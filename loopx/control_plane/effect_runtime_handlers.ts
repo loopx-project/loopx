@@ -1,5 +1,5 @@
 import {projectTodoSummaryLanes, projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
-import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -634,6 +634,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["collaboration.delegation.binding", selectDelegationBinding],
     ["collaboration.delegation.preflight", delegationPreflight],
+    ["collaboration.delegation.turn_plan", delegationTurnPlanDecision],
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],

@@ -167,10 +167,21 @@ class Delegations:
         binding = self.binding(binding_id, require_active=True)
         if not Path(binding["workspace"]).is_dir():
             raise ValueError("delegation workspace unavailable")
-        acceptance = inspect_goal_acceptance(registry_path=self.registry, goal_id=self.goal_id,
-                                              runtime_root=str(self.root))
-        files_current = goal_task_validation_files_current(registry_path=self.registry,
-            runtime_root=str(self.root), goal_id=self.goal_id, agent_id=binding["agent_id"], todo_id=binding["todo_id"])
+        try:
+            acceptance = inspect_goal_acceptance(registry_path=self.registry, goal_id=self.goal_id,
+                                                  runtime_root=str(self.root))
+            files_current = goal_task_validation_files_current(registry_path=self.registry,
+                runtime_root=str(self.root), goal_id=self.goal_id, agent_id=binding["agent_id"], todo_id=binding["todo_id"])
+        except (OSError, ValueError) as exc:
+            # Authority admission is a readiness observation, not a reason for
+            # inspection to invent a provider launch or collapse into a raw CLI error.
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            return effect_runtime_result("collaboration.delegation.preflight", {
+                "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+                "authority": {"ready": False, "reason": str(exc)},
+                "preview": None, "acceptance": None, "validation_files_current": False,
+            })
         operation = "inspect-" + _hash(binding_id)[:32]
         arguments = ["turn", "run-once", "--goal-id", self.goal_id,
                      "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
@@ -210,6 +221,7 @@ class Delegations:
                      if row.get("todo_id") == binding["todo_id"]), None)
         return effect_runtime_result("collaboration.delegation.preflight", {
             "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+            "authority": {"ready": True, "reason": None},
             "preview": preview, "acceptance": task, "validation_files_current": files_current,
         })
 
@@ -405,7 +417,10 @@ class Delegations:
                              "--host", selected_host,
                              "--iteration-context", iteration_context,
                              "--include-transaction-detail")
-            row["turn_key"] = plan["transaction"]["turn_key"]
+            decision = effect_runtime_result("collaboration.delegation.turn_plan", {"plan": plan})
+            if decision["state"] != "planned":
+                raise ValueError(f"delegation Turn plan rejected: {decision['reason']}")
+            row["turn_key"] = decision["turn_key"]
             self._observe(path, row, "running")
         try:
             if row["status"] == "running":
