@@ -269,7 +269,8 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
     completed = subprocess.run(
         ['node', '--no-warnings', '--experimental-strip-types',
          str(root / 'scripts/settlement_binding_witness.mts')],
-        input=json.dumps({'probes': probes}), capture_output=True, text=True, check=False,
+        input=json.dumps({'probes': probes}), capture_output=True, text=True,
+        encoding='utf-8', check=False,
     )
     if completed.returncode != 0:
         raise ValueError(f'settlement_binding_kind: witness probe failed: {completed.stderr.strip()[:300]}')
