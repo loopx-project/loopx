@@ -559,19 +559,53 @@ def divergent_value_sets(inventory: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(entries, key=lambda item: (-item["value_sets"], item["name"]))
 
 
+_WORD_TOKEN = re.compile(r"\w+")
+
+
+def _word_token_mentions(sources: list[SourceFile]) -> dict[str, set[int]]:
+    """Map each word token to the source positions whose text contains it.
+
+    Tokenising is deliberately lexical, over the raw text: comments and string
+    contents counted as mentions before and still do. The value is a set of
+    positions in ``sources`` so a repeated occurrence inside one file counts
+    once, exactly as a single ``search`` did.
+    """
+    mentions: dict[str, set[int]] = {}
+    for position, source in enumerate(sources):
+        for token in set(_WORD_TOKEN.findall(source.text)):
+            mentions.setdefault(token, set()).add(position)
+    return mentions
+
+
 def consumer_ranking(inventory: dict[str, Any], sources: list[SourceFile]) -> list[dict[str, Any]]:
     """Advisory ranking: modules outside the definer that mention each symbol.
 
     Not stored in the committed inventory because it changes with every consumer
     edit; the generator prints it on demand so retirement work can be ordered.
     """
+    # One lexical pass over the corpus instead of one search per symbol. A name
+    # made only of word characters matches ``\bNAME\b`` exactly when it appears
+    # as a whole ``\w+`` token, so the index answers the same question the
+    # per-symbol regex did. Anything else -- a name carrying a non-word
+    # character, where the boundary assertions no longer line up with token
+    # edges -- keeps the original search rather than assume the equivalence.
+    mentions = _word_token_mentions(sources)
     ranking: list[dict[str, Any]] = []
     for section in ("python_enums", "typescript_const_arrays", "python_closed_sets", "python_literal_aliases"):
         for entry in inventory[section]:
-            token = re.compile(rf"\b{re.escape(entry['name'])}\b")
-            consumers = sum(
-                1 for source in sources if source.path != entry["module"] and token.search(source.text)
-            )
+            name = entry["name"]
+            if _WORD_TOKEN.fullmatch(name):
+                # Positions, not paths: a corpus that lists the same path twice
+                # still contributes twice, as the per-source search did.
+                consumers = sum(
+                    1 for position in mentions.get(name, ())
+                    if sources[position].path != entry["module"]
+                )
+            else:
+                token = re.compile(rf"\b{re.escape(name)}\b")
+                consumers = sum(
+                    1 for source in sources if source.path != entry["module"] and token.search(source.text)
+                )
             ranking.append(
                 {
                     "kind": section,

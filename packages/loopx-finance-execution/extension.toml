@@ -1,6 +1,6 @@
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-finance-execution"
-version = "0.1.0"
+version = "0.1.1"
 requires_loopx_api = ">=1,<2"
 permissions = ["finance.operation.simulate"]
 
@@ -10,6 +10,17 @@ entrypoint = "loopx-finance-execution"
 doctor_args = ["--doctor"]
 required_permissions = ["finance.operation.simulate"]
 timeout_seconds = 30
+
+[[provides]]
+id = "human-confirmed-operation-executor"
+kind = "human_confirmed_domain_operation"
+title = "Human-confirmed operation execution"
+status = "active"
+visibility = "public"
+real_world_anchor = "one immutable user-confirmed operation claim and its result receipt"
+user_value = "Execute only the exact operation a trusted user confirmed and return an idempotent result receipt."
+entry_command = "loopx goal-channel prepare-operation --help"
+next_real_step = "Use the simulated finance path first; qualify venue-specific execution separately before any live operation."
 
 [[implements]]
 capability_id = "human-confirmed-operation-executor"

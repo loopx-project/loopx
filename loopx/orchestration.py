@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Any
 import re
 
@@ -48,6 +49,31 @@ def validate_subagent_model_config(value: Any) -> dict[str, str]:
             raise ValueError("unsupported subagent reasoning effort")
         result["reasoning_effort"] = effort
     return result
+
+
+def normalize_subagent_execution_config(value: Any) -> str:
+    """Normalize the Goal's local-private delegation binding pointer.
+
+    The pointer is safe to persist and project because it is repo-relative;
+    the binding file itself remains ignored local state and is never copied
+    into Goal context.
+    """
+
+    text = str(value or "").strip().replace("\\", "/")
+    path = PurePosixPath(text)
+    if (
+        not text
+        or path.is_absolute()
+        or ".." in path.parts
+        or len(path.parts) < 3
+        or path.parts[:2] != (".loopx", "config")
+        or path.suffix != ".json"
+    ):
+        raise ValueError(
+            "subagent execution config must be a repo-relative JSON path "
+            "under .loopx/config/"
+        )
+    return path.as_posix()
 
 
 def subagent_model_configuration_options(value: Any) -> dict[str, Any]:
@@ -126,6 +152,10 @@ def compact_orchestration_policy(spawn_policy: Any) -> dict[str, Any]:
     }
     if "model_config" in policy:
         compact["model_config"] = validate_subagent_model_config(policy["model_config"])
+    if policy.get("execution_config"):
+        compact["execution_config"] = normalize_subagent_execution_config(
+            policy["execution_config"]
+        )
     compact_domains = [str(value) for value in allowed_domains if str(value).strip()]
     if compact_domains:
         compact["allowed_domains"] = compact_domains
@@ -211,6 +241,8 @@ def update_spawn_execution_policy(
     subagent_model: str | None,
     subagent_reasoning_effort: str | None,
     clear_subagent_model_config: bool,
+    subagent_execution_config: str | None,
+    clear_subagent_execution_config: bool,
     allowed_domains: list[str] | None,
     clear_allowed_domains: bool,
     default_max_children: int,
@@ -222,6 +254,12 @@ def update_spawn_execution_policy(
         subagent_reasoning_effort=subagent_reasoning_effort,
         clear_subagent_model_config=clear_subagent_model_config,
     )
+    if clear_subagent_execution_config:
+        spawn_policy.pop("execution_config", None)
+    elif subagent_execution_config is not None:
+        spawn_policy["execution_config"] = normalize_subagent_execution_config(
+            subagent_execution_config
+        )
     if multi_subagent_feature == "enabled":
         spawn_policy["mode"] = MULTI_SUBAGENT_ORCHESTRATION_MODE
         spawn_policy["allowed"] = True

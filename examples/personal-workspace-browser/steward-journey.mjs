@@ -163,10 +163,9 @@ export const stewardJourneyScenario = {
       await stewardCard.first().click();
       const goalNavigation = page.getByRole("navigation", { name: "Goal 视图" });
       await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      // The row is asserted rather than probed: it ships with the product, and
-      // a regression here sends the owner back to typing, which is the
-      // behaviour this beat exists to prevent. Read before the owner types, so
-      // the owner's own words cannot be mistaken for a rendered affordance.
+      // Suggestions remain one disclosure away, without occupying the first
+      // screen. They still send into this persistent conversation.
+      await page.locator(".personal-composer-tools > summary").click();
       const composer = page.getByLabel("向 LoopX 发送消息");
       const promptRow = page.locator(".personal-quick-prompts");
       await promptRow.first().waitFor({ state: "visible", timeout: 15_000 });

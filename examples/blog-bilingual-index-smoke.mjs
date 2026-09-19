@@ -41,13 +41,13 @@ export async function validateBilingualBlog(blogDir) {
       directory: blogDir,
       language: "en",
       counterpartHref: (slug) => `../../blog/zh/${slug}/`,
-      canonicalHref: (slug) => `https://huangruiteng.github.io/loopx/blog/${slug}/`,
+      canonicalHref: (slug) => `https://loopx-project.github.io/loopx/blog/${slug}/`,
     },
     {
       directory: resolve(blogDir, "zh"),
       language: "zh-CN",
       counterpartHref: (slug) => `../../../blog/${slug}/`,
-      canonicalHref: (slug) => `https://huangruiteng.github.io/loopx/blog/zh/${slug}/`,
+      canonicalHref: (slug) => `https://loopx-project.github.io/loopx/blog/zh/${slug}/`,
     },
   ];
 

@@ -802,8 +802,11 @@ For every automatic heartbeat turn, the agent-facing checklist is:
 15. Work bounded when `should_run=true`; a coherent implementation/test/doc/state
     batch is preferred over a tiny substep when scope and validation are clear.
 16. Validate before reporting.
-17. After validation/writeback, refresh accountable progress with explicit
-    delivery scale/outcome hints, then spend exactly once against that record.
+17. After validation/writeback, follow the current typed settlement plan. An
+    exact committed receipt-bound monitor poll already closes that Turn with no
+    accountable refresh or quota spend, including a material poll that releases
+    an independent successor. Other accountable delivery refreshes use explicit
+    scale/outcome hints and spend exactly once against that record.
 18. Refresh state-only metadata after spend only when needed; never emit another
     accountable progress refresh after accounting.
 19. Report compactly.

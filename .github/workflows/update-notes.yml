@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   draft-update-note-pr:
-    if: github.repository == 'huangruiteng/loopx'
+    if: github.repository == 'loopx-project/loopx'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository

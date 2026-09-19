@@ -60,7 +60,7 @@ scale remain user-reported.
 
 [Read the case and inspect all seven PRs](cases/independent-public-engine-refactor.md).
 
-Open the [hosted Showcase index](https://huangruiteng.github.io/loopx/docs/showcases/index.html)
+Open the [hosted Showcase index](https://loopx-project.github.io/loopx/docs/showcases/index.html)
 for the bilingual visual case surface. The
 [feedback coverage map](user-feedback-coverage.md) records every input cluster,
 including useful signals that were deliberately not promoted to success cases.
@@ -108,7 +108,7 @@ npm run export:frontstage-share
 ```
 
 This writes `/tmp/loopx-frontstage-share-bundle` with the static
-[public homepage](https://huangruiteng.github.io/loopx/), compiled dashboard, a
+[public homepage](https://loopx-project.github.io/loopx/), compiled dashboard, a
 sanitized `goal_channel_projection_v0` status fixture, direct `/frontstage/`
 static-route support, and a manifest. GitHub Pages publishes this generated
 artifact, not live registry files or local status exports. The interactive

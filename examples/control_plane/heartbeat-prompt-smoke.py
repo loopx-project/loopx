@@ -84,10 +84,10 @@ def user_output_policy(task_body: str, *, mode: str) -> dict[str, str]:
 
 def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     body = normalized(task_body)
-    assert "no-change=`surface_only`/no spend" in body, mode
-    assert "material=实际outcome+vision决定" in body, mode
-    assert "缺则同turn按返回命令补齐再terminal" in body, mode
-    assert "unchanged→真实`--vision-unchanged-reason`" in body, mode
+    assert "no-change=surface_only/no spend" in body, mode
+    assert "material=outcome+vision" in body, mode
+    assert "缺则同轮按返回命令补齐再terminal" in body, mode
+    assert "unchanged→真实--vision-unchanged-reason" in body, mode
 
     if mode == "full":
         assert (
@@ -597,8 +597,8 @@ def main() -> int:
         "Observed capabilities -> `--available-capability`; never user gates",
         "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend)",
         "else RRULE/projected-fallback_hint/ack/fail",
-        "no-change=`surface_only`/no spend",
-        "unchanged→真实`--vision-unchanged-reason`",
+        "no-change=surface_only/no spend",
+        "unchanged→真实--vision-unchanged-reason",
         "guard; 2 stalls->replan",
         "`agent_read_required`",
         "drain/read/triage before work; settle/ACK",
@@ -699,8 +699,8 @@ def main() -> int:
         "具体user todo未投影",
         "host_action=pause_or_delete_current_heartbeat->automation_update stop(no-spend)",
         "else RRULE/projected-fallback_hint/ack/fail",
-        "no-change=`surface_only`/no spend",
-        "unchanged→真实`--vision-unchanged-reason`",
+        "no-change=surface_only/no spend",
+        "unchanged→真实--vision-unchanged-reason",
         "guard; 2 stalls->replan",
         "P0 blocked: safe P1/P2",
         "monitor quiet/no-spend",
@@ -714,9 +714,9 @@ def main() -> int:
         ("brief", brief_task),
         ("thin", thin_task),
     ):
-        assert "no-change=`surface_only`/no spend" in task, label
-        assert "`--vision-unchanged-reason`" in task, label
-        assert "material=实际outcome+vision决定" in task, label
+        assert "no-change=surface_only/no spend" in task, label
+        assert "--vision-unchanged-reason" in task, label
+        assert "material=outcome+vision" in task, label
     assert "if absent say" not in thin_task, thin_task
     assert "If false/0: quiet/no-user-todo" not in thin_task, thin_task
 

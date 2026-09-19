@@ -22,6 +22,7 @@ import {
   requireNonEmptyString,
 } from "../runtime_decode.ts";
 import { readGoalHeartbeatReceipts } from "../rollout_receipt_log.ts";
+import { isCommittedMonitorPollEffect } from "./settlement_phase.ts";
 import {
   heartbeatReceiptBinding,
   heartbeatReceiptFactFromEvent,
@@ -364,16 +365,6 @@ function decodeMissingReceipts(value: unknown): string[] {
   return [...expected];
 }
 
-function committedMonitorPollEffectIds(
-  candidateBinding: PriorHostTurnCloseoutCandidate,
-  goalId: string,
-  agentId: string,
-): string[] | null {
-  if (candidateBinding.binding_kind !== "todo") return null;
-  const base = `quota-monitor-poll:${goalId}:${agentId}:${candidateBinding.prior_turn_instance_id}`;
-  return [base, `${base}:todo:${candidateBinding.binding_id}`];
-}
-
 function acceptedLifecycleCloseout(todo: CandidateTodoFacts | null): AcceptedCloseout | null {
   if (todo === null) return null;
   if (
@@ -442,15 +433,19 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     );
   }
   const todo = bindingFacts.todo;
-  const acceptedEffectIds = committedMonitorPollEffectIds(selected, goalId, agentId);
   const committedEffectId = bindingFacts.committedMonitorPoll === null
     ? null
     : optionalHeartbeatString(bindingFacts.committedMonitorPoll.effect_id);
   if (
-    acceptedEffectIds !== null &&
+    selected.binding_kind === "todo" &&
     todo?.task_class === MONITOR_TASK_CLASS &&
     committedEffectId !== null &&
-    acceptedEffectIds.includes(committedEffectId)
+    isCommittedMonitorPollEffect(committedEffectId, {
+      goal_id: goalId,
+      agent_id: agentId,
+      turn_instance_id: selected.prior_turn_instance_id,
+      todo_id: selected.binding_id,
+    })
   ) {
     return {
       schema_version: UNSETTLED_HOST_TURN_RECOVERY_RESULT_SCHEMA,

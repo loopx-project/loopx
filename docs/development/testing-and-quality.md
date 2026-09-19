@@ -745,8 +745,8 @@ action without calling the tool, or issuing an unallowlisted command fails.
 
 replan semantic action 另有一条 function-tool 行为资格门，因为 no-tool JSON 决策不能
 证明模型会使用覆盖账本选择新方向并完成真实写回。资格门创建一个包含两个等价 typed
-progress observation 的隔离、public-safe 临时 Goal；真实模型只看到正式 thin Codex App
-heartbeat task body 和普通 `exec_command` tool。真实 quota 必须投影 host coverage context
+progress observation 的隔离、public-safe 临时 Goal；模型接收正式 thin Codex App
+heartbeat task body、受限执行环境说明和 `exec_command` tool。真实 quota 必须投影 host coverage context
 与最小 action packet，模型随后提交的 typed semantic delta 还要通过独立语义判定和真实
 写时闸门。若模型选择新 successor，资格门要求它以当前 `obligation_id` 调用真实
 `todo add`，验证 Todo 原子 receipt 与 `host_action=end_current_heartbeat`，且不得在同一
@@ -787,13 +787,56 @@ python3 scripts/qualify-doubao-capability-monitor-repair-tool-live.py \
 ```
 
 The regular live suite is
-`actual_default_model_behavior_portfolio_v0`: nineteen one-arm scenarios and two
+`actual_default_model_behavior_portfolio_v0`: twenty-one one-arm scenarios and two
 attempts each. Its selected-Todo case starts from a production thin heartbeat,
 executes real quota, and requires the model to perform the selected Todo's
 read-only target action. Its required-vision replan case independently builds a
-hermetic missing-vision state, executes real quota, and requires the model to
-use host-projected frontier/work-source context and submit a typed semantic
-action through the real write path. The other turn cases remain
+hermetic required-profile/missing-vision state with a future monitor and
+peer-owned work. The actor must author an evidence-linked vision, execute the
+projected bound refresh and spend, and pass durable checkpoint, one-spend and
+next-Turn readback. Readback must clear the original missing-baseline obligation;
+a legitimate new successor requirement is allowed. Source alignment includes trigger kinds, accepted outcomes
+and qualification scope; a successful ordinary `typed_progress_repeat` refresh
+cannot qualify this journey. The narrow semantic-action gate remains useful
+but does not prove full closeout. Run this focused journey with
+`uv run --extra test python scripts/qualify-doubao-replan-semantic-action-live.py --required-vision --qualification-id <public-safe-run-id>`.
+The complete required-vision journey has a 32-call bound; the narrow
+single-semantic-action qualifier retains seven. The increased budget covers
+evidence discovery, JSON authoring, refresh, settlement and bounded recovery,
+including multiple field-validation corrections before a final spend;
+it does not authorize more effects or weaken the checkpoint/readback oracle.
+Each receipt records `tool_call_limit` beside actual usage. Earlier seven- and sixteen-call
+failures remain failures; the revised budget defines a new qualification, not
+a retrospective pass. Limit exhaustion after refresh but before spend still
+fails.
+
+Required-vision qualification runs a normal shell in an OS-isolated fixture,
+using `sandbox-exec` on macOS or `bubblewrap` on Linux. These are execution
+prerequisites: missing isolation fails explicitly rather than falling back to an
+unrestricted host. Shell variables, pipelines, compound commands, Python/JSON
+validation, and draft rewrites are ordinary operations, not an allowlisted
+command language. Read-only inspection may precede quota; writeback still needs
+the current quota-derived binding. The source must be observed in returned
+tool data, but no particular read command or metadata-read sequence is required.
+
+The shell may write project drafts and its private `$TMPDIR`. Original inputs,
+authority stores, host-private data and external network access are protected
+by the execution boundary. A fixture-local `loopx` command forwards expanded
+argv to the existing real CLI executor; only the task's quota, help, vision
+refresh and settlement operations have authority. The shell cannot forge run
+history or receipts by writing the store directly. Turn identity is supplied
+as normal host context, never inferred from a model's incorrect binding.
+
+Shell and real CLI failures return output and exit status for correction within
+the same call budget. Returning an error is not semantic acceptance or rollback.
+The model authors its own decision; the host does not fill semantic fields or
+change evidence. An observed source's evidence id and exact source reference
+identify the same evidence. Checkpoint, one-spend and following-Turn verification
+remain independent of shell success. Receipts disclose native-shell execution
+without persisting raw conversations. Other actors retain their existing host
+and seven-call contracts. Earlier bounded-grammar failures remain failed
+qualifications and are not evidence of core semantic rejection.
+The other turn cases remain
 bounded packet-interpretation checks. Nine core-contract scenarios cover
 onboarding, agent identity and goal selection, selected todo, peer identity
 routing, same-agent continuation, final human gate, healthy continuation, and

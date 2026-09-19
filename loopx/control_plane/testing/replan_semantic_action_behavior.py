@@ -25,6 +25,7 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    LoopxCliExecutionError,
     DoubaoExecToolClient,
     argument_value,
     digest_text,
@@ -32,11 +33,27 @@ from .model_tool_behavior import (
     loopx_command_tokens,
 )
 from .selected_todo_tool_behavior import bounded_workspace_read_plan
+from .replan_vision_closeout_behavior import (
+    dispatch_vision_closeout, VISION_HOST_INSTRUCTION, VISION_EXEC_TOOL_DESCRIPTION,
+    REQUIRED_VISION_CLOSEOUT_MAX_CALLS,
+    observe_shell_evidence,
+)
+from .vision_shell_host import VisionShellHost
 
 REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
     "replan_semantic_action_behavior_receipt_v0"
 )
 REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 7
+
+
+class _HostToolError(RuntimeError):
+    """A host tool result that supplies no semantic acceptance or extra budget."""
+
+    def __init__(self, code: str, output: str, exit_code: int) -> None:
+        super().__init__(code)
+        self.code = code
+        self.output = output
+        self.exit_code = exit_code
 
 _FIXTURE_GOAL_ID = "replan-semantic-action-fixture"
 _FIXTURE_AGENT_ID = "codex-replan-semantic-action"
@@ -62,6 +79,7 @@ class _ReplanSemanticActionFixture:
     work_source_target: Path
     composition_experiment_ref: str | None = None
     frontier_exhausted: bool = False
+    required_vision: bool = False
 
 
 @dataclass
@@ -82,6 +100,12 @@ class _QualificationState:
     created_successor_id: str | None = None
     successor_reentry_observation: dict[str, Any] | None = None
     semantic_reentry_observation: dict[str, Any] | None = None
+    vision_closeout: dict[str, Any] | None = None
+
+    @property
+    def tool_call_limit(self) -> int:
+        return (REQUIRED_VISION_CLOSEOUT_MAX_CALLS if self.fixture.required_vision
+                else REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS)
 
 
 def _digest(value: str) -> str:
@@ -93,6 +117,7 @@ def _build_fixture(
     *,
     composition_frontier: bool = False,
     exhausted_frontier: bool = False,
+    required_vision: bool = False,
 ) -> _ReplanSemanticActionFixture:
     source_root = Path(__file__).resolve().parents[3]
     project_root = root / "project"
@@ -189,6 +214,12 @@ def _build_fixture(
         "target_key=replan-semantic-fixture "
         "cadence=1d next_due_at=2999-01-01T00%3A00%3A00Z -->\n"
     )
+    if required_vision:
+        fixture_agent_todo += (
+            "- [ ] [P0] Continue the peer-owned implementation.\n"
+            "  <!-- loopx:todo todo_id=todo_peer_implementation status=open "
+            "task_class=advancement_task claimed_by=codex-fixture-peer -->\n"
+        )
     state_path.write_text(
         "---\n"
         "status: active\n"
@@ -216,7 +247,7 @@ def _build_fixture(
             "status": "connected-delivery",
         },
         "coordination": {
-            "registered_agents": [_FIXTURE_AGENT_ID],
+            "registered_agents": [_FIXTURE_AGENT_ID, "codex-fixture-peer"] if required_vision else [_FIXTURE_AGENT_ID],
             "agent_model": "peer_v1",
             "agent_profiles": {
                 _FIXTURE_AGENT_ID: {
@@ -224,8 +255,11 @@ def _build_fixture(
                     "agent_id": _FIXTURE_AGENT_ID,
                     "profile_role": "quality-qualification",
                     "scope_summary": "Qualify one bounded semantic replan.",
-                    "default_task_classes": ["continuous_monitor"],
-                    "vision_requirement": "optional",
+                    "default_task_classes": (
+                        ["advancement_task", "continuous_monitor"]
+                        if required_vision else ["continuous_monitor"]
+                    ),
+                    "vision_requirement": "required" if required_vision else "optional",
                 }
             },
         },
@@ -254,7 +288,7 @@ def _build_fixture(
     runs_dir = runtime_root / "goals" / _FIXTURE_GOAL_ID / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
     prior_runs: list[dict[str, Any]] = []
-    for minute in (2, 1):
+    for minute in (() if required_vision else (2, 1)):
         generated_at = f"2026-08-13T00:0{minute}:00+00:00"
         run = {
             "generated_at": generated_at,
@@ -404,6 +438,7 @@ def _build_fixture(
             _FIXTURE_COMPOSITION_EXPERIMENT_ID if composition_frontier else None
         ),
         frontier_exhausted=exhausted_frontier,
+        required_vision=required_vision,
     )
 
 
@@ -542,6 +577,7 @@ def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
             )
             or []
         ),
+        "trigger_kinds": sorted({str(trigger["kind"]) for trigger in obligation.get("triggers", [])}),
     }
 
 
@@ -649,16 +685,30 @@ def _execute_loopx(
     fixture: _ReplanSemanticActionFixture,
     turn_instance_id: str,
 ) -> str:
-    return execute_loopx_cli(
-        command,
-        source_root=fixture.source_root,
-        project_root=fixture.project_root,
-        argument_overrides={
-            "--registry": str(fixture.global_registry_path),
-            "--runtime-root": str(fixture.runtime_root),
-            "--turn-instance-id": turn_instance_id,
-        },
-    )
+    tokens = loopx_command_tokens(command)
+    if tokens is None:
+        raise ValueError("fixture requires one bounded LoopX command")
+    # Scope adapter context even when a projected command relies on cwd defaults.
+    # Never supply missing semantic/binding fields on the actor's behalf.
+    if "--registry" not in tokens:
+        tokens[1:1] = ["--registry", str(fixture.global_registry_path)]
+    if "refresh-state" in tokens:
+        tokens.extend(["--no-global-sync", "--suppress-external-sinks"])
+    try:
+        return execute_loopx_cli(
+            shlex.join(tokens),
+            source_root=fixture.source_root,
+            project_root=fixture.project_root,
+            argument_overrides={
+                "--registry": str(fixture.global_registry_path),
+                "--runtime-root": str(fixture.runtime_root),
+                "--turn-instance-id": turn_instance_id,
+            },
+        )
+    except LoopxCliExecutionError as exc:
+        if not fixture.required_vision:
+            raise
+        raise _HostToolError("loopx_cli_nonzero", str(exc), exc.returncode) from None
 
 
 def _bounded_workspace_read_plan(
@@ -799,6 +849,9 @@ def _qualification_receipt(
     passed: bool,
     failure_code: str | None,
 ) -> dict[str, Any]:
+    if passed and state.fixture.required_vision and not (state.vision_closeout or {}).get("settled"):
+        passed = False
+        failure_code = "required_vision_closeout_incomplete"
     receipt = _receipt(
         qualification_id=qualification_id,
         actor_ref=actor_ref,
@@ -814,6 +867,16 @@ def _qualification_receipt(
         receipt["successor_reentry"] = state.successor_reentry_observation
     if state.semantic_reentry_observation is not None:
         receipt["semantic_reentry"] = state.semantic_reentry_observation
+    receipt["qualification_scope"] = (
+        "required_vision_closeout" if state.fixture.required_vision else "semantic_action"
+    )
+    receipt["tool_call_limit"] = state.tool_call_limit
+    if state.fixture.required_vision:
+        receipt["execution_host"] = "os_isolated_shell"
+        receipt["boundary"]["shell_commands_executed"] = bool(state.steps)
+    if state.vision_closeout is not None:
+        receipt["vision_closeout"] = state.vision_closeout
+        receipt["semantic_action_accepted"] = bool(state.semantic_delta and state.semantic_delta.get("accepted"))
     return receipt
 
 
@@ -822,12 +885,15 @@ def _record_tool_step(
     *,
     kind: str,
     command: str,
+    exit_code: int | None = None,
+    error_code: str | None = None,
 ) -> None:
     state.steps.append(
         {
             "ordinal": len(state.steps) + 1,
             "kind": kind,
             "command_digest": _digest(command),
+            **({"exit_code": exit_code, "error_code": error_code} if error_code else {}),
         }
     )
 
@@ -845,6 +911,8 @@ def _handle_quota_command(command: str, state: _QualificationState) -> str:
         raise ValueError("quota result must be an object")
     state.quota_packet = decoded
     state.quota_observation = _quota_behavior_observation(decoded)
+    if state.fixture.required_vision and "required_agent_vision_missing" not in state.quota_observation["trigger_kinds"]:
+        raise ValueError("required_vision_fixture_trigger_mismatch")
     state.seen_quota = True
     state.read_only_host_commands_executed = True
     return output
@@ -1167,9 +1235,13 @@ def _run_qualification_loop(
     state: _QualificationState,
     *,
     qualification_id: str,
+    shell: VisionShellHost | None = None,
 ) -> dict[str, Any]:
-    for _ in range(REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS):
-        tool_call = client.next_tool_call(state.messages)
+    for _ in range(state.tool_call_limit):
+        tool_call = client.next_tool_call(
+            state.messages,
+            tool_description=VISION_EXEC_TOOL_DESCRIPTION if state.fixture.required_vision else None,
+        )
         if tool_call is None:
             return _qualification_receipt(
                 state,
@@ -1178,13 +1250,25 @@ def _run_qualification_loop(
                 passed=False,
                 failure_code="model_returned_without_semantic_action",
             )
-        kind = _behavior_command_kind(tool_call.command, state)
+        kind = "shell" if shell else _behavior_command_kind(tool_call.command, state)
         try:
-            output, dispatched_kind, completed = _dispatch_behavior_command(
-                tool_call.command,
-                state,
-            )
-            kind = dispatched_kind
+            if shell:
+                output, exit_code = shell.execute(tool_call.command)
+                observe_shell_evidence(output, state)
+                state.read_only_host_commands_executed = True
+                if exit_code:
+                    raise _HostToolError("shell_nonzero", output, exit_code)
+                completed = bool((state.vision_closeout or {}).get("settled"))
+            else:
+                output, kind, completed = _dispatch_behavior_command(tool_call.command, state)
+        except _HostToolError as exc:
+            _record_tool_step(state, kind=kind, command=tool_call.command,
+                              exit_code=exc.exit_code, error_code=exc.code)
+            _append_tool_response(state, tool_call=tool_call, output=json.dumps({
+                "error_code": exc.code, "exit_code": exc.exit_code,
+                "output": exc.output[:4096], "truncated": len(exc.output) > 4096,
+            }))
+            continue
         except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
             _record_tool_step(state, kind=kind, command=tool_call.command)
             return _qualification_receipt(
@@ -1259,16 +1343,18 @@ class DoubaoReplanSemanticActionBehaviorActor:
         fixture_root: Path,
         composition_frontier: bool = False,
         exhausted_frontier: bool = False,
+        required_vision: bool = False,
     ) -> dict[str, Any]:
         fixture = _build_fixture(
             fixture_root,
             composition_frontier=composition_frontier,
             exhausted_frontier=exhausted_frontier,
+            required_vision=required_vision,
         )
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": (
+                "content": VISION_HOST_INSTRUCTION if required_vision else (
                     "You are Codex running one LoopX heartbeat against a hermetic "
                     "project. Follow the heartbeat task and use the shell tool. "
                     "The shell working directory is the connected goal project "
@@ -1296,6 +1382,30 @@ class DoubaoReplanSemanticActionBehaviorActor:
             steps=[],
             turn_instance_id=f"qualification-{digest}",
         )
+        if required_vision:
+            def invoke(argv: list[str], cwd: Path, output: str) -> str:
+                observe_shell_evidence(output, state)
+                tokens = ["loopx", *argv]
+                if "--agent-vision-json" in tokens:
+                    index = tokens.index("--agent-vision-json") + 1
+                    if index < len(tokens):
+                        tokens[index] = str((cwd / tokens[index]).resolve())
+                command = shlex.join(tokens)
+                if "--help" in argv or "-h" in argv:
+                    return _execute_loopx(command, fixture=fixture, turn_instance_id=state.turn_instance_id)
+                if _is_quota_guard(command):
+                    return (_execute_loopx(command, fixture=fixture, turn_instance_id=state.turn_instance_id)
+                            if state.seen_quota else _handle_quota_command(command, state))
+                result = dispatch_vision_closeout(command, state, execute=_execute_loopx)
+                if result is None:
+                    raise ValueError("This fixture grants CLI authority for quota, help, vision refresh and settlement only")
+                return result[0]
+
+            shell = VisionShellHost(fixture.project_root, invoke, turn_instance_id=state.turn_instance_id)
+            try:
+                return _run_qualification_loop(self._client, state, qualification_id=qualification_id, shell=shell)
+            finally:
+                shell.close()
         return _run_qualification_loop(
             self._client,
             state,

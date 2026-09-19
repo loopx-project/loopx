@@ -14,6 +14,7 @@ from loopx.capabilities.periodic_report.incremental import (
     build_periodic_report_publication_candidate,
     commit_periodic_report_publication_cursor,
     periodic_report_incremental_baseline,
+    read_periodic_report_goal_publication_cursors,
     read_periodic_report_publication_cursor,
     select_incremental_project_progress,
 )
@@ -874,7 +875,7 @@ def test_snapshot_next_action_ignores_done_markers_and_report_meta_kinds(
     ]
 
 
-def test_snapshot_next_action_scopes_to_the_reporting_agent_and_stage_window(
+def test_snapshot_next_action_prefers_the_reporting_agent_within_the_stage_window(
     tmp_path: Path,
 ) -> None:
     state = _agent_todo_state(
@@ -957,3 +958,289 @@ def test_snapshot_next_action_excludes_continuous_monitor_but_keeps_blocker_clas
     )
     assert snapshot is not None
     assert _next_action_refs(snapshot) == ["todo:todo_blocker"]
+
+
+def _outcome_refs(snapshot: dict[str, object]) -> list[str]:
+    return [
+        str(item["source_ref"])
+        for item in snapshot["items"]
+        if isinstance(item, dict) and item.get("content_kind") == "outcome"
+    ]
+
+
+def test_snapshot_reports_peer_outcomes_and_keeps_unowned_rows_out(
+    tmp_path: Path,
+) -> None:
+    """A Goal-level report must not silently drop another lane's progress."""
+
+    state = _agent_todo_state(
+        [
+            _todo(
+                "- [x] Landed the reporting lane's outcome.",
+                "todo_id=todo_own status=done task_class=advancement_task "
+                f"claimed_by={AGENT_ID} updated_at=2026-08-01T07:00:00Z "
+                "completed_at=2026-08-01T07:00:00Z",
+            ),
+            _todo(
+                "- [x] Landed a peer lane's outcome.",
+                "todo_id=todo_peer status=done task_class=advancement_task "
+                "claimed_by=peer-agent updated_at=2026-08-01T07:30:00Z "
+                "completed_at=2026-08-01T07:30:00Z",
+            ),
+            _todo(
+                "- [x] Landed an unclaimed outcome.",
+                "todo_id=todo_unclaimed status=done task_class=advancement_task "
+                "updated_at=2026-08-01T07:40:00Z completed_at=2026-08-01T07:40:00Z",
+            ),
+        ]
+    )
+    snapshot = build_project_progress_snapshot_from_state(
+        **_snapshot_call(tmp_path, state)
+    )
+
+    assert snapshot is not None
+    assert _outcome_refs(snapshot) == ["todo:todo_own", "todo:todo_peer"]
+
+
+def test_snapshot_ranks_peer_outcomes_after_the_reporter_and_honors_the_stage_window(
+    tmp_path: Path,
+) -> None:
+    state = _agent_todo_state(
+        [
+            _todo(
+                "- [x] Older outcome by the reporting lane.",
+                "todo_id=todo_own_older status=done task_class=advancement_task "
+                f"claimed_by={AGENT_ID} updated_at=2026-08-01T06:00:00Z "
+                "completed_at=2026-08-01T06:00:00Z",
+            ),
+            _todo(
+                "- [x] Newer outcome by a peer lane.",
+                "todo_id=todo_peer_newer status=done task_class=advancement_task "
+                "claimed_by=peer-agent updated_at=2026-08-01T07:50:00Z "
+                "completed_at=2026-08-01T07:50:00Z",
+            ),
+            _todo(
+                "- [x] Peer outcome completed after the stage boundary.",
+                "todo_id=todo_peer_future status=done task_class=advancement_task "
+                "claimed_by=peer-agent updated_at=2026-08-01T09:00:00Z "
+                "completed_at=2026-08-01T09:00:00Z",
+            ),
+            _todo(
+                "- [x] Peer report-intent bookkeeping.",
+                "todo_id=todo_peer_meta status=done task_class=advancement_task "
+                "claimed_by=peer-agent action_kind=consume_periodic_report_intent "
+                "updated_at=2026-08-01T07:10:00Z completed_at=2026-08-01T07:10:00Z",
+            ),
+        ]
+    )
+    snapshot = build_project_progress_snapshot_from_state(
+        **_snapshot_call(tmp_path, state)
+    )
+
+    assert snapshot is not None
+    assert _outcome_refs(snapshot) == [
+        "todo:todo_own_older",
+        "todo:todo_peer_newer",
+    ]
+
+
+def test_snapshot_outcome_cap_keeps_every_reporting_agent_outcome(
+    tmp_path: Path,
+) -> None:
+    own_rows = [
+        _todo(
+            f"- [x] Reporting outcome {index}.",
+            f"todo_id=todo_own_{index} status=done task_class=advancement_task "
+            f"claimed_by={AGENT_ID} updated_at=2026-08-01T06:0{index}:00Z "
+            f"completed_at=2026-08-01T06:0{index}:00Z",
+        )
+        for index in range(5)
+    ]
+    peer_rows = [
+        _todo(
+            f"- [x] Peer outcome {index}.",
+            f"todo_id=todo_peer_{index} status=done task_class=advancement_task "
+            f"claimed_by=peer-agent updated_at=2026-08-01T07:0{index}:00Z "
+            f"completed_at=2026-08-01T07:0{index}:00Z",
+        )
+        for index in range(4)
+    ]
+    snapshot = build_project_progress_snapshot_from_state(
+        **_snapshot_call(tmp_path, _agent_todo_state(own_rows + peer_rows))
+    )
+
+    assert snapshot is not None
+    refs = _outcome_refs(snapshot)
+    assert len(refs) == 6
+    assert refs[:5] == [f"todo:todo_own_{index}" for index in range(4, -1, -1)]
+    assert refs[5:] == ["todo:todo_peer_3"]
+
+
+def test_snapshot_next_action_prefers_the_peer_lane_over_an_unowned_row(
+    tmp_path: Path,
+) -> None:
+    """A row no Agent claimed keeps frontier ownership, and reports nothing."""
+
+    snapshot = build_project_progress_snapshot_from_state(
+        **_snapshot_call(
+            tmp_path,
+            _agent_todo_state(
+                [
+                    _todo(
+                        "- [ ] Continue the unclaimed work.",
+                        "todo_id=todo_unclaimed status=open"
+                        " task_class=advancement_task",
+                    ),
+                    _todo(
+                        "- [ ] Continue the peer lane's work.",
+                        "todo_id=todo_peer status=open"
+                        " task_class=advancement_task claimed_by=peer-agent",
+                    ),
+                ]
+            ),
+        )
+    )
+
+    assert snapshot is not None
+    assert _next_action_refs(snapshot) == ["todo:todo_peer"]
+
+
+PEER_AGENT_ID = "peer-agent"
+
+
+def _commit(
+    runtime: Path,
+    *,
+    agent_id: str,
+    facts: list[dict[str, object]],
+    generation_id: str,
+) -> dict[str, object]:
+    candidate = build_periodic_report_publication_candidate(
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        generation_id=generation_id,
+        trigger_receipt=_trigger(f"trigger_{generation_id}"),
+        facts=facts,
+        baseline=None,
+    )
+    return commit_periodic_report_publication_cursor(
+        runtime_root=runtime,
+        candidate=candidate,
+        publication_id=f"goal-channel:{generation_id}",
+        delivered_at="2026-08-01T09:00:00Z",
+        covered_until="2026-08-01T08:00:00Z",
+    )
+
+
+def test_goal_cursors_drop_a_fact_another_lane_already_published(
+    tmp_path: Path,
+) -> None:
+    """One Goal announces each fact once, whoever the reporting lane is."""
+
+    runtime = tmp_path / "runtime"
+    peer = _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_peer",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    selected = select_incremental_project_progress(
+        _snapshot(
+            [
+                _item("todo:a", title="A completed", summary="A is done."),
+                _item("todo:z", title="Z completed", summary="Z is new."),
+            ]
+        ),
+        cursor=None,
+        goal_cursors=[peer],
+    )
+
+    assert selected is not None
+    assert [item["source_ref"] for item in selected["items"]] == ["todo:z"]
+    assert selected["items"][0]["change_kind"] == "added"
+
+
+def test_goal_cursors_keep_a_fact_a_peer_published_with_different_content(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    peer = _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_peer_text",
+        facts=[_item("todo:a", title="A completed", summary="First wording.")],
+    )
+    selected = select_incremental_project_progress(
+        _snapshot([_item("todo:a", title="A completed", summary="Second wording.")]),
+        cursor=None,
+        goal_cursors=[peer],
+    )
+
+    assert selected is not None
+    assert [item["source_ref"] for item in selected["items"]] == ["todo:a"]
+
+
+def test_goal_cursors_do_not_hide_this_lanes_own_changed_fact(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    own = _commit(
+        runtime,
+        agent_id=AGENT_ID,
+        generation_id="generation_own",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    peer = _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_peer_again",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    selected = select_incremental_project_progress(
+        _snapshot([_item("todo:a", title="A completed", summary="A reopened.")]),
+        cursor=own,
+        goal_cursors=[own, peer],
+    )
+
+    assert selected is not None
+    assert selected["items"][0]["change_kind"] == "changed"
+    assert selected["items"][0]["previous_fact_fingerprint"] == own["fact_states"][0][
+        "fact_fingerprint"
+    ]
+
+
+def test_goal_cursor_reader_returns_every_lane_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    assert (
+        read_periodic_report_goal_publication_cursors(
+            runtime_root=runtime, goal_id=GOAL_ID
+        )
+        == []
+    )
+
+    _commit(
+        runtime,
+        agent_id=AGENT_ID,
+        generation_id="generation_reader_own",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_reader_peer",
+        facts=[_item("todo:b", title="B completed", summary="B is done.")],
+    )
+    cursors = read_periodic_report_goal_publication_cursors(
+        runtime_root=runtime, goal_id=GOAL_ID
+    )
+    assert [cursor["agent_id"] for cursor in cursors] == [AGENT_ID, PEER_AGENT_ID]
+
+    sibling = runtime / "goals" / GOAL_ID / "periodic_reports" / "publication-cursors"
+    corrupt = sibling / "third-agent.json"
+    corrupt.write_text('{"schema_version": "unexpected"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="publication cursor must use"):
+        read_periodic_report_goal_publication_cursors(
+            runtime_root=runtime, goal_id=GOAL_ID
+        )

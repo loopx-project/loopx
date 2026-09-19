@@ -8,8 +8,9 @@ and TS task acceptance. A coordinator role alone grants no execution authority.
 
 ## Enable LoopX mode
 
-On a local managed Codex Goal conversation, choose **Enable LoopX** beside the
-composer. First use opens **Settings** in place. Select the registered sender,
+On a local managed Codex Goal conversation, choose **Enable LoopX** in the
+compact bar below the channel header. First use opens **Settings** in a bounded
+dialog. Select the registered sender,
 its existing delegation configuration under the project's `.loopx/config/`, and
 a positive total coordinator token allowance. Save, then enable. Subsequent
 activations reuse these settings. The member roster comes from the authorized
@@ -34,8 +35,26 @@ thread keeps its original read/wait operations; a shell-capable caller can use
 the CLI recovery entrypoint independently. Tool-schema upgrade remains a
 separate session capability.
 
-The composer shows native state, accumulated coordinator usage and last member
-observations. **Pause** stops the coordinator, while already delegated members
+After configuring bindings, **Team execution** opens the same durable inventory
+for the owner, independently of the native thread's installed tools. Its
+on-demand refresh rechecks accepted artifacts, preserves unavailable items and
+offers pagination. **Check prerequisites** reads the selected member's actual
+Turn/profile and pinned acceptance binding without launching work. An unknown
+runtime stays unknown. The panel works while paused and before enabling mode;
+it does not add validation to regular snapshot polling. Existing native threads
+remain intact. This is local operator readback, not a new dispatch surface.
+Close the dialog or press Escape to return focus to its trigger and keep the
+conversation's reading position. Team details do not occupy the initial chat.
+
+Synthetic desktop and narrow-screen examples show unverified runtime,
+unavailable output and an original execution needing recovery:
+
+![Team execution on desktop](../assets/personal-workspace/goal-team-execution-desktop.png)
+![Team execution on a narrow screen](../assets/personal-workspace/goal-team-execution-mobile.png)
+
+The compact bar shows native state and the coordinator controls. Settings and
+team inspection disclose accumulated usage and member observations on demand.
+**Pause coordinator** stops the coordinator, while already delegated members
 continue under their independent deadlines and acceptance rules. **Continue**
 resumes the same native Goal and its accumulated usage. **Exit mode** returns to
 ordinary conversation; it does not cancel children or settle the canonical Goal.

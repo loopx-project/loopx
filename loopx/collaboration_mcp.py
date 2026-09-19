@@ -27,8 +27,9 @@ if TYPE_CHECKING:
 from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
 from .todos import list_goal_todos
 from .control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
-from .control_plane.goals.acceptance import inspect_goal_acceptance, validate_goal_task_acceptance
+from .control_plane.goals.acceptance import inspect_goal_acceptance, validate_goal_task_acceptance, goal_task_validation_files_current
 from .control_plane.turn_driver.journal_store import turn_journal_path
+from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
 from .control_plane.collaboration.peers import return_result
 from .control_plane.collaboration.inbox import acknowledge, _entry
@@ -160,6 +161,57 @@ class Delegations:
         from .control_plane.collaboration.delegation_inventory import read_delegation_inventory
 
         return read_delegation_inventory(self, limit=limit, cursor=cursor)
+
+    def inspect(self, binding_id: str) -> dict:
+        """Observe the real Turn preflight; never create a request or run a host."""
+        binding = self.binding(binding_id, require_active=True)
+        if not Path(binding["workspace"]).is_dir():
+            raise ValueError("delegation workspace unavailable")
+        acceptance = inspect_goal_acceptance(registry_path=self.registry, goal_id=self.goal_id,
+                                              runtime_root=str(self.root))
+        files_current = goal_task_validation_files_current(registry_path=self.registry,
+            runtime_root=str(self.root), goal_id=self.goal_id, agent_id=binding["agent_id"], todo_id=binding["todo_id"])
+        operation = "inspect-" + _hash(binding_id)[:32]
+        arguments = ["turn", "run-once", "--goal-id", self.goal_id,
+                     "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
+                     "--turn-instance-id", operation, *self._execution_arguments(binding, operation)]
+        # Host arguments are operator-owned, but inspection must stay read-only
+        # even when they contain an abbreviated execution flag or a selector.
+        from .cli import build_parser
+
+        try:
+            selected = build_parser().parse_args(arguments)
+        except SystemExit as exc:
+            raise ValueError("invalid delegation Turn arguments") from exc
+        workspace = Path(binding["workspace"]).resolve()
+        selected_project = Path(selected.project)
+        selected_scan_root = Path(selected.scan_root)
+        if not selected_project.is_absolute():
+            selected_project = workspace / selected_project
+        if not selected_scan_root.is_absolute():
+            selected_scan_root = workspace / selected_scan_root
+        if (selected.execute or selected.resume_turn_key
+                or (selected.goal_id, selected.agent_id, selected.todo_id, selected.turn_instance_id)
+                != (self.goal_id, binding["agent_id"], binding["todo_id"], operation)
+                or selected_project.resolve() != workspace
+                or selected_scan_root.resolve() != workspace):
+            raise ValueError("delegation inspection cannot execute or retarget bound work")
+        preview = self._cli(binding, *arguments)
+        if preview.get("status") != "preview":
+            raise ValueError(f"delegation Turn preflight unavailable: {preview.get('error') or preview.get('status')}")
+        current = inspect_goal_acceptance(registry_path=self.registry, goal_id=self.goal_id,
+                                          runtime_root=str(self.root))
+        if (acceptance != current or self.binding(binding_id, require_active=True) != binding
+                or files_current != goal_task_validation_files_current(registry_path=self.registry,
+                    runtime_root=str(self.root), goal_id=self.goal_id,
+                    agent_id=binding["agent_id"], todo_id=binding["todo_id"])):
+            raise ValueError("delegation preflight source changed; retry inspection")
+        task = next((row for row in (acceptance.get("goal_acceptance_contract") or {}).get("tasks", [])
+                     if row.get("todo_id") == binding["todo_id"]), None)
+        return effect_runtime_result("collaboration.delegation.preflight", {
+            "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+            "preview": preview, "acceptance": task, "validation_files_current": files_current,
+        })
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
               parent_request_id: str | None = None) -> dict:
@@ -317,21 +369,32 @@ class Delegations:
                     if row["status"] == "prepared":
                         self._observe(path, row, "rejected")
 
-    def _execute(self, path: Path, row: dict, binding: dict) -> None:
-        request_id = row["identity"]["request_id"]
-        common = ["--goal-id", self.goal_id, "--agent-id", binding["agent_id"]]
-        host = binding["host_args"]
+    def _execution_arguments(self, binding: dict, operation_id: str) -> list[str]:
+        """Exactly the same profile, workspace and validation arguments for preview/run."""
         # Preserve the journaled validator argv so existing Turns retain their resume identity.
         validator = [sys.executable, "-m", "loopx.collaboration_mcp", "--delegation-action", "validate", "--runtime-root", str(self.root),
                      "--registry", str(self.registry), "--goal-id", self.goal_id,
                      "--agent-id", self.agent_id, "--execution-config", str(self.config),
-                     "--workspace", binding["workspace"], "--operation-id", row["identity"]["operation_id"]]
-        execution = ["--execution-mode", "isolated-headless", "--project", binding["workspace"],
+                     "--workspace", binding["workspace"], "--operation-id", operation_id]
+        return ["--execution-mode", "isolated-headless", "--project", binding["workspace"],
                      "--scan-root", binding["workspace"], "--no-global-sync",
                      "--timeout-seconds", str(binding["timeout_seconds"]),
                      "--validation-command-json", json.dumps(validator),
-                     "--validation-failure-kind", "repair_required", *host]
+                     "--validation-failure-kind", "repair_required", *binding["host_args"]]
+
+    def _execute(self, path: Path, row: dict, binding: dict) -> None:
+        request_id = row["identity"]["request_id"]
+        common = ["--goal-id", self.goal_id, "--agent-id", binding["agent_id"]]
+        host = binding["host_args"]
+        execution = self._execution_arguments(binding, row["identity"]["operation_id"])
         if row["status"] == "prepared":
+            selected_host = turn_host_arg_option(host, "--host")
+            if not selected_host:
+                raise ValueError("delegation host_args require --host")
+            iteration_context = (
+                turn_host_arg_option(host, "--iteration-context")
+                or "resume-if-available"
+            )
             _write(Path(binding["workspace"]) / "DELEGATION.json", {
                 "request_id": request_id, "brief": _entry(self.root, self.goal_id, binding["agent_id"], request_id)["brief"],
                 "instruction": "Read context and assess this request independently before working. Return results through the bound tools.",
@@ -339,8 +402,8 @@ class Delegations:
             plan = self._cli(binding, "turn", "plan", *common, "--todo-id", binding["todo_id"],
                              "--turn-instance-id", "delegation-" + request_id[:32],
                              "--execution-mode", "isolated-headless", "--scan-root", binding["workspace"],
-                             "--host", host[host.index("--host") + 1],
-                             "--iteration-context", host[host.index("--iteration-context") + 1] if "--iteration-context" in host else "resume-if-available",
+                             "--host", selected_host,
+                             "--iteration-context", iteration_context,
                              "--include-transaction-detail")
             row["turn_key"] = plan["transaction"]["turn_key"]
             self._observe(path, row, "running")
@@ -384,6 +447,15 @@ def register_delegation_tools(server, delegations: Delegations) -> None:
     def list_execution_bindings() -> dict:
         """Read operator-authorized peer task bindings; registration alone cannot launch."""
         return delegations.directory()
+
+    @server.tool()
+    def inspect_execution_binding(binding_id: str) -> dict:
+        """Check the selected task, pinned acceptance and actual Turn executor without launching.
+
+        Unknown runtime availability is not launch readiness; this observation grants
+        no execution authority. Reuse original operations for existing work.
+        """
+        return delegations.inspect(binding_id)
 
     @server.tool()
     def list_delegations(limit: int = 20, cursor: str | None = None) -> dict:

@@ -328,6 +328,13 @@ def _projection_record(
         # readback. Normalize that display representation, never the provider
         # record or its digest, before comparing the same semantic scope.
         projected["decision_scope"] = require_todo_decision_scope(projected["decision_scope"])
+    # Native authors may retain only the full text. The permanent Markdown
+    # reader derives its title/priority; compare that same display view without
+    # inventing persisted domain fields or masking an explicit disagreement.
+    priority, title = todo_priority_parts(str(projected.get("text") or ""))
+    if priority:
+        projected.setdefault("priority", priority)
+        projected.setdefault("title", normalize_todo_text(title))
     return projected
 
 

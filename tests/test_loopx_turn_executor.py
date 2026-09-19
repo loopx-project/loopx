@@ -960,6 +960,47 @@ def test_run_once_bounds_provider_capacity_retries_without_spending_quota(
     assert calls == {"host": 3, "writeback": 0, "spend": 0, "scheduler": 0}
 
 
+def test_run_once_never_blindly_retries_output_budget_exhaustion(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: dict[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        raise BuiltInHostError(
+            "dsh_output_budget_exhausted_no_final",
+            failure_kind="output_budget_exhausted",
+        )
+
+    common = {
+        "host_runner": host,
+        "project": tmp_path,
+        "runtime_root": tmp_path / "runtime",
+        "goal_id": "fixture-goal",
+        "timeout_seconds": 5,
+        "execute": True,
+        "writeback": writeback,
+        "spend": spend,
+        "scheduler": scheduler,
+    }
+
+    failed = run_loopx_turn_once(plan, **common)
+
+    assert failed["reason"] == "dsh_output_budget_exhausted_no_final"
+    assert failed["host_failure"] == {
+        "schema_version": "loopx_turn_host_failure_v0",
+        "kind": "output_budget_exhausted",
+        "attempt": 1,
+        "retryable": False,
+    }
+    with pytest.raises(TurnRecoveryBlockedError) as exc_info:
+        run_loopx_turn_once(plan, retry_failed=True, **common)
+    assert exc_info.value.decision["reason"] == "host_retry_not_available"
+    assert calls == {"host": 1, "writeback": 0, "spend": 0, "scheduler": 0}
+
+
 def test_run_once_resumes_session_observed_by_recoverable_failed_turn(
     tmp_path: Path,
 ) -> None:

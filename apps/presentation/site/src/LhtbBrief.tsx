@@ -53,7 +53,7 @@ const contributorLinks = [
   { label: "Wanli Lee", href: "https://wanli-lee.github.io/" },
 ] as const;
 
-const studyUrl = "https://github.com/huangruiteng/loopx/tree/main/benchmark/LHTB";
+const studyUrl = "https://github.com/loopx-project/loopx/tree/main/benchmark/LHTB";
 
 function formatMillions(value: number) {
   return `${(value / 1_000_000).toFixed(2)}M`;

@@ -22,7 +22,7 @@ from .self_update_download import run_archive_installer
 
 
 UPDATE_PLAN_SCHEMA_VERSION = "loopx_update_plan_v0"
-DEFAULT_UPDATE_REPO = "huangruiteng/loopx"
+DEFAULT_UPDATE_REPO = "loopx-project/loopx"
 DEFAULT_UPDATE_REF = "stable"
 ROLLBACK_PREVIOUS_ALIAS = "previous"
 SOURCE_VERSION_CHECK_SCHEMA_VERSION = "loopx_source_version_check_v0"

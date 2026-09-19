@@ -43,7 +43,8 @@ assert.match(styles, /personal-task-card > button > strong { font-size: 14px; fo
 assert.match(styles, /personal-task-lane-scroll > button, \.personal-task-card { flex: 0 0 auto;/, "Task cards do not shrink below their content height");
 assert.match(styles, /personal-files-list { border-radius: 12px/, "LoopX Files uses the standard card radius");
 assert.match(styles, /personal-icon-button {[^}]*flex: 0 0 36px;[^}]*min-width: 36px;[^}]*min-height: 36px;/, "Header icon buttons keep a stable square footprint");
-assert.match(styles, /personal-live-indicator {[^}]*flex: 0 0 auto;[^}]*white-space: nowrap;/, "Live status stays on one line when the header narrows");
+assert.match(styles, /personal-channel-header\[data-goal-selected="true"\] \.personal-channel-title h1 {[^}]*overflow: hidden;[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/, "Long Goal titles remain on one line without widening the header");
+assert.doesNotMatch(header, /personal-live-indicator/, "The Goal header omits the misleading live-status badge");
 assert.match(styles, /@media \(max-width: 720px\) {[\s\S]*personal-home-lane,[\s\S]*personal-task-kanban \.personal-object-list { border-left: 0; border-top: 1px solid #ebebeb;/, "Mobile LoopX lanes use horizontal rather than vertical separators");
 assert.match(styles, /personal-select-listbox[\s\S]*border-radius: 12px/, "Workspace select menus use the card radius");
 assert.match(styles, /personal-channel-title h1 { font-size: 20px/, "LoopX standard uses the panel heading size");

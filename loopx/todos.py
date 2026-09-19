@@ -1154,6 +1154,7 @@ def update_goal_todo(
         clear_resume_when=clear_resume_when, no_followup=no_followup,
         clear_claim=clear_claim,
     )
+    monitor_intent = todo_monitor_metadata.monitor_metadata_intent(monitor_metadata)
     if not claim_only and canonical_update_is_supported(
         text=text, note=note, intent=planning_intent,
         monitor_metadata=monitor_metadata,
@@ -1169,8 +1170,9 @@ def update_goal_todo(
             expected_registry_sha256=update_expected_registry_sha256,
             task_lease_idempotency_key=task_lease_idempotency_key,
             task_lease_expected_version=task_lease_expected_version,
+            monitor_observation=monitor_metadata if monitor_intent["observation"] is not None else None,
             planning_intent={**planning_intent, **(
-                {"monitor_metadata": monitor_metadata} if monitor_metadata else {}
+                {"monitor_metadata": monitor_intent["metadata"]} if monitor_intent["metadata"] else {}
             )},
         )
         if canonical_edit is not None:
@@ -1263,7 +1265,6 @@ def update_goal_todo(
             raise ValueError(f"todo_id {normalized_todo_id!r} was not found in active user or agent todos")
         existing_role, _section, _start, _end, existing_block = existing_block_match
         target_role = role or existing_role
-        monitor_intent = todo_monitor_metadata.monitor_metadata_intent(monitor_metadata)
         authority_todo = dict(existing_block)
         authority_todo["role"] = target_role
         authority_action = todo_update_authority_action(

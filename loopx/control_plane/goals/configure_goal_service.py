@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -411,6 +412,10 @@ def configure_goal_with_global_sync(
     runtime_root_override: str | None,
     execute: bool,
     expected_goal_configuration_revision: str | None = None,
+    align_codex_subagent_capacity: bool = False,
+    codex_home_override: Path | None = None,
+    codex_host_capacity_planner: Callable[..., dict[str, Any]] | None = None,
+    codex_host_capacity_applier: Callable[..., dict[str, Any]] | None = None,
     **configure_options: Any,
 ) -> dict[str, Any]:
     """Configure one Goal under the shared registry mutation lock.
@@ -424,14 +429,122 @@ def configure_goal_with_global_sync(
         registry_path=registry_path,
         goal_id=goal_id,
     )
+    def add_host_capacity(
+        payload: dict[str, Any],
+        *,
+        receipt: dict[str, Any] | None = None,
+        plan_before_apply: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        orchestration = (payload.get("after") or {}).get("orchestration") or {}
+        required_children = (
+            int(orchestration.get("max_children") or 0)
+            if orchestration.get("mode") == "multi_subagent"
+            and orchestration.get("spawn_allowed") is True
+            else 0
+        )
+        if align_codex_subagent_capacity and codex_host_capacity_planner is None:
+            raise ValueError(
+                "Codex host-capacity alignment requires a host adapter"
+            )
+        if required_children == 0:
+            plan = {
+                "schema_version": "codex_subagent_host_capacity_v0",
+                "host": "codex",
+                "status": "not_required",
+                "action": "none",
+                "required_children": 0,
+                "configured_children": None,
+                "configured_source_key": None,
+                "canonical_config_key": (
+                    "agents.max_concurrent_threads_per_session"
+                ),
+                "legacy_alias_present": False,
+                "counts_main_thread": False,
+                "write_required": False,
+                "never_lower": True,
+                "config_path": None,
+                "source_sha256": None,
+                "new_session_required_after_write": False,
+                "reason": "Goal sub-agents are disabled",
+            }
+        elif align_codex_subagent_capacity:
+            plan = codex_host_capacity_planner(
+                required_children,
+                home=codex_home_override,
+            )
+        else:
+            plan = {
+                "schema_version": "codex_subagent_host_capacity_v0",
+                "host": "codex",
+                "status": "not_requested",
+                "action": "preview_with_explicit_alignment_request",
+                "required_children": required_children,
+                "configured_children": None,
+                "configured_source_key": None,
+                "canonical_config_key": (
+                    "agents.max_concurrent_threads_per_session"
+                ),
+                "legacy_alias_present": False,
+                "counts_main_thread": False,
+                "write_required": False,
+                "never_lower": True,
+                "config_path": None,
+                "source_sha256": None,
+                "new_session_required_after_write": False,
+                "reason": (
+                    "Codex host capacity was not inspected because alignment was not requested"
+                ),
+            }
+        goal_changed = bool(payload.get("changed"))
+        host_change = bool(
+            (align_codex_subagent_capacity and plan["write_required"])
+            or (receipt or {}).get("written")
+        )
+        payload["goal_configuration_changed"] = goal_changed
+        payload["codex_host_capacity"] = {
+            **plan,
+            "alignment_requested": bool(align_codex_subagent_capacity),
+            "receipt": receipt,
+        }
+        if host_change:
+            payload["changed"] = True
+            changed_fields = list(payload.get("changed_fields") or [])
+            if "codex_host_capacity" not in changed_fields:
+                changed_fields.append("codex_host_capacity")
+            payload["changed_fields"] = changed_fields
+        if receipt is not None:
+            payload["codex_host_capacity"]["plan_before_apply"] = (
+                plan_before_apply or plan
+            )
+            payload["codex_host_capacity"].update(
+                {
+                    key: value
+                    for key, value in receipt.items()
+                    if key
+                    not in {
+                        "schema_version",
+                        "config_path",
+                        "source_sha256",
+                    }
+                }
+            )
+            payload["written"] = bool(
+                payload.get("written") or receipt.get("written")
+            )
+            payload["ok"] = bool(
+                payload.get("ok") and receipt.get("readback_verified")
+            )
+        return payload
+
     if not execute:
-        return _configure_goal_with_global_sync_unlocked(
+        preview = _configure_goal_with_global_sync_unlocked(
             registry_path=source_registry_path,
             goal_id=goal_id,
             runtime_root_override=runtime_root_override,
             execute=False,
             **configure_options,
         )
+        return add_host_capacity(preview)
     with exclusive_file_lock(
         source_registry_path,
         operation="configure_goal_with_global_sync",
@@ -456,10 +569,64 @@ def configure_goal_with_global_sync(
             )
             if actual_revision != expected_goal_configuration_revision:
                 raise ValueError("Goal configuration changed; preview again")
-        return _configure_goal_with_global_sync_unlocked(
+        preview = _configure_goal_with_global_sync_unlocked(
+            registry_path=source_registry_path,
+            goal_id=goal_id,
+            runtime_root_override=runtime_root_override,
+            execute=False,
+            **configure_options,
+        )
+        preview = add_host_capacity(preview)
+        capacity_plan = preview["codex_host_capacity"]
+        applied = _configure_goal_with_global_sync_unlocked(
             registry_path=source_registry_path,
             goal_id=goal_id,
             runtime_root_override=runtime_root_override,
             execute=True,
             **configure_options,
+        )
+        if not applied.get("ok"):
+            return add_host_capacity(
+                applied,
+                plan_before_apply=capacity_plan,
+            )
+        capacity_receipt = None
+        if align_codex_subagent_capacity and capacity_plan["write_required"]:
+            if codex_host_capacity_applier is None:
+                raise ValueError(
+                    "Codex host-capacity apply requires a host adapter"
+                )
+            try:
+                capacity_receipt = codex_host_capacity_applier(
+                    int(capacity_plan["required_children"]),
+                    expected_source_sha256=str(capacity_plan["source_sha256"]),
+                    home=codex_home_override,
+                )
+            except (OSError, ValueError) as exc:
+                partial = add_host_capacity(
+                    applied,
+                    plan_before_apply=capacity_plan,
+                )
+                partial["ok"] = False
+                partial["partial_write"] = bool(applied.get("written"))
+                partial["error"] = (
+                    "Goal configuration applied, but Codex host-capacity alignment failed: "
+                    f"{exc}"
+                )
+                partial["recommended_action"] = (
+                    "repair or refresh the Codex host configuration, then preview the "
+                    "same Goal capacity alignment again"
+                )
+                partial["codex_host_capacity"].update(
+                    {
+                        "status": "apply_failed",
+                        "readback_verified": False,
+                        "written": False,
+                    }
+                )
+                return partial
+        return add_host_capacity(
+            applied,
+            receipt=capacity_receipt,
+            plan_before_apply=capacity_plan,
         )

@@ -32,6 +32,8 @@ export const COORDINATION_TODO_UPDATE_RECEIPT_SCHEMA =
 
 export const COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_update_request_v3";
+export const COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA =
+  "loopx_local_coordination_todo_update_request_v4";
 export type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
 import {normalizeTodoUpdateInput, prepareUpdatedTodo, type CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
 import {executeCoordinationTodoTerminalLifecycle} from "./todo_terminal_lifecycle.ts";
@@ -57,7 +59,9 @@ function updateReceipt(input: CoordinationTodoUpdateInput, requestSha: string) {
       request_sha256: requestSha}, failure,
     decode(original) {
       if (typeof original.changed !== "boolean") throw new AuthorityStoreProtocolError("update receipt changed must be boolean");
-      return {fields: {todo_id: input.todo_id, original_receipt: original}, changed: original.changed};
+      return {fields: {todo_id: input.todo_id, original_receipt: original,
+        ...(input.monitor_observation === undefined ? {} : {
+          monitor_poll_transition: canonicalAuthorityObject(original.monitor_poll_transition, "Monitor update receipt transition")})}, changed: original.changed};
     }});
 }
 
@@ -71,6 +75,7 @@ function updateRequestSha(input: CoordinationTodoUpdateInput): string {
       {expected_registry_sha256: input.expected_registry_sha256}),
     ...(input.authority_reason == null ? {} : {authority_reason: input.authority_reason}),
     clear_fields: input.clear_fields, dry_run: input.dry_run,
+    ...(input.monitor_observation === undefined ? {} : {monitor_observation: input.monitor_observation}),
     ...(Object.keys(input.planning_intent ?? {}).length ? {planning_intent: input.planning_intent} : {}),
     // Preserve receipt identity for pre-proof requests already persisted in v0.
     ...(input.lease_idempotency_key != null || input.lease_expected_version != null ? {
@@ -191,9 +196,11 @@ export async function executeCoordinationTodoUpdate(
   if (!await authoritySourcesCurrent()) return sourceChanged();
   if (input.dry_run) return {schema_version: COORDINATION_TODO_UPDATE_RESULT_SCHEMA,
     status: changed ? "planned" : "no_change", changed, todo_id: input.todo_id,
-    provider_revision: head.provider_revision, cursor: head.cursor, dry_run: true};
+    provider_revision: head.provider_revision, cursor: head.cursor, dry_run: true,
+    ...(prepared.monitorTransition ? {monitor_poll_transition: prepared.monitorTransition} : {})};
   commit.receipts = [{schema_version: COORDINATION_TODO_UPDATE_RECEIPT_SCHEMA,
     operation_id: input.operation_id, goal_id: input.goal_id,
-    todo_id: input.todo_id, request_sha256: requestSha, changed}];
+    todo_id: input.todo_id, request_sha256: requestSha, changed,
+    ...(prepared.monitorTransition ? {monitor_poll_transition: prepared.monitorTransition} : {})}];
   return receipt.commit(store, commit);
 }

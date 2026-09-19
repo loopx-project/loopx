@@ -237,7 +237,14 @@ def register_turn_commands(
             "managed execution profile (LOOPX_TURN_REASONING_EFFORT)."
         ),
     )
-    run_once.add_argument("--dsh-max-tokens", type=int)
+    run_once.add_argument(
+        "--dsh-max-tokens",
+        type=int,
+        help=(
+            "Per-model-request output-token cap; defaults to LoopX's bounded "
+            "managed-host value. This is not a whole-Turn or tool-call budget."
+        ),
+    )
     run_once.add_argument(
         "--dsh-home",
         help=(

@@ -203,7 +203,16 @@ export function planTodoFieldUpdate(value: unknown): TodoFieldUpdatePlan {
   const monitorPlan = request.monitor_context == null ? null : planMonitorMetadata({
     ...requireJsonObject(request.monitor_context, "monitor context"),
     schema_version: TODO_MONITOR_METADATA_REQUEST_SCHEMA, existing: block, generated_at: updatedAt,
+    reactivate: block.status === "done" && normalizedStatus === "open",
   });
+  if (monitorPlan?.transition && block.status === "done" && normalizedStatus === "open") {
+    // The new observation cycle cannot carry terminal decisions as current
+    // state. Historical operation receipts retain the original completion.
+    updates.no_followup = null;
+    updates.completion_continuation = null;
+    updates.completion_recovery = null;
+    updates.completion_turn_key = null;
+  }
   const monitor = monitorPlan?.metadata ?? intent.monitor_metadata;
   if (present(monitor)) {
     const metadata = requireJsonObject(monitor, "monitor metadata");

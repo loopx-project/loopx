@@ -257,6 +257,14 @@ receipt 过期。
 
 ### 交付语义：先修正规则，再迁移
 
+Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、
+vision path／terminal 一致性校验与对应 refresh 输入投影共用同一 owner。
+Python 保留 progress 归一化／新颖性与持久化适配，不再重复义务匹配规则。
+这是有界规则收敛，不是 settlement writer 或存储迁移。先刻画既有接受语义，
+再修正所有 vision trigger 的可执行写入投影，并验证真实绑定 CLI 闭环、回读及
+资格范围错配反例。Checkpoint 恢复与 in-flight 规则仍由既有边界负责，
+不新增 capability、provider 或设置。
+
 交付历史边界将 `classification`、`health_check` 与 `recommended_action` 视为
 叙述文本。它们不能生成或解除 follow-through obligation，不能证明 outcome，也
 不能判定交付规模。例如，`unblocked after dependency update` 不构成 blocker
@@ -566,8 +574,14 @@ Quota preflight 将原始准入决策冻结到版本化 pending receipt；即使
 显式 lease proof。业务与 quota 仍是分别可恢复的事务，canonical 成功独立于 Markdown
 delivery pending；这不代表全部 T2 命令或整 Goal promotion 已完成。
 
-- 继续闭合 `monitor_poll_writeback.py` 保留的 event caller，复用 monitor
-  generation、独立 successor 和 settlement owner，组成一笔事务，不建第二套引擎。
+- 保留的 issue-fix 分组 Monitor caller 现通过既有 Todo update 事务（request v4）
+  传递观察意图；观察、显式无 lease 再激活、终结标记清理、generation 和 receipt
+  一次提交。Legacy 与 canonical update 共用字段／Monitor planner，不新增 RPC、
+  raw patch 权限或轮询引擎。完成后的新观察即使 hash 相同也推进新一代；历史重放
+  不会重开当前任务。无变化的分组也能恢复显示，包括带优先级前缀的 native 文本。
+  见[观察更新与再激活](../../reference/protocols/quota-monitor-observation-receipt-v0.md#observation-updates-and-reactivation)。
+  保留 execution lease／hard-lease 模式的再激活、其他 lifecycle caller、旧持久化／
+  capture 和整 Goal 资格仍是独立边界。
 - 保持 unchanged poll/reschedule、generation fence、material-change successor
   去重和可归属 settlement。Monitor 不是 delivery 执行任务；独立 advancement Todo
   不能被 monitor 自身替代。

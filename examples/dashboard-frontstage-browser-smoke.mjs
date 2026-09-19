@@ -201,12 +201,12 @@ try {
   const privateRequests = [];
   await page.route((url) => url.pathname === "/private-status.json", (route) => { privateRequests.push(route.request().url()); return route.abort(); });
   // Resolve the public destination to the actual exported case directory in this test.
-  await page.route("https://huangruiteng.github.io/loopx/**", (route) => {
+  await page.route("https://loopx-project.github.io/loopx/**", (route) => {
     return route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Public destination</h1>" });
   });
   for (const route of ["/frontstage?statusUrl=/private-status.json", "/frontstage?mode=showcase&statusUrl=https://example.com/private-status.json"]) {
     await page.goto(`http://127.0.0.1:5197${route}`);
-    await page.waitForURL("https://huangruiteng.github.io/loopx/docs/showcases/index.en.html");
+    await page.waitForURL("https://loopx-project.github.io/loopx/docs/showcases/index.en.html");
   }
   for (const route of ["/frontstage?mode=developer", "/frontstage/developer"]) {
     await page.goto(`http://127.0.0.1:5197${route}`);

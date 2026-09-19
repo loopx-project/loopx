@@ -31,7 +31,7 @@ reject.
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
 from ..operator_credential import (
@@ -58,6 +58,10 @@ TURN_HOST_SOURCE_OPERATOR_CREDENTIAL = "operator_credential"
 TURN_HOST_SOURCE_NO_OPERATOR_CREDENTIAL = "no_operator_credential"
 
 MANAGED_EXECUTOR_BINDING_SCHEMA_VERSION = "managed_executor_binding_v0"
+DSH_OUTPUT_TOKEN_BUDGET_SCHEMA_VERSION = "dsh_output_token_budget_v0"
+DEFAULT_DSH_OUTPUT_TOKEN_LIMIT = 16_384
+OUTPUT_TOKEN_LIMIT_SCOPE = "per_model_request"
+INVALID_OUTPUT_TOKEN_LIMIT = "invalid_output_token_limit"
 # Executor kinds name where a Turn's model work is billed and bounded rather
 # than which adapter is launched: a managed executor runs on an
 # operator-supplied credential, an individual executor on one person's own CLI
@@ -157,6 +161,22 @@ def _managed_unavailable_remediation(reason: str | None) -> list[str]:
     ]
 
 
+def dsh_output_token_budget(max_tokens: int | None = None) -> dict[str, Any]:
+    """Resolve the per-request limit shared by execution and its readback."""
+    limit = DEFAULT_DSH_OUTPUT_TOKEN_LIMIT if max_tokens is None else max_tokens
+    valid = isinstance(limit, int) and not isinstance(limit, bool) and limit > 0
+    return {
+        "schema_version": DSH_OUTPUT_TOKEN_BUDGET_SCHEMA_VERSION,
+        "scope": OUTPUT_TOKEN_LIMIT_SCOPE,
+        "max_tokens": limit if valid else None,
+        "valid": valid,
+        "source": "product_default" if max_tokens is None else "explicit_argument",
+        # DeepSeek Harness 0.1.5rc1 exposes neither of these controls.
+        "final_response_reserve_supported": False,
+        "hard_tool_budget_supported": False,
+    }
+
+
 def managed_executor_binding(
     host: str,
     *,
@@ -166,6 +186,7 @@ def managed_executor_binding(
     provider: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Project the executor one planned Turn would run on.
 
@@ -197,10 +218,13 @@ def managed_executor_binding(
             reasoning_effort=reasoning_effort,
         )
         profile_reason = managed_profile_unavailable_reason(profile)
+        output_token_budget = dsh_output_token_budget(max_tokens)
         if not runtime_available:
             unavailable_reason: str | None = DSH_RUNTIME_UNAVAILABLE
         elif not operator_credential_bound:
             unavailable_reason = OPERATOR_CREDENTIAL_UNCONFIGURED
+        elif not output_token_budget["valid"]:
+            unavailable_reason = INVALID_OUTPUT_TOKEN_LIMIT
         else:
             unavailable_reason = profile_reason
         return {
@@ -210,6 +234,7 @@ def managed_executor_binding(
             "credential_env": credential_env,
             "endpoint_env": _configured_env_name(OPERATOR_ENDPOINT_ENV_VAR, environ),
             "execution_profile": managed_execution_profile_line(profile),
+            "output_token_budget": output_token_budget,
             # Billing boundary, stated instead of assumed: a managed executor is
             # operator-credential-bound only when the credential or an explicit
             # runner hook is configured here.
@@ -245,6 +270,53 @@ def managed_executor_binding(
         # branches on its presence; only a managed executor probes a runtime.
         "runtime_probe": None,
     }
+
+
+def turn_host_arg_option(host_args: Sequence[str], name: str) -> str | None:
+    """Return the value the Turn CLI will use for one repeatable argv option."""
+    args = [str(value) for value in host_args]
+    selected: str | None = None
+    for index, value in enumerate(args):
+        if value.startswith(f"{name}="):
+            candidate = value.partition("=")[2].strip()
+            if not candidate:
+                return None
+            selected = candidate
+        if value == name:
+            if index + 1 >= len(args):
+                return None
+            candidate = args[index + 1].strip()
+            # argparse treats another option token as a missing value for this
+            # option. Keep the read model fail-closed in the same case.
+            if not candidate or candidate.startswith("--"):
+                return None
+            selected = candidate
+    return selected
+
+
+def managed_executor_binding_from_host_args(
+    host_args: Sequence[str],
+    *,
+    environ: Mapping[str, str] | None = None,
+    module_probe: Callable[[str], bool] | None = None,
+) -> dict[str, Any]:
+    """Project one trusted Turn argv binding through the existing host owner.
+
+    This is deliberately a read model: it selects no host, executes no probe
+    command and returns none of the raw argv. Optional host-specific profile
+    flags are interpreted here, beside their owning Turn host, so coordinator
+    capabilities can consume one provider-neutral executor projection.
+    """
+
+    host = turn_host_arg_option(host_args, "--host") or "unknown"
+    return managed_executor_binding(
+        host,
+        environ=environ,
+        module_probe=module_probe,
+        provider=turn_host_arg_option(host_args, "--dsh-provider"),
+        model=turn_host_arg_option(host_args, "--dsh-model"),
+        reasoning_effort=turn_host_arg_option(host_args, "--dsh-reasoning-effort"),
+    )
 
 
 def managed_executor_payload_entry(plan: Mapping[str, Any]) -> dict[str, Any]:

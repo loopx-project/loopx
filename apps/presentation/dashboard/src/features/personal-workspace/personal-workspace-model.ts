@@ -1,4 +1,4 @@
-import type { CollaborationReadback } from "../../data/chat-model";
+import type { CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -61,7 +61,17 @@ export type WorkspaceRepositoryContext = {
 };
 
 export type WorkspaceGoalSubagentConfiguration = {
+  alignCodexHostCapacity?: boolean;
+  codexHostCapacity?: {
+    configuredChildren: number | null;
+    newSessionRequired: boolean;
+    requiredChildren: number;
+    status: string;
+    writeRequired: boolean;
+    written: boolean;
+  };
   modelConfig?: { model: string; reasoning_effort?: string } | null;
+  executionConfig?: string;
   allowedDomains: string[];
   domainCandidates?: Array<{
     domain: string;
@@ -418,7 +428,7 @@ export type PersonalWorkspaceCallbacks = {
   ) => void | WorkspaceActionPreviewRequest | Promise<void | WorkspaceActionPreviewRequest>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
-    settings?: import("../../data/chat").LoopXModeSettings) => void;
+    settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null) => void;
@@ -467,9 +477,14 @@ export function workspaceSessionStatusLabel(status?: string): string {
   } as Record<string, string>)[status] ?? status;
 }
 
+/** A quiet persistent conversation must not masquerade as waiting work. */
+export function goalHasExecutionSummary(goal: Pick<WorkspaceGoal, "state">): boolean {
+  return ["推进中", "需修复", "等待条件"].includes(goal.state);
+}
+
 /**
  * Project the detailed Goal lifecycle onto the five manager-home buckets.
- * The home keeps four active lanes visible and collapses terminal work into history.
+ * The home shows populated active lanes and collapses terminal work into history.
  */
 export function workspaceHomeLaneForGoal(goal: WorkspaceGoal): WorkspaceHomeLane {
   if (goal.activationState === "stopped" || goal.state === "已停止") return "stopped";

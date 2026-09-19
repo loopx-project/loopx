@@ -29,6 +29,7 @@ import {
   type DeliveryWorkspaceCausality,
 } from "./settlement_workspace_causality.ts";
 import {
+  isCommittedMonitorPollEffect,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
@@ -735,7 +736,8 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     optionalString(run.goal_id) === identity.goal_id &&
     optionalString(run.agent_id) === identity.agent_id &&
     optionalString(run.turn_instance_id) === identity.turn_instance_id &&
-    (!identity.todo_id || normalizeTodoId(run.todo_id) === identity.todo_id)
+    normalizeTodoId(run.todo_id) === identity.todo_id &&
+    isCommittedMonitorPollEffect(jsonObject(run.quota_monitor_poll_commit)?.effect_id, identity)
   ) ?? null;
   const nestedCausality = typeof receiptDetails.delivery_workspace_causality === "object" &&
       receiptDetails.delivery_workspace_causality !== null &&

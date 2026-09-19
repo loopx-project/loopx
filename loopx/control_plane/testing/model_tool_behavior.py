@@ -225,17 +225,24 @@ class DoubaoExecToolClient:
     def next_tool_call(
         self,
         messages: list[dict[str, Any]],
+        *,
+        tool_description: str | None = None,
     ) -> ExecToolCall | None:
-        return self.next_step(messages).tool_call
+        return self.next_step(messages, tool_description=tool_description).tool_call
 
     def next_step(
         self,
         messages: list[dict[str, Any]],
+        *,
+        tool_description: str | None = None,
     ) -> ExecToolStep:
         body = {
             "model": self._model,
             "messages": messages,
-            "tools": [EXEC_COMMAND_TOOL],
+            "tools": [EXEC_COMMAND_TOOL if tool_description is None else {
+                **EXEC_COMMAND_TOOL,
+                "function": {**EXEC_COMMAND_TOOL["function"], "description": tool_description},
+            }],
             "tool_choice": "auto",
             "thinking": {"type": "disabled"},
             "temperature": 0,
@@ -527,7 +534,7 @@ def execute_loopx_cli(
         else os.pathsep.join((str(source_root), existing_pythonpath))
     )
     completed = subprocess.run(
-        [sys.executable, "-m", "loopx.cli", *argv],
+        [sys.executable, "-P", "-m", "loopx.cli", *argv],
         cwd=project_root,
         env=env,
         check=False,
@@ -540,8 +547,13 @@ def execute_loopx_cli(
         bounded_detail = (
             detail if len(detail) <= 1_000 else detail[:500] + "\n...\n" + detail[-500:]
         )
-        raise RuntimeError(
-            "LoopX CLI command failed with "
-            f"exit={completed.returncode}: {bounded_detail}"
-        )
+        raise LoopxCliExecutionError(completed.returncode, bounded_detail)
     return completed.stdout
+
+
+class LoopxCliExecutionError(RuntimeError):
+    """An executed CLI returned nonzero; this does not imply state rollback."""
+
+    def __init__(self, returncode: int, detail: str) -> None:
+        super().__init__(f"LoopX CLI command failed with exit={returncode}: {detail}")
+        self.returncode = returncode

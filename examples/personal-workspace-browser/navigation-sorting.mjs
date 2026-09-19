@@ -15,17 +15,24 @@ export const navigationSortingScenario = {
     const notes = [];
     const pass = (criterion, note) => notes.push(`${criterion}: ${note}`);
     try {
+      // Network idleness can precede the per-Goal projection merge. Assert the
+      // settled home model, not the transient directory-only classification.
+      await page.waitForFunction(() => (
+        document.querySelectorAll(".personal-home-lanes .personal-home-goal-card").length === 5
+        && !document.querySelector('[data-testid="personal-home-lane-scheduled"]')
+      ), null, { timeout: 6_000 });
       const body = await page.locator("body").innerText();
-      for (const text of ["LoopX 管家", "需要你", "执行中", "观察中", "已安排", "历史", "GOALS", "Codex"]) {
+      for (const text of ["LoopX 管家", "需要你", "执行中", "观察中", "GOALS", "Codex"]) {
         if (!body.includes(text)) {
           await page.screenshot({ path: resolve(outputDir, "desktop-first-screen-failed.png"), fullPage: false, animations: "disabled" });
           throw new Error(`First screen missing ${text}; body=${body.slice(0, 2000)}`);
         }
       }
-      if (await page.locator(".personal-home-lane").count() !== 4) throw new Error("Manager home did not render four active lanes");
+      if (await page.getByTestId("personal-home-lane-scheduled").count()) throw new Error("An empty scheduled lane consumed home space");
+      if (await page.locator(".personal-home-lanes .personal-home-goal-card").count() !== 5) throw new Error("Compacting empty lanes hid an active Goal");
       if (body.includes("接下来")) throw new Error("Manager home still exposes the ambiguous 接下来 label");
       if (body.includes("stale-browser-goal")) throw new Error("An unregistered historical Goal remained interactive");
-      if (!(await page.locator(".personal-home-history").first().isVisible())) throw new Error("Completed Goals are not available through the collapsed history section");
+      if (await page.locator(".personal-home-history:not(.is-stopped)").count()) throw new Error("An empty history section consumed home space");
       const needsYouCount = await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count();
       const greeting = await page.locator(".personal-manager-greeting").innerText();
       if (!greeting.includes(`你有 ${needsYouCount} 项需要处理`)) {
@@ -89,11 +96,12 @@ export const navigationSortingScenario = {
       await page.screenshot({ path: resolve(outputDir, 'goal-reorder-default.png'), fullPage: false, animations: 'disabled' });
       if (!(await stoppedDirectory.isVisible()) || await stoppedDirectory.getAttribute("open") !== null) throw new Error("Stopped Goals are not available in a collapsed directory section");
       await page.waitForFunction(() => document.querySelectorAll(".personal-stopped-goals .personal-goal-row").length === 2, null, { timeout: 3_000 });
+      if (await page.locator(".personal-home-board").getByText("已停止", { exact: true }).count()) throw new Error("Stopped Goals still occupy the home board after archive load");
       await stoppedDirectory.locator("summary").click();
       await page.locator(".personal-goal-link").filter({ hasText: "Legacy Benchmark" }).click();
       await page.waitForFunction(() => new URL(window.location.href).searchParams.get("goalId") === "legacy-benchmark");
       const stoppedGoalBody = await page.locator(".personal-channel").innerText();
-      if (!stoppedGoalBody.includes("Legacy Benchmark") || !stoppedGoalBody.includes("历史、Todo 和证据仍保留")) {
+      if (!stoppedGoalBody.includes("Legacy Benchmark") || !stoppedGoalBody.includes("已停止") || !stoppedGoalBody.includes("成果") || !stoppedGoalBody.includes("任务")) {
         throw new Error(`Stopped Goal lost its archive context after merge: ${stoppedGoalBody.slice(0, 1200)}`);
       }
       await page.locator(".personal-goal-link").filter({ hasText: "Product Release" }).click();
@@ -120,8 +128,34 @@ export const navigationSortingScenario = {
         throw new Error(`Settings entry still renders as a weak transparent footer row: ${JSON.stringify(settingsEntryVisual)}`);
       }
       await page.screenshot({ path: resolve(outputDir, "desktop-first-screen.png"), fullPage: false, animations: "disabled" });
-      pass(4, "First viewport exposes needs-you, running, observing, and scheduled Goal lanes with collapsed history.");
+      pass(4, "First viewport exposes populated Goal lanes; stopped Goals remain in the sidebar and empty scheduled/history sections do not compete with active work.");
       pass(15, "Desktop viewport matches the approved single-sidebar/channel/drawer composition.");
+      await page.locator(".personal-goal-link").filter({ hasText: "LoopX meta" }).click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
+      const attention = page.locator(".goal-overview-attention");
+      await attention.getByRole("button", { name: "确认本轮独立审查范围" }).click();
+      await page.locator('.personal-context-drawer[data-context-kind="attention"]').waitFor({ state: "visible" });
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await page.locator(".personal-goal-link").filter({ hasText: "Product Release" }).click();
+      const goalNav = page.getByRole("navigation", { name: "Goal 视图" });
+      await goalNav.getByRole("button", { name: "概览", exact: true }).click();
+      const overview = page.locator(".goal-overview");
+      if (await overview.locator(".goal-overview-attention").count()) throw new Error("A quiet Goal still reserved a full attention card");
+      if (await overview.getByRole("button", { name: /查看任务|查看成果/ }).count()) throw new Error("Overview duplicated adjacent tab navigation");
+      const unknownUsage = await overview.locator(".goal-overview-usage dd").allInnerTexts();
+      if (unknownUsage.length !== 3 || unknownUsage.some(value => value !== "未采集")) throw new Error(`Unknown usage became a zero or disappeared: ${unknownUsage}`);
+      await overview.getByRole("alert").filter({ hasText: "交付快照读取失败" }).waitFor({ state: "visible" });
+      await overview.getByText("验收观测不可用，Goal 是否达成仍未知。", { exact: true }).waitFor({ state: "visible" });
+      await goalNav.getByRole("button", { name: "成果", exact: true }).click();
+      const output = page.getByTestId("personal-goal-outputs").getByRole("button", { name: /Product Release milestone report/ });
+      await output.waitFor({ state: "visible" });
+      if ((await output.locator("small").innerText()).includes("Product Release")) throw new Error("Output metadata repeated the selected Goal");
+      await output.click();
+      const outputDrawer = page.locator('.personal-context-drawer[data-context-kind="output"]');
+      await outputDrawer.waitFor({ state: "visible" });
+      if (!await outputDrawer.locator("dl").first().innerText().then(text => text.includes("Product Release") && text.includes("Agent"))) throw new Error("Compacting output cards lost provenance in their existing drawer");
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+      pass(26, "Overview keeps direct decisions, explicit unknown usage and read failures; output provenance is one click away.");
       await page.locator(".personal-goal-link").filter({ hasText: "Progress Projection" }).click();
       await page.getByRole("button", { name: /^(Tasks|任务)$/, current: "page" }).waitFor({ state: "visible" });
       await page.locator(".personal-task-card", { hasText: "Deferred queue task" }).locator("button").first().click();
@@ -245,8 +279,9 @@ export const navigationSortingScenario = {
       }
       const mobileOverflow = await mobile.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       if (mobileOverflow > 1) throw new Error(`Mobile workspace has ${mobileOverflow}px horizontal overflow`);
-      const promptRows = await mobile.locator(".personal-quick-prompts button").evaluateAll(buttons => new Set(buttons.map(button => Math.round(button.getBoundingClientRect().top))).size);
-      if (promptRows > 1) throw new Error("Mobile quick prompts displaced the workspace with multiple rows");
+      if (await mobile.locator(".personal-composer-tools").getAttribute("open") !== null) {
+        throw new Error("Optional suggestions unexpectedly occupied the initial mobile screen");
+      }
       await mobile.screenshot({ path: resolve(outputDir, "mobile-first-screen.png"), fullPage: false, animations: "disabled" });
       const mobileComposer = mobile.getByLabel("向 LoopX 发送消息");
       const composerBox = await mobileComposer.boundingBox();
@@ -376,6 +411,18 @@ export const navigationSortingScenario = {
       if (await page.getByRole("button", { name: /切换到野兽主题|切换到默认主题/ }).count()) throw new Error("Workspace header still exposes the old theme toggle");
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
       await page.getByRole("button", { name: /外观/ }).click();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForFunction(() => {
+        const nav = document.querySelector('.personal-settings-tabs');
+        const selected = nav?.querySelector('[aria-current="page"]');
+        if (!nav || !selected) return false;
+        const parent = nav.getBoundingClientRect();
+        const child = selected.getBoundingClientRect();
+        return child.left >= parent.left - 1 && child.right <= parent.right + 1;
+      });
+      if (await page.getByRole("heading", { name: "外观", exact: true }).count() !== 1) throw new Error("Settings repeated the same heading");
+      await page.screenshot({ path: resolve(outputDir, "mobile-settings-selected-category.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
       await page.getByRole("radio", { name: /高对比/ }).click();
       if (await page.locator(".personal-settings-page").getAttribute("data-pw-theme") !== "brutal") throw new Error("Settings did not enable the high-contrast theme");
       await page.getByRole("radio", { name: /纸张/ }).click();
@@ -395,8 +442,8 @@ export const navigationSortingScenario = {
       await page.waitForTimeout(600);
       const workerCards = await page.locator(".personal-worker-strip > button").count();
       if (workerCards !== 0) throw new Error(`Redundant Agent worker strip is still visible: ${workerCards}`);
-      if (!(await page.locator(".personal-digest-card").isVisible().catch(() => false))) throw new Error("Morning digest card did not render on the manager home");
-      pass(17, "Manager home keeps the morning digest while omitting the redundant Agent worker strip.");
+      if (await page.locator(".personal-digest-card").count()) throw new Error("A first-visit digest repeated attention counts without any new run results");
+      pass(17, "Manager home omits the empty first-visit digest and redundant Agent worker strip.");
 
     } finally {
       await context.close();

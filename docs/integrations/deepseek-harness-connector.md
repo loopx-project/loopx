@@ -179,6 +179,15 @@ host id:
   "endpoint_env": "DEEPSEEK_BASE_URL",
   "operator_credential_bound": true,
   "execution_profile": "deepseek-v4-flash@high",
+  "output_token_budget": {
+    "schema_version": "dsh_output_token_budget_v0",
+    "scope": "per_model_request",
+    "max_tokens": 16384,
+    "valid": true,
+    "source": "product_default",
+    "final_response_reserve_supported": false,
+    "hard_tool_budget_supported": false
+  },
   "available": true,
   "unavailable_reason": null
 }
@@ -197,6 +206,29 @@ line, `deepseek-v4-flash@high` in the shipped shape, with the provider prepended
 only when it is not the shipped one -- it is one line because every plan carries
 it, and the agent-facing output budget is a contract.
 
+`output_token_budget` is deliberately explicit about scope. With the validated
+DeepSeek Harness 0.1.5rc1 runtime, `maxTokens` caps each conversation-model
+request, not the sum of a tool-using Turn, and reasoning tokens are part of the
+reported output-token count. LoopX uses a product default of `16384` for both managed Turns and Chat
+segments, replacing the `256000` default observed on this SDK route. Explicit
+positive `--dsh-max-tokens` values retain their meaning; the cap reduces the
+maximum output allowance and is not a promise that a request will fit.
+The SDK exposes neither a hard tool-call budget nor a final-response reserve,
+so both are reported as unsupported instead of inferred. A `max-tokens` stop is
+`output_budget_exhausted`, never ordinary success or an automatic same-request
+retry; `no_final` and `partial` are distinguished in the public-safe failure
+reason while the raw session remains local.
+
+`output_token_budget` 会明确说明预算作用域。经验证的 DeepSeek Harness
+0.1.5rc1 中，`maxTokens` 限制每次模型请求，而不是整个含工具调用的 Turn；推理
+token 也计入输出 token。LoopX 使用 `16384` 的有界产品默认值，不静默继承适配器
+更大的精确路由默认值。SDK 没有提供硬工具调用预算或最终答复预留，因此控制面会
+明确标记为不支持。托管 Turn 与 Chat segment 使用同一默认上限，替换该 SDK
+路由原有的 `256000`；显式正整数上限仍有效，有界默认值不保证请求必定完成。
+`max-tokens` 必须归类为 `output_budget_exhausted`，不能当作
+普通成功或自动重试；公开安全的 reason 区分 `no_final` 与 `partial`，原始 Session
+仍只保留在本地。
+
 `runtime_probe` distinguishes an import probe (`scope: "probing_interpreter"`,
 `module: "deepseek_harness"`) from an injected runner (`scope: "configured_runner"`,
 `module: null`, no import attempted). Availability applies to the answering
@@ -209,8 +241,8 @@ output, outside the Turn payload.
 `run-once --execute` fails closed on that verdict: status `unavailable`, no host
 invocation, no journal write, and no quota spend, with
 `dsh_runtime_unavailable`, `operator_credential_unconfigured`, or
-`invalid_reasoning_effort` naming the missing fact. `plan` reports the same
-verdict without refusing.
+`invalid_reasoning_effort` / `invalid_output_token_limit` naming the missing
+fact. `plan` reports the same verdict without refusing.
 
 ## Boundaries
 

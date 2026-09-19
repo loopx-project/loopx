@@ -1,1 +1,41 @@
-.goal-loopx-mode{color:var(--pw-text,#171717);font-size:13px;margin-bottom:10px}.goal-loopx-mode-bar{display:flex;align-items:center;justify-content:space-between;gap:16px}.goal-loopx-mode strong{font-weight:500}.goal-loopx-mode p{font-size:12px;color:var(--pw-muted,#666);margin:4px 0}.goal-loopx-mode-actions{display:flex;gap:8px;flex-shrink:0}.goal-loopx-mode button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:40px;border:1px solid var(--pw-line,#ebebeb);background:var(--pw-surface,#fff);color:inherit;border-radius:6px;padding:8px 12px;font:inherit;cursor:pointer}.goal-loopx-mode button:disabled{opacity:.5;cursor:default}.goal-loopx-mode button:focus-visible,.goal-loopx-mode input:focus-visible,.goal-loopx-mode select:focus-visible{outline:2px solid #0070f3;outline-offset:2px}.goal-loopx-mode-settings{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;padding:16px;border:1px solid var(--pw-line,#ebebeb);border-radius:12px;background:var(--pw-surface,#fff)}.goal-loopx-mode-settings label{display:flex;flex-direction:column;gap:6px}.goal-loopx-mode-settings input,.goal-loopx-mode-settings select{min-width:0;width:100%;padding:8px;border:1px solid var(--pw-line,#ddd);border-radius:6px;background:var(--pw-surface,#fff);color:inherit;font:inherit}.goal-loopx-mode-settings label:nth-child(3),.goal-loopx-mode-settings p{grid-column:1/-1}.goal-loopx-mode-members{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.goal-loopx-mode-members span{padding:4px 8px;border:1px solid var(--pw-line,#ebebeb);border-radius:6px;font-size:12px}.goal-loopx-message-mode{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:12px}.goal-loopx-message-mode select{font:inherit;color:inherit;border:1px solid var(--pw-line,#ebebeb);border-radius:6px;background:var(--pw-surface,#fff);padding:6px}@media(max-width:640px){.goal-loopx-mode-bar{align-items:flex-start;flex-wrap:wrap;gap:8px}.goal-loopx-mode-actions{flex-wrap:wrap}.goal-loopx-mode-settings{grid-template-columns:1fr}.goal-loopx-mode button{min-height:44px}}
+.goal-loopx-mode { color: var(--pw-text, #171717); font-size: 13px; padding: 8px 26px; border-bottom: 1px solid var(--pw-line, #ebebeb); }
+.goal-loopx-mode-bar, .goal-loopx-mode-actions { display: flex; align-items: center; gap: 8px; }
+.goal-loopx-mode-bar { justify-content: space-between; gap: 16px; }
+.goal-loopx-mode-status { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-weight: 500; }
+.goal-loopx-mode-status > i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--pw-muted, #666); }
+.goal-loopx-mode-status[data-active="true"] > i { background: var(--pw-green, #13804a); }
+.goal-loopx-mode p { font-size: 12px; color: var(--pw-muted, #666); margin: 8px 0; line-height: 1.6; }
+.goal-loopx-mode .personal-composer-error { color: var(--pw-red, #b42318); }
+.goal-loopx-mode button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 44px; min-height: 44px; border: 1px solid var(--pw-line, #ebebeb); background: var(--pw-surface, #fff); color: inherit; border-radius: 6px; padding: 8px 12px; font: inherit; cursor: pointer; }
+.goal-loopx-mode .goal-loopx-primary { font-weight: 500; border-color: var(--pw-line-strong, #ddd); }
+.goal-loopx-mode .goal-loopx-team-trigger { border-color: transparent; background: transparent; }
+.goal-loopx-mode button:disabled { opacity: .5; cursor: default; }
+.goal-loopx-mode button:focus-visible, .goal-loopx-mode input:focus-visible, .goal-loopx-mode select:focus-visible, .goal-loopx-mode summary:focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; }
+.goal-loopx-alert-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pw-amber, #a66b00); }
+.goal-loopx-mode .goal-loopx-review-notice { color: var(--pw-amber, #a66b00); border: 0; padding-inline: 0; background: transparent; text-align: left; }
+.goal-loopx-dialog { margin: auto; padding: 0; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); border: 1px solid var(--pw-line, #ebebeb); border-radius: 16px; background: var(--pw-bg, #fafafa); color: var(--pw-text, #171717); overflow: auto; overscroll-behavior: contain; }
+.goal-loopx-dialog::backdrop { background: rgb(0 0 0 / 28%); }
+.goal-loopx-dialog-content { padding: 24px; }
+.goal-loopx-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.goal-loopx-dialog h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
+.goal-loopx-dialog h3 { margin: 24px 0 8px; font-size: 13px; font-weight: 600; }
+.goal-loopx-mode-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-block: 24px; }
+.goal-loopx-mode-settings label { display: flex; flex-direction: column; gap: 8px; }
+.goal-loopx-mode-settings input, .goal-loopx-mode-settings select { min-width: 0; width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--pw-line, #ddd); border-radius: 6px; background: var(--pw-surface, #fff); color: inherit; font: inherit; }
+.goal-loopx-mode-settings label:nth-child(3), .goal-loopx-mode-settings p { grid-column: 1 / -1; }
+.goal-loopx-message-mode { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; flex-wrap: wrap; }
+.goal-loopx-message-mode select { font: inherit; color: inherit; min-height: 44px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; background: var(--pw-surface, #fff); padding: 6px; }
+.goal-team-work ul { list-style: none; padding: 0; margin: 8px 0 24px; }
+.goal-team-work li { padding: 12px 0; border-bottom: 1px solid var(--pw-line, #ebebeb); overflow-wrap: anywhere; }
+.goal-team-bindings li > div, .goal-team-work-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.goal-team-work code { display: block; font-size: 12px; overflow-wrap: anywhere; white-space: normal; padding-bottom: 8px; }
+.goal-team-work summary { cursor: pointer; padding: 12px 0; min-height: 44px; font-size: 12px; color: var(--pw-muted, #666); }
+@media (max-width: 640px) {
+  .goal-loopx-mode { padding: 6px 14px; }
+  .goal-loopx-mode-bar { flex-wrap: wrap; gap: 0; }
+  .goal-loopx-mode-status { min-height: 32px; }
+  .goal-loopx-mode-actions { margin-left: auto; gap: 2px; }
+  .goal-loopx-mode-actions button { padding-inline: 8px; }
+  .goal-loopx-mode-settings { grid-template-columns: 1fr; }
+  .goal-loopx-dialog-content { padding: 16px; }
+}

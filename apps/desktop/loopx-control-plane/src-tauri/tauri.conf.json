@@ -33,7 +33,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI5OUQzOTdCNDJDODhDRTQKUldUa2pNaENlem1kS1V0UGo5R21vSnNRNlZUaS84SkludFMyZ2h5RWx5NVhIYVBuM25kOVBMQ1QK",
-      "endpoints": ["https://github.com/huangruiteng/loopx/releases/download/desktop-stable/desktop-updater.json"]
+      "endpoints": ["https://github.com/loopx-project/loopx/releases/download/desktop-stable/desktop-updater.json"]
     }
   }
 }

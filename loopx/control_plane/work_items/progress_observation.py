@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ...turn_identity import normalize_turn_instance_id
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..goals.goal_vision_state import normalize_goal_vision_state
 from ..todos.contract import (
     normalize_todo_task_domain,
@@ -37,31 +37,7 @@ TERMINAL_RESULT_CLASSES = {
     ProgressResultClass.EXPLORATION_EXHAUSTED.value,
     ProgressResultClass.NO_FOLLOWUP.value,
 }
-REPLAN_REQUIRED_OUTCOMES = (
-    "new_surface",
-    "new_hypothesis",
-    "new_probe_family",
-    "new_runnable_successor",
-    "coverage_backed_exploration_exhausted",
-    "new_concrete_blocker",
-    "coverage_backed_no_followup",
-)
-VISION_REPLAN_TRIGGER_KINDS = frozenset(
-    {
-        "vision_acceptance_gap",
-        "vision_checkpoint_missing",
-        "vision_outcome_checkpoint_required",
-        "vision_successor_required",
-        "required_agent_vision_missing",
-    }
-)
-VISION_REPLAN_REQUIRED_OUTCOMES = (
-    "fresh_vision_path_outcome",
-    "new_runnable_successor",
-    "new_concrete_blocker",
-    "coverage_backed_exploration_exhausted",
-    "coverage_backed_no_followup",
-)
+# Legacy ACK readback vocabulary; discharge authority lives in replan_semantics.ts.
 FRESH_VISION_PATH_DISPOSITIONS = frozenset(
     {"continue", "no_change", "replan"}
 )
@@ -350,31 +326,23 @@ def semantic_progress_delta(
     }
 
 
-def required_semantic_outcomes(
+def replan_writeback_requirements(
     obligation: Mapping[str, Any],
-) -> list[str]:
-    """Return exact typed outcomes accepted by this obligation source."""
+) -> dict[str, Any]:
+    """Adapt the shared typed discharge policy for CLI and host projection."""
+    try:
+        result = effect_runtime_result("work_item.replan_semantics.project", {
+            "operation": "requirements", "obligation": dict(obligation),
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    if not isinstance(result, Mapping):
+        raise RuntimeError("TypeScript replan requirements must be an object")
+    return dict(result)
 
-    declared = [
-        str(value or "").strip()
-        for value in (obligation.get("satisfying_semantic_outcomes") or [])
-        if str(value or "").strip()
-    ]
-    known = set(REPLAN_REQUIRED_OUTCOMES) | set(VISION_REPLAN_REQUIRED_OUTCOMES)
-    if declared:
-        if any(value not in known for value in declared):
-            raise ValueError(
-                "satisfying_semantic_outcomes contains an unknown typed outcome"
-            )
-        return list(dict.fromkeys(declared))
-    trigger_kinds = {
-        str(trigger.get("kind") or "").strip()
-        for trigger in (obligation.get("triggers") or [])
-        if isinstance(trigger, Mapping)
-    }
-    if trigger_kinds & VISION_REPLAN_TRIGGER_KINDS:
-        return list(VISION_REPLAN_REQUIRED_OUTCOMES)
-    return list(REPLAN_REQUIRED_OUTCOMES)
+
+def required_semantic_outcomes(obligation: Mapping[str, Any]) -> list[str]:
+    return list(replan_writeback_requirements(obligation)["required_any_of"])
 
 
 def replan_obligation_trigger_kinds(
@@ -437,77 +405,21 @@ def semantic_delta_from_writeback(
         progress_observation,
         baseline=baseline if isinstance(baseline, Mapping) else None,
     )
-    outcomes = list(observation_delta.get("delta_kinds") or [])
-
-    no_followup_consistency_error: str | None = None
-    if "coverage_backed_no_followup" in outcomes:
-        vision_state = ""
-        path_outcome = ""
-        if isinstance(agent_vision, Mapping):
-            vision_state = normalize_goal_vision_state(agent_vision.get("state"))
-            raw_path_delta = agent_vision.get("path_delta")
-            path_delta: Mapping[str, Any] = (
-                raw_path_delta if isinstance(raw_path_delta, Mapping) else {}
-            )
-            path_outcome = str(path_delta.get("outcome") or "").strip()
-        if vision_state != "no_followup" or path_outcome != "stop":
-            outcomes.remove("coverage_backed_no_followup")
-            no_followup_consistency_error = (
-                "coverage-backed no-follow-up requires agent_vision.state="
-                "no_followup and path_delta.outcome=stop"
-            )
-
-    if isinstance(agent_vision, Mapping):
-        raw_patch = agent_vision.get("vision_patch")
-        patch: Mapping[str, Any] = (
-            raw_patch if isinstance(raw_patch, Mapping) else {}
-        )
-        raw_path_delta = agent_vision.get("path_delta")
-        path_delta = (
-            raw_path_delta if isinstance(raw_path_delta, Mapping) else {}
-        )
-        path_outcome = str(path_delta.get("outcome") or "").strip()
-        evidence_refs = [
-            str(value or "").strip()
-            for value in (path_delta.get("evidence_refs") or [])
-            if str(value or "").strip()
-        ]
-        if (
-            str(patch.get("acceptance_summary") or "").strip()
-            and path_outcome in FRESH_VISION_PATH_DISPOSITIONS
-            and evidence_refs
-            and "fresh_vision_path_outcome" not in outcomes
-        ):
-            outcomes.append("fresh_vision_path_outcome")
-
-    required = required_semantic_outcomes(obligation)
-    satisfying = [outcome for outcome in outcomes if outcome in required]
-    if no_followup_consistency_error:
-        satisfying = []
+    vision = dict(agent_vision) if isinstance(agent_vision, Mapping) else {}
+    if vision:
+        vision["state"] = normalize_goal_vision_state(vision.get("state"))
+    try:
+        result = effect_runtime_result("work_item.replan_semantics.project", {
+            "operation": "qualify", "obligation": dict(obligation),
+            "observation_delta": observation_delta, "agent_vision": vision,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
     return {
-        "schema_version": "replan_semantic_delta_v0",
-        "accepted": bool(satisfying),
-        "outcomes": outcomes,
-        "satisfying_outcomes": satisfying,
-        "required_any_of": required,
+        **result,
         "trigger_kinds": replan_obligation_trigger_kinds(obligation),
         "trigger_checkpoints": replan_obligation_trigger_checkpoints(obligation),
         "obligation_id": obligation.get("obligation_id"),
-        "observation_fingerprint": observation_delta.get(
-            "observation_fingerprint"
-        ),
-        "reason": (
-            "writeback changes an outcome accepted by this obligation source"
-            if satisfying
-            else no_followup_consistency_error
-            if no_followup_consistency_error
-            else "writeback does not satisfy this obligation's typed outcomes"
-        ),
-        **(
-            {"reason_code": "no_followup_vision_path_inconsistent"}
-            if no_followup_consistency_error
-            else {}
-        ),
     }
 
 
@@ -642,7 +554,7 @@ def build_replan_action_packet(
             "explore_result_node_refs"
         ),
     )
-    writeback_contract: dict[str, Any] = {}
+    writeback_contract = replan_writeback_requirements(obligation)["writeback_contract"]
     successor_summary = str(
         selected_gap_values.get("successor_summary") or ""
     ).strip()[:240]

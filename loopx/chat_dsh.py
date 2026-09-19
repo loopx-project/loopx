@@ -34,7 +34,13 @@ import uuid
 
 from .chat import parse_agent_response
 from .chat_agent import CodexChatAgentError, CodexChatTimeoutError, _turn_prompt
-from .dsh_goal_mode.turn_host_adapter import resolve_dsh_home, run_dsh_turn
+from .control_plane.turn_driver.host_binding import dsh_output_token_budget
+from .dsh_goal_mode.turn_host_adapter import (
+    normalize_runner_outcome,
+    resolve_dsh_home,
+    run_dsh_turn,
+    terminal_output_budget_state,
+)
 
 EventSink = Callable[[str, dict[str, Any]], None]
 
@@ -140,6 +146,13 @@ class DshChatAdapter:
         return f"{self.objective.strip()}{history_block}\n\n{_turn_prompt(message)}"
 
     def _run_segment(self, prompt: str) -> dict[str, Any]:
+        budget = dsh_output_token_budget(self.max_tokens)
+        if not budget["valid"]:
+            raise CodexChatAgentError(
+                "The managed host requires a positive per-request output-token limit.",
+                gate=None,
+                error_code="invalid_output_token_limit",
+            )
         runner = self.runner or run_dsh_turn
         # The dsh sandbox's own setting wins, so a caller cannot widen the
         # segment's authority by passing a credential mapping that also carries
@@ -154,7 +167,7 @@ class DshChatAdapter:
             provider=self.provider,
             model=self.model,
             reasoning_effort=self.reasoning_effort,
-            max_tokens=self.max_tokens,
+            max_tokens=budget["max_tokens"],
             cordis=self.cordis,
             runtime_bin=self.runtime_bin,
             request_timeout_seconds=self.timeout_sec,
@@ -168,7 +181,7 @@ class DshChatAdapter:
                 gate=None,
                 error_code=MANAGED_HOST_CHAT_FAILED,
             )
-        return outcome
+        return normalize_runner_outcome(outcome)
 
     def _claim_segment_slot(self) -> _SegmentSlot:
         """Reserve the binding's one executor slot, or refuse a second executor.
@@ -237,6 +250,14 @@ class DshChatAdapter:
                 gate=None,
                 error_code=MANAGED_HOST_CHAT_FAILED,
             ) from error
+        budget_state = terminal_output_budget_state(outcome)
+        if budget_state is not None:
+            raise CodexChatAgentError(
+                "The managed host exhausted its per-request output budget. "
+                "No answer was accepted; inspect the session before a bounded recovery.",
+                gate=None,
+                error_code=f"dsh_output_budget_exhausted_{budget_state}",
+            )
         raw = str(outcome.get("final_response") or "").strip()
         if not raw:
             # An empty final message after a terminal provider error is the

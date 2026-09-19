@@ -14,7 +14,7 @@ from ..todos.contract import (
     normalize_todo_replan_obligation_id,
 )
 from ..todos.resume_planning import project_todo_resume_planning
-from .progress_observation import typed_progress_repeat_trigger
+from .progress_observation import replan_writeback_requirements, typed_progress_repeat_trigger
 from .replan_settlement import (
     project_todo_lifecycle_settlement_reentry as project_todo_lifecycle_reentry_effect,
 )
@@ -149,26 +149,9 @@ def build_autonomous_replan_cli_actions(
         ]
     raw_obligation = payload.get("autonomous_replan_obligation")
     obligation: Mapping[str, Any] = (
-        raw_obligation if isinstance(raw_obligation, Mapping) else {}
+        raw_obligation if isinstance(raw_obligation, Mapping) else payload
     )
-    vision_successor_required = any(
-        isinstance(trigger, Mapping)
-        and trigger.get("kind") == "vision_successor_required"
-        for trigger in obligation.get("triggers") or []
-    )
-    semantic_delta_args = (
-        "--agent-vision-json "
-        "'<path-to-evidence-linked-goal-vision-replan-contract-v0.json>'"
-        if vision_successor_required
-        else (
-            "--progress-result-class "
-            "<advanced|blocked|exploration_exhausted|no_followup> "
-            "--progress-surface-id <surface-id> "
-            "--progress-hypothesis-id <hypothesis-id> "
-            "--progress-probe-kind <probe-kind> "
-            "--progress-evidence-id <evidence-id>"
-        )
-    )
+    semantic_delta_args = replan_writeback_requirements(obligation)["cli_semantic_args"]
     delivery_args = (
         "--delivery-batch-scale single_surface "
         "--delivery-outcome outcome_progress "

@@ -90,6 +90,7 @@ import {
   runEvidenceCopy,
 } from "../features/personal-workspace/projection-localization";
 import {
+  goalHasExecutionSummary,
   normalizePersonalHomeModel,
   type WorkspaceAgentOption,
   type WorkspaceAttention,
@@ -475,6 +476,7 @@ type PersonalGoalItem = {
       matchingTodoCount: number;
     }>;
     enabled: boolean;
+    executionConfig?: string;
     maxChildren: number;
   };
   title: string;
@@ -1273,6 +1275,7 @@ function buildPersonalHomeModel(
           enabled: goal.spawn_policy?.mode === "multi_subagent"
             && goal.spawn_policy.spawn_allowed === true
             && goal.spawn_policy.max_children > 0,
+          executionConfig: goal.spawn_policy?.execution_config,
           maxChildren: goal.spawn_policy?.max_children ?? 0,
           modelConfig: goal.spawn_policy?.model_config,
         },
@@ -2618,7 +2621,10 @@ function PersonalGoalHome({
         },
       };
     }) : []),
-    ...(selectedGoal ? [{
+    // A persistent chat session is not itself waiting work. Only surface a
+    // Goal-level execution row when there is execution, evidence, or a wait/fault.
+    ...(selectedGoal && (runtimeBindings[selectedGoal.goalId]?.turnId
+      || selectedGoal.runEvidence || goalHasExecutionSummary(selectedGoal)) ? [{
       id: `run:${selectedGoal.goalId}`,
       kind: "run" as const,
       run: {
@@ -2857,7 +2863,16 @@ function PersonalGoalHome({
               changed: preview.changed,
               configuration: {
                 allowedDomains: preview.after.orchestration.allowed_domains,
+                codexHostCapacity: {
+                  configuredChildren: preview.codex_host_capacity.configured_children,
+                  newSessionRequired: preview.codex_host_capacity.new_session_required,
+                  requiredChildren: preview.codex_host_capacity.required_children,
+                  status: preview.codex_host_capacity.status,
+                  writeRequired: preview.codex_host_capacity.write_required,
+                  written: preview.codex_host_capacity.written,
+                },
                 enabled: preview.feature_summary.multi_subagent === "enabled",
+                executionConfig: preview.after.orchestration.execution_config,
                 maxChildren: preview.after.orchestration.max_children,
                 modelConfig: preview.after.orchestration.model_config,
               },
@@ -2868,7 +2883,16 @@ function PersonalGoalHome({
             const result = await applyGoalSubagentConfiguration(request, previewId);
             return {
               allowedDomains: result.after.orchestration.allowed_domains,
+              codexHostCapacity: {
+                configuredChildren: result.codex_host_capacity.configured_children,
+                newSessionRequired: result.codex_host_capacity.new_session_required,
+                requiredChildren: result.codex_host_capacity.required_children,
+                status: result.codex_host_capacity.status,
+                writeRequired: result.codex_host_capacity.write_required,
+                written: result.codex_host_capacity.written,
+              },
               enabled: result.feature_summary.multi_subagent === "enabled",
+              executionConfig: result.after.orchestration.execution_config,
               maxChildren: result.after.orchestration.max_children,
               modelConfig: result.after.orchestration.model_config,
             };

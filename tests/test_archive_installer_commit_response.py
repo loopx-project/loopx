@@ -83,7 +83,7 @@ def test_commit_response_uses_file_transport_and_cleans_up(tmp_path, valid, ref_
     gh = binary / "gh"
     gh.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -c " + shlex.quote(
         "import os,sys; "
-        "assert sys.argv[1:]==['api','--hostname','github.com','/repos/huangruiteng/loopx/commits/stable']; "
+        "assert sys.argv[1:]==['api','--hostname','github.com','/repos/loopx-project/loopx/commits/stable']; "
         "open(os.environ['TEST_CALLS'],'a').write('authenticated\\n'); "
         "sys.exit(1) if os.environ['TEST_API_MODE']=='unavailable' else None; "
         "sys.stdout.write(open(os.environ['TEST_RESPONSE']).read())"

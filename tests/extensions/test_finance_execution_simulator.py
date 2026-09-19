@@ -8,6 +8,7 @@ import tomllib
 
 import pytest
 
+from loopx.capabilities.catalog import build_capability_detail_packet
 from loopx.extensions.manifest import load_extension_manifest
 
 
@@ -85,16 +86,54 @@ def test_manifest_requires_only_the_simulation_permission() -> None:
     manifest = tomllib.loads(
         (EXTENSION_ROOT / "extension.toml").read_text(encoding="utf-8")
     )
+    pyproject = tomllib.loads(
+        (EXTENSION_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
 
     assert manifest["permissions"] == ["finance.operation.simulate"]
     assert manifest["runtime"]["required_permissions"] == ["finance.operation.simulate"]
     assert manifest["runtime"]["protocol"] == "finance_operation_executor_v0"
     normalized = load_extension_manifest(EXTENSION_ROOT / "extension.toml")
+    assert normalized["provider"]["version"] == pyproject["project"]["version"]
     assert normalized["implementations"] == [
         {
             "capability_id": "human-confirmed-operation-executor",
             "protocol": "finance_operation_executor_v0",
             "provider_id": "loopx-finance-execution",
-            "provider_version": "0.1.0",
+            "provider_version": "0.1.1",
+        }
+    ]
+
+
+def test_manifest_registers_the_capability_it_implements() -> None:
+    manifest_path = EXTENSION_ROOT / "extension.toml"
+
+    capability = build_capability_detail_packet(
+        "human-confirmed-operation-executor",
+        [manifest_path],
+    )["capability"]
+
+    assert capability["provider_id"] == "loopx-finance-execution"
+    assert capability["entry_command"] == (
+        "loopx goal-channel prepare-operation --help"
+    )
+    assert capability["provider_state"] == {
+        "declared": True,
+        "installed": False,
+        "enabled": False,
+        "ready": False,
+    }
+    assert capability["implementation_providers"] == [
+        {
+            "capability_id": "human-confirmed-operation-executor",
+            "protocol": "finance_operation_executor_v0",
+            "provider_id": "loopx-finance-execution",
+            "provider_version": "0.1.1",
+            "provider_state": {
+                "declared": True,
+                "installed": False,
+                "enabled": False,
+                "ready": False,
+            },
         }
     ]

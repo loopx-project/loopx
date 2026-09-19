@@ -53,6 +53,7 @@ def _fixture(
     registry.write_text(
         json.dumps(
             {
+                "common_runtime_root": str(tmp_path),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -71,6 +72,19 @@ def _fixture(
         encoding="utf-8",
     )
     return project, state, registry
+
+
+def _use_provider(state, registry, provider, monkeypatch):
+    if provider == "legacy":
+        return
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    isolate_sqlite_runtime(registry.parent, monkeypatch)
+    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    initialize_canonical_authority(registry.parent, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, leases=[], handoff_mode="soft_claim"),
+        state_path=state, provider=provider)
+    state.unlink()
 
 
 def _monitor_todos(registry: Path, project: Path) -> list[dict]:
@@ -111,10 +125,12 @@ def _packet(
     )
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_grouped_monitor_materialization_is_one_per_bucket_and_retires_empty_bucket(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, provider,
 ) -> None:
     project, state, registry = _fixture(tmp_path)
+    _use_provider(state, registry, provider, monkeypatch)
     ledger = tmp_path / "pr-lifecycle.jsonl"
     first = _packet(101)
     second = _packet(102)
@@ -186,17 +202,22 @@ def test_grouped_monitor_materialization_is_one_per_bucket_and_retires_empty_buc
         ledger_path=ledger,
         claimed_by=AGENT_ID,
         cadence="30m",
-        generated_at="2026-08-01T16:03:00Z",
+        # Completion uses the runtime clock; this new observation follows it.
+        generated_at="2030-08-01T16:03:00Z",
     )
     assert reopened["write_performed"] is True
     reopened_state = state.read_text(encoding="utf-8")
     assert reopened_state.count("task_class=continuous_monitor") == 1
     assert "status=open" in reopened_state
     assert "no_followup=true" not in reopened_state
+    if provider != "legacy":
+        assert reopened["projection_delivery"] in {"delivered", "current"}
 
 
-def test_group_membership_change_advances_monitor_generation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_group_membership_change_advances_monitor_generation(tmp_path: Path, monkeypatch, provider) -> None:
     project, state, registry = _fixture(tmp_path)
+    _use_provider(state, registry, provider, monkeypatch)
     ledger = tmp_path / "pr-lifecycle.jsonl"
     upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger, _packet(101))
     arguments = dict(registry_path=registry, goal_id=GOAL_ID, project=project,
@@ -363,7 +384,7 @@ def test_grouped_monitor_keeps_creator_ownership_across_turns_and_due_poll(
         ledger_path=ledger,
         claimed_by=AGENT_ID,
         cadence="30m",
-        generated_at="2026-08-01T16:33:00Z",
+        generated_at="2030-08-01T16:33:00Z",
     )
     assert reopened_by_creator["write_performed"] is True
     reopened = _monitor_todos(registry, project)[0]
@@ -404,10 +425,12 @@ def test_pr_lifecycle_command_contract_is_shared_by_all_operator_surfaces() -> N
         assert "--fetch-metadata" not in command
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_pr_lifecycle_execute_materializes_pending_monitor_and_keeps_goal_runnable(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, provider,
 ) -> None:
     project, state, registry = _fixture(tmp_path)
+    _use_provider(state, registry, provider, monkeypatch)
     metadata = tmp_path / "pr.json"
     metadata.write_text(
         json.dumps(
@@ -473,6 +496,33 @@ def test_pr_lifecycle_execute_materializes_pending_monitor_and_keeps_goal_runnab
     assert active.count("task_class=continuous_monitor") == 1
     assert "target_key=github-pr-state-huangruiteng--loopx-checks-pending" in active
     assert "task_class=advancement_task" in active
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unchanged_group_retries_display_without_repeating_business(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.todos import provider_projection as delivery
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    project, state, registry = _fixture(tmp_path)
+    _use_provider(state, registry, provider, monkeypatch)
+    ledger = tmp_path / "lifecycle.jsonl"
+    upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger, _packet(101))
+    args = dict(registry_path=registry, goal_id=GOAL_ID, project=project,
+        ledger_path=ledger, claimed_by=AGENT_ID, cadence="30m", generated_at="2030-01-01T00:00:00Z")
+    original = delivery.project_current_canonical_todos
+    def unavailable(**kwargs):
+        raise OSError("isolated display failure")
+    monkeypatch.setattr(delivery, "project_current_canonical_todos", unavailable)
+    first = materialize_issue_fix_grouped_monitors(**args)
+    assert first["projection_delivery"] == "pending"
+    assert first["projection_outbox"]["retry_business_mutation"] is False
+    before = read_canonical_todos_if_promoted(runtime_root=tmp_path, goal_id=GOAL_ID)
+    assert not state.exists()
+    monkeypatch.setattr(delivery, "project_current_canonical_todos", original)
+    recovered = materialize_issue_fix_grouped_monitors(**args)
+    assert recovered["write_performed"] is False
+    assert recovered["projection_delivery"] == "delivered"
+    assert read_canonical_todos_if_promoted(runtime_root=tmp_path, goal_id=GOAL_ID) == before
+    assert "[P2] Monitor" in state.read_text()
 
 
 def test_pr_lifecycle_execute_fetches_public_metadata_by_default(

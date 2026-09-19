@@ -67,6 +67,9 @@ assert.doesNotMatch(drawer, /agentLabel\} · \{selection\.item\.status\}/, "Run 
 assert.match(page, /activeSessionRun/, "Opening a Session preserves the selected run in Goal state");
 assert.match(page, /personal-session-record/, "Goal chat visibly identifies the loaded Session record");
 assert.match(header, /personal-goal-tabs/, "Goal Chat, Tasks, and Files stay one click away in the header");
+assert.match(chatData, /output_token_budget:[\s\S]*scope: z\.literal\("per_model_request"\)/, "Manager binding keeps the typed per-request output budget");
+assert.match(header, /managerOutputTokenBudgetLabel/, "Manager header renders the shared output-budget projection");
+assert.equal((i18n.match(/"header\.managerOutputTokenBudget"/g) ?? []).length, 2, "Output budget has English and Simplified Chinese product copy");
 for (const view of ["Chat", "Tasks", "Files"]) {
   assert.match(header, new RegExp(`\"${view.toLowerCase()}\"|>${view}<`), `Goal header exposes ${view}`);
 }
@@ -125,7 +128,8 @@ assert.match(dashboard, /NEXT_ACTION[\s\S]*下一步：/, "Session next actions 
 assert.match(tasks, /t\("tasks\.viewResult"\)/, "Tasks expose a direct result entry when a Session has answered");
 assert.match(tasks, /t\("tasks\.pendingAndRunning"\)/, "Tasks do not imply that every uncompleted Todo already has an active Run");
 assert.match(tasks, /t\("tasks\.chatRecent"\)/, "Tasks surface the latest Goal conversation without forcing a tab switch");
-assert.match(tasks, /t\("tasks\.chatUnchangedDescription"\)/, "Tasks explain that ordinary Chat does not silently mutate Todo state");
+// The browser journey verifies that ordinary Chat is read-only and the
+// explicit draft action changes only the composer, before any confirmed apply.
 assert.doesNotMatch(tasks, /personal-task-capability-callout|tab: "capabilities"/, "Goal Tasks does not spend a full-width row on capability settings");
 assert.match(header, /aria-label=\{t\("header\.goalSettings"\)\}/, "The Goal settings entry has an accessible label");
 assert.match(header, /onClick=\{onOpenGoalCapabilities\}/, "The Goal settings entry opens the existing capability owner directly");
@@ -152,8 +156,8 @@ assert.match(page, /t\("proposal\.primary\.goalCreate"\)/, "Goal creation names 
 assert.match(router, /const asksForMutation/, "Execution routing remains explicit inside the Router contract");
 assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated proposals are grouped into a compact summary");
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
-assert.match(page, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
-assert.match(page, /Boolean\(item\.run\.canInterrupt\)/, "Running count requires an active interruptible turn");
+assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
+assert.match(timeline, /Boolean\(item\.run\.canInterrupt\)/, "Running count requires an active interruptible turn");
 assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif"/, "Composer accepts bounded image types");
 assert.match(page, /imageInputRef\.current\?\.click\(\)/, "Attachment button explicitly opens the native file chooser");
 assert.match(page, /onDrop=\{\(event\)/, "Composer accepts dragged image files");
@@ -245,6 +249,7 @@ assert.match(drawer, /t\("drawer\.repository"\)/, "Goal settings display the loc
 assert.match(drawer, /t\("common\.readOnly"\)/, "Repository is visibly read-only");
 assert.doesNotMatch(drawer, /Add repository/, "Goal settings do not imply repository binding controls");
 assert.match(model, /subagentExecution\??:\s*WorkspaceGoalSubagentConfiguration/, "Goal exposes the projected sub-agent execution boundary");
+assert.match(model, /executionConfig\??:\s*string/, "Goal sub-agent settings expose the shared delegation binding pointer");
 for (const callback of ["onPreviewGoalSubagentConfiguration", "onApplyGoalSubagentConfiguration"]) {
   assert.match(model, new RegExp(`${callback}\\??:`), `Goal sub-agent settings expose ${callback}`);
   assert.match(drawer, new RegExp(`callbacks\\.${callback}`), `Goal drawer calls ${callback}`);
@@ -259,6 +264,8 @@ assert.match(drawer, /normalize.*SubagentDomains|normalizedSubagentDomains/, "Go
 assert.match(chatData, /\/api\/chat\/goal-subagents\/dry-run/, "Dashboard uses the local preview-locked Goal sub-agent API");
 assert.match(chatData, /\/api\/chat\/goal-subagents\/apply/, "Dashboard applies Goal sub-agent settings through the same local API");
 assert.match(chatData, /global_sync\.readback\.verified/, "Goal sub-agent success requires shared-state readback verification");
+assert.match(chatData, /execution_config:\s*request\.executionConfig/, "Goal sub-agent writes use the canonical execution-config field");
+assert.match(drawer, /subagentExecutionConfigHint/, "Goal sub-agent settings explain the local-private delegation binding boundary");
 assert.match(dashboard, /goal\.spawn_policy\?\.mode === "multi_subagent"/, "Rendered switch state comes from the status spawn-policy projection");
 assert.match(dashboard, /capabilities\.goal_subagent_configuration === "preview_locked"/, "Goal sub-agent UI requires the authoritative Chat capability opt-in");
 assert.match(dashboard, /goalSubagentConfigurationEnabled \? \{[\s\S]*subagentExecution:/, "Capability-off models omit the Goal sub-agent UI contract");
@@ -270,6 +277,10 @@ assert.doesNotMatch(drawer, /localStorage[\s\S]{0,120}subagent|subagent[\s\S]{0,
 assert.match(drawer, /authoritativeSupersedesReceipt/, "A newer authoritative status supersedes an apply receipt without closing the drawer");
 assert.match(drawer, /!subagentConfigurationsMatch\([\s\S]*baseline,[\s\S]*authoritativeSubagentConfiguration/, "Status changes away from the pre-apply baseline supersede the receipt even when they do not echo it");
 assert.match(i18n, /drawer\.subagentDescription/, "Sub-agent authority boundaries are localized in the Goal drawer");
+assert.match(chatData, /align_codex_host_capacity/, "Goal sub-agent confirmation carries the explicit Codex host-capacity request");
+assert.match(chatData, /codexHostCapacitySchema/, "Codex host-capacity receipts are schema validated before UI projection");
+assert.match(drawer, /subagentHostCapacityRaise/, "Goal sub-agent preview discloses a required Codex capacity raise");
+assert.match(drawer, /subagentAppliedRestart/, "Applied host capacity tells the operator that a new Session is required");
 
 for (const lane of ["needs_you", "running", "observing", "scheduled", "history"]) {
   assert.match(model, new RegExp(`"${lane}"`), `Manager home models the ${lane} lane`);
@@ -456,6 +467,8 @@ assert.match(chatData, /fetchGoalConfiguration\(goalId: string\)/, "Goal setting
 assert.match(goalCapabilitySettings, /restoreInheritance/, "Goal overrides expose an explicit path back to live machine defaults");
 assert.match(goalCapabilitySettings, /projectEditableCapabilityConfiguration/, "Goal writes project read models onto editor-owned fields");
 assert.match(goalCapabilitySettings, /status === "partial_write"/, "Goal settings preserve partial-write recovery outcomes");
+assert.match(goalCapabilitySettings, /codex_host_capacity\.write_required/, "Generic Goal capability preview shows the same Codex host-capacity adjustment");
+assert.match(goalCapabilitySettings, /host_capacity_pending/, "Generic Goal capability recovery distinguishes a host-capacity partial write from shared-sync failure");
 assert.match(chatData, /namespace_configuration:\s*namespaceConfiguration/, "The browser patches one owned namespace without round-tripping private namespaces");
 assert.match(chatData, /operation:\s*"remove"/, "The browser uses an explicit typed removal operation");
 assert.match(chatData, /z\.enum\(\["create", "update", "delete", "unchanged"\]\)/, "Machine previews recognize deletion as a first-class action");

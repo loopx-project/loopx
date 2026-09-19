@@ -327,7 +327,13 @@ def _replan_semantic_action_actor(_: str) -> dict[str, Any]:
         delivery_allowed=True,
         semantic_action_accepted=True,
         context_delivery="host_projected",
-        selected_semantic_outcomes=["new_surface"],
+        selected_semantic_outcomes=["fresh_vision_path_outcome"],
+        qualification_scope="required_vision_closeout",
+        trigger_kinds=["required_agent_vision_missing"],
+        required_semantic_outcomes=["fresh_vision_path_outcome", "new_runnable_successor", "new_concrete_blocker",
+                                    "coverage_backed_exploration_exhausted", "coverage_backed_no_followup"],
+        vision_closeout={"checkpoint_satisfied": True, "bound_writeback": True,
+                         "settled": True, "spend_count": 1, "original_obligation_closed": True},
     )
 
 
@@ -340,6 +346,24 @@ def _scoped_gate_successor_actor(_: str) -> dict[str, Any]:
         non_blocking_notice_surfaced=True,
         selected_action_matched_todo=True,
     )
+
+
+@pytest.mark.parametrize("overrides", [
+    {"qualification_scope": "semantic_action"},
+    {"trigger_kinds": ["typed_progress_repeat"]},
+    {"vision_closeout": {"checkpoint_satisfied": True, "settled": False}},
+    {"selected_semantic_outcomes": ["new_surface"]},
+])
+def test_required_vision_rejects_narrow_or_incomplete_actor_receipts(overrides: dict[str, Any]) -> None:
+    from loopx.control_plane.testing.actual_default_model_behavior_portfolio import _SCENARIOS, _receipt_alignment
+    spec = next(item for item in _SCENARIOS if item.scenario_id == "turn_required_vision_replan")
+    complete = _replan_semantic_action_actor("test")
+    expected = {key: complete[key] for key in (
+        "qualification_scope", "trigger_kinds", "required_semantic_outcomes", "vision_closeout",
+    )}
+    aligned, failures = _receipt_alignment(spec, {**complete, **overrides}, expected)
+    assert aligned is False
+    assert failures
 
 
 def _capability_monitor_repair_actor(_: str) -> dict[str, Any]:
@@ -427,27 +451,9 @@ def _replan_frontier_read_action(
 ) -> ScriptedExecToolAction:
     payload = _latest_tool_payload(request)
     action = payload["replan_action_packet"]
-    assert "new_surface" in action["uncovered_frontier"]["required_any_of"]
+    assert "fresh_vision_path_outcome" in action["uncovered_frontier"]["required_any_of"]
     assert "replan-frontier.json" in payload["active_state_next_action"]
     return ScriptedExecToolAction("cat replan-frontier.json")
-
-
-def _semantic_replan_action() -> ScriptedExecToolAction:
-    return ScriptedExecToolAction(
-        "loopx --format json --registry ignored --runtime-root ignored "
-        "refresh-state --goal-id replan-semantic-action-fixture "
-        "--agent-id codex-replan-semantic-action --progress-scope agent_lane "
-        "--classification bounded_replan_progress "
-        "--recommended-action inspect-the-new-surface "
-        "--delivery-batch-scale single_surface "
-        "--delivery-outcome outcome_progress "
-        "--progress-result-class advanced "
-        "--progress-surface-id surface-permission-config "
-        "--progress-hypothesis-id hypothesis-permission-default "
-        "--progress-probe-kind static-contract-read "
-        "--progress-evidence-id evidence-permission-config "
-        "--no-global-sync --suppress-external-sinks"
-    )
 
 
 def _capability_callsite_action(
@@ -548,14 +554,17 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
         )
 
     def replan_semantic_action_actor(run_id: str) -> Mapping[str, Any]:
+        from tests.control_plane.test_required_vision_closeout_behavior import (
+            vision_patch_action, projected_refresh, projected_spend,
+        )
         fixture_root = run_root("replan", run_id)
-        fixture = _build_replan_fixture(fixture_root / "oracle")
+        fixture = _build_replan_fixture(fixture_root / "oracle", required_vision=True)
         transport = ScriptedDoubaoExecTransport(
             [
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 _replan_frontier_read_action,
                 ScriptedExecToolAction("cat fixture/permission-config.json"),
-                _semantic_replan_action(),
+                vision_patch_action, projected_refresh, projected_spend,
             ]
         )
         return DoubaoReplanSemanticActionBehaviorActor(
@@ -564,6 +573,7 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
         ).qualify(
             qualification_id=run_id,
             fixture_root=fixture_root / "actor",
+            required_vision=True,
         )
 
     def scoped_gate_successor_actor(run_id: str) -> Mapping[str, Any]:

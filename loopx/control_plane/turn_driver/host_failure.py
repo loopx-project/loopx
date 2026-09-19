@@ -14,6 +14,7 @@ HOST_FAILURE_KINDS = frozenset(
         "auth_failed",
         "contract_rejected",
         "executor_timeout",
+        "output_budget_exhausted",
         "provider_capacity",
         "provider_overloaded",
         "quota_exhausted",

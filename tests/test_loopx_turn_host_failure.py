@@ -64,6 +64,14 @@ def test_exhausted_quota_requires_repair_instead_of_timed_retry() -> None:
     assert host_failure_retry_available(failure) is False
 
 
+def test_output_budget_exhaustion_cannot_blindly_retry() -> None:
+    failure = build_host_failure_record("output_budget_exhausted", attempt=1)
+
+    assert failure["retryable"] is False
+    assert "retry" not in failure
+    assert host_failure_retry_available(failure) is False
+
+
 def test_public_projection_rejects_unallowlisted_failure_fields() -> None:
     failure = build_host_failure_record("provider_capacity", attempt=1)
     failure["provider_message"] = "private provider prose"

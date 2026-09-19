@@ -812,7 +812,8 @@ def test_two_identical_blocked_successor_waits_trigger_bounded_replan() -> None:
     ] == obligation["satisfying_semantic_outcomes"]
     cli_actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     refresh_action = next(action for action in cli_actions if "refresh-state" in action)
-    assert "--progress-result-class" in refresh_action
+    assert "--agent-vision-json" in refresh_action
+    assert "--progress-result-class" not in refresh_action
     assert "--autonomous-replan-recorded" not in refresh_action
     assert "--repair-delta-kind" not in refresh_action
 

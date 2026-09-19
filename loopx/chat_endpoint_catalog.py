@@ -62,6 +62,7 @@ def managed_host_capability(runtime_root: Path | None = None) -> dict[str, Any]:
         # frontend's execution chip honest about the boundary.
         "sandbox_mode": STEWARD_SEGMENT_ENV["DSH_PERMISSION_MODE"],
         "execution_profile": profile,
+        "output_token_budget": binding.get("output_token_budget"),
         "source": "builtin",
     }
 

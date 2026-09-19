@@ -75,6 +75,7 @@ def test_a_segment_carries_the_resolved_profile_and_a_read_only_boundary(
     assert call["provider"] == "deepseek-official"
     assert call["model"] == "deepseek-v4-flash"
     assert call["reasoning_effort"] == "high"
+    assert call["max_tokens"] == 16_384
     # The channel pins its own segments read-only; dsh enforces it.
     assert call["env"] == STEWARD_SEGMENT_ENV
     assert call["session_root"] == tmp_path / ".local" / ".dsh-sessions"
@@ -107,6 +108,47 @@ def test_an_empty_final_message_fails_closed(tmp_path: Path) -> None:
         _adapter(runner, tmp_path).start_turn("status please", lambda *_args: None)
 
     assert raised.value.error_code == MANAGED_HOST_CHAT_FAILED
+
+
+@pytest.mark.parametrize("final_response", ["", _envelope("truncated answer")])
+@pytest.mark.parametrize("reason_source", ["field", "event"])
+def test_token_exhaustion_never_publishes_a_segment_answer(
+    tmp_path: Path, final_response: str, reason_source: str,
+) -> None:
+    terminal = {"finish_reason": "max-tokens"} if reason_source == "field" else {
+        "events": [{"type": "turn/end", "data": {"reason": {"kind": "max-tokens"}}}],
+    }
+    runner = _Runner({"final_response": final_response, **terminal})
+    adapter = _adapter(runner, tmp_path)
+    events: list[str] = []
+
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter.start_turn("status please", lambda kind, _payload: events.append(kind))
+
+    suffix = "partial" if final_response else "no_final"
+    assert raised.value.error_code == f"dsh_output_budget_exhausted_{suffix}"
+    assert adapter.history == []
+    assert not any(kind.startswith("answer.") for kind in events)
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.parametrize("limit,expected", [(None, 16_384), (5_000, 5_000)])
+def test_segment_budget_reaches_the_runner(tmp_path: Path, limit: int | None, expected: int) -> None:
+    runner = _Runner({"final_response": _envelope("answer"), "finish_reason": "stop"})
+    adapter = _adapter(runner, tmp_path)
+    adapter.max_tokens = limit
+    adapter.start_turn("status please", lambda *_args: None)
+    assert runner.calls[0]["max_tokens"] == expected
+
+
+@pytest.mark.parametrize("limit", [0, -1, True])
+def test_invalid_segment_budget_does_not_launch(tmp_path: Path, limit: object) -> None:
+    runner = _Runner({"final_response": _envelope("answer")})
+    adapter = _adapter(runner, tmp_path)
+    adapter.max_tokens = limit  # type: ignore[assignment]
+    with pytest.raises(CodexChatAgentError):
+        adapter.start_turn("status please", lambda *_args: None)
+    assert runner.calls == []
 
 
 def test_an_unreadable_segment_result_fails_closed(tmp_path: Path) -> None:

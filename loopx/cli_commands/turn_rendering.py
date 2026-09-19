@@ -48,11 +48,41 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
     actual = (
         recovery.get("actual") if isinstance(recovery.get("actual"), dict) else {}
     )
+    managed_executor = (
+        payload.get("managed_executor")
+        if isinstance(payload.get("managed_executor"), dict)
+        else {}
+    )
+    output_token_budget = (
+        managed_executor.get("output_token_budget")
+        if isinstance(managed_executor.get("output_token_budget"), dict)
+        else {}
+    )
+    host_failure = (
+        payload.get("host_failure")
+        if isinstance(payload.get("host_failure"), dict)
+        else {}
+    )
     return "\n".join(
         [
             "# LoopX Turn Run Once",
             f"- status: {payload.get('status')}",
             f"- result_kind: {payload.get('result_kind')}",
+            *(
+                [f"- execution_profile: {managed_executor['execution_profile']}"]
+                if managed_executor.get("execution_profile") else []
+            ),
+            *(
+                [f"- output_token_limit: {output_token_budget.get('max_tokens')}",
+                 f"- output_token_limit_scope: {output_token_budget.get('scope')}"]
+                if output_token_budget else []
+            ),
+            *(
+                [f"- host_failure_kind: {host_failure.get('kind')}",
+                 f"- host_failure_retryable: {host_failure.get('retryable')}",
+                 f"- failure_reason: {payload.get('reason')}"]
+                if host_failure.get("kind") == "output_budget_exhausted" else []
+            ),
             f"- validation: {validation.get('status')}",
             f"- recovery_kind: {validation.get('recovery_kind')}",
             f"- next_phase: {receipt.get('next_phase')}",

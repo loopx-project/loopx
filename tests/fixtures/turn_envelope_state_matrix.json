@@ -188,7 +188,7 @@
     {
       "name": "capability_gate",
       "patch": {
-        "effective_action": "capability_repair",
+        "effective_action": "capability_bridge_repair",
         "normal_delivery_allowed": false,
         "capability_repair_allowed": true,
         "recommended_action": "repair the missing benchmark runner capability",
@@ -229,7 +229,7 @@
         }
       },
       "expected": {
-        "effective_action": "capability_repair",
+        "effective_action": "capability_bridge_repair",
         "action.must_attempt": true,
         "boundary.capability_gate.action": "repair",
         "boundary.capability_gate.missing_capabilities": [
@@ -243,7 +243,7 @@
     {
       "name": "workspace_guard",
       "patch": {
-        "effective_action": "workspace_repair",
+        "effective_action": "agent_workspace_repair",
         "normal_delivery_allowed": false,
         "workspace_repair_allowed": true,
         "recommended_action": "repair the stale writable workspace",
@@ -274,7 +274,7 @@
         }
       },
       "expected": {
-        "effective_action": "workspace_repair",
+        "effective_action": "agent_workspace_repair",
         "action.must_attempt": true,
         "boundary.workspace_guard.action": "repair",
         "boundary.workspace_guard.status": "stale",

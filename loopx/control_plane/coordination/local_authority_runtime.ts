@@ -11,6 +11,7 @@ import {createHash} from "node:crypto";
 
 import type { JsonObject } from "../effect_program.ts";
 import {acceptanceWorkGuard, projectGoalAcceptance} from "../goals/acceptance_contract.ts";
+import {decodeMonitorPollObservation} from "../todos/monitor_metadata.ts";
 import {executeCoordinationMonitorPoll, COORDINATION_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA, COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA,
   COORDINATION_MONITOR_POLL_RESULT_SCHEMA} from "./todo_monitor_poll.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
@@ -63,6 +64,7 @@ import {
   COORDINATION_TODO_PLANNING_UPDATE_REQUEST_SCHEMA,
   COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA,
   COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA,
+  COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA,
   COORDINATION_TODO_UPDATE_RESULT_SCHEMA,
   executeCoordinationTodoUpdate,
 } from "./todo_update.ts";
@@ -740,7 +742,8 @@ export async function updateLocalCoordinationTodo(
     if (input.schema_version !== COORDINATION_TODO_UPDATE_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_TODO_PLANNING_UPDATE_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA &&
-        input.schema_version !== COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA) {
+        input.schema_version !== COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA &&
+        input.schema_version !== COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA) {
       throw new TypeError("local coordination Todo update request schema mismatch");
     }
     const planningIntent = input.planning_intent == null ? undefined :
@@ -750,11 +753,16 @@ export async function updateLocalCoordinationTodo(
       throw new TypeError("planning_intent requires the v1 Todo update request");
     }
     const completionUpdate = input.schema_version === COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA;
+    const observationUpdate = input.schema_version === COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA;
+    if (!observationUpdate && Object.hasOwn(input, "monitor_observation")) {
+      throw new TypeError("Monitor observation payload requires request v4");
+    }
+    if (observationUpdate && input.monitor_observation == null) throw new TypeError("Monitor update requires its observation payload");
     if (!completionUpdate && Object.hasOwn(input, "completion")) {
       throw new TypeError("Todo completion payload requires request v3");
     }
     if (completionUpdate && input.completion == null) throw new TypeError("Todo completion update requires its completion payload");
-    const reviewed = completionUpdate || input.schema_version === COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA;
+    const reviewed = observationUpdate || completionUpdate || input.schema_version === COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA;
     if (!reviewed && ["lifecycle_grants", "authority_reason", "registry_source",
       "expected_provider_revision", "expected_registry_sha256"].some(field => Object.hasOwn(input, field))) {
       throw new TypeError("Todo update admission and revision fields require request v2");
@@ -793,6 +801,7 @@ export async function updateLocalCoordinationTodo(
         lease_expected_version: optionalNonNegativeSafeInteger(input.lease_expected_version, "lease_expected_version"),
         patch: requireJsonObject(input.patch, "Todo update patch"),
         planning_intent: planningIntent,
+        ...(observationUpdate ? {monitor_observation: decodeMonitorPollObservation(input.monitor_observation)} : {}),
         ...(completionUpdate ? {completion: requireJsonObject(input.completion, "Todo completion payload")} : {}),
         clear_fields: input.clear_fields.map((field) => claimAgentValue(field, "clear field")),
         dry_run: input.dry_run as boolean,

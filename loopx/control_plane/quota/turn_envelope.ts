@@ -257,6 +257,8 @@ function replanActionPacket(payload: JsonObject): JsonObject | null {
     "schema_version", "decision", "obligation_id", "uncovered_frontier",
     "required_outcome", "allowed_terminal", "bounded_frontier",
   ]);
+  const writeback = object(source.writeback_contract);
+  if (writeback.vision_authoring) compact.writeback_contract = writeback;
   return Object.keys(compact).length > 0 ? compact : null;
 }
 

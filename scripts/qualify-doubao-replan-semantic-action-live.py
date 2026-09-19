@@ -32,6 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--qualification-id", required=True)
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    parser.add_argument("--required-vision", action="store_true", help="Qualify the missing-vision journey through bound settlement and readback.")
     return parser
 
 
@@ -49,6 +50,7 @@ def main() -> int:
         result = actor.qualify(
             qualification_id=args.qualification_id,
             fixture_root=Path(temp_dir),
+            required_vision=args.required_vision,
         )
     result["source"] = source
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))

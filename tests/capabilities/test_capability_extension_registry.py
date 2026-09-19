@@ -523,9 +523,18 @@ def test_context_provider_factory_dispatches_through_registered_builder() -> Non
 
 def test_cli_rejects_unknown_capability_without_traceback(
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        main(["capability", "show", "not-registered"])
+        main(
+            [
+                "--runtime-root",
+                str(tmp_path / "runtime"),
+                "capability",
+                "show",
+                "not-registered",
+            ]
+        )
 
     assert exc_info.value.code == 2
     assert "unknown capability `not-registered`" in capsys.readouterr().err

@@ -52,6 +52,7 @@ from .selected_todo_tool_behavior import (
     SELECTED_TODO_TOOL_FIXTURE_ACTION_TEXT,
     SELECTED_TODO_TOOL_FIXTURE_TODO_ID,
 )
+from .replan_vision_closeout_behavior import required_vision_scenario_contract
 
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_PORTFOLIO_SCHEMA_VERSION = (
     "actual_default_model_behavior_portfolio_v0"
@@ -843,47 +844,6 @@ def _validate_quota_hot_path_compaction_regression(
         raise ValueError("compaction regression must preserve the selected todo")
 
 
-def _validate_required_vision_replan_scenario(
-    source_packet: Mapping[str, Any],
-    contract: Mapping[str, Any],
-) -> None:
-    semantics = model_behavior_semantic_contract_from_packet(
-        source_packet,
-        arm="full_packet",
-    )
-    vision = semantics["vision_continuation"]
-    trigger_kinds = set(vision.get("trigger_kinds", []))
-    required = {
-        "selected_todo_id": None,
-        "user_action_required": False,
-        "must_attempt_work": True,
-        "quiet_noop_allowed": False,
-    }
-    if any(contract.get(field) != value for field, value in required.items()):
-        raise ValueError("required-vision scenario must execute before quiet wait")
-    if vision.get("required") is not True or (
-        "required_agent_vision_missing" not in trigger_kinds
-    ):
-        raise ValueError("required-vision scenario must preserve the profile gap")
-    if semantics["required_reads"]:
-        raise ValueError("required-vision replan must not require a model read ritual")
-    action_packet = source_packet.get("replan_action_packet")
-    obligation = source_packet.get("autonomous_replan_obligation")
-    if not (
-        isinstance(action_packet, Mapping)
-        and isinstance(obligation, Mapping)
-        and action_packet.get("decision") == "replan_required"
-        and action_packet.get("obligation_id") == obligation.get("obligation_id")
-        and dict(obligation.get("replan_context") or {}).get("delivery")
-        == "host_projected"
-    ):
-        raise ValueError(
-            "required-vision scenario must preserve host-delivered replan context"
-        )
-    if semantics["scheduler_action"].get("action") != "run_now":
-        raise ValueError("required-vision scenario must remain immediately runnable")
-
-
 def _validate_planning_horizon_model_scenario(
     source_packet: Mapping[str, Any],
 ) -> None:
@@ -993,8 +953,6 @@ def _validate_control_plane_composition_scenario(
     source_packet: Mapping[str, Any],
     contract: Mapping[str, Any],
 ) -> None:
-    if spec.scenario_id == "turn_required_vision_replan":
-        _validate_required_vision_replan_scenario(source_packet, contract)
     if spec.scenario_id == "turn_scoped_gate_successor_replan":
         signature = quota_action_signature_document(source_packet)
         action = dict(signature.get("action") or {})
@@ -1111,6 +1069,8 @@ def _scenario_contract(
     _validate_identity_scenario_contract(spec, source_packet, contract)
     _validate_planning_context_scenario(spec, source_packet, contract)
     _validate_control_plane_composition_scenario(spec, source_packet, contract)
+    if spec.scenario_id == "turn_required_vision_replan":
+        contract.update(required_vision_scenario_contract(source_packet, contract))
     _validate_compaction_scenario(spec, source_packet, actor_packet, contract)
     if spec.scenario_family == "diagnostic_authority_boundary":
         diagnostic = dict(actor_packet.get("agent_todo_summary") or {})
@@ -1183,6 +1143,11 @@ def _receipt_alignment(
             if receipt.get(field) != expected[field]
         ]
         mismatches.extend(str(item) for item in receipt.get("safety_violations") or [])
+        if spec.scenario_id == "turn_required_vision_replan" and not (
+            receipt.get("semantic_action_accepted") is True
+            and set(receipt.get("selected_semantic_outcomes") or []).intersection(expected["required_semantic_outcomes"])
+        ):
+            mismatches.append("required_vision_outcome_not_accepted")
         if (
             spec.semantic_contract_fields
             and receipt.get("semantic_contract_complete") is not True

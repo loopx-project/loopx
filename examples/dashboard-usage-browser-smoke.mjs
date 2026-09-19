@@ -94,7 +94,7 @@ async function main() {
     requireText(await openDrawer(page, "Usage unknown"), ["Not measured"], "unknown measurement");
     await page.locator(".personal-drawer-close").click();
     requireText(await openDrawer(page, "Usage zero"), ["0 / 0", "$0.00 / $0.00", "0ms / 0ms"], "measured zero");
-    requireText(await page.locator(".personal-channel-title").innerText(), ["0 tokens", "$0.00", "0ms"], "zero header");
+    rejectText(await page.locator(".personal-channel-title").innerText(), ["0 tokens", "$0.00", "0ms"], "usage belongs in overview and details, not repeated in the header");
     await page.locator(".personal-drawer-close").click();
     const partial = await openDrawer(page, "Usage partial");
     requireText(partial, ["1.5k / 3.0k", "Not measured"], "partial measurement");

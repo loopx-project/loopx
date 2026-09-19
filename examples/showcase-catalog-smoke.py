@@ -277,7 +277,7 @@ def main() -> int:
     for phrase in (
         "Loop engineering for long-horizon AI agents and peer agent teams.",
         "The open, provider-neutral, stateful control plane for long-horizon agents.",
-        "https://huangruiteng.github.io/loopx/",
+        "https://loopx-project.github.io/loopx/",
         "## Advanced Paths",
         "docs/assets/long-running-loop-openviking-trajectory.png",
         "docs/assets/long-running-loop-ml-experiment-trajectory.png",
@@ -294,7 +294,7 @@ def main() -> int:
     featured_section = repo_readme.split("### Used In Real Projects", 1)[1].split("More inspectable surfaces:", 1)[0]
     assert featured_section.count("- **Independent user") == 3, featured_section
     assert "user-feedback-coverage.md" in showcase_index, showcase_index
-    hosted_frontstage = "https://huangruiteng.github.io/loopx/frontstage/"
+    hosted_frontstage = "https://loopx-project.github.io/loopx/frontstage/"
     assert hosted_frontstage not in repo_readme, (
         "README must promote the public homepage instead of hosted frontstage"
     )

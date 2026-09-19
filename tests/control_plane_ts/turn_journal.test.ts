@@ -373,6 +373,30 @@ test("caller-authored Host retryability fails closed", () => {
   assert.equal(result.recovery_decision.reason, "host_retry_contract_invalid");
 });
 
+test("output budget exhaustion cannot reinvoke the Host", () => {
+  const input = failedHostRetryRequest({ kind: "output_budget_exhausted" });
+  input.journal.host_failure = {
+    schema_version: "loopx_turn_host_failure_v0",
+    kind: "output_budget_exhausted",
+    attempt: 1,
+    retryable: false,
+  };
+
+  const result = interpretTurnJournal(input);
+
+  assert.equal(result.recovery_decision.action, "blocked");
+  assert.equal(result.recovery_decision.reinvoke_host, false);
+  assert.equal(result.recovery_decision.reason, "host_retry_not_available");
+  assert.deepEqual(result.recovery_decision.checks, [
+    { kind: "journal_consistency", outcome: "passed" },
+    {
+      kind: "host_retry_policy",
+      outcome: "failed",
+      reason: "host_retry_not_available",
+    },
+  ]);
+});
+
 test("Host retry metadata with extra fields fails closed", () => {
   let input = failedHostRetryRequest({
     failureFields: {

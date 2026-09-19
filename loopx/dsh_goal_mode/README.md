@@ -84,6 +84,41 @@ adapter rejects contradictory or malformed runner outcomes as
 `contract_rejected`. Result parsing and shaping failures use the same typed
 contract failure instead of collapsing into `unknown`.
 
+### Output budget semantics / 输出预算语义
+
+LoopX defaults `--dsh-max-tokens` and managed Chat segments to `16384`. DeepSeek Harness 0.1.5rc1 applies
+that value to **each model request**, includes reasoning tokens inside output
+tokens, and does not expose either a whole-Turn hard tool budget or a reserved
+final-response budget. The managed-executor projection therefore reports
+`scope=per_model_request`, the effective limit and both unsupported controls;
+callers must not present it as a whole-run budget.
+
+When the SDK terminates with `finish_reason=max-tokens`, the built-in host emits
+the non-retryable `output_budget_exhausted` failure. Empty output is recorded as
+`dsh_output_budget_exhausted_no_final`; non-empty output is still treated as an
+untrusted partial fragment and recorded as
+`dsh_output_budget_exhausted_partial`. Neither path validates, writes state,
+spends quota, or automatically repeats the request. The subprocess adapter
+returns the same distinction as a typed `iteration_failed` result because a
+nonzero process exit would erase it. A recovery is allowed only after a caller
+proves an explicit remaining budget and reusable evidence from the retained
+local session. Managed Chat uses the same limit resolver and terminal classifier;
+a truncated segment emits a typed error without publishing an answer or adding
+the fragment to visible history. This applies to frontend and Lark consumers of
+the shared Chat runtime.
+
+LoopX 将 `--dsh-max-tokens` 默认设为 `16384`。在 DeepSeek Harness 0.1.5rc1
+中，这个值限制的是**每次模型请求**，推理 token 计入输出 token；SDK 目前不提供
+整 Turn 的硬工具调用预算，也不支持为最终答复预留 token。因此控制面会明确投影
+作用域、有效上限和两项不支持的能力，调用方不得把它描述为整次运行预算。
+
+SDK 以 `finish_reason=max-tokens` 结束时，内置 host 会产生不可自动重试的
+`output_budget_exhausted`。空输出标记为 `no_final`，非空输出也只视为不可信的
+`partial` 残片；两者都不会进入验证、写状态或消耗配额。只有在调用方能够证明
+显式剩余预算和可复用本地证据时，才可以规划新的有界恢复，禁止盲目重跑。
+托管 Chat 复用同一上限与终止分类；截断 segment 只返回类型化错误，不发布答复、
+不写入可见对话历史。前端和 Lark 都通过共享 Chat runtime 获得此行为。
+
 ## Requirements
 
 - Optional dependency group `loopx[deepseek-harness]`, currently pinned to the

@@ -28,7 +28,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from ..control_plane.turn_driver.host_candidate import (
     ACCEPTED_RESULT_KINDS as ACCEPTED_RESULT_KINDS,
@@ -52,6 +52,10 @@ from ..control_plane.turn_driver.execution_profile import (
     managed_execution_profile,
     managed_profile_unavailable_reason,
     require_supported_reasoning_effort,
+)
+from ..control_plane.turn_driver.host_binding import (
+    DEFAULT_DSH_OUTPUT_TOKEN_LIMIT,
+    dsh_output_token_budget,
 )
 from ..control_plane.turn_driver.host_failure import BuiltInHostError
 
@@ -284,6 +288,27 @@ def terminal_error_reason(outcome: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def terminal_output_budget_state(
+    outcome: Mapping[str, Any],
+) -> Literal["partial", "no_final"] | None:
+    """Classify a token-limited terminal outcome without accepting a fragment.
+
+    DeepSeek Harness 0.1.5rc1 defines ``maxTokens`` as a per-model-request
+    output cap and counts reasoning inside ``outputTokens``. A max-token stop
+    therefore cannot prove that the final response is complete, even when the
+    SDK exposes a non-empty last assistant fragment.
+    """
+
+    if outcome.get("finish_reason") != "max-tokens":
+        return None
+    final_response = outcome.get("final_response")
+    return (
+        "partial"
+        if isinstance(final_response, str) and final_response.strip()
+        else "no_final"
+    )
+
+
 def load_dsh_runner(path: Path) -> Callable[..., object]:
     """Load an explicit runner hook exposing ``run_dsh_turn``.
 
@@ -346,7 +371,10 @@ class DshHostConfig:
     provider: str | None = None
     model: str | None = None
     reasoning_effort: str | None = None
-    max_tokens: int | None = None
+    # Keep one bounded LoopX default instead of inheriting the selected
+    # adapter's much larger route default. This is a per-request cap, not a
+    # whole-Turn or tool-call budget.
+    max_tokens: int | None = DEFAULT_DSH_OUTPUT_TOKEN_LIMIT
     dsh_home: Path | None = None
     cordis: Path | None = None
     runtime_bin: str | None = None
@@ -416,6 +444,12 @@ def _execute_turn_host_request(
             "dsh_execution_profile_rejected",
             failure_kind="contract_rejected",
         )
+    output_token_budget = dsh_output_token_budget(config.max_tokens)
+    if not output_token_budget["valid"]:
+        raise BuiltInHostError(
+            "dsh_output_token_limit_rejected",
+            failure_kind="contract_rejected",
+        )
 
     try:
         prompt = render_prompt(authority)
@@ -435,7 +469,7 @@ def _execute_turn_host_request(
                 provider=str(profile["provider"]),
                 model=str(profile["model"]),
                 reasoning_effort=str(profile["reasoning_effort"]),
-                max_tokens=config.max_tokens,
+                max_tokens=output_token_budget["max_tokens"],
                 cordis=config.cordis,
                 runtime_bin=config.runtime_bin,
                 request_timeout_seconds=config.request_timeout_seconds,
@@ -457,6 +491,37 @@ def _execute_turn_host_request(
         raise BuiltInHostError(
             "dsh_execution_failed",
             failure_kind=classify_dsh_terminal_reason(failure_reason),
+        )
+
+    output_budget_state = terminal_output_budget_state(outcome)
+    if output_budget_state is not None:
+        reason = f"dsh_output_budget_exhausted_{output_budget_state}"
+        if terminal_errors_as_host_failure:
+            # Deliberately non-retryable: the SDK has no whole-Turn remaining
+            # budget or final-response reserve proof, so repeating the same
+            # call would be a blind rerun rather than a bounded recovery.
+            raise BuiltInHostError(
+                reason,
+                failure_kind="output_budget_exhausted",
+            )
+        return build_result(
+            request,
+            {
+                "result_kind": "iteration_failed",
+                "classification": reason,
+                "summary": (
+                    "DeepSeek Harness exhausted the per-request output budget "
+                    "before a trustworthy typed result was available."
+                ),
+                "next_action": (
+                    "Inspect the retained local session and start a fresh "
+                    "bounded recovery only with an explicit remaining budget "
+                    "and reusable evidence; do not blindly rerun the request."
+                ),
+                "vision_unchanged_reason": (
+                    "the token-limited host response was not admitted as progress"
+                ),
+            },
         )
 
     try:
@@ -531,7 +596,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"execution profile ({DEFAULT_REASONING_EFFORT})."
         ),
     )
-    parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_DSH_OUTPUT_TOKEN_LIMIT,
+        help=(
+            "Per-model-request output-token cap; defaults to the bounded "
+            f"LoopX value ({DEFAULT_DSH_OUTPUT_TOKEN_LIMIT}), not a whole-Turn budget."
+        ),
+    )
     parser.add_argument("--workspace", default=os.getcwd())
     parser.add_argument(
         "--dsh-home",

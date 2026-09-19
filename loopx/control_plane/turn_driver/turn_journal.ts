@@ -115,6 +115,7 @@ const hostFailureKinds: ReadonlySet<string> = new Set([
   "auth_failed",
   "contract_rejected",
   "executor_timeout",
+  "output_budget_exhausted",
   "provider_capacity",
   "provider_overloaded",
   "quota_exhausted",
@@ -335,8 +336,18 @@ function hostRetryPolicyCheck(journal: JsonObject): TurnRecoveryCheck | null {
       reason: "host_retry_budget_exhausted",
     };
   }
-  return retryable === true
-    ? { kind: "host_retry_policy", outcome: "passed" }
+  if (retryable === true) {
+    return { kind: "host_retry_policy", outcome: "passed" };
+  }
+  // A max-token terminal has no proved whole-Turn remaining budget or
+  // final-response reserve. Unlike legacy explicitly retried terminal errors,
+  // repeating it would be a blind rerun of an expensive request.
+  return kind === "output_budget_exhausted"
+    ? {
+        kind: "host_retry_policy",
+        outcome: "failed",
+        reason: "host_retry_not_available",
+      }
     : null;
 }
 

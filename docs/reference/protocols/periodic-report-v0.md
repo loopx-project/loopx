@@ -290,11 +290,14 @@ drift.
 `periodic_report_project_progress_projection_v0` is the built-in,
 domain-neutral source input. It groups typed project facts into progress,
 capability evolution, risks, next actions, and supporting evidence, with no
-more than eight primary audience items. Issue Fix has no special standing in
-either schema. It may register a peer source adapter under the same contract as
-release, research, operations, or another domain. OpenViking is likewise an
-optional archive/query provider behind a sink extension; it does not own
-trigger, selection, rendering, or delivery.
+more than eight primary audience items. The snapshot covers the whole Goal:
+facts produced by any Agent lane are selectable, the requesting `agent_id`
+ranks that Agent's own outcomes and next action ahead of a peer lane's, so the
+audience-item cap cannot evict the reporter's own progress, and a row no Agent
+claimed stays out because it has no producer. Issue Fix has no special standing in either schema. It may register a
+peer source adapter under the same contract as release, research, operations, or
+another domain. OpenViking is likewise an optional archive/query provider behind
+a sink extension; it does not own trigger, selection, rendering, or delivery.
 
 `periodic_report_v0` is the LoopX control contract for one bounded report run.
 It binds a period window and a profile to typed source snapshots, one rendered
@@ -349,7 +352,10 @@ does not parse rendered Markdown or infer titles from fingerprints. Its
 interaction semantics are `attention_kind=progress`, `interaction=inform`,
 `delivery=surface`, and `writable=false`. Compact counts distinguish facts
 added since the preceding verified publication from facts whose semantic
-fingerprint changed.
+fingerprint changed. "Already published" is a Goal-level property: every cursor
+file the Goal recorded contributes its published fingerprints, so a fact another
+lane delivered is not announced again by this lane, including by a lane that has
+never published. Each lane's own baseline still decides what counts as changed.
 
 Generation alone does not expose this projection. The publication candidate
 binds its exact SHA-256, and the Goal Channel sink may advance that binding into the

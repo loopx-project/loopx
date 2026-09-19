@@ -48,9 +48,9 @@ def test_update_route_promotes_declarative_decision_metadata() -> None:
     )
 
 
-def test_completion_intent_routes_to_canonical_but_monitor_observations_do_not() -> None:
+def test_completion_and_observation_intents_route_to_their_canonical_owners() -> None:
     intent = build_canonical_update_intent(reason="ordinary")
-    assert not canonical_update_is_supported(
+    assert canonical_update_is_supported(
         text=None,
         note=None,
         intent=intent,

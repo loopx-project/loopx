@@ -284,6 +284,23 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -e ".[test]"
           npm ci --ignore-scripts
+      - name: Prepare native shell isolation
+        # Ubuntu 24.04 may need an executable-scoped userns profile for bwrap.
+        # Do not disable AppArmor or the system-wide unprivileged-userns guard.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if ! bwrap --unshare-all --ro-bind / / /bin/true; then
+            sudo tee /etc/apparmor.d/loopx-qualification-bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile loopx-qualification-bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+            sudo apparmor_parser -r /etc/apparmor.d/loopx-qualification-bwrap
+          fi
+          bwrap --unshare-all --ro-bind / / /bin/true
       - name: Run test shard
         # Split the whole collection, not a hand-maintained list of directories.
         # Without timing history least_duration alternates equal-weight tests.

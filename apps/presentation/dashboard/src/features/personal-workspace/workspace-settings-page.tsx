@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Check, KeyRound, Languages, Palette, ServerCog, Settings2, SlidersHorizontal } from "lucide-react";
 
 import type { WorkspaceLocale } from "./i18n";
@@ -46,6 +46,25 @@ export function WorkspaceSettingsPage({
 }) {
   const { locale, setLocale, t } = useWorkspaceI18n();
   const [tab, setTab] = useState<WorkspaceSettingsTab>(initialTab);
+  const tabsRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const navigation = tabsRef.current;
+    if (!navigation) return;
+    const revealSelectedTab = () => {
+      if (navigation.scrollWidth <= navigation.clientWidth) return;
+      const selected = navigation.querySelector('[aria-current="page"]');
+      if (!selected) return;
+      const parent = navigation.getBoundingClientRect();
+      const child = selected.getBoundingClientRect();
+      const delta = child.left < parent.left ? child.left - parent.left
+        : child.right > parent.right ? child.right - parent.right : 0;
+      if (delta) navigation.scrollLeft += delta;
+    };
+    revealSelectedTab();
+    const observer = new ResizeObserver(revealSelectedTab);
+    observer.observe(navigation);
+    return () => observer.disconnect();
+  }, [tab]);
   const tabs: Array<{ key: WorkspaceSettingsTab; label: string }> = [
     ...(initialGoalId ? [{ key: "capabilities" as const, label: t("capabilities.title") }] : []),
     // The model provider is one machine decision (which endpoint and key the
@@ -98,10 +117,9 @@ export function WorkspaceSettingsPage({
           <span>{t("settings.back")}</span>
         </button>
         <div className="personal-settings-title">
-          <small>{t("settings.eyebrow")}</small>
           <strong>{t("settings.title")}</strong>
         </div>
-        <nav aria-label={t("settings.categories")} className="personal-settings-tabs">
+        <nav aria-label={t("settings.categories")} className="personal-settings-tabs" ref={tabsRef}>
           {tabs.map((item) => {
             const Icon = tabIcons[item.key];
             return (
@@ -151,8 +169,6 @@ export function WorkspaceSettingsPage({
 
         {tab === "appearance" ? (
           <section className="personal-detail-card personal-appearance-settings">
-            <small>{t("settings.workspaceDisplay")}</small>
-            <h3>{t("settings.appearance")}</h3>
             <div className="personal-settings-choice-group" role="radiogroup" aria-label={t("settings.workspaceTheme")}>
               <button aria-checked={theme === "loopx"} onClick={() => onThemeChange("loopx")} role="radio" type="button">
                 <span className="personal-settings-theme-swatch is-loopx" />
@@ -172,12 +188,6 @@ export function WorkspaceSettingsPage({
 
         {tab === "language" ? (
           <section className="personal-settings-card">
-            <header>
-              <span className="personal-settings-icon"><Languages size={18} /></span>
-              <div>
-                <h2>{t("settings.language")}</h2>
-              </div>
-            </header>
             <div aria-label={t("settings.language")} className="personal-language-options" role="radiogroup">
               {localeOptions.map((option) => (
                 <button

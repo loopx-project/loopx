@@ -28,7 +28,7 @@ def build(directory: Path, version: str, tag: str) -> dict:
         if not signature:
             raise ValueError(f"missing signature: {platform}")
         platforms[platform] = {
-            "url": f"https://github.com/huangruiteng/loopx/releases/download/{quote(tag)}/{quote(artifact.name)}",
+            "url": f"https://github.com/loopx-project/loopx/releases/download/{quote(tag)}/{quote(artifact.name)}",
             "signature": signature,
         }
     return {"version": version, "notes": "LoopX App and matching bundled runtime.", "platforms": platforms}

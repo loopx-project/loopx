@@ -161,8 +161,12 @@ function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, pr
         <section aria-live="polite" className="personal-capability-recovery">
           <AlertTriangle aria-hidden size={18} />
           <div>
-            <strong>{t("capabilities.partialWrite")}</strong>
-            <p>{t("capabilities.partialWriteDescription")}</p>
+            <strong>{t(partialWrite.host_capacity_pending
+              ? "capabilities.hostCapacityPartialWrite"
+              : "capabilities.partialWrite")}</strong>
+            <p>{t(partialWrite.host_capacity_pending
+              ? "capabilities.hostCapacityPartialWriteDescription"
+              : "capabilities.partialWriteDescription")}</p>
             <small>{partialWrite.recommended_action}</small>
           </div>
           <button onClick={onApplied} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.refreshSource")}</button>
@@ -172,6 +176,15 @@ function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, pr
         <section className="personal-capability-preview" aria-label={t("capabilities.preview") }>
           <strong>{t("capabilities.preview")}</strong>
           <span>{t(`machine.action.${preview.action}`)}</span>
+          {preview.codex_host_capacity ? <span>{t(
+            preview.codex_host_capacity.write_required
+              ? "drawer.subagentHostCapacityRaise"
+              : "drawer.subagentHostCapacityReady",
+            {
+              configured: preview.codex_host_capacity.configured_children ?? t("drawer.subagentHostCapacityImplicit"),
+              required: preview.codex_host_capacity.required_children,
+            },
+          )}</span> : null}
           <small>{t("capabilities.previewLocked")}</small>
         </section>
       ) : null}

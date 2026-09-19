@@ -116,6 +116,7 @@ def test_the_shipped_default_is_the_cli_endpoint_on_every_machine():
     assert binding["credential_env_var"] == ""
     assert binding["operator_credential_configured"] is False
     assert binding["execution_profile"] is None
+    assert binding.get("output_token_budget") is None
     assert binding["available"] is None
     assert binding["unavailable_reason"] is None
     assert binding["model"] == "gpt-6-astra"
@@ -152,6 +153,7 @@ def test_the_operator_credential_authenticates_without_selecting_the_executor():
     assert with_credential["model"] == "gpt-6-astra"
     assert with_credential["model_source"] == MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
     assert with_credential["execution_profile"] is None
+    assert with_credential.get("output_token_budget") is None
     # The credential is still reported as the fact it is, by variable name and
     # never by value, so an operator can see it was seen.
     assert with_credential["operator_credential_configured"] is True
@@ -652,6 +654,15 @@ def test_a_channel_without_a_session_reads_as_unbound(monkeypatch):
     )
 
     assert binding["available"] is True
+    assert binding["output_token_budget"] == {
+        "schema_version": "dsh_output_token_budget_v0",
+        "scope": "per_model_request",
+        "max_tokens": 16_384,
+        "valid": True,
+        "source": "product_default",
+        "final_response_reserve_supported": False,
+        "hard_tool_budget_supported": False,
+    }
     assert binding["session_mode"] is None
     assert binding["session_mode_source"] == (
         MANAGER_CHANNEL_SESSION_MODE_SOURCE_UNBOUND

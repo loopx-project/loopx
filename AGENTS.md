@@ -232,6 +232,9 @@ gates.
 
 ## UI Design Standard
 
+Apply the whole-viewport attention review in `docs/development/design.md`
+("Earn The User's Attention") before implementation and in PR visual evidence.
+
 Before changing or reproducing any LoopX UI, read and follow the repository-root
 `docs/development/design.md`. This includes websites, dashboards, desktop applications,
 documentation, prototypes, screenshots, and framework migrations. When an

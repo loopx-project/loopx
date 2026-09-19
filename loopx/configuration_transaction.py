@@ -69,6 +69,7 @@ def build_configuration_update_plan(
     changed_units: Mapping[str, Any],
     projected_configuration: Mapping[str, Any] | None,
     projection_field: str,
+    additional_write_required: bool = False,
 ) -> dict[str, Any]:
     """Build one provider-neutral, revision-locked configuration preview.
 
@@ -92,7 +93,7 @@ def build_configuration_update_plan(
 
     if not current_present and desired_present:
         action = "create"
-    elif current == desired:
+    elif current == desired and not additional_write_required:
         action = "unchanged"
     elif not desired_present:
         action = "delete"

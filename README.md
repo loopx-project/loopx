@@ -8,11 +8,11 @@
 
 <sub>Runs on top of Codex, Claude Code, Cursor, and other agent harnesses. LoopX preserves objectives, gates, todos, evidence, quota, and handoffs across turns; the harness executes bounded work.</sub>
 
-<a href="https://trendshift.io/repositories/102379?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="huangruiteng/loopx on Trendshift" width="220" height="48"></a>
+<a href="https://trendshift.io/repositories/102379?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/huangruiteng/loopx?filter=v*&display_name=tag)](https://github.com/huangruiteng/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20active-brightgreen.svg)](docs/product/release-readiness.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20active-brightgreen.svg)](docs/product/release-readiness.md)
 
-[Public website](https://huangruiteng.github.io/loopx/) · [Blog](https://huangruiteng.github.io/loopx/blog/) · [Docs](https://huangruiteng.github.io/loopx/docs/) · [Developer Book](https://huangruiteng.github.io/loopx/docs/book/en/) · [Try LoopX](#try-loopx) · [See real loops](#evidence) · [How it works](#why-loopx) · [简体中文](README.zh-CN.md)
+[Public website](https://loopx-project.github.io/loopx/) · [Blog](https://loopx-project.github.io/loopx/blog/) · [Docs](https://loopx-project.github.io/loopx/docs/) · [Developer Book](https://loopx-project.github.io/loopx/docs/book/en/) · [Try LoopX](#try-loopx) · [See real loops](#evidence) · [How it works](#why-loopx) · [简体中文](README.zh-CN.md)
 
 </div>
 
@@ -31,9 +31,9 @@ to hand off across turns, tools, and agents.
 
 ## Learn LoopX
 
-- **Developer Book** - the curated bilingual path from control-plane foundations to project onboarding and developer contributions. [中文版](https://huangruiteng.github.io/loopx/docs/book/) · [English](https://huangruiteng.github.io/loopx/docs/book/en/)
+- **Developer Book** - the curated bilingual path from control-plane foundations to project onboarding and developer contributions. [中文版](https://loopx-project.github.io/loopx/docs/book/) · [English](https://loopx-project.github.io/loopx/docs/book/en/)
 - **Getting started** - install, connect a project, and run your first governed loop. [Guide](docs/guides/getting-started.md)
-- **Docs** - the full reference and operations site. [LoopX Docs](https://huangruiteng.github.io/loopx/docs/)
+- **Docs** - the full reference and operations site. [LoopX Docs](https://loopx-project.github.io/loopx/docs/)
 
 ## Meet the Personal Agent Workspace
 
@@ -69,7 +69,7 @@ loopx dashboard
 ```
 
 `loopx dashboard` is the supported browser/PWA launch path. You can also download
-native desktop previews from the [1.0 release](https://github.com/huangruiteng/loopx/releases/tag/v1.0.0);
+native desktop previews from the [1.0 release](https://github.com/loopx-project/loopx/releases/tag/v1.0.0);
 they reuse the same loopback services and Goal state. Apple Silicon macOS supports
 signed App updates that pair the shell with its bundled runtime, plus repair and
 recovery. Python 3.11+ is required; the App is ad-hoc signed, not notarized.
@@ -226,13 +226,13 @@ creator dogfooding, reproducible demos, and explicit evidence-strength labels.
 
 ### Exploratory Benchmark Studies
 
-- **[SWE-Marathon](https://huangruiteng.github.io/loopx/benchmarks/swe-marathon/):**
+- **[SWE-Marathon](https://loopx-project.github.io/loopx/benchmarks/swe-marathon/):**
   Five execution modes on 15 matched tasks compare self-verification, scores,
   and cost. More self-verification did not consistently yield higher scores.
-- **[LHTB × LoopX](https://huangruiteng.github.io/loopx/benchmarks/lhtb/):**
+- **[LHTB × LoopX](https://loopx-project.github.io/loopx/benchmarks/lhtb/):**
   Five execution mechanisms on 46 long-horizon terminal tasks compare durable
   state, bounded Todos, replanning, and fresh executor sessions.
-- **[DeepSWE behavior analysis](https://huangruiteng.github.io/loopx/benchmarks/deepswe/behavior-discovery/)** (Chinese):
+- **[DeepSWE behavior analysis](https://loopx-project.github.io/loopx/benchmarks/deepswe/behavior-discovery/)** (Chinese):
   Selected cases examine how domain hints relate to requirement retention and
   verification choices, offering mechanism hypotheses for further testing.
 
@@ -242,7 +242,7 @@ gain.
 
 More inspectable surfaces:
 
-- the [public homepage](https://huangruiteng.github.io/loopx/) for the product
+- the [public homepage](https://loopx-project.github.io/loopx/) for the product
   narrative, quick start, and long-running evidence;
 - the [complete Showcase catalog](docs/showcases/README.md) and its
   [bilingual hosted index](docs/showcases/index.html);
@@ -354,8 +354,8 @@ If LoopX works for you, a one-minute public issue helps us learn what a real
 first run looks like. It is optional, contains no telemetry, and should not
 include logs, paths, credentials, internal project names, or goal contents:
 
-- [First-run feedback](https://github.com/huangruiteng/loopx/issues/new?template=first_run.yml)
-- [Usage story for longer runs](https://github.com/huangruiteng/loopx/issues/new?template=usage_story.yml)
+- [First-run feedback](https://github.com/loopx-project/loopx/issues/new?template=first_run.yml)
+- [Usage story for longer runs](https://github.com/loopx-project/loopx/issues/new?template=usage_story.yml)
 
 `loopx first-run-report` prints the same prefilled link locally without
 sending anything.
@@ -372,7 +372,7 @@ A successful connection has:
 Clone-based install is only for contributors who want the live canary wrapper:
 
 ```bash
-git clone https://github.com/huangruiteng/loopx ~/loopx
+git clone https://github.com/loopx-project/loopx ~/loopx
 ~/loopx/scripts/install-local.sh
 loopx doctor
 ```
@@ -533,8 +533,8 @@ quota, and handoff explicit.
 ### App and Projection Paths
 
 - Local read-first UI: [dashboard guide](apps/presentation/dashboard/README.md)
-- Public product overview: [public homepage](https://huangruiteng.github.io/loopx/)
-- Documentation portal: [hosted docs](https://huangruiteng.github.io/loopx/docs/)
+- Public product overview: [public homepage](https://loopx-project.github.io/loopx/)
+- Documentation portal: [hosted docs](https://loopx-project.github.io/loopx/docs/)
 - Feishu/Lark projection: [Lark Kanban adapter](docs/integrations/lark-kanban-control-plane-adapter.md)
 - Generic host integration: [integration guide](docs/integration.md)
 - Custom multi-agent runner:
@@ -587,32 +587,32 @@ artifacts, and stable reference contracts remain the source of shipped truth.
 
 - **Long-Horizon Benchmarks and Evidence:** reproducible capability evidence
   and controlled mechanism research across complementary benchmark
-  environments. [Direction tracker](https://github.com/huangruiteng/loopx/issues/3243)
+  environments. [Direction tracker](https://github.com/loopx-project/loopx/issues/3243)
 - **Operator Surface and IM Integration:** an operator workspace, session
   records, and bounded collaboration surfaces, currently incubating on a
   dedicated integration branch with `@maxliux5` as implementation lead.
-  [Direction tracker](https://github.com/huangruiteng/loopx/issues/3244)
+  [Direction tracker](https://github.com/loopx-project/loopx/issues/3244)
 - **Shared Goal Authority and Cross-host Coordination:** provider-neutral
   coordination for explicitly shared goals, with NoKV as an unpromoted
   provider candidate rather than a new control-plane authority.
-  [Direction tracker](https://github.com/huangruiteng/loopx/issues/3245)
+  [Direction tracker](https://github.com/loopx-project/loopx/issues/3245)
 - **Architecture and Research Incubator:** Effect Program hardening,
   TypeScript parity migration, hierarchical stride, research exploration,
   human attention, artifact lifecycle, and memory utility work at explicitly
   different maturity levels.
-  [Direction tracker](https://github.com/huangruiteng/loopx/issues/3246)
+  [Direction tracker](https://github.com/loopx-project/loopx/issues/3246)
 
 Read the canonical
 [Technical Directions map](docs/project/technical-directions.md) for stages,
 promotion gates, contributor-safe cuts, and ownership boundaries. Use the
-pinned [GitHub Discussion](https://github.com/huangruiteng/loopx/discussions/2851)
+pinned [GitHub Discussion](https://github.com/loopx-project/loopx/discussions/2851)
 for community discussion. Core control-plane reliability continues as the
 shared foundation beneath these programs.
 
 ## Advanced Documentation
 
 Start with the path that matches your current task. Use the hosted
-[documentation portal](https://huangruiteng.github.io/loopx/docs/) for the
+[documentation portal](https://loopx-project.github.io/loopx/docs/) for the
 published docs site; the [documentation index](docs/README.md) remains the
 complete source map. This list stays selective; each category index owns its
 deeper documents and versioned protocols.
@@ -707,7 +707,7 @@ development. The most useful feedback comes from real long-running agent
 projects: where the control plane helped, where it felt heavy, and which gates
 or handoffs disappeared from view.
 
-- Use [GitHub Issues](https://github.com/huangruiteng/loopx/issues) for
+- Use [GitHub Issues](https://github.com/loopx-project/loopx/issues) for
   reproducible bugs, install problems, and feature requests.
 - Open PRs for docs fixes, showcase writeups, and small public-safe examples.
 - Join the [Discord community](https://discord.gg/XmGgQyCFZd), or use Lark or
@@ -765,7 +765,7 @@ coordination, and an explicitly staged architecture and research incubator.
 ## Star History
 
 <p align="center">
-  <a href="https://github.com/huangruiteng/loopx/stargazers"><img src="https://huangruiteng.github.io/loopx/site-assets/star-history.svg" alt="LoopX GitHub star history from verified snapshots" width="800"></a><br>
+  <a href="https://github.com/loopx-project/loopx/stargazers"><img src="https://loopx-project.github.io/loopx/site-assets/star-history.svg" alt="LoopX GitHub star history from verified snapshots" width="800"></a><br>
   <sub>Generated every six hours from GitHub's official stargazer timestamps using a repository-authorized workflow. A snapshot is published only when the fetched rows match GitHub's current star count; GitHub's image cache may delay refreshes.</sub>
 </p>
 

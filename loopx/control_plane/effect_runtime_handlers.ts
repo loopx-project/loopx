@@ -1,5 +1,5 @@
 import {projectTodoSummaryLanes, projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
-import {delegationInventoryItem, delegationInventoryQuery, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -110,6 +110,7 @@ import {
 } from "./turn_driver/delivery_continuity.ts";
 import { reduceTurnSettlementTransaction } from "./turn_driver/settlement.ts";
 import { evaluateHostTodoCompletion } from "./turn_driver/host_todo_completion.ts";
+import { projectReplanSemantics } from "./work_items/replan_semantics.ts";
 import {
   projectReplanSettlementContract,
   projectTodoLifecycleSettlementReentry,
@@ -632,6 +633,7 @@ export function createEffectRuntimeHandlers(
       evaluatePostWritebackHookTransaction,
     ],
     ["collaboration.delegation.binding", selectDelegationBinding],
+    ["collaboration.delegation.preflight", delegationPreflight],
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],
@@ -736,6 +738,7 @@ export function createEffectRuntimeHandlers(
     ["turn.settlement.reduce", reduceTurnSettlementTransaction],
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
+    ["work_item.replan_semantics.project", projectReplanSemantics],
     [
       "work_item.replan_settlement.reentry",
       projectTodoLifecycleSettlementReentry,

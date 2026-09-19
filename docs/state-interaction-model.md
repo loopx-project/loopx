@@ -827,12 +827,13 @@ or reattributing its delivery workspace. An identical retry returns `replay`
 with the saved checkpoint; it does not append again. A changed satisfied
 decision, changed delivery payload, or a missing checkpoint superseded by a
 later same-Agent vision is rejected with no write. Dry-run previews do not
-repair receipts or append history. A receipt-bound material monitor poll with
-no prior refresh/checkpoint may complete its missing workspace writeback with
-next-action and vision together, through the normal vision/replan validation.
-This first-closeout compatibility path preserves the poll outcome and rejects
-unrelated mutations; subsequent retries use the same strict replay/conflict
-rules. Other missing-workspace repairs precede checkpoint supplementation.
+repair receipts or append history. Current receipt-bound monitor Turns close on
+the exact committed poll, including material polls that release an independent
+successor; they do not require an accountable refresh, workspace supplement or
+quota spend. The retained material-monitor refresh recovery branch is
+compatibility-only for older phase producers and preserves the original poll
+outcome while rejecting unrelated mutations. Other missing-workspace repairs
+precede checkpoint supplementation.
 
 Do not repeat implementation, manufacture a successor, or open another Turn
 just to repair this checkpoint. Keep the ordinary one-spend settlement order.

@@ -50,7 +50,7 @@ MUST_HAVE = (
     "Do not spend quota for a setup-only turn",
     "python3 -m pip install --upgrade loopx",
     "workflow-skills --install",
-    "huangruiteng.github.io/loopx/install.sh",
+    "loopx-project.github.io/loopx/install.sh",
 )
 
 
@@ -62,7 +62,7 @@ def assert_message_contract(payload: dict[str, object]) -> None:
     assert payload["agent_id"] == AGENT_ID, payload
     assert "python3 -m pip install --upgrade loopx" in str(payload["install_repair_command"]), payload
     assert "workflow-skills --install" in str(payload["install_repair_command"]), payload
-    assert "huangruiteng.github.io/loopx/install.sh" in str(payload["install_repair_command"]), payload
+    assert "loopx-project.github.io/loopx/install.sh" in str(payload["install_repair_command"]), payload
     assert payload["existing_goal_probe_command"] == payload["quota_guard_command"], payload
     assert "heartbeat-prompt --thin" in str(payload["heartbeat_prompt_command"]), payload
     assert "heartbeat-prompt --thin" in str(payload["heartbeat_prompt_json_command"]), payload
@@ -222,7 +222,7 @@ def main() -> int:
     assert "Fresh Repo Install Repair" in cli_markdown, cli_markdown
     assert "Post-Bootstrap Thin Loop Prompt" in cli_markdown, cli_markdown
     assert "Transcript-Free Validation Checklist" in cli_markdown, cli_markdown
-    assert "huangruiteng.github.io/loopx/install.sh" in cli_markdown, cli_markdown
+    assert "loopx-project.github.io/loopx/install.sh" in cli_markdown, cli_markdown
     assert "python3 -m pip install --upgrade loopx" in cli_markdown, cli_markdown
 
     cli_message_only = run_cli(

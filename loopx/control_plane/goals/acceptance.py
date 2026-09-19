@@ -94,6 +94,30 @@ def _criterion_effects(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def goal_task_validation_files_current(
+    *, registry_path: Path, runtime_root: str, goal_id: str, agent_id: str, todo_id: str,
+) -> bool:
+    """Check declared validator assets without executing output validation."""
+    route = {**_routing(registry_path, goal_id, runtime_root, agent_id), "todo_id": todo_id}
+    basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
+    if not isinstance(basis, dict) or not basis.get("criteria"):
+        return False
+    for effect in _criterion_effects(basis["criteria"]):
+        pins = effect["validation_files"]
+        workspace = None
+        if pins:
+            workspace, failure = _resolve_completion_validation_workspace(
+                registry_path=registry_path, goal_id=goal_id,
+                task_repository=effect.get("task_repository"), delivery_workspace=None,
+                validation_workspace_path=None, label=effect["validation_label"],
+            )
+            if failure is not None:
+                return False
+        if not _acceptance_pins_match(pins, workspace):
+            return False
+    return True
+
+
 def validate_goal_task_acceptance(
     *, registry_path: Path, runtime_root: str, goal_id: str, agent_id: str, todo_id: str,
 ) -> dict[str, Any]:
@@ -178,6 +202,35 @@ def run_goal_acceptance_effects(
     return results
 
 
+def _acceptance_pins_match(pins: list, workspace: Path | None) -> bool:
+    if not pins:
+        return True
+    if workspace is None:
+        return False
+    for pin in pins:
+        if not isinstance(pin, dict):
+            return False
+        relative = pin.get("path")
+        if not isinstance(relative, str) or not relative or "\\" in relative:
+            return False
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            return False
+        candidate = workspace
+        try:
+            for part in path.parts:
+                candidate = candidate / part
+                if candidate.is_symlink():
+                    return False
+            if not candidate.is_file() or hashlib.sha256(
+                candidate.read_bytes()
+            ).hexdigest() != pin.get("sha256"):
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def run_goal_acceptance_validation_effect(
     *,
     effect: Mapping[str, Any],
@@ -208,34 +261,6 @@ def run_goal_acceptance_validation_effect(
         if failure is not None:
             return failure
 
-    def pins_match() -> bool:
-        if not pins:
-            return True
-        if workspace is None:
-            return False
-        for pin in pins:
-            if not isinstance(pin, dict):
-                return False
-            relative = pin.get("path")
-            if not isinstance(relative, str) or not relative or "\\" in relative:
-                return False
-            path = Path(relative)
-            if path.is_absolute() or ".." in path.parts:
-                return False
-            candidate = workspace
-            try:
-                for part in path.parts:
-                    candidate = candidate / part
-                    if candidate.is_symlink():
-                        return False
-                if not candidate.is_file() or hashlib.sha256(
-                    candidate.read_bytes()
-                ).hexdigest() != pin.get("sha256"):
-                    return False
-            except OSError:
-                return False
-        return True
-
     def stale_receipt() -> dict[str, Any]:
         return {
             "schema_version": "issue_fix_validation_command_v0",
@@ -249,7 +274,7 @@ def run_goal_acceptance_validation_effect(
             "local_path_captured": False,
         }
 
-    if not pins_match():
+    if not _acceptance_pins_match(pins, workspace):
         return stale_receipt()
     receipt = run_declared_completion_validation_effect(
         effect={
@@ -260,7 +285,7 @@ def run_goal_acceptance_validation_effect(
         delivery_workspace=delivery_workspace,
         validation_workspace_path=validation_workspace_path,
     )
-    return receipt if pins_match() else stale_receipt()
+    return receipt if _acceptance_pins_match(pins, workspace) else stale_receipt()
 
 
 def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:

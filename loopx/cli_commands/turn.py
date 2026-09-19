@@ -197,6 +197,7 @@ def handle_turn_command(
             provider=getattr(args, "dsh_provider", None),
             model=getattr(args, "dsh_model", None),
             reasoning_effort=getattr(args, "dsh_reasoning_effort", None),
+            max_tokens=getattr(args, "dsh_max_tokens", None),
         )
         if (
             args.turn_command == "run-once"

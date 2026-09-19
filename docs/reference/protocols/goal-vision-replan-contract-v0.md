@@ -100,6 +100,21 @@ pathless packet fails instead of recording a partial closure. A matching typed
 semantic ACK settles the vision-derived duty even while the original acceptance
 gap remains visible in the source projection.
 
+Quota's replan writeback projection and write-time outcome matching share
+`work_items/replan_semantics.ts`. Every vision-derived trigger, including a
+missing required baseline, projects evidence-linked JSON authoring through
+`replan_action_packet.writeback_contract`; limits come from the existing vision
+validator. This is guidance for a valid refresh path, not a new obligation or
+the removal of typed successor/blocker/terminal alternatives. A new surface id
+alone cannot satisfy a vision obligation. Execute the current settlement binding
+exactly once; accepted semantic writeback, satisfied checkpoint, settled Turn
+and Goal completion remain separate facts. Existing missing-checkpoint recovery
+stays on the original Turn, and in-flight continuation remains unchanged.
+
+投影与写入校验共用 TS 语义规则；required-vision 不再投影只有普通进度标识的模板。
+JSON 写作契约复用 vision 校验器，不新增 ACK 仪式，也不改变既有 successor、blocker、
+terminal 出口。语义接受、checkpoint 满足、Turn 结算与 Goal 完成仍须分别验证。
+
 Inline vision writes require `--agent-id`. JSON packets must also resolve to
 the same `agent_id` as the refresh run. This keeps `research-executor`,
 `evaluator-promoter`, and other roles from overwriting or satisfying each

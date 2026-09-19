@@ -76,6 +76,28 @@ def test_update_plan_rejects_presence_revision_mismatch() -> None:
         )
 
 
+def test_update_plan_can_require_a_host_write_when_configuration_is_unchanged() -> None:
+    configuration = {"enabled": True, "max_children": 6}
+    revision = configuration_payload_revision(configuration)
+
+    plan = build_configuration_update_plan(
+        schema_version="example_configuration_plan_v0",
+        current_present=True,
+        desired_present=True,
+        current_revision=revision,
+        desired_revision=revision,
+        target_identity={"configuration_ref": "configuration/example.json"},
+        changed_units={"changed_capabilities": []},
+        projected_configuration=configuration,
+        projection_field="configuration",
+        additional_write_required=True,
+    )
+
+    assert plan["action"] == "update"
+    assert plan["writes_required"] == 1
+    assert plan["current_revision"] == plan["desired_revision"]
+
+
 def test_apply_requires_exact_preview_revision() -> None:
     plan = _plan(current=None, desired={"enabled": True})
     require_expected_configuration_plan_revision(

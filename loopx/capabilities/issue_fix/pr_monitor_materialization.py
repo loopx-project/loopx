@@ -10,6 +10,9 @@ from ...control_plane.scheduler.monitor_todo import (
     monitor_next_due_at,
 )
 from ...control_plane.todos.monitor_metadata import MonitorPollObservation
+from ...control_plane.coordination.local_authority import LOCAL_AUTHORITY_SOURCES
+from ...control_plane.todos.provider_projection import settle_canonical_todo_projection
+from ...control_plane.work_items.task_lease import runtime_root_from_registry
 from ...todos import (
     add_goal_todo,
     complete_goal_todo,
@@ -85,7 +88,7 @@ def _active_grouped_monitors(
 
 def _existing_issue_fix_monitors(
     *, registry_path: Path, goal_id: str, project: Path
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], str | None]:
     payload = list_goal_todos(
         registry_path=registry_path,
         goal_id=goal_id,
@@ -104,7 +107,7 @@ def _existing_issue_fix_monitors(
             and action_kind.startswith("issue_fix_pr_state_")
         ):
             monitors[target_key] = item
-    return monitors
+    return monitors, (payload.get("authority_read") or {}).get("source_authority")
 
 
 def _group_fingerprint(member_keys: set[str]) -> str:
@@ -125,7 +128,7 @@ def materialize_issue_fix_grouped_monitors(
     """Reconcile issue-fix PR lifecycle buckets into generic monitor todos."""
 
     groups = _active_grouped_monitors(_load_lifecycle_rows(ledger_path))
-    existing = _existing_issue_fix_monitors(
+    existing, source_authority = _existing_issue_fix_monitors(
         registry_path=registry_path,
         goal_id=goal_id,
         project=project,
@@ -246,7 +249,7 @@ def materialize_issue_fix_grouped_monitors(
             }
         )
 
-    return {
+    result = {
         "schema_version": ISSUE_FIX_GROUPED_MONITOR_WRITEBACK_SCHEMA_VERSION,
         "write_performed": any(item["write_performed"] for item in writes),
         "path_recorded": False,
@@ -257,3 +260,13 @@ def materialize_issue_fix_grouped_monitors(
         "next_due_at": next_due_at if groups else None,
         "writes": writes,
     }
+    if source_authority in LOCAL_AUTHORITY_SOURCES:
+        # An unchanged observation may follow a committed write whose display
+        # delivery failed. Drain the current head without repeating that write.
+        result = settle_canonical_todo_projection(
+            payload={**result, "source_authority": source_authority},
+            registry_path=registry_path,
+            runtime_root=runtime_root_from_registry(registry_path, None),
+            goal_id=goal_id, project=project,
+        )
+    return result

@@ -15,7 +15,7 @@ import {
   validateTodoDecisionMetadata,
 } from "./decision_metadata.ts";
 
-import { normalizeMonitorConfiguration } from "./monitor_metadata.ts";
+import { normalizeMonitorConfiguration, type MonitorPollObservation } from "./monitor_metadata.ts";
 
 const STRINGS = new Set(["status", "evidence", "reason", "task_class", "continuation_policy",
   "resume_when", "unblocks_todo_id", "bound_agent", "blocks_agent"]);
@@ -70,7 +70,9 @@ export function normalizeNativePlanningIntent(value: unknown): JsonObject {
 
 export function planNativeTodoUpdate(todo: JsonObject, intent: JsonObject,
   head: JsonObject, actor: string | null, agents: readonly string[], updatedAt: string,
-  kind: "planning" | "user_completion" = "planning"): JsonObject {
+  kind: "planning" | "user_completion" = "planning", observation?: MonitorPollObservation): {
+    updates: JsonObject; monitorTransition?: JsonObject;
+  } {
   if (kind === "user_completion" && todo.role !== "user") {
     throw new AuthorityStoreProtocolError("agent todo completion must use complete_goal_todo (loopx todo complete)");
   }
@@ -79,9 +81,16 @@ export function planNativeTodoUpdate(todo: JsonObject, intent: JsonObject,
     todo, intent, updated_at: updatedAt,
     context: {goal_id: head.goal_id, role: todo.role, actor_agent_id: actor,
       registered_agents: [...agents], items: head.todos,
-      monitor_observation: null, enforce_monitor_boundedness: true}});
-  if ((planned.target_status === "done" && kind === "planning") || planned.monitor_poll_transition != null) {
+      monitor_observation: observation ?? null, enforce_monitor_boundedness: observation === undefined}});
+  if ((planned.target_status === "done" && kind === "planning") ||
+      (planned.monitor_poll_transition != null && observation === undefined)) {
     throw new AuthorityStoreProtocolError("native planning update cannot complete work or commit a Monitor observation");
   }
-  return requireJsonObject(planned.metadata_updates, "Todo planning metadata updates");
+  const updates = requireJsonObject(planned.metadata_updates, "Todo planning metadata updates");
+  if (planned.monitor_poll_transition != null) {
+    updates.material_change_generation = requireJsonObject(planned.monitor_poll_transition, "Monitor transition").material_change_generation;
+  }
+  return {updates,
+    ...(planned.monitor_poll_transition == null ? {} : {
+      monitorTransition: requireJsonObject(planned.monitor_poll_transition, "Monitor transition")})};
 }

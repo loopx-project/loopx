@@ -12,6 +12,18 @@ import {
 import { executeCoordinationTodoUpdate } from "../../loopx/control_plane/coordination/todo_update.ts";
 import {updateLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
 
+test("Monitor observation is versioned before any provider access", async () => {
+  for (const version of [0, 1, 2, 3]) {
+    const result = await updateLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_update_request_v${version}`,
+      monitor_observation: {generated_at: "2030-01-01T00:00:00Z", result_hash: "a", material_change: true}},
+    {createStore: () => {throw new Error("must not open a store");}});
+    assert.equal(result.status, "failed"); assert.match(String(result.reason), /requires request v4/);
+  }
+  const missing = await updateLocalCoordinationTodo({schema_version: "loopx_local_coordination_todo_update_request_v4"},
+    {createStore: () => {throw new Error("must not open a store");}});
+  assert.equal(missing.status, "failed"); assert.match(String(missing.reason), /requires its observation/);
+});
+
 test("planning transport is explicitly versioned before any provider access", async () => {
   const result = await updateLocalCoordinationTodo({
     schema_version: "loopx_local_coordination_todo_update_request_v0",

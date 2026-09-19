@@ -114,6 +114,7 @@ def main() -> int:
             return replan_semantic_action_actor.qualify(
                 qualification_id=run_id,
                 fixture_root=temp_root / "replan-semantic-action" / run_digest,
+                required_vision=True,
             )
 
         def qualify_scoped_gate_successor(run_id: str) -> dict[str, object]:
