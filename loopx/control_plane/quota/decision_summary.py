@@ -328,29 +328,24 @@ def resolve_quota_run_decision(
     if automation_prompt_upgrade_required and not terminal_no_followup:
         should_run = False
         effective_action = EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value
-    elif inbox_reply_due:
+    elif inbox_priority_due:
         should_run = True
         normal_delivery_allowed = True
         recovery_delivery_allowed = False
         self_repair_allowed = False
         capability_repair_allowed = False
         workspace_repair_allowed = False
-        effective_action = EffectiveAction.LARK_INBOX_REPLY_DUE.value
-        reason = (
-            "a direct Lark question, bot mention, or verified reply to the bot "
-            "is pending reply"
-        )
-    elif inbox_material_review_due:
-        should_run = True
-        normal_delivery_allowed = True
-        recovery_delivery_allowed = False
-        self_repair_allowed = False
-        capability_repair_allowed = False
-        workspace_repair_allowed = False
-        effective_action = EffectiveAction.OPERATOR_INBOX_MATERIAL_REVIEW_DUE.value
-        reason = (
-            "captured unaddressed operator-inbox material is pending bounded review"
-        )
+        if inbox_reply_due:
+            effective_action = EffectiveAction.LARK_INBOX_REPLY_DUE.value
+            reason = (
+                "a direct Lark question, bot mention, or verified reply to the bot "
+                "is pending reply"
+            )
+        else:
+            effective_action = EffectiveAction.OPERATOR_INBOX_MATERIAL_REVIEW_DUE.value
+            reason = (
+                "captured unaddressed operator-inbox material is pending bounded review"
+            )
 
     effective_action, reason = _task_orchestration_effective_action(
         task_orchestration_contract,

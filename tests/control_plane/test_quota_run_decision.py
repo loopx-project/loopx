@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from loopx.control_plane.goals.goal_frontier import (
     GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION,
     GOAL_TERMINAL_STATE_SCHEMA_VERSION,
@@ -108,8 +110,8 @@ def test_replan_precedes_normal_delivery() -> None:
     assert decision.effective_action == "autonomous_replan_required"
 
 
-def test_terminal_closure_precedes_automation_upgrade() -> None:
-    projection = {
+def _terminal_projection() -> dict[str, Any]:
+    return {
         "terminal_state": {
             "schema_version": GOAL_TERMINAL_STATE_SCHEMA_VERSION,
             "kind": "no_followup",
@@ -146,10 +148,13 @@ def test_terminal_closure_precedes_automation_upgrade() -> None:
         "autonomy_blockers": [],
         "replan_required": False,
     }
+
+
+def test_terminal_closure_precedes_automation_upgrade() -> None:
     decision = _resolve(
         automation_prompt_upgrade={"reason": "refresh prompt identity"},
         automation_prompt_upgrade_required=True,
-        goal_frontier_projection=projection,
+        goal_frontier_projection=_terminal_projection(),
     )
 
     assert decision.should_run is False
@@ -168,3 +173,69 @@ def test_task_orchestration_refines_normal_run_action() -> None:
     assert decision.should_run is True
     assert decision.normal_delivery_allowed is True
     assert decision.effective_action == "coordinate_task_bundle"
+
+
+@pytest.mark.parametrize(
+    "reply,material,action,reason",
+    [
+        (
+            True,
+            False,
+            "lark_inbox_reply_due",
+            "a direct Lark question, bot mention, or verified reply to the bot is pending reply",
+        ),
+        (
+            False,
+            True,
+            "operator_inbox_material_review_due",
+            "captured unaddressed operator-inbox material is pending bounded review",
+        ),
+        (
+            True,
+            True,
+            "lark_inbox_reply_due",
+            "a direct Lark question, bot mention, or verified reply to the bot is pending reply",
+        ),
+    ],
+)
+@pytest.mark.parametrize("terminal", [False, True])
+@pytest.mark.parametrize("upgrade", [False, True])
+def test_inbox_admission_preserves_guard_and_source_priority(
+    reply: bool,
+    material: bool,
+    action: str,
+    reason: str,
+    terminal: bool,
+    upgrade: bool,
+) -> None:
+    decision = _resolve(
+        normal_delivery_allowed=False,
+        recovery_delivery_allowed=True,
+        self_repair_allowed=True,
+        capability_gate={"action": "repair_bridge"},
+        workspace_guard={"reason": "workspace repair"},
+        inbox_reply_due=reply,
+        inbox_material_review_due=material,
+        goal_frontier_projection=_terminal_projection() if terminal else None,
+        automation_prompt_upgrade_required=upgrade,
+        automation_prompt_upgrade={"reason": "refresh prompt identity"},
+        replan_obligation={"required": True, "agent_id": "agent-a"},
+        task_orchestration_contract={"execution_state": "ready", "mode": "adaptive"},
+    )
+
+    # A nonterminal prompt upgrade wins; terminal inbox work retains the
+    # existing exception. Neither inbox source becomes coordinator work.
+    blocked = upgrade and not terminal
+    assert decision.should_run is (not blocked)
+    assert decision.normal_delivery_allowed is (not blocked)
+    assert decision.effective_action == (
+        "automation_prompt_upgrade_required" if blocked else action
+    )
+    assert decision.reason == ("refresh prompt identity" if blocked else reason)
+    assert decision.recovery_delivery_allowed is False
+    assert decision.self_repair_allowed is False
+    assert decision.capability_repair_allowed is False
+    assert decision.workspace_repair_allowed is False
+    assert decision.replan_decision_allowed is False
+    assert decision.state == "eligible"
+    assert decision.quota == {"state": "eligible"}
