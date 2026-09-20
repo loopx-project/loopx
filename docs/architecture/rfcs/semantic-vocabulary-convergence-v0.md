@@ -1,7 +1,7 @@
 # RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)
 
 - **RFC status:** Draft
-- **Delivery maturity:** Partial (M0 registry, computed inventory, and drift smoke ship with this RFC)
+- **Delivery maturity:** Partial (M0/M0.5 checks, M1 typed action domains and M2 Turn contract generation implemented; M3/M4 retirement remains incomplete)
 - **Authors / owners:** LoopX contributors; control-plane kernel maintainers own approval
 - **Created:** 2026-09-15
 - **Last normative revision:** 2026-09-17
@@ -23,7 +23,7 @@ normative section changes.
 
 - Sections 1-10 are the durable design and acceptance contract.
 - Section 11 is the normative delivery plan.
-- Section 12 contains unresolved decisions; proposed answers are not approval.
+- Section 12 records implementation choices and remaining decisions; a shipped choice or proposed answer does not itself establish approval.
 - Appendices hold the non-normative execution ledger, decision log, evidence
   registry, and rejected alternatives.
 
@@ -52,8 +52,10 @@ not amend normative sections.
    registry is checked against code by AST and text scan, and product code never
    imports it. The M1 generator derives the TypeScript effective-action binding
    from the Python owner after checking registry parity. This does not change
-   wire values or move value authority to the registry; M2's shared contract
-   generation remains a later milestone.
+   wire values or move value authority to the registry. M2 now generates the
+   Turn vocabularies, route projection and ordered controller rules from
+   `turn_loop_controller_contract_v0.json` via `generate_turn_contract.py`;
+   this does not migrate every cross-runtime vocabulary.
 3. **Default and opt-in boundary.** The check is always on for the repository.
    It has no runtime flag because it never runs inside the product.
 4. **Principal constraint.** Fail closed, deterministic, and not weakenable by
@@ -329,19 +331,13 @@ Forbidden alternate authorities: a second registry, a per-module list that
 restates registered values, or a prose table that claims to be normative for a
 registered vocabulary.
 
-**Scope of a name (planned for M0.5, not in M0).** The collision rules are
-keyed by name, so they cannot tell a fork from four bounded contexts that
-happen to reuse one identifier. `SOURCE_SURFACES` is the first case: its four
-definitions in `global_risks.py`, `global_todos.py`, `summary_all.py`, and
-`pr_review.py` each list the data sources of that one CLI command, and the
-value sets are meant to differ. It is counted in `multi_value_forks` today and
-must not be "fixed" by renaming, because a rename lowers the number without
-changing the code's meaning. The M0.5 scope slice adds top-level `scope_declarations` with at
-least `global` and `bounded_context`; a bounded-context name is declared once
-with its owning contexts, and declared names are removed from the semantic
-fork budget while the raw inventory count remains visible (I14, the schema rows below, and the M0.5 row in Section 11). Until
-then the fork budget is a ceiling that contains this one known
-misclassification, recorded in the registry's `inventory_ratchets` note.
+**Scope of a name (M0.5 implemented).** The inventory remains name-keyed.
+`SOURCE_SURFACES` has four bounded contexts declared in `scope_declarations`;
+`check_scope_declarations` checks their owner modules against the actual defining
+modules. The declared name remains in the raw fork inventory and leaves only
+the semantic fork budget (I14). Renaming a definition does not prove a semantic
+repair. The original M0 misclassification is historical; declaring every
+remaining fork or proving pairwise value-set disjointness is not implied.
 
 ### Roles of a vocabulary
 
@@ -784,7 +780,7 @@ on the next full-tree scan; genuine shared-contract changes still need review.
 | Unify the three Turn enums into one in a single PR | Breaks I5 style incrementalism; the three enums have different owners and change reasons (settlement, route, controller). Register and project first, then merge only where a projection proves identity (Section 12, Q2). |
 | Rely on `mypy` `Literal` types | Does not cover TypeScript, JSON payloads, or the CLI; the drift here lives at exactly those boundaries. |
 | Documentation glossary only | Cannot fail a build; the repository already has eleven documents calling themselves a mental model and no glossary, which is the symptom. |
-| Generate bindings from the registry immediately | Premature until owners are settled. Generation is M2 and follows the coordination contract precedent. |
+| Use the registry as an immediate runtime binding authority | The implemented M1 generator derives action bindings from code owners; M2 derives Turn bindings from its dedicated shared contract. The registry checks those authorities and does not replace them. |
 | Grep-based lint in CI without a registry | Encodes the allowed set in the linter, which becomes a second registry with no review trail. |
 | Extend `maintainability_ratchet.py` instead of a new registry | Its subject is module metrics and dependency direction with per-module ceilings; vocabulary shape needs values, owners, and relations. The two share the ratchet idea, not the data model. Merging exception lifecycles is Q7. |
 | Put the scan regex in the registry | A regex in data can be narrowed in the same edit that widens a vocabulary; the M0 review showed the first pattern missed every TypeScript `===` site. Forms are fixed in the smoke and the suffix set is floored. |
@@ -950,21 +946,53 @@ For an already provisioned environment, `bash scripts/loopx-python.sh --exec
 Python nor dependencies. Fleet and premerge child commands can retain `python3`
 because the selected project or CI environment supplies it on `PATH`.
 
-The TypeScript effective-action binding and the [glossary](../../reference/glossary.md)
-are generated with `uv run python scripts/generate_semantic_bindings.py`.
+The TypeScript effective-action/frontier bindings and the [glossary](../../reference/glossary.md)
+are generated with `uv run --extra test python scripts/generate_semantic_bindings.py`.
 Run it after changing the Python owner or registry. Carrier changes are scanned
 automatically; exporting an inventory report is optional. The existing drift smoke and PR pytest sweep check freshness;
 no additional required CI job is introduced. Install the locked Node dependencies
 with `npm ci --ignore-scripts` before running the TypeScript production scan.
 
+The Turn contract has a separate generator and source. Read-only verification:
+
+```bash
+uv run --extra test python scripts/generate_semantic_bindings.py --check
+uv run --extra test python scripts/generate_turn_contract.py --check
+uv run --extra test python scripts/generate_semantic_inventory.py --report --top 10
+uv run --extra test python scripts/generate_semantic_inventory.py --report --consumer-evidence --top 10
+```
+
+The inventory reports are advisory; `--consumer-evidence` requires `--report`.
+The drift smoke remains the blocking check. An exported report is not a required
+committed artifact, and a successful report does not establish producer or
+persistence proof.
+
 ## 11. Normative delivery plan
+
+Implementation readback at `bfbb5ac60` (fact correction for
+[discussion #4738, PR-03](https://github.com/loopx-project/loopx/discussions/4738#discussioncomment-18514184)):
+M0/M0.5 checks run today; Q3/Q6 choices are implemented as described in Section 12;
+M2 Turn generation is consumed by `transaction.py`, `settlement.ts` and the loop
+controller. Milestone rows below retain their acceptance obligations; they are
+not a list of work that has never started. Original measurements keep their
+original SHA. This readback does not change Draft status or infer approval.
+
+The six legacy fields are still written. `protocol_action_packet` retirement
+still needs a target release, consumer scope and historical signature/rollback
+contract. The `settlement_binding_kind` witness in
+[PR #4747](https://github.com/loopx-project/loopx/pull/4747) is a proposed pilot,
+not merged evidence on this baseline and not closure of the other cross-runtime
+vocabularies. F6 remains unproved. PR-07/08 construction work must preserve
+stage precedence; [PR #4764](https://github.com/loopx-project/loopx/pull/4764)
+changes same-Turn deferred selection and monitor settlement on overlapping paths,
+so its outcome must be reconciled before claiming combined behavior parity.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
 | M0 | Registry with 26 vocabularies and 9 relations, computed inventory with optional export, drift smoke with fixed dispatch forms and coverage floor, two owner forks removed, RFC index entry | This RFC opened | Section 9 rows green; 20 mutation classes fail closed | Delete the smoke, `loopx/semantics/`, the generator, and its test |
 | M0.5a | `scope_declarations` with `bounded_context` and per-context owners; semantic fork count separated from raw inventory count | M0 merged | Smoke checks every declared context owner; raw `multi_value_forks` remains 4 and `multi_value_forks_semantic` is 3; undeclared forks still fail the budget | Remove the scope declarations and semantic-fork budget |
 | M0.5b | `producers` and `compatibility_only` on `kernel` vocabularies; production-form scan with the two role checks (I12, I13); retirement budgets counted by identifier with all six anchors lowered in one diff (Q11); merge-order rule from Q9 written into Section 10 | M0.5a complete; Q9 decided or its interim rule accepted | Smoke green with I11 to I14 enforced; `skip` resolved; Section 9 producer rows green; `turn_route` persistence answered for Q2 | Remove producer fields and role checks; budgets return to the pre-M0.5b anchors |
-| M1 | `EffectiveAction` typed enum in one owner module; the replay observation and frontier slots split off (Q6); producers and consumers import it; registry `literal_scan` tightened to the enum | M0.5 merged; owner module chosen (Q3); slot split decided (Q6) | Smoke green; zero bare `effective_action` literals outside the owner; parity fixtures for status/should-run unchanged | Revert to literals; registry keeps the set |
+| M1 | `EffectiveAction` typed enum in one owner module; the Q6 root decision/frontier registered union, separate nested frontier action and journal replay observation; producers and consumers import it; registry `literal_scan` tightened to the enum | M0.5 merged; owner module chosen (Q3); slot contract recorded (Q6) | Smoke green; zero bare `effective_action` literals outside the owner; parity fixtures for status/should-run unchanged | Revert to literals; registry keeps the set |
 | M2 | Route-to-disposition projection, the `decide_loop_disposition` decision table, and the cross-runtime sets published through a shared contract with generated Python and TypeScript bindings, following the coordination contract generator | M1 merged; Q2 and Q7 decided | Generator `--check` and smoke green; `settlement.ts` and `transaction.py` read the generated set | Regenerate from prior contract |
 | M3 | Per-field retirement of legacy should-run fields, one field per PR, budgets lowered to zero and the field removed | Field's migration surface is emptied module by module, and the residual unresolved and dynamic-key evidence is reviewed; a zero count is not by itself the gate | Schema-reduction record per `AGENTS.md`; Appendix B entry | Restore field from the last writer |
 | M4 | Twin budget lowered with each replacement-first cutover from the migration RFC | Each cutover PR | Budget edit in the same diff | None needed; budget follows code |
@@ -1065,10 +1093,12 @@ The phases are therefore:
    explicit.
 2. **M0.5:** implement `scope`, producer forms for the four Turn kernel
    vocabularies, and identifier-based retirement counts.
-3. **M1:** split the overloaded `effective_action` slots and introduce one typed
-   owner after Q3 and Q6 are decided.
-4. **M2:** publish the full decision table and both projection hops through a
-   generated cross-runtime contract.
+3. **M1:** retain the implemented Q3 owner and Q6 registered root union, separate
+   nested frontier action and replay observation; verify the existing versioned
+   compatibility contract when these surfaces change.
+4. **M2:** maintain the implemented generated Turn contract, ordered controller
+   rules and route projection; assess remaining cross-runtime migrations per
+   vocabulary rather than treating Turn generation as their completion.
 5. **M3/M4:** retire legacy fields and reduce Python/TypeScript twins only when
    their reader and migration evidence is complete.
 
@@ -1079,6 +1109,10 @@ introduce a competing target state.
 
 ## 12. Open decisions
 
+This section retains its question numbers and link target. Q3/Q6 describe
+implemented choices; the remaining proposals keep their existing decision
+owners and approval requirements.
+
 1. **Registry location.** Owner: kernel maintainers. M0 implements
    `loopx/semantics/` because the scope is repository-wide and neither
    `loopx/control_plane/` nor `docs/reference/` is; the package holds only the
@@ -1088,13 +1122,13 @@ introduce a competing target state.
    The projection is total but not injective (`blocked` and `wait` both map to
    `wait`), and `stop`, `terminal`, `contract_error` exist on one side only.
    The `same_concept` relations record the four shared verdicts.
-   Recommendation: keep both, publish the projection in M2, revisit after the
-   managed-step consumer matures. The persistence premise is now established:
+   The M2 implementation keeps both and publishes the projection; revisit
+   a merger only after the managed-step consumer matures. The persistence premise is now established:
    `run_loopx_turn_once` writes `plan: dict(plan)` through the TypeScript journal
    writer, including `plan.route.kind`; `load_loopx_turn_plan_from_journal`
    restores that route. The executor replay regression checks an actual journal
-   on disk and the resume reader. Keep the three vocabularies and publish the
-   non-injective projection in M2; any later renaming needs a persisted-plan
+   on disk and the resume reader. The three vocabularies remain distinct and
+   the generated projection is non-injective; any later renaming needs a persisted-plan
    migration, not just an in-process enum refactor. This evidence does not prove
    compatibility of every external reader or every other persisted field.
 3. **Owner module for `EffectiveAction`.** The implementation uses
