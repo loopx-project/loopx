@@ -161,7 +161,7 @@ support. A missing dependency moves the date, not the acceptance bar.
 | Stage / cumulative target | Complete work and existing owner | Exit / permitted claim |
 | --- | --- | --- |
 | Narrative and storyboard · 2–3 working days | S1/S5/S13: one audience, one task, first-screen design, 60–90s script, bilingual copy and public evidence plan | Reviewable polished draft; label concepts and replays. No runnable-product claim |
-| Recorded product preview · 5–7 working days | R2/R3 + S5: review/integrate #4762, resolve supported host-tool authorization, run one real L1 correction; refine the actual result and evidence view | Packaged frontend plus CLI show exact-version objection/revision/acceptance/adoption, intervention and scoped stop. Record an actual run; no synthetic activity presented as live |
+| Recorded product preview · 5–7 working days | R2/R3 + S5: reuse merged collaboration and host-tool authorization, run one reproducible L1 correction; refine the actual result and evidence view | Packaged frontend plus CLI show exact-version objection/revision/acceptance/adoption, intervention and scoped stop. Record an actual run; no synthetic activity presented as live |
 | Focused public alpha · 2–3 weeks | S1/S4/S12: release-package onboarding, intent-respecting steward/Chat selection, readiness repair, single-Agent fallback, restart/reconnect and useful result return; S5 supplies focused team view | Freeze five independent clean-install attempts before testing; at least four reach the first useful result without maintainer shell intervention, all failures retained. G1's two real cycles must pass before advertising continued team collaboration |
 | Repeatable beta / full launch kit · 4–6 weeks | S4/S5/S10/S12/S13: upgrade/rollback, revoke/unavailable/quota recovery, pilot-driven UX, measured cost and support; qualify optional Lark separately | At least three independent users repeat a task on another day; publish denominator, interruptions and limitations. Each advertised platform/transport has its own release-artifact evidence |
 
@@ -173,13 +173,14 @@ onboarding time (including prerequisites/login) and the post-readiness interval;
 authentication or environment failures stay in the funnel. A small pilot is
 feedback, not statistical reliability or product-market fit.
 
-The critical path is host/tool readiness → real L1 episode → packaged first-use
-repair → independent reproduction. #4758 is merged design; #4762 is open at this
-revision and does not establish a shipped or real-model-qualified journey.
-Its GPT trial ended at MCP approval with no accepted artifact. Resolve the
-supported authorization path with its owner; never turn off approval globally
-to obtain a recording. Existing implementation successors remain authoritative;
-inspect canonical Todos and related PRs before assigning a new slice.
+The critical path is usable evidence presentation → a reproducible real episode →
+packaged first-use repair → independent reproduction. As of 2026-09-21, #4762 and
+#4811 are merged; #4811 records native Codex MCP execution and a real-model
+correction lifecycle. The earlier MCP approval block is resolved. This evidence
+does not establish a released first-use journey, two continuing cycles or a
+polished launch film. Reuse those owners and canonical Todos; qualify the actual
+release package and record the episode through its frontend before publishing.
+Never disable approvals globally to obtain a recording.
 
 The first launch does not wait for hundred-Agent scale, a new state provider,
 full 3D, all hosts, mobile-native shells, a connector marketplace, payment/booking

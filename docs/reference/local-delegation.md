@@ -366,6 +366,26 @@ observations, not continuous liveness; accepted output does not prove requester
 adoption. Text is rendered inertly, and source/version identifiers remain
 inspectable. Returning preserves the execution list and keyboard focus.
 
+For accepted work with version-bound dependencies, **See what changed** lets you
+select a referenced source and read it beside the output. Multiple outputs have
+an explicit selector. The source operation, artifact reference and SHA-256 must
+match the dependency; an unavailable or changed source clears the previous
+comparison instead of substituting newer bytes. Highlighting marks the range
+containing text changes, not semantic correctness or requester adoption. The
+panes stack on narrow screens, and verified version identifiers stay expandable.
+This uses the existing read operation and introduces no execution authority.
+
+中文：在已验收且带版本依赖的执行中，选择“看清这次变化”下的一份依据，
+与本次产物并排阅读；多个产物可显式切换。来源 operation、文件与哈希必须匹配，
+来源失效会清除上次对照，不能用新文件替代。高亮只表示文本变化范围，
+不代表正确或已采用；窄屏上下排列，版本标识仍可展开。这不增加执行权限。
+
+Synthetic fixture views: [desktop comparison](../assets/personal-workspace/team-comparison-desktop.png),
+[mobile comparison](../assets/personal-workspace/team-comparison-mobile.png), and
+[unverified source](../assets/personal-workspace/team-comparison-unavailable.png).
+The literal script text in the fixture demonstrates inert artifact rendering;
+these are validation screenshots, not a real research result.
+
 While the original coordinator is executing, feedback includes the selected
 operation and observed artifact hashes in its existing inbox. Pending and delivered
 receipts stay distinct from application; a retry after an uncertain response
