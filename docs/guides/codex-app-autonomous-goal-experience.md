@@ -207,7 +207,7 @@ loopx history --goal-id "$GOAL_ID"
 
 ```bash
 loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop
-loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop --execute
+loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop --actor-kind owner --execute
 ```
 
 **预期效果：**
@@ -225,7 +225,7 @@ loopx goal-lifecycle --goal-id "$GOAL_ID" --operation stop --execute
 **输入：**
 
 ```bash
-loopx goal-lifecycle --goal-id "$GOAL_ID" --operation resume --execute
+loopx goal-lifecycle --goal-id "$GOAL_ID" --operation resume --actor-kind owner --execute
 loopx quota should-run \
   --goal-id "$GOAL_ID" \
   --agent-id "$AGENT_ID" \

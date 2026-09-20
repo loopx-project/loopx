@@ -101,9 +101,12 @@ Preview 冻结规范化参数、影响范围和当前 revision。Apply 只能执
 
 ```bash
 loopx goal-lifecycle --goal-id <goal-id> --operation stop
-loopx goal-lifecycle --goal-id <goal-id> --operation stop --execute
+loopx goal-lifecycle --goal-id <goal-id> --operation stop --actor-kind owner --execute
 loopx quota status --goal-id <goal-id>
 ```
+
+执行 lifecycle transition 时必须显式传入 `--actor-kind owner` 或 `controller`；
+匿名预览仍然保持只读。
 
 暂停会让该 Goal 退出 active attention，并使有效自动运行 quota 投影为 0；Todo、历史、证据和配置
 仍保留。恢复使用显式 `resume --execute`，且不会绕过 Todo、Gate 或 quota。不要把 stop 写成

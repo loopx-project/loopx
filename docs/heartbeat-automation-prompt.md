@@ -658,7 +658,9 @@ hint directly, otherwise do nothing. For the uniquely matched current heartbeat,
 
 If `automation_update` is unavailable in the session and
 `scheduler_hint.app_automation.fallback_hint.available=true`, run the bound
-`fallback_hint.cli_args` (`loopx-apply-rrule`) once instead. It backs up
+`fallback_hint.cli_args` (`loopx-apply-rrule`) once instead. The fallback
+requires the projected registered `--agent-id`; there is no implicit Agent
+default. It backs up
 `codex-dev.db`, syncs the automation TOML and SQLite row, and runs the bound
 ACK; direct SQLite edits bypass the app API, so this is a bounded fallback and
 never the routine path. The bridge reuses the provided parent Turn for its

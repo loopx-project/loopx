@@ -111,9 +111,12 @@ For example, the first Goal-stop command is preview-only:
 
 ```bash
 loopx goal-lifecycle --goal-id <goal-id> --operation stop
-loopx goal-lifecycle --goal-id <goal-id> --operation stop --execute
+loopx goal-lifecycle --goal-id <goal-id> --operation stop --actor-kind owner --execute
 loopx quota status --goal-id <goal-id>
 ```
+
+Executed lifecycle transitions require an explicit `--actor-kind owner` or
+`controller`; anonymous previews remain read-only.
 
 Stopping a Goal removes it from active attention and projects zero effective automatic-run quota while
 preserving Todos, history, evidence, and configuration. Explicit `resume --execute` restores scheduling
