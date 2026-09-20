@@ -516,6 +516,41 @@ def test_f1_f2_domain_names_exactly_the_vocabularies_the_producer_check_walks() 
         assert domain["evidence_bound"] == "producer_scan_reach"
 
 
+def test_the_formal_detail_line_cannot_report_a_projection_it_never_executed() -> None:
+    """A ratio whose two sides come from one expression cannot show a gap.
+
+    ``projections`` was printed as ``len(registry['projections'])`` on both
+    sides of the slash, so the detail line read 100% however many registered
+    projections ``check_projections`` never imports. The invariant above it had
+    already been fixed to count only executed projections, so the report and
+    the invariant could disagree while both stayed green.
+    """
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    assert "projections=1/1" in smoke["summarise_formal_domains"](registry, [])
+
+    registry["projections"]["never_executed"] = {
+        "owner": "loopx/nowhere.py::absent",
+        "mapping": {},
+    }
+    detail = smoke["summarise_formal_domains"](registry, [])
+    assert "projections=1/2" in detail, detail
+
+
+def test_the_formal_detail_line_agrees_with_the_selectors_it_reports() -> None:
+    """The detail line reports the pair the invariant's domain is checked on."""
+    smoke = runpy.run_path(str(SMOKE))
+    registry = smoke["load_registry"]()
+    selectors = smoke["FORMAL_DOMAIN_SELECTORS"]
+    detail = smoke["summarise_formal_domains"](registry, [])
+    for selector, label in (
+        ("projections[*]", "projections"),
+        ("scope_declarations[*].contexts", "declared_contexts"),
+    ):
+        walked, registered = selectors[selector](registry)
+        assert f"{label}={walked}/{registered}" in detail, (label, detail)
+
+
 @pytest.mark.parametrize("invariant_id", sorted({
     "F1_producer_closedness",
     "F2_canonical_value_liveness",

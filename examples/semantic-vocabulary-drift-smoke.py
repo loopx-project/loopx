@@ -680,15 +680,28 @@ def summarise_formal_domains(registry: dict[str, Any], sources: list[SourceFile]
     covered = [name for name in kernel if 'producers' in vocabularies[name]]
     unverified = [name for name in cross_runtime if 'producers' not in vocabularies[name]]
     scanned, tracked = producer_scan_reach(sources)
-    projections = len(registry['projections'])
-    contexts = sum(len(entry['contexts']) for entry in registry['scope_declarations'].values())
+    # Both sides of these ratios came from one expression, so they printed 100%
+    # by construction: ``projections={len(registry['projections'])}`` over
+    # itself reported full coverage however many registered projections the
+    # check never executed. The pair now comes from the same code-owned
+    # selector ``check_invariant_domain`` validates the declared domain
+    # against, so the detail line cannot disagree with the invariant above it.
+    projections_walked, projections_registered = FORMAL_DOMAIN_SELECTORS["projections[*]"](registry)
+    # F4's selector still derives both sides from the declaration list. That is
+    # not a second self-satisfying ratio but a fail-closed count:
+    # ``check_scope_declarations`` validates every declared context against the
+    # modules the inventory really found, or raises. The ratio therefore reads
+    # 100% whenever the smoke gets far enough to print it, and what it reports
+    # is how many contexts that check had to clear.
+    contexts_walked, contexts_registered = FORMAL_DOMAIN_SELECTORS["scope_declarations[*].contexts"](registry)
     return (
         f"formal_domain={sizes} (verified/registered)\n"
         f"  formal_domain_bounds: kernel_with_producers={len(covered)}/{len(kernel)}"
         f" cross_runtime_unverified={len(unverified)}/{len(cross_runtime)}"
         f" producer_scan_reach={scanned}/{tracked}_files"
-        f" projections={projections}/{projections}"
-        f" scope_declarations={len(registry['scope_declarations'])} declared_contexts={contexts}/{contexts}"
+        f" projections={projections_walked}/{projections_registered}"
+        f" scope_declarations={len(registry['scope_declarations'])}"
+        f" declared_contexts={contexts_walked}/{contexts_registered}"
     )
 
 
