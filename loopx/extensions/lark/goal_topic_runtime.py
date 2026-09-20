@@ -57,6 +57,11 @@ from .manager_context import (
     settle_manager_context,
     sync_manager_context,
 )
+from .manager_reply_parts import (
+    deliver_manager_reply_after_length_failure,
+    manager_part_delivery_pending_result,
+    manager_part_delivery_readback,
+)
 from .outbound import LarkOutboundTextError, safe_lark_plain_text_fallback
 from .inbox_reactions import (
     _create_reaction,
@@ -1332,6 +1337,10 @@ def process_lark_goal_topic_event(
         except LarkOutboundTextError:
             if not manager:
                 raise
+            # The rich body did not fit. Degrade presentation first, then split
+            # the degraded body: a persisted manager answer must be delivered in
+            # bounded parts instead of becoming `format_unrepresentable` with
+            # nothing on the channel.
             try:
                 reply_text = safe_lark_plain_text_fallback(reply_text)
                 content_format = "text"
@@ -1345,15 +1354,39 @@ def process_lark_goal_topic_event(
                     updated_at=datetime.now(timezone.utc).isoformat(),
                 )
                 _write_manager_delivery(delivery_path, delivery_state)
-                reply = reply_lark_event_inbox(
-                    project=root,
-                    config_path=config_path,
-                    message_id=message_id,
-                    text=reply_text,
-                    content_format=content_format,
-                    execute=True,
-                    runner=reply_runner,
-                )
+                try:
+                    reply = reply_lark_event_inbox(
+                        project=root,
+                        config_path=config_path,
+                        message_id=message_id,
+                        text=reply_text,
+                        content_format=content_format,
+                        execute=True,
+                        runner=reply_runner,
+                    )
+                except LarkOutboundTextError:
+                    if not reply_text.strip():
+                        raise
+                    part_reply, part_failure = (
+                        deliver_manager_reply_after_length_failure(
+                            reply_text=reply_text,
+                            delivery_state=delivery_state,
+                            delivery_path=delivery_path,
+                            write_delivery=_write_manager_delivery,
+                            reply_runner=reply_runner,
+                            root=root,
+                            config_path=config_path,
+                            message_id=message_id,
+                        )
+                    )
+                    if part_failure:
+                        return manager_part_delivery_pending_result(
+                            reason=part_failure,
+                            delivery_state=delivery_state,
+                            goal_id=route["goal_id"],
+                            inbox_config_ref=config_ref,
+                        )
+                    reply = part_reply
             except (LarkOutboundTextError, ValueError):
                 assert delivery_state is not None and delivery_path is not None
                 delivery_state.update(
@@ -1492,6 +1525,7 @@ def process_lark_goal_topic_event(
             {
                 "saved_response_reused": saved_response_reused,
                 "format_degraded": bool(delivery_state.get("format_degraded")),
+                **manager_part_delivery_readback(delivery_state),
             }
             if manager and delivery_state is not None
             else {}

@@ -73,7 +73,7 @@
     "loopx/extensions/lark/goal_topic_runtime.py": {
       "any_count": 46,
       "dict_any_count": 0,
-      "lines": 1509
+      "lines": 1543
     },
     "loopx/extensions/lark/presentation/explore_results.py": {
       "any_count": 68,

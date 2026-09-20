@@ -275,7 +275,7 @@ def handle_pr_review_command(
             repository = args.repo
             reviewer_login = None
             if args.fixture:
-                fixture_repository, pull_requests = load_pr_fixture(
+                fixture_repository, pull_requests, reviewer_login = load_pr_fixture(
                     Path(args.fixture).expanduser()
                 )
                 repository = repository or fixture_repository
@@ -368,7 +368,7 @@ def handle_pr_review_command(
         source = "github_cli"
         reviewer_login = None
         if args.fixture:
-            repository_from_fixture, pull_requests = load_pr_fixture(
+            repository_from_fixture, pull_requests, reviewer_login = load_pr_fixture(
                 Path(args.fixture).expanduser()
             )
             repository = repository or repository_from_fixture

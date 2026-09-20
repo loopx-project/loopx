@@ -1185,7 +1185,13 @@ def test_latest_review_and_author_owned_fallback_are_enforced(monkeypatch) -> No
         reviewer_login="maintainer",
     )["pull_requests"][0]
     assert valid_fallback["review_conclusion"]["status"] == "valid"
-    assert valid_fallback["review_action_kind"] is None
+    # Merge readiness follows the typed verdict, not GitHub's review state: an
+    # author-owned approval is COMMENTED because the platform blocks
+    # self-approval, and it still owes the pre-merge gate while the PR is open.
+    assert (
+        valid_fallback["review_action_kind"]
+        == "qualify_pull_request_merge_readiness"
+    )
 
     row["reviews"] = [
         {
@@ -1281,7 +1287,13 @@ def test_latest_review_and_author_owned_fallback_are_enforced(monkeypatch) -> No
         reviewer_login="maintainer",
     )["pull_requests"][0]
     assert ordinary_comment["review_conclusion"]["status"] == "valid"
-    assert ordinary_comment["review_action_kind"] is None
+    # The later COMMENTED note is not a conclusion, so the earlier valid
+    # author-owned approval still binds the current head and still owes the
+    # pre-merge gate.
+    assert (
+        ordinary_comment["review_action_kind"]
+        == "qualify_pull_request_merge_readiness"
+    )
 
 
 def test_actionable_sequence_excludes_valid_merged_exact_head(monkeypatch) -> None:

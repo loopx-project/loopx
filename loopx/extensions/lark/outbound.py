@@ -157,8 +157,13 @@ class LarkOutboundTextError(ValueError):
     """A local text-format failure before any provider write."""
 
 
+# The single owner of the provider's plain-text delivery limit: the validator and
+# the splitter both read it, so a part can never be sized against a stale number.
+DEFAULT_LARK_TEXT_LIMIT = 1200
+
+
 def normalize_lark_outbound_text(
-    value: Any, *, limit: int | None = 1200, preserve_format: bool = False,
+    value: Any, *, limit: int | None = DEFAULT_LARK_TEXT_LIMIT, preserve_format: bool = False,
 ) -> str:
     text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
     outside_code = FENCED_CODE_PATTERN.sub("", text)
@@ -185,6 +190,84 @@ def normalize_lark_outbound_text(
             f"Lark outbound text exceeds the {limit}-character delivery limit"
         )
     return normalized
+
+
+# A part marker such as "(12/345)" costs a fixed budget at the head of every
+# part. Reserving it before packing keeps every part inside the provider limit
+# without a second pass that could overflow the last part.
+LARK_PART_MARKER_BUDGET = len("(999/999) ")
+
+
+def split_lark_outbound_text(
+    value: Any,
+    *,
+    limit: int = DEFAULT_LARK_TEXT_LIMIT,
+    preserve_format: bool = False,
+    max_parts: int | None = None,
+    overflow_note: str | None = None,
+) -> list[str]:
+    """Split an over-limit body into bounded, ordered, lossless parts.
+
+    The provider rejects a reply over the delivery limit, which used to leave a
+    persisted manager answer undelivered. Splitting happens after the same
+    validation every other outbound write uses, packs whole lines while they
+    fit, hard-splits a single long line, and marks each part with ``(i/N)`` so a
+    reader can order the parts. The body itself is not reworded, abbreviated or
+    re-flowed: removing the markers restores the validated text exactly.
+
+    ``max_parts`` bounds how many messages an oversized answer may become. A
+    caller that sets it must also pass ``overflow_note``: the note replaces the
+    parts beyond the bound, so the reader learns the answer was longer instead
+    of receiving a flood of messages (or nothing at all).
+    """
+
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        raise ValueError("limit must be a positive integer")
+    if max_parts is not None and (
+        not isinstance(max_parts, int) or isinstance(max_parts, bool) or max_parts < 1
+    ):
+        raise ValueError("max_parts must be a positive integer")
+    if max_parts is not None and not (overflow_note or "").strip():
+        raise ValueError("max_parts requires an overflow_note")
+    normalized = normalize_lark_outbound_text(
+        value, limit=None, preserve_format=preserve_format
+    )
+    if len(normalized) <= limit:
+        return [normalized]
+    budget = limit - LARK_PART_MARKER_BUDGET
+    if budget <= 0:
+        raise LarkOutboundTextError(
+            f"delivery limit {limit} cannot hold a part marker"
+        )
+    pieces: list[str] = []
+    buffer = ""
+    for line in normalized.splitlines(keepends=True):
+        while len(line) > budget:
+            head, line = line[:budget], line[budget:]
+            if buffer:
+                pieces.append(buffer)
+                buffer = ""
+            pieces.append(head)
+        if len(buffer) + len(line) <= budget:
+            buffer += line
+            continue
+        if buffer:
+            pieces.append(buffer)
+        buffer = line
+    if buffer:
+        pieces.append(buffer)
+    total = len(pieces)
+    if max_parts is not None and total > max_parts:
+        pieces = pieces[: max_parts - 1] + [str(overflow_note)]
+        total = len(pieces)
+    parts = [
+        f"({index}/{total}) {piece}" for index, piece in enumerate(pieces, start=1)
+    ]
+    # A part that still cannot be delivered would fail the same way the whole
+    # body did, so refuse locally instead of writing half an answer.
+    for part in parts:
+        normalize_lark_outbound_text(part, limit=limit, preserve_format=preserve_format)
+    return parts
 
 
 def safe_lark_plain_text_fallback(value: Any) -> str:

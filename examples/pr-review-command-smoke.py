@@ -387,6 +387,134 @@ def main() -> int:
             "current_head_review_missing_or_invalid" in blocked["blocking_reasons"]
         ), blocked
         assert "status_checks_failed" in blocked["blocking_reasons"], blocked
+
+    # Merge readiness follows the typed approval verdict, not GitHub's review
+    # state. The platform blocks self-approval, so an author-owned approval is
+    # stored as COMMENTED; a state-based rule counted these still-open heads as
+    # concluded and hid approved heads that had gone behind, conflicted, lost
+    # checks, or become blocked.
+    approval_head = "f" * 40
+
+    def approved_open_head(
+        number: int,
+        *,
+        merge_state: str,
+        review_state: str = "COMMENTED",
+        verdict: str = "APPROVE",
+    ) -> dict[str, object]:
+        title = (
+            "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)"
+            if verdict == "APPROVE"
+            else "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
+        )
+        return {
+            "number": number,
+            "title": f"Approved open head {number}",
+            "url": f"https://github.com/owner/repo/pull/{number}",
+            "state": "OPEN",
+            "author": {"login": "maintainer"},
+            "headRefOid": approval_head,
+            "baseRefName": "main",
+            "isDraft": False,
+            "reviewDecision": "REVIEW_REQUIRED",
+            "mergeStateStatus": merge_state,
+            "files": [{"path": "src/runtime.py", "additions": 1, "deletions": 1}],
+            "reviews": [
+                {
+                    "state": review_state,
+                    "body": (
+                        f"{title}\n\n"
+                        "## 动机\n动机。\n\n## 改动思路\n思路。\n\n"
+                        "## 具体改动\n改动。\n\n## 对主干的风险\n风险。\n\n"
+                        "## 我的整体评价\n通过。\n\n"
+                        f"English verdict: {verdict} at exact head {approval_head}."
+                    ),
+                    "author": {"login": "maintainer"},
+                    "commit": {"oid": approval_head},
+                    "submittedAt": "2026-09-09T11:14:01Z",
+                }
+            ],
+            "statusCheckRollup": [
+                {"name": "Sign-off", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {
+                    "name": "merge-gate",
+                    "status": "COMPLETED",
+                    "conclusion": "SUCCESS" if merge_state == "CLEAN" else "FAILURE",
+                },
+            ],
+            "review_thread_summary": {
+                "schema_version": "github_review_thread_summary_v0",
+                "complete": True,
+                "total_count": 0,
+                "unresolved_count": 0,
+            },
+        }
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        approval_fixture_path = Path(temp_dir) / "approved-open-heads.json"
+        approval_fixture = {
+            "repository": "owner/repo",
+            "reviewer_login": "maintainer",
+            "pull_requests": [
+                approved_open_head(4111, merge_state="BEHIND"),
+                approved_open_head(4112, merge_state="CLEAN"),
+                approved_open_head(
+                    4113, merge_state="CLEAN", verdict="REQUEST_CHANGES"
+                ),
+            ],
+        }
+        approval_fixture_path.write_text(
+            json.dumps(approval_fixture), encoding="utf-8"
+        )
+        approval_packet = json.loads(
+            run_cli(
+                "--format",
+                "json",
+                "pr-review",
+                "--fixture",
+                str(approval_fixture_path),
+                "--state",
+                "open",
+            ).stdout
+        )
+        approvals = {
+            item["number"]: item for item in approval_packet["pull_requests"]
+        }
+        for number in (4111, 4112):
+            assert approvals[number]["review_conclusion"]["verdict"] == "APPROVE", approvals
+            assert (
+                approvals[number]["review_action_kind"]
+                == "qualify_pull_request_merge_readiness"
+            ), approvals[number]
+        assert approvals[4111]["merge_state"] == "BEHIND", approvals[4111]
+        assert approvals[4112]["merge_state"] == "CLEAN", approvals[4112]
+        assert approvals[4113]["review_conclusion"]["verdict"] == "REQUEST_CHANGES", approvals
+        assert approvals[4113]["review_action_kind"] is None, approvals[4113]
+        assert approval_packet["summary"]["review_attention_count"] == 2, (
+            approval_packet["summary"]
+        )
+        assert sorted(
+            item["number"] for item in approval_packet["review_sequence"]
+        ) == [4111, 4112], approval_packet["review_sequence"]
+        for number, expected_blockers in (
+            (4111, ("merge_state_requires_update", "status_checks_failed")),
+            (4112, ()),
+        ):
+            readiness = json.loads(
+                run_cli(
+                    "--format",
+                    "json",
+                    "pr-review",
+                    "--fixture",
+                    str(approval_fixture_path),
+                    "--check-merge-readiness",
+                    f"{number}@{approval_head}",
+                    check=not expected_blockers,
+                ).stdout
+            )
+            for blocker in expected_blockers:
+                assert blocker in readiness["blocking_reasons"], readiness
+            assert readiness["ready"] is (not expected_blockers), readiness
     assert sequence[0]["risk_hint_level"] == "medium", sequence[0]
     assert sequence[0]["main_risk_level"] == "medium", sequence[0]
     merged_sequence = next(item for item in sequence if item["number"] == 770)
@@ -767,7 +895,7 @@ def main() -> int:
     )
     assert incomplete_observation["candidate"] is None, incomplete_observation
 
-    repository, fixture_prs = load_pr_fixture(FIXTURE)
+    repository, fixture_prs, _fixture_reviewer = load_pr_fixture(FIXTURE)
     merged_fixture = next(item for item in fixture_prs if item.get("state") == "MERGED")
     busy_window = []
     for offset in range(105):

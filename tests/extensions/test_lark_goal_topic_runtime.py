@@ -10,6 +10,10 @@ from typing import Any
 
 import pytest
 
+from loopx.extensions.lark.manager_reply_parts import (
+    MANAGER_REPLY_MAX_PARTS,
+    MANAGER_REPLY_OVERFLOW_NOTE,
+)
 from loopx.extensions.lark.event_collector import _jq_projection
 from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
 from loopx.extensions.lark.goal_channel_contracts import (
@@ -1989,14 +1993,24 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
         assert result["ok"] is reply_ok
         assert result.get("format_degraded") is (body == r"private\nformat")
     else:
-        assert "reply_text" not in state
-        assert result["ok"] is False
-        assert result["status"] == "reply_delivery_pending"
-        assert result["reason"] == "reply_format_invalid"
-        assert result["source_acknowledged"] is False
+        # Longer than one deliverable message: the persisted answer is sent as a
+        # bounded, ordered sequence of parts that ends with the overflow note,
+        # instead of being left undelivered as `reply_format_invalid`.
+        assert result["ok"] is reply_ok
+        assert result.get("format_degraded") is True
+        if reply_ok:
+            assert result["delivery_part_count"] == MANAGER_REPLY_MAX_PARTS
+            assert result["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
+            assert state["reply_text"].startswith("(8/8) ")
+            assert MANAGER_REPLY_OVERFLOW_NOTE in state["reply_text"]
+        else:
+            assert result["status"] == "reply_delivery_pending"
+            assert result["reason"] == "reply_part_delivery_incomplete"
+            assert result["delivery_parts_sent"] == 0
+            assert result["source_acknowledged"] is False
     pending = inspect_lark_event_inbox(project=kwargs["runtime_root"],
                                       config_path=Path(result["inbox_config_ref"]))
-    if sendable and reply_ok:
+    if reply_ok:
         assert pending["items"] == []
         assert runtime.process_lark_goal_topic_event(**kwargs)["status"] == "already_acknowledged"
         assert len(answered) == 1
