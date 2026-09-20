@@ -24,6 +24,7 @@ from .extensions.lark.goal_topic_connections import (
     list_lark_apps,
     list_lark_connections,
     list_lark_group_chats,
+    rebind_lark_manager_session,
 )
 from .extensions.lark.goal_topic_batch import connect_lark_goal_topics
 from .extensions.lark.presentation.kanban import (
@@ -34,10 +35,12 @@ from .chat_agent import CodexChatAgentError
 from .chat_manager import (
     controller_runtime_root,
     manager_channel,
+    manager_connection_executor_endpoint,
     manager_executor_endpoint_default,
     open_manager_session,
     steward_machine_defaults,
 )
+from .chat_store import RESUMABLE_SESSION_STATES
 from .extensions.lark.goal_channel_contracts import binding_for_goal, goal_from_registry
 from .extensions.lark.goal_channel_targets import goal_channel_target_for_name
 from .history import load_registry
@@ -190,6 +193,142 @@ def build_lark_goal_topic_runtime_snapshot(
         "target_payload": target_payload,
         "binding_payloads": binding_payloads,
         "goal_contexts": goal_contexts,
+    }
+
+
+def reconcile_lark_manager_route(
+    *,
+    route: Mapping[str, Any],
+    registry_path: Path,
+    runtime_root_override: str | None,
+    runtime_controller: Any,
+) -> dict[str, Any]:
+    """Converge a durable manager route on this machine's live executor.
+
+    The replacement Session is opened before the durable compare-and-swap, so
+    a failed open or write keeps the previous binding intact. A concurrent
+    successful repair is accepted after canonical readback.
+    """
+
+    if route.get("conversation_kind") != "manager":
+        return dict(route)
+    goal_id = _compact_text(route.get("goal_id"), limit=160)
+    connection_id = _compact_text(route.get("connection_id"), limit=160)
+    if not goal_id or not connection_id:
+        raise ValueError("manager route has no durable connection identity")
+
+    registry = load_registry(registry_path)
+    goal = goal_from_registry(registry, goal_id)
+    source_route = resolve_goal_source_runtime_route(
+        registry_path=registry_path,
+        goal_id=goal_id,
+        registry=registry,
+    )
+    source_registry_path = Path(str(source_route["source_registry"]))
+    binding_path = default_goal_channel_binding_path(source_registry_path)
+    binding = binding_for_goal(
+        read_goal_channel_binding(binding_path),
+        goal_id,
+        connection_id=connection_id,
+    )
+    if not binding or binding.get("enabled") is not True:
+        raise ValueError("manager connection is no longer durably configured")
+    routing = binding.get("routing")
+    routing = routing if isinstance(routing, Mapping) else {}
+    if routing.get("conversation_kind") != "manager":
+        raise ValueError("durable connection is no longer a manager route")
+
+    runtime_root = resolve_runtime_root(
+        registry,
+        runtime_root_override,
+        registry_path=registry_path,
+    )
+    target = goal_channel_target_for_name(
+        read_goal_channel_targets(default_goal_channel_target_path(runtime_root)),
+        str(binding.get("target_ref") or ""),
+    )
+    if not target or target.get("enabled") is not True:
+        raise ValueError("manager connection target is unavailable")
+    identity = target.get("identity")
+    identity = identity if isinstance(identity, Mapping) else {}
+    channel = target.get("channel")
+    channel = channel if isinstance(channel, Mapping) else {}
+    app_ref = str(identity.get("sender_profile") or "")
+    chat_id = str(channel.get("chat_id") or "")
+    if not app_ref or not chat_id:
+        raise ValueError("manager connection target has no provider audience")
+    audience = f"{app_ref}\0{chat_id}"
+    expected_channel = manager_channel(provider="lark", audience=audience)
+    executor_endpoint_id, executor_endpoint_source = (
+        manager_connection_executor_endpoint(runtime_root)
+    )
+
+    def current_session(
+        current_binding: Mapping[str, Any],
+    ) -> Mapping[str, Any] | None:
+        session_id = str(current_binding.get("session_id") or "")
+        if not session_id:
+            return None
+        try:
+            return runtime_controller.store.load_session(session_id)
+        except KeyError:
+            return None
+
+    def session_matches(
+        session: Mapping[str, Any] | None,
+        current_binding: Mapping[str, Any],
+    ) -> bool:
+        return bool(
+            session
+            and session.get("session_id") == current_binding.get("session_id")
+            and session.get("agent_id") == executor_endpoint_id
+            and session.get("channel_id") == expected_channel
+            and str(session.get("status") or "") in RESUMABLE_SESSION_STATES
+        )
+
+    session = current_session(binding)
+    if not session_matches(session, binding):
+        replacement, _created = open_manager_session(
+            controller=runtime_controller,
+            goal_id=goal_id,
+            work_dir=Path(str(goal.get("repo") or "")).expanduser().resolve(),
+            executor_endpoint_id=executor_endpoint_id,
+            provider="lark",
+            audience=audience,
+        )
+        try:
+            binding = rebind_lark_manager_session(
+                binding_path=binding_path,
+                goal_id=goal_id,
+                connection_id=connection_id,
+                expected_session_id=str(binding.get("session_id") or ""),
+                session_id=str(replacement["session_id"]),
+                executor_endpoint_id=executor_endpoint_id,
+                executor_endpoint_source=executor_endpoint_source,
+            )
+        except ValueError:
+            # Another event may have completed the same repair after our read.
+            binding = binding_for_goal(
+                read_goal_channel_binding(binding_path),
+                goal_id,
+                connection_id=connection_id,
+            ) or {}
+        session = current_session(binding)
+        if not session_matches(session, binding):
+            raise ValueError("manager connection Session rebind did not converge")
+
+    return {
+        **dict(route),
+        "agent_id": str(binding.get("agent_id") or ""),
+        "session_id": str(binding.get("session_id") or ""),
+        "executor_endpoint_id": executor_endpoint_id,
+        "executor_endpoint_source": executor_endpoint_source,
+        "manager_channel_id": expected_channel,
+        **(
+            {"connector": dict(binding["connector"])}
+            if isinstance(binding.get("connector"), Mapping)
+            else {}
+        ),
     }
 
 

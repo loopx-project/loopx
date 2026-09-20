@@ -836,6 +836,93 @@ def test_invalid_persisted_routing_state_never_answers_replies_or_acknowledges(
     assert not (tmp_path / "runtime" / ".loopx").exists()
 
 
+def test_profile_stream_stops_when_its_durable_route_disappears(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
+
+    snapshot = {
+        "target_payload": {
+            "targets": {
+                "mew-product": {
+                    "name": "mew-product",
+                    "provider": "lark",
+                    "enabled": True,
+                    "channel": {"chat_id": "oc_public_fixture"},
+                    "identity": {"sender_profile": "mew", "cli_bin": "fake-lark"},
+                }
+            }
+        },
+        "binding_payloads": {
+            "goal-alpha": {
+                "bindings": {
+                    "goal-alpha": {
+                        "goal_id": "goal-alpha",
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": "mew-product",
+                    }
+                }
+            }
+        },
+    }
+    released = threading.Event()
+    listening = threading.Event()
+    result: dict[str, Any] = {}
+
+    class BlockingLines:
+        def __iter__(self):
+            yield "[event] ready event_key=im.message.receive_v1\n"
+            assert released.wait(5)
+
+    class BlockingConsumer:
+        stdout = BlockingLines()
+
+        def poll(self):
+            return 0 if released.is_set() else None
+
+        def wait(self, timeout=None):
+            assert released.wait(timeout or 5)
+            return 0
+
+        def terminate(self):
+            released.set()
+
+        def kill(self):
+            released.set()
+
+    stop = threading.Event()
+
+    def run() -> None:
+        result.update(
+            stream_lark_goal_topic_profile(
+                profile="mew",
+                snapshot_provider=lambda: snapshot,
+                stop=stop,
+                runtime_root=tmp_path,
+                answer=lambda _route, _text: "ok",
+                process_factory=lambda _args: BlockingConsumer(),
+                health_sink=lambda update: (
+                    listening.set() if update.get("status") == "listening" else None
+                ),
+            )
+        )
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    assert listening.wait(2)
+    snapshot["binding_payloads"] = {}
+    worker.join(4)
+    assert not worker.is_alive()
+    assert stop.is_set()
+    assert result == {
+        "ok": True,
+        "status": "configuration_removed",
+        "event_count": 0,
+        "replied_count": 0,
+    }
+
+
 def test_bound_topic_reuses_one_goal_chat_session(tmp_path: Path) -> None:
     from loopx.extensions.lark.goal_topic_runtime import answer_lark_goal_topic
 
@@ -1026,6 +1113,51 @@ def test_runtime_service_exposes_content_free_listener_health(tmp_path: Path) ->
 
     release.set()
     service.close()
+
+
+def test_runtime_service_reconciles_manager_route_before_answer(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import loopx.extensions.lark.goal_topic_runtime as runtime
+
+    observed: list[str] = []
+    stop = threading.Event()
+    snapshot = {
+        "target_payload": {},
+        "binding_payloads": {},
+        "goal_contexts": {"goal-alpha": {"work_dir": str(tmp_path)}},
+    }
+
+    def fake_stream(**kwargs: Any) -> dict[str, Any]:
+        receipt = kwargs["answer"](
+            {
+                "goal_id": "goal-alpha",
+                "conversation_kind": "manager",
+                "session_id": "old-session",
+            },
+            "status",
+        )
+        assert receipt["response_text"] == "done"
+        stop.set()
+        return {"ok": True, "status": "stopped"}
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", fake_stream)
+    monkeypatch.setattr(
+        runtime,
+        "answer_lark_goal_topic",
+        lambda **kwargs: observed.append(str(kwargs["route"]["session_id"])) or "done",
+    )
+    service = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path,
+        runtime_controller=object(),
+        manager_route_reconciler=lambda route: {
+            **route,
+            "session_id": "new-session",
+        },
+    )
+    service._poll_profile("mew", stop)
+    assert observed == ["new-session"]
 
 
 def test_runtime_service_records_safe_failure_code_for_listener_exception(
