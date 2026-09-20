@@ -196,6 +196,7 @@ export const executionChipScenario = {
       }
       // The default is one endpoint, so the chip names it and the one way to
       // move it, and never claims a credential branch that does not exist.
+      await page.locator(".personal-runtime-details > summary").click();
       const defaultNote = await page.locator(".personal-execution-rule-note").innerText();
       shippedDefaultNote = defaultNote;
       if (!defaultNote.includes("出货默认值") || !defaultNote.includes("codex")) {
@@ -229,6 +230,7 @@ export const executionChipScenario = {
           `A configured credential moved the steward chip: ${shippedText} -> ${text}`,
         );
       }
+      await credentialOnly.page.locator(".personal-runtime-details > summary").click();
       const credentialDefaultNote = await credentialOnly.page
         .locator(".personal-execution-rule-note")
         .innerText();
@@ -319,12 +321,8 @@ export const executionChipScenario = {
       if (pickerLabel.includes("Codex")) {
         throw new Error(`Chat runtime picker advertised a discovered CLI as the steward: ${pickerLabel}`);
       }
-      const composerLabel = (await stewardPicker.page
-        .locator(".personal-channel-composer > span")
-        .first()
-        .innerText()).trim();
-      if (composerLabel !== "DeepSeek Harness (managed)") {
-        throw new Error(`Composer named ${composerLabel} instead of the steward's declared executor`);
+      if (await stewardPicker.page.locator(".personal-channel-composer > span").count()) {
+        throw new Error("Composer repeated the executor already identified by the runtime picker");
       }
     } finally {
       coverageEntries.push(...await stewardPicker.close());

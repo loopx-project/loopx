@@ -264,7 +264,7 @@
       "value_notes": {
         "ready_for_host": "should_run with delivery_allowed and must_attempt set, and an effective action that is neither a replan nor a repair class. Projects to run_now, so a Host may be engaged.",
         "capability_action_required": "should_run whose effective action is governed_capability_intent and whose capability-intent projection matches the envelope goal and agent and names a command. A capability action runs before any Host; a malformed intent yields contract_error instead.",
-        "repair_required": "should_run whose effective action is in REPAIR_ACTIONS or ends in _repair or _repair_required. Projects to repair.",
+        "repair_required": "should_run whose effective action is an explicit typed REPAIR_ACTIONS member. Projects to repair; unregistered strings and spelling alone grant no repair authority.",
         "replan_required": "should_run whose effective action is in REPLAN_ACTIONS: autonomous_replan, autonomous_replan_required or successor_replan_required. Projects to replan.",
         "user_action_required": "Not should_run, and the envelope user slot marks an action required. Projects to the disposition of the same name.",
         "wait": "Not should_run, no user action required, and the action allows a quiet no-op. Projects to wait.",
@@ -461,7 +461,7 @@
       ],
       "value_notes": {
         "agent_monitor_only": "The lane is monitor-only for this agent: not actionable by the agent, advancement work is the blocked scope, and the scheduler holds it in an agent-monitor wait.",
-        "agent_workspace_repair": "Workspace repair is allowed, and it outranks self-repair: the agent workspace is repaired before any further delivery. The name ends in _repair, so the route is repair_required.",
+        "agent_workspace_repair": "Workspace repair is allowed, and it outranks self-repair: the agent workspace is repaired before any further delivery. It is an explicit typed REPAIR_ACTIONS member, so the route is repair_required.",
         "automation_prompt_upgrade_required": "The installed automation prompt identity must be repaired first. It is one of the conditions that withholds autonomous_replan_decision_allowed, and the automation action is repair_automation_prompt_identity.",
         "autonomous_replan_required": "An autonomous replan is required and its scope applies to this agent. It is one of REPLAN_ACTIONS, so the route is replan_required.",
         "blocked_health": "Existing result of quota_effective_action; previously missed because the literal scan did not inspect declared return functions.",
@@ -617,9 +617,9 @@
         "settled"
       ],
       "value_notes": {
-        "poll_due": "Emitted when no quota monitor poll run exists for this settlement identity of goal, agent, turn instance and, where bound, Todo. The observation record itself is missing, so the system does not yet know whether anything is owed. This is what distinguishes it from the replay vocabulary's open, where the observation exists but its completion receipt does not.",
-        "settlement_pending": "Emitted when a monitor poll exists and reports a material change, but the durable writeback and quota spend readbacks have not both resolved without failure. A material poll owes receipts and at least one is still absent or failing.",
-        "settled": "Emitted on two disjoint routes: a poll that reports no material change owes nothing and is settled on arrival with no receipt at all, or a material poll whose durable writeback and quota spend readbacks both resolved. The first route is the shortcut the replay vocabulary deliberately lacks."
+        "poll_due": "Emitted when no committed quota monitor poll matches the exact goal, agent, turn and Todo identity. A matching observation row without its exact native commit effect does not prove closeout. This is what distinguishes it from the replay vocabulary's open, where the observation exists but its completion receipt does not.",
+        "settlement_pending": "Compatibility value accepted from older phase producers. The current owner no longer emits it once an exact monitor-poll commit is present, because monitor observation is a no-spend closeout regardless of whether it releases a successor.",
+        "settled": "Emitted whenever the exact quota monitor-poll commit exists for the settlement identity. Unchanged and material observations both close the observe-only monitor Turn without accountable refresh or quota spend; a material poll may atomically release an independent advancement successor."
       }
     },
     "receipt_bound_replay_phase": {

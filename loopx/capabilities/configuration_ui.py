@@ -215,6 +215,17 @@ def capability_configuration_editor(
                     "string_list",
                     description="One bounded, public-safe domain per line.",
                 ),
+                _field(
+                    "execution_config",
+                    "Delegation bindings",
+                    "text",
+                    nullable=True,
+                    description=(
+                        "Repo-relative ignored JSON under .loopx/config/. It exposes "
+                        "only authorized, public-safe route status to planning; it "
+                        "does not grant a binding."
+                    ),
+                ),
             ],
         },
         "peer_task_coordination": {

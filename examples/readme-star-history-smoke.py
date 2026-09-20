@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "render-star-history.py"
-IMAGE_URL = "https://huangruiteng.github.io/loopx/site-assets/star-history.svg"
+IMAGE_URL = "https://loopx-project.github.io/loopx/site-assets/star-history.svg"
 
 
 def _fixture_count(fixture: object) -> int:
@@ -36,7 +36,7 @@ def _render(
             sys.executable,
             str(SCRIPT),
             "--repo",
-            "huangruiteng/loopx",
+            "loopx-project/loopx",
             "--input-json",
             str(fixture_path),
             "--expected-count",
@@ -77,7 +77,7 @@ def main() -> int:
         assert 'role="img" aria-labelledby="title desc"' in svg
         assert "@media (prefers-color-scheme: dark)" in svg
         assert "4 stars · updated Aug 6, 2026" in svg
-        assert '<text x="25" y="18" class="legend">huangruiteng/loopx</text>' in svg
+        assert '<text x="25" y="18" class="legend">loopx-project/loopx</text>' in svg
         assert "GitHub stars" in svg
         assert "<polygon" not in svg
         assert "<script" not in svg.lower()
@@ -106,7 +106,7 @@ def main() -> int:
         text = readme.read_text(encoding="utf-8")
         positions = [text.index(section) for section in sections]
         assert text.count(IMAGE_URL) == 1, readme
-        assert "https://github.com/huangruiteng/loopx/stargazers" in text, readme
+        assert "https://github.com/loopx-project/loopx/stargazers" in text, readme
         assert 'width="800"' in text[positions[1] : positions[2]], readme
         assert "star-history.dera.page" not in text, readme
         assert positions == sorted(positions), (readme, sections)

@@ -449,6 +449,8 @@ def configure_goal(
     subagent_model: str | None = None,
     subagent_reasoning_effort: str | None = None,
     clear_subagent_model_config: bool = False,
+    subagent_execution_config: str | None = None,
+    clear_subagent_execution_config: bool = False,
     allowed_domains: list[str] | None = None,
     clear_allowed_domains: bool = False,
     explore_harness_enabled: bool | None = None,
@@ -614,6 +616,11 @@ def configure_goal(
         raise ValueError(
             "--clear-subagent-model-config cannot be combined with model settings"
         )
+    if clear_subagent_execution_config and subagent_execution_config:
+        raise ValueError(
+            "--clear-subagent-execution-config cannot be combined with "
+            "--subagent-execution-config"
+        )
     if explore_harness_profile is not None:
         explore_harness_profile = (
             str(explore_harness_profile).strip().lower().replace("_", "-")
@@ -670,6 +677,10 @@ def configure_goal(
     reward_memory_config = _local_private_config_path(
         reward_memory_config,
         label="reward memory experiment config",
+    )
+    subagent_execution_config = _local_private_config_path(
+        subagent_execution_config,
+        label="subagent execution config",
     )
     periodic_report_change = periodic_report_config.normalize_change(
         periodic_report_configuration, clear=clear_periodic_report_configuration
@@ -923,6 +934,8 @@ def configure_goal(
         or subagent_model is not None
         or subagent_reasoning_effort is not None
         or clear_subagent_model_config
+        or subagent_execution_config is not None
+        or clear_subagent_execution_config
         or allowed_domains is not None
         or clear_allowed_domains
         or explore_harness_enabled is not None
@@ -943,6 +956,8 @@ def configure_goal(
             subagent_model=subagent_model,
             subagent_reasoning_effort=subagent_reasoning_effort,
             clear_subagent_model_config=clear_subagent_model_config,
+            subagent_execution_config=subagent_execution_config,
+            clear_subagent_execution_config=clear_subagent_execution_config,
             allowed_domains=allowed_domains,
             clear_allowed_domains=clear_allowed_domains,
             default_max_children=DEFAULT_MULTI_SUBAGENT_MAX_CHILDREN,
@@ -1358,6 +1373,18 @@ def render_configure_goal_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- control_plane: {payload.get('control_plane_summary')}")
     if payload.get("orchestration_summary"):
         lines.append(f"- orchestration: {payload.get('orchestration_summary')}")
+    codex_capacity = payload.get("codex_host_capacity")
+    if isinstance(codex_capacity, dict):
+        lines.extend(
+            [
+                f"- codex_host_capacity: `{codex_capacity.get('status')}`",
+                f"- codex_required_children: `{codex_capacity.get('required_children')}`",
+                f"- codex_configured_children: `{codex_capacity.get('configured_children')}`",
+                f"- codex_alignment_requested: `{codex_capacity.get('alignment_requested')}`",
+                f"- codex_capacity_written: `{codex_capacity.get('written', False)}`",
+                f"- codex_new_session_required: `{codex_capacity.get('new_session_required', False)}`",
+            ]
+        )
     feature_summary = payload.get("feature_summary")
     if isinstance(feature_summary, dict):
         lines.append(

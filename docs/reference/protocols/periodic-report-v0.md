@@ -352,7 +352,10 @@ does not parse rendered Markdown or infer titles from fingerprints. Its
 interaction semantics are `attention_kind=progress`, `interaction=inform`,
 `delivery=surface`, and `writable=false`. Compact counts distinguish facts
 added since the preceding verified publication from facts whose semantic
-fingerprint changed.
+fingerprint changed. "Already published" is a Goal-level property: every cursor
+file the Goal recorded contributes its published fingerprints, so a fact another
+lane delivered is not announced again by this lane, including by a lane that has
+never published. Each lane's own baseline still decides what counts as changed.
 
 Generation alone does not expose this projection. The publication candidate
 binds its exact SHA-256, and the Goal Channel sink may advance that binding into the

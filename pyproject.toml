@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "1.0.6"
+version = "1.1.0"
 description = "A lightweight Loop Engineering control plane for long-running agent goals."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,11 +14,11 @@ authors = [{ name = "LoopX contributors" }]
 dependencies = []
 
 [project.urls]
-Homepage = "https://huangruiteng.github.io/loopx/"
-Documentation = "https://huangruiteng.github.io/loopx/docs/"
-Repository = "https://github.com/huangruiteng/loopx"
-Issues = "https://github.com/huangruiteng/loopx/issues"
-Changelog = "https://github.com/huangruiteng/loopx/releases"
+Homepage = "https://loopx-project.github.io/loopx/"
+Documentation = "https://loopx-project.github.io/loopx/docs/"
+Repository = "https://github.com/loopx-project/loopx"
+Issues = "https://github.com/loopx-project/loopx/issues"
+Changelog = "https://github.com/loopx-project/loopx/releases"
 
 [project.optional-dependencies]
 deepseek-harness = [

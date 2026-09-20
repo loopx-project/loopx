@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -62,6 +62,7 @@ def build_project_progress_snapshot(
     agent_id: str,
     completed_at: str,
     publication_cursor: Mapping[str, Any] | None = None,
+    goal_cursors: Sequence[Mapping[str, Any]] | None = None,
     available_capabilities: Any = None,
     rollout_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
@@ -83,6 +84,7 @@ def build_project_progress_snapshot(
         agent_id=agent_id,
         completed_at=completed_at,
         publication_cursor=publication_cursor,
+        goal_cursors=goal_cursors,
         available_capabilities=available_capabilities,
         rollout_events=rollout_events,
     )
@@ -97,6 +99,7 @@ def build_project_progress_snapshot_from_state(
     agent_id: str,
     completed_at: str,
     publication_cursor: Mapping[str, Any] | None = None,
+    goal_cursors: Sequence[Mapping[str, Any]] | None = None,
     available_capabilities: Any = None,
     rollout_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
@@ -214,10 +217,13 @@ def build_project_progress_snapshot_from_state(
         "language": "zh-CN",
         "items": progress_items,
     }
-    if publication_cursor is not None:
+    if publication_cursor is not None or goal_cursors:
+        # A lane that has never published still must not re-announce what the
+        # Goal already announced, so the peer baseline applies without one.
         incremental = select_incremental_project_progress(
             snapshot,
             cursor=publication_cursor,
+            goal_cursors=goal_cursors,
         )
         if incremental is None:
             return None

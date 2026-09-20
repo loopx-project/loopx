@@ -191,7 +191,7 @@ def _cell(row, route):
         user_action_required=route == "user_action_required",
         selected_todo_id=todo,
         effective_action={
-            "repair_required": "workspace_repair",
+            "repair_required": "agent_workspace_repair",
             "replan_required": "autonomous_replan",
             "capability_action_required": "governed_capability_intent",
         }.get(route, "deliver"),

@@ -12,6 +12,12 @@ second control plane. LoopX remains authoritative for goal state, todos,
 claims, gates, quota, scheduler hints, and compact evidence. The host owns
 model execution, tools, and an opaque resumable session handle.
 
+The `turn run-once` dry-run response also carries a compact planned `route`:
+`kind`, `selected_todo_id` and `would_invoke_host`. This additive field lets delegation
+preflight distinguish a successful preview from task admission while using the
+same executor/model arguments as execution. It grants no host invocation and
+changes no executing-Turn receipt; the four effect flags remain false.
+
 The protocol is host-neutral. A Codex CLI adapter is the first target, but the
 driver lifecycle must not depend on Codex-specific session files, transcript
 formats, or benchmark task schemas.

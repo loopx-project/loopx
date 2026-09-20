@@ -103,6 +103,81 @@ test("return phase projects reconciliation counts without copying raw child mate
   assert.ok(!JSON.stringify(packet).includes("private original text"));
 });
 
+test("delegation routes and explicit result receipts are bounded public-safe facts", () => {
+  const delegationContext = {
+    schema_version: "loopx_delegation_context_v0",
+    configuration_state: "ready",
+    observed_at: "2026-09-19T04:20:00+00:00",
+    authorized_count: 8,
+    projected_count: 8,
+    reason_code: "unused-private-reason",
+    routes: [
+      {
+        binding_id: "review-route", agent_id: "reviewer", todo_id: "todo-review",
+        runtime_id: "managed-runtime", executor_kind: "managed", readiness: "ready",
+        entrypoint: "malicious replacement", execution_profile: "model-a@high",
+        host_args: ["--secret", "credential"], workspace: "/private/worktree",
+      },
+      {
+        binding_id: "bad route with spaces", agent_id: "ignored", todo_id: "ignored",
+        runtime_id: "ignored", readiness: "ready",
+      },
+    ],
+  };
+  const before = evaluateSubagentContext({ phase: "before_plan", scope,
+    orchestration: policy, observations: { delegation_context: delegationContext } })!;
+  const beforeFacts = (before.contributions as any[])[0].facts;
+  assert.equal(beforeFacts.delegation_context.projected_count, 1);
+  assert.equal(beforeFacts.delegation_context.entrypoint, "loopx delegation");
+  assert.equal(beforeFacts.delegation_context.routes[0].execution_profile, "model-a@high");
+  assert.equal(beforeFacts.delegation_context.operation_receipts, undefined);
+  assert.ok(!JSON.stringify(before).includes("credential"));
+  assert.ok(!JSON.stringify(before).includes("/private/worktree"));
+  assert.ok(!JSON.stringify(before).includes("raw child material"));
+
+  const after = evaluateSubagentContext({ phase: "after_delegate_result", scope,
+    orchestration: policy, observations: { delegation_context: {
+      ...delegationContext,
+      operation_receipts: {
+        observed: 12, accepted: 3, unavailable: 1, recovery_required: 1,
+        private_result: "raw child material",
+      },
+    } } })!;
+  const afterFacts = (after.contributions as any[])[0].facts;
+  assert.equal(afterFacts.delegation_context, undefined);
+  assert.deepEqual(afterFacts.delegation_receipts, {
+    configuration_state: "ready",
+    observed_at: "2026-09-19T04:20:00+00:00",
+    operation_receipts: {
+      observed: 12, accepted: 3, unavailable: 1, recovery_required: 1,
+    },
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(after)) <= 3072);
+});
+
+test("maximum delegation directory stays within provider budget", () => {
+  const routes = Array.from({ length: 6 }, (_, index) => ({
+    binding_id: `review-route-${index}`, agent_id: `reviewer-${index}`,
+    todo_id: `todo-review-${index}`, runtime_id: "managed-runtime",
+    executor_kind: "managed", readiness: "ready",
+    execution_profile: "fixture-provider/fixture-model@max",
+  }));
+  const packet = evaluateSubagentContext({ phase: "before_plan", scope,
+    orchestration: { ...policy, max_children: 6 }, observations: {
+      delegation_context: {
+        schema_version: "loopx_delegation_context_v0", configuration_state: "ready",
+        observed_at: "2026-09-19T04:20:00+00:00", authorized_count: 6,
+        projected_count: 6, routes,
+      },
+    } })!;
+  assert.deepEqual(packet.failures, []);
+  const delegation = (packet.contributions as any[])[0].facts.delegation_context;
+  assert.ok(delegation.projected_count >= 1 && delegation.projected_count <= 6);
+  assert.equal(delegation.routes.length, delegation.projected_count);
+  assert.equal(delegation.routes_truncated, delegation.projected_count < 6 || undefined);
+  assert.ok(Buffer.byteLength(JSON.stringify(packet.contributions[0])) <= 2048);
+});
+
 // Rich model identifiers and the complete participation guidance must survive
 // the actual provider budget, not disappear as an isolated provider failure.
 test("coordinator participation guidance survives all bounded lifecycle projections", () => {
@@ -113,7 +188,7 @@ test("coordinator participation guidance survives all bounded lifecycle projecti
     } })!;
     assert.deepEqual(packet.failures, []);
     const [contribution] = packet.contributions as Record<string, any>[];
-    assert.equal(contribution.revision, "v2");
+    assert.equal(contribution.revision, "v3");
     assert.equal(packet.authority, "guidance_only");
     assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
     assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 3072);

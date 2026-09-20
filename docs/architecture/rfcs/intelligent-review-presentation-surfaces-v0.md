@@ -73,6 +73,18 @@ Minimizing attention does not mean minimizing information or removing human
 judgment. It means maximizing the decision value of each interruption and each
 visible screen:
 
+Each visible element must earn its place through **high-value information,
+essential interaction, or expressive visual presentation** (at least one).
+Evaluate the whole viewport, not isolated components. The canonical development
+and PR evidence workflow is [Earn The User's Attention](../../development/design.md#earn-the-users-attention).
+The bounded workspace application spans Goal conversations, manager home,
+overview, Tasks, outputs and Settings: one-step execution inspection; populated
+home lanes and change-only digests; compact progress and usage; short conversation
+receipts above the unchanged Kanban; output provenance in the existing drawer;
+and configuration consequences kept visible beside the existing preview/apply
+flow. Failures and uncertainty remain prominent. This presentation slice does
+not claim the shared interaction compiler or cross-channel projection is implemented.
+
 - routine, reversible, verified work should stay quiet or complete directly;
 - material progress should be legible without demanding a decision;
 - actual human judgment should arrive as one bounded decision frame;

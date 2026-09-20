@@ -40,14 +40,19 @@ REPLAN_ACTIONS = {
     "autonomous_replan_required",
     "successor_replan_required",
 }
-REPAIR_ACTIONS = {
-    "capability_repair",
-    "projection_repair",
-    "self_repair",
-    "state_projection_repair",
-    "workspace_repair",
-}
-
+REPAIR_ACTIONS: frozenset[EffectiveAction] = frozenset(
+    {
+        EffectiveAction.AGENT_WORKSPACE_REPAIR,
+        EffectiveAction.BOUNDARY_PROJECTION_REPAIR,
+        EffectiveAction.CAPABILITY_BRIDGE_REPAIR,
+        EffectiveAction.CONTROL_PLANE_HEALTH_REPAIR,
+        EffectiveAction.CONTROL_PLANE_PROJECTION_REPAIR,
+        EffectiveAction.CONTROL_PLANE_REPAIR,
+        EffectiveAction.RUNTIME_USER_GATE_PROJECTION_REPAIR,
+        EffectiveAction.STATE_PROJECTION_GAP_REPAIR,
+        EffectiveAction.TODO_DECISION_SCOPE_PROJECTION_REPAIR,
+    }
+)
 
 
 class FailedTurnSessionRecoveryError(ValueError):
@@ -87,7 +92,11 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
     if should_run:
         if not delivery_allowed or not must_attempt:
             return LoopXTurnRoute.BLOCKED
-        if effective_action == EffectiveAction.GOVERNED_CAPABILITY_INTENT.value:
+        try:
+            registered_action = EffectiveAction(effective_action)
+        except ValueError:
+            registered_action = None
+        if registered_action is EffectiveAction.GOVERNED_CAPABILITY_INTENT:
             intent = _mapping(action.get("capability_intent"))
             if (intent.get("schema_version") != "pending_capability_intent_projection_v0"
                 or intent.get("goal_id") != envelope.get("goal_id")
@@ -97,9 +106,7 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
             return LoopXTurnRoute.CAPABILITY_ACTION_REQUIRED
         if effective_action in REPLAN_ACTIONS:
             return LoopXTurnRoute.REPLAN_REQUIRED
-        if effective_action in REPAIR_ACTIONS or effective_action.endswith(
-            ("_repair", "_repair_required")
-        ):
+        if registered_action in REPAIR_ACTIONS:
             return LoopXTurnRoute.REPAIR_REQUIRED
         return LoopXTurnRoute.READY_FOR_HOST
     if user.get("action_required") is True:

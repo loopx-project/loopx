@@ -924,7 +924,7 @@ $skill_line
 $slash_line
 $claude_line
 $opencode_line
-- first-run feedback (optional): https://github.com/huangruiteng/loopx/issues/new?template=first_run.yml
+- first-run feedback (optional): https://github.com/loopx-project/loopx/issues/new?template=first_run.yml
 
 Current shell can use it with:
   export PATH="$bin_dir:\$PATH"

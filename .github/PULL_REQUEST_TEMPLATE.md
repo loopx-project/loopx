@@ -80,6 +80,7 @@ even when the underlying access was authorized.
 - After:
 - States and viewports shown:
 - Source data: <!-- choose one: none | synthetic | public_fixture -->
+- Attention review: <!-- Per docs/development/design.md: what earns its place through high-value information, essential interaction, or expressive visual presentation? Name consolidation/removal across the whole viewport, and how failures, uncertainty, and one-step controls remain available. -->
 
 ## Type of Change
 

@@ -94,14 +94,14 @@ def canonical_update_is_supported(
     """Whether an ordinary update can use the canonical transaction.
 
     User completion is routed to the typed terminal owner; Monitor observations
-    retain their dedicated effect-owned path.
+    carry a versioned effect intent instead of a raw metadata patch.
     Ordinary metadata is validated by the typed transaction, including rejection
     of unsupported fields; this transport must not duplicate its field catalog.
     They must not silently fall back to Markdown after authority promotion.
     """
 
     if isinstance(monitor_metadata, MonitorPollObservation):
-        return False
+        return True
     # Empty notes are the long-standing compatibility spelling for omission;
     # routing them to the canonical adapter would produce an empty patch and a
     # less useful protocol error. Text still uses the normal non-empty text

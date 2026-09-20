@@ -94,7 +94,7 @@ def main() -> None:
         assert "ok: `True`" in doctor.stdout, doctor.stdout
         assert "## Install Freshness" in doctor.stdout, doctor.stdout
         assert "release_manifest_available: `True`" in doctor.stdout, doctor.stdout
-        assert "huangruiteng.github.io/loopx/install.sh" in doctor.stdout, doctor.stdout
+        assert "loopx-project.github.io/loopx/install.sh" in doctor.stdout, doctor.stdout
         doctor_json = subprocess.run(
             [str(installed), "--format", "json", "doctor"],
             check=True,
@@ -110,7 +110,7 @@ def main() -> None:
         assert manifest["source"]["promotion_mode"] == "trusted_github_archive", manifest
         assert manifest["schema_version"] == "loopx_release_manifest_v0", manifest
         assert manifest["source"]["kind"] == "github_archive", manifest
-        assert manifest["source"]["repo"] == "huangruiteng/loopx", manifest
+        assert manifest["source"]["repo"] == "loopx-project/loopx", manifest
         assert manifest["source"]["ref"] == "stable", manifest
         assert manifest["source"]["archive_url"] == f"file://{archive}", manifest
         assert manifest["source"]["archive_sha256"], manifest

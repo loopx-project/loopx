@@ -119,7 +119,7 @@
       ["Protect final delivery", "Test independent acceptance and best-version retention so later optimization cannot erase correct results."]
     ],
     "programAction": "Read the Long-Horizon Harness RFC",
-    "programUrl": "https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md",
+    "programUrl": "https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md",
     "limitsEyebrow": "06 / Evidence boundary",
     "limitsTitle": "A reason to investigate further, not proof of reliable gains at equal budgets.",
     "limits": [
@@ -134,12 +134,12 @@
     "sourcesEyebrow": "07 / Sources",
     "sourcesTitle": "Public links and reproducible aggregate evidence.",
     "sourceItems": [
-      ["46-task public aggregate", "Full scores, runtime settings, and cost provenance.", "https://github.com/huangruiteng/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json"],
-      ["Original mechanism case report", "Reported S27 recovery and DuckDB regression; observational case evidence.", "https://github.com/huangruiteng/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/apps/presentation/site/src/lhtb-copy.json"],
-      ["LoopX LHTB runner", "Current generic_cli + fresh codex exec Heartbeat implementation and fairness contract.", "https://github.com/huangruiteng/loopx/tree/main/benchmark/LHTB"],
+      ["46-task public aggregate", "Full scores, runtime settings, and cost provenance.", "https://github.com/loopx-project/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json"],
+      ["Original mechanism case report", "Reported S27 recovery and DuckDB regression; observational case evidence.", "https://github.com/loopx-project/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/apps/presentation/site/src/lhtb-copy.json"],
+      ["LoopX LHTB runner", "Current generic_cli + fresh codex exec Heartbeat implementation and fairness contract.", "https://github.com/loopx-project/loopx/tree/main/benchmark/LHTB"],
       ["LHTB official site", "Benchmark definition, leaderboard, and methodology.", "https://zli12321.github.io/LHTB/index.html"],
       ["LHTB paper", "Long-Horizon Terminal-Bench, arXiv:2607.08964.", "https://arxiv.org/abs/2607.08964"],
-      ["LoopX benchmark RFC", "The broader long-horizon harness benchmark and research program.", "https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md"]
+      ["LoopX benchmark RFC", "The broader long-horizon harness benchmark and research program.", "https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md"]
     ],
     "attestation": "Scores come from the public 46-task aggregate; comparisons are computed from task rewards. Mechanism cases refer to the original research brief, not new experimental findings.",
     "footer": "An exploratory LoopX research brief built from 46-task aggregate evidence.",
@@ -314,7 +314,7 @@
       ["验证最终交付", "检查独立验收与最佳版本保留；不能让后续优化冲掉已经正确的成果。"]
     ],
     "programAction": "阅读 Long-Horizon Harness RFC",
-    "programUrl": "https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.zh-CN.md",
+    "programUrl": "https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.zh-CN.md",
     "limitsEyebrow": "06 / 证据边界",
     "limitsTitle": "这组结果支持继续研究，尚不能证明同预算下稳定领先。",
     "limits": [
@@ -329,12 +329,12 @@
     "sourcesEyebrow": "07 / 来源",
     "sourcesTitle": "公开链接与可复现的聚合证据。",
     "sourceItems": [
-      ["46 题公开聚合", "全部分数、实验设置与成本来源。", "https://github.com/huangruiteng/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json"],
-      ["原始机制案例报告", "S27 恢复与 DuckDB 回退的报告来源，属于观察性案例。", "https://github.com/huangruiteng/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/apps/presentation/site/src/lhtb-copy.json"],
-      ["LoopX LHTB runner", "当前 generic_cli + fresh codex exec Heartbeat 实现与公平性契约。", "https://github.com/huangruiteng/loopx/tree/main/benchmark/LHTB"],
+      ["46 题公开聚合", "全部分数、实验设置与成本来源。", "https://github.com/loopx-project/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json"],
+      ["原始机制案例报告", "S27 恢复与 DuckDB 回退的报告来源，属于观察性案例。", "https://github.com/loopx-project/loopx/blob/d60813451609ad28b2855fe7acda9a4701740c40/apps/presentation/site/src/lhtb-copy.json"],
+      ["LoopX LHTB runner", "当前 generic_cli + fresh codex exec Heartbeat 实现与公平性契约。", "https://github.com/loopx-project/loopx/tree/main/benchmark/LHTB"],
       ["LHTB 官方网站", "Benchmark 定义、排行榜与方法。", "https://zli12321.github.io/LHTB/index.html"],
       ["LHTB 论文", "Long-Horizon Terminal-Bench，arXiv:2607.08964。", "https://arxiv.org/abs/2607.08964"],
-      ["LoopX benchmark RFC", "更完整的长程 harness benchmark 与研究计划。", "https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.zh-CN.md"]
+      ["LoopX benchmark RFC", "更完整的长程 harness benchmark 与研究计划。", "https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.zh-CN.md"]
     ],
     "attestation": "分数来自公开 46 题聚合；比较指标由逐题分数计算。机制案例沿用原研究简报的报告，不新增实验结论。",
     "footer": "基于 46 题聚合证据的 LoopX 探索性研究简报。",

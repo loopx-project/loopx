@@ -163,6 +163,24 @@ def test_projection_assigns_display_only_provenance_to_native_records() -> None:
     assert all("source_section" not in record and "index" not in record for record in records)
 
 
+@pytest.mark.parametrize("schema", ["todo_item_v0", "todo_domain_record_v0"])
+def test_priority_text_has_a_lossless_display_without_persisted_derived_fields(schema):
+    record = deepcopy(_records()[0])
+    record.update(schema_version=schema, text="[P2] Observe a public target.")
+    record.pop("priority", None)
+    record.pop("title", None)
+    if schema == "todo_domain_record_v0":
+        record.pop("source_section", None)
+        record.pop("index", None)
+    original = deepcopy(record)
+    result = render_canonical_todo_sections(SOURCE, [record], provider_revision="priority-display")
+    assert "[P2] Observe a public target." in result.markdown
+    assert record == original
+    assert not render_canonical_todo_sections(result.markdown, [record], provider_revision="priority-display").changed
+    with pytest.raises(ValueError, match="parity mismatch"):
+        render_canonical_todo_sections(SOURCE, [{**record, "priority": "P0"}], provider_revision="priority-conflict")
+
+
 def test_projection_rejects_unknown_fields_but_allows_known_read_model_fields() -> None:
     unknown = deepcopy(_records())
     unknown[0]["future_field"] = "must-not-disappear"

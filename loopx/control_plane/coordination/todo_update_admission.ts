@@ -22,11 +22,20 @@ export function todoUpdateAdmissionRejection(
   if (todo.archive_state !== "active") {
     return reject("todo_archived", "Todo update requires an active Todo");
   }
-  if (todo.status === "done" && kind === "planning") {
+  const observation = input.monitor_observation;
+  const reactivating = observation !== undefined && todo.status === "done" && input.planning_intent?.status === "open";
+  if (observation !== undefined && (todo.role !== "agent" || todo.task_class !== "continuous_monitor" ||
+      (todo.status !== "open" && !reactivating))) {
+    return reject("invalid_monitor_observation_target", "Observation requires an open Agent Monitor or explicit reactivation of a completed Monitor");
+  }
+  if (todo.status === "done" && kind === "planning" && !reactivating) {
     return reject("unsupported_todo_update_target",
       "native metadata update cannot complete a Todo; use the terminal lifecycle command");
   }
   const lease = leases.get(input.todo_id);
+  if (reactivating && lease !== undefined) {
+    return reject("monitor_reactivation_lease_transition_required", "A retained execution lease requires lifecycle resolution before Monitor reactivation");
+  }
   const mode = head.handoff_mode === undefined ? "legacy" : head.handoff_mode;
   if (typeof mode !== "string" || !["legacy", "soft_claim", "hard_lease"].includes(mode)) {
     return reject("invalid_handoff_mode", "canonical handoff mode is invalid");
@@ -42,7 +51,7 @@ export function todoUpdateAdmissionRejection(
   const authorityDecision = evaluateCoordinationTodoMutationDecision({
     schema_version: COORDINATION_TODO_MUTATION_DECISION_REQUEST_SCHEMA,
     command: "update", handoff_mode: mode, registered_agents: input.registered_agents,
-    lifecycle_grants: input.lifecycle_grants ?? [],
+    lifecycle_grants: observation === undefined ? input.lifecycle_grants ?? [] : [],
     // A reassign-only grant cannot authorize a bundled copy/planning edit.
     authority_action: Object.keys(input.patch).length === 0 && input.clear_fields.length === 0 &&
       Object.keys(intent).every(field => field === "claimed_by" || field === "clear_claim") &&
@@ -78,6 +87,9 @@ export function todoUpdateAdmissionRejection(
   if (input.actor_agent_id === null && (todo.claimed_by !== undefined ||
       todo.bound_agent !== undefined || todo.blocks_agent !== undefined)) {
     return reject("actor_required", "owned or bound Todo updates require an actor");
+  }
+  if (observation !== undefined && input.actor_agent_id === null) {
+    return reject("actor_required", "Monitor observations require a registered actor");
   }
   // A retained lease, even expired/released, has execution lineage. Ownership
   // and exclusions must not change beneath it through a metadata operation.

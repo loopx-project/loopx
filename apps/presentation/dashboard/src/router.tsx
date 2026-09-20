@@ -36,7 +36,7 @@ const benchmarkStudySearchSchema = z.object({
 
 // Bookmarks remain valid, but the retired boards no longer ship a second UI.
 function PublicCasesRedirect() {
-  const target = "https://huangruiteng.github.io/loopx/docs/showcases/index.en.html";
+  const target = "https://loopx-project.github.io/loopx/docs/showcases/index.en.html";
   useEffect(() => { window.location.replace(target); }, []);
   return <a href={target}>Open LoopX cases / 浏览案例</a>;
 }

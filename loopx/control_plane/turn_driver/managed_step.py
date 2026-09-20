@@ -26,7 +26,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from .executor import LOOPX_TURN_EXECUTION_SCHEMA_VERSION
 from .host_failure import normalize_host_failure_record, project_host_failure
 from .loop_controller import (
     LOOP_CONTROLLER_DISPOSITION_SCHEMA_VERSION,
@@ -35,6 +34,7 @@ from .loop_controller import (
 )
 from .turn_journal_runtime import interpret_turn_journal_projection
 from .transaction import (
+    LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
     LOOPX_TURN_RECEIPT_VALIDATION_SCHEMA_VERSION,
     LoopXTurnResultKind,
 )

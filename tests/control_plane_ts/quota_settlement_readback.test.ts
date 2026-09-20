@@ -170,6 +170,11 @@ async function fixture(options: {
       todo_id: todoId,
       turn_instance_id: turnId,
       material_change: true,
+      quota_monitor_poll_commit: {
+        schema_version: "quota_monitor_poll_commit_receipt_v0",
+        effect_id: `quota-monitor-poll:${goalId}:${agentId}:${turnId}:todo:${todoId}`,
+        request_digest: "fixture",
+      },
     });
   }
   await writeFile(
@@ -197,6 +202,37 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test("monitor closeout requires the exact committed effect, not a matching observation row", async t => {
+  const effect = `quota-monitor-poll:${goalId}:${agentId}:${turnId}`;
+  const cases: [string, Record<string, unknown>, string][] = [
+    ["committed", {}, "settled"],
+    ["legacy turn-only commit", {quota_monitor_poll_commit: {effect_id: effect}}, "settled"],
+    ["preview without commit", {quota_monitor_poll_commit: null}, "poll_due"],
+    ["malformed commit", {quota_monitor_poll_commit: []}, "poll_due"],
+    ["missing effect", {quota_monitor_poll_commit: {}}, "poll_due"],
+    ["wrong commit", {quota_monitor_poll_commit: {effect_id: `${effect}:todo:other`}}, "poll_due"],
+    ["wrong agent", {agent_id: "another-agent"}, "poll_due"],
+    ["wrong goal", {goal_id: "another-goal"}, "poll_due"],
+    ["wrong Todo", {todo_id: "todo_other"}, "poll_due"],
+    ["wrong Turn", {turn_instance_id: "other-turn"}, "poll_due"],
+    ["ordinary writeback", {classification: "state_refreshed"}, "poll_due"],
+  ];
+  for (const [name, patch, expected] of cases) {
+    await t.test(name, async () => {
+      const root = await fixture({monitor: true});
+      try {
+        const path = join(root, "goals", goalId, "runs", "index.jsonl");
+        const row = JSON.parse((await readFile(path, "utf8")).trim());
+        await writeFile(path, `${JSON.stringify({...row, ...patch})}\n`);
+        const result = await readQuotaSettlement(request(root));
+        assert.equal(result.monitor_phase, expected);
+        assert.equal(result.replay_phase, "open");
+        assert.equal((result.spend as any).payload.ok, false);
+      } finally { await rm(root, {recursive: true, force: true}); }
+    });
+  }
+});
 
 test("refresh recovery admission never survives a failed Turn identity", async () => {
   const root = await fixture({ guard: false, writeback: true });
@@ -266,7 +302,7 @@ test("reads the complete receipt chain and workspace causality once", async () =
   });
 });
 
-test("keeps partial settlement fail-closed without losing durable facts", async () => {
+test("keeps ordinary partial settlement fail-closed while the monitor poll is closed", async () => {
   const runtimeRoot = await fixture({ writeback: true, monitor: true });
 
   const result = await readQuotaSettlement(request(runtimeRoot));
@@ -274,7 +310,7 @@ test("keeps partial settlement fail-closed without losing durable facts", async 
   assert.equal((result.writeback as any).payload.ok, true);
   assert.equal((result.spend as any).payload.ok, false);
   assert.equal((result.settlement as any).result.failure.kind, "receipt_missing");
-  assert.equal(result.monitor_phase, "settlement_pending");
+  assert.equal(result.monitor_phase, "settled");
   assert.equal(result.replay_phase, "open");
   assert.equal((result.writeback_run as any).delivery_outcome, "outcome_progress");
 });

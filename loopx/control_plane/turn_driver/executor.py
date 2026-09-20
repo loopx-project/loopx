@@ -28,12 +28,11 @@ from .command_validation import (
     reward_memory_reflection_digest,
 )
 from .driver import selected_turn_todo
+from .execution_readback import execution_payload
 from .host_binding import (
-    managed_executor_payload_entry,
-    managed_executor_remediation_projection,
     managed_executor_unavailable_payload,
 )
-from .host_failure import BuiltInHostError, project_host_failure, record_host_failure
+from .host_failure import BuiltInHostError, record_host_failure
 from .journal_store import (
     LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
     TURN_KEY_RE,
@@ -42,7 +41,7 @@ from .journal_store import (
     turn_journal_path,
     write_turn_journal_checkpoint as _write_journal,
 )
-from .lane_fence import single_executor_per_turn_lane, turn_lane_in_flight_projection
+from .lane_fence import single_executor_per_turn_lane
 from .recovery import (
     assess_existing_turn_recovery,
     build_turn_recovery_audit,
@@ -66,7 +65,6 @@ from .settlement import (
     verified_terminal_closeout_effect,
 )
 from .transaction import (
-    LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
     STOP_RESULT_KINDS as STOP_HOST_RESULT_KINDS,
     TRANSACTION_PHASES,
@@ -744,73 +742,6 @@ def _compact_callback(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _execution_payload(
-    plan: Mapping[str, Any],
-    journal: Mapping[str, Any],
-    *,
-    execute: bool,
-    replayed: bool,
-    effects: Mapping[str, bool],
-) -> dict[str, Any]:
-    transaction = (
-        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
-    )
-    turn_key = str(transaction.get("turn_key") or "")
-    planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
-    writeback = _mapping(journal.get("writeback"))
-    todo_completion = _mapping(writeback.get("completion"))
-    quota_spent = effects.get("quota_spent") is True or "quota_spend" in list(
-        journal.get("completed_phases") or []
-    )
-    recovery = journal.get("recovery_audit")
-    return {
-        "ok": journal.get("status")
-        in {
-            "preview",
-            "committed",
-            "stopped",
-            "scheduler_action_required",
-        },
-        "schema_version": LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
-        "mode": "run_once",
-        "dry_run": not execute,
-        "replayed": replayed,
-        "resume_turn_key": turn_key,
-        "journal_ref": f"turn:{turn_key.removeprefix('sha256:')[:16]}",
-        "status": journal.get("status"),
-        "execution_mode": planned_host.get("execution_mode"),
-        "host": journal.get("host"),
-        **managed_executor_payload_entry(plan),
-        "result_kind": journal.get("result_kind"),
-        "validation": journal.get("task_validation"),
-        "receipt": journal.get("receipt"),
-        "scheduler": journal.get("scheduler"),
-        **subagent.subagent_execution_payload_projection(journal),
-        "effects": dict(effects),
-        "quota_slot_spend_count": 1 if quota_spent else 0,
-        **(
-            {"settlement_result": journal["settlement_result"]}
-            if isinstance(journal.get("settlement_result"), Mapping)
-            else {}
-        ),
-        **(
-            {"post_settlement": journal["post_settlement"]}
-            if isinstance(journal.get("post_settlement"), Mapping)
-            else {}
-        ),
-        **({"todo_completion": todo_completion} if todo_completion else {}),
-        **({"reason": journal.get("reason")} if journal.get("reason") else {}),
-        **turn_lane_in_flight_projection(journal),
-        **managed_executor_remediation_projection(journal),
-        **project_host_failure(journal),
-        **({"recovery": dict(recovery)} if isinstance(recovery, Mapping) else {}),
-    }
-
-
 def _host_result_stage(
     plan: Mapping[str, Any],
     request: Mapping[str, Any],
@@ -872,7 +803,7 @@ def _host_result_stage(
             return (
                 None,
                 [],
-                _execution_payload(
+                execution_payload(
                     plan,
                     journal,
                     execute=True,
@@ -910,7 +841,7 @@ def _host_result_stage(
         return (
             None,
             list(TRANSACTION_PHASES[:2]),
-            _execution_payload(
+            execution_payload(
                 plan,
                 journal,
                 execute=True,
@@ -957,7 +888,7 @@ def _task_validation_stage(
             scheduler={"disposition": "not_applicable"},
         )
         _write_journal(journal_path, journal)
-        return completed_phases, _execution_payload(
+        return completed_phases, execution_payload(
             plan,
             journal,
             execute=True,
@@ -1002,7 +933,7 @@ def _task_validation_stage(
             validation_stage="task_postcondition",
         )
         _write_journal(journal_path, journal)
-        return list(TRANSACTION_PHASES[:2]), _execution_payload(
+        return list(TRANSACTION_PHASES[:2]), execution_payload(
             plan,
             journal,
             execute=True,
@@ -1207,7 +1138,7 @@ def _typed_settlement_stage(
             receipt=failure["receipt"],
         )
         _write_journal(journal_path, journal)
-        return _execution_payload(
+        return execution_payload(
             plan,
             journal,
             execute=True,
@@ -1243,7 +1174,7 @@ def _typed_settlement_stage(
             receipt=_receipt(plan, result, completed_phases=completed_phases),
         )
         _write_journal(journal_path, journal)
-        return _execution_payload(
+        return execution_payload(
             plan,
             journal,
             execute=True,
@@ -1259,7 +1190,7 @@ def _typed_settlement_stage(
         receipt=_receipt(plan, result, completed_phases=completed_phases),
     )
     _write_journal(journal_path, journal)
-    return _execution_payload(
+    return execution_payload(
         plan,
         journal,
         execute=True,
@@ -1268,7 +1199,7 @@ def _typed_settlement_stage(
     )
 
 
-@single_executor_per_turn_lane(_execution_payload)
+@single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
     *,
@@ -1321,7 +1252,7 @@ def run_loopx_turn_once(
     )
     if fail_closed is not None:
         # Refuse before journal/host/quota when the planned executor cannot launch.
-        return _execution_payload(
+        return execution_payload(
             plan, fail_closed, execute=True, replayed=False, effects=empty_effects
         )
     if not execute:
@@ -1333,7 +1264,7 @@ def run_loopx_turn_once(
             "receipt": None,
             "scheduler": {"disposition": "not_evaluated"},
         }
-        return _execution_payload(
+        return execution_payload(
             plan,
             preview,
             execute=False,
@@ -1369,7 +1300,7 @@ def run_loopx_turn_once(
             recovery_decision = assessment.decision
             action = recovery_decision.get("action")
             if action == "return_existing":
-                payload = _execution_payload(
+                payload = execution_payload(
                     plan,
                     journal,
                     execute=True,

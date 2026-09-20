@@ -26,7 +26,7 @@ SQUASH_PR_RE = re.compile(r"^(?P<title>.+?)\s+\(#(?P<pr>\d+)\)$")
 MERGE_PR_RE = re.compile(r"^Merge pull request #(?P<pr>\d+)\b")
 FIELD_SEPARATOR = "\x1f"
 RECORD_SEPARATOR = "\x1e"
-PULL_URL = "https://github.com/huangruiteng/loopx/pull"
+PULL_URL = "https://github.com/loopx-project/loopx/pull"
 
 
 @dataclass(frozen=True)

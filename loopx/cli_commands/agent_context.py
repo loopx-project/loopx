@@ -1,8 +1,7 @@
 """Read-only lifecycle context for hosts whose native tools bypass LoopX Turn."""
 
 from ..agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
-from ..control_plane.agent_context import project_agent_context
-from ..orchestration import compact_orchestration_policy
+from ..control_plane.agent_context import project_goal_agent_context
 
 
 def register_agent_context(subparsers, add_format):
@@ -19,7 +18,7 @@ def register_agent_context(subparsers, add_format):
     )
 
 
-def handle_agent_context(args, registry_path, print_payload, output_format):
+def handle_agent_context(args, registry_path, runtime_root, print_payload, output_format):
     goal = load_goal_from_registry(registry_path, args.goal_id)
     if goal is None or args.agent_id not in registered_agent_ids_for_goal(goal):
         print_payload(
@@ -28,18 +27,21 @@ def handle_agent_context(args, registry_path, print_payload, output_format):
             render_agent_context,
         )
         return 1
-    context = project_agent_context(
+    context = project_goal_agent_context(
         phase=args.phase,
         scope={"goal_id": args.goal_id, "agent_id": args.agent_id, "todo_id": None},
-        orchestration=compact_orchestration_policy(goal.get("spawn_policy")),
+        goal=goal,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
     )
     print_payload(
         {
             "ok": True,
             "agent_context": context,
-            "source": "registry.spawn_policy",
+            "source": "registry.spawn_policy+local_delegation",
             "read_only": True,
             "host_receipts_observed": False,
+            "host_receipts_scope": "native_tool_input",
         },
         output_format(args),
         render_agent_context,

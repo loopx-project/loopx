@@ -14,6 +14,7 @@ from loopx.capabilities.periodic_report.incremental import (
     build_periodic_report_publication_candidate,
     commit_periodic_report_publication_cursor,
     periodic_report_incremental_baseline,
+    read_periodic_report_goal_publication_cursors,
     read_periodic_report_publication_cursor,
     select_incremental_project_progress,
 )
@@ -1102,3 +1103,144 @@ def test_snapshot_next_action_prefers_the_peer_lane_over_an_unowned_row(
 
     assert snapshot is not None
     assert _next_action_refs(snapshot) == ["todo:todo_peer"]
+
+
+PEER_AGENT_ID = "peer-agent"
+
+
+def _commit(
+    runtime: Path,
+    *,
+    agent_id: str,
+    facts: list[dict[str, object]],
+    generation_id: str,
+) -> dict[str, object]:
+    candidate = build_periodic_report_publication_candidate(
+        goal_id=GOAL_ID,
+        agent_id=agent_id,
+        generation_id=generation_id,
+        trigger_receipt=_trigger(f"trigger_{generation_id}"),
+        facts=facts,
+        baseline=None,
+    )
+    return commit_periodic_report_publication_cursor(
+        runtime_root=runtime,
+        candidate=candidate,
+        publication_id=f"goal-channel:{generation_id}",
+        delivered_at="2026-08-01T09:00:00Z",
+        covered_until="2026-08-01T08:00:00Z",
+    )
+
+
+def test_goal_cursors_drop_a_fact_another_lane_already_published(
+    tmp_path: Path,
+) -> None:
+    """One Goal announces each fact once, whoever the reporting lane is."""
+
+    runtime = tmp_path / "runtime"
+    peer = _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_peer",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    selected = select_incremental_project_progress(
+        _snapshot(
+            [
+                _item("todo:a", title="A completed", summary="A is done."),
+                _item("todo:z", title="Z completed", summary="Z is new."),
+            ]
+        ),
+        cursor=None,
+        goal_cursors=[peer],
+    )
+
+    assert selected is not None
+    assert [item["source_ref"] for item in selected["items"]] == ["todo:z"]
+    assert selected["items"][0]["change_kind"] == "added"
+
+
+def test_goal_cursors_keep_a_fact_a_peer_published_with_different_content(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    peer = _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_peer_text",
+        facts=[_item("todo:a", title="A completed", summary="First wording.")],
+    )
+    selected = select_incremental_project_progress(
+        _snapshot([_item("todo:a", title="A completed", summary="Second wording.")]),
+        cursor=None,
+        goal_cursors=[peer],
+    )
+
+    assert selected is not None
+    assert [item["source_ref"] for item in selected["items"]] == ["todo:a"]
+
+
+def test_goal_cursors_do_not_hide_this_lanes_own_changed_fact(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    own = _commit(
+        runtime,
+        agent_id=AGENT_ID,
+        generation_id="generation_own",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    peer = _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_peer_again",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    selected = select_incremental_project_progress(
+        _snapshot([_item("todo:a", title="A completed", summary="A reopened.")]),
+        cursor=own,
+        goal_cursors=[own, peer],
+    )
+
+    assert selected is not None
+    assert selected["items"][0]["change_kind"] == "changed"
+    assert selected["items"][0]["previous_fact_fingerprint"] == own["fact_states"][0][
+        "fact_fingerprint"
+    ]
+
+
+def test_goal_cursor_reader_returns_every_lane_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    assert (
+        read_periodic_report_goal_publication_cursors(
+            runtime_root=runtime, goal_id=GOAL_ID
+        )
+        == []
+    )
+
+    _commit(
+        runtime,
+        agent_id=AGENT_ID,
+        generation_id="generation_reader_own",
+        facts=[_item("todo:a", title="A completed", summary="A is done.")],
+    )
+    _commit(
+        runtime,
+        agent_id=PEER_AGENT_ID,
+        generation_id="generation_reader_peer",
+        facts=[_item("todo:b", title="B completed", summary="B is done.")],
+    )
+    cursors = read_periodic_report_goal_publication_cursors(
+        runtime_root=runtime, goal_id=GOAL_ID
+    )
+    assert [cursor["agent_id"] for cursor in cursors] == [AGENT_ID, PEER_AGENT_ID]
+
+    sibling = runtime / "goals" / GOAL_ID / "periodic_reports" / "publication-cursors"
+    corrupt = sibling / "third-agent.json"
+    corrupt.write_text('{"schema_version": "unexpected"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="publication cursor must use"):
+        read_periodic_report_goal_publication_cursors(
+            runtime_root=runtime, goal_id=GOAL_ID
+        )

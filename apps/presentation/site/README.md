@@ -1,7 +1,7 @@
 # LoopX Public Website
 
 This directory owns the React/Vite, public-safe
-[LoopX homepage](https://huangruiteng.github.io/loopx/) published at the root
+[LoopX homepage](https://loopx-project.github.io/loopx/) published at the root
 of the GitHub Pages site. The frontstage exporter builds this application into
 the Pages root, publishes contributor tools at `/developers/projections/`, and
 redirects legacy `/frontstage/` links to the public case directory.

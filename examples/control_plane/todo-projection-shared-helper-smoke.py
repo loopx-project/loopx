@@ -403,6 +403,7 @@ def assert_open_task_count_state_machine(summary: dict) -> None:
         "monitor_due": 1,
         "monitor_schedule_gap": 1,
         "hidden": 0,
+        "complete": True,
     }, counts
 
     hidden_summary = {
@@ -419,7 +420,9 @@ def assert_open_task_count_state_machine(summary: dict) -> None:
     }
     hidden_counts = shared_todo_summary_open_task_counts(hidden_summary)
     assert hidden_counts["open"] == 3, hidden_counts
-    assert hidden_counts["advancement"] == 3, hidden_counts
+    # A bounded legacy projection cannot classify the two unseen items.
+    assert hidden_counts["advancement"] == 1, hidden_counts
+    assert hidden_counts["complete"] is False, hidden_counts
     assert hidden_counts["monitor"] == 0, hidden_counts
     assert hidden_counts["hidden"] == 2, hidden_counts
 

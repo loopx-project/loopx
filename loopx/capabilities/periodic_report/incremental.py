@@ -114,17 +114,20 @@ def periodic_report_fact_fingerprint(item: Mapping[str, Any]) -> str:
     return _canonical_digest(identity)
 
 
-def _cursor_path(runtime_root: Path, goal_id: str, agent_id: str) -> Path:
+def _cursor_directory(runtime_root: Path, goal_id: str) -> Path:
     safe_goal = _identity_text(goal_id, "goal_id")
-    safe_agent = _identity_text(agent_id, "agent_id")
     return (
         runtime_root.expanduser().resolve()
         / "goals"
         / safe_goal
         / "periodic_reports"
         / "publication-cursors"
-        / f"{safe_agent}.json"
     )
+
+
+def _cursor_path(runtime_root: Path, goal_id: str, agent_id: str) -> Path:
+    safe_agent = _identity_text(agent_id, "agent_id")
+    return _cursor_directory(runtime_root, goal_id) / f"{safe_agent}.json"
 
 
 def normalize_periodic_report_publication_cursor(
@@ -205,6 +208,31 @@ def read_periodic_report_publication_cursor(
     )
 
 
+def read_periodic_report_goal_publication_cursors(
+    *, runtime_root: Path, goal_id: str
+) -> list[dict[str, Any]]:
+    """Read every lane's published baseline that one Goal has recorded.
+
+    A report covers the Goal, so what the Goal already announced is a Goal-level
+    fact even though each lane keeps its own cursor file. A cursor that cannot
+    be normalized raises rather than being skipped: narrowing the published set
+    silently would re-announce the facts that file was suppressing.
+    """
+    directory = _cursor_directory(runtime_root, goal_id)
+    if not directory.is_dir():
+        return []
+    cursors: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        cursor = _read_periodic_report_publication_cursor_path(
+            path=path,
+            goal_id=goal_id,
+            agent_id=path.stem,
+        )
+        if cursor is not None:
+            cursors.append(cursor)
+    return cursors
+
+
 def _read_periodic_report_publication_cursor_path(
     *, path: Path, goal_id: str, agent_id: str
 ) -> dict[str, Any] | None:
@@ -260,8 +288,14 @@ def select_incremental_project_progress(
     snapshot: Mapping[str, Any],
     *,
     cursor: Mapping[str, Any] | None,
+    goal_cursors: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Select only facts absent from, or changed since, a published cursor."""
+    """Select only facts the Goal has not already published in this exact form.
+
+    ``cursor`` is the calling lane's own baseline and decides ``changed``.
+    ``goal_cursors`` carries every lane's baseline for the same Goal, so a fact
+    another lane already announced does not become new once more.
+    """
 
     items = snapshot.get("items")
     if not isinstance(items, list):
@@ -271,6 +305,15 @@ def select_incremental_project_progress(
     if cursor is not None:
         normalized = normalize_periodic_report_publication_cursor(cursor)
         previous = {item["source_ref"]: item for item in normalized["fact_states"]}
+    published: set[tuple[str, str]] = set()
+    # Passing this lane's own cursor in is harmless: every fact it holds is
+    # already in ``previous``, so it cannot hide anything the checks below miss.
+    for sibling in goal_cursors or []:
+        sibling_cursor = normalize_periodic_report_publication_cursor(sibling)
+        published.update(
+            (item["source_ref"], item["fact_fingerprint"])
+            for item in sibling_cursor["fact_states"]
+        )
     selected: list[dict[str, Any]] = []
     for raw in items:
         if not isinstance(raw, Mapping):
@@ -280,6 +323,9 @@ def select_incremental_project_progress(
         source_ref = str(item.get("source_ref") or "").strip()
         prior = previous.get(source_ref)
         if prior and prior["fact_fingerprint"] == fingerprint:
+            continue
+        # Another lane already announced this exact fact to the same Goal.
+        if prior is None and (source_ref, fingerprint) in published:
             continue
         item["fact_fingerprint"] = fingerprint
         item["change_kind"] = "changed" if prior else "added"
@@ -516,6 +562,7 @@ __all__ = [
     "normalize_periodic_report_publication_cursor",
     "periodic_report_fact_fingerprint",
     "periodic_report_incremental_baseline",
+    "read_periodic_report_goal_publication_cursors",
     "read_periodic_report_publication_cursor",
     "select_incremental_project_progress",
     "write_periodic_report_publication_candidate",

@@ -734,9 +734,17 @@ Quota and business authority remain separate recoverable transactions. Canonical
 commit success is independent of pending Markdown delivery. This does not finish
 all T2 commands or authorize whole-Goal promotion.
 
-- Finish the retained event callers of `monitor_poll_writeback.py`.
-  Reuse existing monitor generation, independent-successor and settlement
-  owners. Compose one transaction rather than adding a second monitor engine.
+- The retained issue-fix grouped Monitor caller now sends observation intent
+  through the existing Todo update transaction (request v4). Observation,
+  explicit lease-free reactivation, terminal-marker cleanup, generation and
+  receipt commit together. Legacy and canonical updates reuse the same field
+  and Monitor planners; no new RPC, raw patch authority or polling engine is
+  added. A fresh post-completion observation advances the cycle even with an
+  equal result hash; historical replay never reopens current work. Display
+  retry also runs for unchanged groups, including priority-prefixed native text.
+  See [observation updates](../../reference/protocols/quota-monitor-observation-receipt-v0.md#observation-updates-and-reactivation).
+  Retained execution leases/hard-lease reactivation, other lifecycle callers,
+  legacy persistence/capture and whole-Goal qualification remain separate.
 - Preserve unchanged polling/reschedule behavior, generation fences,
   material-change successor deduplication and accountable settlement.
   A monitor remains non-executable delivery context; its independent

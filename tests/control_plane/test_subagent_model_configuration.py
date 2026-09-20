@@ -111,6 +111,56 @@ def test_incremental_update_off_and_clear_preserve_boundaries(registry: Path) ->
     assert cleared["after"]["orchestration"]["max_children"] == 0
 
 
+def test_execution_config_is_local_private_pointer_and_survives_disable(
+    registry: Path,
+) -> None:
+    configured = configure_goal(
+        registry_path=registry,
+        goal_id="example",
+        multi_subagent_feature="enabled",
+        max_children=2,
+        subagent_execution_config=".loopx/config/delegations.json",
+        execute=True,
+    )
+    assert configured["after"]["orchestration"]["execution_config"] == (
+        ".loopx/config/delegations.json"
+    )
+    disabled = configure_goal(
+        registry_path=registry,
+        goal_id="example",
+        multi_subagent_feature="off",
+        execute=True,
+    )
+    assert disabled["after"]["orchestration"]["execution_config"] == (
+        ".loopx/config/delegations.json"
+    )
+    cleared = configure_goal(
+        registry_path=registry,
+        goal_id="example",
+        clear_subagent_execution_config=True,
+        execute=True,
+    )
+    assert "execution_config" not in cleared["after"]["orchestration"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["delegations.json", "../delegations.json", "/tmp/delegations.json", ".loopx/config/delegations.yml"],
+)
+def test_execution_config_rejects_non_private_pointer(
+    registry: Path, value: str
+) -> None:
+    before = registry.read_bytes()
+    with pytest.raises(ValueError, match="repo-relative JSON path"):
+        configure_goal(
+            registry_path=registry,
+            goal_id="example",
+            subagent_execution_config=value,
+            execute=True,
+        )
+    assert registry.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -198,6 +248,18 @@ def test_capability_editor_model_roundtrip_and_clear(registry: Path) -> None:
         )
 
 
+def test_capability_editor_requests_one_click_codex_capacity_alignment() -> None:
+    from loopx.chat_goal_configuration_api import _goal_capability_options
+
+    options = _goal_capability_options(
+        "multi_subagent",
+        {"enabled": True, "max_children": 6, "allowed_domains": []},
+    )
+
+    assert options["align_codex_subagent_capacity"] is True
+    assert options["max_children"] == 6
+
+
 @pytest.mark.parametrize("config", [
     {"model": 42},
     {"model": "example", "reasoning_effort": True},
@@ -268,3 +330,18 @@ def test_goal_drawer_preview_binding_and_model_roundtrip(registry: Path) -> None
         actual = json.loads(registry.read_text())["goals"][0]["spawn_policy"]
         assert actual.get("model_config") == expected
         assert actual["allowed"] is False
+
+    handler.body = {
+        **base,
+        "execution_config": ".loopx/config/delegations.json",
+    }
+    handler._goal_subagent_configuration(apply=False)
+    assert handler.response["after"]["orchestration"]["execution_config"] == (
+        ".loopx/config/delegations.json"
+    )
+    handler.body["preview_id"] = handler.response["preview_id"]
+    handler._goal_subagent_configuration(apply=True)
+    assert handler.response["status"] == 200
+    assert json.loads(registry.read_text())["goals"][0]["spawn_policy"][
+        "execution_config"
+    ] == ".loopx/config/delegations.json"

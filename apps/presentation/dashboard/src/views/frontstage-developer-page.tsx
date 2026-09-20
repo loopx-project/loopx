@@ -240,11 +240,11 @@ export function FrontstageDeveloperPage() {
             </div>
           </div>
           <div className="mt-4 grid gap-2">
-            <a className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium" href="https://huangruiteng.github.io/loopx/">
+            <a className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium" href="https://loopx-project.github.io/loopx/">
               <LayoutDashboard className="h-4 w-4" />
               LoopX home
             </a>
-            <a className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium" href="https://huangruiteng.github.io/loopx/docs/showcases/index.en.html">
+            <a className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium" href="https://loopx-project.github.io/loopx/docs/showcases/index.en.html">
               <ExternalLink className="h-4 w-4" />
               Public cases
             </a>

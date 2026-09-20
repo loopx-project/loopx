@@ -3,7 +3,6 @@ import { Bot, Eye, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { localizedGoalState, useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
-import { goalUsageLabel } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
 
 export function ChannelHeader({
@@ -44,15 +43,6 @@ export function ChannelHeader({
   selectedGoalTab: WorkspaceGoalTab;
 }) {
   const { locale, t } = useWorkspaceI18n();
-  const selectedGoalUsageLabel = selectedGoal
-    ? goalUsageLabel(selectedGoal.usage, {
-      cost: t("drawer.costShort"),
-      duration: t("drawer.durationShort"),
-      period24h: t("drawer.period24h"),
-      period7d: t("drawer.period7d"),
-      tokens: t("drawer.tokensShort"),
-    })
-    : null;
   // The chip reports the selected executor, whose credential pays for it, and
   // the resolved model, so an executor and a model that disagree are visible
   // instead of arriving as one silent configuration.
@@ -121,17 +111,7 @@ export function ChannelHeader({
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
         <h1>{selectedGoal?.title ?? t("header.manager")}</h1>
-        {!selectedGoal && managerRuntime ? (
-          <p>{managerRuntime.status === "ready"
-            ? t("header.managerRuntime", {
-              profile: managerRuntime.runtime_profile,
-              sandbox: managerRuntime.sandbox,
-            })
-            : t("header.managerRuntimeFallback", {
-              profile: managerRuntime.runtime_profile,
-              sandbox: managerRuntime.sandbox,
-            })}</p>
-        ) : null}
+        {selectedGoal && !selectedGoal.loadState && !["安静运行", "推进中"].includes(selectedGoal.state) ? <p>{localizedGoalState(selectedGoal.state, locale)}</p> : null}
         {!selectedGoal && managerChannelBinding ? (
           <p className="personal-manager-execution">
             <span className={managerExecutionUnavailable ? "personal-execution-chip is-unavailable" : "personal-execution-chip"}>
@@ -148,16 +128,27 @@ export function ChannelHeader({
                 })}
               </span>
             ) : null}
-            {managerExecutionDefaultReason ? (
+          </p>
+        ) : null}
+        {!selectedGoal && (managerRuntime || managerExecutionDefaultReason) ? <details className="personal-runtime-details" open={managerRuntime != null && managerRuntime.status !== "ready" ? true : undefined}><summary>{locale === "zh-CN" ? "运行环境" : "Execution environment"}</summary>
+        {!selectedGoal && managerRuntime ? (
+          <p>{managerRuntime.status === "ready"
+            ? t("header.managerRuntime", {
+              profile: managerRuntime.runtime_profile,
+              sandbox: managerRuntime.sandbox,
+            })
+            : t("header.managerRuntimeFallback", {
+              profile: managerRuntime.runtime_profile,
+              sandbox: managerRuntime.sandbox,
+            })}</p>
+        ) : null}
+            {managerExecutionDefaultReason && managerChannelBinding ? (
               <span className="personal-execution-rule-note">
                 {t(managerExecutionDefaultReason, { executor: managerChannelBinding.executor_endpoint })}
               </span>
             ) : null}
-          </p>
-        ) : null}
-        {selectedGoal ? <p>{selectedGoal.loadState ? t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : `${selectedGoal.agentLaneCount && selectedGoal.agentLaneCount > 1
-            ? t("header.workAgentCount", { count: selectedGoal.agentLaneCount })
-            : selectedGoal.agentLabel ?? selectedGoal.agentId} · ${(selectedGoal.loadState ? t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : localizedGoalState(selectedGoal.state, locale))}${selectedGoalUsageLabel ? ` · ${selectedGoalUsageLabel}` : ""} · ${selectedGoal.nextSentence}`}</p> : null}
+        </details> : null}
+        {selectedGoal?.loadState ? <p role="status">{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</p> : null}
       </div>
       {selectedGoal ? (
         <div className="personal-goal-navigation">
@@ -180,7 +171,6 @@ export function ChannelHeader({
           <button aria-label={t("header.goalSettings")} title={t("header.goalSettingsDescription")} className="personal-icon-button personal-goal-settings-action" onClick={onOpenGoalCapabilities} type="button"><SlidersHorizontal aria-hidden size={17} /></button>
         ) : null}
         {!selectedGoal ? runtimeControl : null}
-        <span className="personal-live-indicator"><i />{t("header.live")}</span>
         {onRefresh ? (
           <span className={`personal-refresh-control is-${refreshState ?? "idle"}`}>
             {refreshState === "loading" ? <small>{t("header.refreshing")}</small> : refreshState === "done" ? <small>{t("header.refreshDone")}</small> : refreshState === "error" ? <small>{t("header.refreshFailed")}</small> : null}

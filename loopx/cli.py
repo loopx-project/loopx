@@ -775,7 +775,13 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "agent-context":
-        return handle_agent_context(args, registry_path, print_payload, output_format)
+        return handle_agent_context(
+            args,
+            registry_path,
+            effective_runtime_root(registry_path, args.runtime_root),
+            print_payload,
+            output_format,
+        )
 
     if args.command == "agent-directory":
         return handle_agent_directory(

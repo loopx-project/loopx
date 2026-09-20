@@ -7,6 +7,7 @@ This adapter preserves CLI text encoding and drains the committed projection.
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
 
@@ -29,6 +30,7 @@ from .completion_validation import (
     resolve_private_completion_validation_declaration,
 )
 from .path_resolution import resolve_todo_state_path
+from .monitor_metadata import MonitorPollObservation
 
 
 def update_canonical_todo_if_promoted(
@@ -42,6 +44,7 @@ def update_canonical_todo_if_promoted(
     authority_reason: str | None = None,
     expected_provider_revision: str | None = None,
     expected_registry_sha256: str | None = None,
+    monitor_observation: MonitorPollObservation | None = None,
 ) -> dict[str, Any] | None:
     if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
         return None
@@ -75,7 +78,8 @@ def update_canonical_todo_if_promoted(
                 persist_if_resolved=not dry_run)
         completion = {"validation_declaration": declaration}
     request = {
-        "schema_version": ("loopx_local_coordination_todo_update_request_v3" if completion is not None
+        "schema_version": ("loopx_local_coordination_todo_update_request_v4" if monitor_observation is not None
+                           else "loopx_local_coordination_todo_update_request_v3" if completion is not None
                            else "loopx_local_coordination_todo_update_request_v2"),
         "runtime_root": str(runtime_root.resolve()), "goal_id": goal_id,
         "todo_id": todo_id, "role": role, "actor_agent_id": actor_agent_id,
@@ -84,13 +88,16 @@ def update_canonical_todo_if_promoted(
         "registry_source": registry_source,
         "expected_provider_revision": expected_provider_revision,
         "expected_registry_sha256": expected_registry_sha256,
-        "operation_id": operation_id if operation_id is not None else f"todo-update:{uuid4().hex}",
+        "operation_id": (operation_id if operation_id is not None else
+                         (monitor_observation.monitor_effect_id if monitor_observation else None)
+                         or f"todo-update:{uuid4().hex}"),
         "lease_idempotency_key": task_lease_idempotency_key,
         "lease_expected_version": task_lease_expected_version,
         "patch": patch, "clear_fields": [], "dry_run": dry_run,
         "planning_intent": planning_intent or {},
         "observed_at": now_local(),
         **({"completion": completion} if completion is not None else {}),
+        **({"monitor_observation": asdict(monitor_observation)} if monitor_observation is not None else {}),
     }
     result = effect_runtime_result("coordination.local_authority.todo_update", request)
     completion_validation_executed = False

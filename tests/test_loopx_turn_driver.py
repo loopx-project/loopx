@@ -1029,7 +1029,7 @@ def test_turn_plan_rejects_unsafe_instance_id(instance_id: str) -> None:
 @pytest.mark.parametrize(
     ("effective_action", "expected"),
     [
-        ("capability_repair", LoopXTurnRoute.REPAIR_REQUIRED),
+        ("capability_bridge_repair", LoopXTurnRoute.REPAIR_REQUIRED),
         ("autonomous_replan", LoopXTurnRoute.REPLAN_REQUIRED),
         ("successor_replan_required", LoopXTurnRoute.REPLAN_REQUIRED),
     ],

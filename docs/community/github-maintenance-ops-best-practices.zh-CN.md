@@ -144,7 +144,7 @@ fork 与衍生评估按计划执行。对每个有价值的来源，在作者自
 要求 Python 3.11+ 与 `curl`、`tar`。无需 clone，先安装再在项目根目录接入：
 
 ```bash
-curl -fsSL https://huangruiteng.github.io/loopx/install.sh | bash
+curl -fsSL https://loopx-project.github.io/loopx/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 loopx doctor
 

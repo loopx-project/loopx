@@ -542,3 +542,17 @@ export function productionScaleLeasedMonitorFixture(goalId: string,
     proof: {idempotency_key: fixture.completion_lease_idempotency_key,
       expected_version: fixture.completion_lease_expected_version}};
 }
+
+/** A completed watch and its waiting dependent within the full mixed graph. */
+export function productionScaleCompletedMonitorFixture(goalId: string,
+  schema: AuthorityProjectionSchema = "native") {
+  const fixture = productionScaleLeasedMonitorFixture(goalId, schema);
+  const todos = (fixture.projection.todos as Record<string, unknown>[]).map(todo =>
+    todo.todo_id === fixture.target ? {...todo, status: "done", done: true,
+      completed_at: "2026-09-01T00:30:00Z", no_followup: true,
+      completion_continuation: "no_followup", completion_recovery: "same_turn_terminal_closeout",
+      completion_turn_key: "retired-cycle", watch_only: "true"} : todo);
+  return {...fixture, projection: authorityProjectionFixture(goalId, todos,
+    (fixture.projection.leases as Record<string, unknown>[]).filter(lease => lease.todo_id !== fixture.target),
+    schema, {source_authority: "synthetic_production_scale_fixture", handoff_mode: "legacy"})};
+}

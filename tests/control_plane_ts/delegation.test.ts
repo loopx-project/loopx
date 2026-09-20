@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {delegationInventoryItem, delegationInventoryQuery, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 
 const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: "/fixture",
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
@@ -49,4 +49,24 @@ test("inventory paging is bounded and never interprets a missing result as accep
   assert.equal(unavailable.status, "unavailable");
   assert.equal(unavailable.recovery_required, null);
   assert.equal(unavailable.artifacts, undefined);
+});
+
+test("preflight separates task admission, acceptance binding and runtime availability", () => {
+  const effects = {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const preview = {dry_run: true, status: "preview", effects,
+    route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: "todo_review"},
+    managed_executor: {executor: "dsh", available: true, unavailable_reason: null, execution_profile: "explicit-profile"}};
+  const params = {binding, preview, validation_files_current: true, acceptance: {todo_id: "todo_review", state: "ready"}};
+  assert.equal(delegationPreflight(params).state, "launchable");
+  for (const [available, expected] of [[null, "runtime_unverified"], [false, "runtime_unavailable"]] as const) {
+    assert.equal(delegationPreflight({...params, preview: {...preview,
+      managed_executor: {...preview.managed_executor, available}}}).state, expected);
+  }
+  assert.equal(delegationPreflight({...params, acceptance: null}).state, "acceptance_unavailable");
+  assert.equal(delegationPreflight({...params, acceptance: {...params.acceptance, state: "stale"}}).state, "acceptance_unavailable");
+  assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
+    selected_todo_id: "other"}}}).state, "turn_blocked");
+  assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
+    would_invoke_host: false}}}).state, "turn_blocked");
+  assert.throws(() => delegationPreflight({...params, preview: {...preview, effects: {...effects, host_invoked: true}}}));
 });

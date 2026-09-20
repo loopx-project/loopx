@@ -33,6 +33,38 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
 }
 
 type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected";
+
+/** Read the actual dry-run route/profile, never infer readiness from assignment. */
+export function delegationPreflight(params: JsonObject): JsonObject {
+  const binding = requireJsonObject(params.binding, "binding identity");
+  requireThat([binding.id, binding.agent_id, binding.todo_id].every(text), "binding identities required");
+  const preview = requireJsonObject(params.preview, "Turn preview");
+  const effects = requireJsonObject(preview.effects, "preview effects");
+  requireThat(preview.dry_run === true && preview.status === "preview"
+    && ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"].every(k => effects[k] === false),
+  "delegation inspection requires a read-only Turn preview");
+  const route = requireJsonObject(preview.route, "Turn admission route");
+  const executor = requireJsonObject(preview.managed_executor, "selected executor");
+  requireThat([true, false, null].includes(executor.available as boolean | null), "runtime availability required");
+  requireThat(typeof route.would_invoke_host === "boolean", "Turn admission observation required");
+  const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id;
+  const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
+  const pinned = acceptance?.todo_id === binding.todo_id && acceptance?.state === "ready" && params.validation_files_current === true;
+  const state = !eligible ? "turn_blocked" : !pinned ? "acceptance_unavailable"
+    : executor.available === false ? "runtime_unavailable"
+    : executor.available === null ? "runtime_unverified" : "launchable";
+  return {
+    schema_version: "loopx_delegation_preflight_v0", binding,
+    state, turn_eligible: eligible, turn_route: route.kind,
+    acceptance_ready: pinned,
+    executor: {host: executor.executor, available: executor.available,
+      reason: executor.unavailable_reason, profile: executor.execution_profile},
+    effects,
+    note: "Point-in-time preflight, not an execution permit or evidence of running work. "
+      + "Start rechecks admission; inspect original operations before dispatching replacements. "
+      + "Runtime probes have the selected executor's scope, not remote capacity guarantees.",
+  };
+}
 const transitions: Record<Observation, readonly Observation[]> = {
   prepared: ["running", "rejected"], running: ["turn_returned", "rejected"],
   turn_returned: ["accepted", "rejected"], accepted: [], rejected: [],

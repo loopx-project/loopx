@@ -113,7 +113,7 @@ def main() -> int:
         assert doctor["package"]["release_root"] == str(release_root), doctor
         assert doctor["install_freshness"]["schema_version"] == "loopx_install_freshness_v0", doctor
         assert doctor["install_freshness"]["status"] == "unknown", doctor
-        assert "huangruiteng.github.io/loopx/install.sh" in doctor["install_freshness"]["upgrade_command"], doctor
+        assert "loopx-project.github.io/loopx/install.sh" in doctor["install_freshness"]["upgrade_command"], doctor
         assert doctor["skills"]["loopx-project"]["exists"] is True, doctor
         assert doctor["skills"]["loopx-pr-program"]["exists"] is True, doctor
         assert doctor["skills"]["loopx-pr-review"]["exists"] is True, doctor
@@ -145,7 +145,7 @@ def main() -> int:
         assert bootstrap["goal_id"] == GOAL_ID, bootstrap
         assert "python3 -m pip install --upgrade loopx" in bootstrap["install_repair_command"], bootstrap
         assert "loopx workflow-skills --install" in bootstrap["install_repair_command"], bootstrap
-        assert "huangruiteng.github.io/loopx/install.sh" in bootstrap["archive_fallback_install_command"], bootstrap
+        assert "loopx-project.github.io/loopx/install.sh" in bootstrap["archive_fallback_install_command"], bootstrap
         assert "loopx doctor" in bootstrap["install_repair_command"], bootstrap
         assert (project / ".loopx" / "registry.json").is_file(), bootstrap
         assert (project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md").is_file(), bootstrap

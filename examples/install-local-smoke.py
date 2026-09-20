@@ -122,7 +122,7 @@ def assert_release_snapshot_source_fallback(root: Path) -> None:
         "release_id": "fixture-source",
         "source": {
             "kind": "github_archive",
-            "repo": "huangruiteng/loopx",
+            "repo": "loopx-project/loopx",
             "ref": "main",
             "git_commit": "abc123def4567890abc123def4567890abc123de",
             "git_ref": "main",
@@ -588,7 +588,7 @@ def main() -> int:
         assert freshness["manifest_source_git_commit_short"] == source_commit[:12], freshness
         assert freshness["manifest_source_revision"] == source_commit, freshness
         assert freshness["manifest_skills_digest"] == release_manifest["skills"]["digest"], freshness
-        assert "huangruiteng.github.io/loopx/install.sh" in freshness["upgrade_command"], freshness
+        assert "loopx-project.github.io/loopx/install.sh" in freshness["upgrade_command"], freshness
         assert "loopx doctor" in freshness["upgrade_command"], freshness
         assert doctor_payload["upgrade_hint"] == freshness, doctor_payload
         assert doctor_payload["path"]["loopx"] == str(wrapper), doctor_payload
@@ -682,7 +682,7 @@ def main() -> int:
         assert f"manifest_source_git_commit: `{source_commit[:12]}`" in doctor_markdown, doctor_markdown
         assert "manifest_source: `local_checkout` @ `n/a`" not in doctor_markdown, doctor_markdown
         assert "manifest_skills_digest:" in doctor_markdown, doctor_markdown
-        assert "huangruiteng.github.io/loopx/install.sh" in doctor_markdown, doctor_markdown
+        assert "loopx-project.github.io/loopx/install.sh" in doctor_markdown, doctor_markdown
         assert "latest_promotion_readiness: available=`True`" in doctor_markdown, doctor_markdown
         assert "freshness=`fresh`" in doctor_markdown, doctor_markdown
         assert "requires_readiness_run=`False`" in doctor_markdown, doctor_markdown
@@ -713,7 +713,7 @@ def main() -> int:
         assert stale_install["status"] == "stale", stale_install
         assert stale_install["requires_upgrade"] is True, stale_install
         assert stale_install["release_age_hours"] == 192.0, stale_install
-        assert "huangruiteng.github.io/loopx/install.sh" in stale_install["no_clone_upgrade_command"], stale_install
+        assert "loopx-project.github.io/loopx/install.sh" in stale_install["no_clone_upgrade_command"], stale_install
 
         fresh_install = build_install_freshness(
             command_path=wrapper,
@@ -813,7 +813,7 @@ def main() -> int:
         assert "```sh\nLOOPX_TURN=<current_time_iso>\n" in payload["task_body"], payload
         assert "not a command-prefix assignment" in payload["task_body"], payload
         assert "guard; 2 stalls->replan" in payload["task_body"], payload
-        assert "no-change=`surface_only`/no spend" in payload["task_body"], payload
+        assert "no-change=surface_only/no spend" in payload["task_body"], payload
 
         canary_cli = subprocess.run(
             [

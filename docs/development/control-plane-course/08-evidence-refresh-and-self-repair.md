@@ -778,7 +778,7 @@ ACTIVE_GOAL_STATE.md prose
   -> state_projection_gap_warning
   -> status.project_asset.state_projection_gap
   -> build_state_projection_gap_repair_hint
-  -> quota effective_action=self_repair
+  -> quota effective_action=state_projection_gap_repair
   -> 写回 concrete todo / user gate / successor
 ```
 

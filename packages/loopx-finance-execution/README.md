@@ -25,5 +25,20 @@ loopx extension install \
 loopx extension enable loopx-finance-execution --execute --format json
 ```
 
+Read the registered provider-neutral contract back before preparing a card:
+
+```bash
+loopx capability show human-confirmed-operation-executor --format json
+loopx goal-channel prepare-operation --help
+loopx goal-channel deliver-operation --help
+```
+
+The formal product entry is Core's two-step Goal Channel path. The finance
+extension is never called as a confirmation shortcut: `prepare-operation`
+persists the immutable `loopx_operation_request_v0`, `deliver-operation`
+projects that same request to the bound channel, and only an authenticated,
+unexpired callback may consume the execution claim. Replaying the same claim
+returns the existing result instead of executing again.
+
 Real venue adapters are intentionally out of scope. They require the later
 finance reservation, ambiguity/reconciliation and venue conformance milestones.

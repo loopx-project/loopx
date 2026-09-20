@@ -1,4 +1,4 @@
-NO_CLONE_INSTALL_URL = "https://huangruiteng.github.io/loopx/install.sh"
+NO_CLONE_INSTALL_URL = "https://loopx-project.github.io/loopx/install.sh"
 
 DEFAULT_INSTALL_COMMAND = "python3 -m pip install --upgrade loopx"
 DEFAULT_WORKFLOW_SKILL_INSTALL_COMMAND = "loopx workflow-skills --install"

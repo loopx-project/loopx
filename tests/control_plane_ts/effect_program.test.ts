@@ -149,7 +149,7 @@ test("settlement identity makes illegal dual bindings unrepresentable", () => {
   );
 });
 
-test("receipt-bound monitor settlement phase is derived from typed receipts", () => {
+test("a committed receipt-bound monitor poll is always a no-spend closeout", () => {
   assert.equal(
     receiptBoundMonitorPhase({
       poll_present: false,
@@ -175,7 +175,16 @@ test("receipt-bound monitor settlement phase is derived from typed receipts", ()
       durable_writeback_present: true,
       quota_spend_present: false,
     }),
-    "settlement_pending",
+    "settled",
+  );
+  assert.equal(
+    receiptBoundMonitorPhase({
+      poll_present: true,
+      material_change: true,
+      durable_writeback_present: false,
+      quota_spend_present: false,
+    }),
+    "settled",
   );
   assert.equal(
     receiptBoundMonitorPhase({

@@ -24,6 +24,33 @@ LoopX should feel:
 The interface should read like excellent technical documentation that also
 communicates a confident product.
 
+### Earn The User's Attention
+
+Every visible element must provide at least one of these:
+
+1. **High-value information** that changes what the user understands or decides.
+2. **An essential interaction** needed at this point in the user's journey.
+3. **Expressive visual presentation** worth seeing: a clear composition, useful
+   visual comparison, or purposeful motion that improves understanding or delight.
+
+This is an OR rule, not a demand for three justifications per element or for
+maximum minimalism. Decorative density, raw protocol fields, duplicated status,
+and a button for every available capability do not earn attention by existing.
+Judge the whole viewport, including information repeated across components.
+
+Before implementation, inventory the visible elements and their value. Keep
+conversation, results, and decisions prominent; consolidate routine activity;
+offer one-step access to relevant controls and details without a chain of pages.
+Do not collapse failures, missing authority, uncertain observations, or actions
+requiring judgment into a reassuring success summary. Read models select facts;
+they must not invent execution, acceptance, or completion from prose or counts.
+
+Review realistic populated, quiet, blocked, and unavailable states on desktop
+and mobile. Show before/after views, name what earns attention and what was
+consolidated, and verify keyboard access and return to the original context.
+Record this in the PR's visual evidence section. The repository first-screen
+preview approval gate still applies.
+
 ## Source Of Truth
 
 - Use this file as the default visual contract for all new LoopX UI work.

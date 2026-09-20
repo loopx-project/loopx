@@ -1,3 +1,5 @@
+export type LoopXModeSettings = { agent_id: string; token_budget: number };
+
 export type ChatTodo = {
   todo_id: string | null;
   role: string | null;

@@ -196,7 +196,7 @@ fn install_snapshot(bytes: &[u8], metadata: &Value) -> Result<(), String> {
         .env("LOOPX_INSTALL_REVALIDATE_EXTENSIONS", "0")
         .env_remove("LOOPX_ARCHIVE_URL")
         .env_remove("LOOPX_ARCHIVE_SHA256")
-        .env("LOOPX_REPO", "huangruiteng/loopx")
+        .env("LOOPX_REPO", "loopx-project/loopx")
         .env("LOOPX_REF", metadata["source_revision"].as_str().unwrap())
         .env(
             "LOOPX_RESOLVED_SOURCE_GIT_COMMIT",

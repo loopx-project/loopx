@@ -44,6 +44,7 @@ export const controlPlaneSchema = z.object({
 
 export const orchestrationPolicySchema = z.object({
   model_config: z.object({ model: z.string(), reasoning_effort: z.string().optional() }).optional(),
+  execution_config: z.string().optional(),
 
   mode: z.string().optional().default("default"),
   orchestration_mode: z.string().optional().nullable(),

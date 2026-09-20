@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   full-public-smokes:
-    if: github.repository == 'huangruiteng/loopx'
+    if: github.repository == 'loopx-project/loopx'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:

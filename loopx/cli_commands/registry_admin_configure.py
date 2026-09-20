@@ -130,6 +130,14 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--max-children", type=int, help="Maximum child agents for orchestration."
     )
     configure_goal_parser.add_argument(
+        "--align-codex-subagent-capacity",
+        action="store_true",
+        help=(
+            "Preview or apply the Codex host child-thread limit needed by this Goal. "
+            "Apply is explicit, raises only, preserves higher limits, and affects new sessions."
+        ),
+    )
+    configure_goal_parser.add_argument(
         "--subagent-model",
         help="Persist a child model preference; does not enable spawning or change the parent model.",
     )
@@ -141,6 +149,18 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--clear-subagent-model-config",
         action="store_true",
         help="Remove child model and effort preferences together.",
+    )
+    configure_goal_parser.add_argument(
+        "--subagent-execution-config",
+        help=(
+            "Repo-relative operator binding file under .loopx/config/ used by "
+            "the existing local delegation entrypoint."
+        ),
+    )
+    configure_goal_parser.add_argument(
+        "--clear-subagent-execution-config",
+        action="store_true",
+        help="Remove the Goal's local delegation binding pointer.",
     )
     configure_goal_parser.add_argument(
         "--allowed-domain",

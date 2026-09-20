@@ -94,6 +94,7 @@ def build_goal_configuration_catalog(
         "enabled",
         "--max-children",
         str(default_multi_subagent_max_children),
+        "--align-codex-subagent-capacity",
     )
     peer_coordination = (
         feature_summary.get("peer_task_coordination")
@@ -247,6 +248,8 @@ def build_goal_configuration_catalog(
                 ),
                 "effect": (
                     "Sets the hard capacity boundary for adaptive child orchestration. "
+                    "The preview also reads Codex host capacity; the one-click apply may "
+                    "raise that host limit without lowering an existing higher value. "
                     "Optional --allowed-domain values narrow eligible Todo lanes; without "
                     "them, the task coordinator still decides whether, what, and how to "
                     "parallelize within every other admission boundary."

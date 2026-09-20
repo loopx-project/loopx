@@ -41,7 +41,7 @@ class FeedTests(unittest.TestCase):
         result = self.build()
         self.assertEqual(set(result["platforms"]), {"darwin-aarch64"})
         self.assertEqual(result["platforms"]["darwin-aarch64"]["url"],
-                         "https://github.com/huangruiteng/loopx/releases/download/desktop-main-123-1/LoopX.app.tar.gz")
+                         "https://github.com/loopx-project/loopx/releases/download/desktop-main-123-1/LoopX.app.tar.gz")
 
     def test_missing_empty_and_duplicate_artifact(self):
         self.artifact.unlink()

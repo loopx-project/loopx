@@ -27,7 +27,9 @@ from loopx.control_plane.turn_driver.host_binding import (
     RUNTIME_PROBE_SCOPE_INTERPRETER,
     managed_executor_unavailable_payload,
     managed_executor_binding,
+    managed_executor_binding_from_host_args,
     resolve_default_turn_host,
+    turn_host_arg_option,
 )
 from loopx.control_plane.turn_driver.execution_profile import (
     INVALID_REASONING_EFFORT,
@@ -40,6 +42,49 @@ from loopx.control_plane.turn_driver.execution_profile import (
 
 _NO_RUNTIME = lambda _module: False  # noqa: E731 - tiny probe fixture
 _RUNTIME = lambda _module: True  # noqa: E731 - tiny probe fixture
+
+
+def test_trusted_host_args_project_the_same_last_explicit_profile_without_raw_argv():
+    binding = managed_executor_binding_from_host_args(
+        [
+            "--host",
+            "generic-cli",
+            "--host=dsh",
+            "--dsh-provider=fixture-provider",
+            "--dsh-model",
+            "fixture-model",
+            "--dsh-reasoning-effort=max",
+        ],
+        environ={"DEEPSEEK_API_KEY": "fixture-operator-token"},
+        module_probe=_RUNTIME,
+    )
+
+    assert binding["executor"] == "dsh"
+    assert binding["execution_profile"] == "fixture-provider/fixture-model@max"
+    assert binding["available"] is True
+    assert "host_args" not in binding
+    assert "fixture-operator-token" not in json.dumps(binding)
+    assert (
+        turn_host_arg_option(
+            ["--host", "generic-cli", "--host=dsh"], "--host"
+        )
+        == "dsh"
+    )
+    assert turn_host_arg_option(["--host=dsh"], "--host") == "dsh"
+    assert (
+        turn_host_arg_option(
+            ["--dsh-model", "fixture-model", "--host", "dsh"], "--host"
+        )
+        == "dsh"
+    )
+    assert turn_host_arg_option(["--host", "--dsh-model", "fixture"], "--host") is None
+    assert (
+        turn_host_arg_option(
+            ["--host", "--dsh-model", "fixture", "--host=dsh"], "--host"
+        )
+        is None
+    )
+    assert turn_host_arg_option(["--dsh-model", "fixture"], "--host") is None
 
 
 def test_managed_executor_reports_the_operator_credential_and_endpoint():

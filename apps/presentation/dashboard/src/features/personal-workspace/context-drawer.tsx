@@ -63,7 +63,9 @@ const focusableSelector = [
 type TodoOperation = "block" | "complete" | "defer" | "successor_create";
 
 type GoalSubagentPreview = {
+  codexHostCapacity?: WorkspaceGoalSubagentConfiguration["codexHostCapacity"];
   modelConfig?: { model: string; reasoning_effort?: string } | null;
+  executionConfig?: string;
   allowedDomains: string[];
   changed: boolean;
   enabled: boolean;
@@ -97,6 +99,7 @@ function subagentConfigurationsMatch(
   return left.enabled === right.enabled
     && left.maxChildren === right.maxChildren
     && JSON.stringify(left.modelConfig ?? null) === JSON.stringify(right.modelConfig ?? null)
+    && (left.executionConfig ?? "") === (right.executionConfig ?? "")
     && [...left.allowedDomains].sort((a, b) => a.localeCompare(b)).join("\u0000")
       === [...right.allowedDomains].sort((a, b) => a.localeCompare(b)).join("\u0000");
 }
@@ -128,6 +131,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const [subagentMaxChildren, setSubagentMaxChildren] = useState(2);
   const [subagentModel, setSubagentModel] = useState("");
   const [subagentEffort, setSubagentEffort] = useState("");
+  const [subagentExecutionConfig, setSubagentExecutionConfig] = useState("");
   const [subagentMutationState, setSubagentMutationState] = useState<"idle" | "previewing" | "ready" | "applying" | "success" | "warning" | "error">("idle");
   const [subagentPreview, setSubagentPreview] = useState<GoalSubagentPreview | null>(null);
   const [verifiedSubagentConfiguration, setVerifiedSubagentConfiguration] = useState<WorkspaceGoalSubagentConfiguration | null>(null);
@@ -156,6 +160,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     setSubagentAllowedDomains(configuration?.allowedDomains ?? []);
     setSubagentModel(configuration?.modelConfig?.model ?? "");
     setSubagentEffort(configuration?.modelConfig?.reasoning_effort ?? "");
+    setSubagentExecutionConfig(configuration?.executionConfig ?? "");
     setSubagentMaxChildren(configuration?.maxChildren ? Math.min(configuration.maxChildren, 32) : 2);
     setSubagentFeedback(null);
     setSubagentMutationState("idle");
@@ -185,6 +190,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         setSubagentAllowedDomains(authoritativeSubagentConfiguration.allowedDomains);
         setSubagentModel(authoritativeSubagentConfiguration.modelConfig?.model ?? "");
         setSubagentEffort(authoritativeSubagentConfiguration.modelConfig?.reasoning_effort ?? "");
+        setSubagentExecutionConfig(authoritativeSubagentConfiguration.executionConfig ?? "");
         setSubagentMaxChildren(authoritativeSubagentConfiguration.maxChildren || 2);
         setSubagentFeedback(null);
         setSubagentMutationState("idle");
@@ -210,6 +216,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         setSubagentAllowedDomains(authoritativeSubagentConfiguration.allowedDomains);
         setSubagentModel(authoritativeSubagentConfiguration.modelConfig?.model ?? "");
         setSubagentEffort(authoritativeSubagentConfiguration.modelConfig?.reasoning_effort ?? "");
+        setSubagentExecutionConfig(authoritativeSubagentConfiguration.executionConfig ?? "");
         setSubagentMaxChildren(
           authoritativeSubagentConfiguration.maxChildren || 2,
         );
@@ -382,6 +389,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     setSubagentAllowedDomains(currentSubagentConfiguration.allowedDomains);
     setSubagentModel(currentSubagentConfiguration.modelConfig?.model ?? "");
     setSubagentEffort(currentSubagentConfiguration.modelConfig?.reasoning_effort ?? "");
+    setSubagentExecutionConfig(currentSubagentConfiguration.executionConfig ?? "");
     setSubagentMaxChildren(currentSubagentConfiguration.maxChildren || 2);
     setSubagentFeedback(null);
     setSubagentMutationState("idle");
@@ -417,10 +425,12 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       return;
     }
     const request = {
+      alignCodexHostCapacity: enabled,
       allowedDomains: allowedDomains ?? [],
       enabled,
       goalId: selection.item.goalId,
       maxChildren: enabled ? subagentMaxChildren : 0,
+      executionConfig: subagentExecutionConfig.trim(),
       ...subagentModelRequest(includeModel, subagentModel, subagentEffort),
     };
     setSubagentMutationState("previewing");
@@ -438,12 +448,18 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         setSubagentAllowedDomains(preview.configuration.allowedDomains);
         setSubagentModel(preview.configuration.modelConfig?.model ?? "");
         setSubagentEffort(preview.configuration.modelConfig?.reasoning_effort ?? "");
+        setSubagentExecutionConfig(preview.configuration.executionConfig ?? "");
         setSubagentMaxChildren(preview.configuration.maxChildren || 2);
         setSubagentMutationState("success");
         setSubagentFeedback(t("drawer.subagentNoChange"));
         return;
       }
-      setSubagentPreview({ ...request, changed: preview.changed, previewId: preview.previewId });
+      setSubagentPreview({
+        ...request,
+        codexHostCapacity: preview.configuration.codexHostCapacity,
+        changed: preview.changed,
+        previewId: preview.previewId,
+      });
       setSubagentMutationState("ready");
       setSubagentFeedback(t("drawer.subagentPreviewReady"));
     } catch (error) {
@@ -459,10 +475,12 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     try {
       const verifiedConfiguration = await callbacks.onApplyGoalSubagentConfiguration({
         allowedDomains: subagentPreview.allowedDomains,
+        alignCodexHostCapacity: subagentPreview.enabled,
         enabled: subagentPreview.enabled,
         goalId: subagentPreview.goalId,
         maxChildren: subagentPreview.maxChildren,
         modelConfig: subagentPreview.modelConfig,
+        executionConfig: subagentPreview.executionConfig,
         previewId: subagentPreview.previewId,
       });
       verifiedSubagentBaselineRef.current = authoritativeSubagentConfiguration
@@ -474,9 +492,14 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       setSubagentAllowedDomains(verifiedConfiguration.allowedDomains);
       setSubagentModel(verifiedConfiguration.modelConfig?.model ?? "");
       setSubagentEffort(verifiedConfiguration.modelConfig?.reasoning_effort ?? "");
+      setSubagentExecutionConfig(verifiedConfiguration.executionConfig ?? "");
       setSubagentMaxChildren(verifiedConfiguration.maxChildren || 2);
       setSubagentMutationState("success");
-      setSubagentFeedback(t("drawer.subagentApplied"));
+      setSubagentFeedback(t(
+        verifiedConfiguration.codexHostCapacity?.newSessionRequired
+          ? "drawer.subagentAppliedRestart"
+          : "drawer.subagentApplied",
+      ));
       setSubagentPreview(null);
       try {
         await callbacks.onRefresh?.();
@@ -730,6 +753,16 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                       })
                     : t("drawer.subagentDisableSummary")}</p>
                   {subagentPreview.modelConfig !== undefined ? <p>{t("drawer.subagentModel")}: {subagentPreview.modelConfig?.model || t("drawer.subagentModelDefault")} · {subagentPreview.modelConfig?.reasoning_effort || t("drawer.subagentModelDefault")}</p> : null}
+                  <p>{t("drawer.subagentExecutionConfig")}: {subagentPreview.executionConfig || t("drawer.subagentExecutionConfigNone")}</p>
+                  {subagentPreview.enabled && subagentPreview.codexHostCapacity ? <p>{t(
+                    subagentPreview.codexHostCapacity.writeRequired
+                      ? "drawer.subagentHostCapacityRaise"
+                      : "drawer.subagentHostCapacityReady",
+                    {
+                      configured: subagentPreview.codexHostCapacity.configuredChildren ?? t("drawer.subagentHostCapacityImplicit"),
+                      required: subagentPreview.codexHostCapacity.requiredChildren,
+                    },
+                  )}</p> : null}
                   <div>
                     <button className="personal-primary-action" onClick={() => void applyGoalSubagentConfiguration()} type="button">{t("common.confirm")}</button>
                     <button className="personal-secondary-action" onClick={resetSubagentDraft} type="button">{t("common.cancel")}</button>
@@ -747,6 +780,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 <div><dt>{t("drawer.subagentEffort")}</dt><dd>{currentSubagentConfiguration.modelConfig?.reasoning_effort || t("drawer.subagentModelDefault")}</dd></div>
                 <div><dt>{t("drawer.subagentCurrentBoundary")}</dt><dd>{currentSubagentConfiguration.allowedDomains.join(" · ") || t("drawer.subagentDomainsUnrestricted")}</dd></div>
                 <div><dt>{t("drawer.subagentChildLimit")}</dt><dd>{currentSubagentConfiguration.maxChildren || 0}</dd></div>
+                <div><dt>{t("drawer.subagentExecutionConfig")}</dt><dd>{currentSubagentConfiguration.executionConfig || t("drawer.subagentExecutionConfigNone")}</dd></div>
               </dl>
               {readOnly ? (
                 <p className="personal-subagent-read-only">{t("drawer.subagentRemoteReadOnly")}</p>
@@ -793,6 +827,17 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel("gpt-5.6-luna"); setSubagentEffort("max"); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentLunaPreset")}</button>
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel(""); setSubagentEffort(""); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentClearModel")}</button>
                   <p>{t("drawer.subagentModelHint")}</p>
+                  <label>
+                    <span>{t("drawer.subagentExecutionConfig")}</span>
+                    <input
+                      aria-label={t("drawer.subagentExecutionConfig")}
+                      disabled={subagentBusy}
+                      onChange={(event) => { setSubagentExecutionConfig(event.target.value); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}
+                      placeholder=".loopx/config/delegations.json"
+                      value={subagentExecutionConfig}
+                    />
+                  </label>
+                  <p>{t("drawer.subagentExecutionConfigHint")}</p>
                   <label className="personal-subagent-limit-field">
                     <span>{t("drawer.subagentMaxChildren")}</span>
                     <select

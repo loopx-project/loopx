@@ -30,6 +30,7 @@ export const chatRecoveryScenario = {
       await managerNavigation.getByRole("button", { name: "总览", exact: true }).click();
       await page.locator(".personal-home-board").waitFor({ state: "visible" });
 
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "汇总所有 Goal 进展" }).click();
       const reportDeadline = Date.now() + 5_000;
       while (!api.turnRequests.some((turn) => turn.message.includes("汇总所有活跃 Goal 的最新进展与阻塞")) && Date.now() < reportDeadline) {

@@ -16,6 +16,16 @@ from test_chat_project_coordination import project  # noqa: F401
 @pytest.fixture
 def mode(project, monkeypatch):  # noqa: F811
     root, registry, repo = project
+    registry_payload = json.loads(registry.read_text())
+    next(goal for goal in registry_payload["goals"] if goal["id"] == "research")[
+        "spawn_policy"
+    ] = {
+        "mode": "multi_subagent",
+        "allowed": True,
+        "max_children": 2,
+        "execution_config": ".loopx/config/delegations.json",
+    }
+    registry.write_text(json.dumps(registry_payload))
     store = ChatSessionStore(root)
     controller = ChatRuntimeController(
         store=store, codex_bin="codex", registry_path=registry
@@ -52,7 +62,6 @@ def mode(project, monkeypatch):  # noqa: F811
     settings = {
         "agent_id": "coordinator",
         "token_budget": 10000,
-        "execution_config": ".loopx/config/delegations.json",
     }
     calls = []
 
@@ -112,12 +121,90 @@ def test_unfinished_goal_pins_identity_and_configuration_digest(mode):
     )
     with pytest.raises(ValueError, match="cannot change"):
         apply(mode, "configure", settings={**settings, "agent_id": "reviewer"})
-    config = repo / settings["execution_config"]
+    config = repo / ".loopx/config/delegations.json"
     config.write_text(config.read_text() + "\n")
     with pytest.raises(ValueError, match="bindings changed"):
         apply(mode, "resume", settings=settings)
     with pytest.raises(ValueError, match="invalid LoopX mode settings"):
         apply(mode, "resume", settings={**settings, "config_digest": ""})
+
+
+def test_goal_registry_is_the_execution_config_owner(mode):
+    service, sid, _, settings, _ = mode
+    snapshot = service.snapshot(sid)
+    assert snapshot["settings"]["execution_config"] == (
+        ".loopx/config/delegations.json"
+    )
+    apply(mode, "configure", settings=settings)
+    stored = service.store.load_session(sid)["loopx_mode"]["settings"]
+    assert "execution_config" not in stored
+    assert stored["execution_config_ref"] == ".loopx/config/delegations.json"
+
+    with pytest.raises(ValueError, match="Goal execution bindings changed"):
+        apply(
+            mode,
+            "configure",
+            settings={
+                **settings,
+                "execution_config": ".loopx/config/other.json",
+            },
+        )
+
+
+def test_unfinished_legacy_session_can_resume_until_goal_config_is_migrated(mode):
+    service, sid, repo, settings, calls = mode
+    registry = service.controller.registry_path
+    payload = json.loads(registry.read_text())
+    goal = next(item for item in payload["goals"] if item["id"] == "research")
+    goal["spawn_policy"].pop("execution_config")
+    registry.write_text(json.dumps(payload))
+    service.store.update_session(
+        sid,
+        native_goal={"status": "paused", "tokensUsed": 10},
+        loopx_mode={
+            "enabled": True,
+            "paused": True,
+            "settings": {
+                **settings,
+                "execution_config": ".loopx/config/delegations.json",
+            },
+        },
+    )
+
+    assert service.snapshot(sid)["settings"]["execution_config"] == (
+        ".loopx/config/delegations.json"
+    )
+    result = apply(mode, "resume")
+    assert result["turn_id"]
+    assert len(calls) == 1
+    stored = service.store.load_session(sid)["loopx_mode"]["settings"]
+    assert "execution_config" not in stored
+    assert stored["execution_config_ref"] == ".loopx/config/delegations.json"
+
+
+def test_completed_legacy_session_requires_goal_owned_execution_config(mode):
+    service, sid, _, settings, _ = mode
+    registry = service.controller.registry_path
+    payload = json.loads(registry.read_text())
+    goal = next(item for item in payload["goals"] if item["id"] == "research")
+    goal["spawn_policy"].pop("execution_config")
+    registry.write_text(json.dumps(payload))
+    service.store.update_session(
+        sid,
+        native_goal={"status": "complete", "tokensUsed": 10},
+        loopx_mode={
+            "enabled": True,
+            "paused": True,
+            "settings": {
+                **settings,
+                "execution_config": ".loopx/config/delegations.json",
+            },
+        },
+    )
+
+    assert service.snapshot(sid)["settings"]["execution_config"] is None
+    with pytest.raises(ValueError, match="Goal sub-agent settings"):
+        apply(mode, "start")
 
 
 @pytest.mark.parametrize(
@@ -391,3 +478,17 @@ def test_pause_cannot_enable_mode_and_ordinary_turn_is_not_execution(mode):
     with pytest.raises(Exception):
         apply(mode, "resume")
     assert service.store.load_turn(sid, ordinary["turn_id"])["status"] == "queued"
+
+
+def test_owner_team_readback_is_configured_scoped_and_does_not_start_a_turn(mode):
+    service, sid, _, settings, calls = mode
+    with pytest.raises(ValueError):
+        service.read_team(sid, {"operation": "operations"})
+    apply(mode, "configure", settings=settings)
+    before = service.store.load_session(sid)
+    result = service.read_team(sid, {"operation": "operations"})
+    assert result["items"] == [] and result["page_readback_complete"]
+    assert service.store.load_session(sid) == before
+    assert calls == []
+    with pytest.raises(ValueError, match="invalid team readback"):
+        service.read_team(sid, {"operation": "operations", "agent_id": "other"})

@@ -178,7 +178,7 @@ Requirements are Python 3.11+ plus `curl` and `tar`. Install without cloning,
 then connect from your project root:
 
 ```bash
-curl -fsSL https://huangruiteng.github.io/loopx/install.sh | bash
+curl -fsSL https://loopx-project.github.io/loopx/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
 loopx doctor
 

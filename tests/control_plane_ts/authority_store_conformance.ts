@@ -2,6 +2,7 @@ import {registerUserCompletionUpdateConformance} from "./user_completion_update_
 import {registerLeaseAcquisitionConformance} from "./lease_acquisition_conformance.ts";
 import {registerClaimTransferConformance} from "./claim_transfer_conformance.ts";
 import {registerLeasedMonitorConformance} from "./monitor_poll_lease_conformance.ts";
+import {registerMonitorObservationUpdateConformance} from "./monitor_observation_update_conformance.ts";
 import {registerLeaseLifecycleConformance} from "./lease_lifecycle_conformance.ts";
 import {registerMonitorConfigurationConformance} from "./monitor_configuration_conformance.ts";
 import {registerAuthorityScanConformance} from "./authority_scan_conformance.ts";
@@ -223,6 +224,7 @@ export function registerAuthorityStoreConformance(
   registerUserCompletionUpdateConformance(providerName, factory);
   registerMonitorConfigurationConformance(providerName, factory);
   registerLeasedMonitorConformance(providerName, factory);
+  registerMonitorObservationUpdateConformance(providerName, factory);
   registerCoordinationReceiptConformance(providerName, factory);
   registerAuthoritySourceConformance(providerName, factory);
   registerHandoffModeConformance(providerName, factory);

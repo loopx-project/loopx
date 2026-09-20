@@ -56,7 +56,7 @@ import type {
   WorkspaceTimelineItem,
   WorkspaceTodo,
 } from "./personal-workspace-model";
-import { goalTitleFor, workspaceHomeLaneForGoal } from "./personal-workspace-model";
+import { goalHasExecutionSummary, goalTitleFor, workspaceHomeLaneForGoal } from "./personal-workspace-model";
 import { routeWorkspaceInput } from "./personal-workspace-router";
 import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
@@ -122,19 +122,17 @@ function ManagerHomeBoard({
   ] as const;
   const active = Object.fromEntries(activeHomeLanes.map((lane) => [lane.key, [] as WorkspaceGoal[]])) as Record<(typeof activeHomeLanes)[number]["key"], WorkspaceGoal[]>;
   const history: WorkspaceGoal[] = [];
-  const stopped: WorkspaceGoal[] = [];
   goals.filter((goal) => !goal.loadState).forEach((goal) => {
     const lane = workspaceHomeLaneForGoal(goal);
     if (lane === "history") history.push(goal);
-    else if (lane === "stopped") stopped.push(goal);
-    else active[lane].push(goal);
+    else if (lane !== "stopped") active[lane].push(goal);
   });
   const goalCard = (goal: WorkspaceGoal) => (
     <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
-      <span className="personal-home-goal-meta"><i />{goal.agentLaneCount && goal.agentLaneCount > 1
+      <strong>{goal.title}</strong>
+      <span className="personal-home-goal-meta">{goal.agentLaneCount && goal.agentLaneCount > 1
         ? t("header.workAgentCount", { count: goal.agentLaneCount })
         : goal.agentLabel ?? goal.agentId}</span>
-      <strong>{goal.title}</strong>
       <p>{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.needsYou ?? goal.nextSentence}</p>
       <footer><span>{(goal.loadState ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : localizedGoalState(goal.state, locale))}</span><small title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small></footer>
     </button>
@@ -164,25 +162,19 @@ function ManagerHomeBoard({
         {currentGoals.filter((goal) => goal.loadState).map(goalCard)}
       </section> : null}
       <div className="personal-home-lanes">
-        {activeHomeLanes.map((lane) => (
+        {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
           <section className={`personal-home-lane is-${lane.key}`} data-testid={`personal-home-lane-${lane.key}`} key={lane.key}>
             <header><span><i />{lane.label}</span><b>{active[lane.key].length}</b></header>
             <div className="personal-home-lane-list">
-              {active[lane.key].length ? active[lane.key].map(goalCard) : <span className="personal-home-empty">{t("home.empty")}</span>}
+              {active[lane.key].map(goalCard)}
             </div>
           </section>
         ))}
       </div>
-      <details className="personal-home-history">
+      {history.length ? <details className="personal-home-history">
         <summary><span>{t("home.history")}</span><b>{history.length}</b><small>{t("home.completedGoals")}</small></summary>
-        <div>{history.length ? history.map(goalCard) : <span className="personal-home-empty">{t("home.noCompletedGoals")}</span>}</div>
-      </details>
-      {stopped.length ? (
-        <details className="personal-home-history is-stopped">
-          <summary><span>{t("home.stopped")}</span><b>{stopped.length}</b><small>{t("home.preservedState")}</small></summary>
-          <div>{stopped.map(goalCard)}</div>
-        </details>
-      ) : null}
+        <div>{history.map(goalCard)}</div>
+      </details> : null}
     </section>
   );
 }
@@ -216,9 +208,7 @@ function GoalOutputsView({
           {item.output.report ? <em>{t("files.reportDelta", { added: item.output.report.addedCount, changed: item.output.report.changedCount })}</em> : null}
           <p>{item.output.summary ?? item.output.safePreview ?? item.output.kind ?? t("files.emptySummary")}</p>
           <small title={item.output.createdAt}>{[
-            item.output.goalTitle,
             item.output.kind === "report" ? t("files.verifiedReport") : null,
-            item.output.todoId ? `${t("common.task")} ${item.output.todoId}` : null,
             activityTimeLabel(item.output.createdAt, locale, t),
           ].filter(Boolean).join(" · ")}</small>
         </button>
@@ -377,7 +367,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
       kind: "attention",
     });
   }
-  items.push({
+  if (goalHasExecutionSummary(goal)) items.push({
     id: `run:${goal.goalId}`,
     kind: "run",
     run: {
@@ -845,7 +835,7 @@ export function PersonalWorkspacePage({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const lifecyclePendingGoalIdsRef = useRef(new Set<string>());
   const quickCompletingTodoIdsRef = useRef(new Set<string>());
-  const [digest, setDigest] = useState<{ attention: number; done: number; failed: number } | null>(null);
+  const [digest, setDigest] = useState<{ done: number; failed: number } | null>(null);
   const selectedGoalId = controlledGoalId === undefined ? localGoalId : controlledGoalId;
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const composerDraftKey = `${selectedGoalId ?? "manager"}:${selectedAgentId}`;
@@ -1093,13 +1083,11 @@ export function PersonalWorkspacePage({
       return !Number.isNaN(since) && !Number.isNaN(parsed) && parsed > since;
     };
     const nextDigest = {
-      attention: managerNeedsYouCount,
       done: runs.filter((run) => run.status === "completed" && isFresh(run.latestActivity)).length,
       failed: runs.filter((run) => (run.status === "failed" || run.status === "interrupted") && isFresh(run.latestActivity)).length,
     };
-    setDigest((current) => current?.attention === nextDigest.attention
-      && current.done === nextDigest.done && current.failed === nextDigest.failed ? current : nextDigest);
-  }, [items, managerNeedsYouCount, selectedGoalId]);
+    setDigest((current) => current?.done === nextDigest.done && current.failed === nextDigest.failed ? current : nextDigest);
+  }, [items, selectedGoalId]);
 
   useEffect(() => {
     if (readOnly) {
@@ -1812,12 +1800,7 @@ export function PersonalWorkspacePage({
 
   const selectedAgentLabel = agents.find((agent) => agent.agentId === selectedAgentId)?.label ?? selectedAgentId;
   const goalDraftActive = !selectedGoal && composer.startsWith(t("composer.createGoalDraftLead"));
-  const goalRunningCount = items.filter((item) =>
-    item.kind === "run"
-    && Boolean(item.run.sessionId)
-    && Boolean(item.run.canInterrupt)
-    && (item.run.status === "running" || item.run.status === "queued")
-  ).length;
+
 
   async function selectImages(files: FileList | readonly File[] | null) {
     if (!files?.length) return;
@@ -1952,21 +1935,25 @@ export function PersonalWorkspacePage({
             selectedGoal={selectedGoal}
             selectedGoalTab={selectedGoalTab}
           />
+            {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
+              onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}
+              key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
+              onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
+            /> : null}
           <div className="personal-channel-scroll" data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}>
-            {!selectedGoal && !managerChatOpen && digest && (digest.done + digest.failed + digest.attention) > 0 ? (
+            {!selectedGoal && !managerChatOpen && digest && (digest.done + digest.failed) > 0 ? (
               <section className="personal-digest-card" aria-label={t("digest.away")}>
                 <strong>{t("digest.away")}</strong>
                 <div className="personal-digest-stats">
-                  <span><b>{digest.done}</b>{t("digest.completed")}</span>
-                  <span><b>{digest.failed}</b>{t("digest.failed")}</span>
-                  <span><b>{digest.attention}</b>{t("digest.needsYou")}</span>
+                  {digest.done > 0 ? <span><b>{digest.done}</b>{t("digest.completed")}</span> : null}
+                  {digest.failed > 0 ? <span><b>{digest.failed}</b>{t("digest.failed")}</span> : null}
                 </div>
               </section>
             ) : null}
             {!selectedGoal && !managerChatOpen ? (
               <section className="personal-manager-greeting">
                 <span><Bot size={20} /></span>
-                <div><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {t("home.blockingSummary", { count: managerBlockingCount })}</>}</p></div>
+                <div><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null}</>}</p></div>
               </section>
             ) : null}
             {selectedGoal?.loadState ? (
@@ -2020,11 +2007,6 @@ export function PersonalWorkspacePage({
             )}
           </div>
           <div className="personal-composer-wrap">
-            {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
-              onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}
-              key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
-              onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
-            /> : null}
             {loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id ? <label className="goal-loopx-message-mode">{locale === "zh-CN" ? "消息处理" : "Message delivery"}<select aria-label={locale === "zh-CN" ? "消息处理方式" : "Message delivery mode"} value={loopxDelivery} onChange={event => setLoopxDelivery(event.target.value as typeof loopxDelivery)}><option value="queue">{locale === "zh-CN" ? "下一轮处理" : "Next turn"}</option><option value="inbox">{locale === "zh-CN" ? "放入收件箱" : "Inbox"}</option><option value="steer">{locale === "zh-CN" ? "立即纠偏" : "Steer now"}</option></select><span role="status">{loopxMessageReceipt}</span></label> : null}
             {readOnly ? (
               <div className="personal-read-only-notice"><strong>{t("source.readOnlyNoticeTitle")}</strong><span>{t("source.readOnlyNoticeDescription")}</span></div>
@@ -2059,13 +2041,8 @@ export function PersonalWorkspacePage({
                 <button aria-label={t("common.closeActionReceipt")} onClick={() => setActionFeedback(null)} type="button"><X size={14} /></button>
               </div>
             ) : null}
-            <p className="personal-composer-hint">
-              {selectedGoal
-                ? goalRunningCount > 0
-                  ? t("composer.goalRunningHint", { agent: selectedAgentLabel, count: goalRunningCount })
-                  : t("composer.goalMessageHint", { agent: selectedAgentLabel })
-                : t("composer.managerMessageHint")}
-            </p>
+            <details className="personal-composer-tools" key={selectedGoalId ?? "manager"}>
+              <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
             {selectedGoal ? (
               <div className="personal-quick-prompts">
                 <button aria-label={t("composer.nextAction")} disabled={sending} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
@@ -2081,6 +2058,7 @@ export function PersonalWorkspacePage({
                 <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
               </div>
             )}
+            </details>
             {goalDraftActive ? <div className="personal-goal-draft-status" role="status"><strong>{t("composer.createGoalDraft")}</strong><span>{t("composer.createGoalDraftDescription")}</span></div> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
@@ -2103,7 +2081,6 @@ export function PersonalWorkspacePage({
                 void selectImages(images);
               }}
             >
-              <span><Bot size={17} />{agents.find((agent) => agent.agentId === selectedAgentId)?.label ?? selectedAgentId}</span>
               <button
                 aria-label={t("composer.addImage")}
                 className="personal-composer-attach"

@@ -59,6 +59,7 @@ _PROJECTION_CASES = (
 
 def controller_input(case: str, route: str):
     """Construct synthetic qualified receipts, never touch goal/journal state."""
+    from loopx.control_plane.quota.effective_action import EffectiveAction
     from loopx.control_plane.turn_driver import loop_controller as c
     from loopx.control_plane.turn_driver.host_failure import build_host_failure_record
 
@@ -140,7 +141,7 @@ def controller_input(case: str, route: str):
         "should_run": route not in {"blocked", "terminal"},
         "effective_action": {
             "capability": "governed_capability_intent",
-            "repair": "workspace_repair",
+            "repair": EffectiveAction.AGENT_WORKSPACE_REPAIR.value,
             "replan": "autonomous_replan",
             "terminal": "terminal_no_followup",
         }.get(route, "deliver"),

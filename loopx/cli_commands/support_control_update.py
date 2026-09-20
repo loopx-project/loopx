@@ -85,7 +85,7 @@ def register_update_command(
     )
     update_parser.add_argument(
         "--repo",
-        help="GitHub repo owner/name used by the installer archive. Defaults to LOOPX_REPO or huangruiteng/loopx.",
+        help="GitHub repo owner/name used by the installer archive. Defaults to LOOPX_REPO or loopx-project/loopx.",
     )
     update_parser.add_argument(
         "--ref",

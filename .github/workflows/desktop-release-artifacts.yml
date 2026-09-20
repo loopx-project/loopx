@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'huangruiteng/loopx'
+    if: github.repository == 'loopx-project/loopx'
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30

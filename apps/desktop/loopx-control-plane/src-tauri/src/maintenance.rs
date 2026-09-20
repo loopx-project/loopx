@@ -190,8 +190,8 @@ fn allow_action(phase: &str, action: &str) -> Result<(), String> {
 }
 fn endpoint(channel: &str) -> Result<tauri::Url, String> {
     Ok(match channel {
-        "stable" => "https://github.com/huangruiteng/loopx/releases/download/desktop-stable/desktop-updater.json",
-        "main" => "https://github.com/huangruiteng/loopx/releases/download/desktop-main/desktop-updater.json",
+        "stable" => "https://github.com/loopx-project/loopx/releases/download/desktop-stable/desktop-updater.json",
+        "main" => "https://github.com/loopx-project/loopx/releases/download/desktop-main/desktop-updater.json",
         _ => return Err("invalid_update_channel".into()),
     }.parse().unwrap())
 }

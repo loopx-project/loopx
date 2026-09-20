@@ -9,6 +9,7 @@ import type {
 } from "./personal-workspace-model";
 import { localizedAttentionAge, useWorkspaceI18n } from "./i18n";
 import { CompletedTaskLane } from "./completed-task-lane";
+import { MarkdownText } from "./markdown";
 
 function TaskLane({
   children,
@@ -210,11 +211,7 @@ export function GoalTasksView({
           <span className="personal-task-chat-icon"><MessageSquareText size={18} /></span>
           <div>
             <header><strong>{replyPending ? t("tasks.chatPending") : latestReply ? t("tasks.chatAgentReplied") : t("tasks.chatRecent")}</strong><small>{latestReply?.returnDelivery ? t("tasks.chatReturn") : latestReply?.agentLabel}</small></header>
-            <p className="is-user"><b>{t("common.you")}</b>{latestUserMessage.text}</p>
-            {latestReply && !latestReply.pending ? <p className="is-assistant"><b>{latestReply.returnDelivery ? t("tasks.chatReturn") : latestReply.agentLabel ?? t("common.agent")}</b>{latestReply.text}</p> : null}
-            <small>{replyPending
-              ? t("tasks.chatPendingDescription")
-              : t("tasks.chatUnchangedDescription")}</small>
+            <div className="personal-task-reply-preview"><MarkdownText text={replyPending ? t("tasks.chatPendingDescription") : (latestReply?.text ?? latestUserMessage.text).trim().split(/\r?\n/, 1)[0]} /></div>
           </div>
           <footer>
             <button onClick={onOpenChat} type="button"><MessageSquareText size={14} />{t("tasks.chatViewReply")}</button>

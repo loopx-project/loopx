@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from ...quota import build_quota_should_run
-from ..agent_context import project_agent_context
+from ...agent_registry import load_goal_from_registry
+from ..agent_context import project_agent_context, project_goal_agent_context
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
     dispatch_interaction_projection_hooks,
@@ -529,15 +530,26 @@ def build_live_quota_should_run_decision(
         }
     interaction = payload.get("interaction_contract")
     if isinstance(interaction, dict) and goal_id and agent_id:
-        context = project_agent_context(
-            phase="before_plan",
-            scope={
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "todo_id": (payload.get("selected_todo") or {}).get("todo_id"),
-            },
-            orchestration=(payload.get("goal_boundary") or {}).get("orchestration") or {},
-        )
+        scope = {
+            "goal_id": goal_id,
+            "agent_id": agent_id,
+            "todo_id": (payload.get("selected_todo") or {}).get("todo_id"),
+        }
+        goal = load_goal_from_registry(registry_path, goal_id)
+        if goal is not None:
+            context = project_goal_agent_context(
+                phase="before_plan",
+                scope=scope,
+                goal=goal,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+            )
+        else:
+            context = project_agent_context(
+                phase="before_plan",
+                scope=scope,
+                orchestration=(payload.get("goal_boundary") or {}).get("orchestration") or {},
+            )
         if context is not None:
             interaction["agent_context"] = context
     bind_scheduler_followup_cli_routes(

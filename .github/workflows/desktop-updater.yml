@@ -36,7 +36,7 @@ jobs:
       - run: cargo test --locked && cargo clippy --all-targets --locked -- -D warnings
         working-directory: apps/desktop/loopx-control-plane/src-tauri
   identity:
-    if: github.repository == 'huangruiteng/loopx' && ((github.event_name == 'release' && !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v')) || (github.event_name != 'release' && github.ref == 'refs/heads/main'))
+    if: github.repository == 'loopx-project/loopx' && ((github.event_name == 'release' && !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v')) || (github.event_name != 'release' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     outputs:
       ref: ${{ steps.identity.outputs.ref }}
