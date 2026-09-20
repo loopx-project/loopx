@@ -79,6 +79,71 @@ def test_preflight_surfaces_actual_turn_rejection_without_launch(service):
     assert not (root / "host-started").exists()
 
 
+def test_preflight_projects_unavailable_authority_without_turn_or_provider(
+    service, monkeypatch
+):
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    calls = []
+
+    def unavailable(**_kwargs):
+        raise ValueError(
+            "Goal acceptance requires an existing canonical authority; "
+            "activation never promotes a provider"
+        )
+
+    monkeypatch.setattr(delegation, "inspect_goal_acceptance", unavailable)
+    monkeypatch.setattr(runner, "_cli", lambda *args, **kwargs: calls.append(args))
+    result = runner.inspect("analysis")
+    assert result["state"] == "authority_unavailable"
+    assert result["authority_ready"] is False
+    assert "canonical authority" in result["authority_reason"]
+    assert not any(result["effects"].values())
+    assert calls == []
+    assert not (root / "host-started").exists()
+
+
+def test_dispatch_preserves_turn_plan_rejection_before_transaction_read(
+    service, monkeypatch
+):
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    runner.start("analysis", "rejected-plan", {
+        "schema_version": "collaboration_brief_v0",
+        "purpose": "Exercise a rejected Turn plan",
+        "context": "The provider must remain unstarted.",
+        "constraints": ["No external actions"],
+        "inputs": [],
+        "acceptance": ["Preserve the canonical rejection"],
+        "return_requirement": "Return no model result",
+    })
+    calls = []
+
+    def rejected_plan(_binding, *args, **_kwargs):
+        calls.append(args)
+        return {
+            "ok": False,
+            "schema_version": "loopx_turn_plan_v0",
+            "mode": "plan",
+            "error": "Requested Turn Todo is not accepted by canonical authority",
+            "effects": {"host_invoked": False, "state_written": False,
+                        "scheduler_acknowledged": False, "quota_spent": False},
+        }
+
+    monkeypatch.setattr(runner, "_cli", rejected_plan)
+    runner.execute("rejected-plan")
+    result = runner.read("rejected-plan")
+    assert result["status"] == "rejected"
+    assert result["error"] == (
+        "delegation Turn plan rejected: "
+        "Requested Turn Todo is not accepted by canonical authority"
+    )
+    assert len(calls) == 1 and calls[0][:2] == ("turn", "plan")
+    assert "turn_key" not in result
+    assert not (root / "host-started").exists()
+
+
 def test_selected_dsh_profile_is_not_replaced_by_the_default(service):
     root, runner = service
     config = json.loads(runner.config.read_text())

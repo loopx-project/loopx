@@ -38,6 +38,50 @@ Two P1 overlays reuse that contract without weakening it:
   directions. They do not contain thresholds or evaluate provider-declared
   pass/fail states.
 
+Extension 0.8.0 adds `finance_contract_liquidity_input_v0`, a provider-neutral
+exit-liquidity admission for derivatives. Venue adapters remain responsible for
+contract identity, precision, book collection and evidence timestamps. Finance
+evaluates each frozen position direction and requested notional against one
+freshness window, minimum executable-book coverage and maximum derived exit
+cost. Exit cost is the deterministic sum of spread, price impact and fees; a
+provider cannot submit its own total or pass/fail decision. Long positions must
+use a sell exit and short positions a buy exit.
+
+The result is deliberately independent of investment value and funding. Those
+fields, venue names and account material are rejected rather than folded into
+the liquidity decision. A fresh passing result means only
+`eligible_for_research_successor`; it never creates a ready candidate or grants
+order, signing or transfer authority. Stale measurements are
+`insufficient_evidence`, while fresh amount/cost failures are
+`insufficient_liquidity`.
+
+0.8.0 新增 `finance_contract_liquidity_input_v0`，用于对衍生品退出流动性做
+provider-neutral 准入。私有场所适配器继续负责合约身份、精度、订单簿采集和
+证据时间；Finance 只按持仓方向与申请退出金额，使用冻结的新鲜度、可执行订单簿
+覆盖率和最大退出成本阈值进行确定性判断。退出成本由点差、价格冲击和手续费相加
+得到，不接受 provider 自报总成本或通过/失败；多头必须卖出退出，空头必须买入
+退出。
+
+该判断与投资价值和资金费明确隔离，相关字段、场所名称和账户材料会被拒绝，而
+不是混入流动性结论。通过只表示可以进入下一段研究，不能升级 ready，更不授权
+下单、签名或转账；过期测量是证据不足，新鲜但金额或成本不满足才是流动性不足。
+
+Run the same contract through the direct CLI or managed extension runtime:
+
+```bash
+loopx-finance-value-discovery evaluate-contract-liquidity \
+  --input-json packages/loopx-finance-value-discovery/examples/contract-liquidity-v0.json
+
+loopx extension run loopx-finance-value-discovery \
+  --input-json packages/loopx-finance-value-discovery/examples/contract-liquidity-v0.json \
+  --execute --format json
+```
+
+This slice changes the CLI/managed-Turn contract only. Dashboard and Lark must
+consume the same evaluation in their separately owned projection slice; until
+that lands, this backend delivery is intentionally partial rather than an
+end-to-end visual release.
+
 The packet enforces:
 
 - a cross-sectional screen before a named candidate is selected;

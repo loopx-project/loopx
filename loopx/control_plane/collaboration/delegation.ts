@@ -34,10 +34,56 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
 
 type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected";
 
+function boundedReason(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const reason = value.trim();
+  return reason.length > 0 ? reason.slice(0, 4096) : fallback;
+}
+
+/** Preserve a rejected Turn plan as data before the host adapter reads its transaction. */
+export function delegationTurnPlanDecision(params: JsonObject): JsonObject {
+  const plan = requireJsonObject(params.plan, "Turn plan");
+  if (plan.ok !== true) return {
+    schema_version: "loopx_delegation_turn_plan_decision_v0",
+    state: "rejected",
+    turn_key: null,
+    reason: boundedReason(plan.error ?? plan.reason, "Turn plan rejected without a reason"),
+  };
+  const transaction = requireJsonObject(plan.transaction, "Turn plan transaction");
+  requireThat(typeof transaction.turn_key === "string"
+    && /^sha256:[a-f0-9]{64}$/.test(transaction.turn_key), "Turn plan transaction requires a valid turn_key");
+  return {
+    schema_version: "loopx_delegation_turn_plan_decision_v0",
+    state: "planned",
+    turn_key: transaction.turn_key,
+    reason: null,
+  };
+}
+
 /** Read the actual dry-run route/profile, never infer readiness from assignment. */
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
   requireThat([binding.id, binding.agent_id, binding.todo_id].every(text), "binding identities required");
+  const authority = params.authority === undefined
+    ? {ready: true, reason: null}
+    : requireJsonObject(params.authority, "canonical authority readiness");
+  requireThat(typeof authority.ready === "boolean", "canonical authority readiness required");
+  if (authority.ready === false) {
+    requireThat(params.preview === null && params.acceptance === null
+      && params.validation_files_current === false,
+    "unavailable authority cannot claim a Turn preview or task acceptance");
+    const effects = {host_invoked: false, state_written: false, quota_spent: false,
+      scheduler_acknowledged: false};
+    return {
+      schema_version: "loopx_delegation_preflight_v0", binding,
+      state: "authority_unavailable", turn_eligible: false, turn_route: null,
+      acceptance_ready: false, authority_ready: false,
+      authority_reason: boundedReason(authority.reason, "canonical authority unavailable"),
+      executor: null, effects,
+      note: "Canonical authority is unavailable, so no Turn or provider was inspected or launched. "
+        + "Promote or repair authority explicitly before retrying; inspection never promotes a provider.",
+    };
+  }
   const preview = requireJsonObject(params.preview, "Turn preview");
   const effects = requireJsonObject(preview.effects, "preview effects");
   requireThat(preview.dry_run === true && preview.status === "preview"
@@ -56,7 +102,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   return {
     schema_version: "loopx_delegation_preflight_v0", binding,
     state, turn_eligible: eligible, turn_route: route.kind,
-    acceptance_ready: pinned,
+    acceptance_ready: pinned, authority_ready: true, authority_reason: null,
     executor: {host: executor.executor, available: executor.available,
       reason: executor.unavailable_reason, profile: executor.execution_profile},
     effects,

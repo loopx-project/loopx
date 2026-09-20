@@ -673,6 +673,18 @@ canonical facts, authority, evidence status, or whether an effect committed.
 Adaptive policies must be inspectable and resettable. Their outputs carry
 reason codes and preserve a deterministic fallback.
 
+### 8.7 Live team workspace
+
+[Live Team Workspace v0](live-team-workspace-v0.md) specifies the S5/R2 research
+journey: a command surface and spatial studio share typed facts with the list,
+semantic zoom and historical replay. Purposeful motion is a product objective;
+registration, execution, return, independent acceptance and requester adoption
+remain distinct. Preserve source/revision lineage and uncertainty; never infer
+activity from decorative motion or confidence from agreement counts. This is a
+Draft presentation slice, not a shipped team stream or new scheduling authority.
+Its L1–L3 plan and V1–V7 acceptance extend this RFC's Stage 3 presentation journey;
+they do not close cross-channel or governed settlement acceptance here.
+
 ## 9. Coverage across the long-horizon lifecycle
 
 | Phase | Intelligent surface responsibility |

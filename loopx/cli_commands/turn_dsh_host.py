@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from ..dsh_goal_mode.turn_host_adapter import DshHostConfig, run_dsh_host
+from ..control_plane.operator_credential import (
+    OPERATOR_CREDENTIAL_ENV_VARS,
+    OPERATOR_ENDPOINT_ENV_VAR,
+)
 
 
 DshHostRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
@@ -15,10 +19,20 @@ def build_dsh_host_runner(
     args: argparse.Namespace,
     *,
     workspace: Path,
+    environ: Mapping[str, str],
 ) -> DshHostRunner:
     """Bind CLI-owned DSH options to the in-process Turn host adapter."""
+    # The Turn planner and this host launch receive the same already-resolved
+    # environment. Forward only the operator provider pair: unrelated service
+    # variables are not part of the child host's credential contract.
+    credential = {
+        name: str(environ[name])
+        for name in (*OPERATOR_CREDENTIAL_ENV_VARS, OPERATOR_ENDPOINT_ENV_VAR)
+        if environ and environ.get(name)
+    }
     config = DshHostConfig(
         workspace=workspace,
+        env=credential,
         **{
             key: value
             for key, value in {

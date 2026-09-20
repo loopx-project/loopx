@@ -1003,8 +1003,36 @@ def test_v1_configured_ingest_selects_the_event_surface(tmp_path: Path, capsys) 
     assert receipt["status"] != "planned"
     assert receipt["experiment"]["automatic_ingest"] is True
     assert receipt["experiment"]["automatic_recall"] is True
+    assert receipt["next_recall"]["automatic_recall"] is True
     assert receipt["experiment"]["corpus_count"] == 3
     assert "scope_ref" not in json.dumps(receipt["experiment"])
+
+
+def test_v1_configured_ingest_preserves_explicit_automatic_recall_disable(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    registry_path, event_path, _ = _experiment(tmp_path, SCOPED_PUBLIC_FIXTURE)
+    config = _v1_config()
+    config["automation"]["automatic_recall"] = False
+    _write_v1_config(registry_path, config)
+
+    result, receipt = _run(
+        capsys,
+        registry_path,
+        "reward-memory",
+        "ingest-event",
+        "--goal-id",
+        "reward-memory-goal",
+        "--agent-id",
+        "pilot",
+        "--input",
+        str(event_path),
+    )
+
+    assert result == 0
+    assert receipt["experiment"]["automatic_recall"] is False
+    assert receipt["next_recall"]["automatic_recall"] is False
 
 
 @pytest.mark.parametrize(

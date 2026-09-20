@@ -273,8 +273,8 @@ loopx decision-context prepare-captured --goal-id <goal-id> --agent-id <agent-id
 
 两次采集之间若发生多次 settlement，中间变化可能无法观察；有歧义的批次保留，
 不推断为已审阅。旧 spool 没有观察记录时，仅建立基线，不清理已有批次。
-这两类阻塞均需依据真实审阅证据显式核对；若在当前来源 rebase 后启用新 spool，
-旧 spool 仍须保留为私有检查点。本协议不保证跳过审阅变化后自动排空队列。
+这两类阻塞均需依据真实审阅证据显式核对，或使用下述受保护的恢复入口。
+本协议不保证跳过审阅变化后自动排空队列。
 
 这是变更引用队列，**不是无损历史归档**。首轮历史范围、分页、旧消息编辑/删除可见性、
 超时依然由 provider 保证。回读要求同一边界能确定性复现；历史版本已不可读时明确
@@ -288,6 +288,48 @@ loopx decision-context prepare-captured --goal-id <goal-id> --agent-id <agent-id
 ```bash
 python3 -m pytest -q tests/capabilities/test_decision_context_capture.py
 ```
+
+#### 无损恢复无法重放的来源
+
+恢复由现有 `decision_context` 私有 SQLite spool 负责，不改变 Core 生命周期。
+入口是本地 CLI／受信任 host，不新增 provider、模型调用、远程权限或调度器配置。
+私有 host 可从 `loopx.capabilities.decision_context.capture_recovery` 调用
+`diagnose_capture_source` / `recover_capture_source`，继续传现有 provider overrides。
+
+1. 用相同的 `--goal-id`、`--agent-id`、`--profile`、`--spool`、`--cursor-state`
+   以及明确的 `--source-id` 调用 `capture-diagnose`。默认只读元数据；加 `--probe`
+   才做一次有界、瞬态的 replay / exact read，不做语义审阅或待结算写入。
+   区分未检查、可重放、revision 不可用、binding 改变、cursor 分叉、probe 不可用、
+   状态并发改变、空队列及 acquisition held，不把 provider 原始异常写进输出。
+2. `capture-recovery --action hold` 先预览；确认影响范围后，以
+   `--execute --expected-token <preview_token>` 显式应用。该来源所有待审阅引用
+   原样转入 **held、未解决历史**，暂停其采集，释放活跃队列容量给其他来源。
+   这不是审阅完成，不修改 reviewed cursor，也不丢弃旧证据。
+3. 准备读取当前材料时，重新预览并应用 `--action restart`。它以当前 profile
+   binding 和 **未改动的审阅游标** 重启采集，清除此来源的扫描间隔等待。
+   下一次正常 capture 产生新批次，再走 `prepare-captured` / `settle-review`。
+   新批次被审阅，也不会把旧 held 引用变成已审阅。
+4. `--action rollback --recovery-id <已应用回执 ID>` 同样需要预览和显式应用。
+   只有来源状态、profile／reviewed 文件仍匹配回执且恢复后不超过容量上限时，
+   才恢复操作前状态；新采集或审阅后拒绝覆盖进展。回执保留在私有 spool 中。
+
+预览令牌绑定 action、source、profile／binding、spool 身份、完整队列前沿、
+审阅文件内容与文件身份，以及审计记录。并发采集／审阅、重复应用、重绑或文件 ABA
+必须重新预览。SQLite 串行化采集与恢复写入，恢复使用与 settlement 相同的游标锁。
+不支持手工改库绕过门禁；恢复不替代合法的独立审阅结算，也不宣称创建新审阅 epoch。
+
+`max_pending_batches=N` 继续限制活跃批次；另最多保留 N 条未解决历史，
+2N 条审计记录后停止新增 hold/restart（每条适用回执最多再 rollback 一次）。
+不会自动删除、压缩或无限扩容。达到上限需保留／导出私有 spool 后明确处理保留策略。
+这是显式来源隔离，不是默认公平调度；若其他来源长期不被审阅，仍可能再次背压。
+行为变化：曾背压的来源在容量释放后的下一 tick 可重试，不再多等一个扫描间隔。
+
+`capture-status` 分开报告 active pending、held 历史、每来源 acquisition hold，
+并明确 `semantic_review_completion=not_inferred_from_capture`。`last_checked_at`
+是尝试时间，不保证成功；服务存活和最近成功扫描时间仍由 host 独立报告。
+仅看 status 不能证明历史可重放或决策覆盖完整。停用仍使用原 profile 开关；
+降级旧版本前必须停止调度器，因为旧运行时不认识 recovery hold。
+保留 spool 与回执，不能把软件降级当成状态回滚。
 
 ## 与其他能力的关系
 

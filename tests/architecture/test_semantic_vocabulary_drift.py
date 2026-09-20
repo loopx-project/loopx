@@ -505,12 +505,16 @@ def test_f1_f2_domain_names_exactly_the_vocabularies_the_producer_check_walks() 
     registry = smoke["load_registry"]()
     vocabularies = registry["vocabularies"]
     walked = {name for name, entry in vocabularies.items() if "producers" in entry}
-    assert walked == {name for name, entry in vocabularies.items() if entry["tier"] == "kernel"}
+    # The domain was the kernel tier while that happened to be the set the
+    # check walked. It is no longer: a cross-runtime vocabulary carrying
+    # executed production evidence is walked too, so the selector names the
+    # predicate rather than a tier it no longer matches.
+    assert walked >= {name for name, entry in vocabularies.items() if entry["tier"] == "kernel"}
     skipped = {entry["tier"] for name, entry in vocabularies.items() if name not in walked}
     assert skipped == {"cross_runtime"}
     for invariant_id in ("F1_producer_closedness", "F2_canonical_value_liveness"):
         domain = _invariant(registry, invariant_id)["domain"]
-        assert domain["quantifies_over"] == "vocabularies[tier=kernel].producers"
+        assert domain["quantifies_over"] == "vocabularies[producers].producers"
         assert domain["verified"] == len(walked)
         assert domain["registered"] == len(vocabularies)
         assert domain["evidence_bound"] == "producer_scan_reach"
@@ -549,6 +553,55 @@ def test_the_formal_detail_line_agrees_with_the_selectors_it_reports() -> None:
     ):
         walked, registered = selectors[selector](registry)
         assert f"{label}={walked}/{registered}" in detail, (label, detail)
+
+
+@pytest.mark.parametrize("denial", [
+    " The cross_runtime tier declares no producers.",
+    " No vocabulary in the cross_runtime tier has any producer.",
+])
+def test_canonical_producer_statement_rejects_contradictory_paraphrases(denial: str) -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    _invariant(registry, "F2_canonical_value_liveness")["statement"] += denial
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+
+
+def test_generated_domain_accepts_true_kernel_comparison() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = smoke["load_registry"]()
+    model = registry["formal_model"]
+    assert "Kernel(V) ⊆ Producers(V)." in model["universes"]["vocabularies"]
+    smoke["check_formal_model"](model, registry)
+    domain = smoke["ProducerDomain"].from_registry(registry)
+    assert domain.kernel < domain.walked
+    assert domain.walked - domain.kernel == {"settlement_binding_kind"}
+    assert domain.outside_by_tier == (("cross_runtime", 19),)
+
+
+def test_canonical_domain_rejects_old_kernel_only_universe() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    registry["formal_model"]["universes"]["vocabularies"] = (
+        "V: registered vocabulary identifiers; Kernel(V) is the only producer domain"
+    )
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+
+
+def test_domain_membership_change_requires_regenerated_prose() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    # A membership change must not leave yesterday's tier/count claim green,
+    # even if the independent numeric domain entries were already updated.
+    registry["vocabularies"]["settlement_binding_kind"].pop("producers")
+    for invariant_id in ("F1_producer_closedness", "F2_canonical_value_liveness"):
+        _invariant(registry, invariant_id)["domain"]["verified"] = 6
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+    projected = smoke["producer_domain_prose"](registry)
+    assert "20 cross_runtime" in projected["F1_producer_closedness.statement"]
+    assert "6 kernel and 0 outside" in projected["universes.vocabularies"]
 
 
 @pytest.mark.parametrize("invariant_id", sorted({

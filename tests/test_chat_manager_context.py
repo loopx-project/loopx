@@ -93,6 +93,99 @@ def test_context_scopes_before_read_and_missing_registry_is_unknown(
     assert missing["warnings"] == ["registry_unavailable"]
 
 
+def test_manager_evidence_carries_the_goal_lifecycle_readback(tmp_path, monkeypatch):
+    """Milestones and phase reach the manager, or arrive as a named gap.
+
+    The prompt rows, the read index and the paged portfolio view must describe
+    the same Goal lifecycle: the status collector's own projection, never a
+    second derivation here, and never an absent field the manager could read as
+    "this Goal has no milestones".
+    """
+
+    import loopx.goal_portfolio as portfolio
+    from loopx.capabilities.manager_context.inspection import (
+        ManagerInspection,
+        TOOL_NAME,
+        manager_index,
+    )
+
+    runtime_root = tmp_path / "runtime"
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {"id": g, "coordination": {"registered_agents": ["worker"]}}
+                    for g in ("alpha", "beta")
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    projection = {
+        "schema_version": "goal_artifact_lifecycle_projection_v0",
+        "lifecycle_phase": "qualifying",
+        "milestones": [
+            {"id": "outcome_progress", "reached": True, "reached_evidence_refs": ["sha256:fixture"]}
+        ],
+        "guards": [],
+        "next_transitions": [],
+    }
+
+    def read(**kwargs):
+        selected = kwargs.get("goal_id")
+        ids = [selected] if selected else ["alpha", "beta"]
+        goals = []
+        for goal_id in ids:
+            entry = {
+                "id": goal_id,
+                "latest_status_run": {
+                    "goal_id": goal_id,
+                    "generated_at": "2026-09-10T05:00:00Z",
+                },
+                "latest_runs": [],
+                "semantic_history": {"agents": []},
+            }
+            if goal_id == "alpha":
+                entry["artifact_lifecycle"] = {**projection, "goal_id": goal_id}
+            goals.append(entry)
+        return {"ok": True, "run_history": {"goals": goals}}
+
+    monkeypatch.setattr(portfolio, "collect_status", read)
+    monkeypatch.setattr(
+        portfolio,
+        "build_quota_should_run",
+        lambda *a, **k: {"ok": True, "agent_identity": {"agent_id": "worker"}},
+    )
+    result = context.manager_turn_context(
+        registry_path, {"channel_id": "manager"}, runtime_root, include_details=False
+    )
+    rows = {row["goal_id"]: row for row in result["goals"]}
+    assert rows["alpha"]["goal_lifecycle"]["lifecycle_phase"] == "qualifying"
+    assert rows["alpha"]["goal_lifecycle"]["milestones"][0]["reached"] is True
+    assert rows["beta"]["goal_lifecycle"] == {
+        "schema_version": portfolio.GOAL_LIFECYCLE_READBACK_SCHEMA_VERSION,
+        "goal_id": "beta",
+        "status": "unavailable",
+        "reason": "projection_not_derived",
+    }
+    index = {row["goal_id"]: row for row in manager_index(result)["goals"]}
+    assert index["alpha"]["lifecycle_phase"] == "qualifying"
+    assert index["beta"]["lifecycle_phase"] is None
+    page = ManagerInspection(
+        context=result,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        owner_scope=True,
+        scope_valid=lambda: True,
+        record=lambda _: None,
+    ).read(TOOL_NAME, {"view": "portfolio"})
+    assert page["ok"] is True
+    paged = {row["goal_id"]: row["goal_lifecycle"] for row in page["rows"]}
+    assert paged["alpha"]["schema_version"] == "goal_artifact_lifecycle_projection_v0"
+    assert paged["beta"]["status"] == "unavailable"
+
+
 def _write_delivery_index(root, goal_id, rows):
     path = root / "goals" / goal_id / "runs" / "index.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)

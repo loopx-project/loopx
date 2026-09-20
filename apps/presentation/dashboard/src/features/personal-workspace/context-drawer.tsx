@@ -1010,7 +1010,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
             {selection.item.actionKind === "team.plan" && selection.item.status === "applied" ? <TeamPlanResult proposal={selection.item} t={t} /> : <section className="personal-proposal-card">
               <small>{selection.item.actionKind} · {selection.item.status}</small>
               <h3>{selection.item.title}</h3>
-              <p>{selection.item.impact}</p>
+              {selection.item.impact ? <p>{selection.item.impact}</p> : null}
               {selection.item.reviewPlan && !selection.item.reviewPlan.retryOriginal && selection.item.actionKind !== "team.plan" ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{selection.item.actionKind === "operation.execute" && selection.item.status === "gated"
                 ? t("actionReview.operation_group_confirmation")
                 : selection.item.actionKind === "operation.execute" && selection.item.reviewPlan.reason === "readback_unverified"

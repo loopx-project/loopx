@@ -380,6 +380,9 @@ class DshHostConfig:
     runtime_bin: str | None = None
     request_timeout_seconds: float | None = None
     dsh_runner: Path | None = None
+    # Only the resolved operator provider pair belongs in the child runtime;
+    # the caller deliberately excludes unrelated service environment values.
+    env: Mapping[str, str] | None = None
 
     def resolved_profile(self) -> dict[str, Any]:
         """Return the profile fields this attempt would use, with their source."""
@@ -458,23 +461,24 @@ def _execute_turn_host_request(
             if config.dsh_runner is not None
             else run_dsh_turn
         )
-        outcome = normalize_runner_outcome(
-            runner(
-                prompt=prompt,
-                session_id=session_id,
-                workspace=workspace,
-                # Preserve the established runner keyword while mapping the
-                # path to the current SDK's explicit dsh_home field.
-                session_root=dsh_home,
-                provider=str(profile["provider"]),
-                model=str(profile["model"]),
-                reasoning_effort=str(profile["reasoning_effort"]),
-                max_tokens=output_token_budget["max_tokens"],
-                cordis=config.cordis,
-                runtime_bin=config.runtime_bin,
-                request_timeout_seconds=config.request_timeout_seconds,
-            )
-        )
+        runner_arguments: dict[str, Any] = {
+            "prompt": prompt,
+            "session_id": session_id,
+            "workspace": workspace,
+            # Preserve the established runner keyword while mapping the path
+            # to the current SDK's explicit dsh_home field.
+            "session_root": dsh_home,
+            "provider": str(profile["provider"]),
+            "model": str(profile["model"]),
+            "reasoning_effort": str(profile["reasoning_effort"]),
+            "max_tokens": output_token_budget["max_tokens"],
+            "cordis": config.cordis,
+            "runtime_bin": config.runtime_bin,
+            "request_timeout_seconds": config.request_timeout_seconds,
+        }
+        if config.env is not None and config.dsh_runner is None:
+            runner_arguments["env"] = dict(config.env)
+        outcome = normalize_runner_outcome(runner(**runner_arguments))
     except DshHostResultError as exc:
         raise BuiltInHostError(
             "dsh_host_result_rejected",

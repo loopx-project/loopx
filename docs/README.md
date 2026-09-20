@@ -67,6 +67,7 @@ a longer onboarding path.
 
 ## Project And Community
 
+- [Community entry points](community.md) ([中文](community.zh-CN.md))
 - [Current technical directions](project/technical-directions.md)
 - [Open strategy reviews](community/open-strategy-reviews.md)
   ([中文](community/open-strategy-reviews.zh-CN.md))

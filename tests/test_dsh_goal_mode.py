@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from loopx import dsh_goal_mode
+from loopx.cli_commands import turn_dsh_host
 from loopx.control_plane.quota.turn_envelope import (
     turn_envelope_action_signature_document,
 )
@@ -194,6 +195,78 @@ def test_dsh_host_passes_lineage_session_id_to_the_runner(
 
     assert session_ids[0] != session_ids[1]
     assert session_ids[0] == session_ids[2]
+
+
+def test_dsh_host_forwards_the_resolved_credential_to_the_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def run_fake_dsh_turn(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return '{"result_kind":"wait"}'
+
+    monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", run_fake_dsh_turn)
+    credential = {
+        "DEEPSEEK_API_KEY": "fixture-machine-key",
+        "DEEPSEEK_BASE_URL": "https://provider.invalid",
+    }
+    config = turn_host_adapter.DshHostConfig(
+        workspace=tmp_path,
+        env=credential,
+    )
+
+    turn_host_adapter.run_dsh_host(_signed_request(), config=config)
+
+    assert calls[0]["env"] == credential
+    assert calls[0]["env"] is not credential
+
+
+@pytest.mark.parametrize(
+    "resolved,expected",
+    [
+        ({"DEEPSEEK_API_KEY": "fixture-machine-key"},
+         {"DEEPSEEK_API_KEY": "fixture-machine-key"}),
+        ({"DEEPSEEK_API_KEY": "fixture-env-key",
+          "DEEPSEEK_BASE_URL": "https://provider.invalid",
+          "UNRELATED_SERVICE_SECRET": "must-not-travel"},
+         {"DEEPSEEK_API_KEY": "fixture-env-key",
+          "DEEPSEEK_BASE_URL": "https://provider.invalid"}),
+        ({"UNRELATED_SERVICE_SECRET": "must-not-travel"}, {}),
+    ],
+)
+def test_turn_runner_projects_only_the_resolved_operator_provider_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    resolved: dict[str, str],
+    expected: dict[str, str],
+) -> None:
+    captured: list[turn_host_adapter.DshHostConfig] = []
+
+    def capture(_request: object, *, config: turn_host_adapter.DshHostConfig) -> dict:
+        captured.append(config)
+        return {"ok": True}
+
+    monkeypatch.setattr(turn_dsh_host, "run_dsh_host", capture)
+    args = SimpleNamespace(
+        dsh_provider=None,
+        dsh_model=None,
+        dsh_reasoning_effort=None,
+        dsh_max_tokens=16_384,
+        dsh_home=None,
+        dsh_cordis=None,
+        dsh_runtime_bin=None,
+        timeout_seconds=60,
+        dsh_runner=None,
+    )
+    runner = turn_dsh_host.build_dsh_host_runner(
+        args,
+        workspace=tmp_path,
+        environ=resolved,
+    )
+
+    assert runner({}) == {"ok": True}
+    assert dict(captured[0].env or {}) == expected
 
 
 def test_dsh_goal_mode_is_a_first_class_subpackage() -> None:

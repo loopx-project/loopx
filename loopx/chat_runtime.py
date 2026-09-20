@@ -14,6 +14,7 @@ from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_CONTEXT_VERSION,
     is_manager_channel, manager_agent_objective, manager_model_config,
     manager_workspace, manager_skill_text, operator_credential_pair, operator_credential_resolution,
+    manager_answer_readback,
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION
 from .control_plane.collaboration import conversation_scope
@@ -1264,6 +1265,12 @@ class ChatRuntimeController:
                 turn_id=turn_id,
                 response=response,
                 projector=self.team_plan_projector,
+            )
+            # The owner manager channel states its answer shape in the answer
+            # itself, so the shape is recorded with the turn instead of being
+            # re-derived by every reader.
+            response = manager_answer_readback(
+                response, channel=str(session.get("channel_id") or "")
             )
             event_buffer.close()
             if consume_interrupted():

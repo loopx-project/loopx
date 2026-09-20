@@ -13,6 +13,10 @@ from .attribution import (
     replay_finance_beta_attribution,
 )
 from .contract import FINANCE_CASE_INPUT_SCHEMA_VERSION
+from .contract_liquidity import (
+    FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION,
+    evaluate_finance_contract_liquidity,
+)
 from .metric_packs import (
     FINANCE_METRIC_PACK_INPUT_SCHEMA_VERSION,
     build_finance_metric_pack_evaluation,
@@ -137,6 +141,14 @@ def _direct_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print only the canonical loopx_operation_request_v0 object.",
     )
+    liquidity_parser = sub.add_parser(
+        "evaluate-contract-liquidity",
+        help=(
+            "Evaluate amount- and direction-specific derivatives exit "
+            "liquidity from frozen provider measurements."
+        ),
+    )
+    liquidity_parser.add_argument("--input-json", required=True)
     sub.add_parser("list-packs", help="List bundled industry metric packs.")
     lark_parser = sub.add_parser(
         "render-lark-card",
@@ -170,6 +182,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                 packet = build_finance_research_dashboard_packet(payload)
             elif schema_version == FINANCE_TRANSACTION_APPROVAL_INPUT_SCHEMA_VERSION:
                 packet = build_finance_transaction_approval_packet(payload)
+            elif schema_version == FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION:
+                packet = evaluate_finance_contract_liquidity(payload)
             else:
                 packet = build_finance_value_discovery_packet(payload)
         except Exception as exc:
@@ -212,6 +226,10 @@ def run(argv: Sequence[str] | None = None) -> int:
             packet = build_finance_transaction_approval_packet(
                 _load_json(args.input_json)
             )
+        elif args.command == "evaluate-contract-liquidity":
+            packet = evaluate_finance_contract_liquidity(
+                _load_json(args.input_json)
+            )
         elif args.command == "list-packs":
             packet = list_finance_metric_packs()
         elif args.command == "render-lark-card":
@@ -228,7 +246,8 @@ def run(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "use --doctor, reduce, evaluate, replay, attribute-beta, "
                 "replay-beta, evaluate-pack, replay-pack, list-packs, "
-                "render-lark-card, or build-operation-request"
+                "render-lark-card, build-operation-request, or "
+                "evaluate-contract-liquidity"
             )
     except Exception as exc:
         print(json.dumps(_error_packet(exc), indent=2, sort_keys=True))

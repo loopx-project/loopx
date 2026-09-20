@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -99,11 +100,12 @@ FORMAL_ENFORCEMENT = {"m0", "m0_5", "m1", "advisory", "unproved"}
 FORMAL_DOMAIN_KEYS = {"quantifies_over", "verified", "registered", "evidence_bound"}
 FORMAL_DOMAIN_SELECTORS: dict[str, Callable[[dict[str, Any]], tuple[int, int]]] = {
     # ``check_producers`` walks exactly the vocabularies that declare producers.
-    # Today that predicate selects the kernel tier and nothing else, so F1/F2
-    # quantify over 6 of 26 vocabularies, not over V.
-    "vocabularies[tier=kernel].producers": lambda registry: (
-        sum(1 for entry in registry["vocabularies"].values()
-            if entry["tier"] == "kernel" and "producers" in entry),
+    # That predicate used to select the kernel tier and nothing else; it no
+    # longer does, so the selector names the predicate itself. Writing it as a
+    # tier would quietly stop describing the set the check walks the first time
+    # a cross-runtime vocabulary earns production evidence.
+    "vocabularies[producers].producers": lambda registry: (
+        len(ProducerDomain.from_registry(registry).walked),
         len(registry["vocabularies"]),
     ),
     "vocabularies[*]": lambda registry: (
@@ -151,9 +153,13 @@ FORMAL_EVIDENCE_BOUNDS: dict[str, frozenset[str]] = {
 # an invariant cannot quietly widen its own claim by choosing a looser selector
 # in a data-only edit. Restating an invariant over a different domain is a
 # normative change and edits this literal in the same diff.
+# F1/F2 statements are canonical projections of the producer domain, not
+# arbitrary prose classified by keyword rules.
+PRODUCER_DOMAIN_INVARIANTS = ("F1_producer_closedness", "F2_canonical_value_liveness")
+
 FORMAL_DOMAIN_ANCHOR = {
-    "F1_producer_closedness": ("vocabularies[tier=kernel].producers", "producer_scan_reach"),
-    "F2_canonical_value_liveness": ("vocabularies[tier=kernel].producers", "producer_scan_reach"),
+    "F1_producer_closedness": ("vocabularies[producers].producers", "producer_scan_reach"),
+    "F2_canonical_value_liveness": ("vocabularies[producers].producers", "producer_scan_reach"),
     "F3_consumer_domain_closedness": ("vocabularies[*]", "inventory_only"),
     "F4_scope_separation": ("scope_declarations[*].contexts", "declared_defining_modules"),
     "F5_projection_totality": ("projections[*]", "executable_owner_function"),
@@ -192,9 +198,15 @@ LITERAL_SCAN_ROOTS = ["loopx"]
 INPUT_PRODUCER_ANCHOR = {
     "turn_result_kind": "loopx/control_plane/turn_driver/transaction.py::_result_kind",
     "loop_disposition": "loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition",
+    # The settlement binding kind is decided inside the TypeScript builder, so
+    # the witness executes it rather than reading a literal out of the owner.
+    "settlement_binding_kind": "loopx/control_plane/effect_program.ts::settlementIdentity",
 }
 PRODUCER_VOCABULARY_ANCHOR = {
     "effective_action", "turn_route", "loop_disposition", "agent_scope_frontier_action", "turn_result_kind", "lease_action",
+    # First cross-runtime vocabulary carrying executed production evidence. One
+    # named boundary, not a claim about the rest of the cross-runtime set.
+    "settlement_binding_kind",
 }
 RETURN_PRODUCER_ANCHOR = {
     "turn_route": {"loopx/control_plane/turn_driver/driver.py::_typed_route", "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route", "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"},
@@ -391,6 +403,7 @@ def check_formal_model(model: dict[str, Any], registry: dict[str, Any]) -> None:
         require(item["statement"].strip() and item["evidence"].strip(),
                 f"formal invariant {item['id']} needs a statement and evidence boundary")
         check_invariant_domain(item, registry)
+    check_domain_prose(model, registry)
     policy = model["enforcement_policy"]
     require(set(policy) == FORMAL_POLICY_KEYS,
             "formal_model enforcement_policy must separate current, next, advisory, and unproved checks")
@@ -421,6 +434,84 @@ def check_formal_model(model: dict[str, Any], registry: dict[str, Any]) -> None:
     for key in boundary:
         require(isinstance(boundary[key], list) and all(isinstance(value, str) and value.strip() for value in boundary[key]),
                 f"formal_model proof_boundary.{key} must contain non-empty claim names")
+
+
+@dataclass(frozen=True)
+class ProducerDomain:
+    """Finite facts behind the canonical F1/F2 statements."""
+
+    walked: frozenset[str]
+    kernel: frozenset[str]
+    outside_by_tier: tuple[tuple[str, int], ...]
+
+    @classmethod
+    def from_registry(cls, registry: dict[str, Any]) -> ProducerDomain:
+        vocabularies = registry["vocabularies"]
+        walked = frozenset(name for name, entry in vocabularies.items() if "producers" in entry)
+        kernel = frozenset(name for name, entry in vocabularies.items() if entry["tier"] == "kernel")
+        outside = [entry for name, entry in vocabularies.items() if name not in walked]
+        return cls(walked, kernel, tuple(
+            (tier, sum(entry["tier"] == tier for entry in outside))
+            for tier in sorted({entry["tier"] for entry in outside})
+        ))
+
+
+def producer_domain_prose(registry: dict[str, Any]) -> dict[str, str]:
+    """Render normalized claims; no free-text semantic inference is attempted."""
+    domain = ProducerDomain.from_registry(registry)
+    comparison = (
+        "Kernel(V) ⊆ Producers(V)." if domain.kernel <= domain.walked
+        else "Kernel(V) is not a subset of Producers(V)."
+    )
+    outside = ", ".join(f"{count} {tier}" for tier, count in domain.outside_by_tier) or "0"
+    boundary = (
+        f"Producers(V) contains {len(domain.walked)} vocabularies: "
+        f"{len(domain.walked & domain.kernel)} kernel and "
+        f"{len(domain.walked - domain.kernel)} outside the kernel tier. "
+        f"The {outside} vocabularies outside Producers(V) are unverified."
+    )
+    return {
+        "universes.vocabularies": (
+            "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly "
+            "the subset declaring a producers key (including compatibility-only "
+            f"entries with an empty list). {comparison} {boundary}"
+        ),
+        "F1_producer_closedness.statement": (
+            "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where "
+            "Produced_scan(v) is the production the fixed forms observe inside "
+            f"the code-owned scan reach. {boundary} Production outside the scan "
+            "reach is unverified rather than proven closed."
+        ),
+        "F1_producer_closedness.evidence": (
+            "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES "
+            "reach in loopx/semantics/production.py; check_producers visits only "
+            "vocabularies that declare producers, and validate_production claims no "
+            "whole-program closedness; unresolved dynamic sites are reported, not "
+            "treated as proven safe"
+        ),
+        "F2_canonical_value_liveness.statement": (
+            "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). "
+            f"{boundary} Liveness outside the walked set is not proven."
+        ),
+        "F2_canonical_value_liveness.evidence": (
+            "every value of a vocabulary in Producers(V) has a producer recognised "
+            "inside the scan reach, an executable input witness, or an explicit "
+            "compatibility-only reason; a value whose only producer lies outside "
+            "the reach would be reported as dead, not silently accepted"
+        ),
+    }
+
+
+def check_domain_prose(model: dict[str, Any], registry: dict[str, Any]) -> None:
+    """Require generated canonical statements, not keyword-based prose approval."""
+    actual = {"universes.vocabularies": model["universes"]["vocabularies"]}
+    for item in model["invariants"]:
+        if item["id"] in PRODUCER_DOMAIN_INVARIANTS:
+            for field in ("statement", "evidence"):
+                actual[f"{item['id']}.{field}"] = item[field]
+    for field, expected in producer_domain_prose(registry).items():
+        require(actual.get(field) == expected,
+                f"formal_model {field} must equal its canonical producer-domain projection: {expected}")
 
 
 def check_invariant_domain(invariant: dict[str, Any], registry: dict[str, Any]) -> None:
@@ -709,9 +800,10 @@ def check_producers(registry: dict[str, Any], sources: list[SourceFile]) -> list
     unknown: list[str] = []
     for name, vocabulary in registry['vocabularies'].items():
         if 'producers' not in vocabulary:
-            # Skipped: the whole cross_runtime tier, which declares no producers.
-            # F1/F2 therefore hold over the kernel tier only, which is the domain
-            # the registry's formal_model states -- not an unconditional claim.
+            # Skipped: a vocabulary that declares no producers. That is every
+            # cross_runtime vocabulary except the ones carrying an executed
+            # witness. F1/F2 therefore hold over the walked set the registry's
+            # formal_model names Producers(V) -- not an unconditional claim.
             continue
         try:
             rows = collect_production(REPO_ROOT, vocabulary, sources)

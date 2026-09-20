@@ -287,6 +287,15 @@ changes.
     Lark operation cards. Direct Goal workspace navigation and Overview compose
     bounded graph/acceptance readback, source navigation and snapshot export. General cross-channel disclosure,
     living documents and governed amendment/settlement review remain open.
+- [Live Team Workspace v0](live-team-workspace-v0.md)
+  ([中文版](live-team-workspace-v0.zh-CN.md))
+  - **RFC status:** Draft presentation slice under intelligent presentation.
+  - **Delivery on `main`:** Design proposal only; no live team-stream qualification.
+  - **Current boundary:** A command surface plus spatial research studio, evidence
+    handoff motion, conclusion revision and replay. L1 requires one real
+    objection→revision→acceptance→adoption journey with evidence and intervention/stop
+    feedback in packaged UI; L2 requires original-coordinator two-cycle acceptance;
+    L3 qualifies semantic zoom and display scale. No new scheduler or authority.
 - [Human Attention Wishlist v0](human-attention-wishlist-v0.md)
   ([中文版](human-attention-wishlist-v0.zh-CN.md))
   - **RFC status:** Draft, under maintainer review.

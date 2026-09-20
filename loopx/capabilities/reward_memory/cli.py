@@ -385,6 +385,13 @@ def handle_reward_memory_command(
             )
             if experiment_status is not None:
                 payload["experiment"] = experiment_status
+                next_recall = payload.get("next_recall")
+                if isinstance(next_recall, Mapping):
+                    payload["next_recall"] = dict(next_recall) | {
+                        "automatic_recall": bool(
+                            experiment_status.get("automatic_recall")
+                        )
+                    }
         elif args.reward_memory_command == "evaluate":
             payload = run_reward_memory_evaluation()
         elif args.reward_memory_command == "dogfood-evaluate":

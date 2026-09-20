@@ -234,6 +234,72 @@ def probe_turn_result_input_domain(vocabulary: dict[str, Any]) -> list[Productio
     return rows
 
 
+def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Production]:
+    """Witness the real settlement identity builder's binding-kind domain.
+
+    This executes the shipped TypeScript builder and reports what it returns,
+    then re-checks the same inputs through the Python bridge that reaches it.
+    Enumerating the owner would prove nothing about which values a legal input
+    can actually produce; a successful call does.
+
+    The module and the function are fixed here rather than named by registry
+    data, so the registry cannot select an arbitrary callable. The four cases
+    are the builder's whole binding domain: a todo binding, a replan binding,
+    neither, and the pair it must refuse.
+    """
+    from pathlib import Path as _Path
+
+    from ..control_plane.effect_program import SettlementBindingKind, SettlementIdentity
+
+    site = 'loopx/control_plane/effect_program.ts::settlementIdentity'
+    if vocabulary.get('input_producer') != site:
+        raise ValueError('settlement_binding_kind: input_producer must name the anchored builder')
+
+    expected = {
+        'todo': {'todo_id': 't1'},
+        'autonomous_replan': {'replan_obligation_id': 'r1'},
+        'unbound': {},
+    }
+    if set(expected) != set(vocabulary['values']):
+        raise ValueError('settlement_binding_kind: witness does not cover the registered values')
+
+    root = _Path(__file__).resolve().parents[2]
+    probes = [expected[value] for value in vocabulary['values']]
+    probes.append({'todo_id': 't1', 'replan_obligation_id': 'r1'})
+    completed = subprocess.run(
+        ['node', '--no-warnings', '--experimental-strip-types',
+         str(root / 'scripts/settlement_binding_witness.mts')],
+        input=json.dumps({'probes': probes}), capture_output=True, text=True,
+        encoding='utf-8', check=False,
+    )
+    if completed.returncode != 0:
+        raise ValueError(f'settlement_binding_kind: witness probe failed: {completed.stderr.strip()[:300]}')
+    observed = json.loads(completed.stdout)
+
+    rows: list[Production] = []
+    for value, result in zip(vocabulary['values'], observed, strict=False):
+        if not result.get('ok') or result.get('binding_kind') != value:
+            raise ValueError(
+                f'settlement_binding_kind: builder does not produce registered value {value}')
+        # The same input through the Python bridge has to agree, so a broken
+        # adapter is a failure rather than an unobserved difference.
+        bridged = SettlementIdentity(
+            goal_id='g', agent_id='a', turn_instance_id='t',
+            todo_id=expected[value].get('todo_id'),
+            replan_obligation_id=expected[value].get('replan_obligation_id'),
+        )
+        if bridged.binding_kind is not SettlementBindingKind(value):
+            raise ValueError(
+                f'settlement_binding_kind: the Python bridge disagrees for {value}')
+        rows.append(Production(site, SETTLEMENT_IDENTITY_LINE, 'input_witness',
+                               frozenset({value}), False))
+
+    refused = observed[-1]
+    if refused.get('ok'):
+        raise ValueError('settlement_binding_kind: builder accepted both bindings at once')
+    return rows
+
+
 def _probe_controller_domain(vocabulary: dict[str, Any]) -> list[Production]:
     from .turn_contract_witness import probe_controller_production, probe_projection_production
     return probe_controller_production() + probe_projection_production()
@@ -241,7 +307,12 @@ def _probe_controller_domain(vocabulary: dict[str, Any]) -> list[Production]:
 
 # Executable input witnesses are fixed in code and selected only by the
 # registered ``input_producer`` site; registry data cannot import a callable.
+# Line of ``settlementIdentity`` in the tracked builder, so the witness row
+# points at the function it executed.
+SETTLEMENT_IDENTITY_LINE = 408
+
 INPUT_WITNESSES: dict[str, Callable[[dict[str, Any]], list[Production]]] = {
     'loopx/control_plane/turn_driver/transaction.py::_result_kind': probe_turn_result_input_domain,
     'loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition': _probe_controller_domain,
+    'loopx/control_plane/effect_program.ts::settlementIdentity': probe_settlement_binding_production,
 }

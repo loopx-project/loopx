@@ -88,3 +88,9 @@ ignored and private.
 - [Public/private boundary](public-private-boundary.md)
 - [Status data contract](status-data-contract.md)
 - [Release readiness](product/release-readiness.md)
+
+## Join And Contribute
+
+Use the [community entry-point page](community.md) ([中文](community.zh-CN.md))
+to choose between the pinned discussion, Discord, Lark, WeChat, focused issue
+forms, showcase prompts, and the public ecosystem catalog.

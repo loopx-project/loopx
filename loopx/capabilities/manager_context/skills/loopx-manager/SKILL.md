@@ -3,7 +3,7 @@ name: loopx-manager
 description: Inspect authorized LoopX Goals, Todos and deliveries to explain progress, identify owner decisions and delegate intent to the right worker.
 ---
 
-<!-- loopx-managed-manager-skill:v1 -->
+<!-- loopx-managed-manager-skill:v2 -->
 
 # LoopX manager
 
@@ -16,6 +16,18 @@ Let project conversations handle their in-scope exchanges directly; bring a
 cross-project tradeoff or missing owner decision back to the steward. Do useful
 short investigations within the effective runtime grant instead of delegating
 everything; do not absorb every project's continuous execution into this chat.
+
+## Answer shape
+
+Answer with the contract order and label the parts:
+`结论 -> 里程碑/基线 -> 依据 -> 缺口`. The `结论` answers the owner's question
+first, in one or two sentences. `里程碑/基线` names the milestone, baseline or
+comparison the conclusion is measured against. `依据` names the evidence the
+conclusion rests on, with its coverage and freshness. `缺口` carries the
+remaining gaps and every coverage disclaimer as a bounded footer: a
+missing-evidence note, an unread source or a stale read never opens the answer
+and never replaces the conclusion. An answer that leads with what it could not
+see is a wrong answer even when every caveat in it is true.
 
 Choose reads according to the user's question. The initial Goal directory is
 an index, not a completed investigation. In Chat, use `loopx_manager_read`:

@@ -53,6 +53,58 @@ REPAIR_ACTIONS: frozenset[EffectiveAction] = frozenset(
         EffectiveAction.TODO_DECISION_SCOPE_PROJECTION_REPAIR,
     }
 )
+# Registered actions that run on a Host. The root should-run/Envelope slot is a
+# disjoint union of the decision vocabulary and the frontier vocabulary, and
+# every value either owner can carry is classified: replan above, repair above,
+# capability intent in its own branch, and the rest named here. Host execution
+# is therefore a stated classification rather than the absence of a branch, so
+# a newly registered action cannot inherit it silently -- the accompanying test
+# fails until the new value is classified deliberately.
+HOST_EXECUTION_ACTIONS: frozenset[str] = frozenset(
+    {
+        # Decision vocabulary.
+        EffectiveAction.AGENT_MONITOR_ONLY.value,
+        EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED.value,
+        EffectiveAction.BLOCKED_HEALTH.value,
+        EffectiveAction.BLOCKED_WAIT.value,
+        EffectiveAction.COORDINATE_TASK_BUNDLE.value,
+        EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE.value,
+        EffectiveAction.HEARTBEAT_RECEIPT_WRITE_FAILED.value,
+        EffectiveAction.HEARTBEAT_SETTLED_SKIP.value,
+        EffectiveAction.LARK_INBOX_REPLY_DUE.value,
+        EffectiveAction.MONITOR_DUE.value,
+        EffectiveAction.MONITOR_QUIET_SKIP.value,
+        EffectiveAction.NORMAL_RUN.value,
+        EffectiveAction.OPERATOR_GATE_NOTIFY.value,
+        EffectiveAction.OPERATOR_INBOX_MATERIAL_REVIEW_DUE.value,
+        EffectiveAction.OUTCOME_FLOOR_RECOVERY.value,
+        EffectiveAction.PEER_COORDINATION_BLOCKED.value,
+        EffectiveAction.QUOTA_SKIP.value,
+        EffectiveAction.SCOPED_USER_GATE_FALLBACK.value,
+        EffectiveAction.TERMINAL_NO_FOLLOWUP.value,
+        EffectiveAction.THROTTLED_SKIP.value,
+        EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value,
+        # Frontier vocabulary. These are not EffectiveAction members, so they
+        # are named by value rather than through the enum.
+        "agent_scope_exhausted",
+        "agent_scope_wait",
+        "reassignment_required",
+    }
+)
+
+
+def unregistered_route(effective_action: str) -> LoopXTurnRoute:
+    """Classify an action no registered owner declares.
+
+    Legacy payloads and forward-compatible writers can carry a value this
+    driver does not know. Such a value still runs on a Host: narrowing what the
+    driver accepts is an admission-domain change that needs its own approval and
+    version boundary, so this keeps the previous behaviour. Naming the path
+    separates "this classification was chosen" from "this value was not
+    recognised", which the earlier bare fallthrough could not express.
+    """
+
+    return LoopXTurnRoute.READY_FOR_HOST
 
 
 class FailedTurnSessionRecoveryError(ValueError):
@@ -108,7 +160,9 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
             return LoopXTurnRoute.REPLAN_REQUIRED
         if registered_action in REPAIR_ACTIONS:
             return LoopXTurnRoute.REPAIR_REQUIRED
-        return LoopXTurnRoute.READY_FOR_HOST
+        if effective_action in HOST_EXECUTION_ACTIONS:
+            return LoopXTurnRoute.READY_FOR_HOST
+        return unregistered_route(effective_action)
     if user.get("action_required") is True:
         return LoopXTurnRoute.USER_ACTION_REQUIRED
     if action.get("quiet_noop_allowed") is True:

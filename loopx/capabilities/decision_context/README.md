@@ -312,10 +312,9 @@ substitute capture cursors for that file or manually manufacture reviewed cursor
 If several settlements occur between ticks, their intermediate transitions may
 be unobservable; ambiguous batches are retained, not inferred to be reviewed.
 An older spool without review observations is baselined without retiring rows.
-For either hold, reconcile against actual review evidence explicitly; if starting
-a new spool after a current-source rebase, retain the old spool as a private
-checkpoint. This conservative protocol does not promise automatic queue drainage
-after skipped review transitions.
+For either hold, reconcile against actual review evidence explicitly, or use the
+guarded recovery below. This conservative protocol does not promise automatic
+queue drainage after skipped review transitions.
 
 This is a change-reference spool, **not a lossless source archive**. First-scan
 history, pagination, late edits, deletion visibility and deadlines remain provider
@@ -328,6 +327,68 @@ To stop collection, set `automatic_capture=false` and unload the host scheduler.
 Existing reviewable batches remain private and can still be prepared. To roll
 back to an older release, also remove the three new automation fields; retain
 the spool as a private checkpoint rather than deleting unreviewed work.
+
+#### Recover an unreplayable source without discarding history
+
+Recovery belongs to this capability's existing private SQLite spool, not Core
+Goal lifecycle. The local host/CLI is the operator surface; no provider, model,
+remote write permission, scheduler or dashboard setting is added. A trusted
+host may call `diagnose_capture_source` / `recover_capture_source` from
+`loopx.capabilities.decision_context.capture_recovery` with its existing
+`source_provider_overrides`.
+
+1. Run `capture-diagnose` with the same `--goal-id`, `--agent-id`, `--profile`,
+   `--spool`, `--cursor-state` arguments and an explicit `--source-id`.
+   Metadata-only diagnostics never contact providers. Add `--probe` to perform
+   one bounded transient replay/exact-read check, without semantic review or
+   pending settlement. Results distinguish `replay_not_checked`, `replayable`,
+   `revision_unavailable`, `binding_changed`, `cursor_diverged`,
+   `probe_unavailable`, `state_changed`, `empty` and `acquisition_held`.
+2. Preview `capture-recovery --action hold` with that same scope. It shows
+   affected counts and an opaque `preview_token`. Apply only with explicit
+   operator authorization, `--execute --expected-token <preview_token>`.
+   All pending references for that source move atomically to **held, unresolved
+   history**, byte-for-byte, and acquisition for that source pauses. They are
+   not marked reviewed. Other sources can use the released active capacity.
+3. When ready to read current material, preview and apply `--action restart`
+   with a fresh token. This rebinds acquisition to the current profile and the
+   **unchanged settlement-owned reviewed cursor**, clears the source's interval
+   wait, and removes its acquisition hold. The next ordinary capture produces
+   a fresh batch for `prepare-captured` and normal `settle-review`. Older held
+   references remain unresolved, even after the new batch is reviewed.
+4. `--action rollback --recovery-id <applied-recovery-id>` also requires preview
+   and explicit apply. It restores that operation's prior source state only if
+   the source scope and profile/reviewed files still match its receipt and the
+   active capacity permits restoration. After new capture/review, it fails
+   closed rather than overwriting progress. The applied/rolled-back receipts
+   remain in the private spool; copy/export the spool securely for inspection.
+
+All apply tokens bind action, source, profile/binding, spool identity and full
+queue frontier, reviewed-file digest/identity and audit state. A concurrent
+capture or review, duplicate apply, rebind or file ABA requires a fresh preview.
+SQLite serializes capture/recovery; apply uses the settlement cursor lock.
+Arbitrary manual edits are unsupported. Recovery never writes reviewed cursors,
+so it does not invalidate or supersede a legitimate separate review settlement.
+It is an acquisition restart, **not a claim to have created a new review epoch**.
+
+The existing `max_pending_batches=N` still bounds active batches. Held history
+has a separate cap of N; new hold/restart operations stop after 2N audit records
+(at most one rollback per applicable receipt). No automatic eviction, compaction
+or repeated capacity increase is performed. At that bound, preserve/export the
+private spool and make an explicit retention decision; increasing the limit is
+not evidence consumption. A hold is explicit, not an automatic fairness policy.
+It can isolate a noisy source, but exhaustion can recur if other sources are
+not reviewed. Backpressured sources now retry on the next tick when capacity is
+available instead of waiting an additional scan interval.
+
+`capture-status` separates active `pending_batch_count`, unresolved
+`held_batch_count`, per-source `acquisition_held` and
+`semantic_review_completion=not_inferred_from_capture`. `last_checked_at` is
+the last attempt, not necessarily a successful scan; host service liveness and
+successful-scan timestamps remain separate. No status-only call proves historical
+replay or complete decision coverage. Disable capture using the existing profile
+switch; stop the scheduler before downgrading, since older runtimes do not honor
+recovery holds. Retain the spool/receipts rather than treating downgrade as rollback.
 
 ## Relationship To Other Capabilities
 

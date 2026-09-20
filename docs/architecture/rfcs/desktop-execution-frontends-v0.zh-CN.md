@@ -4,7 +4,7 @@
 - 决策边界：同时支持挂接到外部拥有的 Agent 会话，以及端到端由 LoopX 托管的桌面运行时
 - 初始挂接运行时：Codex App / app-server
 - 初始托管运行时：Pi 与 DeepSeek Harness（`dsh`）
-- 默认托管 provider 配置：火山方舟 Agent Plan
+- 托管 provider 选择：显式配置引导与用户意图约束，Agent 在已授权可用 profile 内自主分配；火山方舟 Agent Plan 保留为可选发行预设。
 
 ## 摘要
 
@@ -15,8 +15,9 @@ LoopX Desktop 应支持两种显式的执行前端模式：
    中断、恢复和执行循环的所有权。
 2. **托管 Agent 运行时（Managed Agent Runtime）**。LoopX Desktop 启动并
    监督 Pi 或 DeepSeek Harness，选择显式的 provider 配置，并通过有界的
-   `loopx_turn_v0` 事务推进工作。默认发行配置使用火山方舟 Agent Plan，
-   而运行时与 provider 契约保持可替换。
+   `loopx_turn_v0` 事务推进工作。发行版可提供命名的火山方舟 Agent Plan 预设，
+   操作者配置与明确意图约束 Agent 的自主分配；不把任何 provider 设为统一产品
+   默认。运行时与 provider 契约保持可替换。
 
 两种模式呈现相同的 LoopX Goal、Todo、gate、quota、evidence 和状态事实。
 它们不共享进程所有权。前端绝不能从聊天散文推断模式切换，也不得静默启动
@@ -35,6 +36,34 @@ manager Agent，也不把连接器硬编码到 Codex。
 托管模式不要求宿主原生的 Goal 循环。桌面拥有的运行时监督器反复询问 LoopX
 下一个有界 Turn 是否有资格执行，调用所选运行时适配器，验证其结果，并提交
 被接受的状态。`loopx_turn_v0` 始终是一个事务，而不是第二个常驻调度器。
+
+## 显式配置引导、用户意图与自主分配
+
+这里细化 provider 默认策略，属于提案，不改变已发布运行时默认值，也不认证新
+适配器。复用现有 machine/Goal capability editor、provider store、会话绑定与
+调度准入，不新增 capability id、provider 实现或选路服务。
+
+- **配置让选择可用。** 展示已探测安装与登录、支持工具、模型/账户、费用或费用
+  未知、宿主在线条件和权限范围。发现不等于授权。命名预设是可选方案，不能覆盖
+  已有明确配置。
+- **用户明确意图约束选择。** 固定模型/账户、本地限定、预算和成员限制，按用户
+  声明的作用域生效。偏好不自动变成硬锁。不能把某位用户的 Codex 偏好，或某个
+  发行版的 Ark 预设，推广成全产品规则。未解决的明确约束冲突需要澄清。
+- **Agent 在范围内自主分配。** 按任务适配性、工具权限、成本和观测到的可用性，
+  选择可用模型/运行时、复用或请求 worker、重新分配后续工作。已授权的灵活资源池
+  不要求逐次确认。选择由 Agent 作语义判断；typed owner 执行资格、预算、权限和
+  会话 fence。
+
+在设置与团队详情投影有效 runtime/model/profile、分配理由和就绪状态，派发时
+重新验准入。锁定路径不可用就阻塞并给修复入口；灵活池中的成员不可用，可以选择
+另一条合格路径并明确回读。不能借替代扩大数据外发、凭证、费用权限或支持工具。
+活跃会话保留绑定与上下文所有权；已授权自主改派走现有显式重新绑定/continuation
+契约，不静默迁移会话。新增付费资源和范围变化保留原有决策边界。
+
+通过打包引导、Chat/管家和独立 CLI 验收：固定选择优先于预设；灵活分配不反复
+审批；锁定路径失效时保持阻塞；预算耗尽或未授权回退不产生执行；重启保持有效
+配置。可选 Lark 投影同一选择及自己的受众约束。用例通过前，这是分配设计而非
+运行保证。见[近期发布路线](loopx-overall-roadmap-v0.zh-CN.md#近期本地-agent-产品与发布路线)。
 
 ## 问题
 
@@ -446,7 +475,7 @@ managed 面板或 supervisor。
 
 1. 选择或创建 LoopX Goal 和工作 Agent 绑定；
 2. 选择 Pi 或 `dsh` 作为运行时；
-3. 选择托管 provider 配置，默认发行配置为 Ark Agent Plan；
+3. 引导配置 provider 与用户约束，由 Agent 在已授权可用 profile 内选择；提供命名的 Ark Agent Plan 预设；
 4. 验证运行时安装、provider 认证和已宣称能力；
 5. 启动一个运行时并创建一个不透明可恢复会话；
 6. 向同一会话发送用户输入；
@@ -497,8 +526,9 @@ Pi 和 `dsh` 实现同一个窄托管运行时契约，而不假装其内部循�
 
 ### Provider 配置契约
 
-运行时选择与 provider 选择正交。Ark Agent Plan 是默认托管产品配置，而不是
-散落在 LoopX 内核各处的特例。
+运行时选择与 provider 选择正交。Ark Agent Plan 是命名的托管 provider 预设。
+显式配置引导、作用域内的用户意图与 Agent 自主分配共同选择合格 profile，
+不把 provider 规则散落在 LoopX 内核各处。
 
 一个 provider 配置必须暴露或解析：
 
@@ -770,7 +800,7 @@ executor 精确版本、完成情况、延迟、动作数、人工介入、禁�
 2. 一个 Desktop 运行时监督器，支持 start、interrupt、close、reconcile 和
    resume；
 3. `dsh` 作为第一个参考运行时，复用其已被接受的 Turn 适配器；
-4. Ark Agent Plan 作为默认配置的 provider 配置；
+4. Ark Agent Plan 作为一个显式选择的 provider 预设；
 5. 一个可恢复对话和一次一个的有界 Turn 执行；以及
 6. 在 Desktop 中联合展示运行时、Turn 和 LoopX 状态。
 

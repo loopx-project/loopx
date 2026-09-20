@@ -24,6 +24,10 @@ from .control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     managed_executor_binding,
 )
+from .capabilities.manager_context.answer_contract import (
+    classify_manager_answer_shape,
+    manager_answer_contract_instruction,
+)
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
@@ -32,8 +36,12 @@ from .chat_store import (
 )
 
 MANAGER_AGENT_GOAL_ID = "loopx-manager"
+# The owner-facing manager channel. External audiences keep their own channel id
+# and their own transcript, so they are never measured by this contract.
+MANAGER_CHANNEL_ID = "manager"
 MANAGER_AGENT_OBJECTIVE = (
     "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer only the current user message in concise Chinese. "
+    + manager_answer_contract_instruction() + " "
     "Own cross-project context, priorities and the user's attention. Investigate directly within the effective host grant; "
     "leave sustained project delivery with its responsible registered Agent. A project coordinator remains an ordinary Agent "
     "that investigates, coordinates peers, accepts dependencies and synthesizes results; it may coordinate a narrower team "
@@ -109,10 +117,27 @@ def manager_agent_objective(runtime_profile: str = "restricted") -> str:
     )
 
 
+def manager_answer_readback(response: Mapping[str, Any], *, channel: str) -> dict[str, Any]:
+    """Attach the contract shape of one steward answer, for owner readback.
+
+    The owner channel is the one this contract is written for; an external
+    audience keeps its own transcript and is left untouched. The shape is a
+    structural report (which contract sections the answer carried, in which
+    order), not a rewrite of the answer.
+    """
+
+    if channel != MANAGER_CHANNEL_ID:
+        return dict(response)
+    message = response.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return dict(response)
+    return {**response, "answer_shape": classify_manager_answer_shape(message)}
+
+
 def manager_channel(*, provider: str = "", audience: str = "") -> str:
     """One manager service, separate owner and external-audience transcripts."""
     if not provider and not audience:
-        return "manager"
+        return MANAGER_CHANNEL_ID
     if not provider or not audience:
         raise ValueError(
             "an external manager conversation requires a provider and audience"
@@ -609,7 +634,23 @@ def open_manager_session(
     )
 
 
-MANAGER_CONTEXT_VERSION = 13
+# 14: the steward answer contract took one typed owner (the managed skill marker
+#     moved v1 -> v2 in the same change).
+# 15: manager_turn_context rows also carry the Goal lifecycle readback
+#     (milestones/phase) the status collector already derived. The counter is
+#     the manager session-invalidation token, so a second row-shape change must
+#     take the next unused value: reusing 14 would leave a session issued under
+#     the answer-contract shape serving the new rows.
+MANAGER_CONTEXT_VERSION = 15
+
+# An installed manager workspace keeps the marker it was written with. The
+# writer refreshes that workspace skill while the file still carries any
+# managed marker, so bumping the marker is how a context change reaches an
+# existing workspace instead of only new ones.
+MANAGED_SKILL_MARKER_V1 = "<!-- loopx-managed-manager-skill:v1 -->"
+MANAGED_SKILL_MARKER_V2 = "<!-- loopx-managed-manager-skill:v2 -->"
+MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2)
+MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V2
 
 
 def manager_skill_text() -> str:
@@ -662,7 +703,7 @@ def manager_workspace(
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     skill_path = path / ".agents/skills/loopx-manager/SKILL.md"
     skill_path.parent.mkdir(parents=True, exist_ok=True)
-    if not skill_path.exists() or "<!-- loopx-managed-manager-skill:v1 -->" in skill_path.read_text(encoding="utf-8"):
+    if not skill_path.exists() or any(marker in skill_path.read_text(encoding="utf-8") for marker in MANAGED_SKILL_MARKERS):
         skill_path.write_text(manager_skill_text(), encoding="utf-8")
     instructions = (
         "# LoopX managed manager instructions\n\n"

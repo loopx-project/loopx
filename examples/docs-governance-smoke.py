@@ -14,6 +14,8 @@ DOCS = REPO_ROOT / "docs"
 ROOT_DOCS = {
     "README.md",
     "architecture.md",
+    "community.md",
+    "community.zh-CN.md",
     "heartbeat-automation-prompt.md",
     "index.md",
     "integration.md",
@@ -79,12 +81,17 @@ MOVED_PATHS = {
 
 # docs/index.md .md targets that stay outside mkdocs nav on purpose.
 # Prefer fixing mkdocs.yaml nav for public hosted entry points instead.
-DOCS_INDEX_NAV_ALLOWLIST: dict[str, str] = {}
+DOCS_INDEX_NAV_ALLOWLIST: dict[str, str] = {
+    "community.md": "hosted community entry linked below the first screen; top-nav promotion remains owner-reviewed",
+    "community.zh-CN.md": "zh locale sibling for the hosted community entry",
+}
 
 # docs/README.md catalog .md targets that stay outside mkdocs top nav on purpose.
 DOCS_CATALOG_NAV_ALLOWLIST = {
     "architecture/README.md": "architecture tree index; RFCs linked from Reference nav",
     "archive/README.md": "excluded from hosted site via exclude_docs",
+    "community.md": "community entry linked from the hosted index below the first screen",
+    "community.zh-CN.md": "zh locale sibling for the community entry",
     "community/open-strategy-reviews.md": "community process; catalog-only entry",
     "community/open-strategy-reviews.zh-CN.md": "zh locale sibling for community reviews",
     "development/contributor-tasks.md": "contributor board; not a hosted docs primary page",

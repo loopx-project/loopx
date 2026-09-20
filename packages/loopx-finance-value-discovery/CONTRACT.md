@@ -239,6 +239,31 @@ closed.
 
 ## Compatibility
 
+### Contract exit liquidity / 合约退出流动性 (extension 0.8.0)
+
+`finance_contract_liquidity_input_v0` is an additive Finance-owned contract.
+It does not alter `finance_case_contract_v1`. The input freezes an instrument
+reference, contract kind, quote unit, observation/evaluation timestamps,
+freshness limit, cost and book-coverage limits, plus one or more amount- and
+direction-specific exit scenarios. Scenarios are unique by position direction
+and requested notional. The engine derives book coverage and total exit cost;
+it does not accept provider-declared totals, readiness or disposition.
+
+Venue-specific instrument discovery, tick/lot precision and book collection
+remain adapter responsibilities. The public Finance contract rejects venue,
+account, funding and investment-value fields. Its output records those
+boundaries, labels venue semantics as `adapter_asserted`, and fixes both
+`trading_allowed` and `automatic_ready_allowed` to false. Stale evidence cannot
+become a negative liquidity conclusion.
+
+`finance_contract_liquidity_input_v0` 是新增的 Finance 合约，不修改
+`finance_case_contract_v1`。输入冻结合约引用、类型、报价单位、观察/评估时点、
+新鲜度、成本和订单簿覆盖阈值，以及按持仓方向和退出金额区分的场景。场景按方向
+与金额唯一；覆盖率和总退出成本由引擎计算，不接受 provider 自报总数、ready 或
+裁决。场所侧合约发现、tick/lot 精度和订单簿采集仍归私有适配器。公共 Finance
+合约拒绝场所、账户、资金费和投资价值字段，并固定不授予交易或自动 ready 权限；
+过期证据不能伪装成负面的流动性结论。
+
 The existing `finance_value_discovery_input_v0` reducer and
 `finance_value_discovery_extension_v0` provider protocol remain supported.
 `finance_case_gate_input_v1` now requires a `subject_ref` naming the case

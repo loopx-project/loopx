@@ -13,7 +13,7 @@
   "formal_model": {
     "schema_version": "loopx_semantic_formal_model_v0",
     "universes": {
-      "vocabularies": "V: registered vocabulary identifiers; Kernel(V) ⊆ V is the tier=kernel subset, the only tier that declares producers",
+      "vocabularies": "V: registered vocabulary identifiers; Producers(V) ⊆ V is exactly the subset declaring a producers key (including compatibility-only entries with an empty list). Kernel(V) ⊆ Producers(V). Producers(V) contains 7 vocabularies: 6 kernel and 1 outside the kernel tier. The 19 cross_runtime vocabularies outside Producers(V) are unverified.",
       "values": "U(v): ambient runtime values; S(v): registered admitted values",
       "sites": "L: source locations that define, produce, consume, interpret, pass through, project, or persist values",
       "scopes": "Scope: global or bounded_context(context_id); ScopeDeclarations are the forked names the registry declares as bounded contexts",
@@ -73,24 +73,24 @@
     "invariants": [
       {
         "id": "F1_producer_closedness",
-        "statement": "∀v ∈ Kernel(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Production outside that reach, and the whole cross_runtime tier, is unverified rather than proven closed.",
+        "statement": "∀v ∈ Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v), where Produced_scan(v) is the production the fixed forms observe inside the code-owned scan reach. Producers(V) contains 7 vocabularies: 6 kernel and 1 outside the kernel tier. The 19 cross_runtime vocabularies outside Producers(V) are unverified. Production outside the scan reach is unverified rather than proven closed.",
         "enforcement": "m0_5",
         "evidence": "bounded production-form AST scan over the PRODUCER_ROOTS/PRODUCER_FILES reach in loopx/semantics/production.py; check_producers visits only vocabularies that declare producers, and validate_production claims no whole-program closedness; unresolved dynamic sites are reported, not treated as proven safe",
         "domain": {
-          "quantifies_over": "vocabularies[tier=kernel].producers",
-          "verified": 6,
+          "quantifies_over": "vocabularies[producers].producers",
+          "verified": 7,
           "registered": 26,
           "evidence_bound": "producer_scan_reach"
         }
       },
       {
         "id": "F2_canonical_value_liveness",
-        "statement": "∀v ∈ Kernel(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). The cross_runtime tier declares no producers, so liveness there is unverified rather than proven.",
+        "statement": "∀v ∈ Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v). Producers(V) contains 7 vocabularies: 6 kernel and 1 outside the kernel tier. The 19 cross_runtime vocabularies outside Producers(V) are unverified. Liveness outside the walked set is not proven.",
         "enforcement": "m0_5",
-        "evidence": "every kernel value has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
+        "evidence": "every value of a vocabulary in Producers(V) has a producer recognised inside the scan reach, an executable input witness, or an explicit compatibility-only reason; a value whose only producer lies outside the reach would be reported as dead, not silently accepted",
         "domain": {
-          "quantifies_over": "vocabularies[tier=kernel].producers",
-          "verified": 6,
+          "quantifies_over": "vocabularies[producers].producers",
+          "verified": 7,
           "registered": 26,
           "evidence_bound": "producer_scan_reach"
         }
@@ -273,11 +273,13 @@
       },
       "producers": [
         "loopx/control_plane/turn_driver/driver.py::_typed_route",
+        "loopx/control_plane/turn_driver/driver.py::unregistered_route",
         "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan",
         "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route"
       ],
       "return_producers": [
         "loopx/control_plane/turn_driver/driver.py::_typed_route",
+        "loopx/control_plane/turn_driver/driver.py::unregistered_route",
         "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route",
         "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"
       ],
@@ -558,6 +560,10 @@
         "autonomous_replan",
         "unbound"
       ],
+      "input_producer": "loopx/control_plane/effect_program.ts::settlementIdentity",
+      "producers": [
+        "loopx/control_plane/effect_program.ts::settlementIdentity"
+      ],
       "value_notes": {
         "todo": "Chosen by settlementIdentity when the todo id is non-blank after trimming; supplying both a todo id and a replan obligation id throws before this point. It fixes the effect id to the goal, agent, todo and turn instance form, and is re-derived when a persisted identity payload is decoded.",
         "autonomous_replan": "Chosen when the todo id is blank and the replan obligation id is non-blank after trimming, so the turn settles a replan obligation rather than a selected Todo. The effect id gains an explicit autonomous_replan segment instead of a Todo segment.",
@@ -593,7 +599,7 @@
         "writeback_rejected": "Raised when the durable_writeback callback ran and returned a payload that is not a committed result, and in the task-lease verbs when a failure arose past the validation stage with a code outside the identity and permission sets. The writeback was attempted and refused, as opposed to writeback_missing where it was never observed.",
         "quota_spend_rejected": "Raised when a settlement callback returned a non-committed payload on a step that is neither durable_writeback nor terminal_closeout, and the rejection reason text does not contain the word budget. It is the same branch as budget_rejected, separated only by that substring test.",
         "terminal_closeout_rejected": "Raised on three branches: the terminal_closeout callback returned a non-committed payload; closeout was required but the turn's result kind is set and is not validated_completion, so there is no completed turn to close out; or a closeout payload was supplied when closeout was not required at all.",
-        "cancelled": "Unresolved: the value is declared in both owner modules and admitted by the decoders, but no branch under loopx/ selects it. A search of the literal, the enum member form and member value reads finds only the two definition sites; every other occurrence of the token in the tree belongs to an unrelated vocabulary such as the chat proposal status, the subagent execution status or a CI conclusion, and the only settlement-shaped uses are tests that fabricate it to check a failure is not erased. Missing evidence: a producing branch, or a compatibility_only declaration saying it is reserved for an external or future canceller. Because the cross_runtime tier declares no producers and is outside the F2 liveness check, a dead value here is not caught by the drift smoke, so whether this is reserved or actually dead is an open question for a maintainer.",
+        "cancelled": "Unresolved: the value is declared in both owner modules and admitted by the decoders, but no branch under loopx/ selects it. A search of the literal, the enum member form and member value reads finds only the two definition sites; every other occurrence of the token in the tree belongs to an unrelated vocabulary such as the chat proposal status, the subagent execution status or a CI conclusion, and the only settlement-shaped uses are tests that fabricate it to check a failure is not erased. Missing evidence: a producing branch, or a compatibility_only declaration saying it is reserved for an external or future canceller. Because this vocabulary declares no producers and is therefore outside the F2 liveness check, a dead value here is not caught by the drift smoke, so whether this is reserved or actually dead is an open question for a maintainer.",
         "permission_denied": "Raised when a task-lease verb was refused by an authority check before any durable write: the failure code is corrupt_lease or one of the registered owner and Todo eligibility codes, or a promoted-authority fence rejected a legacy writer. The invariant is that it was denied at the validation stage and nothing was written. These sites emit the bare string rather than a typed member, so the value is only checked when a decoder parses the envelope.",
         "budget_rejected": "Raised on the same branch as quota_spend_rejected, a non-committed callback payload on a step that is neither durable_writeback nor terminal_closeout, and separated from it only by the derived reason text containing the word budget, case-insensitively. That is a substring test on free-form callback text, not a structured budget signal, so a budget refusal phrased without the word is reported as quota_spend_rejected instead.",
         "effect_outcome_unknown": "Raised when the effect was prepared and dispatched but its outcome cannot be decided either way: the provider's observation for the step is explicitly unknown, or an observation exists that is neither unknown nor a committed payload, meaning the adapter never durably checkpointed it. It is the only failure kind asserting no outcome; every other kind asserts a known one, which is why it must neither be retried nor declared done."

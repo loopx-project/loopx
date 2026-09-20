@@ -57,6 +57,12 @@ from .manager_context import (
     settle_manager_context,
     sync_manager_context,
 )
+from .manager_reply_parts import (
+    deliver_manager_reply_after_length_failure,
+    manager_part_delivery_pending_result,
+    manager_part_delivery_readback,
+)
+from .manager_reply_format import repair_manager_reply_text
 from .outbound import LarkOutboundTextError, safe_lark_plain_text_fallback
 from .inbox_reactions import (
     _create_reaction,
@@ -70,6 +76,7 @@ ProfilePoller = Callable[[str, threading.Event], None]
 SimpleRunner = Callable[[list[str]], Mapping[str, Any]]
 ProcessFactory = Callable[[list[str]], Any]
 HealthSink = Callable[[Mapping[str, Any]], None]
+ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
 class LarkGoalTopicTurnFailed(RuntimeError):
@@ -409,10 +416,22 @@ def stream_lark_goal_topic_profile(
         # provider emits its explicit ready marker (or a real event arrives).
         health_sink({"status": "starting", "error_code": None})
     watcher_done = threading.Event()
+    configuration_removed = threading.Event()
 
     def stop_consumer() -> None:
-        while not watcher_done.wait(0.1):
+        while not watcher_done.wait(1.0):
             if stop.is_set():
+                if process.poll() is None:
+                    process.terminate()
+                return
+            try:
+                configured = profile in _active_profile_configs(snapshot_provider())
+            except Exception:
+                # A transient source read must not tear down a healthy route.
+                continue
+            if not configured:
+                configuration_removed.set()
+                stop.set()
                 if process.poll() is None:
                     process.terminate()
                 return
@@ -522,10 +541,14 @@ def stream_lark_goal_topic_profile(
         and (returncode != 0 or exit_reason not in {"limit", "timeout"})
     )
     return {
-        "ok": stopped or (returncode == 0 and provider_ready and not unexpected_exit),
+        "ok": configuration_removed.is_set()
+        or stopped
+        or (returncode == 0 and provider_ready and not unexpected_exit),
         **({"error_code": "lark_event_source_disconnected"} if unexpected_exit else {}),
         "status": (
-            "stopped"
+            "configuration_removed"
+            if configuration_removed.is_set()
+            else "stopped"
             if stopped
             else "source_disconnected"
             if unexpected_exit
@@ -548,11 +571,13 @@ class LarkGoalTopicRuntimeService:
         runtime_root: str | Path,
         runtime_controller: Any,
         profile_poller: ProfilePoller | None = None,
+        manager_route_reconciler: ManagerRouteReconciler | None = None,
     ) -> None:
         self.snapshot_provider = snapshot_provider
         self.runtime_root = Path(runtime_root).expanduser().resolve()
         self.runtime_controller = runtime_controller
         self._profile_poller = profile_poller or self._poll_profile
+        self.manager_route_reconciler = manager_route_reconciler
         self._lock = threading.Lock()
         self._workers: dict[str, tuple[threading.Event, threading.Thread]] = {}
         self._health: dict[str, dict[str, Any]] = {}
@@ -620,70 +645,117 @@ class LarkGoalTopicRuntimeService:
 
     def _poll_profile(self, profile: str, stop: threading.Event) -> None:
         restart_count = 0
-        while not stop.is_set():
-            self._update_health(
-                profile,
-                status="starting" if restart_count == 0 else "retrying",
-                error_code=None,
-                restart_count=restart_count,
-            )
-            try:
-
-                def answer(route: Mapping[str, Any], text: str) -> Mapping[str, Any]:
-                    snapshot = self.snapshot_provider()
-                    contexts = snapshot.get("goal_contexts")
-                    contexts = contexts if isinstance(contexts, Mapping) else {}
-                    context = contexts.get(str(route.get("goal_id") or ""))
-                    context = context if isinstance(context, Mapping) else {}
-                    response_text = answer_lark_goal_topic(
-                        route=route,
-                        text=text,
-                        work_dir=str(context.get("work_dir") or self.runtime_root),
-                        objective=str(
-                            context.get("objective") or route.get("goal_id") or ""
-                        ),
-                        runtime_controller=self.runtime_controller,
-                    )
-                    return {
-                        "response_text": response_text,
-                        "effect_receipt": _session_turn_effect(route),
-                    }
-
-                result = stream_lark_goal_topic_profile(
-                    profile=profile,
-                    snapshot_provider=self.snapshot_provider,
-                    stop=stop,
-                    runtime_root=self.runtime_root,
-                    answer=answer,
-                    health_sink=lambda update: self._update_health(
-                        profile, **dict(update)
-                    ),
-                )
-                if stop.is_set():
-                    break
-                restart_count += 1
+        try:
+            while not stop.is_set():
                 self._update_health(
                     profile,
-                    status="retrying",
-                    error_code=(
-                        None
-                        if result.get("ok") is True
-                        else str(
-                            result.get("error_code") or "lark_event_listener_failed"
+                    status="starting" if restart_count == 0 else "retrying",
+                    error_code=None,
+                    restart_count=restart_count,
+                )
+                try:
+
+                    def answer(
+                        route: Mapping[str, Any], text: str
+                    ) -> Mapping[str, Any]:
+                        effective_route = route
+                        if (
+                            route.get("conversation_kind") == "manager"
+                            and self.manager_route_reconciler is not None
+                        ):
+                            try:
+                                effective_route = self.manager_route_reconciler(route)
+                            except Exception as exc:
+                                raise LarkGoalTopicTurnFailed(
+                                    "manager_channel_route_reconcile_failed",
+                                    _session_turn_effect(route),
+                                ) from exc
+                        snapshot = self.snapshot_provider()
+                        contexts = snapshot.get("goal_contexts")
+                        contexts = contexts if isinstance(contexts, Mapping) else {}
+                        context = contexts.get(
+                            str(effective_route.get("goal_id") or "")
                         )
-                    ),
-                    restart_count=restart_count,
-                )
-            except Exception:
-                restart_count += 1
-                self._update_health(
-                    profile,
-                    status="retrying",
-                    error_code="lark_event_listener_failed",
-                    restart_count=restart_count,
-                )
-            stop.wait(min(5.0, 0.25 * (2 ** min(restart_count, 4))))
-        self._update_health(profile, status="stopped", error_code=None)
+                        context = context if isinstance(context, Mapping) else {}
+                        response_text = answer_lark_goal_topic(
+                            route=effective_route,
+                            text=text,
+                            work_dir=str(context.get("work_dir") or self.runtime_root),
+                            objective=str(
+                                context.get("objective")
+                                or effective_route.get("goal_id")
+                                or ""
+                            ),
+                            runtime_controller=self.runtime_controller,
+                        )
+                        return {
+                            "response_text": response_text,
+                            "effect_receipt": _session_turn_effect(effective_route),
+                        }
+
+                    result = stream_lark_goal_topic_profile(
+                        profile=profile,
+                        snapshot_provider=self.snapshot_provider,
+                        stop=stop,
+                        runtime_root=self.runtime_root,
+                        answer=answer,
+                        health_sink=lambda update: self._update_health(
+                            profile, **dict(update)
+                        ),
+                    )
+                    if result.get("status") == "configuration_removed":
+                        self._update_health(
+                            profile,
+                            status="inactive",
+                            error_code="lark_route_configuration_removed",
+                            restart_count=restart_count,
+                        )
+                        break
+                    if stop.is_set():
+                        break
+                    restart_count += 1
+                    self._update_health(
+                        profile,
+                        status="retrying",
+                        error_code=(
+                            None
+                            if result.get("ok") is True
+                            else str(
+                                result.get("error_code")
+                                or "lark_event_listener_failed"
+                            )
+                        ),
+                        restart_count=restart_count,
+                    )
+                except Exception:
+                    restart_count += 1
+                    self._update_health(
+                        profile,
+                        status="retrying",
+                        error_code="lark_event_listener_failed",
+                        restart_count=restart_count,
+                    )
+                stop.wait(min(5.0, 0.25 * (2 ** min(restart_count, 4))))
+            if (
+                not self._closed.is_set()
+                and self._health.get(profile, {}).get("status") != "inactive"
+            ):
+                self._update_health(profile, status="stopped", error_code=None)
+        finally:
+            current_thread = threading.current_thread()
+            with self._lock:
+                worker = self._workers.get(profile)
+                if worker is not None and worker[1] is current_thread:
+                    self._workers.pop(profile, None)
+            if not self._closed.is_set():
+                try:
+                    reconfigured = profile in _active_profile_configs(
+                        self.snapshot_provider()
+                    )
+                except Exception:
+                    reconfigured = False
+                if reconfigured:
+                    self.refresh()
 
     def refresh(self) -> None:
         if self._closed.is_set():
@@ -1264,6 +1336,14 @@ def process_lark_goal_topic_event(
                 "goal_id": route["goal_id"],
                 "inbox_config_ref": config_ref,
             }
+    rich_text_repairs: list[dict[str, Any]] = []
+    if manager:
+        # The reader must not receive a one-line answer whose bullet list is
+        # still escaped, nor raw braces left by an unresolved template.  Repair
+        # those defects before the first send: the strict validator keeps
+        # owning unsafe markup, and a repaired markdown answer stays markdown
+        # instead of degrading to plain text.
+        reply_text, rich_text_repairs = repair_manager_reply_text(reply_text)
     if manager and delivery_state is None:
         assert delivery_path is not None
         delivery_state = _pending_manager_delivery(
@@ -1276,6 +1356,8 @@ def process_lark_goal_topic_event(
                 item["message_id"] for item in context_materials
             ],
         )
+        if rich_text_repairs:
+            delivery_state["rich_text_repairs"] = rich_text_repairs
         try:
             _write_manager_delivery(delivery_path, delivery_state)
         except OSError:
@@ -1332,6 +1414,10 @@ def process_lark_goal_topic_event(
         except LarkOutboundTextError:
             if not manager:
                 raise
+            # The rich body did not fit. Degrade presentation first, then split
+            # the degraded body: a persisted manager answer must be delivered in
+            # bounded parts instead of becoming `format_unrepresentable` with
+            # nothing on the channel.
             try:
                 reply_text = safe_lark_plain_text_fallback(reply_text)
                 content_format = "text"
@@ -1345,15 +1431,39 @@ def process_lark_goal_topic_event(
                     updated_at=datetime.now(timezone.utc).isoformat(),
                 )
                 _write_manager_delivery(delivery_path, delivery_state)
-                reply = reply_lark_event_inbox(
-                    project=root,
-                    config_path=config_path,
-                    message_id=message_id,
-                    text=reply_text,
-                    content_format=content_format,
-                    execute=True,
-                    runner=reply_runner,
-                )
+                try:
+                    reply = reply_lark_event_inbox(
+                        project=root,
+                        config_path=config_path,
+                        message_id=message_id,
+                        text=reply_text,
+                        content_format=content_format,
+                        execute=True,
+                        runner=reply_runner,
+                    )
+                except LarkOutboundTextError:
+                    if not reply_text.strip():
+                        raise
+                    part_reply, part_failure = (
+                        deliver_manager_reply_after_length_failure(
+                            reply_text=reply_text,
+                            delivery_state=delivery_state,
+                            delivery_path=delivery_path,
+                            write_delivery=_write_manager_delivery,
+                            reply_runner=reply_runner,
+                            root=root,
+                            config_path=config_path,
+                            message_id=message_id,
+                        )
+                    )
+                    if part_failure:
+                        return manager_part_delivery_pending_result(
+                            reason=part_failure,
+                            delivery_state=delivery_state,
+                            goal_id=route["goal_id"],
+                            inbox_config_ref=config_ref,
+                        )
+                    reply = part_reply
             except (LarkOutboundTextError, ValueError):
                 assert delivery_state is not None and delivery_path is not None
                 delivery_state.update(
@@ -1393,6 +1503,9 @@ def process_lark_goal_topic_event(
                     "delivery_status": str(reply.get("status") or "reply_failed"),
                     "format_degraded": bool(
                         delivery_state and delivery_state.get("format_degraded")
+                    ),
+                    "rich_text_repairs": list(
+                        (delivery_state or {}).get("rich_text_repairs") or []
                     ),
                 }
                 if manager
@@ -1492,6 +1605,10 @@ def process_lark_goal_topic_event(
             {
                 "saved_response_reused": saved_response_reused,
                 "format_degraded": bool(delivery_state.get("format_degraded")),
+                "rich_text_repairs": list(
+                    delivery_state.get("rich_text_repairs") or []
+                ),
+                **manager_part_delivery_readback(delivery_state),
             }
             if manager and delivery_state is not None
             else {}

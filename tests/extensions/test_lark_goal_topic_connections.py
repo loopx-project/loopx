@@ -2556,6 +2556,45 @@ def _manager_fixture(tmp_path: Path):
     return kwargs, state, read_goal_channel_binding(kwargs["binding_path"])
 
 
+def test_manager_session_rebind_is_an_atomic_local_compare_and_swap(
+    tmp_path: Path,
+) -> None:
+    from loopx.extensions.lark.goal_topic_connections import (
+        rebind_lark_manager_session,
+    )
+
+    kwargs, _state, bindings = _manager_fixture(tmp_path)
+    current = binding_for_goal(bindings, "goal-alpha")
+    assert current is not None
+    connection_id = str(current["connection_id"])
+    rebound = rebind_lark_manager_session(
+        binding_path=kwargs["binding_path"],
+        goal_id="goal-alpha",
+        connection_id=connection_id,
+        expected_session_id="manager-session",
+        session_id="manager-session-dsh",
+        executor_endpoint_id="dsh",
+        executor_endpoint_source="machine_configuration",
+    )
+    assert rebound["session_id"] == "manager-session-dsh"
+    assert rebound["connector"]["session_ref"] == "manager-session-dsh"
+    assert rebound["routing"]["executor_endpoint_id"] == "dsh"
+    assert rebound["routing"]["executor_endpoint_source"] == "machine_configuration"
+
+    before = kwargs["binding_path"].read_bytes()
+    with pytest.raises(ValueError, match="changed during Session rebind"):
+        rebind_lark_manager_session(
+            binding_path=kwargs["binding_path"],
+            goal_id="goal-alpha",
+            connection_id=connection_id,
+            expected_session_id="manager-session",
+            session_id="another-session",
+            executor_endpoint_id="codex",
+            executor_endpoint_source="machine_configuration",
+        )
+    assert kwargs["binding_path"].read_bytes() == before
+
+
 def test_builtin_manager_preview_is_synchronous_without_a_worker_registration(
     tmp_path: Path,
 ) -> None:

@@ -1,0 +1,36 @@
+{
+  "schema_version": "finance_contract_liquidity_input_v0",
+  "evaluation_id": "synthetic-perp-exit-2026-01-15",
+  "instrument_ref": "synthetic-perpetual",
+  "contract_kind": "perpetual",
+  "quote_unit": "USD",
+  "observed_at": "2026-01-15T12:00:00Z",
+  "evaluation_as_of": "2026-01-15T12:00:30Z",
+  "maximum_age_seconds": 120,
+  "maximum_exit_cost_bps": "25",
+  "minimum_book_coverage_ratio": "1",
+  "scenarios": [
+    {
+      "scenario_id": "close-long-1000",
+      "position_direction": "long",
+      "exit_side": "sell",
+      "requested_notional": "1000",
+      "executable_notional": "1200",
+      "spread_bps": "2",
+      "price_impact_bps": "4.5",
+      "fee_bps": "5",
+      "evidence_refs": ["public-book:snapshot-001"]
+    },
+    {
+      "scenario_id": "close-short-1000",
+      "position_direction": "short",
+      "exit_side": "buy",
+      "requested_notional": "1000",
+      "executable_notional": "1100",
+      "spread_bps": "2.2",
+      "price_impact_bps": "5.1",
+      "fee_bps": "5",
+      "evidence_refs": ["public-book:snapshot-001"]
+    }
+  ]
+}

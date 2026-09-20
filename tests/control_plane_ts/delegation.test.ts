@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 
 const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: "/fixture",
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
@@ -69,4 +69,31 @@ test("preflight separates task admission, acceptance binding and runtime availab
   assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
     would_invoke_host: false}}}).state, "turn_blocked");
   assert.throws(() => delegationPreflight({...params, preview: {...preview, effects: {...effects, host_invoked: true}}}));
+});
+
+test("preflight reports unavailable canonical authority without pretending to inspect a Turn", () => {
+  const result = delegationPreflight({binding, authority: {ready: false,
+    reason: "Goal acceptance requires an existing canonical authority"}, preview: null,
+  acceptance: null, validation_files_current: false});
+  assert.equal(result.state, "authority_unavailable");
+  assert.equal(result.authority_ready, false);
+  assert.equal(result.turn_eligible, false);
+  assert.equal(result.executor, null);
+  assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
+  assert.match(String(result.authority_reason), /canonical authority/);
+  assert.throws(() => delegationPreflight({binding, authority: {ready: false, reason: "missing"},
+    preview: {}, acceptance: null, validation_files_current: false}));
+});
+
+test("Turn plan decision preserves a rejection and validates a successful transaction", () => {
+  const rejected = delegationTurnPlanDecision({plan: {ok: false,
+    error: "Requested Turn Todo is not accepted by canonical authority"}});
+  assert.deepEqual(rejected, {
+    schema_version: "loopx_delegation_turn_plan_decision_v0", state: "rejected",
+    turn_key: null, reason: "Requested Turn Todo is not accepted by canonical authority",
+  });
+  const turnKey = `sha256:${"a".repeat(64)}`;
+  assert.equal(delegationTurnPlanDecision({plan: {ok: true,
+    transaction: {turn_key: turnKey}}}).turn_key, turnKey);
+  assert.throws(() => delegationTurnPlanDecision({plan: {ok: true, transaction: {}}}));
 });

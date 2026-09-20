@@ -8,6 +8,7 @@ import {
   type TodoApplyResult,
   type TodoPreview,
 } from "./chat-model.js";
+import type {DelegationPreflight} from "./delegation-preflight.js";
 
 const configuredChatOrigin = String(import.meta.env?.VITE_LOOPX_CHAT_ORIGIN ?? "")
   .trim()
@@ -895,11 +896,7 @@ export type DelegationInventory = {
     artifacts?: Array<{ref: string; sha256: string}>}>;
   has_more: boolean; next_cursor: string | null; page_readback_complete: boolean;
 };
-export type DelegationPreflight = {
-  state: "turn_blocked" | "acceptance_unavailable" | "runtime_unavailable" | "runtime_unverified" | "launchable";
-  turn_eligible: boolean; acceptance_ready: boolean; turn_route: string;
-  executor: {host: string; available: boolean | null; reason: string | null; profile: string | null};
-};
+export type {DelegationPreflight} from "./delegation-preflight.js";
 export function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
   return requestJson<DelegationInventory>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "operations", limit: 10, ...(cursor ? {cursor} : {})}),

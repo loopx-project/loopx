@@ -28,6 +28,14 @@ from .runtime import _build_source_providers
 from .sources import DecisionSourceProvider, DecisionSourceSpec
 
 
+class CaptureReplayError(ValueError):
+    """Typed recovery diagnosis; never classify provider exception prose."""
+
+    def __init__(self, reason: str, message: str):
+        self.reason = reason
+        super().__init__(message)
+
+
 def _open_spool(path: Path, *, goal_id: str, agent_id: str) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(
@@ -74,6 +82,10 @@ def _binding_digest(profile: DecisionContextProfile, source: DecisionSourceSpec)
 
 
 def _status(db: sqlite3.Connection, source_ids: tuple[str, ...]) -> dict[str, Any]:
+    has_recovery = (
+        db.execute("SELECT 1 FROM sqlite_master WHERE name='capture_holds'").fetchone()
+        is not None
+    )
     rows = []
     for source_id in source_ids:
         source = db.execute(
@@ -89,12 +101,30 @@ def _status(db: sqlite3.Connection, source_ids: tuple[str, ...]) -> dict[str, An
                 "status": source["status"] if source else "never_checked",
                 "pending_batch_count": pending[0],
                 "next_batch_id": pending[1],
+                "held_batch_count": db.execute(
+                    "SELECT count(*) FROM held_batches WHERE source_id=?", (source_id,)
+                ).fetchone()[0]
+                if has_recovery
+                else 0,
+                "acquisition_held": bool(
+                    db.execute(
+                        "SELECT 1 FROM capture_holds WHERE source_id=?", (source_id,)
+                    ).fetchone()
+                )
+                if has_recovery
+                else False,
             }
         )
     return {
         "schema_version": "decision_context_capture_status_v0",
         "sources": rows,
         "pending_batch_count": db.execute("SELECT count(*) FROM batches").fetchone()[0],
+        "held_batch_count": db.execute("SELECT count(*) FROM held_batches").fetchone()[
+            0
+        ]
+        if has_recovery
+        else 0,
+        "semantic_review_completion": "not_inferred_from_capture",
         "raw_content_captured": False,
         "decision_cursors_mutated": False,
         "external_writes_performed": False,
@@ -180,6 +210,15 @@ def capture_profile_sources(
     try:
         reviewed = load_private_decision_cursors(cursor_path, profile=profile)
         for source in sources:
+            if (
+                db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='capture_holds'"
+                ).fetchone()
+                and db.execute(
+                    "SELECT 1 FROM capture_holds WHERE source_id=?", (source.source_id,)
+                ).fetchone()
+            ):
+                continue
             binding = _binding_digest(profile, source)
             row = db.execute(
                 "SELECT * FROM sources WHERE source_id=?", (source.source_id,)
@@ -217,6 +256,7 @@ def capture_profile_sources(
             if (
                 row
                 and row["checked_at"]
+                and row["status"] != "backpressure"
                 and (now - datetime.fromisoformat(row["checked_at"])).total_seconds()
                 < profile.capture_interval_seconds
             ):
@@ -333,10 +373,12 @@ def assemble_captured_decision_evidence(
         None,
     )
     if source is None or binding != _binding_digest(profile, source):
-        raise ValueError("capture source binding changed")
+        raise CaptureReplayError("binding_changed", "capture source binding changed")
     reviewed = load_private_decision_cursors(cursor_path, profile=profile)
     if reviewed.get(source.source_id) != batch["cursor_before"]:
-        raise ValueError("capture batch must follow the reviewed cursor")
+        raise CaptureReplayError(
+            "cursor_diverged", "capture batch must follow the reviewed cursor"
+        )
     expected = json.loads(batch["receipt"])
 
     def checked_rebase(collection: DecisionEvidenceCollection):
@@ -353,8 +395,9 @@ def assemble_captured_decision_evidence(
             or receipt["status"] != expected["status"]
             or receipt["exact_read_count"] != expected["changed_count"]
         ):
-            raise ValueError(
-                "captured revision unavailable; explicit source rebase required"
+            raise CaptureReplayError(
+                "revision_unavailable",
+                "captured revision unavailable; explicit source rebase required",
             )
         return rebase(collection)
 

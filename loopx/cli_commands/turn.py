@@ -186,13 +186,14 @@ def handle_turn_command(
         # whether that host can launch here, so a caller never has to infer it
         # from the host id. The explicit runner hook is the one launchability
         # fact only this command layer knows.
+        operator_environ = operator_provider_environ(runtime_root)
         payload["managed_executor"] = managed_executor_binding(
             args.host,
             # The credential a managed Turn authenticates with is this
             # machine's resolved pair, not whatever the invoking shell happens
             # to export: the readback above the launch and the launch itself
             # have to name the same credential.
-            environ=operator_provider_environ(runtime_root),
+            environ=operator_environ,
             dsh_runner_configured=bool(getattr(args, "dsh_runner", None)),
             provider=getattr(args, "dsh_provider", None),
             model=getattr(args, "dsh_model", None),
@@ -988,6 +989,7 @@ def handle_turn_command(
                 host_runner = build_dsh_host_runner(
                     args,
                     workspace=project,
+                    environ=operator_environ,
                 )
 
             def post_settlement_reward_memory(

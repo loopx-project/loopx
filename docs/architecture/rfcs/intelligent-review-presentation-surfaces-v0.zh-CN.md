@@ -551,6 +551,15 @@ type PresentationArtifactPlan = {
 
 Adaptive policy 必须 inspectable、resettable，其输出携带 reason codes，并始终保留 deterministic fallback。
 
+### 8.7 团队实时工作区
+
+[团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) 描述 S5/R2 投研旅程：
+指挥台与空间工作室同列表、语义缩放和历史回放共用 typed 事实。有目的的动态
+是产品目标；注册、执行、返回、独立验收与请求方采用保持分离。保留来源 / 版本
+谱系和不确定性，不能由装饰动态推断活动或由共识人数推断置信度。这是 Draft
+展示切片，不是已交付的团队流，也不新增调度权限。其 L1–L3 计划与 V1–V7 验收
+展开本 RFC Stage 3 的展示旅程，不关闭本文跨渠道或受治理 settlement 验收。
+
 ## 9. 覆盖长程工作的完整生命周期
 
 | 阶段 | 智能化界面的职责 |

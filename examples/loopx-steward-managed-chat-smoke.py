@@ -297,6 +297,15 @@ def _run_turn(args: argparse.Namespace) -> int:
             == [PROPOSAL_TEXT],
             "the parsed envelope must survive the managed segment boundary",
         )
+        # The owner channel records the contract shape of its own answer, so a
+        # reader can tell an order-following answer from a hedge-first one
+        # without re-reading the text.
+        answer_shape = response.get("answer_shape") or {}
+        _assert(
+            answer_shape.get("schema_version") == "manager_answer_contract_v0"
+            and isinstance(answer_shape.get("state"), str),
+            f"the persisted steward answer must carry its contract shape ({answer_shape})",
+        )
         _assert(
             CAPTURED_REQUESTS,
             "the managed segment must have called the model endpoint",

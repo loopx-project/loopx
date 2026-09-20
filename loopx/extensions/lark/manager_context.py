@@ -53,6 +53,9 @@ def manager_failure_reply(error: Exception) -> tuple[str, str]:
         "manager_channel_executor_rebind_required": (
             "管家的执行器已由本机设置更改，需要重新应用一次管家连接"
         ),
+        "manager_channel_route_reconcile_failed": (
+            "管家连接自动重绑未能完成，旧连接已保留；请在连接设置中查看修复状态"
+        ),
     }
     code = str(getattr(error, "error_code", ""))
     code = code if code in labels else "processing_failed"

@@ -1,6 +1,6 @@
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-finance-value-discovery"
-version = "0.7.0"
+version = "0.8.0"
 requires_loopx_api = ">=1,<2"
 permissions = []
 

@@ -16,6 +16,11 @@ from .contract import (
     FINANCE_CASE_INPUT_SCHEMA_VERSION,
     validate_finance_case_contract,
 )
+from .contract_liquidity import (
+    FINANCE_CONTRACT_LIQUIDITY_EVALUATION_SCHEMA_VERSION,
+    FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION,
+    evaluate_finance_contract_liquidity,
+)
 from .gates import evaluate_finance_case_gates
 from .metric_packs import (
     FINANCE_METRIC_PACK_EVALUATION_SCHEMA_VERSION,
@@ -55,6 +60,8 @@ __all__ = [
     "FINANCE_CASE_EVALUATION_SCHEMA_VERSION",
     "FINANCE_CASE_INPUT_SCHEMA_VERSION",
     "FINANCE_CASE_REPLAY_RECEIPT_SCHEMA_VERSION",
+    "FINANCE_CONTRACT_LIQUIDITY_EVALUATION_SCHEMA_VERSION",
+    "FINANCE_CONTRACT_LIQUIDITY_INPUT_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_EVALUATION_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_INPUT_SCHEMA_VERSION",
     "FINANCE_METRIC_PACK_REPLAY_SCHEMA_VERSION",
@@ -73,6 +80,7 @@ __all__ = [
     "build_finance_transaction_approval_packet",
     "build_finance_value_discovery_packet",
     "evaluate_finance_case_gates",
+    "evaluate_finance_contract_liquidity",
     "list_finance_metric_packs",
     "render_finance_value_discovery_markdown",
     "replay_finance_beta_attribution",

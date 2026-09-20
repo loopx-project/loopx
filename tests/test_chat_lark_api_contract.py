@@ -663,6 +663,106 @@ def test_session_ingress_resolves_the_exact_goal_agent_session(
     assert connect_calls[0]["ingress_mode"] == "session_queue"
 
 
+def test_manager_route_reconciliation_opens_before_atomic_binding_swap(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import loopx.chat_lark_api as api
+
+    project = tmp_path / "project"
+    project.mkdir()
+    source_registry = project / ".loopx" / "registry.json"
+    source_registry.parent.mkdir()
+    source_registry.write_text("{}\n")
+    registry = {"goals": [{"id": "goal-alpha", "repo": str(project)}]}
+    binding = {
+        "goal_id": "goal-alpha",
+        "connection_id": "lark-manager",
+        "agent_id": "loopx-manager",
+        "session_id": "old-session",
+        "enabled": True,
+        "target_ref": "manager-target",
+        "routing": {"conversation_kind": "manager"},
+        "connector": {"session_ref": "old-session"},
+    }
+    calls: list[str] = []
+    monkeypatch.setattr(api, "load_registry", lambda _path: registry)
+    monkeypatch.setattr(
+        api,
+        "resolve_goal_source_runtime_route",
+        lambda **_kwargs: {"source_registry": str(source_registry)},
+    )
+    monkeypatch.setattr(api, "resolve_runtime_root", lambda *_args, **_kwargs: tmp_path)
+    monkeypatch.setattr(api, "read_goal_channel_binding", lambda _path: {})
+    monkeypatch.setattr(
+        api, "binding_for_goal", lambda *_args, **_kwargs: dict(binding)
+    )
+    monkeypatch.setattr(
+        api,
+        "read_goal_channel_targets",
+        lambda _path: {
+            "targets": {
+                "manager-target": {
+                    "name": "manager-target",
+                    "enabled": True,
+                    "identity": {"sender_profile": "mew"},
+                    "channel": {"chat_id": "oc_public_fixture"},
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        api,
+        "manager_connection_executor_endpoint",
+        lambda _root: ("dsh", "machine_configuration"),
+    )
+
+    def open_session(**_kwargs: Any):
+        calls.append("open")
+        return {"session_id": "new-session"}, True
+
+    def rebind(**_kwargs: Any):
+        calls.append("rebind")
+        return {
+            **binding,
+            "session_id": "new-session",
+            "routing": {
+                "conversation_kind": "manager",
+                "executor_endpoint_id": "dsh",
+            },
+            "connector": {"session_ref": "new-session"},
+        }
+
+    monkeypatch.setattr(api, "open_manager_session", open_session)
+    monkeypatch.setattr(api, "rebind_lark_manager_session", rebind)
+    controller = SimpleNamespace(
+        store=SimpleNamespace(
+            load_session=lambda session_id: {
+                "session_id": session_id,
+                "agent_id": "codex" if session_id == "old-session" else "dsh",
+                "channel_id": api.manager_channel(
+                    provider="lark", audience="mew\0oc_public_fixture"
+                ),
+                "status": "ready",
+            }
+        )
+    )
+    reconciled = api.reconcile_lark_manager_route(
+        route={
+            "goal_id": "goal-alpha",
+            "connection_id": "lark-manager",
+            "conversation_kind": "manager",
+            "session_id": "old-session",
+        },
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        runtime_controller=controller,
+    )
+    assert calls == ["open", "rebind"]
+    assert reconciled["session_id"] == "new-session"
+    assert reconciled["executor_endpoint_id"] == "dsh"
+    assert reconciled["connector"]["session_ref"] == "new-session"
+
+
 @pytest.mark.parametrize("execute", [False, True])
 def test_manager_connection_opens_audience_session_only_on_execute(
     monkeypatch: Any, tmp_path: Path, execute: bool

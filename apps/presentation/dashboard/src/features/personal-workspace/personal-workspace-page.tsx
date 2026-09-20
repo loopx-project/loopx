@@ -602,7 +602,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
           ? t("proposal.impact.lifecycleResume")
       : proposal.permission_classification === "protected"
       ? t("proposal.impact.protected")
-      : t("proposal.impact.default"),
+      : "",
     previewId: proposal.proposal_id,
     lifecycleOperation,
     gate: proposal.gate ? {

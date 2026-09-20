@@ -89,6 +89,28 @@ def load_delivery(
         or not str(payload["reply_idempotency_key"]).startswith("sha256:")
     ):
         raise ValueError("manager verified delivery receipt is invalid")
+    # Part accounting is optional for answers delivered as one message. When it
+    # is present it must be complete: a count without progress, or progress past
+    # the count, would let a retry resume from an unverifiable position.
+    part_count = payload.get("delivery_part_count")
+    parts_sent = payload.get("delivery_parts_sent")
+    for value in (part_count, parts_sent):
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+        ):
+            raise ValueError("manager delivery part accounting is invalid")
+    if part_count is not None and (parts_sent is None or parts_sent > part_count):
+        raise ValueError("manager delivery part accounting is incomplete")
+    truncated = payload.get("delivery_truncated")
+    if truncated is not None and not isinstance(truncated, bool):
+        raise ValueError("manager delivery truncation flag is invalid")
+    source_char_count = payload.get("delivery_source_char_count")
+    if source_char_count is not None and (
+        not isinstance(source_char_count, int)
+        or isinstance(source_char_count, bool)
+        or source_char_count < 0
+    ):
+        raise ValueError("manager delivery source length is invalid")
     return path, payload
 
 

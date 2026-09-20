@@ -212,11 +212,17 @@ The command packet keeps inventory and execution queues distinct.
 window for compact conclusion readback. Top-level and group `review_sequence`
 contain only rows whose `review_action_kind` is non-null. A merged exact head
 without a valid conclusion receives `audit_merged_pull_request_exact_head`; a
-merged or open exact head with a valid non-action conclusion remains
-inventory-only and cannot become the recommended first PR. The summary's
-attention counts are derived from this same actionable set. Inventory-only rows
-set `review_plan` and `review_template` to null and `evidence_commands` to an
-empty list so hosts cannot mistake readback metadata for execution authority.
+merged or open exact head whose valid conclusion is not an approval remains
+inventory-only and cannot become the recommended first PR. An open exact head
+with a valid approval keeps owing `qualify_pull_request_merge_readiness`,
+because merge readiness is decided by the typed verdict rather than by GitHub's
+review state: the platform blocks self-approval, so an author-owned approval is
+recorded as `COMMENTED` and a state-based rule would count that still-unmerged
+head as concluded, even after it goes behind, conflicts, loses its checks or is
+blocked. The summary's attention counts are derived from this same actionable
+set. Inventory-only rows set `review_plan` and `review_template` to null and
+`evidence_commands` to an empty list so hosts cannot mistake readback metadata
+for execution authority.
 
 It emits a
 `pull_request_review_todo_preview_v0` bound to its exact head. The preview may
