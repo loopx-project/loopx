@@ -309,12 +309,17 @@ Pausing the coordinator does not stop dispatched workers: name those workers and
 the remaining execution scope. If worker cancellation is unsupported, state it
 explicitly; a whole-team stop claim requires worker-owner termination readback.
 
-The current producer gap is substantive: `consume_return` records consumption,
-not version-bound requester adoption; research-specific adoption checks in an
-example are not a generic production projection. Extend the existing owning
-contract and its real caller where necessary, rather than inventing frontend
-completion from prose. Do not claim L1 complete until this gap is closed for the
-selected episode. Motion is retained only when it clarifies these transitions;
+Implementation checkpoint (2026-09-20): [#4762](https://github.com/loopx-project/loopx/pull/4762)
+is open and proposes version-bound response/revision/use inputs, explicit
+requester adoption into an accepted downstream artifact, evidence navigation,
+contextual feedback and scoped coordinator pause. File/SQLite, CLI/MCP and
+packaged-browser checks cover that local slice; the real GPT attempt stopped at
+MCP tool approval before an accepted artifact. This is neither shipped acceptance
+nor L1 qualification. Review and reuse that producer rather than rebuilding it.
+`consume_return` alone still means consumption, not version-bound adoption.
+Qualify the substantive independent objection, correction and useful synthesis
+through the selected real-model episode before claiming L1. Motion is retained
+only when it clarifies these transitions;
 remove effects that obscure absent execution, absent acceptance or source loss.
 Broader semantic zoom, extra actors and renderer experiments follow this exit.
 
@@ -353,6 +358,8 @@ no wake policy or model refresh loop. Record observation errors without storing
 sensitive event bodies in diagnostics.
 
 ## 11. Delivery order and relationship to aggressive R2 progress
+
+The [near-term local-agent launch](loopx-overall-roadmap-v0.md#near-term-local-agent-product-and-launch) uses L1 as its real-run demonstration and L2/G1 for sustained-team claims. Marketing preparation can run alongside implementation, but cannot advance these exits.
 
 | Slice | Complete useful result | Entry / exit | Owner and rollback |
 | --- | --- | --- | --- |
@@ -403,7 +410,8 @@ motion, correction replay, evidence drill-down and degraded-state presentation.
 It launches no Agents and reads no private research data. It is not shipped in
 the product or used as live runtime evidence.
 
-**Current checkpoint:** L0 design proposal; L1–L3 unimplemented here. V1/V3 may be
+**Current checkpoint:** L0 design is merged; Section 9 records the open L1
+implementation candidate. Full L1 and L2–L3 remain unqualified. V1/V3 may be
 explored with the synthetic study; V2/V4/V5/V6/V7 remain unqualified until their
 required production or measured evidence exists. No G1/G3/G4 promotion follows.
 The exact delivery PR carries validation and review; roadmap pointers retain

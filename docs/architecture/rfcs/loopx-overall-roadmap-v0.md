@@ -85,6 +85,133 @@ First resource ordering: complete R1 commitments/recovery, then qualify G1. One 
 
 Pause/downscope when a design duplicates authority or widens defaults, real-backend qualification is missing, rollback is not independently possible, cost/attention grows uncontrollably with scale, benchmark integrity fails, or users cannot explain work and blockers. Preserve facts/receipts, stop affected new admission and repair rules or reduce the cohort. Do not weaken acceptance, remove failed samples, refresh test expectations or rename a stage into completion.
 
+### Near-term local-agent product and launch
+
+**Planning revision: 2026-09-20; proposal, not a release qualification.**
+Make the native route approachable as **an open-source personal Agent that uses
+an existing local Agent to carry work through to a checkable result**. Start
+with developers and research-heavy users who already have a supported Agent
+login. One persistent steward is the entry; specialists appear when useful.
+This is a bounded S1/S4/S5/S12/S13 delivery of G0/G1 and early G5, not a third
+runtime, another roadmap, or a prerequisite for the observer-first route.
+
+“Make your local Agent work like Grok Bot or Muse” is a useful comparison hook.
+The primary promise should be “Give your Agent a goal. Come back to the work.”
+Use the comparison with the precise supported scope, not “full open-source
+replacement”, model equivalence, free inference, guaranteed unattended success,
+or an implication of affiliation. Local orchestration does not mean offline
+inference or that providers never receive task data. Background work requires
+an available execution host; closing a browser is not shutting down a laptop.
+
+#### Research basis and product decisions
+
+Sources inspected on 2026-09-20; vendor descriptions are **stated**, not tested.
+
+| Direct source | Relevant observation | LoopX decision / remaining limit |
+| --- | --- | --- |
+| [Grok Bot product](https://x.ai/bot) and [launch](https://x.ai/news/introducing-grok-bot) | Vendor describes persistent cloud teammates, shared tools, handoff and returned work | Adopt conversational delegation and visible returned artifacts; local availability cannot inherit the vendor's cloud 24/7 promise |
+| [Meta Muse announcement](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) and [design rationale](https://introducing.muse.ai/) | Vendor describes a persistent main chat, Goals, meaningful proactive updates, rich artifacts and explicit action controls | Make one steward and first useful outcome primary; use deterministic controls for consequential actions and progressive disclosure for tools |
+| [Original X comparison](https://x.com/Michaelzsguo/status/2101057424115253645) | One user's account favors Muse's integrated experience over configuring components | Treat as a productization hypothesis, not comparative performance evidence; test first use independently |
+
+The X post was inspected through Ego Lite. Official pages were read; no signed-in
+product run or complete demo video was tested. The Muse design page timed out in
+the browser; its article was available through web retrieval. Do not infer actual
+reliability, privacy equivalence or conversion rates from this investigation.
+
+#### One first-use journey and one flagship result
+
+1. Install the released package using the existing installation owner; open
+   `loopx dashboard`. Diagnose Python/Node, the host login, selected model/profile
+   and tool readiness in place. A package install alone is not a ready Agent.
+2. Guide explicit configuration of eligible runtimes, model accounts, tools,
+   budgets and authority. Honor the user's explicit intent; the Agent chooses and
+   allocates eligible routes within that scope. A pinned steward/Chat profile is
+   binding, while an authorized flexible pool permits autonomous selection.
+   Codex and Ark are configurations, not universal preferences. Surface the
+   effective choice; never copy credentials, migrate old sessions or silently
+   fall back outside authorization. Missing readiness offers a concrete repair.
+3. Give the steward a real task without first constructing a team or learning
+   Goal/Todo/Turn vocabulary. Preview relevant scope, outputs and resource limits;
+   routine already-authorized reversible work proceeds without repeated cards.
+4. Deliver a sourced research brief from public documents. Add a contradictory
+   or newer source, show an independent objection, the exact revision and check,
+   then the requester's adopted synthesis. The first single-Agent result must
+   remain useful even when team execution is unavailable.
+5. Return the artifact and the next meaningful decision to the original
+   conversation. Inspect evidence, change direction, pause or stop the named
+   execution scope. Reopen the browser and recover context; stale/disconnected
+   work remains explicit. Proactive updates require a material change.
+
+Use this same episode for the product, a reproducible public sample and the
+launch film. Domain-specific research can build on it without making financial
+recommendations or transaction authority part of the generic kernel. Engineering
+issue-to-reviewed-patch is the next already-owned use case, not a second blocker
+for the first research preview. Lark is an optional later transport using the
+same session, audience and result owners; first local onboarding must not require
+Lark configuration. CLI readback remains part of every claimed local journey.
+
+#### Delivery order, owners and release claims
+
+Estimates are elapsed working time from a staffed start, assuming one dedicated
+engineer with Agent assistance, shared design/QA support, daily maintainer review,
+one macOS + Codex configuration, available model usage and authorized test tools.
+They are planning ranges, not measured velocity, SLAs or a promise of all-host
+support. A missing dependency moves the date, not the acceptance bar.
+
+| Stage / cumulative target | Complete work and existing owner | Exit / permitted claim |
+| --- | --- | --- |
+| Narrative and storyboard · 2–3 working days | S1/S5/S13: one audience, one task, first-screen design, 60–90s script, bilingual copy and public evidence plan | Reviewable polished draft; label concepts and replays. No runnable-product claim |
+| Recorded product preview · 5–7 working days | R2/R3 + S5: review/integrate #4762, resolve supported host-tool authorization, run one real L1 correction; refine the actual result and evidence view | Packaged frontend plus CLI show exact-version objection/revision/acceptance/adoption, intervention and scoped stop. Record an actual run; no synthetic activity presented as live |
+| Focused public alpha · 2–3 weeks | S1/S4/S12: release-package onboarding, intent-respecting steward/Chat selection, readiness repair, single-Agent fallback, restart/reconnect and useful result return; S5 supplies focused team view | Freeze five independent clean-install attempts before testing; at least four reach the first useful result without maintainer shell intervention, all failures retained. G1's two real cycles must pass before advertising continued team collaboration |
+| Repeatable beta / full launch kit · 4–6 weeks | S4/S5/S10/S12/S13: upgrade/rollback, revoke/unavailable/quota recovery, pilot-driven UX, measured cost and support; qualify optional Lark separately | At least three independent users repeat a task on another day; publish denominator, interruptions and limitations. Each advertised platform/transport has its own release-artifact evidence |
+
+Suggested alpha usability targets, to freeze before recruitment: setup within
+10 minutes after documented prerequisites and authentication; first useful
+artifact within 15 minutes for the bounded sample task at a declared budget.
+These are proposed targets, not current performance facts. Report both complete
+onboarding time (including prerequisites/login) and the post-readiness interval;
+authentication or environment failures stay in the funnel. A small pilot is
+feedback, not statistical reliability or product-market fit.
+
+The critical path is host/tool readiness → real L1 episode → packaged first-use
+repair → independent reproduction. #4758 is merged design; #4762 is open at this
+revision and does not establish a shipped or real-model-qualified journey.
+Its GPT trial ended at MCP approval with no accepted artifact. Resolve the
+supported authorization path with its owner; never turn off approval globally
+to obtain a recording. Existing implementation successors remain authoritative;
+inspect canonical Todos and related PRs before assigning a new slice.
+
+The first launch does not wait for hundred-Agent scale, a new state provider,
+full 3D, all hosts, mobile-native shells, a connector marketplace, payment/booking
+or teach-by-demonstration automation. Those retain their existing owners and
+independent demand/qualification. Do not divert R1 reliability work to them.
+
+#### Presentation and launch assets
+
+The signature moment is **the conclusion changing because a peer found better
+evidence**. A precise command surface holds conversation, result and decisions;
+stable spatial stations and event-local motion make the exchange legible. Show
+before/after claims, cited sources and the accepted adopted version. Keep one
+focal event, an accessible list, reduced motion and honest quiet/failed states.
+No ambient animation or Agent count substitutes for work. Follow the existing
+[design contract](../../development/design.md); actual public first screens
+still require their concrete preview approval.
+
+Prepare one consistent kit: a 60–90s real-run film with disclosed time cuts,
+a 15s excerpt, three annotated product screenshots, an accessible replay marked
+historical, bilingual launch article and short social draft, one install/try
+path, a supported-version/cost/privacy/availability FAQ, and a public-safe sample
+with expected output, correction input and recovery steps. Draft these alongside
+implementation, then replace placeholders with qualified evidence. Present the
+user's request, returned result and correction first; configuration details
+belong in setup help. Publication is separate from preparing the kit.
+
+Each release sentence must trace to the tested package/version, entry point and
+user-visible result. “Open source” describes LoopX under its existing license;
+models, paid usage, third-party connectors and hosted infrastructure keep their
+own terms. No license change, public post, live service provisioning or permission
+expansion follows from this roadmap revision.
+
 ### Cross-Domain Measurement and Validation
 
 | Dimension | Shared definition | Minimum evidence |

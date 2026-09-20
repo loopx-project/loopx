@@ -5,7 +5,7 @@
   session and an end-to-end LoopX-managed desktop runtime
 - Initial attached runtime: Codex App / app-server
 - Initial managed runtimes: Pi and DeepSeek Harness (`dsh`)
-- Default managed provider profile: Volcengine Ark Agent Plan
+- Managed provider selection: explicit guided configuration and user intent; Agent allocation within authorized eligible profiles. Ark Agent Plan remains an optional distribution preset.
 
 ## Summary
 
@@ -16,9 +16,10 @@ LoopX Desktop should support two explicit execution frontend modes:
    process, conversation, interruption, resume, and execution-loop ownership.
 2. **Managed Agent Runtime.** LoopX Desktop launches and supervises Pi or
    DeepSeek Harness, selects an explicit provider profile, and advances work
-   through bounded `loopx_turn_v0` transactions. The default distribution
-   profile uses Volcengine Ark Agent Plan, while the runtime and provider
-   contracts remain replaceable.
+   through bounded `loopx_turn_v0` transactions. A distribution may offer
+   Volcengine Ark Agent Plan as a named preset. The operator's configuration and
+   explicit intent bound autonomous Agent allocation; no provider is a universal
+   product default. Runtime and provider contracts remain replaceable.
 
 Both modes present the same LoopX Goal, Todo, gate, quota, evidence, and status
 truth. They do not share process ownership. The frontend must never infer a
@@ -43,6 +44,46 @@ runtime supervisor repeatedly asks LoopX whether another bounded Turn is
 eligible, invokes the selected runtime adapter, validates its result, and
 commits accepted state. `loopx_turn_v0` remains one transaction rather than a
 second recurring scheduler.
+
+## Guided configuration, user intent and autonomous allocation
+
+This proposed selection rule refines the provider-default language; it does not
+change shipped runtime defaults or qualify new adapters. Reuse the existing
+machine/Goal capability editor, provider store, session binding and dispatch
+admission. It adds no capability id, provider implementation or routing service.
+
+- **Configuration makes choices usable.** Show detected installation and login,
+  supported tools, model/account, cost or unknown cost, host availability and
+  permission scope. Discovery does not grant access. A named preset is an
+  offered choice; it cannot override an existing configured selection.
+- **Explicit user intent binds the choice.** A fixed model/account, local-only
+  requirement, budget or member restriction applies at its declared scope.
+  A preference is not a hard lock unless the user made it one. Do not turn a
+  single user's Codex preference, or one distribution's Ark preset, into a
+  global provider rule. Unresolved conflicting instructions require clarification.
+- **The Agent allocates inside that boundary.** Choose eligible models/runtimes,
+  reuse or request workers and redistribute future work by task fit, tool access,
+  cost and observed availability. A flexible authorized pool does not need a
+  fresh confirmation for each assignment. Selection is semantic Agent judgment;
+  typed owners enforce eligibility, budget, authority and session fences.
+
+Project the effective runtime/model/profile, assignment reason and readiness in
+settings and the team detail. Recheck admission at dispatch. An unavailable pinned
+route blocks with a repair action; an unavailable member of a flexible pool may
+be replaced by another eligible route with visible readback. No substitution may
+expand data exposure, credentials, cost authority or supported tools. Active
+sessions retain their binding and context ownership; an authorized autonomous
+reassignment uses the existing explicit rebinding/continuation contract, not a
+silent session migration. New paid resources or scope changes retain their
+existing decision boundary.
+
+Qualify through packaged setup, Chat/steward and independent CLI: pinned choice
+wins over a preset; flexible allocation succeeds without repeated approval;
+unavailable pinned choice stays blocked; exhausted budget or an unauthorized
+fallback creates no execution; restart preserves the effective configuration.
+Optional Lark must project the same choice and its own audience restrictions.
+Until these cases pass, this is the allocation design, not a runtime guarantee.
+See the [near-term launch route](loopx-overall-roadmap-v0.md#near-term-local-agent-product-and-launch).
 
 ## Problem
 
@@ -536,8 +577,8 @@ The managed desktop path is end to end:
 
 1. select or create a LoopX Goal and working Agent binding;
 2. select Pi or `dsh` as the runtime;
-3. select a managed provider profile, with Ark Agent Plan as the default
-   distribution profile;
+3. guide provider configuration and user constraints, then let the Agent select
+   within the authorized eligible profiles; offer Ark Agent Plan as a named preset;
 4. validate runtime installation, provider authentication, and advertised
    capabilities;
 5. launch one runtime and create one opaque resumable session;
@@ -596,9 +637,10 @@ for reconciliation, validation, and resume.
 
 ### Provider profile contract
 
-Runtime choice and provider choice are orthogonal. Ark Agent Plan is the
-default managed product profile, not a special case embedded throughout the
-LoopX kernel.
+Runtime choice and provider choice are orthogonal. Ark Agent Plan is a named
+managed-provider preset. Guided configuration, scoped user intent and Agent
+allocation select an eligible profile; no provider rule is embedded throughout
+the LoopX kernel.
 
 A provider profile must expose or resolve:
 
@@ -907,7 +949,7 @@ running.
 2. one Desktop runtime supervisor with start, interrupt, close, reconcile, and
    resume;
 3. `dsh` as the first reference runtime by reusing its accepted Turn adapter;
-4. Ark Agent Plan as the default configured provider profile;
+4. Ark Agent Plan as one explicitly selected provider preset;
 5. one resumable conversation and one-at-a-time bounded Turn execution; and
 6. joined runtime, Turn, and LoopX status in Desktop.
 
