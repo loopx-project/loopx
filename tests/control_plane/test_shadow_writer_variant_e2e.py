@@ -250,8 +250,8 @@ def prepare_rewards(ws: ShadowWorkspace) -> Path:
 
 
 def reward_args(reason: str, timestamp: str) -> tuple[str, ...]:
-    return ("reward", "--decision", "continue", "--reward", "positive", "--reason-summary", reason,
-            "--recorded-at", timestamp, "--write-active-state-summary")
+    return ("reward", "--actor-kind", "owner", "--decision", "continue", "--reward", "positive",
+            "--reason-summary", reason, "--recorded-at", timestamp, "--write-active-state-summary")
 
 
 def test_concurrent_public_rewards_preserve_both_summaries_and_run_overlays(tmp_path: Path) -> None:

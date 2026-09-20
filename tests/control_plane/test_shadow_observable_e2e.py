@@ -184,7 +184,7 @@ def test_refresh_and_reward_owned_prose(caller: Caller) -> None:
     assert refreshed['ok'] is True, refreshed
     assert 'Read the independent lease snapshot.' in w.state.read_text()
     assert w.read(todo) == record
-    args = ('reward', '--recorded-at', '2026-09-01T12:00:00+00:00', '--decision', 'continue',
+    args = ('reward', '--actor-kind', 'owner', '--recorded-at', '2026-09-01T12:00:00+00:00', '--decision', 'continue',
         '--reward', 'positive', '--reason-summary', 'Retained argument evidence.', '--write-active-state-summary')
     before = w.primary()
     assert w.call(*args, '--dry-run')['ok'] is True

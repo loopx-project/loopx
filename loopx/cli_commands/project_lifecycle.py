@@ -7,6 +7,7 @@ from pathlib import Path
 from ..control_plane.capability_hooks import (
     PostWritebackHookRegistration,
 )
+from ..control_plane.actor_identity import OWNER_CONTROLLER_ACTOR_CHOICES
 from ..feedback import (
     LESSON_KINDS,
     append_human_reward,
@@ -105,7 +106,7 @@ def register_project_lifecycle_commands(
     reward_parser.add_argument("--recorded-at", help="Reward timestamp. Defaults to current UTC time.")
     reward_parser.add_argument(
         "--actor-kind",
-        choices=("owner", "controller"),
+        choices=OWNER_CONTROLLER_ACTOR_CHOICES,
         help=(
             "Explicit non-Agent actor for the durable append. Anonymous dry-run "
             "remains available when this option is omitted."

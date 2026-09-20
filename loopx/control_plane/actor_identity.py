@@ -9,6 +9,11 @@ class OwnerControllerActorKind(str, Enum):
     CONTROLLER = "controller"
 
 
+OWNER_CONTROLLER_ACTOR_CHOICES = tuple(
+    actor.value for actor in OwnerControllerActorKind
+)
+
+
 def normalize_owner_controller_actor(
     value: Any,
     *,

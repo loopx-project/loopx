@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
+from ..control_plane.actor_identity import OWNER_CONTROLLER_ACTOR_CHOICES
 from ..control_plane.goals.activation_service import (
     render_goal_activation_markdown,
     set_goal_activation_state,
@@ -36,7 +37,7 @@ def register_goal_lifecycle_command(
     parser.add_argument("--reason", help="Bounded owner-visible transition reason.")
     parser.add_argument(
         "--actor-kind",
-        choices=("owner", "controller"),
+        choices=OWNER_CONTROLLER_ACTOR_CHOICES,
         help=(
             "Explicit non-Agent actor for --execute. Anonymous preview remains "
             "available when this option is omitted."
