@@ -10,7 +10,9 @@ guessing at wording.
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
+import re
 import sys
 from tempfile import TemporaryDirectory
 
@@ -40,6 +42,22 @@ from loopx.chat_manager import (  # noqa: E402
 def check(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def repeated_segments(text: str) -> list[str]:
+    """Segments one instruction surface carries verbatim more than once.
+
+    A repeated sentence is read by the manager on every turn, so it costs
+    tokens each time and makes the next edit ambiguous about which copy the
+    contract owns. The check is structural: it compares whole sentence-sized
+    segments rather than words that legitimately recur.
+    """
+
+    segments = [
+        segment.strip() for segment in re.split(r"(?<=[.;])\s+", text) if segment.strip()
+    ]
+    counts = Counter(segments)
+    return sorted(segment for segment, count in counts.items() if count > 1)
 
 
 def assert_labels_in_order(text: str, where: str) -> None:
@@ -88,6 +106,20 @@ def main() -> int:
         f"the managed skill must carry its current marker ({MANAGED_SKILL_CURRENT_MARKER})",
     )
     assert_labels_in_order(skill, "the managed loopx-manager skill")
+
+    # Both instruction surfaces reach the manager on every turn, so neither may
+    # carry a sentence twice: the copy costs tokens and the next edit would not
+    # know which one the contract owns. The objective shipped with one repeated
+    # sentence until this guard was added.
+    for surface, text in (
+        ("MANAGER_AGENT_OBJECTIVE", MANAGER_AGENT_OBJECTIVE),
+        ("the managed loopx-manager skill", skill),
+    ):
+        repeated = repeated_segments(text)
+        check(
+            not repeated,
+            f"{surface} must not repeat a sentence ({[item[:60] for item in repeated]})",
+        )
 
     # A workspace installed before this change carries the v1 marker; the writer
     # must refresh it rather than leaving the old contract in place.

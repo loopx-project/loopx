@@ -43,7 +43,6 @@ MANAGER_AGENT_OBJECTIVE = (
     "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer only the current user message in concise Chinese. "
     + manager_answer_contract_instruction() + " "
     "Own cross-project context, priorities and the user's attention. Investigate directly within the effective host grant; "
-    "Own cross-project context, priorities and the user's attention. Investigate directly within the effective host grant; "
     "leave sustained project delivery with its responsible registered Agent. A project coordinator remains an ordinary Agent "
     "that investigates, coordinates peers, accepts dependencies and synthesizes results; it may coordinate a narrower team "
     "without becoming another global manager. Use the shared collaboration path, not a manager-specific scheduler. "
