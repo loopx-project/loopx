@@ -97,6 +97,21 @@ def emit():
     return {"effective_action": str(action)}
 '''
 
+# The same rebinding at module scope, where the scan has a second reason to
+# look at imports: an import is how a producer names the owner module it
+# qualifies against, so an import may not shadow that qualified binding. It
+# must still take the name away from a plain assignment to the same name, and
+# for a while it did not -- the scan reported ``["run"]`` as a complete set
+# while CPython bound the module object.
+MODULE_ASSIGNED_THEN_IMPORTED = '''
+action = "run"
+import os as action
+RESULT = {"effective_action": str(action)}
+
+def emit():
+    return RESULT
+'''
+
 # ``except ... as action`` rebinds the name to the exception and unbinds it at
 # block exit, so the initializer above is not what the field can carry.
 ASSIGNED_THEN_CAUGHT = '''
@@ -155,6 +170,7 @@ def emit():
         pytest.param(MATCH_STAR, [["a"]], id="match-star-rebinds"),
         pytest.param(MATCH_MAPPING_REST, [{"k": 1, "z": 2}], id="match-mapping-rest-rebinds"),
         pytest.param(ASSIGNED_THEN_IMPORTED, [_NO_ARGUMENT], id="import-takes-the-name"),
+        pytest.param(MODULE_ASSIGNED_THEN_IMPORTED, [_NO_ARGUMENT], id="module-import-takes-the-name"),
         pytest.param(ASSIGNED_THEN_CAUGHT, [True], id="except-takes-the-name"),
         pytest.param(NESTED_NONLOCAL_REBIND, ["drop"], id="nested-scope-rebinds"),
         pytest.param(CONTAINER_ALIAS_WRITE, ["drop"], id="alias-writes-the-container"),

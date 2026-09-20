@@ -470,11 +470,19 @@ def scan_python_production(
         if scope == '<module>':
             nested_names -= local_owner_names | {owner.split('::')[1] for owner in call_arguments
                                                    if owner.split('::')[0] == source.path}
-        imported = set()
-        if scope != '<module>':
-            for node in nodes:
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    imported.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
+        import_bound = set()
+        for node in nodes:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                import_bound.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
+        # Two different questions are asked about the same import. At module
+        # scope an import is how a producer names the owner module it qualifies
+        # against, so it must not shadow that qualified binding -- which is why
+        # ``imported`` stays empty here. Whether it takes the name away from a
+        # plain assignment to that same name is asked separately, through
+        # ``rebound_by_other_forms``, and the answer there is yes in every
+        # scope: ``action = "run"`` followed by ``import os as action`` leaves
+        # the module object bound, not the literal.
+        imported = set() if scope == '<module>' else import_bound
         exception_targets = {n.name for n in nodes if isinstance(n, ast.ExceptHandler) and n.name}
         deleted = {n.id for n in nodes if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Del)}
         shadows = set(assigned) | parameters | nested_names | imported | exception_targets | deleted
@@ -509,7 +517,7 @@ def scan_python_production(
         # A later ``import as``, ``except as`` or nested ``def``/``class`` takes
         # the name away from the value the plain assignment gave it, so the
         # initializer is no longer the whole story for this scope.
-        rebound_by_other_forms = imported | exception_targets | nested_names
+        rebound_by_other_forms = import_bound | exception_targets | nested_names
         definitions = {name: values for name, values in plain.items()
                        if assigned[name] == len(values) and name not in parameters
                        and name not in declared and name not in deleted
