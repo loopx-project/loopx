@@ -3,6 +3,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Mapping
 
+from ..actor_identity import normalize_owner_controller_actor
+
 
 GOAL_ACTIVATION_SCHEMA_VERSION = "loopx_goal_activation_v1"
 
@@ -46,6 +48,7 @@ def build_goal_activation(
     state: GoalActivationState | str,
     updated_at: str,
     reason: str,
+    actor_kind: str | None = None,
 ) -> dict[str, str]:
     normalized_state = normalize_goal_activation_state(state)
     timestamp = str(updated_at or "").strip()
@@ -54,12 +57,16 @@ def build_goal_activation(
     compact_reason = " ".join(str(reason or "").split()).strip()
     if not compact_reason or len(compact_reason) > 600:
         raise ValueError("goal activation reason must be bounded visible text")
-    return {
+    actor = normalize_owner_controller_actor(actor_kind, required=False)
+    activation = {
         "schema_version": GOAL_ACTIVATION_SCHEMA_VERSION,
         "state": normalized_state.value,
         "updated_at": timestamp,
         "reason": compact_reason,
     }
+    if actor is not None:
+        activation["actor_kind"] = actor.value
+    return activation
 
 
 def goal_is_stopped(goal: Mapping[str, Any] | None) -> bool:

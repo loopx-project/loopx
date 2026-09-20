@@ -12,6 +12,7 @@ from ...global_registry import sync_project_registry_to_global
 from ...history import load_registry
 from ...registry import atomic_write_json, registry_goals
 from ...registry_writability import probe_registry_write_path
+from ..actor_identity import normalize_owner_controller_actor
 from ..runtime.time import now_local_iso
 from .activation import (
     GoalActivationState,
@@ -211,6 +212,7 @@ def set_goal_activation_state(
     reason: str | None = None,
     runtime_root_override: str | None = None,
     expected_state_fingerprint: str | None = None,
+    actor_kind: str | None = None,
     execute: bool = False,
 ) -> dict[str, Any]:
     """Preview or apply one reversible Goal activation transition."""
@@ -218,6 +220,7 @@ def set_goal_activation_state(
     normalized_goal_id = str(goal_id or "").strip()
     if not normalized_goal_id:
         raise ValueError("goal id is required")
+    actor = normalize_owner_controller_actor(actor_kind, required=execute)
     target_state = normalize_goal_activation_state(state)
     authority_route = _source_and_target(
         registry_path=registry_path,
@@ -237,16 +240,18 @@ def set_goal_activation_state(
     observed_fingerprint = hashlib.sha256(source_registry.read_bytes()).hexdigest()
     before_state = goal_activation_state(source_goal)
     changed = before_state is not target_state
+    actor_label = actor.value if actor is not None else "owner"
     default_reason = (
-        "Stopped by owner"
+        f"Stopped by {actor_label}"
         if target_state is GoalActivationState.STOPPED
-        else "Resumed by owner"
+        else f"Resumed by {actor_label}"
     )
     reason_text = " ".join(str(reason or default_reason).split()).strip()
     proposed_activation = build_goal_activation(
         state=target_state,
         updated_at=now_local_iso(),
         reason=reason_text,
+        actor_kind=actor.value if actor is not None else None,
     )
     payload: dict[str, Any] = {
         "ok": True,
@@ -265,6 +270,7 @@ def set_goal_activation_state(
         "expected_state_fingerprint": normalized_fingerprint,
         "observed_state_fingerprint": observed_fingerprint,
         "activation": proposed_activation,
+        "actor_kind": actor.value if actor is not None else None,
         "readback": {
             "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
             "status": "not_executed" if changed else "not_required",

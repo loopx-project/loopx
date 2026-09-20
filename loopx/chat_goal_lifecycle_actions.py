@@ -125,6 +125,7 @@ class ChatGoalLifecycleActionMixin:
             goal_id=goal_id,
             state=target_state,
             reason=parameters.get("reason"),
+            actor_kind="owner",
             execute=True,
         )
         if not result.get("ok") or not (result.get("readback") or {}).get(

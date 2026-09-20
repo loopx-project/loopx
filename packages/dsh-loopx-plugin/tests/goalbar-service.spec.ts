@@ -763,6 +763,7 @@ describe('GoalBar Host lifecycle authority', () => {
       'goal-lifecycle',
       '--goal-id', goalId,
       '--operation', 'resume',
+      '--actor-kind', 'owner',
       '--execute',
     ])
     await fixture.service.dispose()
@@ -790,6 +791,7 @@ describe('GoalBar Host lifecycle authority', () => {
       'goal-lifecycle',
       '--goal-id', goalId,
       '--operation', 'stop',
+      '--actor-kind', 'owner',
       '--execute',
     ])
     expect(fixture.driverCalls).toEqual(['cancelQueued'])

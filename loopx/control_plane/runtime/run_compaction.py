@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional
 
 HUMAN_REWARD_COMPACT_FIELDS = (
     "recorded_at",
+    "actor_kind",
     "decision",
     "reward",
     "reason_summary",

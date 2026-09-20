@@ -19,6 +19,7 @@ from .public_safe_text import (
     find_private_text_match,
 )
 from .registry import registry_goals, resolve_state_file
+from .control_plane.actor_identity import normalize_owner_controller_actor
 
 
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -402,10 +403,12 @@ def append_human_reward(
     goal_id: str,
     run_generated_at: str | None,
     reward: dict[str, Any],
+    actor_kind: str | None = None,
     dry_run: bool = False,
     state_file_override: Path | None = None,
     write_active_state_summary: bool = False,
 ) -> dict[str, Any]:
+    actor = normalize_owner_controller_actor(actor_kind, required=not dry_run)
     validate_goal_id(goal_id)
     registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
@@ -432,6 +435,8 @@ def append_human_reward(
         for field in HUMAN_REWARD_FIELDS
         if field in reward
     }
+    if actor is not None:
+        index_record["human_reward"]["actor_kind"] = actor.value
 
     selected_run = {
         "generated_at": selected.get("generated_at"),
@@ -500,6 +505,7 @@ def append_human_reward(
         "dry_run": dry_run,
         "selected_run": selected_run,
         "human_reward": index_record["human_reward"],
+        "actor_kind": actor.value if actor is not None else None,
         **coordination,
         "active_state_update": active_state_update,
         "index_record": index_record,
@@ -568,6 +574,7 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Reward",
             f"- recorded_at: `{reward.get('recorded_at')}`",
+            f"- actor_kind: `{reward.get('actor_kind')}`",
             f"- decision: `{reward.get('decision')}`",
             f"- reward: `{reward.get('reward')}`",
             f"- reason_summary: {reward.get('reason_summary')}",
