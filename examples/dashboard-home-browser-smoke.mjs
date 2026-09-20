@@ -969,7 +969,7 @@ async function captureHomeVisualAcceptance(page, url, label) {
   if (!composerBox || composerBox.height > 84) {
     throw new Error(`${label} composer regressed from the compact single-row layout: ${JSON.stringify(composerBox)}`);
   }
-  const composerAgentBox = await composerForm.locator("span").first().boundingBox();
+  const composerAgentBox = await page.getByRole("combobox", { name: "选择聊天 Runtime" }).boundingBox();
   if (!composerAgentBox || composerAgentBox.width < 40) {
     throw new Error(`${label} composer Agent selector is visually truncated: ${JSON.stringify(composerAgentBox)}`);
   }
@@ -992,6 +992,7 @@ async function captureHomeVisualAcceptance(page, url, label) {
 
   const isMobile = label === "mobile";
   if (!isMobile) {
+    await page.locator(".personal-composer-tools > summary").click();
     await page.getByRole("button", { name: "询问全局待办", exact: true }).click();
     if (await composer.inputValue()) {
       throw new Error("Manager advice shortcut should send immediately without leaving a draft.");
@@ -1110,7 +1111,7 @@ async function captureHomeVisualAcceptance(page, url, label) {
   await page.getByText("Files & Outputs", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   const filesList = page.getByTestId("personal-goal-outputs");
   const filesText = await filesList.innerText();
-  if (!filesText.includes("最近验证") || !filesText.includes(selectedGoalTitle)) {
+  if (!filesText.includes("最近验证") || !(await page.locator(".personal-channel-header").innerText()).includes(selectedGoalTitle)) {
     throw new Error(`${label} Files projection lost its public-safe summary or Goal lineage: ${filesText}`);
   }
   await filesList.getByRole("button").first().click();
@@ -1292,6 +1293,7 @@ async function main() {
       throw new Error(`Failed waiting for personal-goal-home: ${error.message}; body=${diagnostic.slice(0, 1000)}; pageErrors=${pageErrors.join(" | ")}`);
     }
 
+    await page.locator(".personal-composer-tools > summary").click();
     const body = await page.locator("body").innerText();
     const required = [
       "GOALS",
@@ -1368,6 +1370,7 @@ async function main() {
     // Explicitly select Goal to validate Goal workspace and Goal prompts
     await page.goto(`${baseUrl}/?goalId=showcase-user-gate-safe-side-path&statusUrl=/${fixtureName}`, { waitUntil: "networkidle" });
     await page.waitForSelector('[data-testid="personal-goal-home"]', { timeout: 10_000 });
+    await page.locator(".personal-composer-tools > summary").click();
     const goalBody = await page.locator("body").innerText();
     const requiredGoalText = [
       "Showcase user gate safe side path",
@@ -1382,6 +1385,7 @@ async function main() {
 
     // Switch to Tasks tab to validate Kanban tasks columns
     await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "任务", exact: true }).click();
+    await page.getByRole("button", {name: "看板", exact: true}).click();
     await page.locator(".personal-task-kanban").waitFor({ state: "visible", timeout: 10_000 });
     const tasksBody = await page.locator("body").innerText();
     const requiredTasksText = [

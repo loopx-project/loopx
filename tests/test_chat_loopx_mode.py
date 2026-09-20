@@ -338,6 +338,19 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         invalid = adapter.session.read_tool_handler(TOOL["name"], {"action": "operations", "operation_id": "one"})
         assert invalid["error"] == "collaboration_request_rejected"
 
+        from loopx.collaboration_mcp import Delegations
+        decisions = []
+        def adopt(bound, operation, consumer):
+            decisions.append((bound.agent_id, operation, consumer))
+            return {"adoptions": []}
+        monkeypatch.setattr(Delegations, "adopt_result", adopt)
+        handler = adapter.session.read_tool_handler
+        assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
+                                      "consumer_operation_id": "consumer"})["ok"]
+        assert decisions == [(settings["agent_id"], "source", "consumer")]
+        assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
+                                     "consumer_operation_id": "consumer", "binding_id": "other"})["error"] == "collaboration_request_rejected"
+
         # Pause persists before attempting potentially slow provider interruption.
         def interrupt(**_):
             assert service.store.load_session(sid)["loopx_mode"]["paused"]
@@ -351,6 +364,9 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         monkeypatch.setattr(service.controller, "interrupt_turn", interrupt)
         apply(mode, "pause")
         assert adapter.session.read_tool_handler(TOOL["name"], {"action": "operations"})["error"] == "conversation_execution_inactive"
+        assert handler(TOOL["name"], {"action": "adopt", "operation_id": "source",
+                                     "consumer_operation_id": "consumer"})["error"] == "conversation_execution_inactive"
+        assert len(decisions) == 1
         with pytest.raises(Exception, match="active conversation execution"):
             apply(mode, "message", delivery_mode="queue", message="After pause")
         assert adapter.session.read_tool_handler("loopx_context_read", {}) == {

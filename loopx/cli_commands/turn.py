@@ -195,10 +195,30 @@ def handle_turn_command(
             # have to name the same credential.
             environ=operator_environ,
             dsh_runner_configured=bool(getattr(args, "dsh_runner", None)),
-            provider=getattr(args, "dsh_provider", None),
-            model=getattr(args, "dsh_model", None),
-            reasoning_effort=getattr(args, "dsh_reasoning_effort", None),
-            max_tokens=getattr(args, "dsh_max_tokens", None),
+            provider=(
+                getattr(args, "dsh_provider", None)
+                if args.host == "dsh"
+                else None
+            ),
+            model=(
+                getattr(args, "dsh_model", None)
+                if args.host == "dsh"
+                else getattr(args, "codex_model", None)
+                if args.host == "codex-cli"
+                else None
+            ),
+            reasoning_effort=(
+                getattr(args, "dsh_reasoning_effort", None)
+                if args.host == "dsh"
+                else getattr(args, "codex_reasoning_effort", None)
+                if args.host == "codex-cli"
+                else None
+            ),
+            max_tokens=(
+                getattr(args, "dsh_max_tokens", None)
+                if args.host == "dsh"
+                else None
+            ),
         )
         if (
             args.turn_command == "run-once"
@@ -974,6 +994,7 @@ def handle_turn_command(
                         codex_bin=args.codex_bin,
                         sandbox=args.codex_sandbox,
                         model=args.codex_model,
+                        reasoning_effort=args.codex_reasoning_effort,
                         timeout_seconds=max(1.0, args.timeout_seconds - 5.0),
                     )
 

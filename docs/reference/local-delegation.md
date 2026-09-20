@@ -36,6 +36,44 @@ select `generic-cli`, `fresh`, and the optional adapter's `--config` invocation.
 Profiles, executables, workspace isolation and credential custody remain the
 operator's responsibility. No model tool accepts those values.
 
+A Codex binding launches an independent, resumable Codex Agent Session through
+the same governed Turn path. Pin both fields when the worker must use an exact
+profile:
+
+```json
+{
+  "id": "strong-independent-review",
+  "agent_id": "managed-reviewer",
+  "todo_id": "todo_review",
+  "requesters": ["lead"],
+  "workspace": "/absolute/reviewer-worktree",
+  "host_args": [
+    "--host", "codex-cli",
+    "--codex-model", "gpt-5.6-sol",
+    "--codex-reasoning-effort", "xhigh",
+    "--codex-sandbox", "workspace-write"
+  ],
+  "timeout_seconds": 300,
+  "output_refs": ["output.json"]
+}
+```
+
+This is not a native `multi_subagent` child. Native children remain temporary
+workers inside one parent execution and use the Goal's child model preference.
+The binding above has its own Agent identity, Todo, workspace, Codex Session and
+durable delegation operation. `delegation inspect` and the planning projection
+show `gpt-5.6-sol@xhigh`; start and resume pass both fields to that same Session.
+The requester still needs the exact binding grant, and a profile is not an
+acceptance or result-return receipt.
+
+中文：Codex binding 通过同一条受治理 Turn 链启动独立、可续接的 Codex Agent
+Session。需要精确执行配置时同时固定 `--codex-model` 与
+`--codex-reasoning-effort`。它不是 `multi_subagent` 的原生临时 child：后者仍在
+单个父执行内部使用 Goal 的 child model 偏好；前者拥有独立 Agent 身份、Todo、
+workspace、Codex Session 与持久 delegation operation。`delegation inspect` 和
+规划投影会读回例如 `gpt-5.6-sol@xhigh`，start/resume 也把同一配置送入原 Session。
+这不扩大 requester grant，也不把 profile 冒充验收或结果返回回执。
+
 ## Use an existing Agent conversation through its shell
 
 An attached Codex or other shell-capable Agent can use the same execution
@@ -101,6 +139,80 @@ turn. The conversation remains persistent independently of whether autonomous
 LoopX mode is enabled. Dashboard, CLI/managed Turn and Lark keep their existing
 conversation and runtime owners; they may consume the shared bounded route
 projection described below, but they do not get another grant or scheduler.
+
+### Bind a later result to an exact accepted version
+
+A brief input may opt into requester-scoped provenance:
+
+```json
+{
+  "ref": "inputs/accepted-analysis.json",
+  "description": "Accepted analysis to use in the synthesis",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "delegation": {
+    "operation_id": "analysis-round-2",
+    "ref": "output.json",
+    "relation": "uses"
+  }
+}
+```
+
+Use the real digest from `delegate read`, not the illustrative digest above.
+`ref` addresses the receiving workspace's already supplied file; `delegation.ref`
+addresses an output of this requester's original operation. The source must be
+currently accepted and both files must match the specified hash. Start checks
+before dispatch and checks again before completing the consumer. It neither
+copies files nor grants workspace access. Existing briefs without `delegation`
+retain their behavior and readback shape.
+
+The typed relations are **requested intent**: `responds_to`, `revises` and `uses`.
+They do not assert that an objection is correct, a revision resolves it or an
+Agent has adopted a result. `read` returns the immediate dependency's specified
+version and current/unavailable observation; it does not flatten a whole team's
+graph or infer relationships from prose.
+
+After inspecting the independently accepted downstream result, the requester
+may explicitly record adoption into that result:
+
+```bash
+delegate adopt --operation-id analysis-round-2 \
+  --consumer-operation-id synthesis-round-1 --execute
+delegate read --operation-id analysis-round-2
+```
+
+Both executions must belong to this requester and remain accepted under their
+current bindings, canonical Todos, pinned validators and saved artifact hashes.
+The consumer's immutable brief must reference the source through `uses`, and
+its supplied input must still match. The receipt binds source hashes, consumer
+hashes and original request/task identities. Repeating the same decision is
+idempotent. At most twelve downstream adoption records can be attached to one
+source. Reading, receiver request acknowledgement and completing a consumer
+never create this requester decision automatically.
+
+Every read rechecks recorded adoption evidence. Changed output, missing input,
+revoked binding or failed acceptance makes that relationship `unavailable`;
+the historical reference remains visible, but its saved success is not replayed.
+This is evidence of the requester's explicit decision and a validated downstream
+artifact, not proof of model comprehension or arbitrary semantic claims. Domain
+acceptance must check substantive dependency use; matching an input hash alone
+cannot establish it. No Goal is completed and no new model is launched by adoption.
+
+MCP exposes `adopt_delegation_result(operation_id, consumer_operation_id)`;
+newly created Goal Chat tool sessions expose `action=adopt` with those fields.
+Existing native sessions keep their original schema; use the existing shell CLI
+when their tools do not include the action. Host tool approval still applies.
+The local Goal Chat evidence panel shows these version links and requester
+receipts, with direct navigation to source/downstream evidence and explicit
+missing or stale adoption. This owner-only surface does not grant Lark or shared
+audiences access. Stop supplying the optional provenance input to disable it for
+new work; existing decisions remain auditable and revalidated, not deleted.
+
+中文：输入可显式绑定当前请求方某次已验收产物及其哈希。`responds_to / revises / uses`
+只表达请求关系；不从文字或完成状态推导纠偏、采用。请求方检查后续已验收结果后，
+通过 `adopt --execute` 显式记录采用；读回重新核验源版本、接收方输入及后续产物。
+版本或验收失效时保留历史引用并显示不可核验，不重放旧成功。领域验收仍须验证实际
+使用了依赖及结论正确性。前端可沿关系打开证据、反馈或暂停协调员；整体 Goal、成员
+停止与跨受众权限均不因此改变。
 
 ### Publish bounded route readiness to the coordinator
 
@@ -220,15 +332,35 @@ Enabled MCP exposes `inspect_execution_binding`; newly enrolled Goal Chat tools
 accept `action=inspect` with `binding_id`. Existing native thread schemas remain
 unchanged. Owners can use **Team execution** directly below the Goal conversation
 controls after configuring its existing bindings, including while paused or
-before enabling LoopX mode. Expand it to recover paged work and artifact hashes,
-or check one member's prerequisites. Reads run only on request; ordinary polling
-does not run validators or preflight. Closing the panel changes no work state.
-This local operator entrypoint does not grant a Lark audience access.
+before enabling LoopX mode. Select **Evidence and feedback** on an original operation to read its bounded
+artifact content. This uses the same `delegate read` owner: bindings, pinned
+acceptance, canonical completion and current file bytes are checked again.
+Changed or unavailable evidence clears the prior content. These are on-demand
+observations, not continuous liveness; accepted output does not prove requester
+adoption. Text is rendered inertly, and source/version identifiers remain
+inspectable. Returning preserves the execution list and keyboard focus.
 
-中文：配置原有执行绑定后，在 Goal 对话中展开「团队执行情况」，不必让模型转述或
-跳到另一个页面。可分页查看原请求、当前验收与产物哈希，点「检查启动条件」读取
-指定任务的 Turn 决策及实际模型配置。运行时未探测时明确显示「尚未验证」，不能
-把已登记、已分配或 dry-run 成功当作正在运行。暂停时仍可检查；检查不启动成员。
+While the original coordinator is executing, feedback includes the selected
+operation and observed artifact hashes in its existing inbox. Pending and delivered
+receipts stay distinct from application; a retry after an uncertain response
+reuses the exact message and operation id. **Pause coordinator** stays in the
+panel and reports its actual scope. Dispatched members continue independently;
+this entrypoint cannot stop the whole team. Ordinary polling does not read artifact
+bodies or run preflight. Closing the panel changes no work state. This local
+operator entrypoint does not grant a Lark audience access.
+
+中文：配置原有执行绑定后，在 Goal 对话的「团队执行情况」中选择原执行的
+「查看证据与反馈」，直接读取经当前验收、绑定和文件核验的产物正文。文件变化或
+读取失败时清除旧内容；这是按需观察，验收通过不代表协调员已采用。来源和版本标识
+可展开查看，返回列表保留位置与键盘焦点。协调员运行时，可把执行标识、看到的
+产物哈希和反馈投递到原收件箱；等待投递、已交付和已应用不能混为一谈。不确定响应
+后重试同一消息和标识，避免重复投递。面板内的「暂停协调员」显示实际反馈，但不会
+停止已派发成员，也不宣称整个团队停止。暂停时仍可检查证据；读取不启动模型。
+
+Screenshots use isolated synthetic research data, not a live-model qualification:
+[desktop evidence](../assets/personal-workspace/team-evidence-desktop.png),
+[mobile evidence](../assets/personal-workspace/team-evidence-mobile.png), and
+[stale evidence](../assets/personal-workspace/team-evidence-stale.png).
 
 ## Use the same bindings through MCP
 

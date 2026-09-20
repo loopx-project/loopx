@@ -360,12 +360,19 @@ Todo 完成入口分别执行当前 pinned 检查，accepted 返回读 canonical
 完成。长期 attached 会话、通用 Agent 创建、动态受治理工作派生、完整 inbox/queue/steer、
 认证远端权威与 packaged frontend/Lark 配套仍归 R2/R3/R4/R6；不晋升已有 Goal。
 
-有 shell 能力的原 coordinator 可通过 `delegation list/operations/start/read/wait/resume` 调用已有执行 owner，无需替换会话。`operations` 从自身持久记录找回上下文丢失前的工作，重新核验 accepted，保留不可用分支与分页；已启用的 MCP 和新挂载工具的 Goal Chat 共用该读模型；已有原生线程恢复时保留原工具 schema。读取不启动工作，也不把展示列表当整体 readiness。合成示例 `prepare` 仍只准备隔离绑定。下一步先将实际执行/验收事实接入已有 R2 readiness，再沿现有注册及 runtime 配置扩展经授权的身份/profile 创建，并验证原请求返回与主力继续推进。无人值守唤醒、完整跨宿主 inbox/queue/steer 和 Lark 等价仍分别验收，不因新增恢复入口晋升 G1/G3。
+有 shell 能力的原 coordinator 可通过 `delegation list/operations/start/read/wait/resume` 调用已有执行 owner，无需替换会话。`operations` 从自身持久记录找回上下文丢失前的工作，重新核验 accepted，保留不可用分支与分页；已启用的 MCP 和新挂载工具的 Goal Chat 共用该读模型；已有原生线程恢复时保留原工具 schema。读取不启动工作，也不把展示列表当整体 readiness。合成示例 `prepare` 仍只准备隔离绑定。Codex binding 现可将精确 model/reasoning effort 送入独立且可续接的 Turn Session，并由同一 preflight/规划投影读回；这与父执行内部的原生临时 child profile 分开。下一步先将实际执行/验收事实接入已有 R2 readiness，再沿现有注册及 runtime 配置扩展经授权的身份创建，并验证原请求返回与主力继续推进。无人值守唤醒、完整跨宿主 inbox/queue/steer 和 Lark 等价仍分别验收，不因 profile 参数接通而晋升 G1/G3。
 
 本地 Goal 对话现可按需读取该持久目录，并按绑定调用实际 Turn dry-run 与所选
 executor/profile 检查启动条件。任务准入、当前 pinned 验收绑定、运行时可用性分开
 表达；未探测的通用/云端运行时保留未知。CLI、已启用 MCP 和新 Chat 工具共用此
-检查，不新增状态账本，也不启动执行。这只验收本地执行事实的读回；计划分配回执
+检查，不新增状态账本，也不启动执行。同一 owner 本地面板可打开当前核验产物正文、版本及来源标识，向原协调员收件箱
+反馈，并显示协调员暂停的实际范围。读取失效时清除旧内容；投递不等于应用、验收
+不等于请求方采用、暂停协调员不等于停止成员。可选的类型化输入现可绑定回应、修订、
+使用所针对的已验收版本；请求方显式采用记录绑定使用该输入的后续已验收结果。面板
+可沿关系打开两端产物；版本或验收失效即撤下当前有效证据。领域 validator 仍负责
+实际依赖使用及结论正确性。文件/SQLite 与打包浏览器验证不构成真实模型纠偏场景
+验收；包含独立异议和有效综合结论的 L1 仍未通过。
+这只验收本地执行事实的读回；计划分配回执
 整合、通用创建、远端探针、两轮持续协作及 Lark 等价仍由原 owner 继续推进。
 
 **团队现场是 S5 核心产品目标。** [团队实时工作区 RFC](live-team-workspace-v0.zh-CN.md)

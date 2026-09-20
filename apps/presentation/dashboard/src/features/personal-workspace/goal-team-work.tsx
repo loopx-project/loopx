@@ -1,16 +1,23 @@
 import {useEffect, useRef, useState} from "react";
-import {fetchLoopXTeamWork, inspectLoopXMember, type DelegationInventory, type DelegationPreflight} from "../../data/chat";
+import {fetchLoopXTeamWork, inspectLoopXMember, delegationStateLabel, type LoopXModeSnapshot, type DelegationInventory, type DelegationPreflight} from "../../data/chat";
+
+import {GoalTeamEvidence} from "./goal-team-evidence";
 import {DelegationPreflightStatus} from "./delegation-preflight-status";
 
 type Member = {id: string; agent_id: string; todo_id: string};
 
 /** On-demand observations share the caller/config pin of this Goal conversation. */
-export function GoalTeamWork({sessionId, members, zh}: {sessionId: string; members: Member[]; zh: boolean}) {
+export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {sessionId: string; members: Member[]; zh: boolean; canMessage: boolean; ingress: LoopXModeSnapshot["ingress"]}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const backButton = useRef<HTMLButtonElement | null>(null);
+  const lastSelection = useRef<string | null>(null);
+  const selectedTrigger = useRef<HTMLButtonElement | null>(null);
   const [page, setPage] = useState<DelegationInventory | null>(null);
   const [checks, setChecks] = useState<Record<string, DelegationPreflight>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0);
+  useEffect(() => {(selected ? backButton.current : selectedTrigger.current)?.focus();}, [selected]);
   useEffect(() => {
     generation.current++; setPage(null); setChecks({}); setError(""); setBusy(false);
     void read();
@@ -18,7 +25,7 @@ export function GoalTeamWork({sessionId, members, zh}: {sessionId: string; membe
   }, [sessionId]);
   async function read(cursor?: string) {
     const current = ++generation.current;
-    setBusy(true); setError(""); setPage(null);
+    setBusy(true); setError(""); setPage(null); setSelected(null);
     try {
       const result = await fetchLoopXTeamWork(sessionId, cursor);
       if (current === generation.current) setPage(result);
@@ -37,15 +44,10 @@ export function GoalTeamWork({sessionId, members, zh}: {sessionId: string; membe
       if (current === generation.current) setError(failure instanceof Error ? failure.message : String(failure));
     } finally {if (current === generation.current) setBusy(false);}
   }
-  const stateLabel = (row: DelegationInventory["items"][number]) => {
-    if (row.status === "unavailable") return zh ? "无法核验" : "Unavailable";
-    if (row.status === "accepted") return zh ? "已通过当前验收" : "Currently accepted";
-    if (row.status === "rejected") return zh ? "未通过验收" : "Rejected";
-    if (row.recovery_required) return zh ? "需要恢复原执行" : "Original execution needs recovery";
-    if (row.status === "running" && row.worker_active) return zh ? "执行中" : "Executing";
-    if (row.status === "turn_returned" && row.worker_active) return zh ? "正在验收" : "Validating";
-    return zh ? "已派发，等待执行回读" : "Dispatched; awaiting execution readback";
-  };
+  if (selected) return <div className="goal-team-work">
+    <button ref={backButton} type="button" onClick={() => setSelected(null)}>{zh ? "返回执行列表" : "Back to executions"}</button>
+    <GoalTeamEvidence key={`${sessionId}:${selected}`} sessionId={sessionId} operationId={selected} zh={zh} canMessage={canMessage} ingress={ingress} onInspect={setSelected}/>
+  </div>;
   return <div className="goal-team-work">
     <section aria-label={zh ? "团队执行详情" : "Team execution details"}>
       <p>{zh ? "检查不会启动成员。暂停协调员后，已派发的工作仍会继续。" : "Inspection starts no members. Dispatched work continues when the coordinator is paused."}</p>
@@ -65,9 +67,11 @@ export function GoalTeamWork({sessionId, members, zh}: {sessionId: string; membe
         {!page.page_readback_complete ? <p role="status">{zh ? "本页有无法核验的工作，请检查原请求；不要直接重新派工。" : "Some work cannot be verified. Reconcile the original request before redispatching."}</p> : null}
         {!page.items.length ? <p>{zh ? "此页没有委派记录；不代表整个团队没有工作或 Goal 已完成。" : "No records on this page; this does not establish an idle team or a completed Goal."}</p> : null}
         <ul className="goal-team-operations">{page.items.map(row => <li key={row.record_id}>
-          <strong>{row.agent_id ?? (zh ? "记录不可读" : "Unreadable record")} · {stateLabel(row)}</strong>
+          <strong>{row.agent_id ?? (zh ? "记录不可读" : "Unreadable record")} · {delegationStateLabel(row, zh)}</strong>
           <details><summary>{zh ? "执行标识" : "Execution identifier"}</summary><code>{row.operation_id ?? row.record_id}</code></details>
-          {row.artifacts?.map(artifact => <details key={artifact.ref}><summary>{artifact.ref}</summary><code>{artifact.sha256}</code></details>)}
+          {row.operation_id ? <button ref={row.operation_id === lastSelection.current ? selectedTrigger : undefined} type="button" onClick={() => {
+            lastSelection.current = row.operation_id; setSelected(row.operation_id);
+          }}>{zh ? "查看证据与反馈" : "Evidence and feedback"}</button> : null}
         </li>)}</ul>
         <p>{zh ? "仅限当前协调身份；分页不是团队快照。" : "Scoped to this coordinator; paging is not a team snapshot."}{page.has_more ? (zh ? " 还有下一页。" : " More pages remain.") : ""}</p>
       </> : null}

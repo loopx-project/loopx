@@ -213,6 +213,39 @@ def test_chat_action_context_cannot_persist_or_emit_overflowed_float(
         server.server_close()
 
 
+@pytest.mark.parametrize(
+    "action", ["snapshot", "apply", "cancel", "regenerate", "reject", "defer"]
+)
+def test_missing_action_returns_the_same_http_error(
+    tmp_path: Path, action: str
+) -> None:
+    server, thread = _start_server()
+    server.action_store = ChatActionStore(tmp_path / "actions")
+    server.action_service = ChatActionService(
+        store=server.action_store, registry_path=tmp_path / "registry.json"
+    )
+    try:
+        response = _request(
+            server.server_address[1],
+            method="GET" if action == "snapshot" else "POST",
+            origin=None,
+            path="/api/actions/missing"
+            + ("" if action == "snapshot" else f"/{action}"),
+            body=None if action == "snapshot" else b"{}",
+        )
+        assert response.status == 404
+        assert json.loads(response.read()) == {
+            "ok": False,
+            "error": "typed Chat action proposal was not found",
+            "error_code": "action_not_found",
+        }
+        assert server.action_store.list() == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_chat_status_forwards_valid_goal_activation_scope(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 

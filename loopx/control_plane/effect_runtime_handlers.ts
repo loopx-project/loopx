@@ -1,5 +1,5 @@
 import {projectTodoSummaryLanes, projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
-import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -640,6 +640,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.chat_mode", planChatMode],
     ["collaboration.conversation.scope", resolveConversationScope],
     ["collaboration.delegation.observe", transitionDelegationObservation],
+    ["collaboration.delegation.adoption", recordDelegationAdoption],
     [
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),

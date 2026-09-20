@@ -24,6 +24,17 @@ function lines(value: unknown, label: string): string[] {
   return value.map((item, index) => text(item, `${label}[${index}]`, 1000));
 }
 
+function workspaceRef(value: unknown): string {
+  const ref = text(value, "input.ref", 512);
+  // References never fetch URLs or expose a sender's absolute filesystem path.
+  if (ref.startsWith("/") || ref.includes("\\") || ref.includes(":")
+      || ref.split("/").some((part) => !part || part === "." || part === "..")
+      || /[\x00-\x1f]/.test(ref)) {
+    throw new EffectRuntimeRequestError("input.ref must be a relative workspace file path");
+  }
+  return ref;
+}
+
 /** Semantic content is context, never a Todo edit, execution grant or priority. */
 export function normalizeCollaborationBrief(value: unknown): JsonObject {
   const brief = requireJsonObject(value, "brief");
@@ -40,21 +51,23 @@ export function normalizeCollaborationBrief(value: unknown): JsonObject {
   }
   const inputs = brief.inputs.map((raw) => {
     const input = requireJsonObject(raw, "brief input");
-    exactKeys(input, ["ref", "description", "sha256"], ["ref", "description"]);
-    const ref = text(input.ref, "input.ref", 512);
-    // Shared-workspace files only. The receiver must open and verify them itself;
-    // this record never fetches URLs or copies a sender's private absolute path.
-    if (ref.startsWith("/") || ref.includes("\\") || ref.includes(":")
-        || ref.split("/").some((part) => !part || part === "." || part === "..")
-        || /[\x00-\x1f]/.test(ref)) {
-      throw new EffectRuntimeRequestError("input.ref must be a relative workspace file path");
-    }
+    exactKeys(input, ["ref", "description", "sha256", "delegation"], ["ref", "description"]);
+    const ref = workspaceRef(input.ref);
     const result: JsonObject = { ref, description: text(input.description, "input.description", 1000) };
     if (input.sha256 !== undefined) {
       if (typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256)) {
         throw new EffectRuntimeRequestError("input.sha256 must be a SHA256 digest");
       }
       result.sha256 = input.sha256;
+    }
+    if (input.delegation !== undefined) {
+      const source = requireJsonObject(input.delegation, "input.delegation");
+      exactKeys(source, ["operation_id", "ref", "relation"], ["operation_id", "ref", "relation"]);
+      if (typeof source.operation_id !== "string" || !ID.test(source.operation_id)
+          || !["responds_to", "revises", "uses"].includes(String(source.relation)) || !result.sha256) {
+        throw new EffectRuntimeRequestError("delegation input requires operation, artifact, relation and digest");
+      }
+      result.delegation = {...source, ref: workspaceRef(source.ref)};
     }
     return result;
   });

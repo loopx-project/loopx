@@ -5,6 +5,7 @@ import json
 import subprocess
 import threading
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -283,6 +284,21 @@ def test_mention_uses_existing_inbox_reply_and_ack_path(tmp_path: Path) -> None:
     assert projection["processed_count"] == 1
 
 
+@pytest.fixture
+def manager_context_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the dated fixture within retention without disabling compaction."""
+    from loopx.extensions.lark import manager_context
+
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            instant = datetime(2026, 9, 13, 6, 1, tzinfo=UTC)
+            return instant.astimezone(tz) if tz is not None else instant.replace(tzinfo=None)
+
+    monkeypatch.setattr(manager_context, "datetime", FixtureDatetime)
+
+
+@pytest.mark.usefixtures("manager_context_clock")
 def test_manager_captures_unaddressed_context_without_granting_turn_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -467,6 +483,7 @@ def test_manager_route_rejects_missing_or_unknown_authority_mode(
     assert answer_calls == []
 
 
+@pytest.mark.usefixtures("manager_context_clock")
 def test_manager_authorized_turn_quietly_recovers_history_as_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

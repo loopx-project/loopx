@@ -411,13 +411,25 @@ sessions, generic Agent creation, dynamic governed work derivation, complete
 inbox/queue/steer, authenticated remote authority and packaged frontend/Lark
 companion work remain R2/R3/R4/R6 boundaries. Existing Goals are not promoted.
 
-An existing shell-capable coordinator uses `delegation list/operations/start/read/wait/resume` without replacing its session. Requester-scoped `operations` recovers durable work after context loss, independently rechecks accepted results and preserves unavailable branches and pagination; enabled MCP and newly tool-equipped Goal Chat use the same read model. Existing native threads retain their tool schema on resume. It starts no work and does not infer overall readiness from a display list. The example's `prepare` still only provisions isolated operator bindings. Next, feed actual execution/acceptance facts into existing R2 readiness, then extend existing registration/runtime configuration for approved identity/profile provisioning and qualify original-request return/lead continuation. Unattended wake, full cross-host inbox/queue/steer and Lark parity remain separate requirements; no G1/G3 promotion follows from this recovery entrypoint.
+An existing shell-capable coordinator uses `delegation list/operations/start/read/wait/resume` without replacing its session. Requester-scoped `operations` recovers durable work after context loss, independently rechecks accepted results and preserves unavailable branches and pagination; enabled MCP and newly tool-equipped Goal Chat use the same read model. Existing native threads retain their tool schema on resume. It starts no work and does not infer overall readiness from a display list. The example's `prepare` still only provisions isolated operator bindings. A Codex binding can now pass an exact model/reasoning effort into an independent resumable Turn Session and expose the same profile through preflight and planning; this remains separate from a native temporary child profile inside the parent execution. Next, feed actual execution/acceptance facts into existing R2 readiness, extend registration/runtime configuration for approved identity provisioning, and qualify original-request return/lead continuation. Unattended wake, full cross-host inbox/queue/steer and Lark parity remain separate requirements; an exact profile parameter does not promote G1/G3.
 
 The local Goal conversation now exposes that inventory on demand, with per-binding
 preflight through the actual Turn dry-run and selected executor/profile. Task
 admission, current pinned acceptance and runtime availability remain distinct;
 unprobed generic/cloud availability stays unknown. The same inspection is available
 to CLI and enabled MCP/new Chat tools, without a new state store or launch effect.
+The same owner-local panel now opens current validated artifact text and its
+version/source identifiers, accepts feedback through the original coordinator
+inbox and exposes coordinator pause with its actual scope. Stale reads clear prior
+content; delivery does not establish application, acceptance does not establish
+requester adoption, and coordinator pause does not stop workers. Optional typed
+brief inputs now bind immediate response/revision/use relationships to exact
+accepted source versions. An explicit requester adoption decision binds a current
+accepted downstream result with that exact input; the panel links both artifacts
+and withdraws current evidence when a version or acceptance fails. Domain
+validators still own substantive dependency use. File/SQLite and packaged browser
+qualification do not establish a real-model correction episode: that L1 acceptance,
+including independent objection and useful synthesis, remains open.
 This qualifies a local execution-facts readback, not the full R2 ladder: assignment
 receipt integration, provisioning, remote probes, two-cycle continuation and Lark
 qualification remain open under their existing owners.
