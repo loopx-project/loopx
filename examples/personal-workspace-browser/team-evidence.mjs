@@ -37,6 +37,35 @@ export const teamEvidenceScenario = {
       await evidence.getByRole("button", {name: "查看后续结果", exact: true}).click();
       await evidence.getByLabel("证据内容: synthesis.json").waitFor();
       await evidence.getByText("源产物与接收方输入一致", {exact: true}).waitFor();
+      const compare = evidence.getByRole("region", {name: "依据与结果对照"});
+      await compare.getByRole("button", {name: /使用依据 report.json/}).click();
+      await compare.getByLabel("指定来源: report.json").waitFor();
+      assert.match(await compare.getByLabel("本次产物: synthesis.json").textContent(), /accepted_cash_flow/);
+      assert.equal(await page.evaluate(() => window.artifactExecuted), undefined);
+      await page.screenshot({path: resolve(outputDir, "team-comparison-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.emulateMedia({reducedMotion: "reduce"});
+      assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+      await page.screenshot({path: resolve(outputDir, "team-comparison-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      // A changed source hash must not silently compare the newest file.
+      const changedSource = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation === "read" && body.operation_id === "accepted-analysis") {
+          return route.fulfill({json: {operation_id: body.operation_id, status: "accepted", recovery_required: false,
+            artifacts: [{ref: "report.json", sha256: "f".repeat(64), text: "newer content must not appear"}]}});
+        }
+        return route.fallback();
+      };
+      await page.route("**/api/chat/sessions/*/loopx", changedSource);
+      await compare.getByRole("button", {name: /使用依据 report.json/}).click();
+      await compare.getByRole("alert").filter({hasText: "指定来源版本无法核验"}).waitFor();
+      assert.equal(await compare.getByLabel("指定来源: report.json").count(), 0);
+      assert.equal(await compare.getByText("newer content must not appear").count(), 0);
+      await page.screenshot({path: resolve(outputDir, "team-comparison-unavailable.png"), animations: "disabled"});
+      await page.unroute("**/api/chat/sessions/*/loopx", changedSource);
+      await compare.getByRole("button", {name: /使用依据 report.json/}).click();
+      await compare.getByLabel("指定来源: report.json").waitFor();
       await evidence.getByRole("button", {name: "accepted-analysis", exact: true}).click();
       await content.waitFor();
       mode.fixtureAdoptionState = "unavailable";

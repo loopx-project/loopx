@@ -53,3 +53,20 @@
 .goal-team-lineage ul { list-style: none; padding: 0; margin: 12px 0; }
 .goal-team-lineage li { display: grid; gap: 8px; padding: 0 0 16px 16px; border-left: 2px solid var(--pw-line, #ebebeb); overflow-wrap: anywhere; }
 .goal-team-lineage button { justify-self: start; max-width: 100%; overflow-wrap: anywhere; text-align: start; }
+.goal-loopx-dialog:has(.goal-team-comparison) { width: min(1040px, calc(100vw - 32px)); }
+.goal-team-comparison { margin-block: 24px; }
+.goal-team-comparison-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.goal-team-comparison-heading h4 { font-size: 20px; letter-spacing: -.02em; }
+.goal-team-comparison-heading > span { font-size: 12px; color: var(--pw-muted, #666); }
+.goal-team-comparison-sources { display: flex; gap: 8px; flex-wrap: wrap; margin-block: 16px; }
+.goal-team-comparison-sources button { flex-direction: column; align-items: flex-start; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.goal-team-comparison-sources button > span { color: var(--pw-muted, #666); font-size: 12px; }
+.goal-team-comparison-sources button[aria-pressed="true"] { border-color: var(--pw-text, #171717); }
+.goal-team-comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.goal-team-comparison-grid article { margin: 0; min-width: 0; border: 1px solid var(--pw-line, #ebebeb); border-radius: 12px; overflow: hidden; }
+.goal-team-comparison-grid header { display: grid; gap: 4px; padding: 16px; border-bottom: 1px solid var(--pw-line, #ebebeb); overflow-wrap: anywhere; }
+.goal-team-comparison-grid header span { color: var(--pw-muted, #666); font-size: 12px; }
+.goal-team-comparison-grid pre { margin: 0; max-height: 400px; border: 0; border-radius: 0; padding: 16px; font-size: 13px; line-height: 1.8; }
+.goal-team-comparison-grid pre span[data-changed="true"] { background: color-mix(in srgb, var(--pw-text, #171717) 7%, transparent); text-decoration: underline; text-decoration-color: var(--pw-muted, #666); text-underline-offset: 4px; }
+.goal-team-comparison select { min-height: 44px; padding: 8px; background: var(--pw-surface, #fff); color: inherit; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; }
+@media (max-width: 640px) { .goal-team-comparison-grid { grid-template-columns: 1fr; } }

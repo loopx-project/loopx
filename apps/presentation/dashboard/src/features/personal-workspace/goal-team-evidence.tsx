@@ -1,4 +1,5 @@
 import {GoalTeamLineage} from "./goal-team-lineage";
+import {GoalTeamComparison} from "./goal-team-comparison";
 import {useEffect, useRef, useState} from "react";
 import {delegationStateLabel, readLoopXTeamWork, sendLoopXMessage, type DelegationReadback, type LoopXModeSnapshot} from "../../data/chat";
 
@@ -56,19 +57,19 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
   return <section className="goal-team-evidence" aria-label={zh ? "执行证据" : "Execution evidence"} aria-busy={busy}>
     <div className="goal-team-work-actions"><h3>{zh ? "执行证据" : "Execution evidence"}</h3>
       <button type="button" disabled={busy} onClick={() => void read()}>{zh ? "重新读取证据" : "Recheck evidence"}</button></div>
-    <code>{operationId}</code>
     {busy ? <p role="status">{zh ? "正在核验绑定、验收与文件…" : "Checking bindings, acceptance and files…"}</p> : null}
     {error ? <p role="alert">{zh ? "无法核验，已清除上次证据。" : "Cannot verify; previous evidence cleared."} {error}</p> : null}
     {result ? <>
       <p role="status"><strong>{result.agent_id} · {delegationStateLabel(result, zh)}</strong>{" · "}{observedAt}</p>
       <p>{zh ? "按需读取的当前观察，不是持续在线状态；验收不代表协调员已采用。" : "An on-demand observation, not continuous liveness; acceptance does not establish coordinator adoption."}</p>
+      <GoalTeamComparison sessionId={sessionId} result={result} zh={zh}/>
       <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/>
       {result.error ? <p role="alert">{result.error}</p> : null}
       {result.status === "accepted" && result.artifacts?.length ? result.artifacts.map(artifact => <article key={artifact.ref}>
         <h4>{artifact.ref}</h4>
         <pre tabIndex={0} aria-label={`${zh ? "证据内容" : "Evidence content"}: ${artifact.ref}`}>{artifact.text}</pre>
         <details><summary>{zh ? "版本与来源标识" : "Version and source identifiers"}</summary>
-          <code>sha256:{artifact.sha256}</code><code>{result.request_id}</code><code>{result.todo_id}</code>
+          <code>{operationId}</code><code>sha256:{artifact.sha256}</code><code>{result.request_id}</code><code>{result.todo_id}</code>
         </details>
       </article>) : <p>{zh ? "本次读取没有可展示的已验收产物。" : "No accepted artifact is available in this readback."}</p>}
       <form onSubmit={event => {event.preventDefault(); void send();}}>
