@@ -21,7 +21,11 @@ def review_action_kind(item: Mapping[str, Any]) -> str | None:
     conclusion = item.get("review_conclusion")
     conclusion = conclusion if isinstance(conclusion, Mapping) else {}
     if conclusion.get("valid") is True:
-        if state == "OPEN" and str(conclusion.get("state") or "").upper() == "APPROVED":
+        # Merge readiness is owed by the typed verdict, not by GitHub's review
+        # state: the platform blocks self-approval, so an author-owned approval
+        # is recorded as COMMENTED and would otherwise sit in the concluded
+        # lane forever, even after the head stops being mergeable.
+        if state == "OPEN" and str(conclusion.get("verdict") or "").upper() == "APPROVE":
             return "qualify_pull_request_merge_readiness"
         return None
     if state == "MERGED":

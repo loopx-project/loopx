@@ -338,16 +338,26 @@ def scan_github_pull_requests(
     }
 
 
-def load_pr_fixture(path: Path) -> tuple[str | None, list[dict[str, Any]]]:
+def load_pr_fixture(
+    path: Path,
+) -> tuple[str | None, list[dict[str, Any]], str | None]:
+    """Load an offline PR window, including the reviewer identity it declares.
+
+    Author-owned conclusions depend on the reviewer identity: GitHub records an
+    author-owned approval as `COMMENTED`, so offline use must be able to name
+    the authenticated reviewer or it cannot represent that real case.
+    """
+
     payload = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(payload, list):
-        return None, [item for item in payload if isinstance(item, dict)]
+        return None, [item for item in payload if isinstance(item, dict)], None
     if not isinstance(payload, dict):
-        return None, []
+        return None, [], None
     items = payload.get("pull_requests") or payload.get("prs") or []
     return (
         str(payload.get("repository") or "") or None,
         [item for item in _as_list(items) if isinstance(item, dict)],
+        str(payload.get("reviewer_login") or "") or None,
     )
 
 
@@ -1302,7 +1312,7 @@ def _review_why_now(item: dict[str, Any]) -> str:
         return "Draft PR; skim for early direction but do not treat as merge-ready."
     conclusion = _as_dict(item.get("review_conclusion"))
     if conclusion.get("valid") is True:
-        if str(conclusion.get("state") or "").upper() == "APPROVED":
+        if str(conclusion.get("verdict") or "").upper() == "APPROVE":
             return "The current exact head has a complete approval; qualify merge readiness."
         return "The current exact head already has a complete standalone conclusion."
     if item.get("author_owned"):

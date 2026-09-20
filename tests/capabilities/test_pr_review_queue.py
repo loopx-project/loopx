@@ -7,8 +7,35 @@ from loopx.capabilities.pr_review_queue import (
     PullRequestReviewPriority,
     build_pull_request_review_queue_observation,
     build_scheduling_policy,
+    materialize_review_execution,
     scheduling_tier,
 )
+
+
+def _concluded_item(
+    *,
+    number: int = 1,
+    state: str = "OPEN",
+    conclusion: dict[str, object] | None = None,
+    draft: bool = False,
+    decision: str = "REVIEW_REQUIRED",
+) -> dict[str, object]:
+    return {
+        "number": number,
+        "state": state,
+        "head_oid": f"{number:040d}",
+        "is_draft": draft,
+        "review_decision": decision,
+        "review_conclusion": conclusion
+        if conclusion is not None
+        else {"valid": True, "state": "COMMENTED", "verdict": "APPROVE"},
+    }
+
+
+def _action_kind(item: dict[str, object]) -> str | None:
+    return materialize_review_execution(
+        item, fresh_audit_exact_heads=set()
+    )["review_action_kind"]
 
 
 def _pr(
@@ -416,6 +443,50 @@ def test_approved_transition_routes_to_merge_policy_without_granting_it() -> Non
     assert todo["action_kind"] == "qualify_pull_request_merge_readiness"
     assert "route any merge through repository policy" in todo["text"]
     assert approved["write_authority_granted"] is False
+
+
+def test_open_head_merge_readiness_follows_typed_verdict() -> None:
+    """An approval keeps owing the pre-merge gate while the PR is open.
+
+    GitHub blocks self-approval, so an author-owned approval is stored as a
+    COMMENTED review. Keying the queue on the formal review state counted such a
+    head as concluded and hid approved heads that had gone behind, conflicted,
+    lost checks, or become blocked.
+    """
+
+    assert (
+        _action_kind(_concluded_item())
+        == "qualify_pull_request_merge_readiness"
+    )
+    assert (
+        _action_kind(
+            _concluded_item(
+                conclusion={"valid": True, "state": "APPROVED", "verdict": "APPROVE"}
+            )
+        )
+        == "qualify_pull_request_merge_readiness"
+    )
+
+    author_owned_request_changes = _concluded_item(
+        conclusion={
+            "valid": True,
+            "state": "COMMENTED",
+            "verdict": "REQUEST_CHANGES",
+        }
+    )
+    assert _action_kind(author_owned_request_changes) is None
+    assert _action_kind(_concluded_item(state="MERGED")) is None
+    assert _action_kind(_concluded_item(draft=True)) is None
+
+    invalid = _concluded_item(
+        conclusion={"valid": False, "state": None, "verdict": None}
+    )
+    assert _action_kind(invalid) == "review_pull_request_exact_head"
+    changes_requested = _concluded_item(
+        conclusion={"valid": False, "state": None, "verdict": None},
+        decision="CHANGES_REQUESTED",
+    )
+    assert _action_kind(changes_requested) == "rereview_pull_request_exact_head"
 
 
 def test_review_backlog_keeps_active_cadence_until_all_handled() -> None:
