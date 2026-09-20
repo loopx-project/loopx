@@ -452,6 +452,12 @@ R ⊆ L × V × Version               将值持久化
 生产证据的词表；`Produced_scan(v)` 是固定形式在代码所有的扫描范围内观察到的
 生产；`ScopeDeclarations` 是注册表声明为有界上下文的那些分叉名字。
 
+机器可读的 universe 和 F1/F2 statement/evidence 字段是 `ProducerDomain` 的规范化
+投影：被检查的词表名字、kernel 成员关系，以及按 tier 划分的域外数量。漂移检查要求
+这些字段与投影完全一致，其中包含合法的 `Kernel(V) ⊆ Producers(V)` 集合关系。
+这些字段是生成的陈述，不是通过禁用短语来检查的自由文本；任意改写不被推断为
+形式化证据。RFC 的解释文字仍需人工评审。
+
 1. **生产闭包（声明了 producers 的词表）：** `∀v ∈ Producers(V): Produced_scan(v) ⊆
    S(v) ⊆ U(v)`。被识别的生产者不能写入注册集合之外的值。`Producers(V)` 目前是
    6 个 `tier: kernel` 词表，加上 `settlement_binding_kind`——唯一携带可执行 witness 的

@@ -566,6 +566,14 @@ executed production evidence; `Produced_scan(v)` is the production the fixed
 forms observe inside the code-owned scan reach; `ScopeDeclarations` are the
 forked names the registry declares as bounded contexts.
 
+The machine-readable universe and F1/F2 statement/evidence fields are canonical
+projections of `ProducerDomain`: the walked vocabulary names, kernel membership,
+and outside counts by tier. The drift smoke requires exact agreement with that
+projection, including the valid `Kernel(V) ⊆ Producers(V)` comparison. These
+fields are generated statements, not free-form prose checked for forbidden
+phrases; arbitrary paraphrases are not interpreted as formal evidence. The RFC
+explanation remains subject to human review.
+
 1. **Producer closedness (vocabularies declaring producers):** `∀v ∈
    Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v)`. A recognised producer cannot
    write a value outside the registered set. `Producers(V)` is currently the six
