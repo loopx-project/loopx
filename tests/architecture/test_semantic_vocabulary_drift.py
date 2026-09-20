@@ -520,53 +520,53 @@ def test_f1_f2_domain_names_exactly_the_vocabularies_the_producer_check_walks() 
         assert domain["evidence_bound"] == "producer_scan_reach"
 
 
-def test_prose_may_not_deny_a_producer_the_check_walks() -> None:
-    """The statement a human reads is held to the set the checker walks.
-
-    The machine domain and the prose were independent: the registry counted a
-    cross-runtime producer into F1/F2 and reported 7/26 while the same file
-    still called the kernel tier the only one declaring producers. Nothing was
-    red, because no check read both. Each mutation below restores one half of
-    that contradiction.
-    """
+@pytest.mark.parametrize("denial", [
+    " The cross_runtime tier declares no producers.",
+    " No vocabulary in the cross_runtime tier has any producer.",
+])
+def test_canonical_producer_statement_rejects_contradictory_paraphrases(denial: str) -> None:
     smoke = runpy.run_path(str(SMOKE))
     registry = copy.deepcopy(smoke["load_registry"]())
-    model = registry["formal_model"]
-    smoke["check_formal_model"](model, registry)
-
-    kernel_only = copy.deepcopy(registry)
-    kernel_only["formal_model"]["universes"]["vocabularies"] = (
-        "V: registered vocabulary identifiers; Kernel(V) \u2286 V is the tier=kernel "
-        "subset, the only tier that declares producers"
-    )
-    with pytest.raises(smoke["Drift"], match="Kernel\\(V\\)"):
-        smoke["check_formal_model"](kernel_only["formal_model"], kernel_only)
-
-    denial = copy.deepcopy(registry)
-    _invariant(denial, "F2_canonical_value_liveness")["statement"] += (
-        " The cross_runtime tier declares no producers."
-    )
-    with pytest.raises(smoke["Drift"], match="declares no producers"):
-        smoke["check_formal_model"](denial["formal_model"], denial)
-
-
-def test_prose_must_keep_naming_what_stays_outside_the_walked_set() -> None:
-    """Stating only the verified half lets the unverified remainder go quiet."""
-    smoke = runpy.run_path(str(SMOKE))
-    registry = copy.deepcopy(smoke["load_registry"]())
-    vocabularies = registry["vocabularies"]
-    outside = [name for name, entry in vocabularies.items() if "producers" not in entry]
-    tiers = {vocabularies[name]["tier"] for name in outside}
-    assert tiers == {"cross_runtime"}, tiers
-
-    statement = _invariant(registry, "F1_producer_closedness")["statement"]
-    fragment = f"{len(outside)} cross_runtime"
-    assert fragment in statement, statement
-    _invariant(registry, "F1_producer_closedness")["statement"] = statement.replace(
-        fragment, "the remaining cross_runtime"
-    )
-    with pytest.raises(smoke["Drift"], match="left outside the walked set"):
+    _invariant(registry, "F2_canonical_value_liveness")["statement"] += denial
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
         smoke["check_formal_model"](registry["formal_model"], registry)
+
+
+def test_generated_domain_accepts_true_kernel_comparison() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = smoke["load_registry"]()
+    model = registry["formal_model"]
+    assert "Kernel(V) ⊆ Producers(V)." in model["universes"]["vocabularies"]
+    smoke["check_formal_model"](model, registry)
+    domain = smoke["ProducerDomain"].from_registry(registry)
+    assert domain.kernel < domain.walked
+    assert domain.walked - domain.kernel == {"settlement_binding_kind"}
+    assert domain.outside_by_tier == (("cross_runtime", 19),)
+
+
+def test_canonical_domain_rejects_old_kernel_only_universe() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    registry["formal_model"]["universes"]["vocabularies"] = (
+        "V: registered vocabulary identifiers; Kernel(V) is the only producer domain"
+    )
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+
+
+def test_domain_membership_change_requires_regenerated_prose() -> None:
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    # A membership change must not leave yesterday's tier/count claim green,
+    # even if the independent numeric domain entries were already updated.
+    registry["vocabularies"]["settlement_binding_kind"].pop("producers")
+    for invariant_id in ("F1_producer_closedness", "F2_canonical_value_liveness"):
+        _invariant(registry, invariant_id)["domain"]["verified"] = 6
+    with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+    projected = smoke["producer_domain_prose"](registry)
+    assert "20 cross_runtime" in projected["F1_producer_closedness.statement"]
+    assert "6 kernel and 0 outside" in projected["universes.vocabularies"]
 
 
 @pytest.mark.parametrize("invariant_id", sorted({
