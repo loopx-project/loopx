@@ -17,7 +17,12 @@ This probe intentionally exercises the current Python SDK bridge because it is
 the available raw byte-CAS seam. It always starts this checkout's reviewed
 `NoKVJsonLinesTransport` and `nokv_jsonl_helper.py`; it has no fake, skip, or
 "unverified but successful" CLI path. The helper admits exactly NoKV SDK
-`0.11.0` / Python API `1`, and the successful report repeats both values.
+`0.11.1` / Python API `1` whose `Client.publish_bytes` names
+`expected_workspace_incarnation_id` and whose module exports
+`WorkspaceIncarnationMismatch`; the successful report repeats both version
+values. A `0.11.0` wheel is refused by the version pin (`invalid_config`), and a
+wheel labelled `0.11.1` without that publication surface is refused as
+`nokv_sdk_capability_mismatch` before any client is constructed.
 
 ## What it proves
 
@@ -25,6 +30,10 @@ Against one **already existing** NoKV workbench, the probe starts three
 independent helper processes and verifies:
 
 - the selected tenant/goal path is initially absent and can be created;
+- a publication of the generation-1 envelope fenced on a stale workbench
+  incarnation is refused typed (`store_identity_mismatch`) before any row or
+  object exists: the stored generation stays 1 and the workbench identity is
+  unchanged (every LoopX publication carries the incarnation it was read from);
 - the stored path generation advances from 1 to 2 under exact generation CAS;
 - after the generation-2 CAS lands, an injected response loss is reconciled
   from the durable authority envelope and operation receipt rather than from
@@ -42,30 +51,34 @@ If the SDK, helper, workbench, backend, CAS, or independent readback cannot be
 proved, the process exits nonzero. The normal test suite uses deterministic
 fakes only to test this sequence and does **not** count as live evidence.
 
-The probe does not prove an atomic expected-incarnation publication fence,
-runtime shadow parity, a multi-Agent canary, authority promotion, HA, failover,
-restart recovery, capacity, or performance. NoKV generation can restart after
-workbench recreation, so the current adapter fails closed through authoritative
-post-write readback; preventing the stale-incarnation write itself requires a
-future provider primitive. The probe also does not create a workbench. A green
-run is Stage 2A single-node storage conformance evidence only.
+The probe proves the expected-incarnation publication fence only as far as a
+single live owner can show it: a stale fence is refused typed and leaves the
+generation untouched. It does not restore or recreate the workbench (NoKV
+exposes no client-side retire verb), so the incarnation rotation itself is
+covered by NoKV's own executor tests, not by this probe. Success is still
+accepted only after authoritative post-write readback in the current
+incarnation: the fence removes the stale write, not the readback obligation.
+The probe does not prove runtime shadow parity, a multi-Agent canary, authority
+promotion, HA, failover, restart recovery, capacity, or performance, and it does
+not create a workbench. A green run is Stage 2A single-node storage conformance
+evidence only.
 
 ## Inputs
 
 Use a current NoKV Python environment. Keep the client configuration in an
 ignored local file; do not commit credentials. The helper accepts three routing
 kinds and passes each to the matching `RoutingConfig` constructor of the
-installed SDK: `etcd` and `static` (the 0.11.0 release wheel) and `seeds`
+installed SDK: `etcd` and `static` (the 0.11.x release wheels) and `seeds`
 (`{"kind": "seeds", "endpoints": ["IP:PORT", ...]}`, the NoKV
 metadata-runtimes line, which names serving owners directly and drops the etcd
 constructor). Static routing is valid for a single-node NoKV deployment; etcd
 is not required by this probe. A routing kind the installed wheel cannot build
 fails the open handshake with `nokv_sdk_capability_mismatch` before any client
-is constructed, so a seeds configuration against a 0.11.0 wheel (or an etcd
+is constructed, so a seeds configuration against a 0.11.1 wheel (or an etcd
 configuration against a metadata-runtimes wheel) is reported as the wrong
 wheel, not as an outage. The `ready` handshake echoes `nokv_protocol_schema`:
 the SDK's `WORKSPACE_PROTOCOL_SCHEMA` when the wheel exports one, otherwise
-`null` (the 0.11.0 release does not). The following shape is illustrative:
+`null` (the 0.11.x releases do not). The following shape is illustrative:
 
 ```json
 {
@@ -136,7 +149,7 @@ unfenced, pre-existing, or unreadable state exits nonzero with a compact JSON
 reason; provider stderr, endpoints, credentials, and raw SDK errors are not
 copied into that result. A successful JSON report includes
 `"qualification_scope":"stage_2a_single_node_store_conformance"`,
-`"nokv_sdk_version":"0.11.0"`, and `"nokv_api_version":1`. The two version
+`"nokv_sdk_version":"0.11.1"`, and `"nokv_api_version":1`. The two version
 fields are the helper's admission constants: the helper refuses to open a client
 for any other SDK version or API version, so a successful report implies them,
 but they are not values read back from the NoKV server. The report is Stage

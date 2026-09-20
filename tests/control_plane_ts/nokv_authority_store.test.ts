@@ -31,6 +31,12 @@ interface FakeNoKVBackend {
   publishFault: PublishFault;
   casRequests: NoKVBlobCasRequest[];
   terminalPhysicalIds: Set<string>;
+  /**
+   * Mirrors NoKV 0.11.1: the expected incarnation is evaluated before the path
+   * is claimed, so a stale fence leaves no row, object, or generation behind.
+   * `false` models an owner that ignored the fence, to pin the readback guard.
+   */
+  enforceIncarnationFence: boolean;
 }
 
 function fakeBackend(): FakeNoKVBackend {
@@ -43,7 +49,12 @@ function fakeBackend(): FakeNoKVBackend {
     publishFault: null,
     casRequests: [],
     terminalPhysicalIds: new Set(),
+    enforceIncarnationFence: true,
   };
+}
+
+function incarnationOf(identity: string): string {
+  return identity.slice("nokv:authority-workbench:".length);
 }
 
 class FakeNoKVTransport implements NoKVBlobTransport {
@@ -96,6 +107,16 @@ class FakeNoKVTransport implements NoKVBlobTransport {
         status: "ambiguous",
         reason_code: "injected_terminal_identity_spent",
         reason: "physical publication identity is terminal",
+      };
+    }
+    if (
+      this.backend.enforceIncarnationFence &&
+      request.expected_workspace_incarnation_id !== incarnationOf(this.backend.identity)
+    ) {
+      return {
+        status: "failed",
+        reason_code: "store_identity_mismatch",
+        reason: "workbench incarnation does not match the expected incarnation",
       };
     }
     const current = this.backend.blob?.generation ?? null;
@@ -275,8 +296,70 @@ test("NoKV provider fences restored bytes with a different workspace incarnation
   assert.equal(backend.casRequests.length, callsBeforeRestore);
 });
 
-test("NoKV provider does not report applied across a workbench-incarnation race", async () => {
+test("NoKV provider names the bound workbench incarnation on every publication", async () => {
   const backend = fakeBackend();
+  const provider = store(backend);
+  const created = await provider.commitAuthority(commit(null, "operation-a", 1, 1));
+  assert.equal(created.status, "applied");
+  const second = commit(
+    created.status === "applied" ? created.provider_revision : null,
+    "operation-b",
+    2,
+    2,
+  );
+  // A terminal physical failure leaves the logical commit ambiguous; the
+  // caller's retry publishes with fresh lower-layer ids and the same fence.
+  backend.publishFault = "terminal_ambiguous_before";
+  assert.equal((await provider.commitAuthority(second)).status, "ambiguous");
+  assert.equal((await provider.commitAuthority(second)).status, "applied");
+
+  assert.equal(backend.casRequests.length, 3);
+  assert.notEqual(backend.casRequests[1]?.operation_id, backend.casRequests[2]?.operation_id);
+  for (const request of backend.casRequests) {
+    assert.equal(request.expected_workspace_incarnation_id, "a".repeat(32));
+  }
+});
+
+test("NoKV provider is refused before writing across a workbench-incarnation race", async () => {
+  const backend = fakeBackend();
+  const provider = store(backend);
+  const created = await provider.commitAuthority(commit(null, "operation-a", 1, 1));
+  assert.equal(created.status, "applied");
+  const bytesBefore = Buffer.from(backend.blob!.bytes).toString("base64");
+  const requestsBefore = backend.casRequests.length;
+  // The store reads generation 1 in incarnation a; the workbench is restored to
+  // incarnation b before the publish reaches the owner.
+  backend.rotateIdentityBeforePublish = `nokv:authority-workbench:${"b".repeat(32)}`;
+
+  const result = await provider.commitAuthority(
+    commit(
+      created.status === "applied" ? created.provider_revision : null,
+      "operation-b",
+      2,
+      2,
+    ),
+  );
+
+  assert.equal(result.status, "failed");
+  if (result.status === "failed") {
+    assert.equal(result.reason_code, "store_identity_mismatch");
+  }
+  assert.equal(backend.casRequests.length, requestsBefore + 1);
+  assert.equal(
+    backend.casRequests.at(-1)?.expected_workspace_incarnation_id,
+    "a".repeat(32),
+  );
+  assert.equal(backend.blob?.generation, 1);
+  assert.equal(Buffer.from(backend.blob!.bytes).toString("base64"), bytesBefore);
+  const reloaded = await provider.loadAuthority();
+  assert.equal(reloaded.status, "failed");
+  if (reloaded.status === "failed") assert.match(reloaded.reason, /lineage mismatch/);
+  assert.equal((await provider.readReceipt("operation-b")).status, "failed");
+});
+
+test("NoKV provider does not report applied when an owner ignores the incarnation fence", async () => {
+  const backend = fakeBackend();
+  backend.enforceIncarnationFence = false;
   const provider = store(backend);
   backend.rotateIdentityBeforePublish = `nokv:authority-workbench:${"b".repeat(32)}`;
 
@@ -287,6 +370,7 @@ test("NoKV provider does not report applied across a workbench-incarnation race"
     assert.equal(result.reason_code, "provider_protocol_violation");
     assert.match(result.reason, /lineage mismatch/);
   }
+  assert.equal(backend.casRequests[0]?.expected_workspace_incarnation_id, "a".repeat(32));
   assert.equal((await provider.loadAuthority()).status, "failed");
 });
 

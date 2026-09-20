@@ -250,6 +250,18 @@ def test_stage_2a_row_reports_specific_unverified_reasons_for_each_missing_input
     assert ladder.collect_bindings(inputs)["nokv_client_config_sha256"] is not None
 
 
+def test_nokv_sdk_pin_and_fence_checks_agree_across_helper_ladder_and_probe() -> None:
+    from loopx.control_plane.coordination import nokv_jsonl_helper as helper
+
+    assert ladder.QUALIFIED_NOKV_SDK_VERSION == helper.QUALIFIED_NOKV_SDK_VERSION == "0.11.1"
+    assert ladder.QUALIFIED_NOKV_API_VERSION == helper.QUALIFIED_NOKV_API_VERSION == 1
+    probe = (ladder.REPO_ROOT / ladder.NOKV_QUALIFICATION_SCRIPT).read_text(encoding="utf-8")
+    assert f'export const QUALIFIED_NOKV_SDK_VERSION = "{ladder.QUALIFIED_NOKV_SDK_VERSION}";' in probe
+    assert f"export const QUALIFIED_NOKV_API_VERSION = {ladder.QUALIFIED_NOKV_API_VERSION};" in probe
+    for check_id in ladder.NOKV_INCARNATION_FENCE_CHECKS:
+        assert f'passed("{check_id}")' in probe
+
+
 def test_pending_rows_never_exit_green_without_allow_pending(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

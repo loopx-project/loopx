@@ -36,7 +36,7 @@ const PYTHON = process.env.LOOPX_TEST_PYTHON ?? "python3";
 /** Minimal module that satisfies helper admission and records that it was imported. */
 const STAND_IN_SDK_SOURCE = `import os
 
-__version__ = "0.11.0"
+__version__ = "0.11.1"
 API_VERSION = 1
 
 _marker = os.environ.get("LOOPX_TEST_STAND_IN_MARKER")
@@ -69,9 +69,18 @@ class ObjectStoreConfig:
         return ("s3", values)
 
 
+class WorkspaceIncarnationMismatch(RuntimeError):
+    def __init__(self, message, expected):
+        super().__init__(message)
+        self.expected = expected
+
+
 class Client:
     def __init__(self, **values):
         self.values = values
+
+    def publish_bytes(self, workbench, path, data, *, expected_workspace_incarnation_id=None, **values):
+        raise NotImplementedError
 `;
 
 function absolutePythonExecutable(): string | null {
@@ -86,9 +95,13 @@ function absolutePythonExecutable(): string | null {
 interface Backend {
   blob: { bytes: Uint8Array; generation: number } | null;
   ignoreCas: boolean;
+  /** Models an owner that accepts a stale incarnation fence instead of refusing it. */
+  ignoreIncarnationFence?: boolean;
   publishCalls: number;
   pretendAppliedWithoutWriteOnCall: number | null;
 }
+
+const FAKE_INCARNATION = "a".repeat(32);
 
 class FakeQualificationTransport implements QualificationTransport {
   readonly backend: Backend;
@@ -101,7 +114,7 @@ class FakeQualificationTransport implements QualificationTransport {
   async storeIdentity(workbench: string): Promise<NoKVStoreIdentityResult> {
     return {
       status: "available",
-      store_identity: `nokv:${workbench}:${"a".repeat(32)}`,
+      store_identity: `nokv:${workbench}:${FAKE_INCARNATION}`,
     };
   }
 
@@ -117,6 +130,16 @@ class FakeQualificationTransport implements QualificationTransport {
 
   async casPublishBlob(request: NoKVBlobCasRequest): Promise<NoKVBlobCasResult> {
     this.backend.publishCalls += 1;
+    if (
+      !this.backend.ignoreIncarnationFence &&
+      request.expected_workspace_incarnation_id !== FAKE_INCARNATION
+    ) {
+      return {
+        status: "failed",
+        reason_code: "store_identity_mismatch",
+        reason: "workbench incarnation does not match the expected incarnation",
+      };
+    }
     const current = this.backend.blob?.generation ?? null;
     if (!this.backend.ignoreCas && current !== request.expected_generation) {
       return { status: "conflict", current_generation: current };
@@ -191,7 +214,7 @@ test("Stage 2A qualification harness rejects a relative Python executable", () =
 
 test("Stage 2A qualification harness names the exact NoKV SDK contract", () => {
   assert.equal(QUALIFICATION_SCOPE, "stage_2a_single_node_store_conformance");
-  assert.equal(QUALIFIED_NOKV_SDK_VERSION, "0.11.0");
+  assert.equal(QUALIFIED_NOKV_SDK_VERSION, "0.11.1");
   assert.equal(QUALIFIED_NOKV_API_VERSION, 1);
 });
 
@@ -216,6 +239,8 @@ test("qualification proves create, ambiguous reconciliation, contention, and fre
     "fresh_authority_target",
     "create_applied",
     "create_generation_one",
+    "stale_incarnation_fence_rejected",
+    "stale_incarnation_fence_left_generation_unchanged",
     "response_lost_success_reconciled",
     "generation_cas_applied",
     "generation_two_readback",
@@ -230,6 +255,28 @@ test("qualification proves create, ambiguous reconciliation, contention, and fre
     Array(report.checks.length).fill("passed"));
   assert.equal(opened.length, 3);
   assert.ok(opened.every((transport) => transport.closed));
+});
+
+test("qualification rejects a backend that accepts a stale incarnation fence", async () => {
+  const backend: Backend = {
+    blob: null,
+    ignoreCas: false,
+    ignoreIncarnationFence: true,
+    publishCalls: 0,
+    pretendAppliedWithoutWriteOnCall: null,
+  };
+  await assert.rejects(
+    exerciseQualificationSequence(BASE_OPTIONS, async () =>
+      new FakeQualificationTransport(backend)),
+    (error: unknown) => {
+      assert.ok(error instanceof QualificationFailure);
+      assert.equal(error.reasonCode, "stale_incarnation_fence_not_enforced");
+      return true;
+    },
+  );
+  // The unfenced owner applied the stale write, so the envelope moved to
+  // generation 2 without a LoopX commit: exactly the outcome the fence removes.
+  assert.equal(backend.blob?.generation, 2);
 });
 
 test("qualification rejects a backend that does not enforce generation CAS", async () => {
@@ -285,7 +332,8 @@ test("qualification requires durable readback after the injected response loss",
     blob: null,
     ignoreCas: false,
     publishCalls: 0,
-    pretendAppliedWithoutWriteOnCall: 2,
+    // create (1), stale fence probe (2), advance (3)
+    pretendAppliedWithoutWriteOnCall: 3,
   };
   await assert.rejects(
     exerciseQualificationSequence(BASE_OPTIONS, async () =>

@@ -308,6 +308,7 @@ export class NoKVJsonLinesTransport implements NoKVBlobTransport {
       workbench: request.workbench,
       path: request.path,
       expected_generation: request.expected_generation,
+      expected_workspace_incarnation_id: request.expected_workspace_incarnation_id,
       bytes_base64: Buffer.from(request.bytes).toString("base64"),
       operation_id: request.operation_id,
       artifact_revision_id: request.artifact_revision_id,

@@ -31,7 +31,12 @@ const ETCD_ROUTING = {
 // NoKV metadata-runtimes line, which drops the etcd constructor.
 const SEEDS_ROUTING = { kind: "seeds", endpoints: ["127.0.0.1:7750"] };
 
-async function openSdkHelper(routing: Record<string, unknown> = ETCD_ROUTING) {
+const FAKE_INCARNATION = "a".repeat(32);
+
+async function openSdkHelper(
+  routing: Record<string, unknown> = ETCD_ROUTING,
+  fakeSdkShape?: "0.11.0" | "0.11.1-unfenced",
+) {
   return await NoKVJsonLinesTransport.open({
     argv: [PYTHON, SDK_HELPER],
     config: {
@@ -44,6 +49,7 @@ async function openSdkHelper(routing: Record<string, unknown> = ETCD_ROUTING) {
       PYTHONPATH: process.env.PYTHONPATH
         ? `${FAKE_SDK_ROOT}:${process.env.PYTHONPATH}`
         : FAKE_SDK_ROOT,
+      ...(fakeSdkShape === undefined ? {} : { LOOPX_FAKE_NOKV_SDK_SHAPE: fakeSdkShape }),
     },
     request_timeout_ms: 2_000,
   });
@@ -121,6 +127,7 @@ test("JSON-lines transport starts once and reuses the helper process", async (t)
       workbench: "authority-workbench",
       path: "metadata/head.json",
       expected_generation: null,
+      expected_workspace_incarnation_id: FAKE_INCARNATION,
       bytes: Buffer.from("payload", "utf8"),
       operation_id: "a".repeat(32),
       artifact_revision_id: "b".repeat(32),
@@ -133,6 +140,69 @@ test("JSON-lines transport starts once and reuses the helper process", async (t)
     assert.equal(Buffer.from(loaded.bytes).toString("utf8"), "payload");
     assert.equal(loaded.generation, 1);
   }
+});
+
+test("JSON-lines helper refuses a stale incarnation fence typed and leaves the generation unchanged", async (t) => {
+  const transport = await openSdkHelper();
+  t.after(async () => await transport.close());
+  assert.deepEqual(
+    await transport.casPublishBlob({
+      workbench: "authority-workbench",
+      path: "metadata/head.json",
+      expected_generation: null,
+      expected_workspace_incarnation_id: FAKE_INCARNATION,
+      bytes: Buffer.from("generation one", "utf8"),
+      operation_id: "c".repeat(32),
+      artifact_revision_id: "d".repeat(32),
+    }),
+    { status: "applied", generation: 1 },
+  );
+
+  assert.deepEqual(
+    await transport.casPublishBlob({
+      workbench: "authority-workbench",
+      path: "metadata/head.json",
+      expected_generation: 1,
+      expected_workspace_incarnation_id: "b".repeat(32),
+      bytes: Buffer.from("stale incarnation", "utf8"),
+      operation_id: "e".repeat(32),
+      artifact_revision_id: "f".repeat(32),
+    }),
+    {
+      status: "failed",
+      reason_code: "store_identity_mismatch",
+      reason: "NoKV workbench incarnation does not match the expected incarnation",
+    },
+  );
+  const loaded = await transport.readBlob("authority-workbench", "metadata/head.json");
+  assert.equal(loaded.status, "loaded");
+  if (loaded.status === "loaded") {
+    assert.equal(Buffer.from(loaded.bytes).toString("utf8"), "generation one");
+    assert.equal(loaded.generation, 1);
+  }
+});
+
+test("JSON-lines helper refuses the 0.11.0 wheel by its version pin", async () => {
+  await assert.rejects(
+    openSdkHelper(ETCD_ROUTING, "0.11.0"),
+    (error: unknown) => {
+      assert.ok(error instanceof NoKVTransportProtocolError);
+      assert.match(error.message, /must be version 0\.11\.1/);
+      return true;
+    },
+  );
+});
+
+test("JSON-lines helper refuses a 0.11.1-labelled wheel without the publication fence", async () => {
+  await assert.rejects(
+    openSdkHelper(ETCD_ROUTING, "0.11.1-unfenced"),
+    (error: unknown) => {
+      assert.ok(error instanceof NoKVTransportProtocolError);
+      assert.match(error.message, /does not fence publication/);
+      assert.match(error.message, /expected_workspace_incarnation_id/);
+      return true;
+    },
+  );
 });
 
 test("JSON-lines helper disconnect is typed unavailable", async (t) => {

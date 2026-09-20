@@ -30,7 +30,7 @@ import {
 
 const REPORT_SCHEMA = "loopx_nokv_authority_live_qualification_v0";
 export const QUALIFICATION_SCOPE = "stage_2a_single_node_store_conformance";
-export const QUALIFIED_NOKV_SDK_VERSION = "0.11.0";
+export const QUALIFIED_NOKV_SDK_VERSION = "0.11.1";
 export const QUALIFIED_NOKV_API_VERSION = 1;
 const REPOSITORY_HELPER = fileURLToPath(
   new URL("../../loopx/control_plane/coordination/nokv_jsonl_helper.py", import.meta.url),
@@ -266,6 +266,16 @@ function applied(
   return result;
 }
 
+/** A 32-hex incarnation that differs from `current` in its first digit. */
+function staleIncarnation(current: string): string {
+  return `${current.startsWith("0") ? "1" : "0"}${current.slice(1)}`;
+}
+
+/** A fresh lower-layer publication identity; the probe never reuses one. */
+function freshPhysicalIdentity(): string {
+  return randomUUID().replaceAll("-", "");
+}
+
 async function rawGeneration(
   transport: NoKVBlobTransport,
   store: NoKVAuthorityStore,
@@ -360,6 +370,47 @@ export async function exerciseQualificationSequence(
     passed("create_applied");
     await rawGeneration(firstTransport, first, 1, "create_generation_failed");
     passed("create_generation_one");
+
+    // A write prepared against one workbench incarnation must not land after
+    // the workbench is restored to another. Send the generation-1 envelope back
+    // through the raw transport with a fence naming a different incarnation:
+    // NoKV must refuse it typed, before any row or object exists, and the
+    // stored generation and the workbench identity must both be unchanged.
+    const boundIdentity = firstIdentity.status === "available"
+      ? firstIdentity.store_identity
+      : fail("workbench_identity_failed", "workbench identity was not available");
+    const currentEnvelope = await firstTransport.readBlob(first.workbench, first.path);
+    expect(
+      currentEnvelope.status === "loaded" && currentEnvelope.generation === 1,
+      "stale_incarnation_fence_probe_failed",
+      "the generation-1 envelope could not be read for the fence probe",
+    );
+    const staleFence = await firstTransport.casPublishBlob({
+      workbench: first.workbench,
+      path: first.path,
+      expected_generation: 1,
+      expected_workspace_incarnation_id: staleIncarnation(
+        boundIdentity.slice(`nokv:${workbench}:`.length),
+      ),
+      bytes: currentEnvelope.bytes,
+      operation_id: freshPhysicalIdentity(),
+      artifact_revision_id: freshPhysicalIdentity(),
+    });
+    expect(
+      staleFence.status === "failed" && staleFence.reason_code === "store_identity_mismatch",
+      "stale_incarnation_fence_not_enforced",
+      "NoKV did not refuse a publication fenced on a stale workbench incarnation",
+    );
+    passed("stale_incarnation_fence_rejected");
+    const identityAfterFence = await first.storeIdentity();
+    expect(
+      identityAfterFence.status === "available" &&
+        identityAfterFence.store_identity === boundIdentity,
+      "stale_incarnation_fence_probe_failed",
+      "the workbench incarnation changed during the fence probe",
+    );
+    await rawGeneration(firstTransport, first, 1, "stale_incarnation_fence_wrote");
+    passed("stale_incarnation_fence_left_generation_unchanged");
 
     const advanced = applied(
       await second.commitAuthority(

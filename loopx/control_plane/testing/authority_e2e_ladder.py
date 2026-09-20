@@ -140,8 +140,14 @@ NOKV_QUALIFICATION_SCRIPT = Path("examples") / "nokv-authority-store" / "live-qu
 NOKV_HELPER = Path("loopx") / "control_plane" / "coordination" / "nokv_jsonl_helper.py"
 NOKV_QUALIFICATION_REPORT_SCHEMA = "loopx_nokv_authority_live_qualification_v0"
 NOKV_QUALIFICATION_SCOPE = "stage_2a_single_node_store_conformance"
-QUALIFIED_NOKV_SDK_VERSION = "0.11.0"
+QUALIFIED_NOKV_SDK_VERSION = "0.11.1"
 QUALIFIED_NOKV_API_VERSION = 1
+# NoKV 0.11.1 refuses a publication fenced on a stale workbench incarnation
+# before any durable row or object exists; the live probe must prove it.
+NOKV_INCARNATION_FENCE_CHECKS: tuple[str, ...] = (
+    "stale_incarnation_fence_rejected",
+    "stale_incarnation_fence_left_generation_unchanged",
+)
 PROBE_SOURCES: tuple[Path, ...] = (
     LIVE_E2E_SCRIPT,
     TS_READBACK_PROBE,
@@ -471,6 +477,10 @@ def _row_nokv_live_qualification(context: RowContext) -> RowOutcome:
         "every qualification check must have passed",
     )
     expect(
+        all(check_id in check_ids for check_id in NOKV_INCARNATION_FENCE_CHECKS),
+        "qualification must prove the stale-incarnation publication fence",
+    )
+    expect(
         report.get("nokv_sdk_version") == QUALIFIED_NOKV_SDK_VERSION
         and report.get("nokv_api_version") == QUALIFIED_NOKV_API_VERSION,
         "qualification must name the qualified NoKV SDK and API versions",
@@ -484,6 +494,7 @@ def _row_nokv_live_qualification(context: RowContext) -> RowOutcome:
         qualification_scope=NOKV_QUALIFICATION_SCOPE,
         check_count=len(check_ids),
         check_ids=check_ids,
+        incarnation_fence_checks=list(NOKV_INCARNATION_FENCE_CHECKS),
         final_generation=report.get("final_generation"),
         final_cursor=report.get("final_cursor"),
         nokv_sdk_version=report.get("nokv_sdk_version"),
