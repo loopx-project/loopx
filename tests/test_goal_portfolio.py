@@ -145,6 +145,130 @@ def test_quota_noise_does_not_evict_recorded_delivery(tmp_path, reads):
     assert row["agents"][0]["todos"][0]["readiness"] == "runnable"
 
 
+LIFECYCLE_FIXTURE = {
+    "schema_version": "goal_artifact_lifecycle_projection_v0",
+    "goal_id": "alpha",
+    "lifecycle_phase": "qualifying",
+    "milestones": [
+        {
+            "id": "outcome_progress",
+            "label": "advance the Goal",
+            "reached": True,
+            "reached_evidence_refs": ["sha256:fixture"],
+            "source": "evidence",
+        }
+    ],
+    "guards": [],
+    "next_transitions": [],
+}
+
+
+def lifecycle_reader(projection: dict | None):
+    """A collector stand-in that attaches, or withholds, the lifecycle key.
+
+    It answers the shared all-Goals read too, because a two-Goal portfolio
+    inside the collection limit is collected once.
+    """
+
+    def record(goal_id):
+        entry = status(goal_id)["run_history"]["goals"][0]
+        if projection is not None:
+            entry["artifact_lifecycle"] = {**deepcopy(projection), "goal_id": goal_id}
+        return entry
+
+    def read(**kwargs):
+        selected = kwargs.get("goal_id")
+        ids = [selected] if selected else [
+            g["id"] for g in json.loads(kwargs["registry_path"].read_text())["goals"]
+        ]
+        return {"ok": True, "run_history": {"goals": [record(i) for i in ids]}}
+
+    return read
+
+
+def test_lifecycle_readback_is_opt_in_and_never_a_silent_gap(
+    tmp_path, reads, monkeypatch
+):
+    """The manager cannot read a missing projection as "no milestones".
+
+    Default callers stay byte-for-byte unaffected; a caller that asks for the
+    lifecycle either receives the collector's own projection or a typed gap
+    naming why, including for a Goal this reader excluded before any read.
+    """
+
+    path = registry(tmp_path, ("alpha", "beta"))
+    monkeypatch.setattr(
+        portfolio, "collect_status", lifecycle_reader(LIFECYCLE_FIXTURE)
+    )
+    default = portfolio.build_goal_portfolio(registry_path=path, now=NOW)
+    assert all("goal_lifecycle" not in row for row in default["goals"]), default
+    assert "Goal lifecycle readback" not in json.dumps(default)
+
+    requested = portfolio.build_goal_portfolio(
+        registry_path=path, now=NOW, include_goal_lifecycle=True
+    )
+    assert requested["goals"][0]["goal_lifecycle"] == {
+        **LIFECYCLE_FIXTURE,
+        "goal_id": "alpha",
+    }
+    assert "Goal lifecycle readback" in requested["limitations"][-1]
+    assert "goal_lifecycle" not in default["limitations"][-1]
+
+
+def test_lifecycle_readback_names_every_unavailable_reason(
+    tmp_path, reads, monkeypatch
+):
+    path = registry(tmp_path, ("alpha", "beta"))
+    monkeypatch.setattr(portfolio, "collect_status", lifecycle_reader(None))
+    derived_absent = portfolio.build_goal_portfolio(
+        registry_path=path, now=NOW, include_goal_lifecycle=True
+    )
+    reasons = {
+        row["goal_lifecycle"]["reason"] for row in derived_absent["goals"]
+    }
+    assert reasons == {"projection_not_derived"}
+    assert all(
+        row["goal_lifecycle"]["schema_version"]
+        == portfolio.GOAL_LIFECYCLE_READBACK_SCHEMA_VERSION
+        and row["goal_lifecycle"]["status"] == "unavailable"
+        for row in derived_absent["goals"]
+    )
+
+    limited = portfolio.build_goal_portfolio(
+        registry_path=path, limit=1, now=NOW, include_goal_lifecycle=True
+    )
+    assert [row["goal_lifecycle"]["reason"] for row in limited["goals"]] == [
+        "projection_not_derived",
+        "goal_not_read",
+    ]
+
+    attach = lifecycle_reader(LIFECYCLE_FIXTURE)
+
+    def changed_read(**kwargs):
+        path.write_text(path.read_text() + "\n")
+        return attach(**kwargs)
+
+    monkeypatch.setattr(portfolio, "collect_status", changed_read)
+    changed = portfolio.build_goal_portfolio(
+        registry_path=path, now=NOW, include_goal_lifecycle=True
+    )
+    assert [row["goal_lifecycle"]["reason"] for row in changed["goals"]] == [
+        "inventory_changed_during_collection"
+    ] * 2
+    # A projection derived from a source that changed mid-read must not survive
+    # as a phase the manager would report as current.
+    assert "lifecycle_phase" not in json.dumps(changed)
+
+    monkeypatch.setattr(
+        portfolio, "collect_status", lifecycle_reader(LIFECYCLE_FIXTURE)
+    )
+    for bad in (1, "yes", None):
+        with pytest.raises(ValueError):
+            portfolio.build_goal_portfolio(
+                registry_path=path, now=NOW, include_goal_lifecycle=bad
+            )
+
+
 @pytest.mark.parametrize(
     "mode,quality",
     [

@@ -635,7 +635,14 @@ def open_manager_session(
     )
 
 
-MANAGER_CONTEXT_VERSION = 14
+# 14: the steward answer contract took one typed owner (the managed skill marker
+#     moved v1 -> v2 in the same change).
+# 15: manager_turn_context rows also carry the Goal lifecycle readback
+#     (milestones/phase) the status collector already derived. The counter is
+#     the manager session-invalidation token, so a second row-shape change must
+#     take the next unused value: reusing 14 would leave a session issued under
+#     the answer-contract shape serving the new rows.
+MANAGER_CONTEXT_VERSION = 15
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any

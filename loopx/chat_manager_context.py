@@ -14,7 +14,7 @@ from .chat_manager import manager_model_config
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .chat_manager_details import read_manager_goal_details
 from .chat_manager_history import read_manager_delivery_history
-from .goal_portfolio import build_goal_portfolio
+from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
 from .chat import redact_local_paths
 from .control_plane.collaboration import conversation_scope
 
@@ -365,6 +365,10 @@ def manager_turn_context(
         goal_ids=scope,
         limit=128,
         include_stopped=False,
+        # The steward's answer order names the Goal's milestones and baseline,
+        # so the lifecycle projection the status collector already derived
+        # travels with the row instead of being reconstructed from todos.
+        include_goal_lifecycle=True,
     )
     labels: dict[str, str] = {}
     try:
@@ -416,6 +420,14 @@ def manager_turn_context(
                 "progress": row.get("progress", "unknown"),
                 "source": row.get("source"),
                 "warnings": row.get("warnings", []),
+                # Present for every row this turn's portfolio attempted; the
+                # portfolio already substitutes a typed gap for a Goal it could
+                # not read, and this floor keeps a future portfolio path from
+                # turning that contract back into a silent null.
+                "goal_lifecycle": row.get("goal_lifecycle")
+                or lifecycle_readback_unavailable(
+                    row["goal_id"], "portfolio_row_missing_lifecycle"
+                ),
                 "agents": [
                     {
                         "agent_id": a.get("agent_id"),

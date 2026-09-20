@@ -18,7 +18,11 @@ READ_TOOL = {
     "name": TOOL_NAME,
     "description": (
         "Read authorized LoopX Core evidence on demand: the global Goal portfolio, "
-        "one Goal's current Todos, recorded deliveries, or handoff receipt status. Use concrete evidence "
+        "one Goal's current Todos, recorded deliveries, or handoff receipt status. "
+        "Every portfolio row carries its Goal lifecycle readback: reached milestones with "
+        "their evidence refs and the phase (starting/qualifying/waiting_owner/closing/closed), "
+        "or a typed unavailable gap naming why it could not be derived. Use that to state where "
+        "the Goal stands before listing detail. Use concrete evidence "
         "to answer progress and priority questions. Paginate with next_offset. "
         "No shell, writes, raw files, or additional Goal authorization."
     ),
@@ -54,6 +58,8 @@ READ_TOOL = {
 CONTEXT_TOOL_NAME = "loopx_context_read"
 CONTEXT_READ_TOOL = {**deepcopy(READ_TOOL), "name": CONTEXT_TOOL_NAME,
     "description": "Read this conversation's authorized Goal, Todos, deliveries and handoff receipts. "
+    "The Goal row carries its lifecycle readback: reached milestones with evidence refs and the phase "
+    "(starting/qualifying/waiting_owner/closing/closed), or a typed unavailable gap naming why. "
     "Paginate with next_offset. No cross-Goal access, shell, writes or execution authority."}
 
 
@@ -77,6 +83,7 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
                 "activation_state": row.get("activation_state", "unknown"),
                 "quality": row.get("quality"),
                 "progress": row.get("progress"),
+                "lifecycle_phase": _lifecycle_phase(row.get("goal_lifecycle")),
                 "details": "use_" + read_tool,
             }
             for row in context.get("goals", [])
@@ -87,6 +94,20 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
         "evidence_source_count": len(context.get("evidence_sources", [])),
         "read_tool": read_tool,
     }
+
+
+def _lifecycle_phase(readback: Any) -> str | None:
+    """The derived phase, or None when the readback names a gap instead.
+
+    A derived projection always carries a phase string, so None means "not
+    derived here", never "this Goal has no phase". The portfolio view carries
+    the typed reason next to the row's existing `quality`.
+    """
+
+    if not isinstance(readback, dict) or readback.get("status") == "unavailable":
+        return None
+    phase = readback.get("lifecycle_phase")
+    return phase if isinstance(phase, str) and phase else None
 
 
 class ManagerInspection:

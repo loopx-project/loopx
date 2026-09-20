@@ -18,6 +18,14 @@ from .global_todos import _classify_goal_todos
 from .paths import resolve_runtime_root
 from .status import collect_status
 
+# A caller that asked for Goal lifecycle evidence always gets an answer. Either
+# the projection the status collector already derived (carrying its own
+# `goal_artifact_lifecycle_projection_v0` schema) or this typed gap record. The
+# status owner deliberately omits the key when it cannot derive a projection;
+# forwarding that omission would make "not derived" and "nobody looked" read
+# the same to the manager, which is the silent-gap failure this contract names.
+GOAL_LIFECYCLE_READBACK_SCHEMA_VERSION = "goal_lifecycle_readback_v0"
+
 
 class SourceQuality(str, Enum):
     VERIFIED = "verified"
@@ -52,6 +60,30 @@ def _identity(value: object) -> str | None:
         and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}", value)
         else None
     )
+
+
+def lifecycle_readback_unavailable(goal_id: str, reason: str) -> dict[str, Any]:
+    """The typed gap a lifecycle-aware reader returns instead of silence."""
+
+    return {
+        "schema_version": GOAL_LIFECYCLE_READBACK_SCHEMA_VERSION,
+        "goal_id": goal_id,
+        "status": "unavailable",
+        "reason": reason,
+    }
+
+
+def _lifecycle_readback(history: dict[str, Any], *, goal_id: str) -> dict[str, Any]:
+    """Pass through the collected projection, or name why there is none.
+
+    This never re-derives a projection, so the lifecycle read has one owner and
+    no second collection path.
+    """
+
+    projection = history.get("artifact_lifecycle")
+    if isinstance(projection, dict) and projection.get("milestones") is not None:
+        return projection
+    return lifecycle_readback_unavailable(goal_id, "projection_not_derived")
 
 
 def _source_versions(goal: dict[str, Any], runtime_root: Path) -> dict[str, str | None]:
@@ -101,6 +133,7 @@ def _read_goal(
     runtime_root: Path,
     now: datetime,
     max_age_hours: float,
+    include_goal_lifecycle: bool = False,
     shared_status: dict[str, Any] | None = None,
     source_versions_before: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
@@ -121,6 +154,13 @@ def _read_goal(
             "observed_at": now.isoformat(),
         },
     }
+    if include_goal_lifecycle:
+        # Every Goal this reader attempted answers the lifecycle question, so a
+        # failed or ambiguous source is named here instead of surfacing as
+        # missing evidence the manager would have to interpret.
+        row["goal_lifecycle"] = lifecycle_readback_unavailable(
+            goal_id, "goal_read_incomplete"
+        )
     try:
         versions_before = source_versions_before or _source_versions(goal, runtime_root)
         status = (
@@ -149,6 +189,8 @@ def _read_goal(
             row["warnings"].append("goal_source_missing_or_ambiguous")
             return row
         history = histories[0]
+        if include_goal_lifecycle:
+            row["goal_lifecycle"] = _lifecycle_readback(history, goal_id=goal_id)
         contexts = {
             c["agent_id"]: c
             for c in (history.get("semantic_history") or {}).get("agents", [])
@@ -271,12 +313,15 @@ def build_goal_portfolio(
     max_age_hours: float = 24,
     now: datetime | None = None,
     include_stopped: bool = True,
+    include_goal_lifecycle: bool = False,
 ) -> dict[str, Any]:
     """Read only the requested registry scope; never derive inventory from chat."""
     if not 1 <= limit <= 128 or not 0 < max_age_hours <= 8760:
         raise ValueError(
             "limit must be 1..128 and max_age_hours must be positive and at most 8760"
         )
+    if type(include_goal_lifecycle) is not bool:
+        raise ValueError("include_goal_lifecycle must be a boolean")
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         raise ValueError("collection time must include a timezone")
@@ -367,11 +412,20 @@ def build_goal_portfolio(
                     runtime_root=runtime_root,
                     now=now,
                     max_age_hours=max_age_hours,
+                    include_goal_lifecycle=include_goal_lifecycle,
                     shared_status=shared_status,
                     source_versions_before=before.get(goal_id),
                 )
             )
         rows[-1]["activation_state"] = activation[goal_id]
+        if include_goal_lifecycle and "goal_lifecycle" not in rows[-1]:
+            # Omitted, duplicate-identity and stopped rows are excluded before
+            # any source read, so they carry no Goal evidence at all. Their
+            # lifecycle answer says exactly that rather than leaving the field
+            # absent for the consumer to mistake for a derivation failure.
+            rows[-1]["goal_lifecycle"] = lifecycle_readback_unavailable(
+                goal_id, "goal_not_read"
+            )
     try:
         changed = registry_path.read_bytes() != registry_bytes
     except OSError:
@@ -381,6 +435,13 @@ def build_goal_portfolio(
             if row["quality"] != "omitted" or row["goal_id"] in stopped:
                 row.update(quality="conflicting", progress="unknown", activation_state="unknown")
                 row["warnings"].append("inventory_changed_during_collection")
+                if row.get("goal_lifecycle", {}).get("status") != "unavailable":
+                    # The projection may have been derived from a source that
+                    # changed while it was read; the row is already downgraded,
+                    # so the lifecycle readback is downgraded with it.
+                    row["goal_lifecycle"] = lifecycle_readback_unavailable(
+                        row["goal_id"], "inventory_changed_during_collection"
+                    )
     qualities = Counter(r["quality"] for r in rows)
     missing = sorted(requested - inventory.keys())
     invalid = len(raw_goals) - len(valid)
@@ -389,6 +450,18 @@ def build_goal_portfolio(
     )
     if missing:
         warnings.append("requested_goals_not_registered")
+    limitations = [
+        "Local registry projection; unavailable remote sources are not fetched.",
+        "Evidence refs identify Core records, not an independent artifact audit.",
+        "Latest evidence-bearing delivery per Agent; not a complete delivery history.",
+        "Todo readiness reuses the Core summary; the returned task list is not exhaustive.",
+        "No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.",
+    ]
+    if include_goal_lifecycle:
+        limitations.append(
+            "Goal lifecycle readback is the status collection's own projection or a typed "
+            "unavailable gap; this reader never derives a second one."
+        )
     snapshot = {
         "ok": True,
         "schema_version": "goal_portfolio_v0",
@@ -413,13 +486,7 @@ def build_goal_portfolio(
         },
         "warnings": warnings,
         "goals": rows,
-        "limitations": [
-            "Local registry projection; unavailable remote sources are not fetched.",
-            "Evidence refs identify Core records, not an independent artifact audit.",
-            "Latest evidence-bearing delivery per Agent; not a complete delivery history.",
-            "Todo readiness reuses the Core summary; the returned task list is not exhaustive.",
-            "No absence-of-progress or all-healthy conclusion; external sharing needs its own scope authorization.",
-        ],
+        "limitations": limitations,
     }
     snapshot["snapshot_id"] = _digest(snapshot)
     return snapshot
