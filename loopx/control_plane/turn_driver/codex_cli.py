@@ -25,6 +25,7 @@ from .executor import (
     HOST_RESULT_TEXT_LIMITS,
     LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
 )
+from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
@@ -665,6 +666,7 @@ def _codex_command(
     output_path: Path,
     sandbox: str,
     model: str | None,
+    reasoning_effort: str | None,
     session_id: str | None,
 ) -> list[str]:
     if session_id:
@@ -700,6 +702,13 @@ def _codex_command(
         ]
     if model:
         command.extend(["--model", model])
+    if reasoning_effort:
+        command.extend(
+            [
+                "-c",
+                f"model_reasoning_effort={json.dumps(reasoning_effort)}",
+            ]
+        )
     if session_id:
         command.append(session_id)
     command.append("-")
@@ -714,12 +723,15 @@ def run_codex_cli_host(
     codex_bin: str = "codex",
     sandbox: str = "read-only",
     model: str | None = None,
+    reasoning_effort: str | None = None,
     timeout_seconds: float = 115.0,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
     if sandbox not in CODEX_CLI_SANDBOXES:
         raise ValueError(f"Codex CLI sandbox must be one of {CODEX_CLI_SANDBOXES}")
+    if reasoning_effort is not None:
+        reasoning_effort = require_supported_reasoning_effort(reasoning_effort)
     resolved = shutil.which(codex_bin) if os.path.sep not in codex_bin else codex_bin
     if not resolved or not Path(resolved).exists():
         raise ValueError("Codex CLI executable is unavailable")
@@ -760,6 +772,7 @@ def run_codex_cli_host(
             output_path=output_path,
             sandbox=sandbox,
             model=model,
+            reasoning_effort=reasoning_effort,
             session_id=session_id,
         )
         proc = subprocess.Popen(

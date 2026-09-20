@@ -30,6 +30,10 @@ TOOL = {
     "Use action=bindings first; start requires binding_id, stable operation_id and brief with "
     "schema_version=collaboration_brief_v0, purpose, context, constraints (strings), inputs "
     "(relative ref, description, optional sha256), acceptance (strings), return_requirement. "
+    "A version-bound input adds delegation={operation_id,ref,relation} and sha256; relation is "
+    "responds_to, revises or uses. Copying inputs needs existing workspace authority. "
+    "Action=adopt(operation_id,consumer_operation_id) records your decision after both results "
+    "are accepted and the consumer has that exact uses input. Reading alone is not adoption. "
     "Read/wait/resume use the original operation_id. Running is not failure; do not duplicate it. "
     "After context loss, action=operations recovers this requester's durable work. Follow "
     "next_cursor for more; unavailable means reconcile, not redispatch. Action=inspect with binding_id checks the actual Turn/profile before new dispatch; unknown availability is not readiness.",
@@ -39,10 +43,11 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "messages"],
+                "enum": ["bindings", "operations", "inspect", "start", "read", "wait", "resume", "adopt", "messages"],
             },
             "binding_id": {"type": "string"},
             "operation_id": {"type": "string"},
+            "consumer_operation_id": {"type": "string"},
             "brief": {"type": "object"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
             "cursor": {"type": "string"},
@@ -250,20 +255,30 @@ class ChatLoopXMode:
     def read_team(self, session_id, body):
         """Owner readback stays available while paused; no model Turn is submitted."""
         operation = body.get("operation")
-        allowed = {"operation", "binding_id"} if operation == "inspect" else {"operation", "limit", "cursor"}
-        if operation not in {"inspect", "operations"} or set(body) - allowed:
+        fields = {
+            "inspect": {"operation", "binding_id"},
+            "operations": {"operation", "limit", "cursor"},
+            "read": {"operation", "operation_id"},
+        }
+        if operation not in fields or set(body) - fields[operation]:
             raise ValueError("invalid team readback request")
         session = self._session(session_id)
         settings = (session.get("loopx_mode") or {}).get("settings") or {}
         if not settings.get("agent_id"):
             raise ValueError("configure a coordinator identity before team readback")
         service, _, _, _ = self._execution(session, settings)
-        result = (service.inspect(body.get("binding_id", "")) if operation == "inspect" else
-                  service.operations(limit=body.get("limit", 10), cursor=body.get("cursor")))
+        if operation == "read":
+            from .control_plane.collaboration.peers import require_operation_id
+
+            result = service.read(require_operation_id(body.get("operation_id")))
+        elif operation == "inspect":
+            result = service.inspect(body.get("binding_id", ""))
+        else:
+            result = service.operations(limit=body.get("limit", 10), cursor=body.get("cursor"))
         return {"ok": True, **result}
 
     def apply(self, session_id, body, *, work_dir, objective):
-        if body.get("operation") in {"inspect", "operations"}:
+        if body.get("operation") in {"inspect", "operations", "read"}:
             return self.read_team(session_id, body)
         if set(body) - {
             "operation",
@@ -607,6 +622,7 @@ class ChatLoopXMode:
                 "action",
                 "binding_id",
                 "operation_id",
+                "consumer_operation_id",
                 "brief",
                 "limit",
                 "cursor",
@@ -617,6 +633,8 @@ class ChatLoopXMode:
                 raise ValueError("pagination is only valid for operations")
             if action == "operations" and set(arguments) - {"action", "limit", "cursor"}:
                 raise ValueError("operations reads a page; use read to select an operation")
+            if action != "adopt" and "consumer_operation_id" in arguments:
+                raise ValueError("consumer_operation_id is only valid for adopt")
             operation_id = arguments.get("operation_id", "")
             if action == "messages":
                 rows = [
@@ -640,6 +658,10 @@ class ChatLoopXMode:
                 result = service.inspect(arguments["binding_id"])
             elif action == "operations":
                 result = service.operations(limit=arguments.get("limit", 20), cursor=arguments.get("cursor"))
+            elif action == "adopt":
+                if set(arguments) != {"action", "operation_id", "consumer_operation_id"}:
+                    raise ValueError("adopt requires source and consumer operation ids only")
+                result = service.adopt_result(operation_id, arguments["consumer_operation_id"])
             elif action == "start":
                 result = service.start(
                     arguments.get("binding_id", ""),

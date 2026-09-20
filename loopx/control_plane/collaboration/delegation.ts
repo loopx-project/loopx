@@ -175,3 +175,41 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   "accepted return requires current canonical completion and artifacts");
   return {status: to};
 }
+
+/** Explicit requester decision backed by two current accepted executions. */
+export function recordDelegationAdoption(params: JsonObject): JsonObject {
+  const source = requireJsonObject(params.source, "source execution");
+  const consumer = requireJsonObject(params.consumer, "consumer execution");
+  requireThat(source.status === "accepted" && consumer.status === "accepted"
+    && source.operation_id !== consumer.operation_id, "adoption requires distinct accepted executions");
+  const inputs = params.inputs;
+  requireThat(Array.isArray(inputs), "consumer inputs required");
+  const artifacts = source.artifacts;
+  requireThat(Array.isArray(artifacts), "source artifacts required");
+  const used = inputs.filter(raw => {
+    const input = requireJsonObject(raw, "consumer input");
+    if (!input.delegation) return false;
+    const link = requireJsonObject(input.delegation, "delegation input");
+    return link.operation_id === source.operation_id && link.relation === "uses"
+      && artifacts.some(raw => {
+        const artifact = requireJsonObject(raw, "source artifact");
+        return artifact.ref === link.ref && artifact.sha256 === input.sha256;
+      });
+  });
+  requireThat(used.length > 0 && params.inputs_current === true,
+    "adoption requires the accepted consumer's exact current uses input");
+  requireThat(Array.isArray(consumer.artifacts) && consumer.artifacts.length > 0, "consumer artifacts required");
+  return {
+    consumer_operation_id: consumer.operation_id, consumer_request_id: consumer.request_id,
+    consumer_agent_id: consumer.agent_id, consumer_todo_id: consumer.todo_id,
+    source_artifacts: used.map(raw => {
+      const input = requireJsonObject(raw, "consumer input");
+      const link = requireJsonObject(input.delegation, "delegation input");
+      return {ref: link.ref, sha256: input.sha256};
+    }),
+    consumer_artifacts: consumer.artifacts.map(raw => {
+      const artifact = requireJsonObject(raw, "consumer artifact");
+      return {ref: artifact.ref, sha256: artifact.sha256};
+    }),
+  };
+}

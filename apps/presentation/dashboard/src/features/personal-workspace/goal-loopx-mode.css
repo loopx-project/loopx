@@ -39,3 +39,17 @@
   .goal-loopx-mode-settings { grid-template-columns: 1fr; }
   .goal-loopx-dialog-content { padding: 16px; }
 }
+
+.goal-team-evidence { margin-block: 16px; padding: 16px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 12px; background: var(--pw-surface, #fff); }
+.goal-team-evidence h3, .goal-team-evidence h4 { margin: 0; font-size: 13px; }
+.goal-team-evidence article { margin-block: 16px; }
+.goal-team-evidence pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--font-mono, monospace); padding: 12px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; }
+.goal-team-evidence label { display: grid; gap: 8px; font-weight: 500; }
+.goal-team-evidence textarea { box-sizing: border-box; resize: vertical; min-height: 88px; width: 100%; padding: 8px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; background: var(--pw-bg, #fafafa); color: inherit; font: inherit; }
+.goal-team-evidence textarea:focus-visible, .goal-team-evidence pre:focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; }
+.goal-team-control { border-top: 1px solid var(--pw-line, #ebebeb); padding-top: 16px; }
+.goal-team-evidence [role="alert"] { color: var(--pw-red, #b42318); }
+.goal-team-lineage { margin-block: 16px; padding-block: 16px; border-block: 1px solid var(--pw-line, #ebebeb); }
+.goal-team-lineage ul { list-style: none; padding: 0; margin: 12px 0; }
+.goal-team-lineage li { display: grid; gap: 8px; padding: 0 0 16px 16px; border-left: 2px solid var(--pw-line, #ebebeb); overflow-wrap: anywhere; }
+.goal-team-lineage button { justify-self: start; max-width: 100%; overflow-wrap: anywhere; text-align: start; }

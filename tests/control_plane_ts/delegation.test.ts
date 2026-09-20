@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 
 const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: "/fixture",
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
@@ -69,6 +69,23 @@ test("preflight separates task admission, acceptance binding and runtime availab
   assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
     would_invoke_host: false}}}).state, "turn_blocked");
   assert.throws(() => delegationPreflight({...params, preview: {...preview, effects: {...effects, host_invoked: true}}}));
+});
+
+test("requester adoption needs accepted downstream use, not reading, revision or prose", () => {
+  const artifact = {ref: "result.json", sha256: "a".repeat(64)};
+  const source = {operation_id: "source", status: "accepted", artifacts: [artifact]};
+  const consumer = {operation_id: "consumer", request_id: "request", agent_id: "reviewer",
+    todo_id: "task", status: "accepted", artifacts: [{...artifact, sha256: "b".repeat(64)}]};
+  const input = {ref: "input.json", sha256: artifact.sha256,
+    delegation: {operation_id: "source", ref: artifact.ref, relation: "uses"}};
+  const params = {source, consumer, inputs: [input], inputs_current: true};
+  assert.equal(recordDelegationAdoption(params).consumer_operation_id, "consumer");
+  for (const patch of [{inputs_current: false}, {inputs: []}, {consumer: {...consumer, status: "running"}},
+    {source: {...source, status: "rejected"}}, {consumer: {...consumer, operation_id: "source"}},
+    {inputs: [{...input, sha256: "c".repeat(64)}]},
+    {inputs: [{...input, delegation: {...input.delegation, relation: "revises"}}]}]) {
+    assert.throws(() => recordDelegationAdoption({...params, ...patch}));
+  }
 });
 
 test("preflight reports unavailable canonical authority without pretending to inspect a Turn", () => {

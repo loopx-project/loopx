@@ -92,6 +92,7 @@ from .goal_topic_routing import (
     IngressMode,
     ReplyMode,
     _routing_value,
+    _connection_routing_modes,
     decide_lark_topic_route_event,
 )
 from .presentation.kanban import (
@@ -1035,29 +1036,7 @@ def list_lark_connections(
             )
             connector_status: dict[str, Any] | None = None
             try:
-                capture_scope = _routing_value(
-                    CaptureScope,
-                    routing.get("capture_scope")
-                    or (
-                        "configured_chat_all"
-                        if routing.get("incoming_mode") == "all"
-                        else "addressed_only"
-                    ),
-                    default=CaptureScope.ADDRESSED_ONLY.value,
-                    field="capture_scope",
-                )
-                ingress_mode = _routing_value(
-                    IngressMode,
-                    routing.get("ingress_mode"),
-                    default=IngressMode.DIRECT_SESSION.value,
-                    field="ingress_mode",
-                )
-                reply_mode = _routing_value(
-                    ReplyMode,
-                    routing.get("reply_mode"),
-                    default=ReplyMode.TOPIC_REPLY.value,
-                    field="reply_mode",
-                )
+                capture_scope, ingress_mode, reply_mode = _connection_routing_modes(routing)
                 raw_connector = binding.get("connector")
                 if raw_connector is not None:
                     if not isinstance(raw_connector, Mapping):
@@ -1216,29 +1195,7 @@ def decide_lark_topic_event(
                 else {}
             )
             try:
-                capture_scope = _routing_value(
-                    CaptureScope,
-                    routing.get("capture_scope")
-                    or (
-                        "configured_chat_all"
-                        if routing.get("incoming_mode") == "all"
-                        else "addressed_only"
-                    ),
-                    default=CaptureScope.ADDRESSED_ONLY.value,
-                    field="capture_scope",
-                )
-                ingress_mode = _routing_value(
-                    IngressMode,
-                    routing.get("ingress_mode"),
-                    default=IngressMode.DIRECT_SESSION.value,
-                    field="ingress_mode",
-                )
-                reply_mode = _routing_value(
-                    ReplyMode,
-                    routing.get("reply_mode"),
-                    default=ReplyMode.TOPIC_REPLY.value,
-                    field="reply_mode",
-                )
+                capture_scope, ingress_mode, reply_mode = _connection_routing_modes(routing)
                 connector = binding.get("connector")
                 if connector is not None:
                     if not isinstance(connector, Mapping):

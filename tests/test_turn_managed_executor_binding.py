@@ -87,6 +87,27 @@ def test_trusted_host_args_project_the_same_last_explicit_profile_without_raw_ar
     assert turn_host_arg_option(["--dsh-model", "fixture"], "--host") is None
 
 
+def test_trusted_codex_binding_projects_its_independent_agent_profile():
+    binding = managed_executor_binding_from_host_args(
+        [
+            "--host",
+            "codex-cli",
+            "--codex-model",
+            "gpt-5.6-sol",
+            "--codex-reasoning-effort",
+            "xhigh",
+        ],
+        environ={"DEEPSEEK_API_KEY": "unrelated-managed-credential"},
+    )
+
+    assert binding["executor"] == "codex-cli"
+    assert binding["executor_kind"] == EXECUTOR_KIND_INDIVIDUAL
+    assert binding["execution_profile"] == "gpt-5.6-sol@xhigh"
+    assert binding["available"] is None
+    assert binding["operator_credential_bound"] is False
+    assert "unrelated-managed-credential" not in json.dumps(binding)
+
+
 def test_managed_executor_reports_the_operator_credential_and_endpoint():
     binding = managed_executor_binding(
         "dsh",
@@ -401,7 +422,7 @@ def test_a_deviating_provider_is_named_in_the_profile_line():
     assert binding["execution_profile"] == "fixture-provider/deepseek-v4-flash@high"
 
 
-def test_non_managed_hosts_carry_no_execution_profile():
+def test_unconfigured_non_managed_hosts_carry_no_execution_profile():
     for host in ("codex-cli", "generic-cli"):
         binding = managed_executor_binding(
             host, environ={"DEEPSEEK_API_KEY": "sk-operator"}, module_probe=_RUNTIME

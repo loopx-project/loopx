@@ -168,6 +168,33 @@ def test_selected_dsh_profile_is_not_replaced_by_the_default(service):
     assert not (root / "host-started").exists()
 
 
+def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
+    root, runner = service
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["host_args"] = [
+        "--host",
+        "codex-cli",
+        "--codex-model",
+        "gpt-5.6-sol",
+        "--codex-reasoning-effort",
+        "xhigh",
+    ]
+    runner.config.write_text(json.dumps(config))
+
+    status, result = cli(runner, "inspect", "--binding-id", "analysis")
+
+    assert status == 0, result
+    assert result["executor"] == {
+        "host": "codex-cli",
+        "available": None,
+        "reason": None,
+        "profile": "gpt-5.6-sol@xhigh",
+    }
+    assert result["state"] == "runtime_unverified"
+    assert not any(result["effects"].values())
+    assert not (root / "host-started").exists()
+
+
 def test_preflight_does_not_call_an_invalidated_acceptance_ready(service):
     root, runner = service
     from loopx.agent_registry import load_goal_from_registry

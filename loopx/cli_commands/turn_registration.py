@@ -9,6 +9,7 @@ from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     resolve_default_turn_host,
 )
+from ..control_plane.turn_driver.execution_profile import REASONING_EFFORTS
 from ..paths import default_public_scan_root
 
 # Explicit host choices stay per-command: planning may name any host the Turn
@@ -208,6 +209,15 @@ def register_turn_commands(
         help="Codex CLI executable used by the built-in codex-cli host.",
     )
     run_once.add_argument("--codex-model")
+    run_once.add_argument(
+        "--codex-reasoning-effort",
+        choices=list(REASONING_EFFORTS),
+        help=(
+            "Reasoning effort for the independent Codex CLI Turn. This is an "
+            "operator-bound independent Agent profile, not the native child-agent "
+            "model preference."
+        ),
+    )
     run_once.add_argument(
         "--codex-sandbox",
         choices=["read-only", "workspace-write", "danger-full-access"],

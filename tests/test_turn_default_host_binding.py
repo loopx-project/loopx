@@ -128,6 +128,23 @@ def test_explicit_host_flag_wins_over_the_default(monkeypatch):
     assert args.host == "generic-cli"
 
 
+def test_codex_managed_agent_profile_is_explicit_cli_configuration():
+    args = build_parser().parse_args(
+        [
+            *_turn_argv("run-once"),
+            "--host",
+            "codex-cli",
+            "--codex-model",
+            "gpt-5.6-sol",
+            "--codex-reasoning-effort",
+            "xhigh",
+        ]
+    )
+
+    assert args.codex_model == "gpt-5.6-sol"
+    assert args.codex_reasoning_effort == "xhigh"
+
+
 @pytest.mark.parametrize("command", ["plan", "run-once"])
 def test_default_execution_mode_follows_the_selected_host(command, monkeypatch):
     for name in ("DEEPSEEK_API_KEY", TURN_HOST_ENV_VAR):

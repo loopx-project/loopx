@@ -1055,6 +1055,13 @@ class ChatRequestHandler(
             status=201,
         )
 
+    def _action_not_found(self) -> None:
+        self._send_error(
+            "typed Chat action proposal was not found",
+            status=404,
+            error_code="action_not_found",
+        )
+
     def _action_snapshot(self, proposal_id: str) -> None:
         try:
             proposal = self.server.action_service.load(proposal_id)
@@ -1062,11 +1069,7 @@ class ChatRequestHandler(
             self._send_error(str(exc), status=400, error_code="invalid_proposal_id")
             return
         if proposal is None:
-            self._send_error(
-                "typed Chat action proposal was not found",
-                status=404,
-                error_code="action_not_found",
-            )
+            self._action_not_found()
             return
         self._send_json(
             {
@@ -1107,11 +1110,7 @@ class ChatRequestHandler(
                 raise ValueError("action cancel request must be empty")
             proposal = self.server.action_service.cancel(proposal_id)
         except KeyError:
-            self._send_error(
-                "typed Chat action proposal was not found",
-                status=404,
-                error_code="action_not_found",
-            )
+            self._action_not_found()
             return
         except ActionConflictError as exc:
             self._send_error(str(exc), status=409, error_code="action_conflict")
@@ -1144,11 +1143,7 @@ class ChatRequestHandler(
             else:
                 raise ValueError("unsupported action transition")
         except KeyError:
-            self._send_error(
-                "typed Chat action proposal was not found",
-                status=404,
-                error_code="action_not_found",
-            )
+            self._action_not_found()
             return
         except ActionConflictError as exc:
             self._send_error(str(exc), status=409, error_code="action_conflict")
@@ -1190,11 +1185,7 @@ class ChatRequestHandler(
             )
             return
         except KeyError:
-            self._send_error(
-                "typed Chat action proposal was not found",
-                status=404,
-                error_code="action_not_found",
-            )
+            self._action_not_found()
             return
         except ActionConflictError as exc:
             self._send_error(str(exc), status=409, error_code="action_conflict")

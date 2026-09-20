@@ -368,6 +368,8 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
         project=project,
         codex_bin=str(executable),
         sandbox=sandbox,
+        model="gpt-5.6-sol",
+        reasoning_effort="xhigh",
         timeout_seconds=5,
     )
     with pytest.raises(RuntimeError, match="binding changed after planning"):
@@ -388,6 +390,8 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
         project=project,
         codex_bin=str(executable),
         sandbox=sandbox,
+        model="gpt-5.6-sol",
+        reasoning_effort="xhigh",
         timeout_seconds=5,
     )
 
@@ -399,6 +403,14 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
     assert "resume" not in argv_rows[0]
     assert "resume" in argv_rows[1]
     assert "session-fixture-0001" in argv_rows[1]
+    for argv in argv_rows:
+        assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
+        config_values = [
+            argv[index + 1]
+            for index, value in enumerate(argv)
+            if value == "-c"
+        ]
+        assert 'model_reasoning_effort="xhigh"' in config_values
     resume_argv = argv_rows[1]
     assert resume_argv[resume_argv.index("-c") + 1] == (
         f'sandbox_mode="{sandbox}"'
@@ -433,6 +445,28 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
     persisted = session_paths[0].read_text(encoding="utf-8")
     assert "raw_trajectory" not in persisted
     assert "private_material" not in persisted
+
+
+def test_codex_cli_host_rejects_unknown_reasoning_effort_before_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    project = tmp_path / "project"
+    project.mkdir()
+
+    with pytest.raises(ValueError, match="unsupported reasoning effort"):
+        run_codex_cli_host(
+            _request(),
+            runtime_root=tmp_path / "runtime",
+            project=project,
+            codex_bin=str(executable),
+            reasoning_effort="turbo",
+            timeout_seconds=5,
+        )
+
+    assert not log_path.exists()
 
 
 def test_codex_cli_host_fresh_iteration_ignores_stored_session(

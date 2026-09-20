@@ -47,6 +47,37 @@ def _routing_value(
         raise ValueError(f"{field} must be one of: {allowed}") from exc
 
 
+def _connection_routing_modes(
+    routing: Mapping[str, Any],
+) -> tuple[str, str, str]:
+    """Normalize persisted modes for both connection readback and event routing."""
+
+    capture_scope = _routing_value(
+        CaptureScope,
+        routing.get("capture_scope")
+        or (
+            "configured_chat_all"
+            if routing.get("incoming_mode") == "all"
+            else "addressed_only"
+        ),
+        default=CaptureScope.ADDRESSED_ONLY.value,
+        field="capture_scope",
+    )
+    ingress_mode = _routing_value(
+        IngressMode,
+        routing.get("ingress_mode"),
+        default=IngressMode.DIRECT_SESSION.value,
+        field="ingress_mode",
+    )
+    reply_mode = _routing_value(
+        ReplyMode,
+        routing.get("reply_mode"),
+        default=ReplyMode.TOPIC_REPLY.value,
+        field="reply_mode",
+    )
+    return capture_scope, ingress_mode, reply_mode
+
+
 def _normalize_mention_name(name: str) -> str:
     cleaned = str(name or "").strip()
     if cleaned.startswith("@"):

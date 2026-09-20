@@ -195,10 +195,11 @@ def managed_executor_binding(
     records that this projection does not probe that executor kind, so it makes
     no claim rather than an unproven ``True``.
 
-    ``execution_profile`` is the managed profile this executor would run -- and,
-    with it, the provider claims to authenticate. It is ``None`` for every
-    non-managed executor because neither the profile nor the credential belongs
-    to an individual or generic host.
+    ``execution_profile`` is the explicit profile this executor would run.
+    Managed DSH resolves its complete provider profile. An individual Codex
+    executor projects only operator-pinned model/effort arguments; absent fields
+    remain ``host-default`` rather than being guessed. Generic hosts have no
+    shared profile contract and keep this field ``None``.
 
     ``runtime_probe`` states what the ``dsh_runtime_unavailable`` verdict is a
     claim about, so a reader does not take a process-level answer for a
@@ -251,6 +252,11 @@ def managed_executor_binding(
                 "available": runtime_available,
             },
         }
+    individual_profile: str | None = None
+    if host == INDIVIDUAL_TURN_HOST and (model or reasoning_effort):
+        individual_profile = (
+            f"{model or 'host-default'}@{reasoning_effort or 'host-default'}"
+        )
     return {
         "schema_version": MANAGED_EXECUTOR_BINDING_SCHEMA_VERSION,
         "executor": host,
@@ -261,7 +267,7 @@ def managed_executor_binding(
         ),
         "credential_env": None,
         "endpoint_env": None,
-        "execution_profile": None,
+        "execution_profile": individual_profile,
         "operator_credential_bound": False,
         "available": None,
         "unavailable_reason": None,
@@ -313,9 +319,25 @@ def managed_executor_binding_from_host_args(
         host,
         environ=environ,
         module_probe=module_probe,
-        provider=turn_host_arg_option(host_args, "--dsh-provider"),
-        model=turn_host_arg_option(host_args, "--dsh-model"),
-        reasoning_effort=turn_host_arg_option(host_args, "--dsh-reasoning-effort"),
+        provider=(
+            turn_host_arg_option(host_args, "--dsh-provider")
+            if host == MANAGED_HOST
+            else None
+        ),
+        model=(
+            turn_host_arg_option(host_args, "--dsh-model")
+            if host == MANAGED_HOST
+            else turn_host_arg_option(host_args, "--codex-model")
+            if host == INDIVIDUAL_TURN_HOST
+            else None
+        ),
+        reasoning_effort=(
+            turn_host_arg_option(host_args, "--dsh-reasoning-effort")
+            if host == MANAGED_HOST
+            else turn_host_arg_option(host_args, "--codex-reasoning-effort")
+            if host == INDIVIDUAL_TURN_HOST
+            else None
+        ),
     )
 
 

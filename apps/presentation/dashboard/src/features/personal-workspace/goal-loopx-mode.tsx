@@ -77,7 +77,7 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
     if (!sessionId) return;
     setBusy(true); setError("");
     try {const result = await updateLoopXMode(sessionId, operation, operation === "configure" ? settings : undefined);
-      setSnapshot(result); onChange(result); setEditing(false);
+      setSnapshot(result); onChange(result); if (operation === "configure" || operation === "exit") setEditing(false);
     } catch (failure) {setError(failure instanceof Error ? failure.message : String(failure));}
     finally {setBusy(false);}
   }
@@ -104,7 +104,12 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
       {panel ? <div className="goal-loopx-dialog-content">
         <header><h2 id="goal-loopx-dialog-title">{panel === "team" ? (zh ? "团队执行情况" : "Team execution") : (zh ? "运行设置" : "Execution settings")}</h2><button type="button" autoFocus aria-label={zh ? "关闭" : "Close"} onClick={() => setPanel(null)}><X size={18}/></button></header>
         {error || readError ? <p className="personal-composer-error" role="alert">{error || readError}</p> : null}
-        {panel === "team" && sessionId ? <GoalTeamWork key={`${sessionId}:${snapshot?.settings.agent_id}:${snapshot?.settings.execution_config}`} sessionId={sessionId} members={snapshot?.members ?? []} zh={zh}/> : null}
+        {panel === "team" && sessionId && !readError ? <GoalTeamWork key={`${sessionId}:${snapshot?.settings.agent_id}:${snapshot?.settings.execution_config}`} sessionId={sessionId} members={snapshot?.members ?? []} zh={zh} canMessage={active && !snapshot?.paused && !readError} ingress={snapshot?.ingress ?? []}/> : null}
+        {panel === "team" ? <div className="goal-team-control">
+          <button type="button" disabled={busy || !active || Boolean(readError)} onClick={() => void mutate("pause")}>{zh ? "暂停协调员" : "Pause coordinator"}</button>
+          <p role="status">{snapshot?.paused ? (active ? (zh ? "已暂停后续调度，等待当前协调轮次停止回读。" : "Further dispatch paused; awaiting coordinator turn stop readback.") : (zh ? "协调员已暂停。" : "Coordinator paused.")) : null}
+            {zh ? "此操作不会停止已派发成员；成员状态以上次执行回读为准。当前入口不支持停止整个团队。" : "This does not stop dispatched members; their states are last-read observations. Whole-team stop is unavailable here."}</p>
+        </div> : null}
     {editing ? <div className="goal-loopx-mode-settings"><label>{zh ? "已注册的协调身份" : "Registered coordinator"}<select value={settings.agent_id} onChange={event => setSettings({...settings, agent_id: event.target.value})}><option value="">{zh ? "选择已授权身份" : "Select authorized identity"}</option>{snapshot?.registered_agents.map(id => <option key={id} value={id}>{id}</option>)}</select></label>
       <label>{zh ? "协调员总 token 额度" : "Coordinator total token allowance"}<input type="number" min={1} max={2147483647} value={settings.token_budget || ""} onChange={event => setSettings({...settings, token_budget: Number(event.target.value)})}/></label>
       <label>{zh ? "成员执行绑定文件（Goal 配置）" : "Member execution bindings (Goal configuration)"}<input readOnly value={snapshot?.settings.execution_config ?? (zh ? "未配置" : "Not configured")}/></label>
