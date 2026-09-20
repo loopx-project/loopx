@@ -10,6 +10,7 @@ import pytest
 from loopx.cli_commands.quota import _apply_requested_quota_action_selection_preflight
 from loopx.cli_commands.quota_failure_report import quota_failure_payload
 from loopx.control_plane.quota.error_codes import (
+    HeartbeatReceiptIdentityConflictError,
     QuotaActionSelectionConflictError,
     QuotaActionSelectionConflictKind,
     quota_error_code,
@@ -40,6 +41,8 @@ def _raise(payload: dict[str, object]) -> QuotaActionSelectionConflictError:
             requested_todo_id=REQUESTED_TODO_ID,
             receipt_bound_todo_id=None,
             receipt_bound_replan_obligation_id=None,
+            receipt_pending_action_todo_id=None,
+            receipt_identity_upgraded=False,
         )
     return raised.value
 
@@ -80,6 +83,8 @@ def test_a_qualified_selection_for_the_requested_todo_is_not_a_conflict() -> Non
         requested_todo_id=REQUESTED_TODO_ID,
         receipt_bound_todo_id=None,
         receipt_bound_replan_obligation_id=None,
+        receipt_pending_action_todo_id=None,
+        receipt_identity_upgraded=False,
     )
 
     assert is_conflict is False
@@ -115,3 +120,51 @@ def test_failure_payload_reports_the_conflict_instead_of_collection_failure() ->
         "selected_todo_id": SELECTED_TODO_ID,
         "qualification_state": "qualified",
     }
+
+
+@pytest.mark.parametrize("requested", [None, REQUESTED_TODO_ID])
+def test_bound_todo_reentry_does_not_select_a_successor(requested: str | None) -> None:
+    # A stale recommendation cannot replace the receipt-owned binding.
+    payload = _payload(selected_todo={"todo_id": SELECTED_TODO_ID})
+    assert _apply_requested_quota_action_selection_preflight(
+        payload, requested_todo_id=requested,
+        receipt_bound_todo_id=REQUESTED_TODO_ID,
+        receipt_bound_replan_obligation_id=None,
+        receipt_pending_action_todo_id=None, receipt_identity_upgraded=False,
+    ) is False
+
+
+def test_bound_todo_rejects_a_different_explicit_selection() -> None:
+    with pytest.raises(HeartbeatReceiptIdentityConflictError):
+        _apply_requested_quota_action_selection_preflight(
+            _payload(), requested_todo_id=SELECTED_TODO_ID,
+            receipt_bound_todo_id=REQUESTED_TODO_ID,
+            receipt_bound_replan_obligation_id=None,
+            receipt_pending_action_todo_id=None, receipt_identity_upgraded=False,
+        )
+
+
+@pytest.mark.parametrize("identity_upgraded, requested, pending, conflict", [
+    (False, REQUESTED_TODO_ID, None, False),
+    (True, REQUESTED_TODO_ID, REQUESTED_TODO_ID, False),
+    (True, SELECTED_TODO_ID, REQUESTED_TODO_ID, True),
+    (True, REQUESTED_TODO_ID, None, True),
+])
+def test_replan_reentry_preserves_retained_selection_authority(
+    identity_upgraded: bool, requested: str, pending: str | None, conflict: bool,
+) -> None:
+    kwargs = dict(
+        requested_todo_id=requested, receipt_bound_todo_id=None,
+        receipt_bound_replan_obligation_id="replan_fixture",
+        receipt_pending_action_todo_id=pending,
+        receipt_identity_upgraded=identity_upgraded,
+    )
+    if conflict:
+        with pytest.raises(QuotaActionSelectionConflictError) as raised:
+            _apply_requested_quota_action_selection_preflight(_payload(), **kwargs)
+        assert raised.value.kind is QuotaActionSelectionConflictKind.CONFLICT
+        assert raised.value.qualification_state == "retained_selection"
+        assert raised.value.requested_todo_id == requested
+        assert raised.value.selected_todo_id == pending
+    else:
+        assert _apply_requested_quota_action_selection_preflight(_payload(), **kwargs) is False
