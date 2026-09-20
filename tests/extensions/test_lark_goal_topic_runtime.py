@@ -2068,8 +2068,22 @@ def test_manager_untyped_or_empty_answer_gets_bounded_failure_receipt(
 
 @pytest.mark.parametrize(
     "body",
-    ["完整报告" * 400, "x" * 6001, "测" * 40000, "测" * 50000, r"private\nformat"],
-    ids=["report", "long-ascii", "long-unicode", "oversize", "invalid-newlines"],
+    [
+        "完整报告" * 400,
+        "x" * 6001,
+        "测" * 40000,
+        "测" * 50000,
+        r"private\nformat",
+        r"{new_description}\n- 条目",
+    ],
+    ids=[
+        "report",
+        "long-ascii",
+        "long-unicode",
+        "oversize",
+        "repaired-newlines",
+        "unresolved-placeholder",
+    ],
 )
 @pytest.mark.parametrize("reply_ok", [True, False])
 def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
@@ -2119,11 +2133,28 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
     )
     result = runtime.process_lark_goal_topic_event(**kwargs)
     sendable = len(body.encode("utf-8")) < 150_000
-    expected = body.replace(r"\n", "\n")
+    if body == r"private\nformat":
+        # Escaped newlines are repaired before the first send, so the answer is
+        # delivered as markdown (a real bullet list) and is not reported as a
+        # degraded delivery.
+        expected = "private\nformat"
+        expected_repairs = ["escaped_newline"]
+    elif body == r"{new_description}\n- 条目":
+        # A placeholder the template never filled reaches the reader as a typed
+        # marker rather than as raw braces, and the escaped bullet list is a
+        # real list.
+        expected = "[未解析占位符: new_description]\n- 条目"
+        expected_repairs = ["escaped_newline", "unresolved_template_placeholder"]
+    else:
+        expected = body
+        expected_repairs = []
+    assert [
+        incident["code"] for incident in result.get("rich_text_repairs") or []
+    ] == expected_repairs
     if sendable:
         assert state["reply_text"] == expected
         assert result["ok"] is reply_ok
-        assert result.get("format_degraded") is (body == r"private\nformat")
+        assert result.get("format_degraded") is False
     else:
         # Longer than one deliverable message: the persisted answer is sent as a
         # bounded, ordered sequence of parts that ends with the overflow note,

@@ -62,6 +62,7 @@ from .manager_reply_parts import (
     manager_part_delivery_pending_result,
     manager_part_delivery_readback,
 )
+from .manager_reply_format import repair_manager_reply_text
 from .outbound import LarkOutboundTextError, safe_lark_plain_text_fallback
 from .inbox_reactions import (
     _create_reaction,
@@ -1335,6 +1336,14 @@ def process_lark_goal_topic_event(
                 "goal_id": route["goal_id"],
                 "inbox_config_ref": config_ref,
             }
+    rich_text_repairs: list[dict[str, Any]] = []
+    if manager:
+        # The reader must not receive a one-line answer whose bullet list is
+        # still escaped, nor raw braces left by an unresolved template.  Repair
+        # those defects before the first send: the strict validator keeps
+        # owning unsafe markup, and a repaired markdown answer stays markdown
+        # instead of degrading to plain text.
+        reply_text, rich_text_repairs = repair_manager_reply_text(reply_text)
     if manager and delivery_state is None:
         assert delivery_path is not None
         delivery_state = _pending_manager_delivery(
@@ -1347,6 +1356,8 @@ def process_lark_goal_topic_event(
                 item["message_id"] for item in context_materials
             ],
         )
+        if rich_text_repairs:
+            delivery_state["rich_text_repairs"] = rich_text_repairs
         try:
             _write_manager_delivery(delivery_path, delivery_state)
         except OSError:
@@ -1493,6 +1504,9 @@ def process_lark_goal_topic_event(
                     "format_degraded": bool(
                         delivery_state and delivery_state.get("format_degraded")
                     ),
+                    "rich_text_repairs": list(
+                        (delivery_state or {}).get("rich_text_repairs") or []
+                    ),
                 }
                 if manager
                 else {}
@@ -1591,6 +1605,9 @@ def process_lark_goal_topic_event(
             {
                 "saved_response_reused": saved_response_reused,
                 "format_degraded": bool(delivery_state.get("format_degraded")),
+                "rich_text_repairs": list(
+                    delivery_state.get("rich_text_repairs") or []
+                ),
                 **manager_part_delivery_readback(delivery_state),
             }
             if manager and delivery_state is not None
