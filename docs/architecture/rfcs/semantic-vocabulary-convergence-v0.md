@@ -560,19 +560,24 @@ R ⊆ L × V × Version               persists a value durably
 ```
 
 Each obligation is stated over the domain it is actually checked on, not over
-`V`. `Kernel(V) ⊆ V` is the `tier: kernel` subset, the only tier that declares
-producers; `Produced_scan(v)` is the production the fixed forms observe inside
-the code-owned scan reach; `ScopeDeclarations` are the forked names the registry
-declares as bounded contexts.
+`V`. `Producers(V) ⊆ V` is the subset that declares producers — every
+`tier: kernel` vocabulary, plus any vocabulary of another tier that carries
+executed production evidence; `Produced_scan(v)` is the production the fixed
+forms observe inside the code-owned scan reach; `ScopeDeclarations` are the
+forked names the registry declares as bounded contexts.
 
-1. **Producer closedness (kernel tier):** `∀v ∈ Kernel(V): Produced_scan(v) ⊆
-   S(v) ⊆ U(v)`. A recognised producer cannot write a value outside the
-   registered set. Production outside the scan reach, and the whole
-   `cross_runtime` tier, is unverified rather than proven closed.
-2. **Canonical liveness (kernel tier):** `∀v ∈ Kernel(V): Canonical(v) ⊆
-   Produced_scan(v) ∪ CompatibilityOnly(v)`. A value that is only compared is
-   dead or compatibility-only, never canonical. The `cross_runtime` tier
-   declares no producers, so liveness there is unverified.
+1. **Producer closedness (vocabularies declaring producers):** `∀v ∈
+   Producers(V): Produced_scan(v) ⊆ S(v) ⊆ U(v)`. A recognised producer cannot
+   write a value outside the registered set. `Producers(V)` is currently the six
+   `tier: kernel` vocabularies plus `settlement_binding_kind`, the one
+   `cross_runtime` vocabulary carrying an executed witness. Production outside
+   the scan reach, and the 19 `cross_runtime` vocabularies still outside
+   `Producers(V)`, are unverified rather than proven closed.
+2. **Canonical liveness (vocabularies declaring producers):** `∀v ∈
+   Producers(V): Canonical(v) ⊆ Produced_scan(v) ∪ CompatibilityOnly(v)`. A
+   value that is only compared is dead or compatibility-only, never canonical.
+   The 19 `cross_runtime` vocabularies outside `Producers(V)` are never walked,
+   so liveness there is unverified.
 3. **Consumer domain closedness:** `Accepted(c) ⊆ S(v)`, unless the consumer
    explicitly declares an external or partial domain.
 4. **Scope enumeration completeness:** `∀n ∈ ScopeDeclarations`, the declared

@@ -447,17 +447,20 @@ G ⊆ V × V × (S(v_source) ⇀ S(v_target) ∪ {reject}) 做投影
 R ⊆ L × V × Version               将值持久化
 ```
 
-每条义务都按它实际被检查的值域陈述，而不是泛指 `V`。`Kernel(V) ⊆ V` 是
-`tier: kernel` 子集，也是唯一声明了 producers 的层；`Produced_scan(v)` 是固定形式
-在代码所有的扫描范围内观察到的生产；`ScopeDeclarations` 是注册表声明为有界上下文
-的那些分叉名字。
+每条义务都按它实际被检查的值域陈述，而不是泛指 `V`。`Producers(V) ⊆ V` 是
+声明了 producers 的子集：所有 `tier: kernel` 词表，再加上其他层中携带了可执行
+生产证据的词表；`Produced_scan(v)` 是固定形式在代码所有的扫描范围内观察到的
+生产；`ScopeDeclarations` 是注册表声明为有界上下文的那些分叉名字。
 
-1. **生产闭包（仅 kernel 层）：** `∀v ∈ Kernel(V): Produced_scan(v) ⊆ S(v) ⊆ U(v)`。
-   被识别的生产者不能写入注册集合之外的值。扫描范围之外的生产，以及整个
-   `cross_runtime` 层，是未验证，而不是已证明闭合。
-2. **规范值存活（仅 kernel 层）：** `∀v ∈ Kernel(V): Canonical(v) ⊆ Produced_scan(v) ∪
-   CompatibilityOnly(v)`。只被比较、没有生产来源的值是死值或兼容值，不能是
-   canonical。`cross_runtime` 层不声明 producers，因此该层的存活性未被验证。
+1. **生产闭包（声明了 producers 的词表）：** `∀v ∈ Producers(V): Produced_scan(v) ⊆
+   S(v) ⊆ U(v)`。被识别的生产者不能写入注册集合之外的值。`Producers(V)` 目前是
+   6 个 `tier: kernel` 词表，加上 `settlement_binding_kind`——唯一携带可执行 witness 的
+   `cross_runtime` 词表。扫描范围之外的生产，以及仍在 `Producers(V)` 之外的 19 个
+   `cross_runtime` 词表，是未验证，而不是已证明闭合。
+2. **规范值存活（声明了 producers 的词表）：** `∀v ∈ Producers(V): Canonical(v) ⊆
+   Produced_scan(v) ∪ CompatibilityOnly(v)`。只被比较、没有生产来源的值是死值或
+   兼容值，不能是 canonical。仍在 `Producers(V)` 之外的 19 个 `cross_runtime` 词表从未
+   被走过，因此该层的存活性未被验证。
 3. **消费者定义域闭包：** `Accepted(c) ⊆ S(v)`，除非消费者显式声明外部定义域或部分定义域。
 4. **作用域枚举完备性：** `∀n ∈ ScopeDeclarations`，声明的上下文 owner 模块集合
    恰好等于定义 `n` 的模块集合，每个模块一个上下文，且每个上下文的 owner 符号

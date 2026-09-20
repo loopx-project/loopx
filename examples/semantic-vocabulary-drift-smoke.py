@@ -152,6 +152,11 @@ FORMAL_EVIDENCE_BOUNDS: dict[str, frozenset[str]] = {
 # an invariant cannot quietly widen its own claim by choosing a looser selector
 # in a data-only edit. Restating an invariant over a different domain is a
 # normative change and edits this literal in the same diff.
+# The invariants whose prose describes which vocabularies declare producers.
+# check_domain_prose reads their statement and evidence, so an invariant added
+# to this set has its free text held to the walked set as well.
+PRODUCER_DOMAIN_INVARIANTS = ("F1_producer_closedness", "F2_canonical_value_liveness")
+
 FORMAL_DOMAIN_ANCHOR = {
     "F1_producer_closedness": ("vocabularies[producers].producers", "producer_scan_reach"),
     "F2_canonical_value_liveness": ("vocabularies[producers].producers", "producer_scan_reach"),
@@ -398,6 +403,7 @@ def check_formal_model(model: dict[str, Any], registry: dict[str, Any]) -> None:
         require(item["statement"].strip() and item["evidence"].strip(),
                 f"formal invariant {item['id']} needs a statement and evidence boundary")
         check_invariant_domain(item, registry)
+    check_domain_prose(model, registry)
     policy = model["enforcement_policy"]
     require(set(policy) == FORMAL_POLICY_KEYS,
             "formal_model enforcement_policy must separate current, next, advisory, and unproved checks")
@@ -428,6 +434,53 @@ def check_formal_model(model: dict[str, Any], registry: dict[str, Any]) -> None:
     for key in boundary:
         require(isinstance(boundary[key], list) and all(isinstance(value, str) and value.strip() for value in boundary[key]),
                 f"formal_model proof_boundary.{key} must contain non-empty claim names")
+
+
+def check_domain_prose(model: dict[str, Any], registry: dict[str, Any]) -> None:
+    """Forbid prose that denies a producer the producer check actually walks.
+
+    ``check_invariant_domain`` pins the machine domain, but ``statement`` and
+    ``evidence`` are free text and nothing tied them to the same set. That
+    split was reachable: the registry counted a cross-runtime producer into
+    F1/F2 and reported 7/26 while this same file still said the kernel tier was
+    the only one declaring producers, and every check stayed green because no
+    check read both. The walked set is derived here, so a claim that contradicts
+    it fails in the diff that widens the set rather than outliving it.
+    """
+    vocabularies = registry["vocabularies"]
+    walked = {name for name, entry in vocabularies.items() if "producers" in entry}
+    kernel = {name for name, entry in vocabularies.items() if entry["tier"] == "kernel"}
+    outside = {name for name in vocabularies if name not in walked}
+    prose = {"universes.vocabularies": model["universes"]["vocabularies"]}
+    for item in model["invariants"]:
+        if item["id"] in PRODUCER_DOMAIN_INVARIANTS:
+            prose[f"{item['id']}.statement"] = item["statement"]
+            prose[f"{item['id']}.evidence"] = item["evidence"]
+    require(len(prose) == 1 + 2 * len(PRODUCER_DOMAIN_INVARIANTS),
+            "formal_model must state each producer-domain invariant exactly once for prose review")
+    beyond_kernel = sorted(walked - kernel)
+    for tier in sorted({vocabularies[name]["tier"] for name in beyond_kernel}):
+        denial = f"the {tier} tier declares no producers"
+        for where, text in prose.items():
+            require(denial not in text.lower(),
+                    f"formal_model {where} says {denial!r} while {beyond_kernel} declare "
+                    "producers and are walked by the producer check")
+    if beyond_kernel:
+        for where, text in prose.items():
+            require("Kernel(V)" not in text,
+                    f"formal_model {where} bounds the claim by Kernel(V) while the producer "
+                    f"check walks {len(walked)} vocabularies, including {beyond_kernel} "
+                    "outside the kernel tier")
+    # The size left outside is the honest half of the boundary: stating only
+    # what is verified lets the unverified remainder shrink out of the text.
+    for tier in sorted({vocabularies[name]["tier"] for name in outside}):
+        remaining = sum(1 for name in outside if vocabularies[name]["tier"] == tier)
+        fragment = f"{remaining} {tier}"
+        for invariant_id in PRODUCER_DOMAIN_INVARIANTS:
+            where = f"{invariant_id}.statement"
+            require(fragment in prose[where],
+                    f"formal_model {where} must name the {remaining} {tier} vocabularies left "
+                    f"outside the walked set; it does not say {fragment!r}")
 
 
 def check_invariant_domain(invariant: dict[str, Any], registry: dict[str, Any]) -> None:
@@ -703,9 +756,10 @@ def check_producers(registry: dict[str, Any], sources: list[SourceFile]) -> list
     unknown: list[str] = []
     for name, vocabulary in registry['vocabularies'].items():
         if 'producers' not in vocabulary:
-            # Skipped: the whole cross_runtime tier, which declares no producers.
-            # F1/F2 therefore hold over the kernel tier only, which is the domain
-            # the registry's formal_model states -- not an unconditional claim.
+            # Skipped: a vocabulary that declares no producers. That is every
+            # cross_runtime vocabulary except the ones carrying an executed
+            # witness. F1/F2 therefore hold over the walked set the registry's
+            # formal_model names Producers(V) -- not an unconditional claim.
             continue
         try:
             rows = collect_production(REPO_ROOT, vocabulary, sources)

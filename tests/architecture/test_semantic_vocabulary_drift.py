@@ -520,6 +520,55 @@ def test_f1_f2_domain_names_exactly_the_vocabularies_the_producer_check_walks() 
         assert domain["evidence_bound"] == "producer_scan_reach"
 
 
+def test_prose_may_not_deny_a_producer_the_check_walks() -> None:
+    """The statement a human reads is held to the set the checker walks.
+
+    The machine domain and the prose were independent: the registry counted a
+    cross-runtime producer into F1/F2 and reported 7/26 while the same file
+    still called the kernel tier the only one declaring producers. Nothing was
+    red, because no check read both. Each mutation below restores one half of
+    that contradiction.
+    """
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    model = registry["formal_model"]
+    smoke["check_formal_model"](model, registry)
+
+    kernel_only = copy.deepcopy(registry)
+    kernel_only["formal_model"]["universes"]["vocabularies"] = (
+        "V: registered vocabulary identifiers; Kernel(V) \u2286 V is the tier=kernel "
+        "subset, the only tier that declares producers"
+    )
+    with pytest.raises(smoke["Drift"], match="Kernel\\(V\\)"):
+        smoke["check_formal_model"](kernel_only["formal_model"], kernel_only)
+
+    denial = copy.deepcopy(registry)
+    _invariant(denial, "F2_canonical_value_liveness")["statement"] += (
+        " The cross_runtime tier declares no producers."
+    )
+    with pytest.raises(smoke["Drift"], match="declares no producers"):
+        smoke["check_formal_model"](denial["formal_model"], denial)
+
+
+def test_prose_must_keep_naming_what_stays_outside_the_walked_set() -> None:
+    """Stating only the verified half lets the unverified remainder go quiet."""
+    smoke = runpy.run_path(str(SMOKE))
+    registry = copy.deepcopy(smoke["load_registry"]())
+    vocabularies = registry["vocabularies"]
+    outside = [name for name, entry in vocabularies.items() if "producers" not in entry]
+    tiers = {vocabularies[name]["tier"] for name in outside}
+    assert tiers == {"cross_runtime"}, tiers
+
+    statement = _invariant(registry, "F1_producer_closedness")["statement"]
+    fragment = f"{len(outside)} cross_runtime"
+    assert fragment in statement, statement
+    _invariant(registry, "F1_producer_closedness")["statement"] = statement.replace(
+        fragment, "the remaining cross_runtime"
+    )
+    with pytest.raises(smoke["Drift"], match="left outside the walked set"):
+        smoke["check_formal_model"](registry["formal_model"], registry)
+
+
 @pytest.mark.parametrize("invariant_id", sorted({
     "F1_producer_closedness",
     "F2_canonical_value_liveness",
