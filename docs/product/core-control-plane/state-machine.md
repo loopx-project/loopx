@@ -474,12 +474,16 @@ The same ordering applies when an agent records a bounded
 as a goal-frontier `acceptance_gaps[]` entry. If no advancement frontier remains,
 the gap becomes a replan trigger before the lane can quietly back off.
 
-Long runnable lanes also pass through this machine. When the current agent can
-select about 15 advancement todos, or about 20 open todos with advancement work
+Long runnable lanes also pass through this machine. When the current agent owns
+15 open advancement todos, or 20 claimed open todos with claimed advancement work
 still present, quota should trigger a bounded vision replan before continuing
 linearly. The replan reads the agent-scoped evidence log, uses bounded public
 research when local evidence is insufficient for a public claim, then groups,
 prunes, or reprioritizes the chain into the next high-value runnable slice.
+Shared unclaimed candidates remain selectable but do not count toward this lane
+threshold. A valid evidence-linked vision path can retain existing runnable work
+and settle the projected Turn without adding another planning Todo. Shared-pool
+churn preserves its obligation identity; owned material changes rearm it.
 
 The same ordering also applies to `vision_checkpoint_v0`: if a role records
 material progress but omits both a vision patch and an unchanged/no-follow-up

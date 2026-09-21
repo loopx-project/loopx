@@ -36,8 +36,13 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
     return [...new Set(declared)] as SemanticOutcome[];
   }
   const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
-  return [...(triggers.some(trigger => VISION_TRIGGERS.has(String(object(trigger).kind ?? "").trim()))
-    ? VISION_OUTCOMES : PROGRESS_OUTCOMES)];
+  const kinds = triggers.map(trigger => String(object(trigger).kind ?? "").trim());
+  if (kinds.some(kind => VISION_TRIGGERS.has(kind))) return [...VISION_OUTCOMES];
+  // Reviewing a long chain may retain existing runnable work. Its projected
+  // vision decision must close the checkpoint without manufacturing another
+  // successor or progress identifier. Keep previously legal progress exits.
+  return kinds.includes("long_todo_chain")
+    ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
 
 function writebackProjection(required: SemanticOutcome[]): JsonObject {
@@ -51,7 +56,7 @@ function writebackProjection(required: SemanticOutcome[]): JsonObject {
         vision_authoring: visionAuthoringContract(),
         required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs"],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS],
-        rule: "Author the JSON file from observed evidence, then execute the bound refresh and spend. A new progress identifier or unchanged reason alone cannot resolve this vision obligation. Other required_any_of exits remain subject to their typed contracts.",
+        rule: "Author the JSON file from observed evidence, then execute the bound refresh and spend. This path requires an acceptance summary and evidence-linked path outcome; an unchanged reason alone is insufficient. Other required_any_of exits remain subject to their typed contracts.",
       },
     };
   }

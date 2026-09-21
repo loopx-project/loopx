@@ -135,7 +135,8 @@ def replan_successor_transition_ack(
                 eligible_ids.add(binding["todo_id"])
             elif binding["kind"] == "predecessor":
                 prior = ensure_replan_novelty_policy({**(replan_obligation or {}), "triggers": [
-                    {**trigger, "frontier_revision": binding["frontier_revision"]}
+                    {**trigger, "frontier_revision": binding["frontier_revision"],
+                     "obligation_identity_revision": binding["obligation_identity_revision"]}
                     for trigger in (replan_obligation or {}).get("triggers") or []]})
                 if prior["obligation_id"] == origins[binding["todo_id"]]:
                     eligible_ids.add(binding["todo_id"])

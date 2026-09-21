@@ -952,7 +952,7 @@ def select_frontier_rule(facts):
 | 4 | `open_user_todo` | 存在真正阻塞当前路径的用户工作；系统应等待具体输入，不能把缺少 authority 误写成 Replan。 | 否 |
 | 5 | `todo_succession_gap` | Advancement 已完成，但没有 successor 或 `no_followup` 理由，且没有其他 advancement 接续；必须补上局部闭包。 | 是 |
 | 6 | `vision_acceptance_gap` | Acceptance 仍有缺口，但没有满足它的 selectable work，或 successor 需要 Vision 决策；必须重建方向与 Frontier。 | 是 |
-| 7 | `long_todo_chain` | 可选 Todo 链超过有界阈值；先做 Vision checkpoint、分组或裁剪，不能用无绑定 ACK 跳过。当前 obligation 只能由匹配其 id 的 semantic delta 闭合。 | 是 |
+| 7 | `long_todo_chain` | 当前 Agent 已认领的 Todo 链达到有界阈值；共享未认领候选不计入。先做 Vision checkpoint、分组或裁剪，不能用无绑定 ACK 跳过。当前 obligation 只能由匹配其 id 的 semantic delta 闭合。 | 是 |
 | 8 | `current_agent_blocker` | 当前 Agent 已有具体 blocker 解释为什么不能推进；下一步由 blocker 的 resume route 决定，而不是再造计划。 | 否 |
 | 9 | `monitor_no_change_streak` | Monitor-only lane 连续 unchanged 达到阈值；必须用 expiry、blocker、supersede 或 successor 结束热等待。 | 是 |
 | 10 | `not_monitor_only` | 当前 lane 并非纯 monitor 等待；monitor exhaustion 规则不适用，交还普通 advancement 路径处理。 | 否 |

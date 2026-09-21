@@ -1241,7 +1241,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
                     "kind": LONG_TODO_CHAIN_TRIGGER,
                     "section": "agent_todo_summary",
                     "text": (
-                        "current agent lane has a long selectable todo chain; "
+                        "current agent lane has a long claimed todo chain; "
                         "run a vision checkpoint/replan before continuing linearly"
                     ),
                     **long_chain_trigger,
@@ -1254,18 +1254,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
                 "update_agent_vision",
                 "create_successor",
             ],
-            todo_actions=[
-                {
-                    "action": "add",
-                    "role": "agent",
-                    "priority": "P1",
-                    "text": (
-                        "run a bounded long-chain vision replan: compare evidence "
-                        "with the active vision, group or prune the todo chain, "
-                        "and select the next high-value runnable slice"
-                    ),
-                }
-            ],
+            todo_actions=[],
             stop_condition=(
                 "stop if pruning or external research requires private material, "
                 "credentials, destructive git, production actions, or owner-only decisions"
@@ -1273,7 +1262,10 @@ def derive_goal_frontier_replan_obligation_from_summaries(
             recommended_action=(
                 "run a bounded long-chain vision replan before continuing a 15+ "
                 "todo lane: read evidence, use public research if local evidence "
-                "is weak, group/prune work, and write a concrete todo or vision delta"
+                "is weak, group/prune work, and record an evidence-linked vision "
+                "path through replan_action_packet.writeback_contract using the "
+                "current Turn settlement binding; retain existing runnable work "
+                "when appropriate instead of adding a Todo whose only action is replan"
             ),
             rearmed_after_obligation_id=(
                 long_chain_ack_decision.rearmed_after_obligation_id

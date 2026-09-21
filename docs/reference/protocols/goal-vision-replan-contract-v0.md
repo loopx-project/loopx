@@ -115,6 +115,17 @@ stays on the original Turn, and in-flight continuation remains unchanged.
 JSON 写作契约复用 vision 校验器，不新增 ACK 仪式，也不改变既有 successor、blocker、
 terminal 出口。语义接受、checkpoint 满足、Turn 结算与 Goal 完成仍须分别验证。
 
+Long-chain review also accepts `fresh_vision_path_outcome` and now projects this
+JSON route. An acceptance summary plus an evidence-linked `continue`, `no_change`
+or `replan` path can retain existing runnable work; no extra planning Todo or
+legacy repair ACK is required. Existing typed progress, successor and terminal
+exits remain available. Vision-only obligations still reject ordinary progress
+identifiers. Use the projected Todo **or** obligation binding, never both.
+
+长链 review 同样接受带验收摘要和证据的 vision path，并默认投影 JSON 写回路径；
+可以保留已有可执行工作，无需新增“再次重规划”的 Todo。既有 typed progress、
+successor 和 terminal 出口保留；严格 vision 义务仍不接受普通进度标识。
+
 Inline vision writes require `--agent-id`. JSON packets must also resolve to
 the same `agent_id` as the refresh run. This keeps `research-executor`,
 `evaluator-promoter`, and other roles from overwriting or satisfying each
@@ -501,8 +512,8 @@ or agent-scope wait decisions:
 - normalized progress shows no remaining advancement frontier;
 - monitor-only lanes have no material transition and acceptance remains open;
 - a cleared handoff has no successor or no-follow-up rationale;
-- the current agent lane has a long selectable todo chain, such as 15 or more
-  advancement todos or roughly 20 open todos with advancement work still present;
+- the current agent lane owns at least 15 open advancement Todos, or 20 claimed
+  open Todos with claimed advancement work still present;
 - a periodic autonomous replan obligation is due;
 - the user objective or acceptance contract changed;
 - an approved dreaming proposal requires a delivery route.
@@ -510,6 +521,22 @@ or agent-scope wait decisions:
 The replan decision must not be disturbed by monitor quiet skip, scoped gate
 waiting, or a single agent having no runnable todo. Those may explain local
 lane state, but they cannot erase a required goal-level replan.
+
+Long-chain scope correction (#4667): Agent-scoped counts now exclude shared
+unclaimed candidates. They remain selectable, but do not create a replan duty
+for a lane that has not claimed them. Unscoped Goal observations retain the
+selectable-pool thresholds. Numeric thresholds and other replan sources are
+unchanged. The typed frontier owner supplies `obligation_identity_revision`
+from the owned material identity, keeping an open obligation stable across
+peer/shared-pool churn; `frontier_revision` retains the full selectable-source
+checkpoint for diagnostics and historical ACK matching. Owned material changes
+still rearm. Timestamp/evidence bookkeeping does not. Existing accepted ACKs
+remain readable; an outstanding pre-upgrade Turn should refresh its guard.
+
+长链触发范围修正：Agent lane 只统计自己已认领的任务；共享未认领任务仍可选取，
+但不计入本 lane 的长链阈值。无 Agent 的 Goal 总览保留原可选池口径。
+义务身份使用 typed owner 给出的 owned 实质 revision，同伴修改共享池不会让正在
+处理的义务换 ID；自己任务的实质修改仍重新触发。证据补充或更新时间不重新触发。
 
 ## Replan Output
 

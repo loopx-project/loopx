@@ -728,14 +728,22 @@ Python 验证前置 obligation id。压缩保留实质字段 `done`，历史保�
 多后继歧义、过期、来源截断或无关实质变化都不能关闭当前 obligation。
 这闭合一个 T3 规则组，不代表其余 consumer 或 T1/T2/D1–D3 完成。
 
-阈值仍是 15 项 advancement，或存在 advancement 时的 20 项可选 open Todo。
+长链口径修正（#4667）：Agent lane 统计 15 项已认领 advancement，或存在已认领
+advancement 时的 20 项已认领 open Todo。共享候选仍可选，但不再计入本 lane 的
+义务；无 Agent 的 Goal 总览保留原可选池口径。
 完整实质 revision 包含终态 advancement；仅更新时间不重新触发。完整的 Agent-owned
 identity 还能在同伴改变共享 unclaimed 工作时保持既有 long-chain ACK 有效。
-自己的实质工作变化仍重新触发；全是未认领工作的链不能使用 owned 豁免。
+自己的实质工作变化仍重新触发；没有认领工作的 lane 不产生长链义务。
 历史 revision-only ACK 仍按精确 revision 匹配。明确修正：语义写回不再丢失
 owned identity；只有 identity 而没有 revision、或明确不完整的 checkpoint 不能
-压制 replan；其他 trigger kind 不能借用长链身份匹配。阈值、写权限和 obligation-id
-规则均未改变。
+压制 replan；其他 trigger kind 不能借用长链身份匹配。同一 TS owner 现在提供
+基于 owned 实质内容的 `obligation_identity_revision`，供既有 Python 身份 codec
+及 predecessor 校验使用；同伴修改共享池不能在 ACK 前让本 Turn 的义务换 ID。
+阈值数值和写权限不变。`replan_semantics.ts` 为长链 review 接受并投影带证据的
+vision path，保留既有 progress 出口和严格 vision 义务。真实 CLI 回归沿投影绑定
+验证持久 ACK、checkpoint、一次 spend 和下一 Turn 回读；维护不触发，自己任务的
+实质修改重新触发。本次推进总路线 S2/S3 已有 T3 owner，不新增 provider、迁移存储
+或前端设置，也不宣称整个 RFC 验收完成。
 
 Canonical index 仍在展示截断前生成。Exclusion、重复 ID/index lane、不完整时间与
 权威 index 不完整时均保持 fail-closed。真实 CLI 验证两条 ACK 路径经过运行记录及

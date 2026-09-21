@@ -59,7 +59,8 @@ def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(
             "role": "agent", "status": "open", "done": False, "task_class": "advancement_task",
             "text": "Synthetic independent work", "archive_state": "active", "source_section": "Agent Todo",
             "index": len(projection["todos"]) + 1, "updated_at": "2026-09-01T00:00:00.000002Z",
-            **({"claimed_by": "agent-a"} if index == 0 else {}),
+            # Reach the lane-owned threshold; retain a shared tail for ACK parity.
+            **({"claimed_by": "agent-a"} if index < 15 else {}),
             **({"excluded_agents": ["agent-a"]} if index == 29 else {}),
         })
     from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes

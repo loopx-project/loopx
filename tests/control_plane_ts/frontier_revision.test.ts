@@ -67,12 +67,22 @@ test("duplicate identities and malformed or absent revision facts cannot authori
   assert.deepEqual(result.decision, {acknowledged: false, rearmed_after_obligation_id: null});
 });
 
-test("long-chain thresholds remain 15 advancement or 20 selectable with advancement", () => {
+test("lane thresholds count 15 claimed advancement or 20 claimed open with advancement", () => {
   assert.notEqual(observe().observation, null);
   assert.equal(observe({frontier_counts: {current_agent_claimed_advancement_count: 14}}).observation, null);
   const open = {current_agent_claimed_open_count: 20, unclaimed_open_count: 0};
-  assert.notEqual(observe({summary: open, frontier_counts: {unclaimed_advancement_count: 1}}).observation, null);
+  const result = observe({summary: open, frontier_counts: {current_agent_claimed_advancement_count: 1}});
+  assert.equal((result.observation as Record<string, unknown>).count_kind, "claimed_open_todos");
+  assert.equal((result.observation as Record<string, unknown>).trigger_count, 20);
   assert.equal(observe({summary: open, frontier_counts: {}}).observation, null);
+  assert.equal(observe({summary: open, frontier_counts: {unclaimed_advancement_count: 100}}).observation, null);
+  for (const current of [0, 14]) {
+    assert.equal(observe({summary: {current_agent_claimed_open_count: current, unclaimed_open_count: 100},
+      frontier_counts: {current_agent_claimed_advancement_count: current, unclaimed_advancement_count: 100}}).observation, null);
+  }
+  // Unscoped overview keeps the existing selectable-chain contract.
+  assert.notEqual(observe({agent_id: null, summary: open,
+    frontier_counts: {unclaimed_advancement_count: 1}}).observation, null);
 });
 
 test("only exact accepted checkpoint suppresses a repeated trigger; material change rearms", () => {
@@ -200,12 +210,14 @@ test("successor reconstruction requires a complete matching source and an alread
   const request = {schema_version: "todo_frontier_revision_request_v0", operation: "successor_checkpoints",
     agent_id: "worker-a", rows, obligation_id: "replan-current",
     candidates: [{todo_id: "todo_15", updated_at: rows[15].updated, origin_obligation_id: "replan-prior"}],
-    triggers: [{kind: "long_todo_chain", ...current, selectable_advancement_count: 16, selectable_open_count: 16}]};
+    triggers: [{kind: "long_todo_chain", ...current,
+      current_agent_claimed_advancement_count: 16, current_agent_claimed_open_count: 16}]};
   const result = projectAdvancementFrontier(request).source_checkpoint as Record<string, unknown>;
   assert.deepEqual(result.bindings, [{kind: "predecessor", todo_id: "todo_15",
-    frontier_revision: project(rows.slice(0, 15), "worker-a").frontier_revision}]);
+    frontier_revision: project(rows.slice(0, 15), "worker-a").frontier_revision,
+    obligation_identity_revision: project(rows.slice(0, 15), "worker-a").frontier_owned_identity}]);
   for (const triggers of [
-    [{...request.triggers[0], selectable_advancement_count: 15, selectable_open_count: 15}],
+    [{...request.triggers[0], current_agent_claimed_advancement_count: 15, current_agent_claimed_open_count: 15}],
     [{...request.triggers[0], frontier_revision: "different-current-source"}],
     [...request.triggers, {kind: "periodic_review"}],
   ]) {

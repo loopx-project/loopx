@@ -24,6 +24,7 @@ class LongTodoChainObservation:
     count_kind: str
     selectable_open_count: int
     selectable_advancement_count: int
+    current_agent_claimed_open_count: int
     current_agent_claimed_advancement_count: int
     unclaimed_advancement_count: int
     threshold: int

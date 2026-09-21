@@ -314,6 +314,8 @@ def test_writeback_ack_preserves_owned_material_basis(change: str, rearms: bool)
         changed[0]["priority"] = "P0"
     else:
         changed[0]["updated_at"] = "2026-08-22T10:00:00+08:00"
+    # The open Turn must keep its binding even before an ACK is recorded.
+    assert (derive(changed)["obligation_id"] != original["obligation_id"]) is rearms
     assert (derive(changed, ack) is not None) is rearms
 
 

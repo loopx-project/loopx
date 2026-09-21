@@ -203,7 +203,10 @@ def ensure_replan_novelty_policy(
         normalized.pop("rearmed_after_obligation_id", None)
     trigger_identity = [
         {
-            key: trigger.get(key)
+            key: (
+                trigger.get("obligation_identity_revision", trigger.get(key))
+                if key == "frontier_revision" else trigger.get(key)
+            )
             for key in (
                 "kind",
                 "frontier_identity",

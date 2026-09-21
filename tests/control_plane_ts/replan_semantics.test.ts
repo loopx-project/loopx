@@ -28,6 +28,35 @@ test("missing evidence or acceptance cannot manufacture a fresh path outcome", (
   }
 });
 
+test("long-chain review accepts its evidence-linked vision route and retains progress exits", () => {
+  const chain = {triggers: [{kind: "long_todo_chain"}]};
+  const projection = projectReplanSemantics({operation: "requirements", obligation: chain});
+  assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
+    agent_vision: vision}).accepted, true);
+  for (const outcome of ["new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor"]) {
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
+      observation_delta: {delta_kinds: [outcome]}}).accepted, true);
+  }
+  for (const incomplete of [{vision_patch: vision.vision_patch},
+    {...vision, path_delta: {outcome: "replan", evidence_refs: []}},
+    {...vision, vision_patch: {}}, {...vision, path_delta: {outcome: "wait", evidence_refs: ["evidence"]}}]) {
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
+      agent_vision: incomplete}).accepted, false);
+  }
+  // A stricter source, mixed vision duty or unrelated trigger keeps its policy.
+  for (const restricted of [
+    {...chain, satisfying_semantic_outcomes: ["new_runnable_successor"]},
+    {triggers: [{kind: "typed_progress_repeat", text: "long_todo_chain"}]},
+  ]) {
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: restricted,
+      agent_vision: vision}).accepted, false);
+  }
+  assert.equal(projectReplanSemantics({operation: "qualify",
+    obligation: {triggers: [...chain.triggers, ...obligation.triggers]},
+    observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
+});
+
 test("explicit outcome restriction remains authoritative; trigger prose is not", () => {
   assert.deepEqual(requiredSemanticOutcomes({satisfying_semantic_outcomes: ["new_runnable_successor", "new_runnable_successor"]}), ["new_runnable_successor"]);
   assert.throws(() => requiredSemanticOutcomes({satisfying_semantic_outcomes: ["unrecognized"]}), /unknown typed outcome/);
