@@ -63,17 +63,26 @@ if [[ "$loopx_command" == "quota" \
   exec node --no-warnings --experimental-strip-types "$native_scheduler_entry" "$@"
 fi
 
-python_bin="${LOOPX_PYTHON:-}"
-if [[ -z "$python_bin" && -f "$repo_root/.loopx-python" ]]; then
-  IFS= read -r python_bin <"$repo_root/.loopx-python"
-fi
-if [[ -z "$python_bin" ]]; then
-  python_bin="python3"
-fi
-if ! command -v "$python_bin" >/dev/null 2>&1; then
-  echo "loopx runtime error: configured Python executable not found: $python_bin" >&2
-  echo "Set LOOPX_PYTHON to Python 3.11+ and reinstall LoopX." >&2
-  exit 2
+python_selector="$repo_root/scripts/loopx-python.sh"
+if [[ -f "$python_selector" ]]; then
+  if ! python_bin="$(bash "$python_selector")"; then
+    echo "Set LOOPX_PYTHON to Python 3.11+ and reinstall LoopX." >&2
+    exit 2
+  fi
+else
+  # Keep old release snapshots runnable if the companion selector is absent.
+  python_bin="${LOOPX_PYTHON:-}"
+  if [[ -z "$python_bin" && -f "$repo_root/.loopx-python" ]]; then
+    IFS= read -r python_bin <"$repo_root/.loopx-python"
+  fi
+  if [[ -z "$python_bin" ]]; then
+    python_bin="python3"
+  fi
+  if ! command -v "$python_bin" >/dev/null 2>&1; then
+    echo "loopx runtime error: configured Python executable not found: $python_bin" >&2
+    echo "Set LOOPX_PYTHON to Python 3.11+ and reinstall LoopX." >&2
+    exit 2
+  fi
 fi
 
 if [[ "$loopx_command" == "canary" && "$loopx_subcommand" == "premerge" ]]; then
