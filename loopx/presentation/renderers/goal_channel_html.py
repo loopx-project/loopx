@@ -114,12 +114,39 @@ def render_goal_channel_projection_html(projection: Mapping[str, Any]) -> str:
     open_gates = _as_mappings(projection.get("open_gates"))
     artifacts = _as_mappings(projection.get("artifacts"))
     active_leases = _as_mappings(projection.get("active_leases"))
-    ownership_unavailable = _as_mapping(projection.get("coordination_observation")).get("status") == "unavailable"
+    coordination_authority = _as_mapping(projection.get("coordination_authority"))
+    coordination_observation = _as_mapping(projection.get("coordination_observation"))
+    ownership_unavailable = coordination_observation.get("status") == "unavailable"
+    coordination_state = coordination_authority.get("state")
+    coordination_next_action = {
+        "promoted": "inspect_managed_delegation",
+        "promotion_required": "preview_reviewed_goal_authority_promotion",
+        "unavailable": (
+            "repair_canonical_authority"
+            if coordination_observation.get("source_authority") == "canonical_unavailable"
+            else "repair_authority_observation"
+        ),
+    }.get(coordination_state)
+    coordination_authority_panel = dict(coordination_authority)
+    if coordination_next_action is not None:
+        coordination_authority_panel["next_action"] = coordination_next_action
     recent_events = _as_mappings(projection.get("recent_events"))
     source_warnings = _as_mappings(projection.get("source_warnings"))
 
     panels = [
         _html_kv_panel("decision-frame", "Decision Frame", decision_frame, tone="blue"),
+        _html_kv_panel(
+            "coordination-authority",
+            "Coordination Authority",
+            coordination_authority_panel,
+            tone=(
+                "green"
+                if coordination_authority.get("state") == "promoted"
+                else "red"
+                if coordination_authority.get("state") == "unavailable"
+                else "orange"
+            ),
+        ),
         _html_kv_panel("quota", "Quota Guard", quota, tone="purple"),
         _html_item_panel(
             "user-todos",

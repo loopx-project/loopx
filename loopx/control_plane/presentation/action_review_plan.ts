@@ -79,23 +79,40 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
  * stay keys, not sentences, because this boundary is language-neutral; the
  * surface owns the words and renders the data below.
  */
-export type ReviewCardFrame = {
+type ReviewCardFrameBase = {
   schemaVersion: "review_card_frame_v0";
   actionKind: string;
   proposalId: string;
   stateFingerprint: string;
-  kind: "confirmation";
-  attentionKind: "authority";
-  interactionMode: "confirm_reject";
-  decisions: readonly ["confirm", "reject"];
   titleKey: string;
   subtitleKey: string;
-  confirmLabelKey: string;
-  rejectLabelKey: string;
   warningKey: string;
   focus: string;
   fields: Array<{ key: string; value: string }>;
 };
+
+export type ReviewCardFrame = ReviewCardFrameBase & (
+  | {
+      kind: "confirmation";
+      attentionKind: "authority";
+      interactionMode: "confirm_reject";
+      decisions: readonly ["confirm", "reject"];
+      confirmLabelKey: string;
+      rejectLabelKey: string;
+    }
+  | {
+      kind: "pending";
+      attentionKind: "progress";
+      interactionMode: "inform";
+    }
+  | {
+      kind: "result";
+      attentionKind: "progress";
+      interactionMode: "inform";
+      resultKind: "applied" | "rejected" | "stale" | "failed" | "inactive";
+      resultSummary: string;
+    }
+);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -160,7 +177,6 @@ function envelopeFieldValue(value: unknown): string {
 export function compileReviewCardFrame(proposalValue: unknown): ReviewCardFrame | undefined {
   const proposal = objectValue(proposalValue);
   if (proposal?.action_kind !== "team.plan") return undefined;
-  if (proposal.status !== "preview_ready" && proposal.status !== "deferred") return undefined;
   const parameters = objectValue(proposal.normalized_parameters);
   const plan = objectValue(parameters?.plan);
   if (!plan || plan.kind !== "steward_team_plan_preview" || plan.applies !== false) return undefined;
@@ -189,22 +205,57 @@ export function compileReviewCardFrame(proposalValue: unknown): ReviewCardFrame 
     { key: "quota_envelope", value: envelopeFieldValue(plan.quota_envelope) },
     { key: "stop_condition", value: compactValue(plan.stop_condition) },
   ].filter((field) => field.value.length > 0);
-  return {
+  const base: ReviewCardFrameBase = {
     schemaVersion: "review_card_frame_v0",
     actionKind: "team.plan",
     proposalId,
     stateFingerprint,
-    kind: "confirmation",
-    attentionKind: "authority",
-    interactionMode: "confirm_reject",
-    decisions: ["confirm", "reject"],
     titleKey: "team_plan_preview",
     subtitleKey: "preview_only_no_lane_exists",
-    confirmLabelKey: "confirm_team_plan",
-    rejectLabelKey: "reject_team_plan",
     warningKey: "confirming_creates_each_ready_lane_first_todo",
     focus: `${goalId} · ${lanes.length} lane${lanes.length === 1 ? "" : "s"}`,
     fields,
+  };
+  if (proposal.status === "preview_ready" || proposal.status === "deferred") {
+    return {
+      ...base,
+      kind: "confirmation",
+      attentionKind: "authority",
+      interactionMode: "confirm_reject",
+      decisions: ["confirm", "reject"],
+      confirmLabelKey: "confirm_team_plan",
+      rejectLabelKey: "reject_team_plan",
+    };
+  }
+  if (proposal.status === "applying") {
+    return {
+      ...base,
+      kind: "pending",
+      attentionKind: "progress",
+      interactionMode: "inform",
+    };
+  }
+  const receipt = objectValue(proposal.receipt);
+  const failure = objectValue(proposal.failure);
+  const resultKind = proposal.status === "applied"
+    ? "applied"
+    : proposal.status === "rejected"
+    ? "rejected"
+    : proposal.status === "stale"
+    ? "stale"
+    : proposal.status === "failed"
+    ? "failed"
+    : "inactive";
+  return {
+    ...base,
+    kind: "result",
+    attentionKind: "progress",
+    interactionMode: "inform",
+    resultKind,
+    resultSummary: compactValue(
+      receipt?.outcome ?? failure?.error_code ?? proposal.status,
+      160,
+    ),
   };
 }
 

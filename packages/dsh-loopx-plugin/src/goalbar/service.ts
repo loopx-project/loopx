@@ -679,6 +679,7 @@ export class GoalBarService implements GoalBarServiceHandle {
         'goal-lifecycle',
         '--goal-id', binding.goalId,
         '--operation', operation,
+        '--actor-kind', 'owner',
         '--execute',
       ], {
         runner: this.runner,

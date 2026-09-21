@@ -401,22 +401,20 @@ def test_a_confirmed_lane_keeps_the_priority_the_owner_confirmed(
     assert "[P0] Advance the intake contract" in _todos(project)
 
 
-def test_a_lane_that_already_declares_a_priority_is_not_relabelled(
+def test_a_lane_with_conflicting_priority_declarations_is_refused(
     tmp_path: Path,
 ) -> None:
-    """The plan's own label wins, and re-reading it cannot stack a second one."""
+    """A plan cannot silently choose between two conflicting priorities."""
 
-    from loopx.todos import list_goal_todos
-
-    _project, registry_path = _fixture(tmp_path)
+    project, registry_path = _fixture(tmp_path)
     proposal = _proposal()
     proposal["lanes"][0]["first_todo"]["text"] = "[P2] Advance the intake contract"
     proposal["lanes"][0]["first_todo"]["priority"] = "P0"
 
-    _settle(registry_path, proposal)
+    with pytest.raises(ValueError, match="priority conflicts"):
+        _settle(registry_path, proposal)
 
-    items = list_goal_todos(registry_path=registry_path, goal_id=GOAL_ID)["todos"]
-    assert items[0]["text"] == "[P2] Advance the intake contract"
+    assert "loopx:todo " not in _todos(project)
 
 
 def test_the_receipt_retains_each_lanes_acceptance_beside_its_todo(

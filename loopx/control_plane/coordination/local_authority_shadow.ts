@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -24,7 +24,11 @@ import {
   validateCoordinationTodoReadModel,
 } from "./coordination_projection.ts";
 import { FileAuthorityStore } from "./file_authority_store.ts";
-import { requireShadowCaptureBinding, withShadowMaintenanceLock, readShadowBootstrapSourcePath } from "./shadow_management.ts";
+import {
+  readShadowBootstrapSourcePath,
+  requireShadowCaptureBinding,
+  withShadowMaintenanceLock,
+} from "./shadow_management.ts";
 import { outboxEntryIdentity, OUTBOX_ENTRY_FILE_PATTERN } from "./local_authority_shadow_identity.ts";
 import { legacyCoordinationTodoLockPath, taskLeaseLockPath } from "./legacy_writer_lock_paths.ts";
 import {
@@ -939,9 +943,11 @@ function sourceReference(entry: ShadowEntry, digest: string | null): string {
 function validateEntryIdentity(request: CommitEntryRequest, binding: ShadowLineageBinding): void {
   const { entry } = request;
   requireLineage(entry.capture_lineage_id === binding.capture_lineage_id, "stale_generation");
-  const rootDigest = `sha256:${createHash("sha256").update(resolve(request.runtime_root)).digest("hex")}`;
-  requireLineage(entry.source_root_digest === binding.source_root_digest && rootDigest === binding.source_root_digest,
-    "source_root_mismatch");
+  // requireShadowCaptureBinding has already proved that this binding belongs
+  // to the requested physical runtime root. Keep accepting the binding's
+  // immutable digest so an in-flight lineage created by a pre-canonical-path
+  // release can drain safely after upgrade.
+  requireLineage(entry.source_root_digest === binding.source_root_digest, "source_root_mismatch");
   requireLineage(entry.entry_id === outboxEntryIdentity(request.goal_id, entry.partition, entry.seq,
     sourceReference(entry, request.partition_digest), entry.capture_lineage_id, entry.source_root_digest),
   "entry_identity_mismatch");

@@ -311,6 +311,11 @@ def capability_configuration_editor(
             "writable_scopes": ["goal"],
             "fields": [_field("enabled", "Enabled", "boolean")],
         },
+        "coordination_runtime_shadow": {
+            "supported_scopes": ["goal"],
+            "writable_scopes": ["goal"],
+            "fields": [_field("enabled", "Enabled", "boolean")],
+        },
         "lark_kanban_heartbeat_sync": {
             "supported_scopes": ["goal"],
             "writable_scopes": ["goal"],

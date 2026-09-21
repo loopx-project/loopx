@@ -438,6 +438,7 @@ assert.match(capabilityWorkbench, /configuration_editor\.writable_scopes\.length
 assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(capabilities, locale\)/, "Machine and Goal catalogs use one presentation-order policy");
 for (const capabilityId of [
   "change_quality_qualification",
+  "coordination_runtime_shadow",
   "explore_graph",
   "explore_harness",
   "lark_event_inbox",

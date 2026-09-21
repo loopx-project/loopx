@@ -108,12 +108,15 @@ CLI 提供同一套可预览、可验证的生命周期操作：
 loopx goal-lifecycle --goal-id <goal-id> --operation stop
 
 # 确认执行，再读取 quota 验证自动推进已暂停
-loopx goal-lifecycle --goal-id <goal-id> --operation stop --execute
+loopx goal-lifecycle --goal-id <goal-id> --operation stop --actor-kind owner --execute
 loopx quota status --goal-id <goal-id>
 
 # 恢复；不会绕过其他运行门禁
-loopx goal-lifecycle --goal-id <goal-id> --operation resume --execute
+loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner --execute
 ```
+
+`--execute` 必须显式声明 `--actor-kind owner` 或 `controller`；不带 actor 的
+预览仍保持只读。写入的 activation receipt 会保留该 actor kind。
 
 执行时，LoopX 会写入权威 source registry、同步全局 registry，并验证两端 readback；任一端未验证成功时不会宣称操作完成。
 

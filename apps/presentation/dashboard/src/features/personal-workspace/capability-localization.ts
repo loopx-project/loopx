@@ -46,6 +46,10 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "Local authority shadow",
       description: "Observes post-commit Todo and task-lease state through the shared authority contract without taking write authority.",
     },
+    coordination_runtime_shadow: {
+      displayName: "Coordination runtime shadow",
+      description: "Captures transaction-bound Todo and task-lease mutations for reviewed whole-Goal coordination-authority promotion.",
+    },
     multi_subagent: {
       displayName: "Adaptive child capacity",
       description: "Sets bounded child-agent capacity and the public-safe responsibility domains in which parallel work may be delegated.",
@@ -101,6 +105,10 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     local_authority_shadow: {
       displayName: "本地 Authority 影子观测",
       description: "通过共享 Authority contract 观测提交后的 Todo 与 task lease 状态，但不取得写入权。",
+    },
+    coordination_runtime_shadow: {
+      displayName: "协调 Runtime 影子",
+      description: "捕获事务绑定的 Todo 与 task lease 变更，为经评审的整 Goal 协调 Authority 晋级提供证据。",
     },
     multi_subagent: {
       displayName: "自适应子 Agent 容量",

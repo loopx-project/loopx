@@ -181,6 +181,8 @@ def test_goal_actions_cli_projects_exact_fresh_execution_identity(
         GOAL_ID,
         "--operation",
         "stop",
+        "--actor-kind",
+        "owner",
         "--expected-state-fingerprint",
         packet["state_fingerprint"],
         "--execute",

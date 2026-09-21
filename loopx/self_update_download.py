@@ -67,13 +67,17 @@ def run_archive_installer(
                     code = 28
                     break
                 observation["stage"] = "installer_execution"
+                installer_env = dict(env)
+                installer_env["LOOPX_INSTALLER_TIMEOUT_SECONDS"] = str(
+                    max(1, int(remaining))
+                )
                 try:
                     return subprocess.run(
                         ["bash", str(script)],
                         check=False,
                         text=True, encoding="utf-8", errors="replace",
                         capture_output=True,
-                        env=env,
+                        env=installer_env,
                         timeout=remaining,
                     ), observation
                 except subprocess.TimeoutExpired:

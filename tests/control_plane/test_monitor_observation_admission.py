@@ -9,6 +9,7 @@ from tests.control_plane.test_quota_settlement_cli import (
     TODO_ID,
     _append_newly_due_monitor,
     _classification_count,
+    _projected_cli_args,
     _run_cli,
     _spend_run_count,
     _write_fixture,
@@ -37,7 +38,7 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     assert first_rc == 0, first
     assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
 
-    _append_newly_due_monitor(project)
+    _append_newly_due_monitor(project, watch_only=True)
     capability_args = (
         "--available-capability",
         "network",
@@ -54,27 +55,20 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     assert replay["selected_todo"]["todo_id"] == TODO_ID
     assert "due_monitor_context" in replay["work_lane_contract"]["reason_codes"]
 
-    poll_args = (
-        "quota",
-        "monitor-poll",
-        "--codex-app",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--turn-instance-id",
-        turn_instance_id,
-        "--todo-id",
-        DUE_MONITOR_TODO_ID,
-        "--target-key",
-        "due-monitor-fixture",
-        "--result-hash",
-        "unchanged-auxiliary-monitor",
-        *capability_args,
-        "--execute",
-        "--scan-path",
-        str(project),
+    auxiliary_cli = replay["interaction_contract"]["cli_channel"][
+        "auxiliary_monitor_poll"
+    ]
+    assert auxiliary_cli["turn_instance_id"] == turn_instance_id
+    poll_args = _projected_cli_args(
+        auxiliary_cli["command"],
+        turn_instance_id=turn_instance_id,
     )
+    poll_args = tuple(
+        "unchanged-auxiliary-monitor"
+        if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
+        else token
+        for token in poll_args
+    ) + ("--scan-path", str(project))
     poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
     poll_replay_rc, poll_replay = _run_cli(
         registry_path,

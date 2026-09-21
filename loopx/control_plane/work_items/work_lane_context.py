@@ -10,9 +10,11 @@ from ..todos.todo_semantics import (
     todo_summary_first_executable_item,
     todo_summary_monitor_due_count,
     todo_summary_monitor_due_items,
+    todo_summary_non_watch_only_monitor_due_items,
     todo_summary_monitor_schedule_gap_count,
     todo_summary_monitor_schedule_gap_items,
     todo_summary_open_task_counts,
+    todo_summary_watch_only_monitor_due_items,
 )
 from .delivery_history import project_delivery_response
 from .work_lane import (
@@ -113,6 +115,12 @@ def build_work_lane_context_contract(
         agent_todo_summary,
         due_items=due_monitor_items,
     )
+    watch_only_due_monitor_items = todo_summary_watch_only_monitor_due_items(
+        agent_todo_summary
+    )
+    non_watch_only_due_monitor_items = (
+        todo_summary_non_watch_only_monitor_due_items(agent_todo_summary)
+    )
     if not advancement_allowed and due_monitor_count <= 0:
         # In monitor-only mode, an action phrase such as "observe result" must
         # not bypass the monitor todo's explicit cadence window.
@@ -122,7 +130,11 @@ def build_work_lane_context_contract(
         agent_todo_summary,
         gap_items=monitor_schedule_gap_items,
     )
-    first_due_monitor = due_monitor_items[0] if due_monitor_items else None
+    first_preemptive_due_monitor = (
+        non_watch_only_due_monitor_items[0]
+        if non_watch_only_due_monitor_items
+        else None
+    )
     first_advancement = (
         todo_summary_first_executable_item(agent_todo_summary)
         if advancement_allowed
@@ -143,11 +155,13 @@ def build_work_lane_context_contract(
         todo_counts=todo_counts,
         monitor_due_count=due_monitor_count,
         due_monitor_items=due_monitor_items,
+        watch_only_due_monitor_items=watch_only_due_monitor_items,
+        non_watch_only_due_monitor_items=non_watch_only_due_monitor_items,
         monitor_schedule_gap_count=monitor_schedule_gap_count,
         monitor_schedule_gap_items=monitor_schedule_gap_items,
         first_advancement=first_advancement,
         due_monitor_preempts_advancement=due_monitor_preempts_advancement(
-            first_due_monitor,
+            first_preemptive_due_monitor,
             first_advancement=first_advancement,
         ),
         outcome_followthrough=(

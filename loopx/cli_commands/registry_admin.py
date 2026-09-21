@@ -538,6 +538,12 @@ def handle_registry_admin_command(
                 clear_local_authority_shadow=bool(
                     args.clear_local_authority_shadow
                 ),
+                coordination_runtime_shadow_file=bool(
+                    args.coordination_runtime_shadow_file
+                ),
+                clear_coordination_runtime_shadow=bool(
+                    args.clear_coordination_runtime_shadow
+                ),
                 waiting_on=args.waiting_on,
                 clear_waiting_on=bool(args.clear_waiting_on),
                 boundary_authority_scopes=args.boundary_authority_scope,

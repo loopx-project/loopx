@@ -424,6 +424,12 @@ should-run` pass can select a matched todo as ordinary runnable work.
 Replaying the same merged observation reuses the stable event id and creates no
 second transition.
 
+If GitHub redirects a renamed repository, lifecycle reconciliation treats the
+provider-returned PR URL as the canonical repository identity and records the
+requested repository as an explicit alias source reference. The alias is valid
+only for the same observed PR number; resume evaluation remains repository-
+qualified and never matches the same number in an unrelated repository.
+
 This is deliberately event-backed rather than webhook-code coupling:
 
 ```text

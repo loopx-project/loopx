@@ -116,6 +116,66 @@ def test_configure_goal_rejects_enable_and_clear_in_one_operation(
         )
 
 
+def test_configure_goal_exposes_transaction_bound_runtime_shadow_separately(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path)
+
+    preview = configure_goal(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        coordination_runtime_shadow_file=True,
+        execute=False,
+    )
+    assert preview["changed_fields"] == ["coordination_runtime_shadow"]
+    assert preview["before"]["coordination_runtime_shadow"] == {
+        "enabled": False,
+        "provider": None,
+        "status": "configuration_absent",
+    }
+    assert preview["after"]["coordination_runtime_shadow"] == {
+        "enabled": True,
+        "provider": "file_v0",
+        "status": "enabled",
+    }
+    assert preview["after"]["local_authority_shadow"]["enabled"] is False
+
+    applied = configure_goal(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        coordination_runtime_shadow_file=True,
+        execute=True,
+    )
+    assert applied["written"] is True
+    goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
+    assert goal["coordination"]["runtime_shadow"] == {
+        "enabled": True,
+        "schema_version": "loopx_coordination_runtime_shadow_config_v0",
+        "provider": "file_v0",
+    }
+    assert "authority_shadow" not in goal["coordination"]
+
+    feature = next(
+        item
+        for item in applied["configuration_catalog"]["features"]
+        if item["feature_id"] == "coordination_runtime_shadow"
+    )
+    assert feature["current"]["enabled"] is True
+    assert feature["commands"]["apply_enable"].endswith(
+        "--coordination-runtime-shadow-file --execute"
+    )
+
+    cleared = configure_goal(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        clear_coordination_runtime_shadow=True,
+        execute=True,
+    )
+    assert cleared["changed_fields"] == ["coordination_runtime_shadow"]
+    goal = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
+    assert "runtime_shadow" not in goal["coordination"]
+
+
 def test_configure_goal_cli_exposes_default_off_shadow_boundary(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

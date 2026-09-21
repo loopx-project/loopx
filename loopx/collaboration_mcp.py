@@ -28,6 +28,7 @@ from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTi
 from .todos import list_goal_todos
 from .control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
 from .control_plane.goals.acceptance import inspect_goal_acceptance, validate_goal_task_acceptance, goal_task_validation_files_current
+from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.turn_driver.journal_store import turn_journal_path
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
@@ -178,9 +179,27 @@ class Delegations:
             # inspection to invent a provider launch or collapse into a raw CLI error.
             if self.binding(binding_id, require_active=True) != binding:
                 raise ValueError("delegation preflight source changed; retry inspection")
+            try:
+                promoted = local_authority_is_promoted(
+                    runtime_root=self.root,
+                    goal_id=self.goal_id,
+                )
+            except (OSError, RuntimeError):
+                # A mode readback failure is an unavailable authority, never a
+                # reason to suggest that a fresh promotion should be attempted.
+                promoted = True
             return effect_runtime_result("collaboration.delegation.preflight", {
                 "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
-                "authority": {"ready": False, "reason": str(exc)},
+                "authority": {
+                    "ready": False,
+                    "reason": str(exc),
+                    "state": "unavailable" if promoted else "promotion_required",
+                    "next_action": (
+                        "repair_canonical_authority"
+                        if promoted
+                        else "preview_reviewed_goal_authority_promotion"
+                    ),
+                },
                 "preview": None, "acceptance": None, "validation_files_current": False,
             })
         operation = "inspect-" + _hash(binding_id)[:32]

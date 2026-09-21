@@ -260,6 +260,7 @@ class ChatActionStore:
                 "status": "preview_ready",
                 "receipt": None,
                 "operation": None,
+                "review_card": None,
                 "gate": None,
                 "failure": None,
                 "checkpoint": None,
@@ -277,6 +278,346 @@ class ChatActionStore:
                 "proposal_id": proposal_id,
                 "request_digest": request_digest,
             }
+            self._write(payload)
+            return proposal
+
+    def record_review_card_delivery(
+        self,
+        proposal_id: str,
+        *,
+        audience_id: str,
+        delivery: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Bind one verified external review surface to a typed proposal.
+
+        A proposal may be rendered into more than one audience, but every card
+        retains the proposal id and state fingerprint owned by the typed action
+        store.  Recording all audiences on that one proposal is what prevents a
+        manager card and a Goal card from becoming two independent approvals.
+        """
+
+        audience = _opaque_id(audience_id, field="review_card.audience_id")
+        safe_delivery = _safe_json_value(
+            dict(delivery), path=f"review_card.deliveries.{audience}"
+        )
+        if not isinstance(safe_delivery, dict):
+            raise ValueError("review card delivery must be an object")
+        required = {
+            "provider",
+            "message_id",
+            "chat_id",
+            "app_id",
+            "cli_bin",
+            "sender_profile",
+            "binding_digest",
+            "card_digest",
+            "submitted_card",
+            "delivered_at",
+            "authorized_principal",
+        }
+        if set(safe_delivery) != required:
+            raise ValueError(
+                "review card delivery has unsupported or missing fields"
+            )
+        for field in required - {"submitted_card"}:
+            _bounded_text(
+                safe_delivery.get(field),
+                field=f"review_card.delivery.{field}",
+                limit=512,
+            )
+        submitted_card = safe_delivery.get("submitted_card")
+        if not isinstance(submitted_card, dict):
+            raise ValueError("review card submitted payload must be an object")
+        if _canonical_digest(submitted_card) != safe_delivery["card_digest"]:
+            raise ActionConflictError("review card submitted payload drifted")
+        token = _opaque_id(proposal_id, field="proposal_id")
+        with exclusive_file_lock(
+            self.path,
+            agent_id="loopx-chat",
+            operation="record_review_card_delivery",
+        ):
+            payload = self._read()
+            proposal = payload["proposals"].get(token)
+            if not isinstance(proposal, dict):
+                raise KeyError("typed Chat action proposal was not found")
+            if proposal.get("action_kind") != "team.plan":
+                raise ActionConflictError(
+                    "only a team plan can bind this review card"
+                )
+            review_card = proposal.get("review_card")
+            if review_card is None:
+                raise ActionConflictError(
+                    "review card audiences must be prepared before delivery"
+                )
+            if not isinstance(review_card, dict):
+                raise ValueError("typed review card state is malformed")
+            if review_card.get("state_fingerprint") != proposal.get(
+                "expected_state_fingerprint"
+            ):
+                raise ActionConflictError("review card state fingerprint drifted")
+            if review_card.get("authorized_principal") != safe_delivery.get(
+                "authorized_principal"
+            ):
+                raise ActionConflictError(
+                    "review card audience changed the authorized principal"
+                )
+            deliveries = review_card.get("deliveries")
+            if not isinstance(deliveries, dict):
+                raise ValueError("typed review card deliveries are malformed")
+            expected_audiences = review_card.get("expected_audience_ids")
+            if (
+                not isinstance(expected_audiences, list)
+                or audience not in expected_audiences
+            ):
+                raise ActionConflictError("review card audience was not prepared")
+            existing = deliveries.get(audience)
+            if existing is not None:
+                immutable_fields = required - {"delivered_at"}
+                if not isinstance(existing, Mapping) or any(
+                    existing.get(field) != safe_delivery.get(field)
+                    for field in immutable_fields
+                ):
+                    raise ActionConflictError(
+                        "review card audience is already bound to another message"
+                    )
+                return proposal
+            if review_card.get("confirmation") is not None:
+                raise ActionConflictError("review card decision is already consumed")
+            deliveries[audience] = safe_delivery
+            proposal["updated_at"] = _utc_now()
+            self._write(payload)
+            return proposal
+
+    def prepare_review_card_delivery(
+        self,
+        proposal_id: str,
+        *,
+        audience_ids: Sequence[str],
+        authorized_principal: str,
+    ) -> dict[str, Any]:
+        """Freeze every audience before the first actionable card is sent."""
+
+        normalized_audiences = sorted(
+            {_opaque_id(value, field="review_card.audience_id") for value in audience_ids}
+        )
+        if not normalized_audiences or len(normalized_audiences) != len(audience_ids):
+            raise ValueError("review card audiences must be non-empty and unique")
+        principal = _opaque_id(
+            authorized_principal, field="review_card.authorized_principal"
+        )
+        token = _opaque_id(proposal_id, field="proposal_id")
+        with exclusive_file_lock(
+            self.path,
+            agent_id="loopx-chat",
+            operation="prepare_review_card_delivery",
+        ):
+            payload = self._read()
+            proposal = payload["proposals"].get(token)
+            if not isinstance(proposal, dict):
+                raise KeyError("typed Chat action proposal was not found")
+            if proposal.get("action_kind") != "team.plan":
+                raise ActionConflictError(
+                    "only a team plan can bind this review card"
+                )
+            expected = {
+                "schema_version": "loopx_review_card_delivery_v0",
+                "state_fingerprint": proposal.get("expected_state_fingerprint"),
+                "expected_audience_ids": normalized_audiences,
+                "deliveries": {},
+                "confirmation": None,
+                "authorized_principal": principal,
+            }
+            existing = proposal.get("review_card")
+            if existing is None:
+                proposal["review_card"] = expected
+                proposal["updated_at"] = _utc_now()
+                self._write(payload)
+                return proposal
+            if not isinstance(existing, dict):
+                raise ValueError("typed review card state is malformed")
+            immutable = {
+                "schema_version": expected["schema_version"],
+                "state_fingerprint": expected["state_fingerprint"],
+                "expected_audience_ids": expected["expected_audience_ids"],
+                "authorized_principal": expected["authorized_principal"],
+            }
+            if any(existing.get(key) != value for key, value in immutable.items()):
+                raise ActionConflictError("review card audience plan drifted")
+            return proposal
+
+    def decide_review_card(
+        self,
+        proposal_id: str,
+        *,
+        decision: str,
+        confirmation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Consume one verified card decision across every delivered audience."""
+
+        selected_decision = str(decision or "").strip().lower()
+        if selected_decision not in {"confirm", "reject"}:
+            raise ValueError("review card decision must be confirm or reject")
+        safe_confirmation = _safe_json_value(
+            dict(confirmation), path="review_card.confirmation"
+        )
+        if not isinstance(safe_confirmation, dict):
+            raise ValueError("review card confirmation must be an object")
+        required = {
+            "provider",
+            "event_id",
+            "principal",
+            "message_id",
+            "chat_id",
+            "app_id",
+            "audience_id",
+            "state_fingerprint",
+            "card_digest",
+            "confirmed_at",
+        }
+        if set(safe_confirmation) != required:
+            raise ValueError(
+                "review card confirmation has unsupported or missing fields"
+            )
+        for field in required:
+            _bounded_text(
+                safe_confirmation.get(field),
+                field=f"review_card.confirmation.{field}",
+                limit=512,
+            )
+        token = _opaque_id(proposal_id, field="proposal_id")
+        audience = _opaque_id(
+            safe_confirmation["audience_id"], field="review_card.audience_id"
+        )
+        with exclusive_file_lock(
+            self.path,
+            agent_id="loopx-chat",
+            operation="decide_review_card",
+        ):
+            payload = self._read()
+            proposal = payload["proposals"].get(token)
+            review_card = (
+                proposal.get("review_card") if isinstance(proposal, dict) else None
+            )
+            if not isinstance(review_card, dict):
+                raise KeyError("typed review card was not found")
+            deliveries = review_card.get("deliveries")
+            delivery = (
+                deliveries.get(audience) if isinstance(deliveries, dict) else None
+            )
+            if not isinstance(delivery, dict):
+                raise ActionConflictError("review card audience was not delivered")
+            expected_audiences = review_card.get("expected_audience_ids")
+            if (
+                not isinstance(expected_audiences, list)
+                or set(deliveries) != set(expected_audiences)
+            ):
+                raise ActionConflictError(
+                    "review card audiences are not completely delivered"
+                )
+            expected = {
+                "provider": delivery.get("provider"),
+                "message_id": delivery.get("message_id"),
+                "chat_id": delivery.get("chat_id"),
+                "app_id": delivery.get("app_id"),
+                "state_fingerprint": review_card.get("state_fingerprint"),
+                "card_digest": delivery.get("card_digest"),
+            }
+            if any(
+                safe_confirmation.get(field) != value
+                for field, value in expected.items()
+            ):
+                raise ActionConflictError(
+                    "review card callback does not match the delivered request"
+                )
+            if safe_confirmation.get("principal") != review_card.get(
+                "authorized_principal"
+            ):
+                raise ActionConflictError(
+                    "principal is not authorized for this review card"
+                )
+            existing = review_card.get("confirmation")
+            if isinstance(existing, dict):
+                # Every audience is a view of the same proposal. Once one exact
+                # decision wins, later clicks only observe that decision and can
+                # never launch a second canonical effect.
+                return proposal
+            status = str(proposal.get("status") or "")
+            if status not in {"preview_ready", "deferred"}:
+                raise ActionConflictError(
+                    "review card proposal is no longer awaiting confirmation"
+                )
+            now = _utc_now()
+            review_card["confirmation"] = {
+                **safe_confirmation,
+                "decision": selected_decision,
+            }
+            if selected_decision == "confirm":
+                proposal["status"] = "applying"
+                proposal["gate"] = None
+                proposal["failure"] = None
+            else:
+                proposal["status"] = "rejected"
+                proposal["rejected_at"] = now
+            proposal["updated_at"] = now
+            self._write(payload)
+            return proposal
+
+    def record_review_card_result_delivery(
+        self,
+        proposal_id: str,
+        *,
+        audience_id: str,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Record exact result-card readback for one already-bound audience."""
+
+        audience = _opaque_id(audience_id, field="review_card.audience_id")
+        safe_result = _safe_json_value(
+            dict(result), path=f"review_card.deliveries.{audience}.result"
+        )
+        if not isinstance(safe_result, dict):
+            raise ValueError("review card result delivery must be an object")
+        required = {"card_digest", "transport", "delivered_at"}
+        if set(safe_result) != required:
+            raise ValueError(
+                "review card result delivery has unsupported or missing fields"
+            )
+        for field in required:
+            _bounded_text(
+                safe_result.get(field),
+                field=f"review_card.result.{field}",
+                limit=512,
+            )
+        token = _opaque_id(proposal_id, field="proposal_id")
+        with exclusive_file_lock(
+            self.path,
+            agent_id="loopx-chat",
+            operation="record_review_card_result_delivery",
+        ):
+            payload = self._read()
+            proposal = payload["proposals"].get(token)
+            review_card = (
+                proposal.get("review_card") if isinstance(proposal, dict) else None
+            )
+            deliveries = (
+                review_card.get("deliveries")
+                if isinstance(review_card, dict)
+                else None
+            )
+            delivery = (
+                deliveries.get(audience) if isinstance(deliveries, dict) else None
+            )
+            if not isinstance(delivery, dict):
+                raise KeyError("typed review card audience was not found")
+            existing = delivery.get("result")
+            if existing is not None:
+                if existing != safe_result:
+                    raise ActionConflictError(
+                        "review card result delivery is already immutable"
+                    )
+                return proposal
+            delivery["result"] = safe_result
+            proposal["updated_at"] = _utc_now()
             self._write(payload)
             return proposal
 

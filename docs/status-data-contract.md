@@ -2000,9 +2000,9 @@ quiet skip.
 For `controller_readiness`, the status export keeps only controller-stage
 booleans, missing gate names, operator-facing review text, next handoff
 condition, and compact gate rows with `id`, `ok`, and `review`. For
-`human_reward`, the status export keeps only `recorded_at`, `decision`,
-`reward`, `reason_summary`, and `follow_up`. For `operator_gate`, the status
-export keeps only `recorded_at`, `gate`, `decision`, `operator_question`,
+`human_reward`, the status export keeps only `recorded_at`, `actor_kind`,
+`decision`, `reward`, `reason_summary`, and `follow_up`. For `operator_gate`,
+the status export keeps only `recorded_at`, `gate`, `decision`, `operator_question`,
 `reason_summary`, `follow_up`, and `agent_command`. Operator-gate runs may also
 include a compact `operator_gate_resume_contract` with
 `version=operator_gate_resume_contract_v0`, `gate_id`, `created_state_ref`,
@@ -2040,6 +2040,7 @@ Operators can append `human_reward` with the CLI:
 ```bash
 loopx reward \
   --goal-id example-experiment-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending"
@@ -2055,6 +2056,7 @@ operating-rule correction, the overlay may also include a compact lesson:
 ```bash
 loopx reward \
   --goal-id example-experiment-goal \
+  --actor-kind owner \
   --decision route_correction \
   --reward mixed \
   --reason-summary "run the driver repair before expanding cases" \
@@ -2105,6 +2107,7 @@ operator explicitly asks for it:
 ```bash
 loopx reward \
   --goal-id example-experiment-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending" \

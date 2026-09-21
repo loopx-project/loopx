@@ -945,6 +945,19 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
             reference,
             timeout_seconds=fetch_timeout_seconds,
         )
+    canonical_reference = reference
+    provider_url = payload.get("url")
+    if isinstance(provider_url, str) and provider_url.strip():
+        provider_reference = normalise_github_issue_reference(
+            repo=repo,
+            issue_ref=pr_ref,
+            url=provider_url,
+        )
+        if (
+            provider_reference.get("kind") == "pull_request"
+            and provider_reference.get("number") == reference.get("number")
+        ):
+            canonical_reference = provider_reference
     if not issue_ref:
         raw_linked_issues = payload.get("closingIssuesReferences") or payload.get(
             "closing_issues_references"
@@ -958,12 +971,17 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
                     issue_ref = f"issues_{number}"
                     break
     observation = _build_observation(
-        repo=str(reference["repo"]),
-        pr_ref=str(reference["issue_ref"]),
+        repo=str(canonical_reference["repo"]),
+        pr_ref=str(canonical_reference["issue_ref"]),
         issue_ref=issue_ref,
-        reference=reference,
+        reference=canonical_reference,
         provider_payload=payload,
     )
+    requested_repo = str(reference["repo"])
+    canonical_repo = str(canonical_reference["repo"])
+    if canonical_repo != requested_repo:
+        observation["requested_repo"] = requested_repo
+        observation["repository_aliases"] = [requested_repo]
     transition = _decide_transition(observation)
     maintainer_correction = (
         normalise_issue_fix_maintainer_correction_input(maintainer_correction_input)

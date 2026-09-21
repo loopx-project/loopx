@@ -223,6 +223,23 @@ def test_coordination_shadow_parser_exposes_explicit_execute_gate() -> None:
     )
     assert read_candidate.todo_id == "todo_b"
 
+    promote = parser.parse_args(
+        [
+            "coordination-shadow",
+            "promote",
+            "--goal-id",
+            "goal-a",
+            "--minimum-operations",
+            "5",
+            "--require-event-kind",
+            "todo_claim",
+            "--execute",
+        ]
+    )
+    assert promote.minimum_operations == 5
+    assert promote.require_event_kind == ["todo_claim"]
+    assert promote.execute is True
+
 
 def test_coordination_shadow_reads_parity_matched_todo_candidate(
     monkeypatch,
@@ -313,6 +330,65 @@ def test_coordination_shadow_qualify_applies_coverage_policy(
         "todo_claim",
         "task_lease_acquire",
     ]
+
+
+def test_coordination_shadow_promote_previews_and_applies_only_through_review_owner(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        command,
+        "inspect_coordination_runtime_shadow",
+        lambda **_kwargs: {
+            "status": "matched",
+            "parity_matches": True,
+            "decision_read_from_shadow": False,
+        },
+    )
+    requests: list[dict[str, object]] = []
+
+    def promote(**kwargs) -> dict[str, object]:
+        requests.append(kwargs)
+        return {
+            "status": "applied" if kwargs["execute"] else "preview_ready",
+            "promotion_ready": True,
+            "executed": kwargs["execute"],
+            "legacy_writer_fenced": kwargs["execute"],
+            "legacy_fallback_used": False,
+        }
+
+    monkeypatch.setattr(
+        command,
+        "review_local_coordination_authority_promotion",
+        promote,
+    )
+    preview_result, preview = _run(
+        monkeypatch,
+        tmp_path,
+        action="promote",
+        minimum_operations=5,
+        require_event_kind=["todo_claim"],
+    )
+    apply_result, applied = _run(
+        monkeypatch,
+        tmp_path,
+        action="promote",
+        execute=True,
+        minimum_operations=5,
+        require_event_kind=["todo_claim"],
+    )
+
+    assert preview_result == 0
+    assert preview["executed"] is False
+    assert preview["promotion"]["status"] == "preview_ready"
+    assert apply_result == 0
+    assert applied["executed"] is True
+    assert applied["promotion"]["status"] == "applied"
+    assert requests[0]["execute"] is False
+    assert requests[1]["execute"] is True
+    assert requests[0]["minimum_operations"] == 5
+    assert requests[0]["required_event_kinds"] == ["todo_claim"]
+    assert str(requests[0]["operation_id"]).startswith("promote:goal-a:")
 
 
 def test_coordination_shadow_rollback_passes_exact_selector_to_management_owner(

@@ -407,6 +407,11 @@ scope、public-safe 且幂等的 `pr_merge` rollout event。Todo resume 投影�
 后续一次 `status` / `quota should-run` 就能把已匹配的 todo 当作普通 runnable work
 选中。相同 merged observation 重放时复用稳定 event id，不会制造第二次 transition。
 
+如果 GitHub 对改名仓库返回重定向，lifecycle reconciliation 以 provider 返回的 PR URL
+作为 canonical repository identity，并把请求时的旧仓库记为显式 alias source ref。
+alias 只对同一次观察到的 PR number 有效；resume evaluation 仍保持 repository-qualified，
+不会误匹配其他仓库中的同号 PR。
+
 这是一条事件驱动链，而不是 webhook 与业务代码硬耦合：
 
 ```text

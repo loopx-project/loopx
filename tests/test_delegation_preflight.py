@@ -99,6 +99,9 @@ def test_preflight_projects_unavailable_authority_without_turn_or_provider(
     result = runner.inspect("analysis")
     assert result["state"] == "authority_unavailable"
     assert result["authority_ready"] is False
+    assert result["authority_state"] == "unavailable"
+    assert result["authority_next_action"] == "repair_canonical_authority"
+    assert result["promotion_from_surface_allowed"] is False
     assert "canonical authority" in result["authority_reason"]
     assert not any(result["effects"].values())
     assert calls == []

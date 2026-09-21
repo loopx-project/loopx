@@ -243,14 +243,34 @@ test("a validated plan compiles into a confirmation card frame", () => {
   }
 });
 
-test("a plan card frame is refused for anything that is not an admitted preview", () => {
+test("a plan card keeps the same identity through pending and result states", () => {
+  const pending = compileReviewCardFrame({ ...teamPlanProposal(), status: "applying" });
+  if (!pending) assert.fail("expected pending review card frame");
+  assert.equal(pending.kind, "pending");
+  assert.equal(pending.proposalId, "proposal-team-plan-1");
+  assert.equal(pending.stateFingerprint, "registry-revision-1");
+
+  const applied = compileReviewCardFrame({
+    ...teamPlanProposal(),
+    status: "applied",
+    receipt: { outcome: "team_plan_applied", projection_verified: true },
+  });
+  if (!applied) assert.fail("expected applied review card frame");
+  assert.equal(applied.kind, "result");
+  if (applied.kind !== "result") assert.fail("expected result frame");
+  assert.equal(applied.resultKind, "applied");
+  assert.equal(applied.resultSummary, "team_plan_applied");
+  assert.equal(applied.proposalId, pending.proposalId);
+});
+
+test("a plan card frame is refused for anything that was never an admitted preview", () => {
   const applied = teamPlanProposal();
   applied.normalized_parameters.plan.applies = true;
   assert.equal(compileReviewCardFrame(applied), undefined);
 
   const moved = teamPlanProposal();
   moved.status = "applied";
-  assert.equal(compileReviewCardFrame(moved), undefined);
+  assert.equal(compileReviewCardFrame(moved)?.kind, "result");
 
   const otherKind = { ...teamPlanProposal(), action_kind: "todo.create" };
   assert.equal(compileReviewCardFrame(otherKind), undefined);

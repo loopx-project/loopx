@@ -207,8 +207,8 @@ It provides a unified, coherent experience for managing long-running agent Goals
 
   ```bash
   loopx goal-lifecycle --goal-id <goal-id> --operation stop
-  loopx goal-lifecycle --goal-id <goal-id> --operation stop --execute
-  loopx goal-lifecycle --goal-id <goal-id> --operation resume --execute
+  loopx goal-lifecycle --goal-id <goal-id> --operation stop --actor-kind owner --execute
+  loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner --execute
   loopx quota status --goal-id <goal-id>
   ```
 

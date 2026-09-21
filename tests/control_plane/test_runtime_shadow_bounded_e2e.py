@@ -179,6 +179,215 @@ def test_public_cli_and_independent_native_writer_qualify_one_complete_lineage(t
     assert all(receipt["capture_lineage_id"] == boot["bootstrap"]["capture_lineage_id"] for receipt in receipts)
 
 
+def test_reviewed_promotion_survives_restart_and_enables_managed_codex_preflight(
+    tmp_path: Path,
+) -> None:
+    registry, runtime, _state = workspace(tmp_path)
+    registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+    registry_payload["goals"][0]["adapter"] = {
+        "kind": "generic_project_goal_v0",
+        "status": "connected",
+    }
+    registry_payload["goals"][0]["domain"] = "coordination-promotion"
+    registry_payload["goals"][0]["quota"] = {
+        "compute": 1.0,
+        "window_hours": 24,
+        "slot_minutes": 1,
+        "allowed_slots": 10,
+    }
+    registry.write_text(
+        json.dumps(registry_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    delegated = cli(
+        registry,
+        runtime,
+        "todo",
+        "add",
+        "--goal-id",
+        "goal-a",
+        "--role",
+        "agent",
+        "--text",
+        "Validate a managed worker only after reviewed promotion",
+        "--task-class",
+        "advancement_task",
+        "--action-kind",
+        "validate",
+        "--claimed-by",
+        "agent-b",
+    )
+    cli(
+        registry,
+        runtime,
+        "task-lease",
+        "acquire",
+        "--goal-id",
+        "goal-a",
+        "--todo-id",
+        delegated["todo_id"],
+        "--owner",
+        "agent-b",
+        "--idempotency-key",
+        "managed-worker-before-promotion",
+        "--ttl-seconds",
+        "600",
+    )
+    enable(registry)
+    cli(
+        registry,
+        runtime,
+        "coordination-shadow",
+        "bootstrap",
+        "--goal-id",
+        "goal-a",
+        "--execute",
+    )
+    cli(
+        registry,
+        runtime,
+        "todo",
+        "add",
+        "--goal-id",
+        "goal-a",
+        "--role",
+        "agent",
+        "--text",
+        "Capture one promotion qualification mutation",
+        "--task-class",
+        "advancement_task",
+        "--action-kind",
+        "capture",
+        "--claimed-by",
+        "agent-a",
+    )
+    common = (
+        "coordination-shadow",
+        "promote",
+        "--goal-id",
+        "goal-a",
+        "--minimum-operations",
+        "1",
+        "--require-event-kind",
+        "todo_add",
+    )
+    preview = cli(registry, runtime, *common)
+    assert preview["promotion"]["status"] == "preview_ready"
+    assert preview["promotion"]["promotion_ready"] is True
+    assert not (runtime / "authority" / "file-v0").exists()
+    assert not (runtime / ".local" / "manager-context" / "executions").exists()
+
+    applied = cli(registry, runtime, *common, "--execute")
+    assert applied["promotion"]["status"] == "applied"
+    assert applied["promotion"]["legacy_writer_fenced"] is True
+
+    # A fresh CLI process owns each call below. The first post-promotion
+    # canonical mutation therefore proves that runtime-root identity and the
+    # promoted authority survive process restart before any worker can launch.
+    inspected = cli(registry, runtime, "goal-acceptance", "inspect", "--goal-id", "goal-a")
+    document = tmp_path / "managed-acceptance.json"
+    document.write_text(
+        json.dumps(
+            {
+                "objective": "Validate managed worker acceptance after restart",
+                "non_goals": ["Start the managed worker during inspection"],
+                "criteria": [
+                    {
+                        "id": "ready",
+                        "description": "The fixture validator succeeds",
+                        "validation_argv": [sys.executable, "-c", "raise SystemExit(0)"],
+                    }
+                ],
+                "bindings": [
+                    {"todo_id": delegated["todo_id"], "criterion_ids": ["ready"]}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    configured = cli(
+        registry,
+        runtime,
+        "goal-acceptance",
+        "configure",
+        "--goal-id",
+        "goal-a",
+        "--document",
+        str(document),
+        "--expected-provider-revision",
+        inspected["provider_revision"],
+        "--operation-id",
+        "post-promotion-managed-acceptance",
+        "--execute",
+    )
+    bound = next(
+        item
+        for item in configured["goal_acceptance_contract"]["tasks"]
+        if item["todo_id"] == delegated["todo_id"]
+    )
+    assert bound == {
+        "todo_id": delegated["todo_id"],
+        "state": "ready",
+        "criterion_ids": ["ready"],
+        "reason": "The owner confirmed this work's current acceptance association.",
+        "reason_code": "goal_acceptance_ready",
+        "applicable": True,
+    }
+
+    worker = tmp_path / "managed-worker"
+    worker.mkdir()
+    config = tmp_path / "delegations.json"
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_local_delegation_v0",
+                "bindings": [
+                    {
+                        "id": "managed-sol",
+                        "agent_id": "agent-b",
+                        "todo_id": delegated["todo_id"],
+                        "requesters": ["agent-a"],
+                        "workspace": str(worker),
+                        "timeout_seconds": 60,
+                        "output_refs": ["output.json"],
+                        "host_args": [
+                            "--host",
+                            "codex-cli",
+                            "--codex-model",
+                            "gpt-5.6-sol",
+                            "--codex-reasoning-effort",
+                            "xhigh",
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    preflight = cli(
+        registry,
+        runtime,
+        "delegation",
+        "inspect",
+        "--goal-id",
+        "goal-a",
+        "--agent-id",
+        "agent-a",
+        "--execution-config",
+        str(config),
+        "--binding-id",
+        "managed-sol",
+    )
+    assert preflight["authority_state"] == "promoted"
+    assert preflight["authority_ready"] is True
+    assert preflight["acceptance_ready"] is True
+    assert preflight["executor"]["profile"] == "gpt-5.6-sol@xhigh"
+    assert preflight["state"] in {"launchable", "runtime_unverified"}
+    assert not any(preflight["effects"].values())
+    assert not (runtime / ".local" / "manager-context" / "executions").exists()
+    assert not (runtime / "goals" / "goal-a" / "turns").exists()
+
+
 def test_unrecorded_canonical_change_cannot_become_qualified_after_a_later_public_write(tmp_path: Path) -> None:
     registry, runtime, state = workspace(tmp_path)
     enable(registry)

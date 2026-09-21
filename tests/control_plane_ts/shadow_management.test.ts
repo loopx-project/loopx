@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";
+import { canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {
   bootstrapManagedShadow, rollbackManagedShadow, readShadowManagementState,
-  requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath,
-  ShadowManagementError, readShadowBootstrapSourcePath,
+  readShadowBootstrapSourcePath, requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath,
+  ShadowManagementError,
 } from "../../loopx/control_plane/coordination/shadow_management.ts";
 
 const primary = {
@@ -31,6 +33,46 @@ test("existing-only identity reads do not materialize a missing store", async ()
   assert.equal((await store.storeIdentity()).status, "unavailable");
   assert.equal((await store.loadAuthority()).status, "missing");
   assert.deepEqual(await readdir(root), []);
+});
+
+test("runtime-root aliases survive restart and retain legacy shadow bindings", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "loopx-management-root-alias-"));
+  const root = join(parent, "runtime");
+  const alias = join(parent, "runtime-alias");
+  await mkdir(root);
+  await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+  const applied = await bootstrapManagedShadow(bootstrap(alias), primary);
+  assert.equal(applied.status, "applied", JSON.stringify(applied));
+  assert.deepEqual(await requireShadowPrimaryWriteAllowed(root, "goal-a"), {
+    capture_profile: applied.capture_profile,
+    capture_lineage_id: applied.capture_lineage_id,
+    source_root_digest: applied.source_root_digest,
+    store_identity: applied.store_identity,
+    bootstrap_operation_id: applied.bootstrap_operation_id,
+    bootstrap_provider_revision: applied.bootstrap_provider_revision,
+  });
+
+  // Releases before canonical-root hashing persisted the lexical alias. Keep
+  // those active lineages readable only when their immutable manifest proves
+  // that the old path resolves to this exact runtime root.
+  const statePath = join(shadowMaintenanceLockPath(root, "goal-a"), "..", "state.json");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  const operations = join(shadowMaintenanceLockPath(root, "goal-a"), "..", "operations");
+  const [operation] = await readdir(operations);
+  const manifestPath = join(operations, operation, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const legacyDigest = `sha256:${createHash("sha256").update(resolve(alias), "utf8").digest("hex")}`;
+  manifest.source_root_digest = legacyDigest;
+  state.source_root_digest = legacyDigest;
+  state.binding.source_root_digest = legacyDigest;
+  state.result.source_root_digest = legacyDigest;
+  state.operation.manifest_digest = `sha256:${canonicalAuthoritySha256(manifest)}`;
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await writeFile(statePath, JSON.stringify(state));
+  const legacyBinding = await requireShadowPrimaryWriteAllowed(root, "goal-a");
+  assert.equal(legacyBinding?.source_root_digest, legacyDigest);
+  assert.ok(legacyBinding);
+  assert.equal(await readShadowBootstrapSourcePath(root, "goal-a", legacyBinding), join(alias, "state.md"));
 });
 
 async function killAt(kind: "bootstrap" | "rollback", request: object, phase: string): Promise<void> {

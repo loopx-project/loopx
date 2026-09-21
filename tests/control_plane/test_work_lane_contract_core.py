@@ -92,6 +92,154 @@ def test_due_monitor_preempts_lower_priority_advancement() -> None:
     assert guard["recommended_action"] == "[P0] Monitor one overdue dependency."
 
 
+def test_due_watch_only_monitor_is_an_auxiliary_no_spend_route() -> None:
+    items = _monitor_and_advancement()
+    items[0].update(
+        {
+            "todo_id": "todo_watch_due",
+            "watch_only": "true",
+        }
+    )
+    items[1].update(
+        {
+            "todo_id": "todo_advancement",
+        }
+    )
+    payload = _status(
+        agent_todo_items=items,
+        next_action="Advance the bounded product slice.",
+    )
+    turn_instance_id = "turn-watch-only-auxiliary"
+    guard = build_quota_should_run(
+        payload,
+        goal_id=GOAL_ID,
+        turn_instance_id=turn_instance_id,
+    )
+
+    assert guard["recommended_action"] == "[P1] Advance the bounded product slice."
+    lane = guard["work_lane_contract"]
+    assert lane["lane"] == "advancement_task"
+    assert lane["auxiliary_monitor_poll"] == {
+        "schema_version": "auxiliary_monitor_poll_v0",
+        "required": False,
+        "preempts_advancement": False,
+        "spend_policy": "no_spend",
+        "continuation": "advancement_remains_primary",
+        "monitor_due_count": 1,
+        "monitor_due_items": [
+            {
+                "index": 1,
+                "text": "[P0] Monitor one overdue dependency.",
+                "todo_id": "todo_watch_due",
+                "status": "open",
+                "priority": "P0",
+                "task_class": "continuous_monitor",
+                "action_kind": "monitor",
+                "next_due_at": PAST_DUE_AT,
+                "watch_only": "true",
+            }
+        ],
+        "selected_todo_id": "todo_watch_due",
+        "selected_next_due_at": PAST_DUE_AT,
+    }
+    summary = guard["agent_todo_summary"]
+    assert summary["watch_only_monitor_due_count"] == 1
+    assert summary["watch_only_monitor_due_items"][0]["todo_id"] == (
+        "todo_watch_due"
+    )
+    interaction = guard["interaction_contract"]
+    assert interaction["agent_channel"]["auxiliary_monitor_poll"][
+        "required"
+    ] is False
+    auxiliary_cli = interaction["cli_channel"]["auxiliary_monitor_poll"]
+    assert auxiliary_cli["schema_version"] == "auxiliary_monitor_poll_cli_v0"
+    assert auxiliary_cli["availability"] == "ready"
+    assert auxiliary_cli["turn_instance_id"] == turn_instance_id
+    assert auxiliary_cli["spend_policy"] == "no_spend"
+    assert f"--turn-instance-id {turn_instance_id}" in auxiliary_cli["command"]
+    assert "--todo-id todo_watch_due" in auxiliary_cli["command"]
+    assert '--result-hash "${LOOPX_MONITOR_RESULT_HASH:?}"' in auxiliary_cli[
+        "command"
+    ]
+    assert auxiliary_cli["command"].endswith("--execute")
+    assert "--material-change --execute" in auxiliary_cli[
+        "material_change_command"
+    ]
+    assert auxiliary_cli["input_contract"] == {
+        "schema_version": "auxiliary_monitor_observation_input_v0",
+        "result_hash": {
+            "required": True,
+            "environment_variable": "LOOPX_MONITOR_RESULT_HASH",
+            "source": "fresh_external_observation_digest",
+        },
+        "material_change": {
+            "required": True,
+            "unchanged_command_key": "command",
+            "changed_command_key": "material_change_command",
+        },
+    }
+
+
+def test_due_watch_only_monitor_without_turn_binding_is_not_executable() -> None:
+    items = _monitor_and_advancement()
+    items[0].update({"todo_id": "todo_watch_due", "watch_only": "true"})
+    items[1]["todo_id"] = "todo_advancement"
+
+    guard = build_quota_should_run(
+        _status(agent_todo_items=items),
+        goal_id=GOAL_ID,
+    )
+
+    auxiliary_cli = guard["interaction_contract"]["cli_channel"][
+        "auxiliary_monitor_poll"
+    ]
+    assert auxiliary_cli["availability"] == "turn_binding_required"
+    assert auxiliary_cli["reason_code"] == (
+        "auxiliary_monitor_turn_instance_id_missing"
+    )
+    assert "command" not in auxiliary_cli
+    assert "material_change_command" not in auxiliary_cli
+
+
+def test_watch_only_priority_cannot_hide_an_ordinary_due_monitor() -> None:
+    items = _monitor_and_advancement()
+    items[0].update(
+        {
+            "todo_id": "todo_watch_due",
+            "watch_only": "true",
+        }
+    )
+    items.insert(
+        1,
+        {
+            "index": 3,
+            "todo_id": "todo_ordinary_due",
+            "text": "[P1] Poll the ordinary due dependency.",
+            "role": "agent",
+            "status": "open",
+            "priority": "P1",
+            "task_class": "continuous_monitor",
+            "action_kind": "monitor",
+            "next_due_at": PAST_DUE_AT,
+        },
+    )
+    items[-1].update(
+        {
+            "priority": "P2",
+            "text": "[P2] Advance the bounded product slice.",
+        }
+    )
+    payload = _status(agent_todo_items=items)
+
+    guard = build_quota_should_run(payload, goal_id=GOAL_ID)
+    lane = guard["work_lane_contract"]
+
+    assert lane["lane"] == "continuous_monitor"
+    assert lane["selected_todo_id"] == "todo_ordinary_due"
+    assert lane["monitor_due_items"][0]["todo_id"] == "todo_ordinary_due"
+    assert lane.get("auxiliary_monitor_poll") is None
+
+
 def test_receipt_bound_advancement_retains_auxiliary_due_monitor_context() -> None:
     due_monitor = {
         "todo_id": "todo_due_monitor",

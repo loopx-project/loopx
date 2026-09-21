@@ -29,12 +29,12 @@ export {
   COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
 } from "./coordination_state_contract.generated.ts";
 
-interface RuntimeShadowDependencies {
+export interface RuntimeShadowDependencies {
   createStore?: (directory: string, goalId: string) => AuthorityStore;
   createFileStore?: (directory: string, goalId: string) => FileAuthorityStore;
 }
 
-interface ShadowRequest extends JsonObject {
+export interface ShadowRequest extends JsonObject {
   runtime_root: string;
   goal_id: string;
   projection: JsonObject;
@@ -58,7 +58,7 @@ function failure(schema: string, error: unknown): JsonObject {
     sustained_parity_verdict: "not_evaluated",
     primary_writeback_preserved: true, decision_read_from_shadow: false };
 }
-function decode(value: unknown, schema: string, extra: string[] = []): ShadowRequest {
+export function decodeRuntimeShadowRequest(value: unknown, schema: string, extra: string[] = []): ShadowRequest {
   const input = requireJsonObject(value, "coordination shadow request");
   const allowed = ["schema_version", "runtime_root", "goal_id", "projection", "source_snapshot", ...extra];
   if (Object.keys(input).some((key) => !allowed.includes(key)) || input.schema_version !== schema) {
@@ -180,7 +180,7 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
 export async function bootstrapCoordinationRuntimeShadow(value: unknown, _dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA, ["operation_id", "source_version"]);
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA, ["operation_id", "source_version"]);
     text(request.operation_id, "operation_id"); text(request.source_version, "source_version");
     const result = await bootstrapManagedShadow(request, {
       withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation),
@@ -192,7 +192,7 @@ export async function bootstrapCoordinationRuntimeShadow(value: unknown, _depend
 export async function rollbackCoordinationRuntimeShadow(value: unknown, _dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_ROLLBACK_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_ROLLBACK_REQUEST_SCHEMA,
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_ROLLBACK_REQUEST_SCHEMA,
       ["operation_id", "expected_provider_revision", "expected_bootstrap_operation_id"]);
     text(request.operation_id, "operation_id");
     const revision = request.expected_provider_revision;
@@ -246,8 +246,12 @@ async function pendingOutbox(root: string, goal: string,
   return false;
 }
 
-async function qualifySnapshot(request: ShadowRequest, dependencies: RuntimeShadowDependencies, minimum: number, required: string[]): Promise<JsonObject> {
-  return await withShadowMaintenanceLock(request.runtime_root, request.goal_id, () => withShadowSourceLocks(request, async () => {
+export async function qualifyCoordinationRuntimeShadowUnderLocks(
+  request: ShadowRequest,
+  dependencies: RuntimeShadowDependencies,
+  minimum: number,
+  required: string[],
+): Promise<JsonObject> {
     await verifyShadowSourceSnapshot(request);
     const store = dependencies.createStore?.(join(request.runtime_root, "authority-shadow", "file-v0"), request.goal_id) ??
       new FileAuthorityStore(join(request.runtime_root, "authority-shadow", "file-v0"), request.goal_id, { existingOnly: true });
@@ -278,7 +282,11 @@ async function qualifySnapshot(request: ShadowRequest, dependencies: RuntimeShad
       primary_writeback_preserved: true, decision_read_from_shadow: false,
       head: lineage.head.head,
     };
-  }));
+}
+
+async function qualifySnapshot(request: ShadowRequest, dependencies: RuntimeShadowDependencies, minimum: number, required: string[]): Promise<JsonObject> {
+  return await withShadowMaintenanceLock(request.runtime_root, request.goal_id, () => withShadowSourceLocks(request, () =>
+    qualifyCoordinationRuntimeShadowUnderLocks(request, dependencies, minimum, required)));
 }
 function policy(request: ShadowRequest): { minimum: number; required: string[] } {
   const minimum = request.minimum_operations ?? 3;
@@ -291,7 +299,7 @@ function policy(request: ShadowRequest): { minimum: number; required: string[] }
 export async function qualifyCoordinationRuntimeShadow(value: unknown, dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA, ["minimum_operations", "required_event_kinds"]);
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_QUALIFY_REQUEST_SCHEMA, ["minimum_operations", "required_event_kinds"]);
     const selected = policy(request);
     const result = await qualifySnapshot(request, dependencies, selected.minimum, selected.required);
     delete result.head;
@@ -301,7 +309,7 @@ export async function qualifyCoordinationRuntimeShadow(value: unknown, dependenc
 export async function inspectCoordinationRuntimeShadow(value: unknown, dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA);
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA);
     const result = await qualifySnapshot(request, dependencies, 0, []);
     delete result.head;
     return { schema_version: schema, ...result, status: result.qualified ? "matched" : result.status,
@@ -315,7 +323,7 @@ export async function inspectCoordinationRuntimeShadow(value: unknown, dependenc
 export async function readCoordinationRuntimeShadowTodoCandidate(value: unknown, dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA;
   try {
-    const request = decode(value, schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA, ["todo_id"]);
+    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA, ["todo_id"]);
     const todoId = text(request.todo_id, "todo_id");
     const result = await qualifySnapshot(request, dependencies, 3, []);
     const head = result.head as JsonObject;

@@ -462,9 +462,9 @@ def test_the_owner_channel_projects_an_admitted_preview_onto_the_action_surface(
     """Admission answers; the projection is what offers the card to confirm.
 
     The surfaces list typed actions, so a Turn proposal is invisible until the
-    channel hands it to the owner of that store. Only the owner's own local
-    channel is projected: a remote audience's confirmation surface is not this
-    store, so no card is written on its behalf.
+    channel hands it to the owner of that store. Local and remote manager
+    channels both project there; a remote audience renders the same proposal
+    through its provider surface instead of constructing a second action.
     """
 
     from loopx.capabilities.manager_context.team_plan import (
@@ -509,15 +509,14 @@ def test_the_owner_channel_projects_an_admitted_preview_onto_the_action_surface(
     assert "确认前不会创建任何 lane" in owner["message"]
     assert owner["proposals"] == response["proposals"]
 
-    # A remote manager audience has no card of its own, so none is written on its
-    # behalf -- but it still learns the exact Goal whose workspace holds one,
-    # instead of reading a plan it has no way to confirm.
+    # A remote manager audience projects the same admitted preview, so its Lark
+    # surface can bind the canonical proposal identity rather than rebuilding it.
     remote = offer(
         {"channel_id": "manager.external." + "a" * 24},
         projector=projector,
         turn_id="turn-2",
     )
-    assert projected == [preview]
+    assert projected == [preview, preview]
     assert remote["message"].startswith(answer)
     assert "authorized-goal" in remote["message"]
 

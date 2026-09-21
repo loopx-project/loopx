@@ -11,7 +11,7 @@ interface Row {
   payload: JsonObject; display: JsonObject; claim: string | null;
   bound: string | null; blocks: string | null; excluded: readonly string[];
   global: boolean; gate: boolean; removed: boolean; actionable: boolean;
-  due: boolean; taskClass: string; priority: number; index: number;
+  due: boolean; watchOnly: boolean; taskClass: string; priority: number; index: number;
   profileRank: number; missing: readonly string[]; rawClaimed: boolean;
 }
 
@@ -25,7 +25,8 @@ function decodeRow(value: unknown, available?: readonly string[]): Row {
     claim: optional("claim"), bound: optional("bound"), blocks: optional("blocks"),
     excluded: requireStringArray(raw.excluded, "excluded"), global: boolean("global"),
     gate: boolean("gate"), removed: boolean("removed"), actionable: boolean("actionable"),
-    due: boolean("due"), taskClass: optional("task_class") ?? "advancement_task",
+    due: boolean("due"), watchOnly: raw.watch_only === undefined ? false : boolean("watch_only"),
+    taskClass: optional("task_class") ?? "advancement_task",
     priority: integer("priority"), index: integer("index"), profileRank: integer("profile_rank"),
     missing: available === undefined ? requireStringArray(raw.missing, "missing") :
       missingRequiredCapabilities(requireStringArray(raw.required, "required"), requireStringArray(raw.targets, "targets"), available),
@@ -148,6 +149,8 @@ export function projectQuotaSelection(value: unknown): JsonObject {
   const scope = agent && !userMode ? claimScope(blocking, open, agent, profile, diagnostic) : null;
   const monitors = open.filter(row => row.actionable && row.taskClass === "continuous_monitor");
   const due = supported ? monitors.filter(row => row.due && executableBy(row, agent)) : [];
+  const admittedDue = due.filter(row => !row.missing.length);
+  const watchOnlyMonitors = monitors.filter(row => row.watchOnly);
   const activeVisible = (row: Row) => userMode ? (row.gate ? gateApplies(row, agent) : actionApplies(row, agent)) : executableBy(row, agent);
   const gateFilter = otherGates.length ? {
     schema_version: "agent_scoped_user_gate_filter_v0", agent_id: agent,
@@ -170,7 +173,10 @@ export function projectQuotaSelection(value: unknown): JsonObject {
     user_action_agent_scope_filter: actionFilter, other_agent_scoped_items: payloads(otherGates),
     agent_scope_filter: gateFilter, open_items: payloads(open), claim_scope: scope,
     executable_items: payloads(open.filter(row => row.actionable && row.taskClass === "advancement_task")),
-    monitor_items: payloads(monitors), monitor_due_items: payloads(due.filter(row => !row.missing.length)),
+    monitor_items: payloads(monitors), monitor_due_items: payloads(admittedDue),
+    watch_only_monitor_items: payloads(watchOnlyMonitors),
+    watch_only_monitor_due_items: payloads(admittedDue.filter(row => row.watchOnly)),
+    non_watch_only_monitor_due_items: payloads(admittedDue.filter(row => !row.watchOnly)),
     monitor_capability_blocked_due_items: due.filter(row => row.missing.length).map(row => ({...row.display, missing_capabilities: [...row.missing]})),
     claimed_open_items: payloads(blocking.filter(row => row.rawClaimed)),
     display_open_items: payloads(userMode ? [...open, ...actions] : open),

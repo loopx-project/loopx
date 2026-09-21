@@ -146,6 +146,12 @@ def _local_authority_shadow_options(config: Mapping[str, Any]) -> dict[str, Any]
     return {"clear_local_authority_shadow": True}
 
 
+def _coordination_runtime_shadow_options(config: Mapping[str, Any]) -> dict[str, Any]:
+    if _boolean_configuration("coordination_runtime_shadow", config, "enabled"):
+        return {"coordination_runtime_shadow_file": True}
+    return {"clear_coordination_runtime_shadow": True}
+
+
 def _goal_capability_options(
     capability_id: str,
     configuration: Mapping[str, Any] | None,
@@ -181,6 +187,7 @@ def _goal_capability_options(
         "pull_request_review": {"wait_for_ci", "review_priority"},
         "change_quality_qualification": {"enabled", "safe_fix", "strict_receipt"},
         "local_authority_shadow": {"enabled"},
+        "coordination_runtime_shadow": {"enabled"},
         "lark_kanban_heartbeat_sync": {"enabled"},
         "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule"},
         "reward_memory": {"config_path", "enabled_agents"},
@@ -234,6 +241,8 @@ def _goal_capability_options(
         return _change_quality_options(config)
     if capability_id == "local_authority_shadow":
         return _local_authority_shadow_options(config)
+    if capability_id == "coordination_runtime_shadow":
+        return _coordination_runtime_shadow_options(config)
     return {
         "lark_kanban_heartbeat_sync": _boolean_configuration(
             capability_id, config, "enabled"

@@ -203,6 +203,48 @@ test("one reducer evaluates Todo, PR, capacity, monitor, and date resume conditi
   assert.equal(conditions.todo_wait_date.material_change_generation, 1);
 });
 
+test("PR merge source aliases bridge a repository redirect without weakening repository binding", () => {
+  const request = {
+    schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: [
+      todo("todo_old_repo", "deferred", "advancement_task", {
+        resume_when: "pr_merged:#4344",
+        task_repository: "git:github.com/huangruiteng/loopx",
+      }),
+      todo("todo_unrelated_repo", "deferred", "advancement_task", {
+        resume_when: "pr_merged:#4344",
+        task_repository: "git:github.com/example/loopx",
+      }),
+    ],
+    source_items: [],
+    rollout_events: [{
+      event_id: "event-redirected-merge-4344",
+      event_kind: "pr_merge",
+      pr_ref: "loopx-project/loopx#4344",
+      source_refs: [
+        {kind: "pull_request", ref: "huangruiteng/loopx#4344"},
+        {kind: "pull_request", ref: "example/loopx#9999"},
+      ],
+      recorded_at: "2026-09-13T13:45:34Z",
+    }],
+    available_capabilities: [],
+    evaluated_at: "2026-09-20T00:00:00Z",
+  };
+  const result = evaluateTodoResumeConditions(request);
+  const conditions = Object.fromEntries(
+    (result.conditions as Array<Record<string, unknown>>).map((row) => [
+      row.todo_id,
+      row.condition,
+    ]),
+  ) as Record<string, Record<string, unknown>>;
+  assert.equal(conditions.todo_old_repo.satisfied, true);
+  assert.equal(
+    conditions.todo_old_repo.matched_pr_ref,
+    "huangruiteng/loopx#4344",
+  );
+  assert.equal(conditions.todo_unrelated_repo.satisfied, false);
+});
+
 test("monitor resume is generation-fenced and fail-closed without a baseline", () => {
   const result = evaluateTodoResumeConditions({
     schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,

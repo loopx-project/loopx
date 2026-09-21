@@ -41,6 +41,8 @@ LOCAL_AUTHORITY_PROTOCOL_KEYS = (
     "promotion_request_schema",
     "promotion_result_schema",
     "promotion_receipt_schema",
+    "promotion_review_request_schema",
+    "promotion_review_result_schema",
 )
 RUNTIME_SHADOW_PROTOCOL_KEYS = (
     "commit_request_schema",

@@ -78,6 +78,7 @@ def test_append_human_reward_binds_default_overlay_to_latest_utc_run(
         runtime_root_override=None,
         goal_id="fixture-goal",
         run_generated_at=None,
+        actor_kind="owner",
         reward={
             "recorded_at": "2026-08-31T02:00:00Z",
             "decision": "continue",
@@ -88,6 +89,7 @@ def test_append_human_reward_binds_default_overlay_to_latest_utc_run(
 
     assert result["selected_run"]["classification"] == "newer-utc"
     assert result["index_record"]["classification"] == "newer-utc"
+    assert result["human_reward"]["actor_kind"] == "owner"
 
 
 @pytest.mark.parametrize(

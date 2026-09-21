@@ -157,6 +157,7 @@ import {
   pollLocalCoordinationMonitor,
   listLocalCoordinationTodos,
   promoteLocalCoordinationAuthority,
+  reviewLocalCoordinationAuthorityPromotion,
   readLocalCoordinationTodo,
   terminalLifecycleLocalCoordinationTodo,
 } from "./coordination/local_authority_runtime.ts";
@@ -517,6 +518,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow],
     ["coordination.local_authority.promote", promoteLocalCoordinationAuthority],
+    ["coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion],
     ["coordination.local_authority.todo_continuation", continueLocalTodo],
     ["coordination.local_authority.todo_claim", claimLocalCoordinationTodo],
     ["coordination.local_authority.todo_create", createLocalCoordinationTodo],

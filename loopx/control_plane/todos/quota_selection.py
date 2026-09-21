@@ -13,7 +13,8 @@ from .contract import (
 )
 from .todo_semantics import (
     todo_item_has_removed_continuation_policy, todo_item_is_actionable_open,
-    todo_item_is_due_monitor, todo_item_task_class, todo_projection_sort_key,
+    todo_item_is_due_monitor, todo_item_is_watch_only_monitor,
+    todo_item_task_class, todo_projection_sort_key,
     todo_summary_monitor_writeback_supported,
 )
 from .resume_planning import build_todo_resume_planning_request
@@ -46,6 +47,7 @@ def project_quota_planning(
             "removed": todo_item_has_removed_continuation_policy(item),
             "actionable": todo_item_is_actionable_open(item),
             "due": todo_item_is_due_monitor(item),
+            "watch_only": todo_item_is_watch_only_monitor(item),
             "task_class": todo_item_task_class(item),
             "priority": priority, "index": index,
             "profile_rank": agent_profile_candidate_rank(item, agent_profile=profile),

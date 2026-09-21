@@ -155,6 +155,7 @@ def test_reward_summary_cannot_inject_a_canonical_todo(tmp_path: Path) -> None:
     with pytest.raises(ActiveStateAuthorityMutationError):
         append_human_reward(registry_path=registry, runtime_root_override=None,
             goal_id=GOAL, run_generated_at=None, reward=reward,
+            actor_kind="owner",
             write_active_state_summary=True)
     assert (state.read_bytes(), index.read_bytes()) == before
 
@@ -173,6 +174,7 @@ def test_reward_rebases_its_owned_paragraph_after_a_concurrent_todo_write(
     monkeypatch.setattr(feedback, "plan_active_state_update", plan_then_edit)
     feedback.append_human_reward(registry_path=registry, runtime_root_override=None,
         goal_id=GOAL, run_generated_at=None, reward=reward,
+        actor_kind="owner",
         write_active_state_summary=True)
     assert "Concurrent task." in state.read_text()
     assert "Review accepted." in state.read_text()
@@ -417,7 +419,8 @@ def test_prose_only_reward_remains_allowed_under_a_legacy_fence(tmp_path: Path) 
     # comparison proves that no Todo/lease field is changed.
     fence.write_text("{invalid", encoding="utf-8")
     result = append_human_reward(registry_path=registry, runtime_root_override=None,
-        goal_id=GOAL, run_generated_at=None, reward=reward, write_active_state_summary=True)
+        goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+        write_active_state_summary=True)
     assert result["appended"] is True
     assert "Review accepted." in state.read_text()
     assert not (root / "authority-shadow").exists()
@@ -433,7 +436,8 @@ def test_prose_only_reward_holds_before_index_append_during_maintenance(tmp_path
     before = state.read_bytes(), index.read_bytes()
     with pytest.raises(ShadowManagementError):
         append_human_reward(registry_path=registry, runtime_root_override=None,
-            goal_id=GOAL, run_generated_at=None, reward=reward, write_active_state_summary=True)
+            goal_id=GOAL, run_generated_at=None, reward=reward, actor_kind="owner",
+            write_active_state_summary=True)
     assert (state.read_bytes(), index.read_bytes()) == before
 
 

@@ -54,6 +54,8 @@ function lifecycleAction(
     goalId,
     "--operation",
     operation,
+    "--actor-kind",
+    "owner",
     "--expected-state-fingerprint",
     fingerprint,
     "--execute",

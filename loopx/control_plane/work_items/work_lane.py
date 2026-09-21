@@ -68,6 +68,7 @@ WORK_LANE_TODO_ITEM_FIELDS = (
     "target_key",
     "next_due_at",
     "expires_at",
+    "watch_only",
     "resume_when",
     "resume_ready",
     "blocking_monitor_todo_id",
@@ -512,6 +513,8 @@ def build_work_lane_contract(
     todo_counts: dict[str, int],
     monitor_due_count: int,
     due_monitor_items: list[dict[str, Any]],
+    watch_only_due_monitor_items: list[dict[str, Any]] | None = None,
+    non_watch_only_due_monitor_items: list[dict[str, Any]] | None = None,
     first_advancement: dict[str, Any] | None,
     due_monitor_preempts_advancement: bool,
     outcome_followthrough: dict[str, Any] | None,
@@ -544,22 +547,41 @@ def build_work_lane_contract(
     )
     non_runnable_non_monitor_count = max(0, open_count - monitor_count)
     first_due_monitor = due_monitor_items[0] if due_monitor_items else None
+    watch_only_due_items = watch_only_due_monitor_items or []
+    ordinary_due_items = (
+        non_watch_only_due_monitor_items
+        if non_watch_only_due_monitor_items is not None
+        else due_monitor_items
+    )
+    first_preemptive_due_monitor = ordinary_due_items[0] if ordinary_due_items else None
     blocked_by_monitor_items = resume_blocked_by_monitor_items or []
     schedule_gap_items = monitor_schedule_gap_items or []
     first_schedule_gap = schedule_gap_items[0] if schedule_gap_items else None
     monitor_debt_backoff_applies = bool(
         monitor_debt_backoff_active
-        and first_due_monitor
+        and first_preemptive_due_monitor
         and first_advancement
-        and todo_priority_rank(first_advancement) <= todo_priority_rank(first_due_monitor)
+        and todo_priority_rank(first_advancement)
+        <= todo_priority_rank(first_preemptive_due_monitor)
     )
     effective_due_monitor_preemption = due_monitor_preempts_advancement and not (
         has_advancement_todos
         and (monitor_attempt_already_recorded or monitor_debt_backoff_applies)
     )
 
-    def due_monitor_contract(*, reason_codes: list[str]) -> dict[str, Any]:
-        selected = first_due_monitor or {}
+    def due_monitor_contract(
+        *, reason_codes: list[str], selected_monitor: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        selected = selected_monitor or first_due_monitor or {}
+        selected_todo_id = normalize_todo_id(selected.get("todo_id"))
+        projected_due_items = [
+            selected,
+            *[
+                item
+                for item in due_monitor_items
+                if normalize_todo_id(item.get("todo_id")) != selected_todo_id
+            ],
+        ]
         return {
             "schema_version": WORK_LANE_CONTRACT_SCHEMA_VERSION,
             "lane": "continuous_monitor",
@@ -571,7 +593,7 @@ def build_work_lane_contract(
             "monitor_policy": "attempt_due_monitor_once_then_writeback_or_no_spend_if_unchanged",
             "monitor_due_count": max(0, int(monitor_due_count)),
             "monitor_due_items": _compact_work_lane_todo_items(
-                due_monitor_items,
+                projected_due_items,
                 limit=monitor_due_item_limit,
             ),
             "selected_todo_id": selected.get("todo_id"),
@@ -585,7 +607,8 @@ def build_work_lane_contract(
     if progress_scope != "dependency_observation":
         if has_advancement_todos and effective_due_monitor_preemption:
             return due_monitor_contract(
-                reason_codes=["monitor_due", "due_monitor_priority_preempts_advancement"]
+                reason_codes=["monitor_due", "due_monitor_priority_preempts_advancement"],
+                selected_monitor=first_preemptive_due_monitor,
             )
         if has_advancement_todos and first_advancement is not None:
             reason_codes = ["open_agent_todo"]
@@ -624,6 +647,24 @@ def build_work_lane_contract(
                 "monitor_policy": "material_transition_only",
                 "action": action,
             }
+            if watch_only_due_items:
+                selected_watch_only_monitor = watch_only_due_items[0]
+                contract["auxiliary_monitor_poll"] = {
+                    "schema_version": "auxiliary_monitor_poll_v0",
+                    "required": False,
+                    "preempts_advancement": False,
+                    "spend_policy": "no_spend",
+                    "continuation": "advancement_remains_primary",
+                    "monitor_due_count": len(watch_only_due_items),
+                    "monitor_due_items": _compact_work_lane_todo_items(
+                        watch_only_due_items,
+                        limit=monitor_due_item_limit,
+                    ),
+                    "selected_todo_id": selected_watch_only_monitor.get("todo_id"),
+                    "selected_next_due_at": selected_watch_only_monitor.get(
+                        "next_due_at"
+                    ),
+                }
             if outcome_followthrough:
                 contract["outcome_followthrough"] = outcome_followthrough
             return contract

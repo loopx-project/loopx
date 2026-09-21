@@ -100,6 +100,8 @@ QUOTA_PAYLOAD_ITEM_FIELDS = (
 )
 QUOTA_PAYLOAD_LANE_LIMITS = {
     "monitor_due_items": MONITOR_DUE_ITEM_LIMIT,
+    "watch_only_monitor_due_items": MONITOR_DUE_ITEM_LIMIT,
+    "non_watch_only_monitor_due_items": MONITOR_DUE_ITEM_LIMIT,
     "monitor_capability_blocked_due_items": QUOTA_PAYLOAD_DIAGNOSTIC_LANE_LIMIT,
     "monitor_schedule_gap_items": MONITOR_DUE_ITEM_LIMIT,
     "first_open_items": 3,
@@ -181,6 +183,9 @@ class _QuotaTodoLanes:
     executable_items: list[dict[str, Any]]
     monitor_items: list[dict[str, Any]]
     monitor_due_items: list[dict[str, Any]]
+    watch_only_monitor_items: list[dict[str, Any]]
+    watch_only_monitor_due_items: list[dict[str, Any]]
+    non_watch_only_monitor_due_items: list[dict[str, Any]]
     monitor_capability_blocked_due_items: list[dict[str, Any]]
     claimed_open_items: list[dict[str, Any]]
     display_open_items: list[dict[str, Any]]
@@ -401,6 +406,14 @@ def summarize_user_todos_for_quota(
         "monitor_open_items": lanes.monitor_items,
         "monitor_due_count": len(lanes.monitor_due_items),
         "monitor_due_items": lanes.monitor_due_items[:MONITOR_DUE_ITEM_LIMIT],
+        "watch_only_monitor_count": len(lanes.watch_only_monitor_items),
+        "watch_only_monitor_due_count": len(lanes.watch_only_monitor_due_items),
+        "watch_only_monitor_due_items": lanes.watch_only_monitor_due_items[
+            :MONITOR_DUE_ITEM_LIMIT
+        ],
+        "non_watch_only_monitor_due_items": lanes.non_watch_only_monitor_due_items[
+            :MONITOR_DUE_ITEM_LIMIT
+        ],
         "monitor_capability_blocked_due_count": len(
             lanes.monitor_capability_blocked_due_items
         ),
@@ -420,11 +433,7 @@ def summarize_user_todos_for_quota(
         summary["advancement_frontier_revision_index"] = value[
             "advancement_frontier_revision_index"
         ]
-    if value.get("watch_only_monitor_count"):
-        summary["watch_only_monitor_count"] = value["watch_only_monitor_count"]
-        summary["watch_only_monitor_due_count"] = value.get(
-            "watch_only_monitor_due_count", 0
-        )
+    if lanes.watch_only_monitor_items:
         summary["convergence_open_count"] = value.get("convergence_open_count")
     if recent_completed_advancement_items:
         summary["recent_completed_advancement_items"] = recent_completed_advancement_items
@@ -821,6 +830,14 @@ def summarize_project_asset_todos_for_quota(
         "monitor_open_items": lanes.monitor_items,
         "monitor_due_count": len(lanes.monitor_due_items),
         "monitor_due_items": lanes.monitor_due_items[:MONITOR_DUE_ITEM_LIMIT],
+        "watch_only_monitor_count": len(lanes.watch_only_monitor_items),
+        "watch_only_monitor_due_count": len(lanes.watch_only_monitor_due_items),
+        "watch_only_monitor_due_items": lanes.watch_only_monitor_due_items[
+            :MONITOR_DUE_ITEM_LIMIT
+        ],
+        "non_watch_only_monitor_due_items": lanes.non_watch_only_monitor_due_items[
+            :MONITOR_DUE_ITEM_LIMIT
+        ],
         "monitor_capability_blocked_due_count": len(
             lanes.monitor_capability_blocked_due_items
         ),

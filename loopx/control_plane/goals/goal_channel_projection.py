@@ -350,7 +350,10 @@ def build_goal_channel_projection(
     project_asset = _project_asset(status_item_dict)
     user_todos = _compact_todos(project_asset, "user")
     agent_todos = _compact_todos(project_asset, "agent")
-    from .coordination_observation import observe_goal_coordination
+    from .coordination_observation import (
+        coordination_authority_transition,
+        observe_goal_coordination,
+    )
 
     explicit = None if active_leases is None else [
         _compact_coordination_entry({**{key: item[key] for key in ("todo_id", "status", "lease_until", "write_scope") if key in item},
@@ -434,6 +437,7 @@ def build_goal_channel_projection(
         ),
         "artifacts": _compact_artifacts(artifacts),
         "active_leases": [_compact_coordination_entry(row) for row in observation["entries"]],
+        "coordination_authority": coordination_authority_transition(observation),
         "recent_events": _recent_events(run_history_goal_dict),
         "source_warnings": _source_warnings(raw_keys),
         "truth_contract": {

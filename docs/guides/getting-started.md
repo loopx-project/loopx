@@ -866,6 +866,7 @@ loopx operator-gate \
 
 loopx reward \
   --goal-id your-project-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "validation improved and the route is worth extending"

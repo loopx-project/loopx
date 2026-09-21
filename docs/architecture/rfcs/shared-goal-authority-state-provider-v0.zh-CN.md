@@ -1426,6 +1426,8 @@ promotion shadow，也不能参与协调决策。
 管理面 caller 是显式且 preview-first 的：
 
 ```bash
+loopx configure-goal --goal-id <goal-id> \
+  --coordination-runtime-shadow-file --execute
 loopx coordination-shadow inspect --goal-id <goal-id>
 loopx coordination-shadow bootstrap --goal-id <goal-id>
 loopx coordination-shadow bootstrap --goal-id <goal-id> --execute
@@ -1433,12 +1435,23 @@ loopx coordination-shadow qualify --goal-id <goal-id> \
   --minimum-operations 3 \
   --require-event-kind todo_claim \
   --require-event-kind task_lease_acquire
+loopx coordination-shadow promote --goal-id <goal-id> \
+  --minimum-operations 3 \
+  --require-event-kind todo_claim
+loopx coordination-shadow promote --goal-id <goal-id> \
+  --minimum-operations 3 \
+  --require-event-kind todo_claim --execute
 loopx coordination-shadow rollback --goal-id <goal-id> \
   --provider-revision <revision-from-inspect> --execute
 ```
 
 它从当前 canonical Todo 与 task-lease view 派生紧凑 projection，只报告计数与摘要，
-并要求 `--execute` 才调用 bootstrap。写入成功后会立即通过 typed parity inspection
+并要求 `--execute` 才调用 bootstrap 或 promotion。`promote` 未带 `--execute` 时零写入；
+preview 返回精确的 qualified revision、projection digest、writer-fence identity 和
+rollback identity。apply 会在同一段 maintenance 与 legacy source 锁生命周期内重新
+验证 source snapshot、资格化精确 shadow lineage、engage 持久 writer fence、提交
+canonical head，并读回 promotion receipt。v0 会拒绝尚未资格化为 `hard_lease` 的 Goal，
+且绝不会把 handoff mode 变化藏在 promotion 副作用中。写入成功后会立即通过 typed parity inspection
 读回。除非目标开启精确的 goal-level `file_v0` shadow opt-in，否则该命令不可执行。
 
 promotion 前 rollback 带精确 revision fence，且不删除数据。TypeScript 会把命中的
@@ -1486,9 +1499,21 @@ Todo 读取，尚无 lifecycle 或 settlement 调用方消费这个答案。正�
 把 provider-first read flip 与 legacy-writer fencing 作为同一个受审原子边界；flip 后
 回退 Markdown 会重新制造双权威，因此禁止。
 
-后续仍需完成 provider-first read flip，并 fence 全部 legacy coordination writer；这些
-仍是独立评审的本地 canonical promotion 的强制证据。因此 NoKV/PostgreSQL 远端 shadow
-仍属于 Stage 3，不能把这个默认关闭的 hook 当作 authority。
+受评审的 operator path 现在把 provider-first read flip 与 legacy writer fence 收进同一
+个 TypeScript-owned cutover transaction；任何 read、delegation、frontend 或 Lark 路径
+都不能隐式调用它。真实 Goal 仍必须分别完成精确 qualification、静止态 `hard_lease`
+切换、preview、显式 apply、重启读回和 managed-worker acceptance，之后才能宣称该 Goal
+已经 promoted。因此 NoKV/PostgreSQL 远端 shadow 仍属于 Stage 3，不能把这个默认关闭的
+hook 当作 authority。
+
+只读消费者现在复用一份显式的 authority-transition 投影。managed delegation preflight
+及其打包 Dashboard 展示会区分 `promotion_required`、`unavailable` 与 `promoted`，并给出
+typed next action，但不会启动 Turn 或执行器。Lark 使用的 Goal Channel 投影遵守同一边界，
+继续通过现有 `mode=read_only` 与 truth contract 声明
+`projection_is_writable=false`、`write_authority=none`，renderer 再为 operator 派生对应的
+next action。只有经评审的 TypeScript preview 才能证明 readiness。这补齐了解释链路，
+同时不会在每份 status payload 重复相同的来源／权限事实，也不会把 Chat 或 Lark 变成
+第二个 promotion owner。
 
 下一块 Stage 2C 实现加入了 TypeScript cutover kernel，但尚未改变默认 runtime。
 同一个纯 reducer 从一次 Todo/lease mutation 派生 projection、event 与 receipt；显式
@@ -1506,8 +1531,10 @@ fail-closed write-check hook；promotion 可按 operation receipt 重放，provi
 时检查同一个 fence。fence 不存在时保持零 runtime 调用的默认兼容路径；fence 存在、
 不可读或不合法时一律 fail closed。后续 promotion orchestrator 必须先取得这两把 legacy
 lock，再 engage fence，从而保证不存在某次 legacy write 已通过检查、却在 cutover 后才
-提交。provider-first CLI 路由和持锁 promotion operation 仍是下一切片；在它们落地前，
-本集成选择阻断 split-brain 写入，而不会静默回退。
+提交。持锁的 `coordination-shadow promote` 路径现在完成了这一切片。剩余验收属于逐
+Goal 的 qualification 与产品投影，而不是第二套 Python promotion state machine；若
+发生 fence 已写入但 canonical readback 不成立的中断，会 fail closed 等待 operator
+recovery，绝不静默回退。
 
 Todo collection-read 切片只在 durable fence 已存在时把 `loopx todo list` 路由到
 `FileAuthorityStore`。它与 legacy 路径复用同一套过滤、排序、resume 和 summary

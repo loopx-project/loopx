@@ -91,6 +91,27 @@ def test_download_timeout_honors_total_budget(monkeypatch):
     assert diagnostic["attempts"][0]["http_status"] == 0
 
 
+def test_installer_receives_remaining_outer_timeout_budget(monkeypatch):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[0] == "curl":
+            Path(args[args.index("--output") + 1]).write_text("exit 0")
+            return subprocess.CompletedProcess(args, 0, "200", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr("loopx.self_update_download.time.monotonic", lambda: 0.0)
+    monkeypatch.setattr("loopx.self_update_download.subprocess.run", run)
+    result, diagnostic = run_archive_installer(
+        "https://example.invalid/", env={}, timeout_seconds=600
+    )
+
+    assert result.returncode == 0
+    assert diagnostic["stage"] == "installer_execution"
+    assert calls[-1][1]["env"]["LOOPX_INSTALLER_TIMEOUT_SECONDS"] == "600"
+
+
 @pytest.mark.parametrize("timeout", [False, True])
 def test_installer_failure_is_not_retried(monkeypatch, timeout):
     calls = []

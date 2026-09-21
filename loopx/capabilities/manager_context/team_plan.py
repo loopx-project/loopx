@@ -115,12 +115,15 @@ def project_team_plan_preview(
 ) -> None:
     """Offer each admitted team preview in this answer as a confirmable card.
 
-    Only the owner's own local manager channel is projected. A remote audience's
-    confirmation surface is not this store, so its answer keeps the preview in
-    text and no card is written on its behalf.
+    Every admitted manager preview is projected into the one typed action store.
+    Remote delivery still requires its own authenticated surface, but it must
+    refer to this same proposal instead of constructing a second action from the
+    model response.
     """
 
-    if projector is None or str(session.get("channel_id") or "") != "manager":
+    if projector is None or not is_manager_channel(
+        str(session.get("channel_id") or "")
+    ):
         return
     for preview in team_plan_previews(response):
         try:
@@ -175,7 +178,7 @@ def confirmation_pointer(goals: Sequence[str]) -> str:
 
     named = "、".join(goals)
     return (
-        f"已为 {named} 准备好可确认的团队计划卡片：在 LoopX 工作区的该 Goal 下确认后，"
+        f"已为 {named} 准备好同一份团队计划卡片：可在当前管家会话或该 Goal 的已绑定频道确认；"
         "才会为每条就绪 lane 创建它的首个有界 Todo；确认前不会创建任何 lane。"
     )
 
@@ -193,10 +196,9 @@ def offer_team_plan_confirmation(
 
     Admission decides whether a preview may be *shown*; this is what turns it into
     something the owner can act on, and it does exactly two things for a manager
-    channel: it appends one typed pointer line naming the Goal whose workspace
-    holds the card, and -- for the owner's own local channel only -- it stores
-    that card. A remote audience's confirmation surface is not this store, so it
-    receives the pointer and no card is written on its behalf.
+    channel: it appends one typed pointer line naming the Goal and stores one
+    provider-neutral proposal. Local and remote surfaces may then render that
+    exact proposal; neither surface gains authority to create a second action.
 
     The steward's prose is preserved: the added line is an operational receipt
     from the channel, in the same way the delegation path states its own receipt,

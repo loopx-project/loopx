@@ -16,9 +16,15 @@ export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflig
   const disclaimer = check.state === "authority_unavailable"
     ? (zh ? "未检查或启动执行器" : "No executor was inspected or launched")
     : (zh ? "不代表正在执行" : "Does not mean executing");
+  const authorityAction = check.authority_next_action === "preview_reviewed_goal_authority_promotion"
+    ? (zh ? "下一步：预览整 Goal 协调 Authority 晋级" : "Next: preview whole-Goal coordination-authority promotion")
+    : check.authority_next_action === "repair_canonical_authority"
+      ? (zh ? "下一步：修复规范 Authority 读回" : "Next: repair canonical authority readback")
+      : null;
   return <p role="status">
     {zh ? labels[check.state].zh : labels[check.state].en}
     {detail ? ` · ${detail}` : ""}
+    {authorityAction ? ` · ${authorityAction}` : ""}
     {` · ${disclaimer}`}
   </p>;
 }

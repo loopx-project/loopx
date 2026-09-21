@@ -102,6 +102,7 @@ Use `loopx reward` to append this compact signal to an existing run:
 ```bash
 loopx reward \
   --goal-id example-experiment-goal \
+  --actor-kind owner \
   --run-generated-at 2026-06-01T00:00:00+00:00 \
   --decision continue_route \
   --reward positive \

@@ -15,6 +15,8 @@ export const LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA = "loopx_local_coordinat
 export const LOCAL_COORDINATION_PROMOTION_REQUEST_SCHEMA = "loopx_local_coordination_promotion_request_v0";
 export const LOCAL_COORDINATION_PROMOTION_RESULT_SCHEMA = "loopx_local_coordination_promotion_result_v0";
 export const LOCAL_COORDINATION_PROMOTION_RECEIPT_SCHEMA = "loopx_local_coordination_promotion_receipt_v0";
+export const LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA = "loopx_local_coordination_promotion_review_request_v0";
+export const LOCAL_COORDINATION_PROMOTION_REVIEW_RESULT_SCHEMA = "loopx_local_coordination_promotion_review_result_v0";
 
 export const COORDINATION_RUNTIME_SHADOW_COMMIT_REQUEST_SCHEMA = "loopx_coordination_runtime_shadow_commit_v0";
 export const COORDINATION_RUNTIME_SHADOW_COMMIT_RESULT_SCHEMA = "loopx_coordination_runtime_shadow_result_v0";
@@ -235,7 +237,9 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
     "todo_list_result_schema": LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
     "promotion_request_schema": LOCAL_COORDINATION_PROMOTION_REQUEST_SCHEMA,
     "promotion_result_schema": LOCAL_COORDINATION_PROMOTION_RESULT_SCHEMA,
-    "promotion_receipt_schema": LOCAL_COORDINATION_PROMOTION_RECEIPT_SCHEMA
+    "promotion_receipt_schema": LOCAL_COORDINATION_PROMOTION_RECEIPT_SCHEMA,
+    "promotion_review_request_schema": LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
+    "promotion_review_result_schema": LOCAL_COORDINATION_PROMOTION_REVIEW_RESULT_SCHEMA
   },
   "runtime_shadow_protocol": {
     "commit_request_schema": COORDINATION_RUNTIME_SHADOW_COMMIT_REQUEST_SCHEMA,

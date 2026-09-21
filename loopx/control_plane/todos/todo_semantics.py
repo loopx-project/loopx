@@ -626,6 +626,64 @@ def todo_summary_monitor_due_items(
     )
 
 
+def todo_summary_watch_only_monitor_due_items(
+    summary: dict[str, Any] | None,
+    *,
+    task_text_keys: tuple[str, ...] = ("title", "text"),
+    text_mode: str = "label",
+) -> list[dict[str, Any]]:
+    """Consume the typed watch-only partition; legacy summaries fall back safely."""
+
+    if isinstance(summary, dict) and isinstance(
+        summary.get("watch_only_monitor_due_items"), list
+    ):
+        return _summary_monitor_items(
+            summary,
+            projected_key="watch_only_monitor_due_items",
+            predicate=lambda _item: True,
+            task_text_keys=task_text_keys,
+            text_mode=text_mode,
+        )
+    return [
+        item
+        for item in todo_summary_monitor_due_items(
+            summary,
+            task_text_keys=task_text_keys,
+            text_mode=text_mode,
+        )
+        if todo_item_is_watch_only_monitor(item)
+    ]
+
+
+def todo_summary_non_watch_only_monitor_due_items(
+    summary: dict[str, Any] | None,
+    *,
+    task_text_keys: tuple[str, ...] = ("title", "text"),
+    text_mode: str = "label",
+) -> list[dict[str, Any]]:
+    """Consume the typed ordinary-due partition; classify only legacy summaries."""
+
+    if isinstance(summary, dict) and isinstance(
+        summary.get("non_watch_only_monitor_due_items"), list
+    ):
+        return _summary_monitor_items(
+            summary,
+            projected_key="non_watch_only_monitor_due_items",
+            predicate=lambda _item: True,
+            task_text_keys=task_text_keys,
+            text_mode=text_mode,
+        )
+    return [
+        item
+        for item in todo_summary_monitor_due_items(
+            summary,
+            task_text_keys=task_text_keys,
+            text_mode=text_mode,
+        )
+        if not todo_item_is_watch_only_monitor(item)
+    ]
+
+
 def todo_summary_monitor_due_count(
     summary: dict[str, Any] | None,
     *,

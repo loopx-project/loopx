@@ -2010,8 +2010,9 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     assert by_id["todo_successor"]["completion_continuation"] == "no_followup"
     assert result["authority_read"]["todo_read_model"]["todo_count"] == 3
 
-    # The public compatibility CLI must retain claim-neutral text correction
-    # after promotion; it must not reconstruct or write the Markdown source.
+    # The public compatibility CLI must retain a claim-neutral text correction
+    # and the existing structured priority after promotion; it must not
+    # reconstruct or write the Markdown source.
     correction_command = [
         sys.executable,
         "-m",
@@ -2039,7 +2040,7 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     corrected_item = next(
         item for item in corrected["todos"] if item["todo_id"] == "todo_claimable"
     )
-    assert corrected_item["text"] == "Corrected before claiming"
+    assert corrected_item["text"] == "[P0] Corrected before claiming"
     assert not corrected_item.get("claimed_by")
     assert corrected_item["last_actor_agent_id"] == "agent-b"
     assert not state_file.exists()
@@ -2056,7 +2057,7 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
         item for item in noted["todos"] if item["todo_id"] == "todo_claimable"
     )
     assert noted_item["note"] == "Correction context"
-    assert noted_item["text"] == "Corrected before claiming"
+    assert noted_item["text"] == "[P0] Corrected before claiming"
     assert not noted_item.get("claimed_by")
     assert not state_file.exists()
 
@@ -2261,7 +2262,8 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     edited_by_id = {item["todo_id"]: item for item in after_edit["todos"]}
     assert edited_by_id["todo_claimable"] == {
         **claimed_item,
-        "text": "Edit provider-owned work",
+        "text": "[P0] Edit provider-owned work",
+        "title": "Edit provider-owned work",
         "note": "compatibility edit",
         "last_actor_agent_id": "agent-a",
         "updated_at": edited_by_id["todo_claimable"]["updated_at"],

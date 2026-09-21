@@ -6,6 +6,7 @@ ref="${LOOPX_REF:-stable}"
 archive_url_override="${LOOPX_ARCHIVE_URL:-}"
 archive_url="$archive_url_override"
 python_bin="${LOOPX_PYTHON:-python3}"
+installer_timeout_seconds="${LOOPX_INSTALLER_TIMEOUT_SECONDS:-}"
 export LOOPX_REPO="$repo"
 export LOOPX_REF="$ref"
 
@@ -23,6 +24,11 @@ need "$python_bin"
 if [[ -n "${LOOPX_RESOLVED_SOURCE_GIT_COMMIT:-}" \
   && ! "$LOOPX_RESOLVED_SOURCE_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "loopx installer error: LOOPX_RESOLVED_SOURCE_GIT_COMMIT must be a full Git commit SHA" >&2
+  exit 2
+fi
+if [[ -n "$installer_timeout_seconds" \
+  && ! "$installer_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+  echo "loopx installer error: LOOPX_INSTALLER_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 2
 fi
 
@@ -112,8 +118,65 @@ extract_dir="$tmp_dir/extract"
 mkdir -p "$extract_dir"
 
 echo "loopx installer: downloading $archive_url" >&2
-curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-max-time 150 \
-  "$archive_url" -o "$archive_path"
+archive_deadline=$((SECONDS + ${installer_timeout_seconds:-150}))
+archive_attempt=1
+archive_max_attempts=3
+archive_attempts_completed=0
+archive_downloaded=0
+last_curl_code=28
+last_http_status=0
+while [[ "$archive_attempt" -le "$archive_max_attempts" ]]; do
+  remaining=$((archive_deadline - SECONDS))
+  if [[ "$remaining" -le 0 ]]; then
+    break
+  fi
+  attempt_timeout="$remaining"
+  if [[ "$archive_attempt" -lt "$archive_max_attempts" ]]; then
+    reserved_attempts=$((archive_max_attempts - archive_attempt))
+    attempt_timeout=$((remaining - reserved_attempts))
+    if [[ "$attempt_timeout" -gt 120 ]]; then
+      attempt_timeout=120
+    elif [[ "$attempt_timeout" -lt 1 ]]; then
+      attempt_timeout=1
+    fi
+  fi
+  archive_attempts_completed="$archive_attempt"
+  if http_status="$(curl --silent --show-error --fail --location \
+    --connect-timeout 10 --max-time "$attempt_timeout" \
+    --continue-at - --write-out '%{http_code}' \
+    "$archive_url" -o "$archive_path")"; then
+    archive_downloaded=1
+    break
+  else
+    last_curl_code=$?
+  fi
+  if [[ "$http_status" =~ ^[0-9]{3}$ ]]; then
+    last_http_status="$http_status"
+  else
+    last_http_status=0
+  fi
+  retryable=0
+  case "$last_curl_code" in
+    5|6|7|18|28|35|52|55|56)
+      retryable=1
+      ;;
+    22)
+      case "$last_http_status" in
+        403|408|429|500|502|503|504)
+          retryable=1
+          ;;
+      esac
+      ;;
+  esac
+  if [[ "$retryable" -ne 1 ]]; then
+    break
+  fi
+  archive_attempt=$((archive_attempt + 1))
+done
+if [[ "$archive_downloaded" -ne 1 ]]; then
+  echo "loopx installer error: archive download failed after $archive_attempts_completed attempt(s) (curl $last_curl_code, HTTP $last_http_status)" >&2
+  exit "$last_curl_code"
+fi
 archive_sha256="$("$python_bin" - "$archive_path" <<'PY'
 from pathlib import Path
 import hashlib

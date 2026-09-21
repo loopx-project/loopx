@@ -8,6 +8,16 @@ import pytest
 from loopx.capabilities.issue_fix.pr_gate_reconcile import (
     reconcile_issue_fix_pr_gate,
 )
+from loopx.capabilities.issue_fix.pr_lifecycle import (
+    build_issue_fix_pr_lifecycle_monitor_packet,
+)
+from loopx.capabilities.issue_fix.pr_lifecycle_rollout import (
+    append_pr_merge_rollout_event,
+)
+from loopx.control_plane.todos.resume_condition import (
+    evaluate_todo_resume_conditions,
+)
+from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 
 
 GOAL_ID = "multi-agent-pr-gate-reconcile"
@@ -96,3 +106,71 @@ def test_multi_agent_legacy_merge_gate_without_actor_is_atomic(tmp_path: Path) -
         _reconcile(registry, state, agent_id=None)
 
     assert state.read_text(encoding="utf-8") == before
+
+
+def test_repository_redirect_emits_canonical_merge_with_exact_alias_resume(
+    tmp_path: Path,
+) -> None:
+    registry, _state = _write_fixture(tmp_path)
+    runtime_root = tmp_path / "runtime"
+    packet = build_issue_fix_pr_lifecycle_monitor_packet(
+        url="https://github.com/huangruiteng/loopx/pull/4344",
+        provider_payload={
+            "state": "MERGED",
+            "mergedAt": "2026-09-13T13:45:34Z",
+            "url": "https://github.com/loopx-project/loopx/pull/4344",
+        },
+        generated_at="2026-09-20T10:30:00Z",
+    )
+
+    assert packet["observation"]["repo"] == "loopx-project/loopx"
+    assert packet["observation"]["requested_repo"] == "huangruiteng/loopx"
+    assert packet["observation"]["repository_aliases"] == [
+        "huangruiteng/loopx"
+    ]
+
+    receipt = append_pr_merge_rollout_event(
+        payload=packet,
+        goal_id=GOAL_ID,
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+    )
+    assert receipt["pr_ref"] == "loopx-project/loopx#4344"
+    assert receipt["repository_aliases"] == ["huangruiteng/loopx"]
+    events = load_rollout_events(rollout_event_log_path(runtime_root, GOAL_ID))
+    assert events[0]["code_refs"]["pr_ref"] == "loopx-project/loopx#4344"
+    assert events[0]["source_refs"] == [
+        {"kind": "pull_request", "ref": "huangruiteng/loopx#4344"}
+    ]
+
+    conditions = evaluate_todo_resume_conditions(
+        [
+            {
+                "todo_id": "todo_legacy_repository_wait",
+                "status": "deferred",
+                "task_repository": "git:github.com/huangruiteng/loopx",
+                "resume_when": "pr_merged:#4344",
+            }
+        ],
+        source_items=[],
+        rollout_events=events,
+        evaluated_at="2026-09-20T10:31:00Z",
+    )
+    assert conditions["todo_legacy_repository_wait"]["satisfied"] is True
+    assert conditions["todo_legacy_repository_wait"]["matched_pr_ref"] == (
+        "huangruiteng/loopx#4344"
+    )
+
+
+def test_repository_redirect_alias_does_not_match_another_pr_number() -> None:
+    packet = build_issue_fix_pr_lifecycle_monitor_packet(
+        url="https://github.com/huangruiteng/loopx/pull/4344",
+        provider_payload={
+            "state": "MERGED",
+            "mergedAt": "2026-09-13T13:45:34Z",
+            "url": "https://github.com/loopx-project/loopx/pull/4345",
+        },
+    )
+
+    assert packet["observation"]["repo"] == "huangruiteng/loopx"
+    assert "repository_aliases" not in packet["observation"]

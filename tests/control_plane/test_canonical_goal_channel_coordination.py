@@ -22,6 +22,12 @@ def test_empty_canonical_ownership_never_revives_display_claim_or_local_lease(tm
     observed = build_goal_channel_projection(goal_id=GOAL_ID, status_item=_status_item(claimed_by='stale-agent'), runtime_root=tmp_path)
     assert observed['active_leases'] == []
     assert observed['coordination_observation']['source_authority'] == provider + '_v0'
+    assert observed['coordination_authority'] == {
+        'state': 'promoted',
+    }
+    assert observed['mode'] == 'read_only'
+    assert observed['truth_contract']['projection_is_writable'] is False
+    assert observed['truth_contract']['write_authority'] == 'none'
     assert state.read_bytes() == before
     state.unlink()
     assert build_goal_channel_projection(goal_id=GOAL_ID, runtime_root=tmp_path)['active_leases'] == []
@@ -30,6 +36,9 @@ def test_empty_canonical_ownership_never_revives_display_claim_or_local_lease(tm
 def test_explicit_empty_observation_is_not_unspecified():
     observed = build_goal_channel_projection(goal_id=GOAL_ID, status_item=_status_item(claimed_by='stale-agent'), active_leases=[])
     assert observed['active_leases'] == []
+    assert observed['coordination_authority']['state'] == 'promotion_required'
+    assert observed['mode'] == 'read_only'
+    assert observed['truth_contract']['write_authority'] == 'none'
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
@@ -49,9 +58,12 @@ def test_canonical_failure_is_visible_and_never_discloses_or_falls_back(tmp_path
     observed = build_goal_channel_projection(goal_id=GOAL_ID, status_item=_status_item(claimed_by='stale-agent'), runtime_root=tmp_path)
     assert observed['active_leases'] == []
     assert observed['coordination_observation']['status'] == 'unavailable'
+    assert observed['coordination_authority']['state'] == 'unavailable'
     assert observed['source_warnings'][-1]['kind'] == 'coordination_unavailable'
     html = render_goal_channel_projection_html(observed)
     assert 'PRIVATE_' not in html and 'PRIVATE_' not in json.dumps(observed)
+    assert 'Coordination Authority' in html
+    assert 'repair_canonical_authority' in html
     assert 'Task ownership could not be read' in html
     assert 'Task ownership is unavailable; see Source Warnings.' in html
     assert 'No active claim or lease projected.' not in html

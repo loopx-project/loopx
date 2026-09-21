@@ -38,6 +38,9 @@ A browser append endpoint may be implemented only when all of these are true:
 - The payload has already passed the same validation as `/reward/dry-run`.
 - The response remains compact and does not return `index_path`, `json_path`,
   `markdown_path`, local absolute paths, or raw private evidence.
+- The trusted loopback adapter records `actor_kind=owner` in both preview and
+  append receipts; the canonical CLI requires an explicit owner/controller
+  actor kind for a durable write.
 
 ## Preview Handshake
 

@@ -104,6 +104,46 @@ def test_manager_delivery_persists_and_validates_exact_context_ids(tmp_path):
         load_delivery(project=project, config_path=config, event=event)
 
 
+def test_manager_delivery_rejects_an_unverified_proposal_delivery_receipt(tmp_path):
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    event = {
+        "event_id": "evt_reply_fixture",
+        "message_id": "om_reaction_fixture",
+        "sender_id": "ou_owner_fixture",
+        "content": "Prepare the team plan.",
+    }
+    proposal_id = "proposal-" + "a" * 32
+    path, _ = load_delivery(project=project, config_path=config, event=event)
+    payload = pending_delivery(
+        event=event,
+        text="Plan ready.",
+        content_format="markdown",
+        effect_receipt=None,
+        failure_code=None,
+        proposal_ids=[proposal_id],
+    )
+    payload["proposal_delivery"] = {"ok": True}
+    write_delivery(path, payload)
+
+    with pytest.raises(ValueError, match="proposal delivery receipt"):
+        load_delivery(project=project, config_path=config, event=event)
+
+    payload["proposal_delivery"] = {
+        "schema_version": "lark_team_plan_review_delivery_v0",
+        "ok": True,
+        "status": "team_plan_review_cards_delivered",
+        "proposal_ids": [proposal_id],
+        "proposal_count": 1,
+        "audience_count": 2,
+        "readback_verified": True,
+        "external_write_count": 2,
+    }
+    write_delivery(path, payload)
+
+    _, loaded = load_delivery(project=project, config_path=config, event=event)
+    assert loaded["proposal_delivery"]["proposal_ids"] == [proposal_id]
+
+
 def test_manager_context_retention_discards_oldest_with_reason(tmp_path):
     config = tmp_path / ".loopx" / "config" / "lark.json"
     inbox = tmp_path / ".loopx" / "inbox" / "lark"

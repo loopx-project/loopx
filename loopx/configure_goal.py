@@ -46,7 +46,7 @@ from .control_plane.agents.runtime_model import (
 )
 from .control_plane.agents.supervisor import normalize_peer_supervisor
 from .control_plane.agents.work_mode import normalize_agent_work_modes
-from .control_plane.coordination import local_authority_shadow_observation as shadow
+from .control_plane.coordination import runtime_shadow as shadow
 from .control_plane.coordination.configuration import normalize_goal_write_scope
 from .control_plane.operator_inbox_binding import local_private_config_digest
 from .control_plane.reward_memory import (
@@ -262,7 +262,7 @@ def _settings_summary(goal: dict[str, Any]) -> dict[str, Any]:
         "waiting_on": goal.get("waiting_on"),
         "write_scope": normalize_goal_write_scope(coordination.get("write_scope") or [])
         or [],
-        "local_authority_shadow": shadow.local_authority_shadow_summary(goal),
+        **shadow.coordination_shadow_summaries(goal),
         "checkpointed_boundary_authority": checkpointed_boundary_authority_summary(
             coordination
         ),
@@ -477,6 +477,8 @@ def configure_goal(
     clear_write_scope: bool = False,
     local_authority_shadow_file: bool = False,
     clear_local_authority_shadow: bool = False,
+    coordination_runtime_shadow_file: bool = False,
+    clear_coordination_runtime_shadow: bool = False,
     waiting_on: str | None = None,
     clear_waiting_on: bool = False,
     boundary_authority_scopes: list[str] | None = None,
@@ -547,9 +549,8 @@ def configure_goal(
         raise ValueError(
             "--clear-write-scope cannot be combined with --replace-write-scope"
         )
-    shadow.validate_local_authority_shadow_change(
-        local_authority_shadow_file, clear_local_authority_shadow
-    )
+    shadow.validate_coordination_shadow_changes(
+        local_authority_shadow_file, clear_local_authority_shadow, coordination_runtime_shadow_file, clear_coordination_runtime_shadow)
     if clear_waiting_on and waiting_on:
         raise ValueError("--clear-waiting-on cannot be combined with --waiting-on")
     adding_boundary_authority = any(
@@ -1208,9 +1209,8 @@ def configure_goal(
             coordination["checkpointed_boundary_authority"] = [*entries, entry]
         goal["coordination"] = coordination
 
-    shadow.apply_local_authority_shadow_change(
-        goal, local_authority_shadow_file, clear_local_authority_shadow
-    )
+    shadow.apply_coordination_shadow_changes(
+        goal, local_authority_shadow_file, clear_local_authority_shadow, coordination_runtime_shadow_file, clear_coordination_runtime_shadow)
     after = _settings_summary(goal)
     changed_fields = _changed_fields(before, after)
     if goal != before_goal and not changed_fields:
@@ -1254,6 +1254,7 @@ def configure_goal(
             after.get("peer_task_coordination") or {"enabled": False}
         ),
         "local_authority_shadow": deepcopy(after["local_authority_shadow"]),
+        "coordination_runtime_shadow": deepcopy(after["coordination_runtime_shadow"]),
         "lark_event_inbox": _lark_event_inbox_config_summary(goal),
         "lark_kanban_heartbeat_sync": _lark_kanban_heartbeat_config_summary(goal),
         "reward_memory": reward_memory_goal_policy_summary(goal),

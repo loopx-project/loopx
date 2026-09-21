@@ -178,6 +178,7 @@ def test_apply_ssh_goal_lifecycle_uses_remote_typed_contract_without_local_fallb
     argv = run.call_args.args[0]
     assert argv[:4] == ["ssh", "-o", "ConnectTimeout=5", "ark-devbox"]
     assert "goal-lifecycle" in argv[4]
+    assert "--actor-kind owner" in argv[4]
     assert '"$HOME/.codex/loopx/registry.global.json"' in argv[4]
     assert result == {
         "ok": True,

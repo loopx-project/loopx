@@ -31,6 +31,7 @@ for (const [fault, source, reason] of [
   test(`selected provider ${fault} has accurate failure across runtime entrypoints and no fallback`, async t => {
     const directory = await root(t);
     await writeFile(join(directory, "registry.json"), "{}");
+    await writeFile(join(directory, "ACTIVE_GOAL_STATE.md"), "# Synthetic source\n");
     await selectLocalSqliteAuthority(directory, "goal-a", true);
     const store = await openLocalAuthorityStore(directory, "goal-a");
     assert.ok(store instanceof SqliteAuthorityStore);
@@ -78,7 +79,6 @@ for (const [fault, source, reason] of [
     // Even an existing fence cannot be claimed as verified if opening fails
     // first. Its independent existence does not replace this call's readback.
     const promotion = promotionRequest(directory, {}, "file:synthetic:1");
-    await writeFile(join(directory, "ACTIVE_GOAL_STATE.md"), "# Synthetic source\n");
     await engageFence(promotion);
     const fenced = await loadLegacyCoordinationWriterFence(directory, "goal-a");
     assert.equal(fenced.status, "loaded");
@@ -129,6 +129,25 @@ function providerCalls(directory: string, revision: string, dryRun: boolean) {
     archiveLocalCoordinationTodos: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_ARCHIVE_REQUEST_SCHEMA, max_active_done: 0}],
     acknowledgeLocalCoordinationTodoArchive: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_ARCHIVE_ACK_REQUEST_SCHEMA}],
     promoteLocalCoordinationAuthority: [promotionRequest(directory, {}, "file:synthetic:1")],
+    reviewLocalCoordinationAuthorityPromotion: [{
+      schema_version: runtime.LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
+      runtime_root: directory,
+      goal_id: "goal-a",
+      operation_id: "promote:goal-a:reviewed",
+      projection: {},
+      source_snapshot: {
+        state_path: join(directory, "ACTIVE_GOAL_STATE.md"),
+        registered_runtime_root: directory,
+        registered_state_path: join(directory, "ACTIVE_GOAL_STATE.md"),
+        state_bytes_sha256: `sha256:${"0".repeat(64)}`,
+        lease_inventory: [],
+        projection_sha256: `sha256:${"0".repeat(64)}`,
+        evidence_files: [],
+      },
+      minimum_operations: 1,
+      required_event_kinds: [],
+      execute: !dryRun,
+    }],
     pollLocalCoordinationMonitor: [
       {...input, schema_version: "loopx_coordination_monitor_poll_request_v0", observation: {}, intent: {}},
       {...witnessed, schema_version: "loopx_coordination_monitor_poll_request_v2", observation: {}, intent: {}}],

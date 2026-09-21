@@ -137,7 +137,7 @@ CASES = [
          "tests/control_plane_ts/shadow_management.test.ts", 'management manifest hash'),
     Case('management_phase', ((COORDINATION + "shadow_management.ts", replacement('operation.kind !== kind || !phases.includes(String(operation.phase))', 'operation.kind !== kind')),),
          "tests/control_plane_ts/shadow_management.test.ts", 'management phase validation'),
-    Case('management_goal_binding', ((COORDINATION + "shadow_management.ts", replacement('value.goal_id !== goal || ', '')),),
+    Case('management_goal_binding', ((COORDINATION + "shadow_management.ts", replacement(' || value.goal_id !== goal\n      || ', '\n      || ')),),
          "tests/control_plane_ts/shadow_management.test.ts", 'management goal binding'),
     Case('management_candidate_lineage', ((COORDINATION + "shadow_management.ts", replacement('candidate.capture_lineage_id !== expectedLineage', 'false')),),
          "tests/control_plane_ts/shadow_management.test.ts", 'rollback refuses a different valid candidate lineage'),

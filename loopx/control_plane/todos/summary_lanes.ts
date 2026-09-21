@@ -8,7 +8,9 @@ export const TODO_SUMMARY_LANES = [
   "open_items", "terminal_items", "deferred_items", "done_items", "projected_open_items",
   "projected_deferred_items", "budgeted_items", "claimed_open_items", "unclaimed_open_items",
   "executable_items", "blocker_items", "resume_blocked_items", "monitor_items",
-  "monitor_due_items", "monitor_schedule_gap_items", "claimed_advancement_items",
+  "monitor_due_items", "watch_only_monitor_items", "watch_only_monitor_due_items",
+  "non_watch_only_monitor_due_items", "convergent_open_items",
+  "monitor_schedule_gap_items", "claimed_advancement_items",
   "claimed_monitor_items", "active_next_action_items", "active_next_action_executable_items",
 ] as const;
 export type TodoSummaryLane = typeof TODO_SUMMARY_LANES[number];
@@ -82,6 +84,9 @@ export function projectTodoSummaryLanes(value: unknown): JsonObject {
   const monitors = ordered.filter(row => row.actionable && row.taskClass === "continuous_monitor");
   const activeMonitor = (row: Row) => row.expiresAt === null || row.expiresAt > now;
   const due = monitors.filter(row => activeMonitor(row) && row.dueAt !== null && row.dueAt <= now);
+  const watchOnlyMonitors = monitors.filter(row => row.watchOnly);
+  const watchOnlyDue = due.filter(row => row.watchOnly);
+  const nonWatchOnlyDue = due.filter(row => !row.watchOnly);
   const missing = monitors.filter(row => activeMonitor(row) && !row.watchOnly && row.dueAt === null);
   const selected = {
     open_items: open, terminal_items: terminal, deferred_items: deferred, done_items: done,
@@ -90,7 +95,11 @@ export function projectTodoSummaryLanes(value: unknown): JsonObject {
     unclaimed_open_items: ordered.filter(row => !row.claim), executable_items: executable,
     blocker_items: ordered.filter(row => row.status === "blocked" && row.taskClass === "blocker"),
     resume_blocked_items: ordered.filter(row => row.resumeBlocked), monitor_items: monitors,
-    monitor_due_items: due, monitor_schedule_gap_items: missing,
+    monitor_due_items: due, watch_only_monitor_items: watchOnlyMonitors,
+    watch_only_monitor_due_items: watchOnlyDue,
+    non_watch_only_monitor_due_items: nonWatchOnlyDue,
+    convergent_open_items: open.filter(row => !(row.taskClass === "continuous_monitor" && row.watchOnly)),
+    monitor_schedule_gap_items: missing,
     claimed_advancement_items: executable.filter(row => row.claim), claimed_monitor_items: monitors.filter(row => row.claim),
     active_next_action_items: ordered.filter(row => row.preferred),
     active_next_action_executable_items: executable.filter(row => row.preferred),

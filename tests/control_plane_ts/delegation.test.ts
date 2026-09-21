@@ -58,6 +58,7 @@ test("preflight separates task admission, acceptance binding and runtime availab
     managed_executor: {executor: "dsh", available: true, unavailable_reason: null, execution_profile: "explicit-profile"}};
   const params = {binding, preview, validation_files_current: true, acceptance: {todo_id: "todo_review", state: "ready"}};
   assert.equal(delegationPreflight(params).state, "launchable");
+  assert.equal(delegationPreflight(params).authority_state, "promoted");
   for (const [available, expected] of [[null, "runtime_unverified"], [false, "runtime_unavailable"]] as const) {
     assert.equal(delegationPreflight({...params, preview: {...preview,
       managed_executor: {...preview.managed_executor, available}}}).state, expected);
@@ -94,10 +95,19 @@ test("preflight reports unavailable canonical authority without pretending to in
   acceptance: null, validation_files_current: false});
   assert.equal(result.state, "authority_unavailable");
   assert.equal(result.authority_ready, false);
+  assert.equal(result.authority_state, "unavailable");
+  assert.equal(result.authority_next_action, "repair_canonical_authority");
+  assert.equal(result.promotion_from_surface_allowed, false);
   assert.equal(result.turn_eligible, false);
   assert.equal(result.executor, null);
   assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
   assert.match(String(result.authority_reason), /canonical authority/);
+  const legacy = delegationPreflight({binding, authority: {ready: false,
+    reason: "canonical authority absent", state: "promotion_required",
+    next_action: "preview_reviewed_goal_authority_promotion"}, preview: null,
+  acceptance: null, validation_files_current: false});
+  assert.equal(legacy.authority_state, "promotion_required");
+  assert.equal(legacy.authority_next_action, "preview_reviewed_goal_authority_promotion");
   assert.throws(() => delegationPreflight({binding, authority: {ready: false, reason: "missing"},
     preview: {}, acceptance: null, validation_files_current: false}));
 });

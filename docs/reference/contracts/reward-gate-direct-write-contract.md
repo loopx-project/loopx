@@ -63,6 +63,8 @@ Browser append is allowed only when all of these are true:
 
 Successful append writes one run-bound `human_reward` overlay row. Active state
 may carry a summary, but the run overlay remains the durable source of truth.
+The CLI requires `--actor-kind owner|controller`; the opt-in loopback adapter
+records `owner` for its reviewed preview/apply path.
 
 ## Operator Gate
 

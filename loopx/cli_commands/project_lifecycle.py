@@ -7,6 +7,7 @@ from pathlib import Path
 from ..control_plane.capability_hooks import (
     PostWritebackHookRegistration,
 )
+from ..control_plane.actor_identity import OWNER_CONTROLLER_ACTOR_CHOICES
 from ..feedback import (
     LESSON_KINDS,
     append_human_reward,
@@ -103,6 +104,14 @@ def register_project_lifecycle_commands(
         help="Exact run generated_at timestamp. Defaults to the latest compact run for the goal.",
     )
     reward_parser.add_argument("--recorded-at", help="Reward timestamp. Defaults to current UTC time.")
+    reward_parser.add_argument(
+        "--actor-kind",
+        choices=OWNER_CONTROLLER_ACTOR_CHOICES,
+        help=(
+            "Explicit non-Agent actor for the durable append. Anonymous dry-run "
+            "remains available when this option is omitted."
+        ),
+    )
     reward_parser.add_argument("--decision", required=True, help="Operator decision label, such as continue_route.")
     reward_parser.add_argument(
         "--reward",
@@ -265,6 +274,7 @@ def handle_project_lifecycle_command(
                 goal_id=args.goal_id,
                 run_generated_at=args.run_generated_at,
                 reward=reward,
+                actor_kind=args.actor_kind,
                 dry_run=bool(args.dry_run),
                 state_file_override=Path(args.state_file).expanduser() if args.state_file else None,
                 write_active_state_summary=bool(args.write_active_state_summary),

@@ -16,8 +16,8 @@ function todoRecord(overrides: Record<string, unknown> = {}) {
 }
 
 // Build a mirrored shadow fixture; this does not authorize promotion.
-export async function qualifiedShadow(root: string) {
-  const baseline = fileProjection([todoRecord()], [], "soft_claim");
+export async function qualifiedShadow(root: string, handoffMode = "soft_claim") {
+  const baseline = fileProjection([todoRecord()], [], handoffMode);
   const statePath = join(root, "ACTIVE_GOAL_STATE.md");
   await writeFile(statePath, "---\ngoal_id: goal-a\nhandoff_mode: soft_claim\n---\n\n## Agent Todo\n\n");
   const store = new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), "goal-a");
@@ -28,7 +28,7 @@ export async function qualifiedShadow(root: string) {
     operation_id: "bootstrap:goal-a:state-0", source_version: "state:0",
   });
   assert.equal(bootstrapped.status, "applied", JSON.stringify(bootstrapped));
-  const entry = await pendingEntry(f, 1, {handoff_mode: "soft_claim", todos: [todoRecord({claimed_by: "agent-a"})]},
+  const entry = await pendingEntry(f, 1, {handoff_mode: handoffMode, todos: [todoRecord({claimed_by: "agent-a"})]},
     {writeClass: "todo_claim"});
   const mirrored = await commitLocalAuthorityShadowEntry(entry);
   assert.equal(mirrored.outcome, "delivered", JSON.stringify(mirrored));

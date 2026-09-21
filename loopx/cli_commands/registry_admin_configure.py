@@ -330,6 +330,22 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         ),
     )
     configure_goal_parser.add_argument(
+        "--coordination-runtime-shadow-file",
+        action="store_true",
+        help=(
+            "Enable the default-off transaction-bound FileAuthorityStore shadow "
+            "used by coordination-shadow qualification and reviewed promotion."
+        ),
+    )
+    configure_goal_parser.add_argument(
+        "--clear-coordination-runtime-shadow",
+        action="store_true",
+        help=(
+            "Disable transaction-bound coordination shadow capture. Retained "
+            "shadow evidence is not deleted."
+        ),
+    )
+    configure_goal_parser.add_argument(
         "--waiting-on",
         choices=["codex", "user_or_controller", "controller", "external_evidence"],
         help="Override registry waiting owner for status/quota routing.",

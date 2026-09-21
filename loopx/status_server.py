@@ -348,6 +348,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
             goal_id=goal_id,
             run_generated_at=run_generated_at,
             reward=reward,
+            actor_kind="owner",
             dry_run=True,
             write_active_state_summary=(
                 _json_boolean(body, "write_active_state_summary", default=True)
@@ -428,6 +429,7 @@ class StatusRequestHandler(BaseHTTPRequestHandler):
                 goal_id=goal_id,
                 run_generated_at=run_generated_at,
                 reward=reward,
+                actor_kind="owner",
                 dry_run=False,
                 write_active_state_summary=_json_boolean(
                     body, "write_active_state_summary", default=True

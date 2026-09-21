@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "loopx" / "cli.py"
 MODULE = ROOT / "loopx" / "cli_commands" / "project_lifecycle.py"
+PROJECT_SKILL = ROOT / "skills" / "loopx-project" / "SKILL.md"
 # The `refresh-state` command owns its own module since #4521, so the markers
 # that belong to that command are required there instead of in the dispatcher.
 REFRESH_MODULE = ROOT / "loopx" / "cli_commands" / "project_lifecycle_refresh_state.py"
@@ -164,6 +165,18 @@ def main() -> None:
     cli_source = CLI.read_text(encoding="utf-8")
     module_source = MODULE.read_text(encoding="utf-8")
     init_source = INIT.read_text(encoding="utf-8")
+    project_skill = PROJECT_SKILL.read_text(encoding="utf-8")
+    reward_skill = project_skill.split("## Record Human Reward", 1)[1].split(
+        "## Multi-Project Status", 1
+    )[0]
+
+    for marker in (
+        "--dry-run",
+        "--actor-kind owner",
+        "--actor-kind controller",
+        "Never infer",
+    ):
+        require(marker in reward_skill, f"project skill reward flow omitted {marker}")
 
     forbidden_cli_markers = [
         "refresh_state_parser = sub.add_parser",
@@ -218,7 +231,7 @@ def main() -> None:
             "--dry-run",
         ),
         "read-only-map": ("--recommended-action", "--dry-run"),
-        "reward": ("--write-active-state-summary", "--lesson-kind", "--lesson-avoid", "--dry-run"),
+        "reward": ("--actor-kind", "--write-active-state-summary", "--lesson-kind", "--lesson-avoid", "--dry-run"),
         "operator-gate": ("--agent-command", "--no-global-sync"),
     }.items():
         help_text = require_success(run_cli(command, "--help"))
@@ -320,6 +333,53 @@ def main() -> None:
             "reward lesson avoid changed",
         )
 
+        rejected_reward = run_cli(
+            *command_prefix,
+            "reward",
+            "--goal-id",
+            GOAL_ID,
+            "--decision",
+            "continue_route",
+            "--reward",
+            "positive",
+            "--reason-summary",
+            "synthetic durable reward",
+            "--format",
+            "json",
+        )
+        require(rejected_reward.returncode == 1, "anonymous durable reward should fail")
+        rejected_payload = json.loads(rejected_reward.stdout)
+        require(
+            "actor kind is required" in str(rejected_payload.get("error") or ""),
+            f"anonymous durable reward returned the wrong error: {rejected_payload}",
+        )
+        require(index_path.read_text(encoding="utf-8") == before_index, "rejected reward mutated run index")
+
+        durable_reward = require_json_success(
+            run_cli(
+                *command_prefix,
+                "reward",
+                "--goal-id",
+                GOAL_ID,
+                "--actor-kind",
+                "owner",
+                "--decision",
+                "continue_route",
+                "--reward",
+                "positive",
+                "--reason-summary",
+                "synthetic durable reward",
+                "--format",
+                "json",
+            )
+        )
+        require(durable_reward.get("actor_kind") == "owner", "durable reward lost its actor")
+        persisted_reward = json.loads(index_path.read_text(encoding="utf-8").splitlines()[-1])
+        require(
+            (persisted_reward.get("human_reward") or {}).get("actor_kind") == "owner",
+            "durable reward index row lost its actor",
+        )
+
         gate_payload = require_json_success(
             run_cli(
                 *command_prefix,
@@ -344,7 +404,10 @@ def main() -> None:
             (gate_payload.get("operator_gate") or {}).get("decision") == "defer",
             "operator-gate decision changed",
         )
-        require(index_path.read_text(encoding="utf-8") == before_index, "dry-run commands mutated run index")
+        require(
+            len(index_path.read_text(encoding="utf-8").splitlines()) == 2,
+            "project lifecycle smoke wrote an unexpected number of run rows",
+        )
 
     print("cli-project-lifecycle-command-modularization-smoke: ok")
 

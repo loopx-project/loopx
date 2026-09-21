@@ -114,7 +114,9 @@
     "todo_list_result_schema": "loopx_local_coordination_todo_list_result_v0",
     "promotion_request_schema": "loopx_local_coordination_promotion_request_v0",
     "promotion_result_schema": "loopx_local_coordination_promotion_result_v0",
-    "promotion_receipt_schema": "loopx_local_coordination_promotion_receipt_v0"
+    "promotion_receipt_schema": "loopx_local_coordination_promotion_receipt_v0",
+    "promotion_review_request_schema": "loopx_local_coordination_promotion_review_request_v0",
+    "promotion_review_result_schema": "loopx_local_coordination_promotion_review_result_v0"
   },
   "runtime_shadow_protocol": {
     "commit_request_schema": "loopx_coordination_runtime_shadow_commit_v0",

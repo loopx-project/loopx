@@ -67,6 +67,8 @@ def apply_ssh_goal_lifecycle(
             shlex.quote(normalized_goal_id),
             "--operation",
             normalized_operation,
+            "--actor-kind",
+            "owner",
             "--reason",
             shlex.quote(normalized_reason),
             "--execute",

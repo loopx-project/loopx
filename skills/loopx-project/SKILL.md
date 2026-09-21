@@ -968,11 +968,15 @@ loopx reward \
   --dry-run
 ```
 
-Only after the user has explicitly approved recording the reward, rerun without
-`--dry-run`. The durable source of truth is still the run-bound
-`human_reward` overlay. The active-state writeback is a `Progress Ledger`
-summary for future agents; project agents should read the reward through the
-returned `project_agent_visibility.history_command`.
+The preview may stay anonymous. Only after the user has explicitly approved
+recording the reward, rerun without `--dry-run` and add exactly one reviewed
+actor classification: `--actor-kind owner` for the owner's judgment or
+`--actor-kind controller` for an authorized controller's judgment. Never infer
+that classification from the process, Agent id, or command defaults. The
+durable source of truth is still the run-bound `human_reward` overlay. The
+active-state writeback is a `Progress Ledger` summary for future agents;
+project agents should read the reward through the returned
+`project_agent_visibility.history_command`.
 
 ## Multi-Project Status
 

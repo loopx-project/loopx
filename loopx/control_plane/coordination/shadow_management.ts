@@ -1,5 +1,6 @@
 /** Durable, per-goal shadow lifecycle. The journal never grants decision authority. */
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
@@ -52,8 +53,22 @@ export class ShadowManagementError extends Error {
     this.payload = { status: "blocked", reason_code: code };
   }
 }
+function canonicalSourceRoot(root: string): string {
+  const lexical = resolve(root);
+  try { return realpathSync(lexical); } catch { return lexical; }
+}
+function sourceRootDigests(root: string): Set<string> {
+  return new Set([resolve(root), canonicalSourceRoot(root)].map(path =>
+    `sha256:${createHash("sha256").update(path, "utf8").digest("hex")}`));
+}
 export function shadowSourceRootDigest(root: string): string {
-  return `sha256:${createHash("sha256").update(resolve(root), "utf8").digest("hex")}`;
+  return `sha256:${createHash("sha256").update(canonicalSourceRoot(root), "utf8").digest("hex")}`;
+}
+function validSourceRootDigest(value: unknown, root: string): value is string {
+  return typeof value === "string" && sourceRootDigests(root).has(value);
+}
+function sameSourceRoot(left: string, right: string): boolean {
+  return canonicalSourceRoot(left) === canonicalSourceRoot(right);
 }
 export function shadowManagementDirectory(root: string, goal: string): string {
   const digest = createHash("sha256").update(goal, "utf8").digest("hex").slice(0, 16);
@@ -84,8 +99,9 @@ function validBinding(value: unknown, digest: string): value is ShadowCaptureBin
 function decodeState(value: unknown, root: string, goal: string): ShadowManagementState {
   const fail = () => { throw new ShadowManagementError("shadow_management_state_invalid"); };
   if (!exact(value, ["schema_version", "goal_id", "source_root_digest", "status", "binding", "operation", "previous_operation_id", "result"])) return fail();
-  const digest = shadowSourceRootDigest(root);
-  if (value.schema_version !== SHADOW_MANAGEMENT_STATE_SCHEMA || value.goal_id !== goal || value.source_root_digest !== digest) return fail();
+  if (value.schema_version !== SHADOW_MANAGEMENT_STATE_SCHEMA || value.goal_id !== goal
+      || !DIGEST.test(String(value.source_root_digest))) return fail();
+  const digest = String(value.source_root_digest);
   if (!["bootstrapping", "active", "rolling_back", "inactive"].includes(String(value.status))) return fail();
   const operation = value.operation;
   if (!exact(operation, ["kind", "operation_id", "request_digest", "manifest_digest", "phase"]) || !text(operation.operation_id)
@@ -109,7 +125,29 @@ async function readJson(path: string): Promise<JsonObject | null> {
 export async function readShadowManagementState(root: string, goal: string): Promise<ShadowManagementState | null> {
   try {
     const value = await readJson(shadowManagementStatePath(root, goal));
-    return value === null ? null : decodeState(value, root, goal);
+    if (value === null) return null;
+    const state = decodeState(value, root, goal);
+    if (!validSourceRootDigest(state.source_root_digest, root)) {
+      const locator: ManagementRequest = {
+        runtime_root: root,
+        goal_id: goal,
+        operation_id: String(state.operation.operation_id),
+      };
+      const manifest = await readJson(manifestPath(locator));
+      if (!manifest || managementDigest(manifest) !== state.operation.manifest_digest
+          || manifest.source_root_digest !== state.source_root_digest
+          || manifest.request_digest !== state.operation.request_digest
+          || !isAuthorityJsonObject(manifest.request)) {
+        throw new ShadowManagementError("shadow_management_state_invalid");
+      }
+      const original = requestOf(manifest.request);
+      if (original.goal_id !== goal || original.operation_id !== state.operation.operation_id
+          || requestDigest(original) !== manifest.request_digest
+          || !sameSourceRoot(original.runtime_root, root)) {
+        throw new ShadowManagementError("shadow_management_state_invalid");
+      }
+    }
+    return state;
   } catch (error) {
     if (error instanceof ShadowManagementError) throw error;
     throw new ShadowManagementError("shadow_management_state_invalid");
@@ -149,7 +187,7 @@ export async function readShadowBootstrapSourcePath(root: string, goal: string, 
       || manifest.request_digest !== state.operation.request_digest
       || !isAuthorityJsonObject(manifest.request)) return invalid();
   const request = manifest.request;
-  if (request.runtime_root !== root || request.goal_id !== goal || request.operation_id !== binding.bootstrap_operation_id
+  if (!sameSourceRoot(String(request.runtime_root), root) || request.goal_id !== goal || request.operation_id !== binding.bootstrap_operation_id
       || requestDigest(request as ManagementRequest) !== manifest.request_digest
       || !isAuthorityJsonObject(request.source_snapshot)) return invalid();
   const path = request.source_snapshot.state_path;
@@ -270,7 +308,7 @@ async function loadManifest(request: ManagementRequest, state: { operation: Json
       || manifest.schema_version !== SHADOW_MANAGEMENT_MANIFEST_SCHEMA
       || manifest.kind !== ("expected_provider_revision" in request ? "rollback" : "bootstrap")
       || manifest.goal_id !== request.goal_id || manifest.operation_id !== request.operation_id
-      || manifest.source_root_digest !== shadowSourceRootDigest(request.runtime_root)
+      || !validSourceRootDigest(manifest.source_root_digest, request.runtime_root)
       || manifest.request_digest !== requestDigest(request)
       || !isAuthorityJsonObject(manifest.request)
       || manifest.request.runtime_root !== request.runtime_root || manifest.request.goal_id !== request.goal_id
@@ -334,7 +372,9 @@ async function validateReplayResult(request: ManagementRequest, manifest: JsonOb
 function initialState(request: ManagementRequest, kind: "bootstrap" | "rollback", manifest: JsonObject, prior: ShadowManagementState | null): ShadowManagementState {
   return {
     schema_version: SHADOW_MANAGEMENT_STATE_SCHEMA, goal_id: request.goal_id,
-    source_root_digest: shadowSourceRootDigest(request.runtime_root),
+    source_root_digest: kind === "rollback" && prior
+      ? prior.source_root_digest
+      : shadowSourceRootDigest(request.runtime_root),
     status: kind === "bootstrap" ? "bootstrapping" : "rolling_back",
     binding: kind === "rollback" ? prior?.binding ?? null : null,
     operation: { kind, operation_id: request.operation_id, request_digest: requestDigest(request), manifest_digest: managementDigest(manifest), phase: "prepared" },
@@ -432,7 +472,8 @@ export async function bootstrapManagedShadow(value: unknown, dependencies: Shado
           await effect(dependencies, "bootstrap_prepared");
         }
         const lineage = String(manifest.capture_lineage_id);
-        const projection: JsonObject = { ...canonicalAuthorityObject(request.projection, "projection"), capture_profile: SHADOW_CAPTURE_PROFILE, capture_lineage_id: lineage, source_root_digest: shadowSourceRootDigest(request.runtime_root) };
+        const sourceRootDigest = String(manifest.source_root_digest);
+        const projection: JsonObject = { ...canonicalAuthorityObject(request.projection, "projection"), capture_profile: SHADOW_CAPTURE_PROFILE, capture_lineage_id: lineage, source_root_digest: sourceRootDigest };
         const event: JsonObject = {
           schema_version: "loopx_coordination_runtime_shadow_bootstrap_event_v0", operation_id: request.operation_id,
           source_version: request.source_version, source_projection_sha256: canonicalAuthoritySha256(projection),
@@ -454,7 +495,7 @@ export async function bootstrapManagedShadow(value: unknown, dependencies: Shado
         if (identity.status !== "available") throw new ShadowManagementError(identity.reason_code);
         const binding: ShadowCaptureBinding = {
           capture_profile: SHADOW_CAPTURE_PROFILE, capture_lineage_id: lineage,
-          source_root_digest: shadowSourceRootDigest(request.runtime_root), store_identity: identity.store_identity,
+          source_root_digest: sourceRootDigest, store_identity: identity.store_identity,
           bootstrap_operation_id: request.operation_id, bootstrap_provider_revision: loaded.provider_revision,
         };
         await effect(dependencies, "bootstrap_candidate_committed");
@@ -512,7 +553,7 @@ export async function rollbackManagedShadow(value: unknown, dependencies: Shadow
             const expectedLineage = state.binding?.capture_lineage_id ?? bootstrapManifest?.capture_lineage_id;
             const expectedBootstrap = state.binding?.bootstrap_operation_id ?? bootstrapManifest?.operation_id;
             if (candidate.capture_profile !== SHADOW_CAPTURE_PROFILE || candidate.capture_lineage_id !== expectedLineage
-                || candidate.source_root_digest !== shadowSourceRootDigest(request.runtime_root)
+                || candidate.source_root_digest !== state.source_root_digest
                 || candidate.bootstrap_operation_id !== expectedBootstrap
                 || (state.binding && (candidate.store_identity !== state.binding.store_identity
                   || candidate.bootstrap_provider_revision !== state.binding.bootstrap_provider_revision))) {
@@ -523,7 +564,7 @@ export async function rollbackManagedShadow(value: unknown, dependencies: Shadow
           await retainTerminal(request, state);
           manifest = {
             schema_version: SHADOW_MANAGEMENT_MANIFEST_SCHEMA, kind: "rollback", goal_id: request.goal_id,
-            operation_id: request.operation_id, source_root_digest: shadowSourceRootDigest(request.runtime_root),
+            operation_id: request.operation_id, source_root_digest: state.source_root_digest,
             request_digest: requestDigest(request), request,
             predecessor_operation_id: state.operation.operation_id, prior_binding: state.binding,
             candidate, outbox: pending, aborted_bootstrap: bootstrapManifest,

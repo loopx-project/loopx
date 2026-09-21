@@ -75,11 +75,15 @@ _CALLBACK_FAILURE_CODES = {
 _CALLBACK_FAILURE_STAGES = {
     "_callback_action": "parse_action",
     "_callback_timestamp": "validate_timestamp",
+    "callback_timestamp": "validate_timestamp",
     "_callback_card_content_matches": "verify_card_content",
+    "callback_card_content_matches": "verify_card_content",
     "_operator_membership_verified": "verify_operator_membership",
+    "operator_membership_verified": "verify_operator_membership",
     "decide_operation": "claim_operation",
     "_execute_claimed_operation": "execute_operation",
     "_update_callback_card": "deliver_result",
+    "update_callback_card": "deliver_result",
 }
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 Sleeper = Callable[[float], None]

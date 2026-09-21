@@ -573,11 +573,16 @@ editing the run JSON by hand:
 ```bash
 loopx reward \
   --goal-id project-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending" \
   --follow-up "promote to the next longer-window check"
 ```
+
+Durable reward writes require an explicit `--actor-kind owner` or
+`--actor-kind controller`; `--dry-run` remains available without an actor.
+The selected kind is stored with the run-bound overlay.
 
 By default the command attaches feedback to the latest compact run for the
 goal. Pass `--run-generated-at <timestamp>` to target an older run. The writer
@@ -604,6 +609,7 @@ overlay instead of creating a separate memory store:
 ```bash
 loopx reward \
   --goal-id project-goal \
+  --actor-kind owner \
   --decision route_correction \
   --reward mixed \
   --reason-summary "fix lifecycle counters before adding more benchmark cases" \
@@ -629,6 +635,7 @@ the durable loop in one CLI call:
 ```bash
 loopx reward \
   --goal-id project-goal \
+  --actor-kind owner \
   --decision continue_route \
   --reward positive \
   --reason-summary "comparable validation improved and the route is worth extending" \

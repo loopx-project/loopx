@@ -337,6 +337,15 @@ def test_reward_memory_goal_editor_reuses_the_capability_owned_configurator() ->
     }
 
 
+def test_coordination_runtime_shadow_editor_uses_the_transaction_bound_owner() -> None:
+    assert _goal_capability_options(
+        "coordination_runtime_shadow", {"enabled": True}
+    ) == {"coordination_runtime_shadow_file": True}
+    assert _goal_capability_options(
+        "coordination_runtime_shadow", {"enabled": False}
+    ) == {"clear_coordination_runtime_shadow": True}
+
+
 def test_goal_configuration_inspection_requires_one_goal_id() -> None:
     handler = _Handler(CHAT_GOAL_CONFIGURATION_PATH, _catalog_payload())
     handler._goal_configuration_inspect()

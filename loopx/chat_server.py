@@ -1490,6 +1490,7 @@ def serve_chat(
         ),
         runtime_root=runtime_root,
         runtime_controller=server.runtime_controller,
+        action_service=server.action_service,
         manager_route_reconciler=lambda route: reconcile_lark_manager_route(
             route=route,
             registry_path=server.registry_path,

@@ -17,6 +17,7 @@ from ..control_plane.coordination.runtime_shadow import (  # noqa: F401
     load_task_lease_runtime_shadow_records,
     qualify_coordination_runtime_shadow,
     read_coordination_runtime_shadow_todo_candidate,
+    review_local_coordination_authority_promotion,
     resolve_coordination_runtime_shadow_config,
     rollback_coordination_runtime_shadow,
 )
@@ -55,6 +56,10 @@ def register_coordination_shadow_command(
             "Read one Todo from a freshly qualified bounded file shadow.",
         ),
         (
+            "promote",
+            "Preview or explicitly apply the reviewed whole-Goal coordination-authority cutover.",
+        ),
+        (
             "bootstrap",
             "Import the current legacy projection into an empty file shadow.",
         ),
@@ -64,7 +69,7 @@ def register_coordination_shadow_command(
         action.add_argument("--goal-id", required=True)
         action.add_argument("--project", type=Path)
         action.add_argument("--state-file", type=Path)
-        if name in {"bootstrap", "rollback"}:
+        if name in {"bootstrap", "rollback", "promote"}:
             action.add_argument(
                 "--execute",
                 action="store_true",
@@ -83,6 +88,19 @@ def register_coordination_shadow_command(
                 type=int,
                 default=3,
                 help="Minimum verified primary mutations in this bounded lineage (default: 3).",
+            )
+            action.add_argument(
+                "--require-event-kind",
+                action="append",
+                default=[],
+                help="Required verified outbox write class; repeat for multiple classes.",
+            )
+        if name == "promote":
+            action.add_argument(
+                "--minimum-operations",
+                type=int,
+                default=3,
+                help="Minimum verified primary mutations in the selected lineage (default: 3).",
             )
             action.add_argument(
                 "--require-event-kind",
@@ -143,6 +161,15 @@ def _render(payload: dict[str, object]) -> str:
             [
                 f"- read_candidate: `{read_candidate.get('status')}`",
                 f"- read_candidate_qualified: `{read_candidate.get('read_candidate_qualified')}`",
+            ]
+        )
+    promotion = payload.get("promotion")
+    if isinstance(promotion, dict):
+        lines.extend(
+            [
+                f"- promotion: `{promotion.get('status')}`",
+                f"- promotion_ready: `{promotion.get('promotion_ready')}`",
+                f"- legacy_writer_fenced: `{promotion.get('legacy_writer_fenced')}`",
             ]
         )
     bounded = qualification if isinstance(qualification, dict) else read_candidate
@@ -301,6 +328,34 @@ def handle_coordination_shadow_command(
                 and read_candidate.get("read_candidate_qualified") is True
                 and read_candidate.get("decision_read_from_shadow") is False
             )
+        if args.coordination_shadow_command == "promote":
+            operation_digest = _projection_version(
+                {
+                    "goal_id": args.goal_id,
+                    "projection": projection,
+                    "minimum_operations": args.minimum_operations,
+                    "required_event_kinds": args.require_event_kind,
+                }
+            )
+            promotion = review_local_coordination_authority_promotion(
+                goal=goal,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                operation_id=f"promote:{args.goal_id}:{operation_digest}",
+                projection=projection,
+                source_snapshot=source_snapshot,
+                minimum_operations=args.minimum_operations,
+                required_event_kinds=args.require_event_kind,
+                execute=bool(args.execute),
+            )
+            payload["executed"] = bool(args.execute)
+            payload["promotion"] = promotion
+            payload["ok"] = promotion.get("status") in {
+                "preview_ready",
+                "applied",
+                "replayed",
+                "recovered",
+            }
         if args.coordination_shadow_command == "rollback":
             provider_revision = getattr(args, "provider_revision", None)
             pending_bootstrap = getattr(args, "bootstrap_operation_id", None)

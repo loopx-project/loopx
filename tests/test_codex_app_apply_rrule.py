@@ -120,6 +120,8 @@ def test_scheduler_hint_replays_parent_turn_without_synthetic_capabilities(
     assert (
         main(
             [
+                "--agent-id",
+                "codex-fixture",
                 "--automations-root",
                 str(tmp_path / "automations"),
                 "--db-path",
@@ -148,13 +150,22 @@ def test_default_app_stores_follow_codex_home_and_capabilities_are_explicit(
     codex_home = tmp_path / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
-    defaults = _parse_args([])
+    defaults = _parse_args(["--agent-id", "codex-fixture"])
     assert defaults.automations_root == codex_home / "automations"
     assert defaults.db_path == codex_home / "sqlite/codex-dev.db"
     assert defaults.capability == []
 
-    explicit = _parse_args(["--capability", "network"])
+    explicit = _parse_args(
+        ["--agent-id", "codex-fixture", "--capability", "network"]
+    )
     assert explicit.capability == ["network"]
+
+
+def test_scheduler_bridge_requires_explicit_agent_identity() -> None:
+    with pytest.raises(SystemExit) as error:
+        _parse_args([])
+
+    assert error.value.code == 2
 
 
 def test_heartbeat_guide_matches_parent_turn_replay_contract() -> None:
@@ -188,6 +199,8 @@ def test_should_run_failure_reports_structured_stdout(
     with pytest.raises(SystemExit) as raised:
         main(
             [
+                "--agent-id",
+                "codex-fixture",
                 "--automations-root",
                 str(tmp_path / "automations"),
                 "--db-path",
@@ -226,6 +239,8 @@ def test_apply_updates_toml_db_and_runs_ack(
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -268,6 +283,8 @@ def test_dry_run_writes_nothing(tmp_path: Path, monkeypatch) -> None:
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",
@@ -309,6 +326,8 @@ def test_no_apply_needed_is_quiet_noop(tmp_path: Path, monkeypatch) -> None:
 
     code = main(
         [
+            "--agent-id",
+            "codex-fixture",
             "--automations-root",
             str(tmp_path / "automations"),
             "--db-path",

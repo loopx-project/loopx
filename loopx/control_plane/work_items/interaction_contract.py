@@ -57,6 +57,11 @@ INTERACTION_CONTRACT_SCHEMA_VERSION = "loopx_interaction_contract_v0"
 INTERACTION_RESPONSE_PLAN_SCHEMA_VERSION = "interaction_response_plan_v0"
 PROTOCOL_ACTION_PACKET_SCHEMA_VERSION = "protocol_action_packet_v0"
 PROTOCOL_ACTION_PACKET_LLM_POLICY = "no_api"
+AUXILIARY_MONITOR_POLL_CLI_SCHEMA_VERSION = "auxiliary_monitor_poll_cli_v0"
+AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION = (
+    "auxiliary_monitor_observation_input_v0"
+)
+AUXILIARY_MONITOR_RESULT_HASH_ENV = "LOOPX_MONITOR_RESULT_HASH"
 
 
 class _InteractionContractRequired(typing.TypedDict):
@@ -1188,6 +1193,15 @@ def _build_interaction_agent_channel(
         "quiet_noop_allowed": quiet_noop_allowed,
     }
     channel.update(build_primary_action_projection(payload, mode=mode))
+    work_lane = (
+        payload.get("work_lane_contract")
+        if isinstance(payload.get("work_lane_contract"), Mapping)
+        else {}
+    )
+    if isinstance(work_lane.get("auxiliary_monitor_poll"), Mapping):
+        channel["auxiliary_monitor_poll"] = dict(
+            work_lane["auxiliary_monitor_poll"]
+        )
     if isinstance(payload.get("action_portfolio"), dict):
         channel["action_portfolio_ref"] = "$.action_portfolio"
     selection.apply_action_selection_agent_gate(channel, payload)
@@ -1308,6 +1322,83 @@ def _build_interaction_cli_channel(
             spend_after_validation=spend_after_selection,
         ),
     }
+    work_lane = (
+        payload.get("work_lane_contract")
+        if isinstance(payload.get("work_lane_contract"), Mapping)
+        else {}
+    )
+    auxiliary_monitor = (
+        work_lane.get("auxiliary_monitor_poll")
+        if isinstance(work_lane.get("auxiliary_monitor_poll"), Mapping)
+        else None
+    )
+    if auxiliary_monitor is not None:
+        selected_monitor_id = normalize_todo_id(
+            auxiliary_monitor.get("selected_todo_id")
+        )
+        try:
+            auxiliary_scheduler_args = render_scheduler_execution_args(
+                scheduler_execution_context=scheduler_execution_context,
+            )
+        except ValueError:
+            auxiliary_scheduler_args = ""
+        if selected_monitor_id:
+            command_prefix = selection.render_cli_command_prefix(
+                runtime_root=runtime_root
+            )
+            agent_identity = (
+                payload.get("agent_identity")
+                if isinstance(payload.get("agent_identity"), dict)
+                else {}
+            )
+            safe_turn_instance_id = str(turn_instance_id or "").strip()
+            auxiliary_projection: dict[str, Any] = {
+                **dict(auxiliary_monitor),
+                "schema_version": AUXILIARY_MONITOR_POLL_CLI_SCHEMA_VERSION,
+                "input_contract": {
+                    "schema_version": (
+                        AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION
+                    ),
+                    "result_hash": {
+                        "required": True,
+                        "environment_variable": AUXILIARY_MONITOR_RESULT_HASH_ENV,
+                        "source": "fresh_external_observation_digest",
+                    },
+                    "material_change": {
+                        "required": True,
+                        "unchanged_command_key": "command",
+                        "changed_command_key": "material_change_command",
+                    },
+                },
+            }
+            if not safe_turn_instance_id:
+                auxiliary_projection.update(
+                    {
+                        "availability": "turn_binding_required",
+                        "reason_code": "auxiliary_monitor_turn_instance_id_missing",
+                    }
+                )
+            else:
+                command = (
+                    f"{command_prefix} quota monitor-poll --goal-id "
+                    f"{shlex.quote(str(payload.get('goal_id') or '<GOAL_ID>'))}"
+                    f"{_scoped_cli_args(agent_identity, available_capabilities=available_capabilities)}"
+                    f"{auxiliary_scheduler_args} --turn-instance-id "
+                    f"{shlex.quote(safe_turn_instance_id)} --todo-id "
+                    f"{shlex.quote(selected_monitor_id)} --result-hash "
+                    f'"${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}"'
+                )
+                auxiliary_projection.update(
+                    {
+                        "availability": "ready",
+                        "turn_instance_id": safe_turn_instance_id,
+                        "command": f"{command} --execute",
+                        "material_change_command": (
+                            f"{command} --material-change --execute"
+                        ),
+                    }
+                )
+            channel["auxiliary_monitor_poll"] = auxiliary_projection
     selection.apply_action_selection_cli_gate(channel, payload)
     if settlement_plan is not None and spend_after_selection:
         channel["settlement_plan"] = settlement_plan

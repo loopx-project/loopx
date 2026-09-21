@@ -147,6 +147,7 @@ def test_stop_orphaned_global_goal_uses_fail_safe_fallback(
         registry_path=global_registry,
         goal_id="orphaned-goal",
         state="stopped",
+        actor_kind="owner",
         execute=True,
     )
 
@@ -181,6 +182,7 @@ def test_resume_orphaned_global_goal_fails_closed(tmp_path: Path) -> None:
             registry_path=global_registry,
             goal_id="orphaned-goal",
             state="active",
+            actor_kind="owner",
             execute=True,
         )
 
@@ -205,6 +207,7 @@ def test_stop_does_not_fallback_for_non_global_registry(tmp_path: Path) -> None:
             registry_path=project_registry,
             goal_id="orphaned-goal",
             state="stopped",
+            actor_kind="owner",
             execute=True,
         )
 
@@ -224,12 +227,14 @@ def test_stop_and_resume_sync_source_global_and_quota(
         goal_id="goal-one",
         state="stopped",
         reason="Owner is reducing the active workspace",
+        actor_kind="owner",
         execute=True,
     )
 
     assert stopped["ok"] is True
     assert stopped["written"] is True
     assert stopped["readback"]["verified"] is True
+    assert _goal(source_registry)["activation"]["actor_kind"] == "owner"
     assert goal_activation_state(_goal(source_registry)) is GoalActivationState.STOPPED
     assert goal_activation_state(_goal(global_registry)) is GoalActivationState.STOPPED
     stopped_quota = quota_status(_goal(global_registry), waiting_on="codex")
@@ -246,6 +251,7 @@ def test_stop_and_resume_sync_source_global_and_quota(
         registry_path=global_registry,
         goal_id="goal-one",
         state="active",
+        actor_kind="owner",
         execute=True,
     )
 
@@ -337,6 +343,7 @@ def test_idempotent_execute_reconciles_drifted_global_projection(
         registry_path=global_registry,
         goal_id="goal-one",
         state="stopped",
+        actor_kind="owner",
         execute=True,
     )
 
@@ -366,6 +373,7 @@ def test_stop_migrates_legacy_projected_activation_state(
         registry_path=global_registry,
         goal_id="goal-one",
         state="stopped",
+        actor_kind="owner",
         execute=True,
     )
 
@@ -416,6 +424,7 @@ def test_delete_stopped_goal_removes_source_and_global(
         registry_path=global_registry,
         goal_id="goal-one",
         state="stopped",
+        actor_kind="owner",
         execute=True,
     )
 
@@ -480,6 +489,7 @@ def test_owner_confirmed_typed_action_deletes_stopped_goal(
         registry_path=global_registry,
         goal_id="goal-one",
         state="stopped",
+        actor_kind="owner",
         execute=True,
     )
     service = ChatActionService(
@@ -516,6 +526,7 @@ def test_owner_confirmed_typed_action_rejects_stale_delete_without_writing(
         registry_path=global_registry,
         goal_id="goal-one",
         state="stopped",
+        actor_kind="owner",
         execute=True,
     )
     service = ChatActionService(
@@ -570,6 +581,7 @@ def test_goal_deletion_backups_are_unique_and_preserve_preimages(
             registry_path=global_registry,
             goal_id=goal_id,
             state="stopped",
+            actor_kind="owner",
             execute=True,
         )["ok"] is True
 

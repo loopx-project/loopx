@@ -69,6 +69,13 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     : requireJsonObject(params.authority, "canonical authority readiness");
   requireThat(typeof authority.ready === "boolean", "canonical authority readiness required");
   if (authority.ready === false) {
+    const authorityState = authority.state ?? "unavailable";
+    requireThat(authorityState === "promotion_required" || authorityState === "unavailable",
+      "unavailable authority transition state required");
+    const authorityNextAction = authority.next_action ?? (authorityState === "promotion_required"
+      ? "preview_reviewed_goal_authority_promotion" : "repair_canonical_authority");
+    requireThat(authorityNextAction === "preview_reviewed_goal_authority_promotion"
+      || authorityNextAction === "repair_canonical_authority", "invalid authority next action");
     requireThat(params.preview === null && params.acceptance === null
       && params.validation_files_current === false,
     "unavailable authority cannot claim a Turn preview or task acceptance");
@@ -79,6 +86,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       state: "authority_unavailable", turn_eligible: false, turn_route: null,
       acceptance_ready: false, authority_ready: false,
       authority_reason: boundedReason(authority.reason, "canonical authority unavailable"),
+      authority_state: authorityState, authority_next_action: authorityNextAction,
+      promotion_from_surface_allowed: false,
       executor: null, effects,
       note: "Canonical authority is unavailable, so no Turn or provider was inspected or launched. "
         + "Promote or repair authority explicitly before retrying; inspection never promotes a provider.",
@@ -103,6 +112,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     schema_version: "loopx_delegation_preflight_v0", binding,
     state, turn_eligible: eligible, turn_route: route.kind,
     acceptance_ready: pinned, authority_ready: true, authority_reason: null,
+    authority_state: "promoted", authority_next_action: "none",
+    promotion_from_surface_allowed: false,
     executor: {host: executor.executor, available: executor.available,
       reason: executor.unavailable_reason, profile: executor.execution_profile},
     effects,

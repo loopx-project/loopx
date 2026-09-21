@@ -18,6 +18,46 @@ export function latency(samples: readonly number[]): Latency {
   return {n: sorted.length, p50_ms: at(.5), p95_ms: at(.95), p99_ms: at(.99)};
 }
 
+/**
+ * Exact WAL traffic over one bounded commit window. A held read mark blocks
+ * every WAL reset, so the file only appends and frame growth is exact. The
+ * window measures per-commit traffic at one history depth; it is not a
+ * whole-run total.
+ */
+export type WalTrafficWindow =
+  | {status: "measured"; warmup_commits: number; window_commits: number; page_size_bytes: number;
+    frame_bytes: number; wal_bytes: number; frames: number; wal_bytes_per_commit: number}
+  | {status: "invalid"; reason: string};
+
+/**
+ * Logical write volume from the filled database itself: the serialized bytes
+ * each commit hands to SQLite (commits row plus the full-projection head
+ * rewrite, with checkpoint rows amortized). Page, index and compaction
+ * overhead are deliberately excluded; they belong to WAL traffic and file
+ * growth, which are reported separately.
+ */
+export interface LogicalWriteAccounting {
+  commits_rows_sampled: number;
+  commits_row_bytes_mean: number;
+  checkpoints: number;
+  checkpoint_row_bytes_mean: number;
+  head_projection_bytes: number;
+  per_commit_logical_bytes: number;
+  cumulative_logical_bytes: number;
+  formula: string;
+}
+
+/**
+ * App-observed lock wait: end-to-end store commit latency while a probe
+ * process holds the database write lock for a controlled interval. The
+ * node:sqlite driver does not expose busy-handler internals, so this is the
+ * application-observed wait, not pure busy time.
+ */
+export type LockWaitProbe =
+  | {status: "measured"; samples: number; held_write_lock_ms: number;
+    uncontended_commit_p50_ms: number; observed_wait: Latency}
+  | {status: "invalid"; reason: string};
+
 export interface CapacityAxis {
   target_commits: number;
   completed_commits: number;
@@ -33,6 +73,9 @@ export interface CapacityAxis {
   bounded_profile: SqliteAuthorityBoundedProfile | null;
   /** Linear archive audit, only requested where its cost is affordable. */
   history_audit: {status: string; commits: number; checkpoints: number} | null;
+  wal_traffic_window: WalTrafficWindow | null;
+  logical_writes: LogicalWriteAccounting | null;
+  lock_wait: LockWaitProbe | null;
   sampled_peak_rss_bytes: number;
   resource_peak_rss_bytes: number;
   fill_seconds: number;
@@ -106,10 +149,37 @@ export function capacityLedger(axes: readonly CapacityAxis[], formal: boolean): 
       scope: "retained checkpoint and delta bytes against one full copy per retained commit",
       observed: retained, budget: Math.floor(perCommitCopy / 8), unit: "bytes"});
   }
+  // Logical writes, WAL traffic and final file size are three separate
+  // measurements; none may substitute for another. Each growth row is the
+  // cumulative 10k -> 100k growth implied by per-commit traffic measured at
+  // both depths under the identical matched workload, so a per-commit cost
+  // that grows with history depth fails the <=15x budget.
+  const perCommitGrowth = (id: string, baselinePerCommit: number | undefined,
+    finalPerCommit: number | undefined, method: string) => {
+    const ratio = baselinePerCommit !== undefined && finalPerCommit !== undefined &&
+      baselinePerCommit > 0 && finalPerCommit > 0 ? 10 * (finalPerCommit / baselinePerCommit) : undefined;
+    if (!ready || ratio === undefined || !Number.isFinite(ratio)) {
+      rows.push({id, status: "missing", scope: `requires the complete matched profile and a measured window at both depths (${method})`});
+    } else rows.push({id, status: ratio <= 15 ? "passed" : "failed",
+      scope: `cumulative ${method} growth from 10k to 100k commits at fixed live state and delta sizes`,
+      observed: ratio, budget: 15, unit: "ratio"});
+  };
+  perCommitGrowth("logical_write_growth",
+    baseline?.logical_writes?.per_commit_logical_bytes, final?.logical_writes?.per_commit_logical_bytes,
+    "logical write");
+  perCommitGrowth("wal_traffic_growth",
+    baseline?.wal_traffic_window?.status === "measured" ? baseline.wal_traffic_window.wal_bytes_per_commit : undefined,
+    final?.wal_traffic_window?.status === "measured" ? final.wal_traffic_window.wal_bytes_per_commit : undefined,
+    "WAL traffic");
+  const lock = final?.lock_wait;
+  if (!ready || lock?.status !== "measured" || lock.observed_wait.n !== (formal ? 12 : 3)) {
+    rows.push({id: "lock_wait_observed", status: "missing",
+      scope: "requires the matched profile's held-write-lock probe at the 100k axis"});
+  } else rows.push({id: "lock_wait_observed", status: "passed",
+    scope: "app-observed store commit wait while a probe process holds the write lock; driver busy-handler internals remain unexposed",
+    observed: lock.observed_wait.p95_ms, unit: "ms"});
   const scope: Record<string, string> = {
     domain_workload: "eight agents, four writers, leases/capture/archive and the production-scale fixture remain separate",
-    cumulative_storage_writes: "application input bytes and final files cannot qualify logical writes, WAL traffic or the <=15x budget",
-    lock_wait_distribution: "no pure busy-handler timing is exposed by this node:sqlite driver",
     steady_state_rss: "sampled RSS and per-process peak are observations, not a proof across steady-state windows",
     large_history_recovery: "small fault regressions do not qualify bounded recovery of a 100k history; the linear archive audit is only launched in the rehearsal profile",
     payload_and_headroom: "1 MiB, 300k and bursts are not launched by this profile",

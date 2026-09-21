@@ -172,7 +172,7 @@ def append_global_registry_findings_markdown(
 
 def append_human_reward_markdown(lines: list[str], goal_id: Any, reward: dict[str, Any]) -> None:
     headline_parts = []
-    for field in ("recorded_at", "decision", "reward"):
+    for field in ("recorded_at", "actor_kind", "decision", "reward"):
         value = reward.get(field)
         if value:
             headline_parts.append(f"{field}={markdown_scalar(value)}")

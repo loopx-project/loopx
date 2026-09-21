@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import itertools
+import json
 from pathlib import Path
 
 import pytest
 
-from loopx.chat_action_store import ChatActionStore
+from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService
 
 GOAL_ID = "team-plan-action-fixture"
@@ -108,6 +109,28 @@ def _todos(project: Path) -> str:
     )
 
 
+def _card_delivery(*, message_id: str, chat_id: str) -> dict:
+    card = {"schema": "2.0", "body": {"elements": []}}
+    digest = hashlib.sha256(
+        json.dumps(
+            card, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "provider": "lark",
+        "message_id": message_id,
+        "chat_id": chat_id,
+        "app_id": "cli_public_fixture",
+        "cli_bin": "lark-cli-fixture",
+        "sender_profile": "fixture",
+        "binding_digest": "sha256:" + "b" * 64,
+        "card_digest": digest,
+        "submitted_card": card,
+        "delivered_at": "2026-09-20T00:00:00Z",
+        "authorized_principal": "lark:ou_owner",
+    }
+
+
 def _rewrite_objective(project: Path, objective: str) -> None:
     """Change only the intent the plan was reviewed against, not the registry."""
 
@@ -161,6 +184,143 @@ def test_a_confirmed_plan_creates_each_ready_lane_first_todo(tmp_path: Path) -> 
     assert "Advance the intake contract" in state
     assert f"claimed_by={AGENT_ID}" in state
     assert state.count("loopx:todo ") == 1
+
+
+def test_two_review_audiences_consume_one_team_plan_decision(tmp_path: Path) -> None:
+    project, _registry_path, service = _fixture(tmp_path)
+    preview = _preview(service)
+    proposal_id = preview["proposal_id"]
+    fingerprint = preview["expected_state_fingerprint"]
+    service.store.prepare_review_card_delivery(
+        proposal_id,
+        audience_ids=["manager", f"goal:{GOAL_ID}"],
+        authorized_principal="lark:ou_owner",
+    )
+    service.store.record_review_card_delivery(
+        proposal_id,
+        audience_id="manager",
+        delivery=_card_delivery(
+            message_id="om_manager_card", chat_id="oc_manager"
+        ),
+    )
+    service.store.record_review_card_delivery(
+        proposal_id,
+        audience_id=f"goal:{GOAL_ID}",
+        delivery=_card_delivery(message_id="om_goal_card", chat_id="oc_goal"),
+    )
+
+    decided = service.store.decide_review_card(
+        proposal_id,
+        decision="confirm",
+        confirmation={
+            "provider": "lark",
+            "event_id": "evt_manager",
+            "principal": "lark:ou_owner",
+            "message_id": "om_manager_card",
+            "chat_id": "oc_manager",
+            "app_id": "cli_public_fixture",
+            "audience_id": "manager",
+            "state_fingerprint": fingerprint,
+            "card_digest": _card_delivery(
+                message_id="om_manager_card", chat_id="oc_manager"
+            )["card_digest"],
+            "confirmed_at": "2026-09-20T00:01:00Z",
+        },
+    )
+    assert decided["status"] == "applying"
+
+    replay = service.store.decide_review_card(
+        proposal_id,
+        decision="confirm",
+        confirmation={
+            "provider": "lark",
+            "event_id": "evt_goal",
+            "principal": "lark:ou_owner",
+            "message_id": "om_goal_card",
+            "chat_id": "oc_goal",
+            "app_id": "cli_public_fixture",
+            "audience_id": f"goal:{GOAL_ID}",
+            "state_fingerprint": fingerprint,
+            "card_digest": _card_delivery(
+                message_id="om_goal_card", chat_id="oc_goal"
+            )["card_digest"],
+            "confirmed_at": "2026-09-20T00:01:01Z",
+        },
+    )
+    assert replay["review_card"]["confirmation"]["event_id"] == "evt_manager"
+
+    applied = service.apply(proposal_id)["proposal"]
+    assert applied["status"] == "applied"
+    assert _todos(project).count("loopx:todo ") == 1
+
+
+def test_team_plan_cannot_be_decided_before_every_audience_is_delivered(
+    tmp_path: Path,
+) -> None:
+    _project, _registry_path, service = _fixture(tmp_path)
+    preview = _preview(service)
+    proposal_id = preview["proposal_id"]
+    service.store.prepare_review_card_delivery(
+        proposal_id,
+        audience_ids=["manager", f"goal:{GOAL_ID}"],
+        authorized_principal="lark:ou_owner",
+    )
+    manager_delivery = _card_delivery(
+        message_id="om_manager_card", chat_id="oc_manager"
+    )
+    service.store.record_review_card_delivery(
+        proposal_id,
+        audience_id="manager",
+        delivery=manager_delivery,
+    )
+
+    with pytest.raises(
+        ActionConflictError, match="audiences are not completely delivered"
+    ):
+        service.store.decide_review_card(
+            proposal_id,
+            decision="confirm",
+            confirmation={
+                "provider": "lark",
+                "event_id": "evt_manager",
+                "principal": "lark:ou_owner",
+                "message_id": "om_manager_card",
+                "chat_id": "oc_manager",
+                "app_id": "cli_public_fixture",
+                "audience_id": "manager",
+                "state_fingerprint": preview["expected_state_fingerprint"],
+                "card_digest": manager_delivery["card_digest"],
+                "confirmed_at": "2026-09-20T00:01:00Z",
+            },
+        )
+
+
+def test_review_card_delivery_retry_keeps_the_first_verified_receipt(
+    tmp_path: Path,
+) -> None:
+    _project, _registry_path, service = _fixture(tmp_path)
+    preview = _preview(service)
+    proposal_id = preview["proposal_id"]
+    service.store.prepare_review_card_delivery(
+        proposal_id,
+        audience_ids=["manager", f"goal:{GOAL_ID}"],
+        authorized_principal="lark:ou_owner",
+    )
+    first = _card_delivery(message_id="om_manager_card", chat_id="oc_manager")
+    service.store.record_review_card_delivery(
+        proposal_id,
+        audience_id="manager",
+        delivery=first,
+    )
+    retry = {**first, "delivered_at": "2026-09-20T00:02:00Z"}
+
+    replay = service.store.record_review_card_delivery(
+        proposal_id,
+        audience_id="manager",
+        delivery=retry,
+    )
+
+    assert replay["review_card"]["deliveries"]["manager"] == first
 
 
 def test_confirming_a_plan_that_staffs_no_lane_is_not_reported_as_success(

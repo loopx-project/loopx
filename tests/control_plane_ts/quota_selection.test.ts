@@ -7,6 +7,7 @@ import { productionScaleCoordinationFixture } from "./production_scale_coordinat
 function row(id: string, fields: JsonObject = {}): JsonObject {
   return {payload: {todo_id: id}, claim: null, bound: null, blocks: null, excluded: [],
     global: false, gate: false, removed: false, actionable: true, due: false,
+    watch_only: false,
     task_class: "advancement_task", priority: 1, index: 1, profile_rank: 1,
     missing: [], raw_claimed: false, ...fields};
 }
@@ -50,10 +51,14 @@ test("execution scope is shared with active-next-action, including removed-polic
 
 test("monitor eligibility preserves provider writeback and capability fences", () => {
   const items = [row("due", {task_class: "continuous_monitor", due: true}),
+    row("watch", {task_class: "continuous_monitor", due: true, watch_only: true}),
     row("missing", {task_class: "continuous_monitor", due: true, missing: ["network"]}),
     row("future", {task_class: "continuous_monitor"})];
   const lanes = projectQuotaSelection(request(items)).lanes as JsonObject;
-  assert.deepEqual(ids(lanes.monitor_due_items), ["due"]);
+  assert.deepEqual(ids(lanes.monitor_due_items), ["due", "watch"]);
+  assert.deepEqual(ids(lanes.watch_only_monitor_items), ["watch"]);
+  assert.deepEqual(ids(lanes.watch_only_monitor_due_items), ["watch"]);
+  assert.deepEqual(ids(lanes.non_watch_only_monitor_due_items), ["due"]);
   assert.deepEqual(ids(lanes.monitor_capability_blocked_due_items), ["missing"]);
   assert.deepEqual(ids(lanes.executable_items), []);
   const unsupported = projectQuotaSelection(request(items, {monitor_supported: false})).lanes as JsonObject;

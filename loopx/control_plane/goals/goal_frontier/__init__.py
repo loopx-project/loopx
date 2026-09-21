@@ -578,11 +578,21 @@ def _count_advancement_items(items: Any, *, claimed_by: str | None = None) -> in
 def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
     open_count = _open_todo_count(summary)
     if not isinstance(summary, dict):
-        return {"open": open_count, "advancement": 0, "monitor": 0, "monitor_due": 0}
+        return {
+            "open": open_count,
+            "advancement": 0,
+            "monitor": 0,
+            "monitor_due": 0,
+            "watch_only_monitor_due": 0,
+        }
     executable = summary.get("executable_backlog_items")
     monitor_open = summary.get("monitor_open_items")
-    watch_only_count = (
-        len(
+    if isinstance(summary.get("watch_only_monitor_count"), int):
+        watch_only_count = safe_non_negative_int(
+            summary.get("watch_only_monitor_count")
+        )
+    elif isinstance(monitor_open, list):
+        watch_only_count = len(
             [
                 item
                 for item in monitor_open
@@ -591,10 +601,14 @@ def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
                 and todo_item_is_watch_only_monitor(item)
             ]
         )
-        if isinstance(monitor_open, list)
-        else safe_non_negative_int(summary.get("watch_only_monitor_count"))
-    )
-    open_count = max(0, open_count - watch_only_count)
+    else:
+        watch_only_count = 0
+    if isinstance(summary.get("convergence_open_count"), int):
+        open_count = safe_non_negative_int(summary.get("convergence_open_count"))
+    else:
+        # Compatibility-only fallback for summaries produced before the typed
+        # TypeScript lane owner exposed convergence_open_count.
+        open_count = max(0, open_count - watch_only_count)
     advancement_count = (
         _count_advancement_items(executable)
         if isinstance(executable, list)
@@ -608,8 +622,15 @@ def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
             ]
         )
     )
-    monitor_count = (
-        len(
+    work_counts = summary.get("work_counts")
+    if isinstance(work_counts, dict):
+        monitor_count = max(
+            0,
+            safe_non_negative_int(work_counts.get("monitor"))
+            - watch_only_count,
+        )
+    elif isinstance(monitor_open, list):
+        monitor_count = len(
             [
                 item
                 for item in monitor_open
@@ -619,9 +640,10 @@ def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
                 and not todo_item_is_watch_only_monitor(item)
             ]
         )
-        if isinstance(monitor_open, list)
-        else safe_non_negative_int(summary.get("claimed_monitor_open_count"))
-    )
+    else:
+        monitor_count = safe_non_negative_int(
+            summary.get("claimed_monitor_open_count")
+        )
     return {
         "open": open_count,
         "advancement": advancement_count,
@@ -630,6 +652,9 @@ def _summary_task_counts(summary: dict[str, Any] | None) -> dict[str, int]:
             0,
             safe_non_negative_int(summary.get("monitor_due_count"))
             - safe_non_negative_int(summary.get("watch_only_monitor_due_count")),
+        ),
+        "watch_only_monitor_due": safe_non_negative_int(
+            summary.get("watch_only_monitor_due_count")
         ),
     }
 
@@ -1812,6 +1837,9 @@ def build_goal_frontier_projection(
             "agent_advancement_open_count": agent_counts.get("advancement", 0),
             "agent_monitor_open_count": agent_counts.get("monitor", 0),
             "agent_monitor_due_count": agent_counts.get("monitor_due", 0),
+            "agent_watch_only_monitor_due_count": agent_counts.get(
+                "watch_only_monitor_due", 0
+            ),
         },
         "remaining_advancement_frontier": {
             "current_agent_claimed_advancement_count": current_agent_claimed_advancement_count,

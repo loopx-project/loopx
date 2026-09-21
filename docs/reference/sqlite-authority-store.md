@@ -278,15 +278,28 @@ the isolated fixture. `--python` chooses the Python executable. These figures
 include process startup but do not drop the OS file cache. Cold Node-only load
 and warm actual-provider calls are separate. The provider's normal per-call
 connection open/close remains inside warm timing. CLI mutations happen after
-the fixed-history measurement; their extra commits are reported separately.
+the fixed-history measurement; CLI, traffic-window and lock-probe commits all
+extend past the fill target and are counted separately, so target-state rows
+keep their meaning.
 
 Reports carry p50/p95/p99 and counts, parent-process RSS, application request
 JSON bytes and separate DB/WAL/SHM sizes at the target history. Resource-usage
 peak RSS is process-lifetime across both groups; sampled axis RSS is separate,
 and CLI child RSS is not measured. Application bytes, final files, SQLite
 logical writes, cumulative WAL traffic and physical device writes are different
-metrics. The unavailable write-traffic and pure busy-wait metrics remain
-`missing`; a final WAL size of zero proves no cumulative-write bound.
+metrics and are never substituted for one another. Logical write volume is
+measured from the filled database as the serialized bytes each commit hands to
+SQLite (commits row plus the full-projection head rewrite plus amortized
+checkpoint rows); page, index and compaction overhead belong to the other
+columns. Cumulative WAL traffic is measured over one bounded commit window per
+axis: read marks pinned by two observer connections make every WAL reset
+impossible, so frame growth over the window is exact, and the per-commit
+traffic at both depths carries the <=15x cumulative-growth budget. Lock wait is
+app-observed: a probe process holds the write lock for a controlled interval
+and the end-to-end store commit wait is reported against the uncontended
+baseline. Whole-run WAL totals, pure busy-handler time and physical device
+writes remain `missing`; a final WAL size of zero still proves no
+cumulative-write bound.
 
 Each axis reserves 5 GiB free space, caps its database at 16 GiB and checks a
 2,400-second fill budget. All data are generated in a new temporary directory;
@@ -348,12 +361,17 @@ command, migration manifest and reverse export remain separate deliverables.
 ### Qualification holds / 资格保留项
 
 The report's `passed` rows apply only to their named axis and sample counts.
-`failed` measurements remain failed; `missing` rows include cumulative storage
-writes, pure lock wait, steady-state RSS proof, the full domain profile, 1 MiB
-and 300k headroom, 24-hour consumer lag, large-history recovery, fenced
-backup/restore, supported upgrades/rollback, OS/runtime coverage and a real
->=10-day soak. Those holds still block profile promotion. Accelerated volume
-never substitutes for elapsed time, and running this command starts no soak.
+`failed` measurements remain failed. The split storage-write rows —
+`logical_write_growth`, `wal_traffic_growth` and `lock_wait_observed` — carry
+the <=15x cumulative-growth budget as per-commit traffic measured at both
+depths, and an invalidated window or missing probe is missing evidence, never a
+pass from the surviving columns. `missing` rows still include whole-run WAL
+totals, pure busy-handler time, physical device writes, steady-state RSS proof,
+the full domain profile, 1 MiB and 300k headroom, 24-hour consumer lag,
+large-history recovery, fenced backup/restore, supported upgrades/rollback,
+OS/runtime coverage and a real >=10-day soak. Those holds still block profile
+promotion. Accelerated volume never substitutes for elapsed time, and running
+this command starts no soak.
 
 Retained state is measured where the formal profile runs: an axis reports its
 checkpoint count, replay budget, recovery tail and retained projection/delta

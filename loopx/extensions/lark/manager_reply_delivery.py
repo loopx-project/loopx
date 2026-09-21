@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,8 @@ from .event_inbox import MESSAGE_ID_PATTERN, load_lark_event_inbox_config
 from .private_json import write_private_json_atomic
 
 SCHEMA_VERSION = "lark_manager_reply_delivery_v0"
+TEAM_PLAN_DELIVERY_RECEIPT_SCHEMA_VERSION = "lark_team_plan_review_delivery_v0"
+PROPOSAL_ID_PATTERN = re.compile(r"^proposal-[a-f0-9]{32}$")
 
 
 def source_digest(event: Mapping[str, Any]) -> str:
@@ -31,6 +34,43 @@ def source_digest(event: Mapping[str, Any]) -> str:
 
 def text_digest(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def validate_team_plan_delivery_receipt(
+    value: object, *, proposal_ids: Sequence[str]
+) -> dict[str, Any]:
+    """Validate the receipt that makes proposal delivery replay-safe."""
+
+    expected_ids = [str(item) for item in proposal_ids]
+    required = {
+        "schema_version",
+        "ok",
+        "status",
+        "proposal_ids",
+        "proposal_count",
+        "audience_count",
+        "readback_verified",
+        "external_write_count",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("manager proposal delivery receipt is invalid")
+    receipt = dict(value)
+    audience_count = receipt.get("audience_count")
+    external_write_count = receipt.get("external_write_count")
+    if (
+        receipt.get("schema_version") != TEAM_PLAN_DELIVERY_RECEIPT_SCHEMA_VERSION
+        or receipt.get("ok") is not True
+        or receipt.get("status") != "team_plan_review_cards_delivered"
+        or receipt.get("proposal_ids") != expected_ids
+        or receipt.get("proposal_count") != len(expected_ids)
+        or audience_count != len(expected_ids) * 2
+        or receipt.get("readback_verified") is not True
+        or not isinstance(external_write_count, int)
+        or isinstance(external_write_count, bool)
+        or not 0 <= external_write_count <= audience_count
+    ):
+        raise ValueError("manager proposal delivery receipt is invalid")
+    return receipt
 
 
 def delivery_path(
@@ -81,6 +121,21 @@ def load_delivery(
             or payload.get("content_format") not in {"markdown", "text"}
         ):
             raise ValueError("manager pending delivery content is invalid")
+    proposal_ids = payload.get("proposal_ids", [])
+    if (
+        not isinstance(proposal_ids, list)
+        or len(set(proposal_ids)) != len(proposal_ids)
+        or any(
+            not isinstance(value, str) or not PROPOSAL_ID_PATTERN.fullmatch(value)
+            for value in proposal_ids
+        )
+    ):
+        raise ValueError("manager delivery proposal ids are invalid")
+    proposal_delivery = payload.get("proposal_delivery")
+    if proposal_delivery is not None:
+        validate_team_plan_delivery_receipt(
+            proposal_delivery, proposal_ids=proposal_ids
+        )
     if payload.get("status") == "sent_verified" and (
         payload.get("external_write_performed") is not True
         or payload.get("verification_performed") is not True
@@ -128,12 +183,19 @@ def pending_delivery(
     effect_receipt: Mapping[str, Any] | None,
     failure_code: str | None,
     context_material_ids: Sequence[str] | None = None,
+    proposal_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     normalized_context_ids = [str(value) for value in (context_material_ids or [])]
     if len(set(normalized_context_ids)) != len(normalized_context_ids) or any(
         not MESSAGE_ID_PATTERN.fullmatch(value) for value in normalized_context_ids
     ):
         raise ValueError("manager delivery context material ids are invalid")
+    normalized_proposal_ids = [str(value) for value in (proposal_ids or [])]
+    if len(set(normalized_proposal_ids)) != len(normalized_proposal_ids) or any(
+        not PROPOSAL_ID_PATTERN.fullmatch(value)
+        for value in normalized_proposal_ids
+    ):
+        raise ValueError("manager delivery proposal ids are invalid")
     now = datetime.now(timezone.utc).isoformat()
     return {
         "schema_version": SCHEMA_VERSION,
@@ -149,6 +211,7 @@ def pending_delivery(
         # Persist the exact context set used to produce this answer so a
         # transport retry cannot silently switch to newer arrivals.
         "context_material_ids": normalized_context_ids,
+        "proposal_ids": normalized_proposal_ids,
         "failure_code": failure_code,
         "format_degraded": False,
         "attempt_count": 0,

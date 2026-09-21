@@ -34,8 +34,25 @@ test("one observation time fences due, expiry, missing schedule and watch-only m
     monitor({due_at: 10, expires_at: 100}), monitor({}), monitor({watch_only: true}),
     monitor({due_at: 90, acceptance_blocked: true})]).lanes as JsonObject;
   assert.deepEqual(lanes.monitor_due_items, [0]);
+  assert.deepEqual(lanes.watch_only_monitor_items, [4]);
+  assert.deepEqual(lanes.watch_only_monitor_due_items, []);
+  assert.deepEqual(lanes.non_watch_only_monitor_due_items, [0]);
+  assert.deepEqual(lanes.convergent_open_items, [0, 1, 2, 3, 5]);
   assert.deepEqual(lanes.monitor_schedule_gap_items, [3]);
   assert.deepEqual(lanes.monitor_items, [0, 1, 2, 3, 4]);
+});
+
+test("watch-only due monitors remain schedulable but are partitioned from ordinary due work", () => {
+  const monitor = (fields: JsonObject) => row({task_class: "continuous_monitor", ...fields});
+  const lanes = project([
+    monitor({due_at: 90, watch_only: true}),
+    monitor({due_at: 80}),
+    row(),
+  ]).lanes as JsonObject;
+  assert.deepEqual(lanes.monitor_due_items, [0, 1]);
+  assert.deepEqual(lanes.watch_only_monitor_due_items, [0]);
+  assert.deepEqual(lanes.non_watch_only_monitor_due_items, [1]);
+  assert.deepEqual(lanes.convergent_open_items, [1, 2]);
 });
 
 test("display ordering preserves stable legacy ties and Python Unicode ordering", () => {

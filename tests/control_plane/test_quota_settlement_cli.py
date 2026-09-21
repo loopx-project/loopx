@@ -330,9 +330,11 @@ def _append_newly_due_monitor(
     project: Path,
     *,
     priority: str = "P0-monitor",
+    watch_only: bool = False,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
+    watch_only_field = "watch_only=true " if watch_only else ""
     state_path.write_text(
         state_text.replace(
             "## Agent Todo\n\n",
@@ -342,6 +344,7 @@ def _append_newly_due_monitor(
             "task_class=continuous_monitor action_kind=observe "
             f"claimed_by={AGENT_ID} target_key=due-monitor-fixture "
             "required_capabilities=network%2Cexternal_evidence_poll "
+            f"{watch_only_field}"
             "cadence=1m next_due_at=2000-01-01T00%3A00%3A00Z -->\n",
         ),
         encoding="utf-8",

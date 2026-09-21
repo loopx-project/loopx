@@ -454,7 +454,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         )
     )
     parser.add_argument("--goal-id", default="loopx-meta")
-    parser.add_argument("--agent-id", default="codex-side-bypass")
+    parser.add_argument(
+        "--agent-id",
+        required=True,
+        help="Registered LoopX Agent that owns this scheduler mutation.",
+    )
     parser.add_argument(
         "--registry",
         type=Path,

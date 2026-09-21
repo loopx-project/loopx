@@ -47,10 +47,23 @@ def append_pr_merge_rollout_event(
         }
 
     pr_ref = f"{repo}#{number}"
+    repository_aliases = sorted(
+        {
+            str(alias).strip().lower()
+            for alias in observation.get("repository_aliases") or []
+            if isinstance(alias, str)
+            and str(alias).strip()
+            and str(alias).strip().lower() != repo
+        }
+    )
     event = build_rollout_event(
         goal_id=goal_id,
         event_kind="pr_merge",
         pr_ref=pr_ref,
+        source_refs=[
+            {"kind": "pull_request", "ref": f"{alias}#{number}"}
+            for alias in repository_aliases
+        ],
         status="merged",
         summary=f"PR {pr_ref} merged; dependent resume conditions may proceed.",
         recorded_at=str(
@@ -82,4 +95,5 @@ def append_pr_merge_rollout_event(
         "recorded_at": recorded_event["recorded_at"],
         "status": recorded_event.get("status"),
         "pr_ref": pr_ref,
+        "repository_aliases": repository_aliases,
     }

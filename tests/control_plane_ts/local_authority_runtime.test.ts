@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import type { AuthorityStoreCommit } from "../../loopx/control_plane/coordination/authority_store.ts";
 import {
@@ -35,6 +36,7 @@ import {
   listLocalCoordinationTodos,
   claimLocalCoordinationTodo,
   promoteLocalCoordinationAuthority,
+  reviewLocalCoordinationAuthorityPromotion,
   readLocalCoordinationTodo,
   terminalLifecycleLocalCoordinationTodo,
 } from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
@@ -46,6 +48,7 @@ import {computeContinuationTodoFacts} from "../../loopx/control_plane/coordinati
 import {
   checkLegacyCoordinationWriteAllowed,
   engageLegacyCoordinationWriterFence,
+  loadLegacyCoordinationWriterFence,
   LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
   LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
@@ -54,6 +57,8 @@ import {
   COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/runtime_shadow.ts";
 import { qualifiedShadow, promotionRequest, engageFence } from "./local_promotion_fixture.ts";
+import { sourceRequest } from "./shadow_file_fixture.ts";
+import { LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA } from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import { executeTaskLeaseAcquire } from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
 import {
   TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
@@ -228,6 +233,143 @@ test("local promotion fences shadow revision, digest, and writer-fence identity"
   assert.equal(unqualified.reason_code, "local_authority_shadow_not_qualified");
   const canonical = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   assert.equal((await canonical.loadAuthority()).status, "missing");
+});
+
+test("reviewed promotion previews without effects and atomically applies the whole Goal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-reviewed-promotion-"));
+  const shadow = await qualifiedShadow(root, "hard_lease");
+  const sourceProjection = { ...shadow.projection };
+  delete sourceProjection.capture_lineage_id;
+  delete sourceProjection.capture_profile;
+  delete sourceProjection.source_root_digest;
+  sourceProjection.partitions = { todos: null, leases: null };
+  const statePath = join(root, "ACTIVE_GOAL_STATE.md");
+  const source = await sourceRequest({
+    root,
+    statePath,
+    store: new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), "goal-a"),
+    baseline: sourceProjection,
+  }, sourceProjection);
+  const request = {
+    ...source,
+    schema_version: LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
+    operation_id: "promote:goal-a:reviewed",
+    minimum_operations: 1,
+    required_event_kinds: ["todo_claim"],
+    execute: false,
+  };
+
+  const preview = await reviewLocalCoordinationAuthorityPromotion(request);
+  assert.equal(preview.status, "preview_ready", JSON.stringify(preview));
+  assert.equal(preview.promotion_ready, true);
+  assert.equal((await loadLegacyCoordinationWriterFence(root, "goal-a")).status, "missing");
+  const canonical = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a", { existingOnly: true });
+  assert.equal((await canonical.loadAuthority()).status, "missing");
+
+  const applied = await reviewLocalCoordinationAuthorityPromotion({ ...request, execute: true });
+  assert.equal(applied.status, "applied", JSON.stringify(applied));
+  assert.equal(applied.legacy_writer_fenced, true);
+  assert.equal((await loadLegacyCoordinationWriterFence(root, "goal-a")).status, "loaded");
+  const head = await canonical.loadAuthority();
+  assert.equal(head.status, "loaded");
+  if (head.status === "loaded") {
+    assert.equal(canonicalAuthoritySha256(head.head), canonicalAuthoritySha256(shadow.projection));
+  }
+  const replayed = await reviewLocalCoordinationAuthorityPromotion({ ...request, execute: true });
+  assert.equal(replayed.status, "replayed", JSON.stringify(replayed));
+});
+
+test("reviewed promotion resumes the exact request after a fence-to-canonical interruption", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-reviewed-promotion-recovery-"));
+  const shadow = await qualifiedShadow(root, "hard_lease");
+  const sourceProjection = { ...shadow.projection };
+  delete sourceProjection.capture_lineage_id;
+  delete sourceProjection.capture_profile;
+  delete sourceProjection.source_root_digest;
+  sourceProjection.partitions = { todos: null, leases: null };
+  const statePath = join(root, "ACTIVE_GOAL_STATE.md");
+  const source = await sourceRequest({
+    root,
+    statePath,
+    store: new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), "goal-a"),
+    baseline: sourceProjection,
+  }, sourceProjection);
+  const request = {
+    ...source,
+    schema_version: LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
+    operation_id: "promote:goal-a:recoverable",
+    minimum_operations: 1,
+    required_event_kinds: ["todo_claim"],
+    execute: true,
+  };
+  const legacyBytes = await readFile(statePath);
+  class InterruptOnceStore extends FileAuthorityStore {
+    private interrupt = true;
+    override async commitAuthority(commit: AuthorityStoreCommit) {
+      if (this.interrupt) {
+        this.interrupt = false;
+        throw new Error("synthetic interruption after durable fence");
+      }
+      return await super.commitAuthority(commit);
+    }
+  }
+  const canonical = new InterruptOnceStore(join(root, "authority", "file-v0"), "goal-a");
+  const dependencies = {createCanonicalStore: () => canonical};
+
+  const interrupted = await reviewLocalCoordinationAuthorityPromotion(request, dependencies);
+  assert.equal(interrupted.status, "failed", JSON.stringify(interrupted));
+  assert.equal(interrupted.legacy_writer_fenced, true);
+  assert.equal((await canonical.loadAuthority()).status, "missing");
+  assert.deepEqual(await readFile(statePath), legacyBytes);
+
+  const changed = await reviewLocalCoordinationAuthorityPromotion({
+    ...request,
+    operation_id: "promote:goal-a:different",
+  }, dependencies);
+  assert.equal(changed.status, "failed", JSON.stringify(changed));
+  assert.equal(changed.reason_code, "local_authority_writer_fence_conflict");
+  assert.equal(changed.legacy_writer_fenced, true);
+  assert.equal((await canonical.loadAuthority()).status, "missing");
+
+  const recovered = await reviewLocalCoordinationAuthorityPromotion(request, dependencies);
+  assert.equal(recovered.status, "recovered", JSON.stringify(recovered));
+  assert.equal(recovered.legacy_writer_fenced, true);
+  const head = await canonical.loadAuthority();
+  assert.equal(head.status, "loaded");
+  if (head.status === "loaded") {
+    assert.equal(canonicalAuthoritySha256(head.head), canonicalAuthoritySha256(shadow.projection));
+  }
+  assert.deepEqual(await readFile(statePath), legacyBytes);
+});
+
+test("reviewed promotion rejects a non-hard-lease Goal without fencing writers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-reviewed-promotion-mode-"));
+  const shadow = await qualifiedShadow(root, "soft_claim");
+  const sourceProjection: JsonObject = {
+    ...shadow.projection,
+    partitions: { todos: null, leases: null },
+  };
+  delete sourceProjection.capture_lineage_id;
+  delete sourceProjection.capture_profile;
+  delete sourceProjection.source_root_digest;
+  const statePath = join(root, "ACTIVE_GOAL_STATE.md");
+  const source = await sourceRequest({
+    root,
+    statePath,
+    store: new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), "goal-a"),
+    baseline: sourceProjection,
+  }, sourceProjection);
+  const result = await reviewLocalCoordinationAuthorityPromotion({
+    ...source,
+    schema_version: LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
+    operation_id: "promote:goal-a:wrong-mode",
+    minimum_operations: 1,
+    required_event_kinds: ["todo_claim"],
+    execute: true,
+  });
+  assert.equal(result.status, "not_ready", JSON.stringify(result));
+  assert.equal(result.reason_code, "local_authority_promotion_requires_hard_lease");
+  assert.equal((await loadLegacyCoordinationWriterFence(root, "goal-a")).status, "missing");
 });
 
 test("new bootstrap and provider list fail closed without exact Todo consumer semantics", async () => {
