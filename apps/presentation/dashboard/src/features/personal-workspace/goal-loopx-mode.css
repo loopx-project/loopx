@@ -70,3 +70,42 @@
 .goal-team-comparison-grid pre span[data-changed="true"] { background: color-mix(in srgb, var(--pw-text, #171717) 7%, transparent); text-decoration: underline; text-decoration-color: var(--pw-muted, #666); text-underline-offset: 4px; }
 .goal-team-comparison select { min-height: 44px; padding: 8px; background: var(--pw-surface, #fff); color: inherit; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; }
 @media (max-width: 640px) { .goal-team-comparison-grid { grid-template-columns: 1fr; } }
+
+.goal-team-artifact > header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
+.goal-team-artifact > header h4 { font-size: 12px; color: var(--pw-muted); font-weight: 500; }
+.goal-team-report { padding: 24px; background: var(--pw-surface, #fff); color: var(--pw-text, #171717); overflow-wrap: anywhere; }
+.goal-team-report .personal-md { font-size: 15px; line-height: 1.8; gap: 20px; }
+.goal-team-report .personal-md p { font-size: inherit; line-height: inherit; color: inherit; margin: 0; }
+.goal-team-report .personal-md .is-h1 { font-size: 26px; line-height: 1.3; font-weight: 600; letter-spacing: -.03em; }
+.goal-team-report .personal-md .is-h2 { font-size: 18px; font-weight: 600; margin-top: 8px; }
+.goal-team-report .personal-md-list { list-style: revert; margin: 0; padding-left: 24px; }
+.goal-team-report .personal-md-list li { border: 0; padding: 0; }
+.personal-md-table-scroll { min-width: 0; max-width: 100%; overflow-x: auto; }
+.personal-md-table-scroll table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.6; }
+.personal-md-table-scroll th, .personal-md-table-scroll td { padding: 12px; border-bottom: 1px solid var(--pw-line, #ebebeb); text-align: left; vertical-align: top; }
+.personal-md-table-scroll th { font-weight: 500; background: var(--pw-bg, #fafafa); }
+.goal-team-comparison-grid .goal-team-report { max-height: 480px; overflow: auto; }
+.goal-team-comparison-grid .goal-team-report .personal-md { font-size: 14px; }
+.goal-team-results { width: min(960px, 100%); margin: 16px auto 24px; padding: 24px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 12px; background: var(--pw-surface, #fff); color: var(--pw-text, #171717); }
+.goal-team-results > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.goal-team-results h3 { font-size: 16px; font-weight: 600; margin: 0; }
+.goal-team-results p { font-size: 12px; line-height: 1.7; color: var(--pw-muted); }
+.goal-team-results [role="alert"] { color: var(--pw-red, #b42318); }
+.goal-team-results button, .goal-team-results select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; background: var(--pw-surface, #fff); color: inherit; font: inherit; cursor: pointer; }
+.goal-team-results button[aria-pressed="true"] { border-color: var(--pw-text); }
+.goal-team-results button:disabled { opacity: .5; cursor: default; }
+.goal-team-results summary { cursor: pointer; padding: 12px 0; font-size: 12px; min-height: 44px; }
+.goal-team-results code { overflow-wrap: anywhere; }
+.goal-team-report table code { white-space: pre; overflow-wrap: normal; word-break: normal; }
+.goal-team-results pre { padding: 16px; max-height: 400px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.7 var(--font-mono, monospace); background: var(--pw-bg); }
+.goal-team-result-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.goal-team-result-list button { max-width: 100%; overflow-wrap: anywhere; font-size: 13px; text-align: start; }
+.goal-team-result-reader { border-top: 1px solid var(--pw-line); margin-top: 16px; padding-top: 16px; }
+.goal-team-results .goal-team-artifact > header { margin-bottom: 0; }
+.goal-team-results :focus-visible, .goal-team-report:focus-visible, .personal-md-table-scroll:focus-visible { outline: 2px solid var(--pw-blue-ink, #0070f3); outline-offset: 2px; }
+@media (max-width: 640px) {
+  .goal-team-results { padding: 16px; }
+  .goal-team-report { padding: 16px 0; }
+  .goal-team-comparison-grid .goal-team-report { padding: 16px; }
+  .goal-team-report .personal-md .is-h1 { font-size: 22px; }
+}

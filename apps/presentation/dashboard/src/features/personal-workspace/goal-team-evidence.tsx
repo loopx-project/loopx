@@ -1,5 +1,6 @@
 import {GoalTeamLineage} from "./goal-team-lineage";
 import {GoalTeamComparison} from "./goal-team-comparison";
+import {TeamArtifactReport} from "./team-artifact-content";
 import {useEffect, useRef, useState} from "react";
 import {delegationStateLabel, readLoopXTeamWork, sendLoopXMessage, type DelegationReadback, type LoopXModeSnapshot} from "../../data/chat";
 
@@ -65,13 +66,12 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
       <GoalTeamComparison sessionId={sessionId} result={result} zh={zh}/>
       <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/>
       {result.error ? <p role="alert">{result.error}</p> : null}
-      {result.status === "accepted" && result.artifacts?.length ? result.artifacts.map(artifact => <article key={artifact.ref}>
-        <h4>{artifact.ref}</h4>
-        <pre tabIndex={0} aria-label={`${zh ? "证据内容" : "Evidence content"}: ${artifact.ref}`}>{artifact.text}</pre>
+      {result.status === "accepted" && !result.error && !result.recovery_required && result.artifacts?.length ? result.artifacts.map(artifact => <div key={`${artifact.ref}:${artifact.sha256}`}>
+        <TeamArtifactReport artifact={artifact} zh={zh}/>
         <details><summary>{zh ? "版本与来源标识" : "Version and source identifiers"}</summary>
-          <code>{operationId}</code><code>sha256:{artifact.sha256}</code><code>{result.request_id}</code><code>{result.todo_id}</code>
+          <code>{operationId}</code><code>{result.request_id}</code><code>{result.todo_id}</code>
         </details>
-      </article>) : <p>{zh ? "本次读取没有可展示的已验收产物。" : "No accepted artifact is available in this readback."}</p>}
+      </div>) : <p>{zh ? "本次读取没有可展示的已验收产物。" : "No accepted artifact is available in this readback."}</p>}
       <form onSubmit={event => {event.preventDefault(); void send();}}>
         <label>{zh ? "向协调员反馈此执行" : "Send feedback about this execution"}
           <textarea value={message} maxLength={6000} rows={3} disabled={Boolean(submission.current)} onChange={event => setMessage(event.target.value)}/>

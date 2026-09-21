@@ -1,7 +1,7 @@
 # RFC: Live Team Workspace v0
 
 - **RFC status:** Draft; proposed product and presentation decisions.
-- **Delivery maturity:** Design only. An isolated synthetic visual exploration does not qualify production execution or streaming.
+- **Delivery maturity:** Partial implementation: bounded team inspection is shipped; the readable result/comparison slice is proposed in [#4828](https://github.com/loopx-project/loopx/pull/4828). Spatial streaming remains a design, not production qualification.
 - **Owners:** existing workspace presentation, collaboration and runtime owners.
 - **Created / normative revision:** 2026-09-20.
 - **Implementation baseline:** `e7ef75c08`.
@@ -315,11 +315,19 @@ records native Codex MCP execution and a real-model correction/acceptance/adopti
 qualification. This retires the earlier host-approval blocker; it does not prove
 the released first-use journey, two continuing cycles or observer comprehension.
 Reuse the existing version-bound readback, feedback and scoped pause owners.
-The next presentation slice compares an explicitly selected dependency with the
-accepted output, requiring the referenced artifact and hash to match. A newer,
+The presentation slice in #4828 returns readable reports to the original Goal
+conversation and compares an explicitly selected dependency with the accepted
+output, preferring the same artifact name/type. The referenced artifact and hash
+must match; source text stays inspectable, with no inferred JSON narrative. A newer,
 missing or unverified source must not silently replace the requested version.
 Text differences do not establish semantic correctness or requester adoption.
 Keep readable output and comparison prominent; retain raw identifiers in details.
+Merged [#4814](https://github.com/loopx-project/loopx/pull/4814) adds confirmation
+of one canonical team plan from manager and Goal Lark cards. Authenticated card
+bindings and the shared decision owner prevent a second click from creating a
+second assignment. This strengthens the optional request/intervention entry;
+real dual-card click-through remains post-install acceptance. It does not prove
+execution, result return or whole-team stopping.
 `consume_return` alone still means consumption, not version-bound adoption.
 Motion is retained
 only when it clarifies these transitions;

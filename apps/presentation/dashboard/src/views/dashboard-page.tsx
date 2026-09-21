@@ -1,3 +1,4 @@
+import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
@@ -322,10 +323,6 @@ function cleanShareText(value?: string | null) {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function compactShareText(value?: string | null, limit = 132) {
-  const text = cleanShareText(value);
-  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
-}
 
 function shareUsageById(usage?: UsageSummary | null) {
   const map = new Map<string, NonNullable<UsageSummary["goals"]>[number]>();

@@ -366,9 +366,26 @@ observations, not continuous liveness; accepted output does not prove requester
 adoption. Text is rendered inertly, and source/version identifiers remain
 inspectable. Returning preserves the execution list and keyboard focus.
 
+Configured Goal conversations also expose **Team results** in the main view.
+Select an accepted artifact to recheck its exact operation, reference and hash
+before reading. Markdown reports use the existing inert renderer, including
+readable tables; **View source** preserves the original bytes. JSON and other
+text remain source evidence, without inferred prose or changed numeric values.
+When several artifacts are returned, prefer the Markdown report. Refresh and
+pagination are explicit; a failed read clears the previous report. Expand
+acceptance/adoption separately: showing a result does not finish the Goal or
+inject a coordinator answer. Reading starts no model or member work.
+
+中文：配置后的 Goal 对话主界面提供「团队成果」，优先选择 Markdown 报告。
+点击后按原执行、文件与哈希重新核验；Markdown 以可读段落和表格展示，原文可切换，
+JSON 等文本保留原值，不推断成结论。刷新和翻页显式操作，核验失败清除旧报告。
+验收/采用关系单独展开；显示产物不代表 Goal 完成，也不伪造协调员回复或启动模型。
+
 For accepted work with version-bound dependencies, **See what changed** lets you
 select a referenced source and read it beside the output. Multiple outputs have
-an explicit selector. The source operation, artifact reference and SHA-256 must
+an explicit selector, defaulting to the same reference, then the same file type,
+then the first available artifact. This is a reading convenience, not semantic
+equivalence. Read reports by default; **View source changes** reveals the raw diff. The source operation, artifact reference and SHA-256 must
 match the dependency; an unavailable or changed source clears the previous
 comparison instead of substituting newer bytes. Highlighting marks the range
 containing text changes, not semantic correctness or requester adoption. The
@@ -376,7 +393,8 @@ panes stack on narrow screens, and verified version identifiers stay expandable.
 This uses the existing read operation and introduces no execution authority.
 
 中文：在已验收且带版本依赖的执行中，选择“看清这次变化”下的一份依据，
-与本次产物并排阅读；多个产物可显式切换。来源 operation、文件与哈希必须匹配，
+与本次产物并排阅读；默认优先同名、再同类型产物，仍可显式切换。这只是阅读选择，
+不证明语义相同。默认阅读报告，可切换原文差异。来源 operation、文件与哈希必须匹配，
 来源失效会清除上次对照，不能用新文件替代。高亮只表示文本变化范围，
 不代表正确或已采用；窄屏上下排列，版本标识仍可展开。这不增加执行权限。
 

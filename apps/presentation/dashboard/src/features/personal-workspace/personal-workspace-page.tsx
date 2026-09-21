@@ -30,6 +30,7 @@ import {
 
 import { ChannelHeader } from "./channel-header";
 import { GoalLoopXMode } from "./goal-loopx-mode";
+import { GoalTeamResults } from "./goal-team-results";
 import { sendLoopXMessage, type LoopXModeSnapshot } from "../../data/chat";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
@@ -1941,6 +1942,11 @@ export function PersonalWorkspacePage({
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
             /> : null}
           <div className="personal-channel-scroll" data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}>
+            {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
+              key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
+              sessionId={conversationSessionId} zh={locale === "zh-CN"}
+              refreshKey={JSON.stringify(loopxMode.deliveries)}/>
+              : null}
             {!selectedGoal && !managerChatOpen && digest && (digest.done + digest.failed) > 0 ? (
               <section className="personal-digest-card" aria-label={t("digest.away")}>
                 <strong>{t("digest.away")}</strong>

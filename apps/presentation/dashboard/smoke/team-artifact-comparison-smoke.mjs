@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {comparisonSource, changedRange} from "../node_modules/.cache/team-comparison/features/personal-workspace/team-artifact-comparison.js";
+import {comparisonSource, changedRange, preferredComparisonIndex} from "../node_modules/.cache/team-comparison/features/personal-workspace/team-artifact-comparison.js";
 
 const link = {operation_id: "original", ref: "report.txt", sha256: "a".repeat(64),
   input_ref: "input.txt", relation: "revises", state: "current"};
@@ -24,4 +24,10 @@ const inserted = changedRange("one\nend", "one\nadded\nend");
 assert.equal(inserted.leftEnd, 1); assert.equal(inserted.rightEnd, 2);
 const removed = changedRange("one\nremoved\nend", "one\nend");
 assert.equal(removed.leftEnd, 2); assert.equal(removed.rightEnd, 1);
+const outputs = [{ref: "output.json"}, {ref: "review.md"}, {ref: "report.md"}];
+assert.equal(preferredComparisonIndex("report.md", outputs), 2);
+assert.equal(preferredComparisonIndex("analysis.MD", outputs), 1);
+assert.equal(preferredComparisonIndex("source.json", outputs), 0);
+assert.equal(preferredComparisonIndex("no-extension", outputs), 0);
+assert.equal(preferredComparisonIndex("source.txt", outputs), 0);
 console.log("team artifact comparison: exact-version rejection and changed-range cases passed");

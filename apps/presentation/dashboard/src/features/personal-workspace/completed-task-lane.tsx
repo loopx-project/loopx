@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { z } from "zod";
+import {compactWorkspaceText} from "./personal-workspace-model";
 import type { WorkspaceAgentTodo, WorkspaceDrawerSelection, WorkspaceGoal } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
 
@@ -75,7 +76,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, listView = fal
           const todo = rows[index]!;
           return <div className="personal-task-card personal-completed-row" key={todo.todoId} style={{ top: index * rowHeight, height: rowHeight }}>
             <button type="button" onFocus={() => setFocused(index)} onBlur={() => setFocused(null)} onClick={() => onSelect({ kind: "todo", item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId } })}>
-              <span className="is-done">✓</span><strong>{todo.text}</strong><small>{todo.claimedBy ?? goal.agentLabel ?? goal.agentId}</small>
+              <span className="is-done">✓</span><strong>{compactWorkspaceText(todo.text, 112)}</strong><small>{todo.claimedBy ?? goal.agentLabel ?? goal.agentId}</small>
             </button>
           </div>;
         })}

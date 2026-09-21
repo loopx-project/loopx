@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import {createElement} from "react";
+import {renderToStaticMarkup} from "react-dom/server";
+import {MarkdownText} from "../node_modules/.cache/team-report/features/personal-workspace/markdown.js";
+import {TeamArtifactContent} from "../node_modules/.cache/team-report/features/personal-workspace/team-artifact-content.js";
+
+const text = '# Research\n\n| Measure | Value |\n|---|---:|\n| **Cash** | 75 |\n| Escaped \\| label | 25 |\n\n[Source](https://example.org/report)\n<script>window.pwned=true</script>\n[Unsafe](javascript:alert(1))\n![Tracking](https://example.org/pixel)';
+const artifact = {ref: "report.md", sha256: "a".repeat(64), text};
+const html = renderToStaticMarkup(createElement(TeamArtifactContent, {artifact, label: "Report"}));
+assert.match(html, /<table>/); assert.match(html, /scope="col"/); assert.match(html, /<strong>Cash<\/strong>/);
+assert.match(html, /Escaped \| label/); assert.match(html, /href="https:\/\/example.org\/report"/);
+assert.doesNotMatch(html, /<script|<img|href="javascript:/);
+assert.match(html, /&lt;script&gt;/);
+const raw = renderToStaticMarkup(createElement(TeamArtifactContent, {artifact, label: "Report", raw: true}));
+assert.doesNotMatch(raw, /<table>|<a /); assert.match(raw, /\| Measure \| Value \|/);
+const chat = renderToStaticMarkup(createElement(MarkdownText, {text}));
+assert.doesNotMatch(chat, /<table>/, "Existing chat rendering stays unchanged");
+const malformed = renderToStaticMarkup(createElement(MarkdownText, {text: "| One | Two |\n|---|\n| kept | intact |", report: true}));
+assert.doesNotMatch(malformed, /<table>/); assert.match(malformed, /kept/);
+const json = renderToStaticMarkup(createElement(TeamArtifactContent, {artifact: {...artifact, ref: "report.json"}, label: "JSON"}));
+assert.doesNotMatch(json, /<table>/, "File suffix does not turn JSON evidence into a report");
+console.log("report rendering: readable table, raw fidelity, safe links and inert HTML, chat parity passed");

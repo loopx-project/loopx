@@ -1493,9 +1493,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         if (body.operation_id === "accepted-synthesis") {
           await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-synthesis",
             agent_id: "synthesizer", todo_id: "todo_synthesis", status: "accepted", worker_active: false,
-            recovery_required: false, artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64), text: '{"accepted_cash_flow":75}'}],
+            recovery_required: false, artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64), text: '{"accepted_cash_flow":75}'},
+              {ref: "report.md", sha256: "8".repeat(64), text: "# Reviewed cash allocation\n\n| Measure | Value |\n|---|---:|\n| Free cash | 75 |\n\nIndependent review retained the original conclusion."}],
             dependencies: [{operation_id: "accepted-analysis", ref: "report.json", sha256: "d".repeat(64),
-              input_ref: "accepted-input.json", relation: "uses", state: current.fixtureAdoptionState ?? "current"}]}});
+              input_ref: "accepted-input.json", relation: "uses", state: current.fixtureAdoptionState ?? "current"},
+              {operation_id: "accepted-analysis", ref: "report.md", sha256: "9".repeat(64), input_ref: "analysis.md", relation: "responds_to", state: "current"}]}});
         } else if (body.operation_id !== "accepted-analysis") {
           await route.fulfill({status: 409, json: {ok: false, error: "delegation artifact unavailable"}});
         } else {
@@ -1507,7 +1509,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
               source_artifacts: [{ref: "report.json", sha256: "d".repeat(64)}],
               consumer_artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64)}], state: current.fixtureAdoptionState}]} : {}),
             artifacts: [{ref: "report.json", sha256: "d".repeat(64),
-              text: '{"cash_flow":75,"note":"<script>window.artifactExecuted=true</script>"}'}]}});
+              text: '{"cash_flow":75,"note":"<script>window.artifactExecuted=true</script>"}'},
+              {ref: "report.md", sha256: "9".repeat(64), text: "# Cash allocation\n\n| Measure | Value |\n|---|---:|\n| Free cash | 75 |\n\n[Source](https://example.org/report)\n<script>window.artifactExecuted=true</script>"}]}});
         }
         return;
       }
@@ -1521,7 +1524,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           agent_id: "cloud-reviewer", todo_id: "todo_review", status: "running", worker_active: false, recovery_required: true}]
           : [{record_id: "a".repeat(64), operation_id: "accepted-analysis", agent_id: "local-analyst",
             todo_id: "todo_analysis", status: "accepted", worker_active: false, recovery_required: false,
-            artifacts: [{ref: "report.json", sha256: "d".repeat(64)}]},
+            artifacts: [{ref: "report.json", sha256: "d".repeat(64)}, {ref: "report.md", sha256: "9".repeat(64)}]},
           {record_id: "b".repeat(64), operation_id: "stale-output", status: "unavailable", recovery_required: null}];
         await route.fulfill({json: {items, has_more: !body.cursor, next_cursor: body.cursor ? null : "b".repeat(64), page_readback_complete: Boolean(body.cursor)}});
         return;

@@ -149,6 +149,12 @@ issue-to-reviewed-patch is the next already-owned use case, not a second blocker
 for the first research preview. Lark is an optional later transport using the
 same session, audience and result owners; first local onboarding must not require
 Lark configuration. CLI readback remains part of every claimed local journey.
+Merged [#4814](https://github.com/loopx-project/loopx/pull/4814) advances this
+optional S1/S5 entry: manager and Goal Lark cards share one canonical team-plan
+decision, authenticated delivery bindings and retry recovery. Qualify real
+dual-card interaction separately; assignment is not execution, adoption or a
+completed research journey. Keep readable results and local first use on the
+critical path, then connect that proven journey to the optional Lark entry.
 
 #### Delivery order, owners and release claims
 

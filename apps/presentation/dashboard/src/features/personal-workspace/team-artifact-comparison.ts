@@ -2,6 +2,15 @@ import type {DelegationDependency, DelegationReadback} from "../../data/chat";
 
 type Artifact = NonNullable<DelegationReadback["artifacts"]>[number];
 
+/** A reading convenience only; the user can compare any returned artifact. */
+export function preferredComparisonIndex(ref: string, artifacts: Artifact[]): number {
+  const exact = artifacts.findIndex(row => row.ref === ref);
+  if (exact >= 0) return exact;
+  const extension = ref.match(/\.[^./]+$/)?.[0].toLowerCase();
+  const sameFormat = extension ? artifacts.findIndex(row => row.ref.toLowerCase().endsWith(extension)) : -1;
+  return Math.max(0, sameFormat);
+}
+
 /** Compare only the exact source version bound to the request, never a newer file. */
 export function comparisonSource(link: DelegationDependency, source: DelegationReadback): Artifact | null {
   if (link.state !== "current" || source.operation_id !== link.operation_id ||

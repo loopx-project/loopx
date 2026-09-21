@@ -37,6 +37,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 
 type Block =
   | { type: "code"; text: string }
+  | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "heading"; level: number; text: string }
   | { type: "list"; ordered: boolean; items: string[] }
   | { type: "paragraph"; lines: string[] };
@@ -44,7 +45,11 @@ type Block =
 const UNORDERED = /^\s*[-*•]\s+(.*)$/;
 const ORDERED = /^\s*\d{1,2}[.、)]\s+(.*)$/;
 
-function parseBlocks(text: string): Block[] {
+function tableCells(line: string) {
+  return line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, "|"));
+}
+
+function parseBlocks(text: string, report: boolean): Block[] {
   const lines = text.split("\n");
   const blocks: Block[] = [];
   let paragraph: string[] = [];
@@ -78,6 +83,22 @@ function parseBlocks(text: string): Block[] {
       i += 1;
       continue;
     }
+    // Report tables are opt-in; ordinary chat keeps its existing rendering.
+    if (report && line.includes("|") && i + 1 < lines.length) {
+      const headers = tableCells(line), separators = tableCells(lines[i + 1]);
+      if (headers.length === separators.length && separators.every(cell => /^:?-{3,}:?$/.test(cell))) {
+        flushParagraph();
+        const rows: string[][] = [];
+        i += 2;
+        while (i < lines.length && lines[i].includes("|")) {
+          const cells = tableCells(lines[i]);
+          if (cells.length !== headers.length) break;
+          rows.push(cells); i++;
+        }
+        blocks.push({type: "table", headers, rows});
+        continue;
+      }
+    }
     if (UNORDERED.test(line) || ORDERED.test(line)) {
       flushParagraph();
       const ordered = ORDERED.test(line);
@@ -104,16 +125,22 @@ function parseBlocks(text: string): Block[] {
   return blocks;
 }
 
-export function MarkdownText({ text }: { text: string }) {
+export function MarkdownText({ text, report = false }: { text: string; report?: boolean }) {
   return (
     <div className="personal-md">
-      {parseBlocks(text).map((block, index) => {
+      {parseBlocks(text, report).map((block, index) => {
         const key = `b${index}`;
         if (block.type === "code") {
           return <pre className="personal-md-pre" key={key}><code>{block.text}</code></pre>;
         }
         if (block.type === "heading") {
           return <p className={`personal-md-heading is-h${block.level}`} key={key}>{renderInline(block.text, key)}</p>;
+        }
+        if (block.type === "table") {
+          return <div className="personal-md-table-scroll" tabIndex={0} key={key}><table>
+            <thead><tr>{block.headers.map((cell, n) => <th scope="col" key={n}>{renderInline(cell, `${key}-h${n}`)}</th>)}</tr></thead>
+            <tbody>{block.rows.map((row, n) => <tr key={n}>{row.map((cell, c) => <td key={c}>{renderInline(cell, `${key}-${n}-${c}`)}</td>)}</tr>)}</tbody>
+          </table></div>;
         }
         if (block.type === "list") {
           const items = block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>);
