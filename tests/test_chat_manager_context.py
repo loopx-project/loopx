@@ -10,6 +10,7 @@ import pytest
 import loopx.chat_manager_context as context
 from loopx.chat_manager import (
     MANAGER_AGENT_GOAL_ID,
+    MANAGER_AGENT_OBJECTIVE,
     MANAGER_CONTEXT_VERSION,
     manager_model_config,
     manager_workspace,
@@ -296,6 +297,23 @@ def test_source_health_rows_type_a_window_that_read_nothing():
     assert read[0]["reason"] is None
     assert read[0]["coverage_effect"] is None
     assert read[0]["next_action"] is None
+
+
+def test_manager_prompt_uses_the_window_source_health_rows_as_guidance():
+    """The window publishes source_health rows, so the prompt has to name them.
+
+    The rows ship as data in every Turn; without a matching sentence the answer
+    only reads remote_evidence, and a source that was declared but contributed
+    nothing stays an unexplained gap. The wording also keeps the coverage effect
+    explicitly guidance rather than a machine-checked obligation.
+    """
+
+    assert "evidence_window.source_health carries one typed row per declared source" in (
+        MANAGER_AGENT_OBJECTIVE
+    )
+    assert "including the local source" in MANAGER_AGENT_OBJECTIVE
+    assert "next_action as the repair" in MANAGER_AGENT_OBJECTIVE
+    assert "not a machine-checked obligation" in MANAGER_AGENT_OBJECTIVE
 
 
 def test_remote_source_rows_are_typed_and_never_read_as_no_progress():
