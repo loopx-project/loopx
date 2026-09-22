@@ -182,7 +182,7 @@ Typed failure class of a settlement step.
 - Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
 - python: [`SettlementFailureKind`](../../loopx/control_plane/effect_program.py).
 - typescript: [`SETTLEMENT_FAILURE_KINDS`](../../loopx/control_plane/effect_program.ts).
-- Values / 值: `invalid_identity`, `receipt_missing`, `identity_mismatch`, `writeback_missing`, `writeback_rejected`, `quota_spend_rejected`, `terminal_closeout_rejected`, `cancelled`, `permission_denied`, `budget_rejected`, `effect_outcome_unknown`.
+- Values / 值: `invalid_identity`, `receipt_missing`, `receipt_unbound`, `identity_mismatch`, `writeback_missing`, `writeback_rejected`, `quota_spend_rejected`, `terminal_closeout_rejected`, `cancelled`, `permission_denied`, `budget_rejected`, `effect_outcome_unknown`.
 
 ## settlement_step_kind
 

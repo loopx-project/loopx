@@ -529,7 +529,11 @@ function inferPersistedIdentity(
 
 function failedIdentity(
   reason: string,
-  kind: "invalid_identity" | "identity_mismatch" | "receipt_missing",
+  kind:
+    | "invalid_identity"
+    | "identity_mismatch"
+    | "receipt_missing"
+    | "receipt_unbound",
   details?: JsonObject,
 ) {
   return settlementFailed<JsonObject>({
@@ -615,13 +619,15 @@ function resolveIdentity(
     // the guard's own same-turn reconciliation owns that, so there is one
     // binder rather than two -- which means the caller has to be told the state
     // and the exact repair instead of being handed a binding mismatch it cannot
-    // act on.
+    // act on. The state also gets its own failure kind, so a consumer can branch
+    // on the missing binding without reading details.binding_kind: the receipt
+    // exists and is well-formed here, which is not what identity_mismatch means.
     return failedIdentity(
       "the quota should-run receipt for this turn carries no settlement binding " +
         `yet (turn_instance_id ${turnInstanceId}); rebind it through the guard's ` +
         "same-turn reconciliation, then settle: quota should-run --turn-instance-id " +
         `${turnInstanceId} --todo-id ${identity.todo_id ?? "<todo_id>"}`,
-      "identity_mismatch",
+      "receipt_unbound",
       {
         binding_kind: "unbound",
         requested_binding_kind: identity.binding_kind,

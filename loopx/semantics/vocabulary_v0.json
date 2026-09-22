@@ -581,6 +581,7 @@
       "values": [
         "invalid_identity",
         "receipt_missing",
+        "receipt_unbound",
         "identity_mismatch",
         "writeback_missing",
         "writeback_rejected",
@@ -593,6 +594,7 @@
       ],
       "value_notes": {
         "invalid_identity": "A validation-step rejection of the identity's own shape, judged in isolation before any comparison with a durable record: no identity object, a blank goal, agent or turn instance id, both or neither work-item binding, a turn instance id failing the public-safe pattern, a missing effect id, or an effect id that disagrees with the one recomputed from that same identity. Self-inconsistency inside one plan, as opposed to identity_mismatch which compares two records.",
+        "receipt_unbound": "A settlement identity was compared with this Turn's persisted guard receipt, and that receipt declares no binding of its own: the guard committed before any work item was chosen, or it declined the explicit choice it was handed, so there is nothing to compare against yet. identity_mismatch needs two records that disagree; receipt_unbound names the single-record case where the receipt exists but carries neither a Todo nor an autonomous replan binding.",
         "receipt_missing": "A receipt or phase record needed to proceed is absent or not durably committed and no more specific kind applies: completed phases are not an ordered prefix of the transaction phases, validation is required but not completed, a phase marked completed carries a payload that is not committed, or readback finds no heartbeat receipt, quota spend or terminal closeout event.",
         "identity_mismatch": "A well-formed identity compared against a second durable record names a different effect or binding: the journal's committed effect id differs from the plan's, a heartbeat receipt's binding or settlement effect id differs from the request, or a prepared attempt's effect reference does not match the effect id and step kind. The contrast with invalid_identity is that this failure needs two records to detect.",
         "writeback_missing": "Raised at exactly one site, in the writeback readback, when the accountable refresh-state run or its matching event is null for this identity: the durable writeback receipt was never found. It is absence, never refusal, which is what separates it from writeback_rejected.",

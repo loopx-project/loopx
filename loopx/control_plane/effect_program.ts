@@ -108,6 +108,7 @@ export type SettlementBindingKind = (typeof SETTLEMENT_BINDING_KINDS)[number];
 export const SETTLEMENT_FAILURE_KINDS = [
   "invalid_identity",
   "receipt_missing",
+  "receipt_unbound",
   "identity_mismatch",
   "writeback_missing",
   "writeback_rejected",

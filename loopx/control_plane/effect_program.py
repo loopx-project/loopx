@@ -185,6 +185,7 @@ class SettlementBindingKind(StrEnum):
 class SettlementFailureKind(StrEnum):
     INVALID_IDENTITY = "invalid_identity"
     RECEIPT_MISSING = "receipt_missing"
+    RECEIPT_UNBOUND = "receipt_unbound"
     IDENTITY_MISMATCH = "identity_mismatch"
     WRITEBACK_MISSING = "writeback_missing"
     WRITEBACK_REJECTED = "writeback_rejected"
