@@ -1283,9 +1283,10 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
         "$.unsettled_host_turn_recovery"
     )
     assert contract["cli_channel"]["spend_after_validation"] is False
-    assert "monitor_changed:<monitor-todo-id>" in contract["cli_channel"][
+    assert "--turn-instance-id turn-unsettled-prior" in contract["cli_channel"][
         "next_cli_actions"
     ][1]
+    assert packet["repair"] == "resume_prior_turn"
     assert "settlement_identity" not in recovery["heartbeat_receipt"]
     assert recovery["heartbeat_receipt"]["semantic_replan_obligation_id"] == (
         replan_obligation_id

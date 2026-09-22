@@ -295,10 +295,16 @@ whose capabilities are known when the automation is installed.
   `closeout_required=true`. A fresh heartbeat checks the immediately preceding
   flagged guard against its exact writeback/spend receipts and typed Todo
   lifecycle. If neither is present, `unsettled_host_turn_recovery_v0` preempts
-  ordinary work selection. The host must repair the prior closeout, rerun the
-  same current Turn, and then continue an eligible successor. Recovery is
-  idempotent and no-spend; receipts created before this explicit flag are not
-  retroactively treated as unsettled;
+  ordinary work selection. For an open advancement Todo without a resume gate,
+  the typed `resume_prior_turn` route re-enters the original Turn guard: inspect
+  existing effects first, follow its current eligibility and settlement contract,
+  and account only verified work under that original identity. Missing receipts
+  are not evidence of an external wait; never invent `monitor_changed` or a
+  successor to clear recovery. After legal closeout, rerun the same current Turn
+  and continue eligible work. Recovery selection itself is idempotent and
+  no-spend; actual validated delivery retains normal accounting. Genuine external
+  waits and monitor observations retain their existing typed closeouts. Receipts
+  created before the explicit flag are not retroactively treated as unsettled;
 - use `user_gate` only for an exact authority boundary such as approval to merge
   an aggregate branch into `main`, release, launch a benchmark, or perform a
   protected action;

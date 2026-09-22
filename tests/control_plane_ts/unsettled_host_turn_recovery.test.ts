@@ -413,7 +413,7 @@ test("a committed monitor-poll closeout is not accepted for a non-monitor Turn",
       ),
     );
     assert.equal(verdict.status, "recovery_required");
-    assert.equal((verdict.obligation as JsonObject).repair, "lifecycle");
+    assert.equal((verdict.obligation as JsonObject).repair, "resume_prior_turn");
   } finally {
     await runtime.close();
   }
@@ -484,14 +484,45 @@ test("an unsettled Turn keeps the exact public recovery payload", async () => {
       binding_task_class: "advancement_task",
       binding_target_key: "key-1",
       binding_cadence: "1h",
-      repair: "lifecycle",
+      repair: "resume_prior_turn",
     });
     const obligation = verdict.obligation as JsonObject;
     assert.equal(obligation.lane, "control_plane_recovery");
     assert.equal(obligation.must_attempt_work, true);
     assert.equal(obligation.delivery_allowed, false);
     assert.equal(obligation.notify, "DONT_NOTIFY");
-    assert.equal(obligation.repair, "lifecycle");
+    assert.equal(obligation.repair, "resume_prior_turn");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("continuation is a guarded route, not a closeout or an inferred wait", async () => {
+  const runtime = await runtimeWith([
+    receipt("turn-a", closeoutRequired("turn-a", "todo_alpha")),
+  ]);
+  try {
+    const candidate = candidateFrom(await preflight(runtime.root));
+    for (const missing of [
+      ["durable_writeback_receipt", "quota_spend_receipt"],
+      ["quota_spend_receipt"],
+    ]) {
+      for (const [todo, repair] of [
+        [ADVANCEMENT_OPEN, "resume_prior_turn"],
+        [{...ADVANCEMENT_OPEN, has_successor_todo_ids: true}, "resume_prior_turn"],
+        [{...ADVANCEMENT_OPEN, has_resume_when: true}, "lifecycle"],
+        [{...ADVANCEMENT_OPEN, task_class: "user_gate"}, "lifecycle"],
+        [{...ADVANCEMENT_OPEN, status: "open "}, "lifecycle"],
+        [null, "lifecycle"],
+      ] as const) {
+        const verdict = reduce(candidate, missing, READ_TODO(todo));
+        assert.equal(verdict.status, "recovery_required");
+        assert.equal((verdict.recovery as JsonObject).repair, repair);
+        assert.equal((verdict.obligation as JsonObject).delivery_allowed, false);
+        assert.equal(verdict.accepted_closeout, undefined);
+        assert.deepEqual((verdict.recovery as JsonObject).missing_receipts, missing);
+      }
+    }
   } finally {
     await runtime.close();
   }

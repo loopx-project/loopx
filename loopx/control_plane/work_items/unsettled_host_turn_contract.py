@@ -26,6 +26,27 @@ def recovery_cli_actions(
     )
     # The repair lane is a typed fact from the recovery transaction; this
     # renderer only turns it into operator commands.
+    if recovery.get("repair") == "resume_prior_turn":
+        prior_turn_id = str(recovery["prior_turn_instance_id"])
+        return [
+            (
+                "inspect existing effects and persisted outcomes before retrying; "
+                "missing receipts do not establish an external wait or authorize "
+                "duplicate execution. Re-enter the original guard and follow its "
+                "fresh eligibility and settlement contract; record only verified "
+                "outcomes, never fabricate progress to clear recovery"
+            ),
+            (
+                f"{typed_quota_guard} --turn-instance-id "
+                f"{shlex.quote(prior_turn_id)} --todo-id "
+                f"{shlex.quote(prior_todo_id)}"
+            ),
+            (
+                "after the original Turn is legally settled, rerun the current "
+                "Turn below; recovery itself does not spend quota"
+            ),
+            f"{typed_quota_guard}{current_turn_arg}",
+        ]
     if recovery.get("repair") == "monitor_poll":
         prior_turn_id = str(
             recovery.get("prior_turn_instance_id") or "<prior-turn-id>"
@@ -54,7 +75,9 @@ def recovery_cli_actions(
     return [
         (
             "inspect unsettled_host_turn_recovery and supply a typed host "
-            "observation; never infer external state from Todo prose"
+            "observation; never infer external state from Todo prose. Only a "
+            "verified external-only wait may use the conditional transition below; "
+            "otherwise repair the actual lifecycle or missing binding"
         ),
         (
             f"{command_prefix} todo update --goal-id {goal_id} --todo-id "
