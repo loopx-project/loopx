@@ -8,11 +8,14 @@
 
 <sub>在 Codex、Claude Code、Cursor 等 agent harness 之上，持久保存目标、gate、todo、证据、quota 与交接状态。LoopX 负责跨轮次的状态与执行边界，harness 负责有界执行。</sub>
 
+**[LHTB](https://zli12321.github.io/LHTB/index.html) · 46 个任务 · GPT-5.6 Sol：**LoopX 1.0.3 Heartbeat 平均 Reward 达到 **0.4948**，较 **Plain Codex 提升 17.3%**，较**原生 Codex Goal 提升 10.6%**。<br>
+<sub><a href="#lhtb-results">查看结果与通过率 ↓</a></sub>
+
 <a href="https://trendshift.io/repositories/102379?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx 在 Trendshift 的趋势排名" width="220" height="48"></a>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20active-brightgreen.svg)](docs/product/release-readiness.md)
 
-[产品首页](https://loopx-project.github.io/loopx/) · [博客](https://loopx-project.github.io/loopx/blog/zh/) · [文档](https://loopx-project.github.io/loopx/docs/) · [开发者手册](https://loopx-project.github.io/loopx/docs/book/) · [试用 LoopX](#试用-loopx) · [查看真实 Loop](#证据) · [理解工作原理](#为什么需要-loopx) · [English](README.md)
+[产品首页](https://loopx-project.github.io/loopx/) · [博客](https://loopx-project.github.io/loopx/blog/zh/) · [文档](https://loopx-project.github.io/loopx/docs/) · [开发者手册](https://loopx-project.github.io/loopx/docs/book/) · [试用 LoopX](#试用-loopx) · [LHTB 结果](#lhtb-results) · [查看真实 Loop](#证据) · [理解工作原理](#为什么需要-loopx) · [English](README.md)
 
 </div>
 
@@ -26,6 +29,12 @@ LoopX 是开放且 Provider-neutral 的轻量 state kernel，也是 local-first
 > 让 Loop 持续向前，让关键判断留在人手里。
 
 ## 学习 LoopX
+
+| 你想做什么 | 从这里开始 |
+| --- | --- |
+| 跑第一个长程任务 | [安装并连接项目](#试用-loopx) |
+| 用可视化界面管理工作 | [个人 Agent 工作区](#认识个人-agent-工作区) |
+| 先看证据再决定是否采用 | [LHTB 结果](#lhtb-results) · [真实项目案例](#证据) |
 
 - **开发者手册** - 从控制面基础到项目接入和开发者贡献的双语学习路径。[简体中文](https://loopx-project.github.io/loopx/docs/book/) · [English](https://loopx-project.github.io/loopx/docs/book/en/)
 - **快速开始** - 安装、连接项目并运行第一个受治理的 Loop。[指南](docs/guides/getting-started.md)
@@ -129,6 +138,38 @@ LoopX 不是生产自动化控制器。危险权限、生产写入、公开发�
 
 ## 证据
 
+<a id="lhtb-results"></a>
+
+### LHTB：同一模型，更高的平均 Reward
+
+**46 个相同任务上，LoopX 1.0.3 Heartbeat 平均 Reward 达到 0.4948：**
+较 **Plain Codex 提升 17.3%**，较**原生 Codex Goal 提升 10.6%**。
+三者均使用 GPT-5.6 Sol、max 推理档位，关闭 Web Search。
+[Long-Horizon Terminal-Bench](https://zli12321.github.io/LHTB/index.html) 不只考察代码：任务覆盖研究复现、科学仿真、
+多模态分析、专业工作流、游戏与系统工程等方向。
+
+| 执行模式 | 平均 Reward ↑ | 严格通过率（≥0.95） | 通过率（≥0.80） |
+| --- | ---: | ---: | ---: |
+| Plain Codex | 0.4218 | 7/46（15.2%） | 12/46（26.1%） |
+| 原生 Codex Goal | 0.4475 | 4/46（8.7%） | 14/46（30.4%） |
+| **LoopX 1.0.3 Heartbeat** | **0.4948** | **7/46（15.2%）** | **15/46（32.6%）** |
+
+≥0.80 是事后补充观察口径，≥0.95 仍是 benchmark 的严格通过阈值。
+本组没有恰好等于 0.80 的分数，因此这里的计数与研究简报的 >0.80 一致。
+
+相对原生 Goal，逐题 Reward **23 胜、13 平、10 负**。
+严格通过题数与 Plain Codex 相同；平均 Reward 也计入部分完成的得分，
+因此均分提升不代表每题都改善，也不代表比 Plain 完整解决了更多任务。
+
+每个任务、每种模式仅一条有效轨迹；包含指定替代运行，运行时与预算不完全相同，
+部分 Heartbeat 替代运行使用了更长预算。这是观测到的系统结果，
+不是等预算效率结论，也未单独识别 LoopX 的因果增益。
+
+[交互结果、逐题对比与方法](https://loopx-project.github.io/loopx/benchmarks/lhtb/?lang=zh)
+· [五臂研究与边界](benchmark/LHTB/studies/five-arm-gpt56sol-max/README.md)
+· [公开逐题分数](benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json)
+
+Benchmark 之外，LoopX 也有可检查的长程项目证据。
 OpenViking 的公开贡献序列与脱敏的 owner-run Auto ML showcase 各自跨越
 **200+ 小时自然时长**，保留多轮 Todo、决策和证据更新。这里衡量的是项目经过的
 wall-clock 时间，不是连续模型执行时长或无人值守的生产自治。点击原图查看
@@ -201,8 +242,8 @@ creator dogfooding、reproducible demo 和证据强度标签见
   在相同的 15 个任务上对照 5 种执行模式，比较自验证行为、得分与成本。
   更多自验证并未稳定转化为更高得分。
 - **[LHTB × LoopX](https://loopx-project.github.io/loopx/benchmarks/lhtb/?lang=zh)**：
-  在 46 个长程终端任务上对比 5 种执行机制，研究持久状态、Todo、replan
-  与 fresh executor session。
+  从[上方核心结果](#lhtb-results)进入五种执行机制、逐题对比、退步案例
+  与探索性任务类型分析。
 - **[DeepSWE 行为分析](https://loopx-project.github.io/loopx/benchmarks/deepswe/behavior-discovery/)**：
   通过精选案例观察领域提示、需求保留与验证选择之间的关系，提出有待复验的机制假设。
 
@@ -524,8 +565,8 @@ LoopX 当前有三个活跃战略计划和一个架构与研究孵化器。这�
   并开展受控的机制研究。
   [方向 Tracker](https://github.com/loopx-project/loopx/issues/3243)
 - **Operator Surface 与 IM Integration：**建设 operator workspace、session
-  record 与有界协作表面；当前在专用 integration branch 孵化，由 `@maxliux5`
-  作为 implementation lead。
+  record 与有界协作表面。Personal Workspace 已交付；统一管家、执行与恢复
+  旅程仍在验收，由 `@maxliux5` 作为 implementation lead。
   [方向 Tracker](https://github.com/loopx-project/loopx/issues/3244)
 - **Shared Goal Authority 与跨 Host 协作：**为显式共享 goal 提供
   provider-neutral 协调；NoKV 是尚未晋级的 provider candidate，而不是新的控制面

@@ -8,11 +8,14 @@
 
 <sub>Runs on top of Codex, Claude Code, Cursor, and other agent harnesses. LoopX preserves objectives, gates, todos, evidence, quota, and handoffs across turns; the harness executes bounded work.</sub>
 
+**[LHTB](https://zli12321.github.io/LHTB/index.html) · 46 tasks · GPT-5.6 Sol:** LoopX 1.0.3 Heartbeat reaches **0.4948 mean reward** — **+17.3% vs Plain Codex**, **+10.6% vs native Codex Goal**.<br>
+<sub><a href="#lhtb-results">Results and pass rates ↓</a></sub>
+
 <a href="https://trendshift.io/repositories/102379?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20active-brightgreen.svg)](docs/product/release-readiness.md)
 
-[Public website](https://loopx-project.github.io/loopx/) · [Blog](https://loopx-project.github.io/loopx/blog/) · [Docs](https://loopx-project.github.io/loopx/docs/) · [Developer Book](https://loopx-project.github.io/loopx/docs/book/en/) · [Try LoopX](#try-loopx) · [See real loops](#evidence) · [How it works](#why-loopx) · [简体中文](README.zh-CN.md)
+[Public website](https://loopx-project.github.io/loopx/) · [Blog](https://loopx-project.github.io/loopx/blog/) · [Docs](https://loopx-project.github.io/loopx/docs/) · [Developer Book](https://loopx-project.github.io/loopx/docs/book/en/) · [Try LoopX](#try-loopx) · [LHTB results](#lhtb-results) · [See real loops](#evidence) · [How it works](#why-loopx) · [简体中文](README.zh-CN.md)
 
 </div>
 
@@ -30,6 +33,12 @@ to hand off across turns, tools, and agents.
 > Keep the loop moving. Keep the judgment human.
 
 ## Learn LoopX
+
+| Your next step | Start here |
+| --- | --- |
+| Run your first long-horizon task | [Install and connect](#try-loopx) |
+| Manage work through a visual interface | [Personal Agent Workspace](#meet-the-personal-agent-workspace) |
+| Inspect the evidence before adopting | [LHTB results](#lhtb-results) · [Real project cases](#used-in-real-projects) |
 
 - **Developer Book** - the curated bilingual path from control-plane foundations to project onboarding and developer contributions. [中文版](https://loopx-project.github.io/loopx/docs/book/) · [English](https://loopx-project.github.io/loopx/docs/book/en/)
 - **Getting started** - install, connect a project, and run your first governed loop. [Guide](docs/guides/getting-started.md)
@@ -148,6 +157,42 @@ publishing, production writes, and final ownership stay with the human.
 
 ## Evidence
 
+<a id="lhtb-results"></a>
+
+### LHTB: Higher Mean Reward With the Same Model
+
+**LoopX 1.0.3 Heartbeat reaches 0.4948 mean reward across 46 matched tasks:**
+**+17.3% over Plain Codex** and **+10.6% over native Codex Goal**.
+All three use GPT-5.6 Sol, max reasoning effort, and disabled Web Search.
+[Long-Horizon Terminal-Bench](https://zli12321.github.io/LHTB/index.html) goes beyond coding: these tasks span research
+reproduction, scientific simulation, multimodal analysis, professional
+workflows, games, and systems work.
+
+| Execution mode | Mean reward ↑ | Strict pass rate (≥0.95) | Pass rate (≥0.80) |
+| --- | ---: | ---: | ---: |
+| Plain Codex | 0.4218 | 7/46 (15.2%) | 12/46 (26.1%) |
+| Native Codex Goal | 0.4475 | 4/46 (8.7%) | 14/46 (30.4%) |
+| **LoopX 1.0.3 Heartbeat** | **0.4948** | **7/46 (15.2%)** | **15/46 (32.6%)** |
+
+The ≥0.80 threshold is a supplementary, post-hoc view; ≥0.95 remains the
+benchmark's strict solved threshold. No score in this study equals 0.80, so
+these counts also match the study brief's >0.80 view.
+
+Against native Goal, task-level rewards improve on **23**, tie on **13**, and
+regress on **10** tasks. Strict solves match Plain Codex, so the mean gain is
+not a claim that every task improves or that more tasks are fully solved than
+Plain. Mean reward also credits partial progress.
+
+One effective trial per task and mode; designated replacement trials and
+unequal runtime/budgets, including longer budgets for some Heartbeat replacements.
+These are observed system results, not an equal-budget efficiency result or
+an isolated causal estimate of LoopX's effect.
+
+[Interactive results, task comparisons and methodology](https://loopx-project.github.io/loopx/benchmarks/lhtb/)
+· [Five-arm study and limits](benchmark/LHTB/studies/five-arm-gpt56sol-max/README.md)
+· [Public task-level scores](benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json)
+
+Beyond benchmarks, LoopX also has inspectable long-running project evidence.
 The public OpenViking contribution sequence and the redacted, owner-run
 Auto ML showcase each span **200+ hours of elapsed loop lifetime**, preserving
 bounded turns, decisions, and evidence updates. This measures wall-clock project
@@ -230,8 +275,8 @@ creator dogfooding, reproducible demos, and explicit evidence-strength labels.
   Five execution modes on 15 matched tasks compare self-verification, scores,
   and cost. More self-verification did not consistently yield higher scores.
 - **[LHTB × LoopX](https://loopx-project.github.io/loopx/benchmarks/lhtb/):**
-  Five execution mechanisms on 46 long-horizon terminal tasks compare durable
-  state, bounded Todos, replanning, and fresh executor sessions.
+  The [results above](#lhtb-results) lead into five execution mechanisms,
+  task-level comparisons, regressions, and exploratory task-type analysis.
 - **[DeepSWE behavior analysis](https://loopx-project.github.io/loopx/benchmarks/deepswe/behavior-discovery/)** (Chinese):
   Selected cases examine how domain hints relate to requirement retention and
   verification choices, offering mechanism hypotheses for further testing.
@@ -589,8 +634,9 @@ artifacts, and stable reference contracts remain the source of shipped truth.
   and controlled mechanism research across complementary benchmark
   environments. [Direction tracker](https://github.com/loopx-project/loopx/issues/3243)
 - **Operator Surface and IM Integration:** an operator workspace, session
-  records, and bounded collaboration surfaces, currently incubating on a
-  dedicated integration branch with `@maxliux5` as implementation lead.
+  records, and bounded collaboration surfaces. The Personal Workspace is
+  shipped; unified steward, execution, and recovery journeys remain under
+  qualification, with `@maxliux5` as implementation lead.
   [Direction tracker](https://github.com/loopx-project/loopx/issues/3244)
 - **Shared Goal Authority and Cross-host Coordination:** provider-neutral
   coordination for explicitly shared goals, with NoKV as an unpromoted

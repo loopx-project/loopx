@@ -46,6 +46,17 @@ by itself establish a C2 uplift claim.
 
 ## Current work
 
+- **LHTB result highlight:** GPT-5.6 Sol + LoopX 1.0.3 Heartbeat reaches
+  **0.4948 mean reward** on 46 tasks: **+17.3% vs Plain Codex** and
+  **+10.6% vs native Codex Goal**. Strict solves are 7/46, matching Plain and
+  above Goal's 4/46. At the supplementary post-hoc threshold ≥0.80, LoopX /
+  Plain / Goal reach **15/46 / 12/46 / 14/46** (32.6% / 26.1% / 30.4%);
+  no score equals 0.80 in this study. One effective trial per task-arm, designated replacements
+  and unequal execution budgets make this an exploratory system comparison,
+  not an equal-budget efficiency or isolated causal result.
+  [Full comparison and limits](LHTB/studies/five-arm-gpt56sol-max/README.md)
+  · [Interactive brief](https://loopx-project.github.io/loopx/benchmarks/lhtb/)
+  · [LHTB official website](https://zli12321.github.io/LHTB/index.html).
 - [`swe-marathon/README.md`](swe-marathon/README.md) links the published
   [SWE-Marathon research brief](https://huangruiteng.github.io/loopx/benchmarks/swe-marathon/).
 - [`LHTB/studies/five-arm-gpt56sol-max/README.md`](LHTB/studies/five-arm-gpt56sol-max/README.md)
