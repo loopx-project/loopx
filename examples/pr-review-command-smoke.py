@@ -59,6 +59,33 @@ def assert_public_safe(payload: dict[str, object]) -> None:
             )
 
 
+# `--check-merge-readiness` now mandates a Goal id. Every authoritative
+# invocation an agent may read has to carry it, or the canonical self-merge
+# gate fails deterministically before it can record its observation.
+MERGE_READINESS_GUIDANCE_PATHS = (
+    REPO_ROOT / "AGENTS.md",
+    REPO_ROOT / "loopx" / "capabilities" / "pr_review_queue" / "README.md",
+    REPO_ROOT / "loopx" / "capabilities" / "pr_review_queue" / "catalog_entry.py",
+    PR_REVIEW_SKILL,
+    PR_MERGE_SKILL,
+)
+
+
+def assert_merge_readiness_invocations_require_goal_id() -> None:
+    for path in MERGE_READINESS_GUIDANCE_PATHS:
+        source = path.read_text(encoding="utf-8")
+        for span in re.findall(r"`[^`]*--check-merge-readiness[^`]*`", source):
+            assert "--goal-id" in span, (
+                f"{path.name} must pass --goal-id to --check-merge-readiness: {span}"
+            )
+        for line in source.splitlines():
+            if "--check-merge-readiness" in line and "`" not in line:
+                assert "--goal-id" in line, (
+                    f"{path.name} must pass --goal-id to --check-merge-readiness: "
+                    f"{line.strip()}"
+                )
+
+
 def main() -> int:
     skill_source = PR_REVIEW_SKILL.read_text(encoding="utf-8")
     skill_text = " ".join(skill_source.split())
@@ -149,6 +176,7 @@ def main() -> int:
         "A merge decision without this evidence is not authorized",
     ):
         assert phrase in merge_text, phrase
+    assert_merge_readiness_invocations_require_goal_id()
 
     assert _github_search_date("2026-06-28T00:00:00+08:00") == "2026-06-27"
     assert _github_search_date("2026-06-28T00:00:00Z") == "2026-06-28"

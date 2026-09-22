@@ -122,7 +122,8 @@ merged commit and correcting the rule that let it through.
 - the change is single-purpose and easy to review from the diff;
 - required checks or focused smokes have passed;
 - the exact head carries a published self-review, and
-  `loopx pr-review --check-merge-readiness NUMBER@HEAD_OID` returned ready for
+  `loopx pr-review --goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID`
+  returned ready for
   that unchanged head. GitHub blocks formal self-approval, so on an
   author-owned PR the record is a `COMMENTED` review on the exact head that
   states the approval conclusion and an English verdict; a green CI run, a diff

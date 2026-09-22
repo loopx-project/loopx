@@ -841,7 +841,8 @@ The packet should let a reviewer move through PRs in order:
    copied as the final risk judgement.
 8. Recheck the exact head, then decide `approve`, `request changes`, `defer`, or
    `merge after checks`. Immediately before merge, require
-   `--check-merge-readiness NUMBER@HEAD_OID` to return `ready=true`.
+   `loopx pr-review --goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` to
+   return `ready=true`.
 
 A response that only lists `Open` and `Merged` PRs, scale, and recommended next
 order is incomplete for `/loopx-pr-review`; it should continue into the
@@ -871,7 +872,7 @@ A first implementation is acceptable when:
 - `--fresh-audit-exact-head NUMBER@HEAD_OID` is the only packet-level way to
   turn an unchanged valid conclusion into an actionable fresh audit, and
   malformed, absent, or already-actionable targets fail closed;
-- Goal-scoped `--check-merge-readiness NUMBER@HEAD_OID` rejects head drift, stale review
+- Goal-scoped `--goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` rejects head drift, stale review
   prose, non-approval conclusions, red/pending/unknown checks, incomplete or
   unresolved review-thread evidence, and incompatible merge state, then records
   the compact observation used to suppress only unchanged requalification;
