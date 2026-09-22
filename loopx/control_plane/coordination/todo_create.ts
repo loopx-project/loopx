@@ -216,11 +216,14 @@ export async function executeCoordinationTodoCreate(
     actor_agent_id: input.actor_agent_id,
     dry_run: input.dry_run,
   });
-  const existing = await createReceipt(input, requestSha).read(store);
+  const receipt = createReceipt(input, requestSha);
+  const existing = await receipt.read(store);
   if (existing !== null) return existing;
 
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
-  const head = await store.loadAuthority();
+  const observation = await receipt.observe(store);
+  if (observation.kind === "receipt") return observation.result;
+  const head = observation.authority;
   if (head.status !== "loaded") {
     return {schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA, ...head};
   }

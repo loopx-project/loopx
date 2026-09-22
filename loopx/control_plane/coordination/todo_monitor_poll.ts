@@ -177,7 +177,9 @@ export async function executeCoordinationMonitorPoll(store: AuthorityStore,
   const previous = await receipt.read(store);
   if (previous) return previous;
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
-  const head = await store.loadAuthority();
+  const observation = await receipt.observe(store);
+  if (observation.kind === "receipt") return observation.result;
+  const head = observation.authority;
   if (head.status !== "loaded") return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, ...head};
   let plan: ReturnType<typeof planWriteback>;
   try { plan = planWriteback(input, head.head); }

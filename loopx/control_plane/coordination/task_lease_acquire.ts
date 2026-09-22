@@ -4,12 +4,10 @@ import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthoritySha256} from "./authority_store_codec.ts";
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
-import {indexCoordinationProjection, validateCoordinationTodoReadModel, prepareCoordinationProjectionCommit} from "./coordination_projection.ts";
-import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
-import {HANDOFF_MODES} from "./handoff_mode_policy.ts";
-import {requireStringLiteral} from "../runtime_decode.ts";
+import {prepareCoordinationProjectionCommit} from "./coordination_projection.ts";
+import {canonicalTaskLease} from "./task_lease_state.ts";
 import {decideTaskLeaseAcquire, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
-import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
+import {acquisitionFacts, currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {normalizeGoalId, normalizeTodoId, normalizeOwner, normalizeIdempotencyKey,
   normalizeWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
@@ -24,7 +22,7 @@ export interface CanonicalTaskLeaseAcquireInput {
 export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, raw: CanonicalTaskLeaseAcquireInput,
   beforeCommit?: (lease: JsonObject) => Promise<void>): Promise<JsonObject> {
   const schema = "loopx_canonical_task_lease_acquire_result_v0";
-  const failed = (code: string, reason: string, detail: JsonObject = {}) =>
+  const failed = (code: string, reason: string, detail: JsonObject = {}): JsonObject & {schema_version: typeof schema} =>
     ({schema_version: schema, status: "failed", changed: false, reason_code: code, reason, failure_stage: "validation", ...detail});
   let input: CanonicalTaskLeaseAcquireInput & {ttl_seconds: number};
   try {
@@ -62,47 +60,16 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
       return {...payload, fields: {...payload.fields, operation_id: identity.operation_id}};
     }});
 
-  const readFacts = async () => {
-    const head = await store.loadAuthority();
-    if (head.status !== "loaded") return {head, facts: null, mode: null};
-    validateCoordinationTodoReadModel(head.head, input.goal_id);
-    const index = indexCoordinationProjection(head.head, input.goal_id);
-    return {head, facts: canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id, input.registered_agents, input.now),
-      mode: requireStringLiteral(head.head.handoff_mode ?? "legacy", HANDOFF_MODES, "canonical handoff_mode")};
-  };
-  // Do not grant execution from a receipt that outlived its execution generation.
-  const currentProof = async (result: JsonObject): Promise<JsonObject> => {
-    if (!["applied", "no_change", "replayed", "recovered"].includes(String(result.status))) return result;
-    const {head, facts, mode} = await readFacts();
-    if (head.status !== "loaded" || facts === null) return {...failed("canonical_acquire_readback_required",
-      "acquisition receipt is durable but current authority is unavailable; retry the same request"),
-      status: "ambiguous", original_receipt: result.original_receipt, recovery: {operation_id: identity.operation_id, retry_with_same_operation_id: true}};
-    const original = canonicalTaskLease(canonicalAuthorityObject(result.lease, "original acquire lease"), input.goal_id, input.todo_id);
-    const current = facts.current;
-    const details = {handoff_mode: mode, original_receipt: result.original_receipt,
-      current_provider_revision: head.provider_revision, current_cursor: head.cursor};
-    const rejection = mode === "soft_claim" ? "handoff_mode_forbids_lease" : leaseOwnerRejection(facts.todo, input.owner, input.registered_agents);
-    if (rejection) return failed(rejection, `current authority rejects lease acquire replay: ${rejection}`, details);
-    if (!current || !leaseIsActive(current, input.now) || current.owner !== input.owner ||
-        current.idempotency_key !== input.idempotency_key || leaseEpoch(current) !== leaseEpoch(original) ||
-        leaseVersion(current) < leaseVersion(original)) {
-      return failed("idempotency_key_reuse", "acquire receipt belongs to a retired execution; use a new execution key", details);
-    }
-    const acceptance = acceptanceWorkGuard(head.head, input.goal_id, input.todo_id);
-    if (acceptance !== null && !acceptance.allowed) {
-      return failed(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
-        {...details, goal_acceptance_guard: acceptance});
-    }
-    // Renewal may advance version/expiry within this execution. Return current
-    // usable proof while the immutable receipt preserves the original decision.
-    return {...result, ...details, lease: current};
-  };
+  const currentProof = (result: JsonObject & {schema_version: typeof schema}) =>
+    currentLeaseAcquisitionProof(store, {...input, operation_id: identity.operation_id}, result, failed);
 
   let committed = false;
   try {
     const replay = await receipt.read(store);
     if (replay !== null) return await currentProof(replay);
-    const {head, facts, mode} = await readFacts();
+    const observation = await receipt.observe(store);
+    if (observation.kind === "receipt") return await currentProof(observation.result);
+    const {head, facts, mode} = acquisitionFacts(observation.authority, input);
     if (head.status !== "loaded" || facts === null) return failed("canonical_lease_authority_unavailable",
       "canonical lease authority is unavailable; restore the selected provider before retrying", {...head});
     const decision = decideTaskLeaseAcquire({handoff_mode: mode!, registered_agents: input.registered_agents,

@@ -23,7 +23,9 @@ export async function commitTeamPlan(store: AuthorityStore, request: JsonObject)
     }});
   const previous = await receipt.read(store);
   if (previous) return previous;
-  const head = await store.loadAuthority();
+  const observation = await receipt.observe(store);
+  if (observation.kind === "receipt") return observation.result;
+  const head = observation.authority;
   if (head.status !== "loaded") return {...head};
   // The canonical revision is included at preview. Stale work cannot be
   // admitted merely because its Markdown projection has not caught up yet.

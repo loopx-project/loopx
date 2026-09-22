@@ -2,7 +2,7 @@
  * Only trusted local owner/host adapters may invoke these mutation exports. */
 import {isAbsolute} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
-import type {AuthorityStore, AuthorityStoreHead} from "../coordination/authority_store.ts";
+import type {AuthorityStore, AuthorityStoreHead, AuthorityStoreLoadResult} from "../coordination/authority_store.ts";
 import {authorityStoreSourceAuthority} from "../coordination/authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthoritySha256,
   requireAuthorityStoreId} from "../coordination/authority_store_codec.ts";
@@ -52,8 +52,7 @@ function receiptFor(request: JsonObject, kind: "configure" | "verify") {
     decode: original => ({fields: canonicalAuthorityObject(original.result, "acceptance operation result"), changed: true})});
   return {identity, receipt};
 }
-async function current(store: AuthorityStore, request: JsonObject): Promise<AuthorityStoreHead | JsonObject> {
-  const loaded = await store.loadAuthority();
+function current(loaded: AuthorityStoreLoadResult, request: JsonObject): AuthorityStoreHead | JsonObject {
   if (loaded.status !== "loaded") return {...loaded};
   if (loaded.provider_revision !== request.expected_provider_revision) return {
     status: "conflict", changed: false, reason_code: "goal_acceptance_provider_revision_mismatch",
@@ -92,7 +91,9 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
   const command = receiptFor(request, "configure");
   const replay = await command.receipt.read(store);
   if (replay) return source(store, {...replay, projection_delivery: "not_required"});
-  const head = await current(store, request);
+  const observation = await command.receipt.observe(store);
+  if (observation.kind === "receipt") return source(store, {...observation.result, projection_delivery: "not_required"});
+  const head = current(observation.authority, request);
   if (!loaded(head)) return source(store, head);
   const previous = readGoalAcceptance(head.head, String(request.goal_id));
   let state: AcceptanceState | null = previous;
@@ -124,7 +125,9 @@ export async function commitGoalAcceptanceVerification(store: AuthorityStore, va
   const command = receiptFor(request, "verify");
   const replay = await command.receipt.read(store);
   if (replay) return source(store, {...replay, projection_delivery: "not_required"});
-  const head = await current(store, request);
+  const observation = await command.receipt.observe(store);
+  if (observation.kind === "receipt") return source(store, {...observation.result, projection_delivery: "not_required"});
+  const head = current(observation.authority, request);
   if (!loaded(head)) return source(store, head);
   const goalId = String(request.goal_id);
   const state = readGoalAcceptance(head.head, goalId);

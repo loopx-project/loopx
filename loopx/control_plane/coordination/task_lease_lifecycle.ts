@@ -109,7 +109,9 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
   try {
     const replay = await receipt.read(store);
     if (replay !== null) return replay;
-    const head = await store.loadAuthority();
+    const observation = await receipt.observe(store);
+    if (observation.kind === "receipt") return observation.result;
+    const head = observation.authority;
     if (head.status !== "loaded") return {schema_version: contract.result, ...head, failure_stage: "validation", changed: false};
     const index = indexCoordinationProjection(head.head, input.goal_id);
     validateCoordinationTodoReadModel(head.head, input.goal_id);

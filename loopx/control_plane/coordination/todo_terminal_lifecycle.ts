@@ -790,12 +790,15 @@ export async function executeCoordinationTodoTerminalLifecycle(
   const requestSha = terminalRequestSha(input);
   // Terminal recovery reports history, not present execution authority. It
   // precedes review/validation freshness even if a Monitor has since reopened.
-  const replay = await terminalReceipt(input, requestSha).read(store);
+  const receipt = terminalReceipt(input, requestSha);
+  const replay = await receipt.read(store);
   if (replay !== null) return replay;
 
   if (!await authoritySourcesCurrent()) return terminalFailure(AUTHORITY_SOURCE_CHANGED.code,
     AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
-  const head = await store.loadAuthority();
+  const observation = await receipt.observe(store);
+  if (observation.kind === "receipt") return observation.result;
+  const head = observation.authority;
   if (head.status !== "loaded") {
     return {
       schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
@@ -829,13 +832,6 @@ export async function executeCoordinationTodoTerminalLifecycle(
     return terminalFailure("todo_not_found", "Todo is missing from the canonical provider head", {
       todo_id: input.todo_id,
     }, "decision_rejection");
-  }
-  // The first receipt read can precede a peer commit while this head already
-  // observes it. Recover only the matching operation receipt; never discard a
-  // validation receipt to manufacture a terminal replay from Todo state alone.
-  if (input.command === "complete" && todo.status === "done" && input.validation_receipt !== null) {
-    const committedReplay = await terminalReceipt(input, requestSha).read(store);
-    if (committedReplay !== null) return committedReplay;
   }
   if (input.expected_role !== null && todo.role !== input.expected_role) {
     return terminalFailure(

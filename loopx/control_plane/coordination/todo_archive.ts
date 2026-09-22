@@ -97,11 +97,16 @@ export async function executeCoordinationTodoArchiveCompleted(
   });
   // Preview observes the current snapshot without consuming or replaying a
   // durable operation identity. Historical receipts precede current-head CAS.
+  const receipt = archiveReceipt(input, requestSha);
   if (!input.dry_run) {
-    const replay = await archiveReceipt(input, requestSha).read(store);
+    const replay = await receipt.read(store);
     if (replay !== null) return replay;
   }
-  const head = await store.loadAuthority();
+  const observation = input.dry_run
+    ? {kind: "authority" as const, authority: await store.loadAuthority()}
+    : await receipt.observe(store);
+  if (observation.kind === "receipt") return observation.result;
+  const head = observation.authority;
   if (head.status !== "loaded") {
     return {schema_version: COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA, ...head, changed: false};
   }

@@ -166,7 +166,9 @@ export async function executeCoordinationTodoUpdate(
       !input.registered_agents.includes(input.actor_agent_id)) {
     return failure("actor_not_registered", "Todo update requires a registered actor");
   }
-  const head = await store.loadAuthority();
+  const observation = await receipt.observe(store);
+  if (observation.kind === "receipt") return observation.result;
+  const head = observation.authority;
   if (head.status !== "loaded") {
     return {schema_version: COORDINATION_TODO_UPDATE_RESULT_SCHEMA, ...head, changed: false};
   }

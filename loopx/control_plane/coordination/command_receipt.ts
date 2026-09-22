@@ -3,7 +3,7 @@
  * Business planners and request hashes remain with their command owners. */
 import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult,
-  AuthorityStoreReceiptResult} from "./authority_store.ts";
+  AuthorityStoreReceiptResult, AuthorityStoreLoadResult} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject} from "./authority_store_codec.ts";
 import {projectionDelivery} from "../todos/projection_delivery.ts";
 
@@ -20,6 +20,12 @@ interface CommandReceiptContract<S extends string> {
   failure(code: string, reason: string): JsonObject & {schema_version: S};
 }
 type Result<S extends string> = JsonObject & {schema_version: S};
+
+/** A head and a receipt are separate reads. The receipt observed after the head
+ * wins: that head may already include this operation's effects. */
+export type CommandObservation<S extends string> =
+  | {kind: "receipt"; result: Result<S>}
+  | {kind: "authority"; authority: AuthorityStoreLoadResult};
 
 /** One envelope identity, result projection and post-commit state machine for
  * canonical Todo commands. Existing wire schemas and request digests are retained. */
@@ -54,6 +60,16 @@ export class CoordinationCommandReceipt<S extends string> {
 
   async read(store: AuthorityStore): Promise<Result<S> | null> {
     return this.project(await store.readReceipt(this.contract.identity.operation_id), "replayed");
+  }
+
+  /** Call after the initial historical lookup and command-specific source gates.
+   * Recheck before interpreting the head (including unavailable/stale heads).
+   * This is not a transaction or a write retry: a later competing commit remains
+   * subject to the provider CAS and normal post-commit receipt recovery. */
+  async observe(store: AuthorityStore): Promise<CommandObservation<S>> {
+    const authority = await store.loadAuthority();
+    const replay = await this.read(store);
+    return replay === null ? {kind: "authority", authority} : {kind: "receipt", result: replay};
   }
 
   async commit(store: AuthorityStore, commit: AuthorityStoreCommit): Promise<Result<S>> {
