@@ -27,6 +27,8 @@ loopx --format json authority-archive verify --archive ./authority.ndjson
 ```
 
 Save `archive.archive_sha256` from the compact response for recovery review.
+It identifies the canonical record hash chain and terminal seal, not the raw
+file bytes: use `verify`, rather than `sha256sum` of the NDJSON file, for this value.
 The archive is private state, written with mode `0600`; do not publish it as a
 fixture or attach it to a public PR. Checksums detect corruption and bind the
 reviewed content; they do not authenticate its author. Protect the digest and
