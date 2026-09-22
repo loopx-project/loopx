@@ -82,6 +82,7 @@ from .cli_commands import (
     handle_bootstrap_connect_command,
     handle_canary_command,
     handle_coordination_shadow_command,
+    handle_authority_archive_command,
     handle_capability_command,
     handle_doctor_command,
     handle_dreaming_command,
@@ -120,6 +121,7 @@ from .cli_commands import (
     register_bootstrap_connect_command,
     register_canary_commands,
     register_coordination_shadow_command,
+    register_authority_archive_command,
     register_capability_commands,
     register_doctor_command,
     register_dreaming_commands,
@@ -357,6 +359,7 @@ def build_parser() -> LoopXArgumentParser:
     register_explore_commands(sub, add_subcommand_format)
     register_todo_command(sub, add_subcommand_format)
     register_coordination_shadow_command(sub, add_subcommand_format)
+    register_authority_archive_command(sub, add_subcommand_format)
     register_task_lease_command(sub, add_subcommand_format)
     register_authority_shadow_command(sub, add_subcommand_format)
     register_todo_continuation(sub, add_subcommand_format)
@@ -885,6 +888,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     if explore_result is not None:
         return explore_result
+
+    authority_archive_result = handle_authority_archive_command(
+        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+        output_format=output_format, print_payload=print_payload,
+    )
+    if authority_archive_result is not None:
+        return authority_archive_result
 
     coordination_shadow_result = handle_coordination_shadow_command(
         args,
