@@ -22,6 +22,18 @@ Retain T0 caller/parity inventory, T1/T2 transaction/effect convergence, T3 comp
 
 ## Current implementation checkpoint
 
+Canonical command observation now has one typed receipt/head boundary. Team,
+Todo creation/edit/claim/terminal/archive, Monitor, lease maintenance and Goal
+acceptance recheck receipts after the head read before interpreting new state.
+This repairs same-operation races without provider API changes, write retries
+or a Python copy of the decision. Standalone and atomic claim acquisition share
+current lease proof; renewed proof is returned without rewriting history, while
+retired execution and unavailable current authority cannot return stale success.
+This closes a concurrency/current-proof slice of L2/L3, not whole-Goal migration,
+default onboarding, contributor-owned SQLite D2 or T4 Python retirement. The
+[operator contract](../../reference/canonical-lease-renew.md#commit-retry-and-readback)
+distinguishes historical results from present execution.
+
 Terminal review and validation now converge in the existing TS terminal owner.
 Agent completion and Monitor stop reuse Chat's canonical receipt-first recovery
 and display acknowledgement; v2 binds validation continuation to its source

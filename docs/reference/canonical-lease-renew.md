@@ -174,8 +174,49 @@ with the same owner/key/epoch. Replay after renewal returns the current
 version/expiry in `lease`, with the unchanged original decision in
 `original_receipt`; `current_provider_revision/current_cursor` identify that
 readback. A transferred, expired or released execution cannot be revived by its
-old receipt. Claim receipts and maintenance receipts retain their historical
-semantics; they are not acquire responses.
+old receipt. Atomic `todo claim` with `--task-lease-idempotency-key` now uses the
+same current-proof owner after commit/recovery, including receipt-only no-ops.
+A plain claim without an acquisition request and maintenance receipts retain
+historical semantics; they do not grant new execution.
+
+For atomic adoption, freeze both identities across an uncertain response:
+
+```bash
+loopx --registry registry.json todo claim \
+  --goal-id example-goal --todo-id todo_work \
+  --claimed-by agent-a --agent-id agent-a \
+  --claim-operation-id adopt-work-a \
+  --task-lease-idempotency-key execution-a --task-lease-expected-version 0
+```
+
+The operation id identifies the claim transaction; the execution key identifies
+the lease generation. Repeating this exact command after renewal returns the
+renewed lease and the original receipt. After release or expiry it fails with
+`idempotency_key_reuse`; after a claim transfer it fails current-owner admission.
+Inspect the current state before choosing a new execution key and operation id.
+If the receipt exists but the current head cannot be read, the command returns
+`ambiguous` with same-operation recovery, not the historical active lease.
+Switching away from `hard_lease` also invalidates atomic claim/acquire success.
+
+| Readback | Meaning | Next action |
+| --- | --- | --- |
+| `replayed`, same epoch, newer lease version | Same execution was renewed | Use the returned current lease version. |
+| `idempotency_key_reuse` | The receipt belongs to a retired execution | Inspect, then request a new execution with a new key. |
+| `owner_conflicts_with_claim` | Current Todo ownership changed | Let the current owner continue or use an authorized handover. |
+| `canonical_acquire_readback_required` | History is known, current proof is unavailable | Restore the provider and retry the same operation. |
+| Acceptance/source rejection | Current control-plane authority changed | Resolve that boundary before attempting work. |
+
+A successful readback is still a point-in-time proof, not a lock over subsequent
+external effects. Execution must retain its existing mutation fences; this
+change does not close the remaining external-effect fencing work.
+
+Canonical commands recheck their receipt after reading the decision head.
+This handles a peer committing the same operation between the first absent
+receipt and the head read: recovery precedes duplicate-ID, stale-revision,
+Monitor-generation and other new-admission checks. The second read does not
+lock the head; commits after it still resolve through CAS and receipt recovery.
+Archive preview remains a current-state preview with no receipt lookup.
+No provider becomes the default and no legacy writer is re-enabled by this change.
 
 The canonical-only acquire and lifecycle requests are closed and versioned. Joint claim
 transfer uses `loopx_canonical_task_lease_claim_transfer_request_v0`, so an older
@@ -299,8 +340,15 @@ expected-version 0 的原样重试可恢复回执，改变参数会拒绝。
 Acquire 的成功还必须核对当前有效 owner/key/epoch 和资格。同一执行续约后，
 重试返回 `lease` 中的当前版本/到期时间，以及 `original_receipt` 中不可变的原始
 决定；`current_provider_revision/current_cursor` 标识当前读回。已转交、到期或释放
-的旧执行不能凭 receipt 复活。Todo claim 和维护 receipt 仍是历史语义，不能将其
-当成新的 acquire 响应。
+的旧执行不能凭 receipt 复活。携带 lease 请求的原子 Todo claim 也共享这项检查，
+包括首次提交、丢响应恢复、历史重放和只保存 receipt 的 no-op。普通 claim 和维护
+receipt 仍是历史语义，不授予新执行权。当前 head 不可读时返回 ambiguous，要求
+沿用原 operation id 恢复；不能把原 receipt 中的 active lease 当作当前证明。
+
+各 canonical 命令在读 head 后再次查原 receipt，解决另一调用恰在第一次查无回执后
+提交成功的竞争。回执优先于新一轮的重复 ID、陈旧 revision 和 Monitor generation
+校验；之后仍由 CAS 防止覆盖并发更新。归档 dry-run 继续只看当前状态，不重放历史。
+公开参数、provider 默认值和 legacy 路径保持不变。
 
 canonical acquire 与 lifecycle 各有封闭 wire，旧 renew wire 只接受 renew；旧
 runtime 不识别新 acquire schema。fence、provider、注册源变化和 CAS 错误不回退

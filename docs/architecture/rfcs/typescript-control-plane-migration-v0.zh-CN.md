@@ -21,6 +21,15 @@
 
 ## 当前实现检查点
 
+Canonical command 的 receipt/head 观察顺序统一归属 TS：团队规划、Todo 创建/
+修改/领取/终态/归档、Monitor、lease 维护和 Goal acceptance 在读 head 后复查原
+receipt，再执行新准入。这修复同 operation 并发竞争，不扩展 provider API、不
+自动重试写入，也不在 Python 复制决定。独立 acquire 与原子 claim/acquire 共用
+当前 lease 证明：续租返回新 proof 而保留原 receipt，退役执行或当前 authority
+不可读均不能返回旧成功。它只关闭 L2/L3 的并发和当前证明缺口，不代表全 Goal
+迁移、默认启用、contributor 的 SQLite D2 或 T4 Python 退役完成。见
+[操作和恢复合同](../../reference/canonical-lease-renew.md#commit-retry-and-readback)。
+
 终结审核与验证已收敛到既有 TS terminal owner：Agent 完成、Monitor 停止复用 Chat
 先恢复 canonical 回执再确认显示的路径；v2 把验证 continuation 绑定来源 revision，
 准入/回放之后才请求私有声明。删除 Python 的终结操作审核分流和提前解析声明编排。
