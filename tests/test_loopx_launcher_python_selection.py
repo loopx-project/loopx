@@ -79,3 +79,38 @@ def test_source_launcher_preserves_explicit_missing_python_diagnostic(
     assert completed.returncode == 2
     assert "configured Python executable not found" in completed.stderr
     assert str(missing) in completed.stderr
+
+
+def test_source_launcher_preserves_explicit_old_python_diagnostic(
+    tmp_path: Path,
+) -> None:
+    release_root = tmp_path / "release"
+    scripts = release_root / "scripts"
+    scripts.mkdir(parents=True)
+    (release_root / "loopx").mkdir()
+    shutil.copy2(REPO_ROOT / "scripts/loopx", scripts / "loopx")
+    shutil.copy2(REPO_ROOT / "scripts/loopx-python.sh", scripts / "loopx-python.sh")
+
+    legacy = tmp_path / "python-legacy"
+    _write_stub(
+        legacy,
+        "if [[ \"$1\" == \"-c\" ]]; then\n"
+        "  printf '%s\\n' 'loopx runtime error: Python 3.11+ is required; selected Python is 3.9. Set LOOPX_PYTHON to Python 3.11+ and reinstall LoopX.' >&2\n"
+        "fi\n"
+        "exit 2",
+    )
+    clean_env = {
+        key: value for key, value in os.environ.items() if key != "LOOPX_PYTHON"
+    }
+
+    completed = subprocess.run(
+        ["bash", str(scripts / "loopx"), "version"],
+        cwd=release_root,
+        env={**clean_env, "LOOPX_PYTHON": str(legacy), "PATH": "/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "selected Python is 3.9" in completed.stderr
