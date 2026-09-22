@@ -1423,7 +1423,7 @@ test("provider-first Todo claim validates authority and hard-lease ownership", a
   assert.equal((unchanged.todo as Record<string, unknown>).claimed_by, undefined);
 });
 
-test("provider-first Todo claim atomically acquires its canonical hard lease", async () => {
+test("provider-first atomic claim replays current execution and rejects expired receipt proof", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-claim-lease-"));
   const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   assert.equal((await store.commitAuthority({
@@ -1487,10 +1487,15 @@ test("provider-first Todo claim atomically acquires its canonical hard lease", a
 
   const replay = await claimLocalCoordinationTodo({
     ...request,
-    observed_at: "2026-09-05T06:00:00Z",
+    observed_at: "2026-09-05T04:45:00Z",
   });
   assert.equal(replay.status, "replayed");
   assert.deepEqual(replay.original_receipt, applied.original_receipt);
+  const expiredReplay = await claimLocalCoordinationTodo({...request, observed_at: "2026-09-05T05:15:00Z"});
+  assert.equal(expiredReplay.status, "failed");
+  assert.equal(expiredReplay.reason_code, "idempotency_key_reuse");
+  assert.equal(expiredReplay.lease, undefined);
+  assert.deepEqual(expiredReplay.original_receipt, applied.original_receipt);
   const retiredGeneration = await claimLocalCoordinationTodo({
     ...request,
     operation_id: "todo-claim:goal-a:todo_a:fresh-after-expiry",

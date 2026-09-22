@@ -1,3 +1,5 @@
+import {registerClaimAcquisitionProofConformance} from "./claim_acquisition_proof_conformance.ts";
+import {registerCommandObservationConformance} from "./command_observation_conformance.ts";
 import {registerPeriodicReportConformance} from "./periodic_report_conformance.ts";
 import {registerIssueFixMonitorReconciliationConformance} from "./issue_fix_monitor_reconciliation_conformance.ts";
 import {registerTodoConsumerScopeConformance} from "./todo_consumer_scope_conformance.ts";
@@ -251,6 +253,8 @@ export function registerAuthorityStoreConformance(
   registerLeaseLifecycleConformance(providerName, factory);
   registerClaimTransferConformance(providerName, factory);
   registerLeaseAcquisitionConformance(providerName, factory);
+  registerCommandObservationConformance(providerName, factory);
+  registerClaimAcquisitionProofConformance(providerName, factory);
   registerAuthorityScanConformance(providerName, factory);
   registerOwnershipObservationConformance(providerName, factory);
   registerSuccessionReadConformance(providerName, factory);

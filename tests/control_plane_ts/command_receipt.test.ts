@@ -116,3 +116,64 @@ test("commit identity mismatch fails before the effect", async () => {
   await assert.rejects(receipt().commit(target, {...commit, operation_id: "other"}), /identities differ/);
   assert.equal(writes, 0);
 });
+
+test("observation rechecks receipt after the head, including unavailable or unparseable heads", async () => {
+  const heads = [
+    {status: "loaded" as const, provider_revision: "after", cursor: "2", head: {invalid_domain: true}},
+    {status: "missing" as const},
+    {status: "unavailable" as const, reason_code: "offline", reason: "synthetic read gap"},
+  ];
+  for (const authority of heads) {
+    const calls: string[] = [];
+    const target = store(applied, found);
+    target.loadAuthority = async () => {calls.push("head"); return authority;};
+    target.readReceipt = async () => {calls.push("receipt"); return found;};
+    target.commitAuthority = async () => {throw new Error("observation cannot write");};
+    const observation = await receipt().observe(target);
+    assert.deepEqual(calls, ["head", "receipt"]);
+    assert.equal(observation.kind, "receipt");
+    if (observation.kind !== "receipt") throw new Error("historical receipt lost");
+    assert.equal(observation.result.status, "replayed");
+    assert.equal(observation.result.provider_revision, "historical-revision");
+    assert.equal(observation.result.changed, false);
+  }
+});
+
+test("observation does not turn a receipt read failure into missing-operation permission", async () => {
+  for (const readback of [unavailable, {...found, receipts: [{...original, request_sha256: "different"}]}]) {
+    const target = store(applied, readback);
+    target.loadAuthority = async () => ({status: "loaded", provider_revision: "current", cursor: "2", head: {}});
+    const result = await receipt().observe(target);
+    assert.equal(result.kind, "receipt");
+    if (result.kind !== "receipt") throw new Error("uncertain receipt admitted a new decision");
+    assert.equal(result.result.status, readback.status === "unavailable" ? "unavailable" : "failed");
+    assert.equal(result.result.changed, false);
+  }
+});
+
+test("only confirmed absence yields the original head for domain admission", async () => {
+  const target = store(applied, {status: "missing"});
+  const authority = {status: "loaded" as const, provider_revision: "basis", cursor: "1", head: {retained: true}};
+  target.loadAuthority = async () => authority;
+  const result = await receipt().observe(target);
+  assert.equal(result.kind, "authority");
+  if (result.kind !== "authority") throw new Error("missing receipt became a result");
+  assert.strictEqual(result.authority, authority, "do not reinterpret or mutate the decision snapshot");
+});
+
+test("commit after observation still resolves through CAS receipt recovery without retrying the write", async () => {
+  let committed = false, writes = 0;
+  const target = store(applied, {status: "missing"});
+  target.loadAuthority = async () => ({status: "loaded", provider_revision: "before", cursor: "1", head: {}});
+  target.readReceipt = async () => committed ? found : {status: "missing"};
+  assert.equal((await receipt().observe(target)).kind, "authority");
+  committed = true; // A peer wins after the bounded observation, before this CAS.
+  target.commitAuthority = async () => {
+    writes++;
+    return {status: "conflict", conflict_kind: "provider_revision_mismatch", current_provider_revision: "after", current_cursor: "2"};
+  };
+  const result = await receipt().commit(target, commit);
+  assert.equal(result.status, "recovered");
+  assert.equal(writes, 1);
+  assert.equal(result.provider_revision, "historical-revision");
+});
