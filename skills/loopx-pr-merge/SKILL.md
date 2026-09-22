@@ -28,9 +28,10 @@ authorized: a diff read, green CI, or pull-request metadata is not a substitute.
    surface.
 2. Apply `completion_gate` literally, and re-read the remote head immediately
    before the decision.
-3. Immediately before the merge, run `loopx --format json pr-review --repo
-   OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only when it
-   returns `ready=true` for that unchanged head.
+3. Immediately before the merge, run `loopx --format json pr-review --goal-id
+   GOAL --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only
+   when it returns `ready=true` for that unchanged head; this records the
+   compact Goal readiness observation consumed by future review queues.
 
 A rebase or head update restarts review, and admin bypass never overrides this
 gate: it needs explicit owner authorization and never substitutes for the

@@ -10,6 +10,12 @@ from loopx.capabilities.pr_review_queue import (
     materialize_review_execution,
     scheduling_tier,
 )
+from loopx.capabilities.pr_review_queue.readiness_observation import (
+    MERGE_READINESS_OBSERVATION_SCHEMA_VERSION,
+    observation_key,
+    readiness_material_fingerprint,
+    readiness_material_state,
+)
 
 
 def _concluded_item(
@@ -445,8 +451,8 @@ def test_approved_transition_routes_to_merge_policy_without_granting_it() -> Non
     assert approved["write_authority_granted"] is False
 
 
-def test_open_head_merge_readiness_follows_typed_verdict() -> None:
-    """An approval keeps owing the pre-merge gate while the PR is open.
+def test_open_head_without_observation_routes_to_typed_merge_readiness() -> None:
+    """An approval owes the pre-merge gate until its material state is observed.
 
     GitHub blocks self-approval, so an author-owned approval is stored as a
     COMMENTED review. Keying the queue on the formal review state counted such a
@@ -487,6 +493,98 @@ def test_open_head_merge_readiness_follows_typed_verdict() -> None:
         decision="CHANGES_REQUESTED",
     )
     assert _action_kind(changes_requested) == "rereview_pull_request_exact_head"
+
+
+def test_readiness_observation_suppresses_only_an_exact_material_match() -> None:
+    repository = "owner/repo"
+    threads = {
+        "complete": True,
+        "total_count": 1,
+        "unresolved_count": 0,
+    }
+    item = _concluded_item(
+        conclusion={
+            "valid": True,
+            "status": "valid",
+            "state": "APPROVED",
+            "verdict": "APPROVE",
+            "review_commit": "1" * 40,
+            "invalid_reasons": [],
+        },
+        decision="APPROVED",
+    ) | {
+        "base_oid": "a" * 40,
+        "merge_state": "CLEAN",
+        "checks": {
+            "total": 1,
+            "counts": {"success": 1, "failure": 0, "pending": 0, "unknown": 0},
+            "failures": [],
+            "pending": [],
+        },
+        "wait_for_ci": True,
+    }
+    material = readiness_material_state(
+        repository=repository,
+        item=item,
+        review_threads=threads,
+        wait_for_ci=True,
+    )
+    exact_head = f"1@{item['head_oid']}"
+    observations = {
+        observation_key(repository, exact_head): {
+            "schema_version": MERGE_READINESS_OBSERVATION_SCHEMA_VERSION,
+            "material_fingerprint": readiness_material_fingerprint(material),
+        }
+    }
+
+    unchanged = materialize_review_execution(
+        item,
+        fresh_audit_exact_heads=set(),
+        readiness_observations=observations,
+        repository=repository,
+        review_threads=threads,
+    )
+    assert unchanged["review_action_kind"] is None
+    assert (
+        unchanged["merge_readiness_observation"]["observation_state"]
+        == "observed_unchanged"
+    )
+
+    mutations = []
+    changed_head = deepcopy(item)
+    changed_head["head_oid"] = "2" * 40
+    mutations.append((changed_head, threads))
+    changed_base = deepcopy(item)
+    changed_base["base_oid"] = "b" * 40
+    mutations.append((changed_base, threads))
+    changed_review = deepcopy(item)
+    changed_review["review_conclusion"]["review_commit"] = "2" * 40
+    mutations.append((changed_review, threads))
+    changed_checks = deepcopy(item)
+    changed_checks["checks"]["counts"]["success"] = 0
+    changed_checks["checks"]["counts"]["failure"] = 1
+    changed_checks["checks"]["failures"] = ["merge-gate"]
+    mutations.append((changed_checks, threads))
+    changed_threads = dict(threads, unresolved_count=1)
+    mutations.append((deepcopy(item), changed_threads))
+    changed_merge_state = deepcopy(item)
+    changed_merge_state["merge_state"] = "BEHIND"
+    mutations.append((changed_merge_state, threads))
+
+    for changed_item, changed_thread_state in mutations:
+        execution = materialize_review_execution(
+            changed_item,
+            fresh_audit_exact_heads=set(),
+            readiness_observations=observations,
+            repository=repository,
+            review_threads=changed_thread_state,
+        )
+        assert execution["review_action_kind"] == "qualify_pull_request_merge_readiness"
+        if changed_item["head_oid"] == item["head_oid"]:
+            assert (
+                execution["merge_readiness_observation"]["observation_state"]
+                == "material_transition"
+            )
 
 
 def test_review_backlog_keeps_active_cadence_until_all_handled() -> None:

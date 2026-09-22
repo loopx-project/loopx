@@ -928,6 +928,8 @@ def _normalize_pr(
     generated_at: datetime,
     fresh_audit_exact_heads: set[str],
     wait_for_ci: bool = True,
+    readiness_observations: Mapping[str, Mapping[str, object]] | None = None,
+    repository: str | None = None,
 ) -> dict[str, Any]:
     files = _files(pr)
     checks = _checks(pr)
@@ -975,6 +977,7 @@ def _normalize_pr(
         if merge_commit_oid
         else None,
         "base_ref": _redact_text(pr.get("baseRefName"), limit=80),
+        "base_oid": _redact_text(pr.get("baseRefOid"), limit=80),
         "head_ref": _redact_text(pr.get("headRefName"), limit=120),
         "head_oid": _redact_text(pr.get("headRefOid"), limit=80),
         "is_draft": bool(pr.get("isDraft")),
@@ -1001,7 +1004,11 @@ def _normalize_pr(
     }
     item.update(
         materialize_review_execution(
-            item, fresh_audit_exact_heads=fresh_audit_exact_heads
+            item,
+            fresh_audit_exact_heads=fresh_audit_exact_heads,
+            readiness_observations=readiness_observations or {},
+            repository=repository,
+            review_threads=_as_dict(pr.get("review_thread_summary")),
         )
     )
     item["community_feedback_ready"] = bool(
@@ -1030,6 +1037,7 @@ def build_pr_review_packet(
     target_exact_heads: Sequence[str] = (),
     review_priority: object = DEFAULT_REVIEW_PRIORITY,
     wait_for_ci: bool = True,
+    readiness_observations: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, Any]:
     normalized_state_filter = normalize_pr_state_filter(state_filter)
     normalized_priority = normalize_review_priority(review_priority)
@@ -1045,6 +1053,8 @@ def build_pr_review_packet(
             generated_at=generated_at,
             fresh_audit_exact_heads=requested_fresh_audits,
             wait_for_ci=wait_for_ci,
+            readiness_observations=readiness_observations,
+            repository=repository,
         )
         for item in pull_requests
     ]

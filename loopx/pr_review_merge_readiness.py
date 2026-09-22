@@ -27,7 +27,7 @@ def fetch_github_pull_request(
 ) -> dict[str, Any]:
     fields = (
         "number,title,url,state,isDraft,reviewDecision,mergeStateStatus,"
-        "headRefName,headRefOid,baseRefName,author,createdAt,updatedAt,"
+        "headRefName,headRefOid,baseRefName,baseRefOid,author,createdAt,updatedAt,"
         "closedAt,mergedAt,mergeCommit,body,files,changedFiles,additions,"
         "deletions,commits,reviews"
     )

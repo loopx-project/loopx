@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .readiness_observation import (
+    readiness_material_fingerprint,
+    readiness_material_state,
+)
+
 
 SCHEMA_VERSION = "pull_request_merge_readiness_v0"
 
@@ -89,6 +94,12 @@ def build_merge_readiness(
         blockers.append("repository_merge_state_blocked")
 
     blockers = list(dict.fromkeys(blockers))
+    material_state = readiness_material_state(
+        repository=repository,
+        item=item,
+        review_threads=review_threads,
+        wait_for_ci=wait_for_ci,
+    )
     return {
         "ok": True,
         "schema_version": SCHEMA_VERSION,
@@ -111,6 +122,8 @@ def build_merge_readiness(
         "ci_policy": "required" if wait_for_ci else "not_consulted",
         "wait_for_ci": wait_for_ci,
         "blocking_reasons": blockers,
+        "material_state": material_state,
+        "material_fingerprint": readiness_material_fingerprint(material_state),
         "authority": {
             "grants_merge_authority": False,
             "admin_bypass_overrides_this_gate": False,

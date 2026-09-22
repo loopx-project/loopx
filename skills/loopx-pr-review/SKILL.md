@@ -115,10 +115,10 @@ review back, verify its state and rendered body, and return its URL. Merge
 still routes through `loopx-pr-merge`; an `APPROVE` is not merge authority.
 Do not leave a public blocker only in chat.
 
-Immediately before every merge, run `loopx --format json pr-review --repo
-OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`; merge only when it returns
-`ready=true` for that unchanged head. A rebase/update restarts review, admin
-bypass never overrides this gate, and author-owned fallback needs user authority.
+Immediately before every merge, run `loopx --format json pr-review --goal-id GOAL
+--repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`.
+Its compact Goal observation suppresses only unchanged requalification; material
+change reopens it, admin bypass never overrides this gate, and author fallback needs user authority.
 
 ## Full PR Review And Bilingual Format
 

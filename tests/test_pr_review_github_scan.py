@@ -536,9 +536,23 @@ def _merge_readiness_args(**overrides: object) -> SimpleNamespace:
         "repo": "owner/repo",
         "since": None,
         "fresh_audit_exact_head": [],
+        "target_exact_head": [],
+        "goal_id": "test-goal",
+        "limit": 100,
+        "state": "open",
+        "review_priority": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _goal_registry(tmp_path: Path) -> Path:
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps({"goals": [{"id": "test-goal", "repo": str(tmp_path)}]}),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _capture_payload(out: list[dict[str, object]]):
@@ -571,6 +585,8 @@ def test_merge_readiness_cli_qualifies_one_fixture_exact_head(
 
     result = pr_review_cli_module.handle_pr_review_command(
         _merge_readiness_args(fixture=str(fixture_path), repo=None),
+        runtime_root=tmp_path,
+        registry_path=_goal_registry(tmp_path),
         output_format=lambda _args: "json",
         print_payload=_capture_payload(out),
     )
@@ -583,6 +599,7 @@ def test_merge_readiness_cli_qualifies_one_fixture_exact_head(
 
 def test_merge_readiness_cli_reads_live_pr_and_threads(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
         pr_review_cli_module,
@@ -603,6 +620,8 @@ def test_merge_readiness_cli_reads_live_pr_and_threads(
 
     result = pr_review_cli_module.handle_pr_review_command(
         _merge_readiness_args(),
+        runtime_root=tmp_path,
+        registry_path=_goal_registry(tmp_path),
         output_format=lambda _args: "json",
         print_payload=_capture_payload(out),
     )
@@ -611,6 +630,146 @@ def test_merge_readiness_cli_reads_live_pr_and_threads(
     assert out[0]["ready"] is True
     assert out[0]["source"] == "github_cli"
     assert out[0]["review_conclusion"]["reviewer"] == "maintainer"
+
+
+def test_goal_readiness_observation_suppresses_only_unchanged_exact_head(
+    tmp_path: Path,
+) -> None:
+    fixture_path = tmp_path / "pull-request.json"
+    pull_request = _merge_ready_pr()
+    pull_request["review_thread_summary"] = _complete_review_threads()
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "repository": "owner/repo",
+                "reviewer_login": "maintainer",
+                "pull_requests": [pull_request],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry_path = _goal_registry(tmp_path)
+    readiness: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(fixture=str(fixture_path), repo=None),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(readiness),
+    ) == 0
+    assert readiness[0]["local_goal_observation_write_performed"] is True
+
+    def queue_args() -> SimpleNamespace:
+        return _merge_readiness_args(
+            check_merge_readiness=None,
+            fixture=str(fixture_path),
+            repo=None,
+        )
+
+    unchanged: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        queue_args(),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(unchanged),
+    ) == 0
+    item = unchanged[0]["pull_requests"][0]
+    assert item["review_action_kind"] is None
+    assert (
+        item["merge_readiness_observation"]["observation_state"]
+        == "observed_unchanged"
+    )
+
+    pull_request["baseRefOid"] = "c" * 40
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "repository": "owner/repo",
+                "reviewer_login": "maintainer",
+                "pull_requests": [pull_request],
+            }
+        ),
+        encoding="utf-8",
+    )
+    changed: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        queue_args(),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(changed),
+    ) == 0
+    changed_item = changed[0]["pull_requests"][0]
+    assert changed_item["review_action_kind"] == "qualify_pull_request_merge_readiness"
+    assert (
+        changed_item["merge_readiness_observation"]["observation_state"]
+        == "material_transition"
+    )
+
+
+def test_head_drift_observation_does_not_suppress_the_new_remote_head(
+    tmp_path: Path,
+) -> None:
+    fixture_path = tmp_path / "pull-request.json"
+    pull_request = _merge_ready_pr()
+    pull_request["review_thread_summary"] = _complete_review_threads()
+    current_head = str(pull_request["headRefOid"])
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "repository": "owner/repo",
+                "reviewer_login": "maintainer",
+                "pull_requests": [pull_request],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry_path = _goal_registry(tmp_path)
+    readiness: list[dict[str, object]] = []
+    stale_head = "d" * 40
+    assert pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(
+            fixture=str(fixture_path),
+            repo=None,
+            check_merge_readiness=f"4110@{stale_head}",
+        ),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(readiness),
+    ) == 1
+    assert "remote_head_mismatch" in readiness[0]["blocking_reasons"]
+    assert readiness[0]["readiness_observation"]["exact_head"] == f"4110@{stale_head}"
+
+    queue: list[dict[str, object]] = []
+    assert pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(
+            fixture=str(fixture_path),
+            repo=None,
+            check_merge_readiness=None,
+        ),
+        runtime_root=tmp_path,
+        registry_path=registry_path,
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(queue),
+    ) == 0
+    item = queue[0]["pull_requests"][0]
+    assert item["head_oid"] == current_head
+    assert item["review_action_kind"] == "qualify_pull_request_merge_readiness"
+    assert item["merge_readiness_observation"] is None
+
+
+def test_merge_readiness_requires_goal_scope() -> None:
+    out: list[dict[str, object]] = []
+    result = pr_review_cli_module.handle_pr_review_command(
+        _merge_readiness_args(goal_id=None),
+        output_format=lambda _args: "json",
+        print_payload=_capture_payload(out),
+    )
+
+    assert result == 1
+    assert out[0]["error"] == "merge readiness requires --goal-id"
 
 
 def test_pr_review_cli_uses_machine_capability_priority_when_flag_is_omitted(

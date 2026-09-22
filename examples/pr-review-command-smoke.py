@@ -316,6 +316,12 @@ def main() -> int:
 
     merge_head = "e" * 40
     with tempfile.TemporaryDirectory() as temp_dir:
+        runtime_root = Path(temp_dir) / "runtime"
+        registry_path = Path(temp_dir) / "registry.json"
+        registry_path.write_text(
+            json.dumps({"goals": [{"id": "test-goal", "repo": temp_dir}]}),
+            encoding="utf-8",
+        )
         merge_fixture_path = Path(temp_dir) / "merge-readiness.json"
         merge_fixture = {
             "repository": "owner/repo",
@@ -372,9 +378,15 @@ def main() -> int:
         merge_fixture_path.write_text(json.dumps(merge_fixture), encoding="utf-8")
         ready = json.loads(
             run_cli(
+                "--runtime-root",
+                str(runtime_root),
+                "--registry",
+                str(registry_path),
                 "--format",
                 "json",
                 "pr-review",
+                "--goal-id",
+                "test-goal",
                 "--fixture",
                 str(merge_fixture_path),
                 "--check-merge-readiness",
@@ -383,6 +395,29 @@ def main() -> int:
         )
         assert ready["ready"] is True, ready
         assert ready["blocking_reasons"] == [], ready
+        unchanged_queue = json.loads(
+            run_cli(
+                "--runtime-root",
+                str(runtime_root),
+                "--registry",
+                str(registry_path),
+                "--format",
+                "json",
+                "pr-review",
+                "--goal-id",
+                "test-goal",
+                "--fixture",
+                str(merge_fixture_path),
+                "--state",
+                "open",
+            ).stdout
+        )
+        unchanged_item = unchanged_queue["pull_requests"][0]
+        assert unchanged_item["review_action_kind"] is None, unchanged_item
+        assert (
+            unchanged_item["merge_readiness_observation"]["observation_state"]
+            == "observed_unchanged"
+        ), unchanged_item
 
         merge_fixture["pull_requests"][0]["reviews"][0]["body"] = merge_fixture[
             "pull_requests"
@@ -392,9 +427,15 @@ def main() -> int:
         )
         merge_fixture_path.write_text(json.dumps(merge_fixture), encoding="utf-8")
         blocked_run = run_cli(
+            "--runtime-root",
+            str(runtime_root),
+            "--registry",
+            str(registry_path),
             "--format",
             "json",
             "pr-review",
+            "--goal-id",
+            "test-goal",
             "--fixture",
             str(merge_fixture_path),
             "--check-merge-readiness",
@@ -471,6 +512,12 @@ def main() -> int:
         }
 
     with tempfile.TemporaryDirectory() as temp_dir:
+        runtime_root = Path(temp_dir) / "runtime"
+        registry_path = Path(temp_dir) / "registry.json"
+        registry_path.write_text(
+            json.dumps({"goals": [{"id": "test-goal", "repo": temp_dir}]}),
+            encoding="utf-8",
+        )
         approval_fixture_path = Path(temp_dir) / "approved-open-heads.json"
         approval_fixture = {
             "repository": "owner/repo",
@@ -522,9 +569,15 @@ def main() -> int:
         ):
             readiness = json.loads(
                 run_cli(
+                    "--runtime-root",
+                    str(runtime_root),
+                    "--registry",
+                    str(registry_path),
                     "--format",
                     "json",
                     "pr-review",
+                    "--goal-id",
+                    "test-goal",
                     "--fixture",
                     str(approval_fixture_path),
                     "--check-merge-readiness",

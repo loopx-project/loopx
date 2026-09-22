@@ -33,9 +33,9 @@ PR_REVIEW_CATALOG_ENTRY: dict[str, Any] = {
     ),
     "commands": [
         {
-            "command": "loopx pr-review --repo <owner/repo> --check-merge-readiness NUMBER@HEAD_OID --format json",
+            "command": "loopx pr-review --goal-id <goal-id> --repo <owner/repo> --check-merge-readiness NUMBER@HEAD_OID --format json",
             "purpose": "Fail closed on exact-head, approval-body, configured CI, thread, or merge-state drift immediately before merge.",
-            "write_boundary": "live public GitHub read only; does not approve, merge, bypass policy, or grant merge authority",
+            "write_boundary": "reads live public GitHub state and writes one compact public-safe Goal observation; does not approve, merge, bypass policy, or grant merge authority",
         },
         {
             "command": "loopx pr-review --check-result <result.json> --packet <packet.json> --format json",
@@ -80,6 +80,11 @@ PR_REVIEW_CATALOG_ENTRY: dict[str, Any] = {
         {
             "schema_version": "pull_request_merge_readiness_v0",
             "module": "loopx.capabilities.pr_review_queue.merge_readiness",
+            "doc": "loopx/capabilities/pr_review_queue/README.md",
+        },
+        {
+            "schema_version": "pull_request_merge_readiness_observation_v0",
+            "module": "loopx.capabilities.pr_review_queue.readiness_observation",
             "doc": "loopx/capabilities/pr_review_queue/README.md",
         },
         {
@@ -151,7 +156,8 @@ PR_REVIEW_CATALOG_ENTRY: dict[str, Any] = {
         "Only rows with a non-null review_action_kind enter review_sequence and carry review plans, templates, or evidence commands; valid exact-head conclusions remain artifact-free inventory-only rows, and only --fresh-audit-exact-head NUMBER@HEAD_OID can explicitly reopen one.",
         "Todo prose, monitor notes, and one-off author filters are not scheduling authority.",
         "A complete exact-head conclusion requires the five Chinese sections, a state-aligned English verdict, and formal state or the verdict-specific titled author-owned fallback.",
-        "Every merge must rerun the read-only merge-readiness gate for the reviewed exact head; admin bypass cannot override stale review text, required CI when wait_for_ci is true, incomplete thread evidence, or head drift.",
+        "Every merge must rerun the Goal-scoped merge-readiness gate for the reviewed exact head; the resulting compact observation suppresses only unchanged qualification work, and any head, base, review, CI, thread, draft, merge-state, or PR-state change reopens it.",
+        "Readiness observations contain only public-safe material fingerprints and compact verdicts; they exclude review bodies, raw logs, credentials, private payloads, and local paths.",
         "One observation emits at most one exact-head advancement Todo preview; unchanged observations replay it until explicit durable Todo-projection ACK, then rotate across acknowledged exact heads.",
         "The capability reuses the existing pr-review GitHub scan and normalized packet; review bodies are inspected for format but never emitted or checkpointed.",
         "Candidate selection grants no GitHub review, comment, push, merge, quota, or Todo-write authority; those remain with their existing policy surfaces.",

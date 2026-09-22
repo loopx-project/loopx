@@ -7,6 +7,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .review_contract import build_review_plan, build_review_template
+from .readiness_observation import (
+    observation_key,
+    observation_matches_material_state,
+    readiness_material_fingerprint,
+    readiness_material_state,
+)
 
 
 EXACT_HEAD_PATTERN = re.compile(
@@ -62,10 +68,36 @@ def exact_head_key(item: Mapping[str, Any]) -> str | None:
 
 
 def materialize_review_execution(
-    item: Mapping[str, Any], *, fresh_audit_exact_heads: set[str]
+    item: Mapping[str, Any],
+    *,
+    fresh_audit_exact_heads: set[str],
+    readiness_observations: Mapping[str, Mapping[str, Any]] | None = None,
+    repository: str | None = None,
+    review_threads: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     action_kind = review_action_kind(item)
     key = exact_head_key(item)
+    readiness_observation: dict[str, Any] | None = None
+    if action_kind == "qualify_pull_request_merge_readiness" and key and repository:
+        observed = (readiness_observations or {}).get(observation_key(repository, key))
+        if observed:
+            material_state = readiness_material_state(
+                repository=repository,
+                item=item,
+                review_threads=review_threads or {},
+                wait_for_ci=item.get("wait_for_ci") is not False,
+            )
+            matched = observation_matches_material_state(observed, material_state)
+            readiness_observation = {
+                "schema_version": "pull_request_merge_readiness_queue_match_v0",
+                "observation_state": (
+                    "observed_unchanged" if matched else "material_transition"
+                ),
+                "material_fingerprint": readiness_material_fingerprint(material_state),
+                "previous_material_fingerprint": observed.get("material_fingerprint"),
+            }
+            if matched:
+                action_kind = None
     fresh_audit_requested = key in fresh_audit_exact_heads
     conclusion = item.get("review_conclusion")
     conclusion = conclusion if isinstance(conclusion, Mapping) else {}
@@ -79,6 +111,7 @@ def materialize_review_execution(
     result: dict[str, Any] = {
         "review_action_kind": action_kind,
         "fresh_audit_requested": fresh_audit_requested,
+        "merge_readiness_observation": readiness_observation,
     }
     if not action_kind:
         return result | {

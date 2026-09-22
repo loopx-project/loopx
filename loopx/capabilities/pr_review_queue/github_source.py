@@ -32,6 +32,7 @@ PR_LIST_FIELDS = (
     "headRefName",
     "headRefOid",
     "baseRefName",
+    "baseRefOid",
     "author",
     "createdAt",
     "updatedAt",

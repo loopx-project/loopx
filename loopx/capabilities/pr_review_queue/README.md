@@ -47,7 +47,7 @@ workflow or the merge-focused `loopx-pr-merge` skill.
 | Command | CLI reference | Intent |
 | --- | --- | --- |
 | `/loopx-pr-review` | `loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open\|merged\|all] [--review-priority other-developers-first\|owner-first] [--since ISO] [--fresh-audit-exact-head NUMBER@HEAD_OID]` | Review a small explicit batch with repeatable `--target-exact-head`, or list a lifecycle queue when no target is supplied. Both paths provide concrete main-regression analysis and the five-block review contract. The default queue prioritizes non-owner developer PRs; `owner-first` opts into owner priority. `--fresh-audit-exact-head` separately forces new evidence for an unchanged concluded head. |
-| pre-merge readback | `loopx pr-review --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. This read grants no merge authority. |
+| pre-merge readback | `loopx pr-review --goal-id GOAL --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. The Goal-scoped command records a compact public-safe readiness observation; this read grants no merge authority. |
 
 The slash command must run the CLI first. Agentloop must not reconstruct the
 review window by manually calling `gh pr view` / `gh pr list` for every PR. The
@@ -232,15 +232,18 @@ contain only rows whose `review_action_kind` is non-null. A merged exact head
 without a valid conclusion receives `audit_merged_pull_request_exact_head`; a
 merged or open exact head whose valid conclusion is not an approval remains
 inventory-only and cannot become the recommended first PR. An open exact head
-with a valid approval keeps owing `qualify_pull_request_merge_readiness`,
-because merge readiness is decided by the typed verdict rather than by GitHub's
+with a valid approval owes `qualify_pull_request_merge_readiness` until the Goal
+has observed its current readiness material state. An unchanged observation
+suppresses duplicate qualification work; exact-head, base, review conclusion,
+configured CI, review-thread, merge-state, or draft-state changes reopen it.
+This preserves the typed readiness verdict rather than relying on GitHub's
 review state: the platform blocks self-approval, so an author-owned approval is
-recorded as `COMMENTED` and a state-based rule would count that still-unmerged
-head as concluded, even after it goes behind, conflicts, loses its checks or is
-blocked. The summary's attention counts are derived from this same actionable
-set. Inventory-only rows set `review_plan` and `review_template` to null and
-`evidence_commands` to an empty list so hosts cannot mistake readback metadata
-for execution authority.
+recorded as `COMMENTED` and a state-based rule could otherwise count a
+still-unmerged head as concluded even after it goes behind, conflicts, loses
+its checks or is blocked. The summary's attention counts are derived from this
+same actionable set. Inventory-only rows set `review_plan` and
+`review_template` to null and `evidence_commands` to an empty list so hosts
+cannot mistake readback metadata for execution authority.
 
 It emits a
 `pull_request_review_todo_preview_v0` bound to its exact head. The preview may
@@ -525,6 +528,15 @@ unknown effective checks and incomplete or unresolved review threads. An admin
 bypass may satisfy GitHub's author-owned
 self-review limitation, but it never overrides this capability gate or supplies
 user merge authority.
+
+`pull_request_merge_readiness_observation_v0` is the Goal-scoped scheduling
+receipt for that gate. It persists only the exact-head material fingerprint and
+compact public-safe readiness result under the local Goal runtime. It excludes
+review bodies, raw logs, credentials, private payloads, and local paths. Queue
+construction consumes the observation only when every readiness input still
+matches; a changed head, base, review conclusion, CI policy/result, review
+thread, draft flag, merge state, or PR state fails open to a fresh
+qualification.
 
 They must not include raw logs, private connector payloads, credentials, local
 absolute paths, private source bodies, or hidden CI artifacts.
@@ -859,9 +871,10 @@ A first implementation is acceptable when:
 - `--fresh-audit-exact-head NUMBER@HEAD_OID` is the only packet-level way to
   turn an unchanged valid conclusion into an actionable fresh audit, and
   malformed, absent, or already-actionable targets fail closed;
-- `--check-merge-readiness NUMBER@HEAD_OID` rejects head drift, stale review
+- Goal-scoped `--check-merge-readiness NUMBER@HEAD_OID` rejects head drift, stale review
   prose, non-approval conclusions, red/pending/unknown checks, incomplete or
-  unresolved review-thread evidence, and incompatible merge state;
+  unresolved review-thread evidence, and incompatible merge state, then records
+  the compact observation used to suppress only unchanged requalification;
 - the default limit is 100, and exhaustive requests only proceed when
   `result_completeness.complete=true`; truncated packets provide a larger
   `recommended_limit` for the next read;
