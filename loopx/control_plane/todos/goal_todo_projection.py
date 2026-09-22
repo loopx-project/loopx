@@ -316,6 +316,60 @@ def todo_summaries_from_fields(
         uncapped_todo_count=uncapped_todo_count,
     )
 
+
+def exact_archived_todo_summaries(
+    *,
+    archived_items: list[dict[str, Any]],
+    source: str,
+    projection_fields: dict[str, Any] | None,
+    projection_overlay: dict[str, Any] | None,
+    rollout_events: list[dict[str, Any]],
+    roles: list[str],
+    status: str | None,
+    todo_id: str,
+    agent_id: str | None,
+    limit: int | None,
+) -> GoalTodoSummaries | None:
+    """Project one exact retained Todo without widening normal active lists."""
+
+    item = next(
+        (
+            dict(candidate)
+            for candidate in archived_items
+            if normalize_todo_id(candidate.get("todo_id")) == todo_id
+            and candidate.get("archive_state") == "archive"
+        ),
+        None,
+    )
+    if item is None:
+        return None
+    item_role = item.get("role")
+    if item_role not in {"user", "agent"} or item_role not in roles:
+        return None
+    summary = compact_todo_group(
+        [item],
+        source_section=str(item.get("source_section") or "Completed Work Archive"),
+        role=item_role,
+        include_empty_source=True,
+        resume_source_items=archived_items,
+        rollout_events=rollout_events,
+        item_limit=None,
+    )
+    if summary is None:
+        return None
+    return todo_summaries_from_fields(
+        fields={f"{item_role}_todos": summary},
+        source=source,
+        projection_fields=projection_fields,
+        projection_overlay=projection_overlay,
+        rollout_events=rollout_events,
+        roles=roles,
+        status=status,
+        todo_id=todo_id,
+        agent_id=agent_id,
+        limit=limit,
+    )
+
 def project_goal_todo_items(
     goal: dict[str, Any] | None,
     *,
@@ -345,6 +399,7 @@ def project_goal_todo_items(
 __all__ = [
     "GoalTodoSummaries",
     "empty_todo_summary",
+    "exact_archived_todo_summaries",
     "filtered_todo_summary",
     "goal_todo_summaries",
     "merge_todo_projection_fields",

@@ -43,12 +43,13 @@ def cli(root: Path, *args: str, workspace: Path | None = None, timeout: int = 60
     return result
 
 
-def prepare(root: Path, provider: str = "file", topology: str = "cloud-led") -> None:
+def prepare(root: Path, provider: str = "file", topology: str = "cloud-led",
+            team_size: tuple[int, int, int] | None = None) -> None:
     if root.exists():
         raise ValueError("use_a_new_disposable_directory")
+    members = roster(topology, team_size)
     project = root / "project"
     project.mkdir(parents=True)
-    members = roster(topology)
     write(project / "team.json", members)
     (project / ".gitignore").write_text(".local/\nACTIVE_GOAL_STATE.md\n")
     (project / "README.md").write_text("Disposable synthetic research team.\n")
@@ -91,17 +92,19 @@ def prepare(root: Path, provider: str = "file", topology: str = "cloud-led") -> 
             "Read the assignment with read_assignment, or inspect the synthetic team/input files. Organize the registered "
             "members with list_execution_bindings/start_delegation/wait_delegation to analyze their authorized revisions. "
             "Use stable operation ids and collaboration_brief_v0 (purpose, context, constraints, inputs, acceptance, return_requirement). "
-            "Complete local-analyst before requesting cloud-reviewer, who must adopt its exact artifact. "
-            "Cloud-analyst is responsible for delegating its local-reviewer prerequisite through the same tools. "
+            "Inspect team.json: an upstream must pass acceptance before its consumer finishes. "
+            "A member with requester other than lead must be delegated by that requester, using parent_request_id. "
             "You can start independent branches concurrently. A running operation is not failure; wait for its original result. "
             "Read all final artifacts with read_accepted_evidence or canonical CLI readback. Decide questions and order yourself. Review their "
-            "accepted results, resolve differences, then write_report or lead/report.json with all four evidence hashes. "
+            "accepted results, resolve differences, then write_report or lead/report.json with every member evidence hash. "
             "Only return validated_progress after write_report confirms independent checks."
             if actor == "lead" else
             "Read TASK.md and DELEGATION.json, or use read_input/write_output. Read context and assess_request before working. "
             "Use list_execution_bindings to find any authorized child. If present, start_delegation to the child "
             "with a collaboration_brief_v0 and parent_request_id from DELEGATION.json; wait_delegation until accepted. "
-            "Then read_input again to obtain and adopt its exact artifact. Produce independently checked output.json for " + revision + "."
+            "Then read_input again to obtain and adopt its exact artifact. A Codex member can read local input.json and "
+            "write output.json directly, using the native loopx_delegation context and assess_request tools. "
+            "Produce independently checked output.json for " + revision + "."
         )
         if actor != "lead":
             (root / actor / revision / "TASK.md").write_text(task(revision, text))
@@ -112,7 +115,7 @@ def prepare(root: Path, provider: str = "file", topology: str = "cloud-led") -> 
                          "validation_timeout_seconds": 5, "validation_files": pins})
         bindings.append({"todo_id": identity, "criterion_ids": [actor + "-" + revision]})
     write(root / "bootstrap.json", {"tasks": tasks, "document": {
-        "objective": "Deliver a revision-aware synthetic research report with four completed dependencies",
+        "objective": "Deliver a revision-aware synthetic research report with every configured dependency completed",
         "non_goals": ["Trading", "External research", "Owner approval of the whole Goal"],
         "criteria": criteria, "bindings": bindings,
     }})
@@ -152,28 +155,33 @@ def accepted_entry(worker: str, revision: str, output: dict) -> dict:
 
 
 def prepare_execution(root: Path, model: str, environment_id: str, dsh_model: str,
-                      topology: str = "local-led") -> dict:
+                      topology: str = "local-led", team_size: tuple[int, int, int] | None = None) -> dict:
     """Prepare a fresh operator fixture without starting a replacement lead."""
-    prepare(root, topology=topology)
+    prepare(root, topology=topology, team_size=team_size)
     write(root / "settings.json", {"dsh_model": dsh_model, "ark_model": model, "environment_id": environment_id})
     config = configure_delegations(root)
     return {"goal_id": GOAL, "agent_id": "lead", "registry": str(root / "registry.json"),
             "runtime_root": str(root / "runtime"), "execution_config": str(config),
             "workspace": str(root / "lead"), "execution_started": False,
+            "member_count": len(roster(topology, team_size)),
             "next_action": "Use delegation list/start/read/wait from the existing Agent session. "
                            "Supply LOOPX_RESEARCH_DEMO_ROOT and the configured credentials when starting work. "
                            "Independent task acceptance remains bound; prepare does not complete any task."}
 
 
-def launch(root: Path, model: str, environment_id: str, dsh_model: str, topology: str = "local-led") -> dict:
+def launch(root: Path, model: str, environment_id: str, dsh_model: str, topology: str = "local-led",
+           team_size: tuple[int, int, int] | None = None) -> dict:
+    roster(topology, team_size)
+    if team_size and not shutil.which("codex"):
+        raise ValueError("codex_cli_required_for_luna_members")
     if importlib.util.find_spec("deepseek_harness") is None:
         raise ValueError("install_loopx_deepseek_harness_extra_in_this_interpreter")
     if not os.environ.get("ARK_API_KEY") or not operator_provider_environ().get("DEEPSEEK_API_KEY"):
         raise ValueError("ARK_API_KEY_and_machine_or_environment_DEEPSEEK_credential_required")
-    prepare_execution(root, model, environment_id, dsh_model, topology)
+    prepare_execution(root, model, environment_id, dsh_model, topology, team_size)
     os.environ["LOOPX_RESEARCH_DEMO_ROOT"] = str(root)
     result = turn(root, "lead", "report", root / "lead", [sys.executable, str(HERE / "research_team.py"), "validate-report", str(root)],
-                  host_arguments(root, "lead", "report", host="dsh" if topology == "local-led" else "ark"), 1200)
+                  host_arguments(root, "lead", "report", host="ark" if topology == "cloud-led" else "dsh"), 1200)
     summary = {key: result.get(key) for key in ("status", "result_kind", "validation", "resume_turn_key", "error", "host_failure")}
     write(root / "lead-turn.json", summary)
     if result.get("status") == "committed" and result.get("result_kind") == "validated_progress":
@@ -193,30 +201,42 @@ def main() -> None:
     p.add_argument("--model", default=os.environ.get("ARK_MODEL_ID"))
     p.add_argument("--environment-id", default=os.environ.get("ARK_ENVIRONMENT_ID"))
     p.add_argument("--dsh-model", default="deepseek-v4-flash")
-    p.add_argument("--topology", choices=["local-led", "cloud-led"], default="local-led")
+    p.add_argument("--topology", choices=["local-led", "cloud-led"], default=None)
+    p.add_argument("--team-size", nargs=3, type=int, metavar=("LUNA", "DSH", "ARK"),
+                   help="Positive member counts, excluding the coordinator; uses a mixed dependency graph.")
     args = p.parse_args()
+    if args.team_size and args.topology:
+        p.error("--team-size selects the mixed graph; do not combine it with --topology")
+    if args.team_size and args.command not in {"prepare", "prepare-chat", "run"}:
+        p.error("--team-size is only valid when preparing or running a new team")
+    team_size = tuple(args.team_size) if args.team_size else None
+    topology = "mixed" if team_size else (args.topology or "local-led")
+    try:
+        roster(topology, team_size)
+    except ValueError as exc:
+        p.error(str(exc))
     if args.command in {"prepare", "prepare-chat", "run"}:
         if not args.model or not args.environment_id:
             p.error("explicit model and existing environment required")
         if args.command == "prepare":
             print(json.dumps(prepare_execution(args.root.resolve(), args.model, args.environment_id,
-                                               args.dsh_model, args.topology)))
+                                               args.dsh_model, topology, team_size)))
             return
         if args.command == "prepare-chat":
             root = args.root.resolve()
-            prepare_execution(root, args.model, args.environment_id, args.dsh_model, args.topology)
+            prepare_execution(root, args.model, args.environment_id, args.dsh_model, topology, team_size)
             target = root / "project" / ".loopx" / "config" / "delegations.json"
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(root / "delegation-config.json", target)
             with (root / "project" / "ACTIVE_GOAL_STATE.md").open("a") as stream:
                 stream.write("\n## Objective\n\nOrganize the authorized members with loopx_collaboration. "
-                             "Local-analyst must finish before cloud-reviewer adopts its exact evidence; "
-                             "cloud-analyst delegates local-reviewer itself. Wait for independently accepted results. "
+                             "Follow the prepared team.json dependency and requester graph; consume every configured member. "
+                             "Wait for independently accepted results and adopt their exact artifacts. "
                              "Return the corrected cash-flow comparison, source and period caveats, and exact dependency "
                              "hashes in this conversation. The canonical report task and whole Goal remain for owner review.\n")
             print("Prepared Goal Chat team. Select lead and .loopx/config/delegations.json in LoopX mode settings.")
             return
-        result = launch(args.root.resolve(), args.model, args.environment_id, args.dsh_model, args.topology)
+        result = launch(args.root.resolve(), args.model, args.environment_id, args.dsh_model, topology, team_size)
         print(json.dumps(result))
         if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
             raise SystemExit(1)

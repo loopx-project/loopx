@@ -153,3 +153,50 @@ def test_cloud_member_mcp_requires_bound_identity_and_completed_upstream(tmp_pat
     assert not asyncio.run(call(env)).isError
     assert asyncio.run(call({**env, "LOOPX_TURN_TODO_ID": "todo_someone_else"})).isError
     assert not canonical_tasks(root)["todo_cloud-reviewer-initial"]["done"]
+
+
+@pytest.mark.parametrize("command", ["prepare", "prepare-chat"])
+def test_mixed_team_cli_binds_profiles_and_canonical_acceptance(tmp_path, command):
+    root = tmp_path / "mixed"
+    result = subprocess.run([sys.executable, str(demo.HERE / "research_team.py"), command, str(root),
+                             "--team-size", "2", "1", "1", "--model", "example-model",
+                             "--environment-id", "example-environment"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    config = json.loads((root / "delegation-config.json").read_text())
+    assert len(config["bindings"]) == 4
+    actors = {row["agent_id"] for row in config["bindings"]}
+    assert actors == {"codex-1", "codex-2", "dsh-1", "ark-1"}
+    for binding in config["bindings"]:
+        assert binding["requesters"] == ["lead"]
+        assert Path(binding["workspace"]).is_relative_to(root)
+        if binding["agent_id"].startswith("codex-"):
+            arguments = binding["host_args"]
+            assert arguments[arguments.index("--codex-model") + 1] == "gpt-5.6-luna"
+            assert arguments[arguments.index("--codex-reasoning-effort") + 1] == "max"
+    if command == "prepare-chat":
+        assert json.loads((root / "project" / ".loopx/config/delegations.json").read_text()) == config
+    fixture(root)
+    # A matching downstream artifact is still unaccepted while its exact
+    # upstream canonical task remains open. Production TS owns the rejection.
+    with pytest.raises(RuntimeError, match="goal_acceptance_validation_rejected"):
+        demo.complete(root, "dsh-1", "corrected")
+    for actor, revision in [("codex-1", "initial"), ("dsh-1", "corrected"), ("ark-1", "corrected")]:
+        demo.complete(root, actor, revision)
+    with pytest.raises(RuntimeError, match="goal_acceptance_validation_rejected"):
+        demo.complete(root, "lead", "report")
+    demo.complete(root, "codex-2", "initial")
+    demo.complete(root, "lead", "report")
+    assert all(row["done"] for row in canonical_tasks(root).values())
+
+
+@pytest.mark.parametrize("options", [
+    ["--team-size", "1", "0", "1"],
+    ["--team-size", "1", "1", "1", "--topology", "local-led"],
+])
+def test_cli_rejects_invalid_or_conflicting_composition_before_writes(tmp_path, options):
+    root = tmp_path / "not-created"
+    result = subprocess.run([sys.executable, str(demo.HERE / "research_team.py"), "prepare", str(root),
+                             "--model", "example-model", "--environment-id", "example-environment", *options],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    assert not root.exists()

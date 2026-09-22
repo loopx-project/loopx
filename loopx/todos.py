@@ -89,9 +89,11 @@ from .control_plane.todos.list_projection import (
     todo_list_projection_contract,
 )
 from .control_plane.todos.goal_todo_projection import (
+    exact_archived_todo_summaries,
     goal_todo_summaries,
     todo_summaries_from_fields,
 )
+from .control_plane.todos.active_state_todo_parser import parse_todo_source
 from .control_plane.todos import monitor_metadata as todo_monitor_metadata
 from .control_plane.todos.mutation_authority import authorize_todo_lifecycle_mutation, todo_update_authority_action
 from .control_plane.todos.succession_warning import build_open_parent_successor_advisory
@@ -117,6 +119,7 @@ from .control_plane.todos.authoring_scope import (
 )
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction
 from .control_plane.coordination.local_authority import (
+    canonical_todo_items,
     canonical_todo_summary_fields,
     claim_canonical_todo_if_promoted,
     local_authority_is_promoted,
@@ -234,9 +237,10 @@ def list_goal_todos(
     else:
         if not resolved_state_file.exists():
             raise ValueError(f"active state file does not exist: {resolved_state_file}")
+        state_text = resolved_state_file.read_text(encoding="utf-8")
         projected = goal_todo_summaries(
             goal,
-            state_text=resolved_state_file.read_text(encoding="utf-8"),
+            state_text=state_text,
             state_path=resolved_state_file,
             rollout_events=rollout_events,
             roles=roles,
@@ -245,6 +249,33 @@ def list_goal_todos(
             agent_id=normalized_agent_id,
             limit=limit,
         )
+    if normalized_todo_id and not projected.todos:
+        if canonical_read is not None:
+            archived_items = [
+                item
+                for item in canonical_todo_items(canonical_read["todos"])
+                if item.get("archive_state") == "archive"
+            ]
+        else:
+            _active_items, archived_items, _source_sections = parse_todo_source(
+                state_text,
+                goal=goal,
+                state_path=resolved_state_file,
+            )
+        archived_projection = exact_archived_todo_summaries(
+            archived_items=archived_items,
+            source=projected.source,
+            projection_fields=projected.projection_fields,
+            projection_overlay=projected.projection_overlay,
+            rollout_events=rollout_events,
+            roles=roles,
+            status=status,
+            todo_id=normalized_todo_id,
+            agent_id=normalized_agent_id,
+            limit=limit,
+        )
+        if archived_projection is not None:
+            projected = archived_projection
     source = projected.source
     projection_fields = projected.projection_fields
     projection_overlay = projected.projection_overlay

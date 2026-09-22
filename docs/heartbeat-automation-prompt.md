@@ -304,7 +304,10 @@ whose capabilities are known when the automation is installed.
   and continue eligible work. Recovery selection itself is idempotent and
   no-spend; actual validated delivery retains normal accounting. Genuine external
   waits and monitor observations retain their existing typed closeouts. Receipts
-  created before the explicit flag are not retroactively treated as unsettled;
+  created before the explicit flag are not retroactively treated as unsettled.
+  Exact-ID lifecycle reads include retained
+  `Completed Work Archive` rows, while ordinary Todo lists remain active-only;
+  an archived terminal fact closes recovery without rewriting archive history;
 - use `user_gate` only for an exact authority boundary such as approval to merge
   an aggregate branch into `main`, release, launch a benchmark, or perform a
   protected action;

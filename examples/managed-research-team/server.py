@@ -33,12 +33,12 @@ def read_assignment() -> dict:
     path = root()
     return {"execution": "Use list_execution_bindings, then start_delegation for your bindings. "
                          "Choose stable operation ids; wait_delegation returns running until finished. "
-                         "Cloud-analyst delegates local-reviewer itself; cloud-reviewer consumes completed local-analyst. "
-                         "Read the final four artifacts with read_accepted_evidence before write_report.",
+                         "Follow each assignment upstream and requester; only its requester can delegate a member. "
+                         "Read every final artifact with read_accepted_evidence before write_report.",
             "assignments": assignments(path), "inputs": [evidence(revision) for revision in REVISIONS],
             "objective": "Compare the initial and corrected evidence. Obtain an independently accepted result "
                          "for each authorized worker/revision assignment. You choose questions/order; revise rejected work. "
-                         "Use all four accepted artifacts in the report. Count source families corroborating "
+                         "Use every configured member artifact in the report. Count source families corroborating "
                          "CURRENT-period figures only, excluding historical comparison material. No trades or external information.",
             "report_fields": {"initial_normalized_fcf": "integer", "corrected_normalized_fcf": "integer",
                               "revision_delta": "corrected minus initial", "growth_supported": "boolean",

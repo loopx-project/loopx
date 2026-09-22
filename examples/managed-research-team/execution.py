@@ -13,6 +13,11 @@ def host_arguments(root: Path, actor: str, revision: str, *, host: str, attempt:
     settings = json.loads((root / "settings.json").read_text())
     coordinator = actor == "lead"
     workspace = root / "lead" if coordinator else root / actor / revision
+    if host == "codex":
+        # Delegation injects its existing native MCP tools. Model/effort are an
+        # independent Turn binding; no user profile or credential is copied.
+        return ["--host", "codex-cli", "--codex-model", "gpt-5.6-luna",
+                "--codex-reasoning-effort", "max", "--codex-sandbox", "workspace-write"]
     if host == "dsh":
         args = ["--host", "dsh", "--dsh-model", settings["dsh_model"], "--dsh-reasoning-effort", "high",
                 "--dsh-home", str(root / "homes" / (actor + "-" + revision + "-" + str(attempt)))]

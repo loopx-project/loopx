@@ -84,3 +84,34 @@ def test_report_rejects_broken_dependencies(tmp_path, mutation):
     (tmp_path / "lead" / "report.json").write_bytes(encoded(report))
     with pytest.raises((ValueError, FileNotFoundError)):
         validate_report(tmp_path)
+
+
+@pytest.mark.parametrize("counts", [(1, 1, 1), (3, 1, 2), (1, 3, 1)])
+def test_mixed_team_consumes_every_configured_member(tmp_path, counts):
+    from scenario import roster
+
+    team = roster("mixed", counts)
+    assert len({row["worker"] for row in team}) == sum(counts)
+    assert [sum(row["host"] == host for row in team) for host in ("codex", "dsh", "ark")] == list(counts)
+    (tmp_path / "project").mkdir()
+    (tmp_path / "project" / "team.json").write_bytes(encoded(team))
+    report = fixture(tmp_path)
+    assert validate_report(tmp_path)["revision_delta"] == -15
+    # Extra workers cannot become decorative: omitting ANY of their accepted
+    # artifacts invalidates the aggregate, even when all numbers still agree.
+    for member in team:
+        identity = member["worker"] + "/" + member["revision"]
+        omitted = {**report, "dependencies": {k: v for k, v in report["dependencies"].items() if k != identity}}
+        (tmp_path / "lead" / "report.json").write_bytes(encoded(omitted))
+        with pytest.raises(ValueError, match="lead_did_not_adopt_dependency"):
+            validate_report(tmp_path)
+
+
+@pytest.mark.parametrize("counts", [(0, 1, 1), (-1, 1, 1), (True, 1, 1), (1, 1)])
+def test_invalid_counts_do_not_prepare_state(tmp_path, counts):
+    import research_team as demo
+
+    root = tmp_path / "invalid"
+    with pytest.raises(ValueError, match="positive_luna_dsh_ark"):
+        demo.prepare(root, topology="mixed", team_size=counts)
+    assert not root.exists()

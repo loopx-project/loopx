@@ -1602,6 +1602,132 @@ def test_prior_host_closeout_survives_hidden_todo_lifecycle(
     assert resumed["quota"]["spent_slots"] == prior["quota"]["spent_slots"]
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_prior_host_closeout_reads_archived_exact_todo(
+    tmp_path: Path,
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    guard = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--scan-path",
+        str(project),
+    )
+    prior_turn_id = "turn-archived-closeout-prior"
+    rc, prior = _run_cli(
+        registry_path,
+        runtime,
+        *guard,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--todo-id",
+        TODO_ID,
+    )
+    assert rc == 0, prior
+    assert prior["heartbeat_receipt"]["closeout_required"] is True
+
+    state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    if provider != "legacy":
+        rc, listed = _run_cli(
+            registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+        )
+        assert rc == 0, listed
+        projection = build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            handoff_mode="soft_claim",
+            todos=listed["todos"],
+        )
+        initialize_canonical_authority(
+            runtime, GOAL_ID, projection, state_path=state, provider=provider
+        )
+
+    rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        prior_turn_id,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "archived closeout lifecycle validated",
+        "--next-agent-todo",
+        "Continue after archived closeout validation.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "implement",
+    )
+    assert rc == 0, complete
+    rc, archived = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "archive-completed",
+        "--goal-id",
+        GOAL_ID,
+        "--max-active-done",
+        "0",
+        "--execute",
+    )
+    assert rc == 0, archived
+    assert archived["moved_count"] == 1
+
+    rc, active = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert rc == 0, active
+    assert TODO_ID not in {item["todo_id"] for item in active["todos"]}
+    rc, exact = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "list",
+        "--goal-id",
+        GOAL_ID,
+        "--role",
+        "agent",
+        "--todo-id",
+        TODO_ID,
+    )
+    assert rc == 0, exact
+    assert exact["todo"]["todo_id"] == TODO_ID
+    assert exact["todo"]["status"] == "done"
+    assert exact["todo"]["archive_state"] == "archive"
+    assert exact["todo"]["source_section"] == "Completed Work Archive"
+
+    rc, observed = _run_cli(registry_path, runtime, *guard, "--begin-turn")
+    assert rc == 0, observed
+    assert observed["effective_action"] != "unsettled_host_turn_recovery", observed.get(
+        "unsettled_host_turn_recovery"
+    )
+    assert observed["quota"]["spent_slots"] == prior["quota"]["spent_slots"]
+
+
 def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     tmp_path: Path,
 ) -> None:

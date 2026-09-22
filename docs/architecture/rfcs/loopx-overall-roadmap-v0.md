@@ -424,6 +424,16 @@ sessions, generic Agent creation, dynamic governed work derivation, complete
 inbox/queue/steer, authenticated remote authority and packaged frontend/Lark
 companion work remain R2/R3/R4/R6 boundaries. Existing Goals are not promoted.
 
+The disposable example now also accepts `--team-size LUNA DSH ARK`: independent
+Luna max Turns consume the initial filing, DSH consumes accepted analysis and
+the correction, and Ark consumes accepted corrected evidence. Preparation
+reuses machine credentials and creates only Goal-owned bindings; the DSH lead
+uses the same delegation service and must adopt every configured result. This
+removes hand-edited roster setup for the synthetic qualification route. It does
+not close the release frontier: actual public-source research, a visual launch
+control, original-conversation result return and member stop/recovery must be
+qualified together before advertising the one-action research showcase.
+
 An existing shell-capable coordinator uses `delegation list/operations/start/read/wait/resume` without replacing its session. Requester-scoped `operations` recovers durable work after context loss, independently rechecks accepted results and preserves unavailable branches and pagination; enabled MCP and newly tool-equipped Goal Chat use the same read model. Existing native threads retain their tool schema on resume. It starts no work and does not infer overall readiness from a display list. The example's `prepare` still only provisions isolated operator bindings. A Codex binding can now pass an exact model/reasoning effort into an independent resumable Turn Session and expose the same profile through preflight and planning; this remains separate from a native temporary child profile inside the parent execution. Next, feed actual execution/acceptance facts into existing R2 readiness, extend registration/runtime configuration for approved identity provisioning, and qualify original-request return/lead continuation. Unattended wake, full cross-host inbox/queue/steer and Lark parity remain separate requirements; an exact profile parameter does not promote G1/G3.
 
 The local Goal conversation now exposes that inventory on demand, with per-binding
