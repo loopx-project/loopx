@@ -3158,6 +3158,19 @@ freshness, a background drainer, all L5 consumers or D2/D3. See the
   naming passed, failed and missing evidence. NoKV and PostgreSQL retain their
   own qualification; a pass on SQLite cannot waive another affected provider.
 
+**D3 recovery artifact checkpoint (2026-09-22).** The
+[canonical authority archive](../../reference/authority-archive.md) now defines
+an explicit CLI export/verify/isolated-restore journey. One TS retained-journal
+codec preserves operation/receipt identity, complete historical state and source
+provenance across File/SQLite and service-owned PostgreSQL. Verified recovery
+copies do not select an authority, revive executors or roll back writer fences.
+This closes the portable recovery-artifact gap only; final source draining,
+fenced target adoption, later-write accounting and cohort cutover remain L8.
+The conditional **5–8 package** estimate below is unchanged until the remaining
+caller, projection, D2, migration and default exits are qualified. Pending
+reviewed-promotion and command-recovery PRs must be integrated at their accepted
+heads rather than counted as merged prerequisites.
+
 **D3 — integrate and request a whole-Goal cutover.**
 
 - Requires T1–T3, D1/D2 and qualified capture; production cutover additionally

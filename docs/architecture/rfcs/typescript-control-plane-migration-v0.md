@@ -1109,6 +1109,16 @@ debit. This closes the demonstrated T3 consumer gap, not D1–D3, provider
 promotion, or the remaining Python transaction adapters. See the
 [operating contract](../../quota-allocation.md#receipt-backed-settlement-progress).
 
+**Recovery boundary (2026-09-22).** The
+[authority archive command](../../reference/authority-archive.md) places retained
+history validation, delta reconstruction and resumable restore in the existing
+TS coordination owner. Python only resolves CLI paths and transports compact
+requests/results; it does not reconstruct domain state or duplicate a provider
+migration rule. The state-log codec is reused rather than creating independent
+File/SQLite/PostgreSQL export formats. This enables an independently verified
+recovery copy for D3/L8, while authority adoption, executor fencing and actual
+Python writer retirement remain separate exits.
+
 **T4 — collect full-writer retirement after durability cutover.**
 
 - The 2026-09-19 command audit retires two already-typed but unconsumed
