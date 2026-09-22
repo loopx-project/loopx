@@ -64,7 +64,14 @@ if [[ "$loopx_command" == "quota" \
 fi
 
 python_selector="$repo_root/scripts/loopx-python.sh"
-if [[ -f "$python_selector" ]]; then
+if [[ -n "${LOOPX_PYTHON:-}" ]]; then
+  python_bin="$LOOPX_PYTHON"
+  if ! command -v "$python_bin" >/dev/null 2>&1; then
+    echo "loopx runtime error: configured Python executable not found: $python_bin" >&2
+    echo "Set LOOPX_PYTHON to Python 3.11+ and reinstall LoopX." >&2
+    exit 2
+  fi
+elif [[ -f "$python_selector" ]]; then
   if ! python_bin="$(bash "$python_selector")"; then
     echo "Set LOOPX_PYTHON to Python 3.11+ and reinstall LoopX." >&2
     exit 2

@@ -38,7 +38,10 @@ def test_source_launcher_uses_project_venv_without_path_activation(tmp_path: Pat
     completed = subprocess.run(
         ["bash", str(scripts / "loopx"), "version"],
         cwd=release_root,
-        env={**os.environ, "PATH": "/usr/bin:/bin"},
+        env={
+            **{key: value for key, value in os.environ.items() if key != "LOOPX_PYTHON"},
+            "PATH": "/usr/bin:/bin",
+        },
         text=True,
         capture_output=True,
         check=False,
@@ -47,3 +50,32 @@ def test_source_launcher_uses_project_venv_without_path_activation(tmp_path: Pat
     assert completed.returncode == 0, completed.stderr
     assert selected.read_text(encoding="utf-8") == "selected"
     assert "Python 3.11+ is required" not in completed.stderr
+
+
+def test_source_launcher_preserves_explicit_missing_python_diagnostic(
+    tmp_path: Path,
+) -> None:
+    release_root = tmp_path / "release"
+    scripts = release_root / "scripts"
+    scripts.mkdir(parents=True)
+    (release_root / "loopx").mkdir()
+    shutil.copy2(REPO_ROOT / "scripts/loopx", scripts / "loopx")
+    shutil.copy2(REPO_ROOT / "scripts/loopx-python.sh", scripts / "loopx-python.sh")
+
+    missing = tmp_path / "missing-python"
+    completed = subprocess.run(
+        ["bash", str(scripts / "loopx"), "version"],
+        cwd=release_root,
+        env={
+            **{key: value for key, value in os.environ.items() if key != "LOOPX_PYTHON"},
+            "LOOPX_PYTHON": str(missing),
+            "PATH": "/usr/bin:/bin",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "configured Python executable not found" in completed.stderr
+    assert str(missing) in completed.stderr
