@@ -289,12 +289,27 @@ function acceptanceBound(state: AcceptanceState, todoId: string): boolean {
 }
 
 export function acceptanceWorkGuard(head: JsonObject, goalId: string, todoId: string): JsonObject | null {
+  return projectGoalAcceptanceWorkGuards(head, goalId, [todoId])[todoId] ?? null;
+}
+
+/** Project many work guards from one validated acceptance/read-model snapshot.
+ * Collection reads must not reparse the contract and rebuild the Todo index
+ * once per Todo: that turns a bounded provider read into quadratic work. */
+export function projectGoalAcceptanceWorkGuards(
+  head: JsonObject,
+  goalId: string,
+  todoIds: readonly string[],
+): Record<string, JsonObject> {
   const state = readGoalAcceptance(head, goalId);
-  if (!state?.enabled) return null;
-  const todo = acceptanceTodos(head, goalId).get(todoId);
-  if (todo && !acceptanceApplies(todo) && !acceptanceBound(state, todoId)) return null;
-  const task = acceptanceTask(todoId, todo, state);
-  return {allowed: task.state === "ready", ...task, revision: state.revision, digest: state.digest};
+  if (!state?.enabled) return {};
+  const todos = acceptanceTodos(head, goalId);
+  return Object.fromEntries(todoIds.flatMap(todoId => {
+    const todo = todos.get(todoId);
+    if (todo && !acceptanceApplies(todo) && !acceptanceBound(state, todoId)) return [];
+    const task = acceptanceTask(todoId, todo, state);
+    return [[todoId, {allowed: task.state === "ready", ...task,
+      revision: state.revision, digest: state.digest}]];
+  }));
 }
 
 /** Trusted execution adapter only. Run these commands at the inspected provider

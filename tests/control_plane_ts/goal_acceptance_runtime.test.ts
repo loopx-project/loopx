@@ -11,7 +11,8 @@ import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_au
 import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
-import {acceptanceWorkGuard, goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_contract.ts";
+import {acceptanceWorkGuard, goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance,
+  projectGoalAcceptanceWorkGuards} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
@@ -202,6 +203,21 @@ test("canonical list/read expose only enabled public-safe acceptance sidecars", 
     runtime_root: root, goal_id: "goal-a"});
   assert.equal(Object.hasOwn(disabled, "goal_acceptance_contract"), false);
   assert.equal(Object.hasOwn(disabled, "goal_acceptance_work_guards"), false);
+});
+
+test("collection guard projection reuses one acceptance and Todo snapshot", () => {
+  const records = Array.from({length: 150}, (_, index) => todo({
+    todo_id: `todo_${String(index).padStart(3, "0")}`,
+    text: `Work ${index}`,
+  }));
+  const head = projection(records, acceptance(records, false));
+  const ids = records.map(record => String(record.todo_id));
+  const startedAt = performance.now();
+  const guards = projectGoalAcceptanceWorkGuards(head, "goal-a", ids);
+  const elapsedMs = performance.now() - startedAt;
+  assert.equal(Object.keys(guards).length, records.length);
+  assert.ok(Object.values(guards).every(guard => guard.reason_code === "goal_acceptance_unbound"));
+  assert.ok(elapsedMs < 1_000, `150 Todo guards should remain a bounded collection read, got ${elapsedMs}ms`);
 });
 
 test("completion plans both validators and rejects a combined budget exceeding 29 seconds", async t => {

@@ -1,7 +1,8 @@
 /** Canonical Todo reads and projection confirmation share one provider snapshot. */
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
-import {acceptanceWorkGuard, projectGoalAcceptance} from "../goals/acceptance_contract.ts";
+import {acceptanceWorkGuard, projectGoalAcceptance,
+  projectGoalAcceptanceWorkGuards} from "../goals/acceptance_contract.ts";
 import {authorityStoreSourceAuthority as sourceAuthorityFor} from "./authority_store.ts";
 import {requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {openRuntimeAuthorityStore as openRuntimeStore, requireLocalAuthorityRuntimeRoot as runtimeRoot,
@@ -110,10 +111,7 @@ export async function listLocalCoordinationTodos(
       todo_ids: projection.todo_ids,
       todo_read_model: todoReadModel,
       ...(acceptance.enabled !== true ? {} : {goal_acceptance_contract: acceptance,
-        goal_acceptance_work_guards: Object.fromEntries(projection.todo_ids.flatMap(id => {
-          const guard = acceptanceWorkGuard(head.head, goalId, id);
-          return guard === null ? [] : [[id, guard]];
-        }))}),
+        goal_acceptance_work_guards: projectGoalAcceptanceWorkGuards(head.head, goalId, projection.todo_ids)}),
       ...(leaseIndex === null ? {} : {
         leases: leaseIndex.lease_todo_ids.map((id) => leaseIndex.leases.get(id)!),
         handoff_mode: head.head.handoff_mode ?? "legacy",
