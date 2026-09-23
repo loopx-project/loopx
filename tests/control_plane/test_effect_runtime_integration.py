@@ -156,6 +156,87 @@ def test_managed_runtime_is_reused_and_restart_safe_for_typed_write(
     )
 
 
+def test_response_timeout_keeps_live_runtime_locator_and_never_replays_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "a" * 64
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime, "_start_runtime",
+        lambda **_kwargs: pytest.fail("a response timeout must not start another server"),
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(2)
+        info_path = effect_runtime._runtime_info_path(fingerprint)
+        info = {
+            "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+            "fingerprint": fingerprint,
+            "pid": os.getpid(),
+            "host": "127.0.0.1",
+            "port": listener.getsockname()[1],
+            "token": "fixture-token",
+        }
+        info_path.write_text(json.dumps(info), encoding="utf-8")
+
+        def serve_one() -> int:
+            with listener.accept()[0] as connection:
+                request = b""
+                while b"\n" not in request:
+                    request += connection.recv(4096)
+                time.sleep(0.1)
+                try:
+                    connection.sendall(b'{}\n')
+                except OSError:
+                    pass
+                return 1
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            served = executor.submit(serve_one)
+            with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous) as error:
+                effect_runtime.effect_runtime_request(
+                    "coordination.local_authority.todo_terminal",
+                    {"operation_id": "fixture-operation"},
+                    timeout=0.02,
+                )
+            assert error.value.diagnostic_code == "runtime_response_ambiguous"
+            assert served.result(timeout=2) == 1
+        assert json.loads(info_path.read_text(encoding="utf-8")) == info
+
+
+def test_old_server_close_cannot_remove_replacement_runtime_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    effect_runtime.effect_runtime_result("runtime.ping", {})
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    original = json.loads(info_path.read_text(encoding="utf-8"))
+    replacement = {**original, "pid": os.getpid(), "token": "replacement-token"}
+    info_path.write_text(json.dumps(replacement), encoding="utf-8")
+
+    effect_runtime._request_with_info(
+        original,
+        request_id="shutdown-old-server",
+        method="runtime.shutdown",
+        params={},
+        timeout=2,
+    )
+    deadline = time.monotonic() + 2
+    while effect_runtime._pid_is_alive(original["pid"]) and time.monotonic() < deadline:
+        time.sleep(0.025)
+    assert json.loads(info_path.read_text(encoding="utf-8")) == replacement
+
+
 def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundary(
     tmp_path: Path,
     monkeypatch,

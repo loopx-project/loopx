@@ -81,7 +81,8 @@ def append_todo_rollout_event(
         and getattr(args, "no_follow_up", False)
     )
     if (
-        not payload.get("ok")
+        args.todo_command == "receipt"
+        or not payload.get("ok")
         or payload.get("dry_run")
         or (payload.get("idempotent_replay") and not turn_instance_id)
     ):

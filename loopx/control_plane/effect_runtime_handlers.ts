@@ -173,7 +173,8 @@ import {
   executeReviewedCoordinationPromotion,
   terminalLifecycleLocalCoordinationTodo,
 } from "./coordination/local_authority_runtime.ts";
-import {listLocalCoordinationTodos, readLocalCoordinationTodo} from "./coordination/local_authority_read.ts";
+import {listLocalCoordinationTodos, readLocalCoordinationTodo,
+  readLocalCoordinationOperationReceipt} from "./coordination/local_authority_read.ts";
 import { evaluateCoordinationTodoClaimDecision } from "./coordination/todo_claim.ts";
 import {
   evaluateCoordinationTodoTerminalDecision,
@@ -566,6 +567,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.todo_archive", archiveLocalCoordinationTodos],
     ["coordination.local_authority.todo_archive_ack", acknowledgeLocalCoordinationTodoArchive],
     ["coordination.local_authority.todo_read", readLocalCoordinationTodo],
+    ["coordination.local_authority.operation_receipt", readLocalCoordinationOperationReceipt],
     ["coordination.ownership_observation", projectOwnershipObservation],
     ["coordination.local_authority.ownership_observation", observeLocalCoordinationOwnership],
     ["coordination.local_authority.todo_list", listLocalCoordinationTodos],

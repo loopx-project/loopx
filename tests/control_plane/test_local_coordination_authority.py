@@ -1459,7 +1459,9 @@ Continue provider-first delivery.
     original_effect_runtime_result = provider_terminal_lifecycle.effect_runtime_result
     original_authority_runtime_result = local_authority_module.effect_runtime_result
 
-    def count_runtime_call(method: str, params: dict[str, object]) -> object:
+    def count_runtime_call(
+        method: str, params: dict[str, object], **kwargs: object
+    ) -> object:
         runtime_calls.append(method)
         if method == "coordination.local_authority.todo_archive":
             archive_operation_ids.append(str(params["operation_id"]))
@@ -1467,7 +1469,7 @@ Continue provider-first delivery.
             assert params["schema_version"] == "loopx_local_coordination_todo_terminal_lifecycle_request_v3"
             assert "operation_id" not in params
             assert params["operation_identity"]["kind"] == "explicit"
-        result = original_effect_runtime_result(method, params)
+        result = original_effect_runtime_result(method, params, **kwargs)
         if method == "coordination.local_authority.todo_terminal":
             terminal_phases.append(str(result["status"]))
         return result
@@ -1997,9 +1999,11 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     original_effect_runtime_result = provider_terminal_lifecycle.effect_runtime_result
     original_authority_runtime_result = local_authority_module.effect_runtime_result
 
-    def count_runtime_call(method: str, params: dict[str, object]) -> object:
+    def count_runtime_call(
+        method: str, params: dict[str, object], **kwargs: object
+    ) -> object:
         runtime_calls.append(method)
-        return original_effect_runtime_result(method, params)
+        return original_effect_runtime_result(method, params, **kwargs)
 
     def count_authority_runtime_call(
         method: str, params: dict[str, object], **kwargs: object

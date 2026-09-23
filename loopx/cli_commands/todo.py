@@ -4,7 +4,11 @@ import argparse
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from ..control_plane.coordination.local_authority import read_canonical_todo_fields_if_promoted
+from ..control_plane.coordination.local_authority import (
+    local_authority_is_promoted,
+    read_canonical_todo_fields_if_promoted,
+)
+from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.todos.contract import (
     replan_successor_semantic_binding,
@@ -47,6 +51,7 @@ from .todo_argument_validation import (
     validate_todo_claim_options,
     validate_todo_complete_options,
     validate_todo_list_options,
+    validate_todo_receipt_options,
     validate_todo_project_markdown_options,
     validate_todo_plan_options,
     validate_todo_supersede_options,
@@ -182,6 +187,23 @@ def _todo_path_args(args: argparse.Namespace) -> dict[str, Path | None]:
     }
 
 
+def _render_todo_receipt(payload: dict[str, object]) -> str:
+    lines = [
+        "# LoopX Canonical Operation Receipt",
+        "",
+        f"- status: `{payload.get('status')}`",
+        f"- goal_id: `{payload.get('goal_id')}`",
+        f"- operation_id: `{payload.get('operation_id')}`",
+        f"- source_authority: `{payload.get('source_authority')}`",
+        f"- provider_revision: `{payload.get('provider_revision')}`",
+        f"- cursor: `{payload.get('cursor')}`",
+        "- note: Historical readback only; it does not grant a current lease or a retry.",
+    ]
+    if payload.get("error") or payload.get("reason"):
+        lines.append(f"- error: `{payload.get('error') or payload.get('reason')}`")
+    return "\n".join(lines)
+
+
 def handle_todo_command(
     args: argparse.Namespace,
     *,
@@ -194,8 +216,8 @@ def handle_todo_command(
     post_writeback_projection_builder: PostWritebackProjectionBuilder | None = None,
 ) -> int:
     renderer = (
-        render_task_planning_packet
-        if args.todo_command == "plan"
+        render_task_planning_packet if args.todo_command == "plan"
+        else _render_todo_receipt if args.todo_command == "receipt"
         else render_todo_markdown
     )
     try:
@@ -228,6 +250,22 @@ def handle_todo_command(
                 **_todo_path_args(args),
                 runtime_root_arg=runtime_root_arg,
             )
+        elif args.todo_command == "receipt":
+            validate_todo_receipt_options(args)
+            runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+            if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=args.goal_id):
+                raise ValueError("todo receipt requires promoted canonical authority; no legacy fallback")
+            result = effect_runtime_result(
+                "coordination.local_authority.operation_receipt",
+                {"schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+                 "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
+                 "goal_id": args.goal_id, "operation_id": args.operation_id},
+                timeout=15.0,
+            )
+            if not isinstance(result, dict):
+                raise RuntimeError("canonical operation receipt returned an invalid result")
+            payload = {"ok": result.get("status") in {"found", "missing"},
+                       "command": "receipt", **result}
         elif args.todo_command == "project-markdown":
             validate_todo_project_markdown_options(args)
             registry = load_registry(registry_path)

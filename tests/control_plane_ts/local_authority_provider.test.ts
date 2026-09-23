@@ -116,6 +116,12 @@ function providerCalls(directory: string, revision: string, dryRun: boolean) {
     observeLocalCoordinationOwnership: [{...input, schema_version: "loopx_local_ownership_observation_request_v0"}],
     listLocalCoordinationTodos: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA}],
     readLocalCoordinationTodo: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA}],
+    readLocalCoordinationOperationReceipt: [{
+      runtime_root: directory,
+      goal_id: "goal-a",
+      schema_version: "loopx_local_coordination_operation_receipt_request_v0",
+      operation_id: "open-failure",
+    }],
     createLocalCoordinationTodo: [
       {...input, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, todo: {}},
       {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA, todo: {}}],

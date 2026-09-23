@@ -31,6 +31,7 @@ def register_todo_command(
         choices=[
             "add",
             "list",
+            "receipt",
             "claim",
             "update",
             "complete",
@@ -53,6 +54,10 @@ def register_todo_command(
     todo_parser.add_argument("--priority", choices=["P0", "P1", "P2", "P3", "P4"], help="For add/update, declare Todo priority independently of text; omission retains the current value.")
     todo_parser.add_argument("--clear-priority", action="store_true", help="For update, explicitly remove priority; cannot be combined with --priority.")
     todo_parser.add_argument("--todo-id", help="Structured todo id from status/quota, such as todo_ab12cd34ef56.")
+    todo_parser.add_argument(
+        "--operation-id",
+        help="For todo receipt, read the exact historical canonical operation after an ambiguous response; this does not grant a retry or lease.",
+    )
     todo_parser.add_argument(
         "--update-operation-id",
         help=("For promoted text/note, planning, validator revision or User completion update, reuse this operation id after a lost response; "

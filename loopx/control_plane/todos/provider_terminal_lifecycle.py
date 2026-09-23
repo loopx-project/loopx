@@ -44,6 +44,10 @@ _TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_req
 _ARCHIVE_REQUEST_SCHEMA = "loopx_local_coordination_todo_archive_request_v0"
 _ARCHIVE_ACK_REQUEST_SCHEMA = "loopx_local_coordination_todo_archive_ack_request_v0"
 _ACCEPTED = {"applied", "recovered", "replayed", "no_change", "planned"}
+# A promoted File authority can verify and publish a retained journal while
+# holding the canonical writer fence. This is an explicit terminal-command
+# budget, not a global relaxation of the Effect runtime request deadline.
+_TERMINAL_RUNTIME_TIMEOUT_SECONDS = 45.0
 
 
 TodoMutation = Callable[..., dict[str, Any]]
@@ -387,7 +391,8 @@ def terminal_canonical_todo_if_promoted(
             "observed_at": now_local(),
         }
     result = effect_runtime_result(
-        "coordination.local_authority.todo_terminal", request
+        "coordination.local_authority.todo_terminal", request,
+        timeout=_TERMINAL_RUNTIME_TIMEOUT_SECONDS,
     )
     if isinstance(result, Mapping) and result.get("status") == "resolve_validation":
         # Admission and receipt recovery precede host-local declaration IO.
@@ -401,7 +406,10 @@ def terminal_canonical_todo_if_promoted(
             registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
             persist_if_resolved=not dry_run,
         )
-        result = effect_runtime_result("coordination.local_authority.todo_terminal", request)
+        result = effect_runtime_result(
+            "coordination.local_authority.todo_terminal", request,
+            timeout=_TERMINAL_RUNTIME_TIMEOUT_SECONDS,
+        )
     completion_validation_executed = False
     if isinstance(result, Mapping) and result.get("status") == "execute_validation":
         request["validation_source_provider_revision"] = result["provider_revision"]
@@ -413,7 +421,8 @@ def terminal_canonical_todo_if_promoted(
         completion_validation_executed = True
         request["observed_at"] = now_local()
         result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request
+            "coordination.local_authority.todo_terminal", request,
+            timeout=_TERMINAL_RUNTIME_TIMEOUT_SECONDS,
         )
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(

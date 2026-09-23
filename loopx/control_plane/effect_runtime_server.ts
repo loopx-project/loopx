@@ -1,6 +1,6 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
-import { chmod, rm } from "node:fs/promises";
+import { chmod, readFile, rm } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
 import {
@@ -11,7 +11,7 @@ import {
   EffectRuntimeRequestError,
   effectRuntimeErrorPayload,
 } from "./effect_runtime_errors.ts";
-import { atomicWriteJson } from "./effect_runtime_io.ts";
+import { atomicWriteJson, withFileMutationLock } from "./effect_runtime_io.ts";
 import { sqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
 import {
   requireJsonObject as requiredObject,
@@ -184,23 +184,38 @@ const server = createServer((socket) => {
 });
 
 server.on("close", () => {
-  void rm(infoPath, { force: true }).finally(() => process.exit(0));
+  void withFileMutationLock(infoPath, async () => {
+    let published: Record<string, unknown>;
+    try {
+      published = JSON.parse(await readFile(infoPath, "utf8"));
+    } catch {
+      return;
+    }
+    // A timed-out client may have published a replacement server. The old
+    // server must never erase that server's locator when it finally exits.
+    if (published.token === token && published.pid === process.pid &&
+        published.fingerprint === fingerprint) {
+      await rm(infoPath, { force: true });
+    }
+  }).finally(() => process.exit(0));
 });
 
 server.listen(0, "127.0.0.1", async () => {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("invalid address");
-  await atomicWriteJson(infoPath, {
-    schema_version: INFO_SCHEMA,
-    fingerprint,
-    pid: process.pid,
-    host: "127.0.0.1",
-    port: address.port,
-    token,
-    // A managed runtime is reused per source revision, so the Node/SQLite pair
-    // serving a goal is not necessarily the one the caller resolves from PATH.
-    runtime_identity: sqliteRuntimeIdentity(),
+  await withFileMutationLock(infoPath, async () => {
+    await atomicWriteJson(infoPath, {
+      schema_version: INFO_SCHEMA,
+      fingerprint,
+      pid: process.pid,
+      host: "127.0.0.1",
+      port: address.port,
+      token,
+      // A managed runtime is reused per source revision, so the Node/SQLite pair
+      // serving a goal is not necessarily the one the caller resolves from PATH.
+      runtime_identity: sqliteRuntimeIdentity(),
+    });
+    await chmod(infoPath, 0o600);
   });
-  await chmod(infoPath, 0o600);
   resetIdleTimer(server);
 });

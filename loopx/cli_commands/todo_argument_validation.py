@@ -11,6 +11,7 @@ TODO_OPTION_FIELDS = (
     ("--priority", "priority"),
     ("--clear-priority", "clear_priority"),
     ("--todo-id", "todo_id"),
+    ("--operation-id", "operation_id"),
     ("--claim-operation-id", "claim_operation_id"),
     ("--update-operation-id", "update_operation_id"),
     ("--update-expected-provider-revision", "update_expected_provider_revision"),
@@ -300,6 +301,15 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
     )
 
 
+def validate_todo_receipt_options(args: argparse.Namespace) -> None:
+    _validate_todo_option_subset(
+        args, {"operation_id"},
+        "todo receipt only accepts --goal-id, --operation-id, and --format; unsupported: ",
+    )
+    if not args.operation_id:
+        raise ValueError("todo receipt requires --operation-id")
+
+
 def validate_todo_plan_options(args: argparse.Namespace) -> None:
     _validate_todo_option_subset(
         args, {"text", "agent_id"},
@@ -493,6 +503,8 @@ def validate_todo_archive_completed_options(args: argparse.Namespace) -> None:
 
 
 def validate_shared_todo_options(args: argparse.Namespace) -> None:
+    if getattr(args, "operation_id", None) and args.todo_command != "receipt":
+        raise ValueError("--operation-id is supported only by todo receipt")
     agent_id_allowed_for_user_authoring = (
         args.todo_command == "add"
         and args.role == "user"

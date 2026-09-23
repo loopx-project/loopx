@@ -17,6 +17,9 @@ from ..effect_runtime import effect_runtime_result
 from ..todos.provider_projection import settle_canonical_todo_projection
 
 
+_MONITOR_POLL_RUNTIME_TIMEOUT_SECONDS = 45.0
+
+
 def require_monitor_poll_source_available(*, runtime_root: Path, goal_id: str) -> None:
     """Fail closed on unavailable promoted authority before unrelated quota work."""
     read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
@@ -41,7 +44,7 @@ def poll_canonical_monitor_if_promoted(
         "registered_agents": registered,
         "registry_source": registry_source,
         "dry_run": not execute, "observation": observation, "intent": intent,
-    })
+    }, timeout=_MONITOR_POLL_RUNTIME_TIMEOUT_SECONDS)
     if (not isinstance(result, dict)
         or result.get("status") not in {"applied", "replayed", "recovered", "planned"}
         or result.get("source_authority") not in LOCAL_AUTHORITY_SOURCES

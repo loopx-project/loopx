@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { atomicWriteJson } from "../../loopx/control_plane/effect_runtime_io.ts";
+import { withCanonicalWriter } from "../../loopx/control_plane/coordination/local_authority_write.ts";
 import {
   shadowMaintenanceLockPath,
   shadowManagementStatePath,
@@ -104,6 +105,36 @@ import { engageLegacyCoordinationWriterFence, legacyCoordinationTodoLockPath, le
 import { taskLeaseLockPath } from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
 import { withFileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 import { access } from "node:fs/promises";
+
+test("a canonical writer waits for a slow file-v0 critical section without losing the fence", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-canonical-long-writer-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  let entered!: () => void;
+  let release!: () => void;
+  const firstEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const firstRelease = new Promise<void>((resolve) => { release = resolve; });
+  const first = withCanonicalWriter(root, "goal-a", false, async () => {
+    entered();
+    await firstRelease;
+    return "first";
+  });
+  await firstEntered;
+  let secondState = "pending";
+  const second = withCanonicalWriter(root, "goal-a", false, async () => "second")
+    .then((value) => { secondState = "applied"; return value; }, (error: unknown) => {
+      secondState = "failed";
+      return error;
+    });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 5_200));
+    assert.equal(secondState, "pending", "the old five-second lock deadline must not reject a live writer");
+  } finally {
+    release();
+  }
+  assert.equal(await first, "first");
+  assert.equal(await second, "second");
+  assert.equal(secondState, "applied");
+});
 
 function fenceRequest(root: string) {
   return {schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
