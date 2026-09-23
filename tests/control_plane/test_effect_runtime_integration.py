@@ -237,6 +237,46 @@ def test_old_server_close_cannot_remove_replacement_runtime_locator(
     assert json.loads(info_path.read_text(encoding="utf-8")) == replacement
 
 
+def test_pre_send_connection_failure_does_not_remove_live_locator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "b" * 64
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint
+    )
+    monkeypatch.setattr(
+        effect_runtime, "_start_runtime",
+        lambda **_kwargs: pytest.fail("a live locator must not start a replacement"),
+    )
+    info_path = effect_runtime._runtime_info_path(fingerprint)
+    info = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+        "fingerprint": fingerprint,
+        "pid": os.getpid(),
+        "host": "127.0.0.1",
+        "port": 1,
+        "token": "still-live",
+    }
+    info_path.write_text(json.dumps(info), encoding="utf-8")
+    calls = 0
+
+    def refuse_before_send(_info: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise ConnectionRefusedError("fixture refused before send")
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", refuse_before_send)
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as error:
+        effect_runtime.effect_runtime_request("runtime.ping", {}, retry_safe=True)
+    assert error.value.diagnostic_code == "runtime_request_failed"
+    assert calls == 2
+    assert json.loads(info_path.read_text(encoding="utf-8")) == info
+
+
 def test_retired_coordination_snapshot_mirror_is_rejected_across_runtime_boundary(
     tmp_path: Path,
     monkeypatch,

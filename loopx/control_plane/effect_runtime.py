@@ -371,6 +371,25 @@ def _pid_is_alive(value: object) -> bool:
     return process_is_alive(value)
 
 
+def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> None:
+    """Let a dead directly spawned child fail the next non-signaling probe.
+
+    A stopped child can remain a zombie until its Python parent reaps it;
+    ``kill(pid, 0)`` still reports that zombie as present. This helper does
+    nothing for a live child or a runtime owned by another process.
+    """
+
+    if os.name == "nt" or not isinstance(info, Mapping):
+        return
+    pid = info.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass
+
+
 def _start_lock_holder_pid(path: Path) -> int | None:
     try:
         value = int(path.read_text(encoding="utf-8").strip())
@@ -819,11 +838,13 @@ def effect_runtime_request(
         except (OSError, RuntimeError) as exc:
             last_error = exc
             if attempt == 0 and retry_safe:
-                # Only pre-send connection failures reach this branch. Do not
-                # remove a replacement runtime published by another caller.
-                current = _read_info(info_path, fingerprint=fingerprint)
-                if info is not None and current is not None and current.get("token") == info.get("token"):
-                    info_path.unlink(missing_ok=True)
+                # Only pre-send connection failures reach this branch. Re-read
+                # the locator on retry: reap our own exited child first so a
+                # zombie is rejected by _read_info, while a live server may
+                # simply be draining.
+                # Even a token check followed by unlink would race with a
+                # replacement server publishing its own locator.
+                _reap_exited_runtime_child(info)
                 continue
             break
     if isinstance(last_error, TimeoutError):
