@@ -88,7 +88,9 @@ def main(request):
             # must keep excluding a new index reader and receipt replacement.
             os._exit(0)
         child = start_probe(envelope)
-        stdout, stderr = child.communicate(timeout=30)
+        # The canonical writer may now wait 30s for the real provider fence;
+        # let that typed lock result win over the probe harness deadline.
+        stdout, stderr = child.communicate(timeout=45)
         assert child.returncode == 0, stdout + stderr
         return json.loads(stdout)
 

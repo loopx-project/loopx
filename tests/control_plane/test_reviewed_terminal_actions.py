@@ -210,12 +210,12 @@ def test_monitor_completion_uses_explicit_identity_modes(tmp_path, monkeypatch, 
     execute = provider_terminal_lifecycle.effect_runtime_result
     identities = []
 
-    def capture(method, params):
+    def capture(method, params, **kwargs):
         if method == "coordination.local_authority.todo_terminal":
             assert params["schema_version"] == "loopx_local_coordination_todo_terminal_lifecycle_request_v3"
             assert "operation_id" not in params
             identities.append(params["operation_identity"])
-        return execute(method, params)
+        return execute(method, params, **kwargs)
 
     monkeypatch.setattr(provider_terminal_lifecycle, "effect_runtime_result", capture)
     kwargs = dict(registry_path=registry, goal_id="goal-a", todo_id=todo_id,

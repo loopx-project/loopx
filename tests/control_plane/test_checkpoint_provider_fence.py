@@ -95,7 +95,10 @@ def test_existing_cli_maintenance_guard_precedes_provider_commit(tmp_path, monke
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)["provider_revision"]
     with context_io._source_guard(runtime, GOAL_ID, state):
         writer = public_writer(registry, runtime, barrier, provider)
-        stdout, stderr = writer.communicate(timeout=15)
+        # The canonical writer now waits up to 30s for a real retained File
+        # history commit. Give the subprocess enough time to return its typed
+        # lock error rather than timing out the test harness first.
+        stdout, stderr = writer.communicate(timeout=60)
         assert writer.returncode == 1, stdout + stderr
         assert "lock timed out" in json.loads(stdout)["error"]
         assert not (barrier / "writer-entered").exists()
