@@ -77,6 +77,43 @@ def test_installation_scope_cannot_claim_host_integration_health():
         parser.parse_args(["doctor", "--installation-only", "--agent-type", "codex"])
 
 
+def test_installation_scope_uses_current_distribution_and_console_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from loopx import release_candidate
+
+    invocation = tmp_path / "current" / "bin" / "loopx"
+    other_command = tmp_path / "old" / "bin" / "loopx"
+    distribution_root = tmp_path / "current" / "site-packages"
+    observed: dict = {}
+    monkeypatch.setattr(doctor, "current_script_invocation_path", lambda: invocation)
+    monkeypatch.setattr(
+        "loopx.command_invocation.resolve_command_path", lambda _name: other_command
+    )
+
+    def distribution_install(module_path: Path) -> dict:
+        observed["module_path"] = module_path
+        return {"root": str(distribution_root)}
+
+    def deep_checks(**kwargs) -> dict:
+        observed["deep_checks"] = kwargs
+        return {"checks": [{"id": "distribution_check", "required": True, "ok": True}]}
+
+    monkeypatch.setattr(doctor, "python_distribution_install", distribution_install)
+    monkeypatch.setattr(release_candidate, "collect_deep_install_checks", deep_checks)
+    monkeypatch.setattr(
+        "loopx.control_plane.effect_runtime.collect_effect_runtime_readiness",
+        lambda *, deep: {"ready": True, "status": "ready"},
+    )
+
+    result = release_candidate.collect_installation_doctor(deep=True)
+    assert result["ok"] is True
+    assert result["path"]["loopx"] == str(invocation)
+    assert observed["module_path"] == Path(doctor.__file__).resolve()
+    assert observed["deep_checks"]["invocation_path"] == invocation
+    assert observed["deep_checks"]["distribution_root"] == str(distribution_root)
+
+
 def test_runtime_projection_diagnostics_bound_one_stalled_source_and_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

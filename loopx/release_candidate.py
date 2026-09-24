@@ -289,7 +289,7 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
     from .doctor import current_script_invocation_path, python_distribution_install
 
     invocation = current_script_invocation_path()
-    command = resolve_command_path("loopx") or invocation
+    command = invocation or resolve_command_path("loopx")
     package_root = Path(__file__).resolve().parents[1]
     selected = os.environ.get("LOOPX_RELEASE_ROOT")
     runtime = collect_effect_runtime_readiness(deep=deep)
@@ -311,7 +311,9 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
             invocation_path=invocation,
             package_root=package_root,
             invocation_root=Path(selected).expanduser().resolve() if selected else package_root,
-            distribution_root=python_distribution_install(Path(__file__).resolve()).get("root"),
+            distribution_root=python_distribution_install(
+                Path(__file__).with_name("doctor.py").resolve()
+            ).get("root"),
         )
         checks.extend(candidate["checks"])
         payload["release_candidate"] = candidate
