@@ -9,6 +9,10 @@ HEARTBEAT_SETTLED_REPLAY_REASON = (
     "the receipt-bound work binding and required settlement receipts "
     "are complete for this heartbeat turn; defer successor selection to a new turn"
 )
+RECEIPT_BOUND_DEFERRED_REASON = (
+    "the Todo bound to this heartbeat receipt is deferred; do not "
+    "select or spend an independent successor in the same Turn"
+)
 
 _ACTION_PROJECTION_KEYS = (
     "agent_command",
@@ -89,3 +93,26 @@ def settled_replay_fields() -> dict[str, Any]:
             "spend_policy": "no quota spend for an already-settled heartbeat turn",
         },
     }
+
+
+def deferred_receipt_bound_skip_fields(
+    quota: dict[str, Any],
+    heartbeat_recommendation: dict[str, Any],
+) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    """Project a deferred receipt without borrowing a successor's authority."""
+
+    effective_action = EffectiveAction.QUOTA_SKIP.value
+    reason = RECEIPT_BOUND_DEFERRED_REASON
+    return (
+        effective_action,
+        reason,
+        {**quota, "safe_bypass_allowed": False},
+        {
+            **heartbeat_recommendation,
+            "recommended_mode": effective_action,
+            "notify": "DONT_NOTIFY",
+            "reason": reason,
+            "spend_policy": "no quota spend for a deferred receipt-bound Todo",
+            "stop_if_unchanged": True,
+        },
+    )

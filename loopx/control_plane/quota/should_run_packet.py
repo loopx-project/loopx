@@ -129,6 +129,7 @@ from ..work_items.work_lane import (
     work_lane_contract_is_receipt_bound_monitor_settled,
 )
 from .settlement_precedence import (
+    deferred_receipt_bound_skip_fields,
     settled_replay_fields,
     HEARTBEAT_SETTLED_REPLAY_REASON,
     clear_quota_action_projections,
@@ -889,31 +890,32 @@ def _resolve_quota_should_run_route(
             "reason": reason,
             "spend_policy": "no quota spend for an already-settled heartbeat turn",
         }
-    receipt_bound_deferred_wait = bool(
+    if (
         prepared.receipt_bound_todo_id
         and isinstance(prepared.work_lane_contract, dict)
         and prepared.work_lane_contract.get("obligation")
         == WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION
-    )
-    if receipt_bound_deferred_wait:
-        normal_delivery_allowed = recovery_allowed = self_repair_allowed = False
-        capability_repair_allowed = workspace_repair_allowed = False
-        replan_decision_allowed = receipt_bound_replan_decision = False
-        should_run = False
-        effective_action = EffectiveAction.QUOTA_SKIP.value
-        reason = (
-            "the Todo bound to this heartbeat receipt is deferred; do not "
-            "select or spend an independent successor in the same Turn"
+    ):
+        # Every action path is closed for this immutable, deferred receipt.
+        (
+            normal_delivery_allowed,
+            recovery_allowed,
+            self_repair_allowed,
+            capability_repair_allowed,
+            workspace_repair_allowed,
+            replan_decision_allowed,
+            receipt_bound_replan_decision,
+            should_run,
+        ) = (False,) * 8
+        (
+            effective_action,
+            reason,
+            quota,
+            heartbeat_recommendation,
+        ) = deferred_receipt_bound_skip_fields(
+            quota,
+            heartbeat_recommendation,
         )
-        quota = {**quota, "safe_bypass_allowed": False}
-        heartbeat_recommendation = {
-            **heartbeat_recommendation,
-            "recommended_mode": effective_action,
-            "notify": "DONT_NOTIFY",
-            "reason": reason,
-            "spend_policy": "no quota spend for a deferred receipt-bound Todo",
-            "stop_if_unchanged": True,
-        }
     monitor_quiet_skip = (
         not replan_decision_allowed
         and normal_delivery_allowed

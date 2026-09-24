@@ -452,6 +452,20 @@ def _build_agent_work_lane(
     return monitor_only, work_lane, task_orchestration
 
 
+def _deferred_receipt_bound_work_lane(
+    *, todo_id: str, source_items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Keep a deferred Todo's old receipt visible without selecting new work."""
+
+    if any(
+        normalize_todo_id(source_item.get("todo_id")) == todo_id
+        and normalize_todo_status(source_item.get("status")) == TODO_STATUS_DEFERRED
+        for source_item in source_items
+    ):
+        return receipt_bound_deferred_work_lane(todo_id=todo_id)
+    return None
+
+
 def _prepare_quota_should_run_item(
     status_payload: dict[str, Any],
     *,
@@ -738,24 +752,24 @@ def _prepare_quota_should_run_item(
             and candidate.get("selection_binding") == "heartbeat_receipt"
         ):
             receipt_bound_agent_next_action = candidate
-            preserved_work_lane = preserve_heartbeat_receipt_bound_work_lane(
-                work_lane_contract,
-                selected_todo=candidate,
+            work_lane_contract = (
+                preserve_heartbeat_receipt_bound_work_lane(
+                    work_lane_contract,
+                    selected_todo=candidate,
+                )
+                or work_lane_contract
             )
-            if isinstance(preserved_work_lane, dict):
-                work_lane_contract = preserved_work_lane
-        elif any(
-            normalize_todo_id(source_item.get("todo_id")) == receipt_bound_todo_id
-            and normalize_todo_status(source_item.get("status"))
-            == TODO_STATUS_DEFERRED
-            for source_item in agent_todo_planning_source_items
-        ):
+        else:
             # The old Turn still owns its committed settlement identity, but a
             # deferred Todo is not an executable candidate.  A successor may be
             # selected only by a fresh Turn; do not leak it through work-lane
             # fallback on this replay.
-            work_lane_contract = receipt_bound_deferred_work_lane(
-                todo_id=receipt_bound_todo_id,
+            work_lane_contract = (
+                _deferred_receipt_bound_work_lane(
+                    todo_id=receipt_bound_todo_id,
+                    source_items=agent_todo_planning_source_items,
+                )
+                or work_lane_contract
             )
     if inbox_priority_due:
         task_orchestration_contract = capability_gate = capability_monitor_contract = None
