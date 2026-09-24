@@ -30,6 +30,29 @@ import {AuthorityJournalScan} from "./authority_journal_scan.ts";
 
 const FILE_AUTHORITY_STORE_SCHEMA = "loopx_file_authority_store_v0";
 const STORE_IDENTITY_PATTERN = /^file:[0-9a-f]{32}$/;
+// File-v0 retains every projection in one envelope. A managed Effect server
+// opens a new store handle for each request, so revalidating an unchanged
+// journal on every read makes one Goal's history dominate the RPC budget.
+// Keep only one verified document process-wide; bytes and store identity must
+// both match before a later handle may reuse that validation.
+const MAX_CACHED_DOCUMENT_BYTES = 128 * 1024 * 1024;
+let verifiedDocument: {
+  path: string;
+  identity: string;
+  digest: string;
+  document: FileAuthorityStoreDocument;
+} | null = null;
+
+function documentDigest(raw: Uint8Array): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+function rememberVerifiedDocument(path: string, identity: string, raw: Uint8Array,
+  digest: string, document: FileAuthorityStoreDocument): void {
+  verifiedDocument = raw.byteLength <= MAX_CACHED_DOCUMENT_BYTES
+    ? {path, identity, digest, document}
+    : null;
+}
 
 interface FileAuthorityStoreDocument extends JsonObject, RetainedAuthorityJournal {
   schema_version: typeof FILE_AUTHORITY_STORE_SCHEMA;
@@ -167,6 +190,11 @@ export class FileAuthorityStore implements AuthorityStore {
   /** Filesystem-only crash seam; the archive owner must still fsync both parents. */
   protected async archiveRenamed(): Promise<void> {}
 
+  /** Full-history verification seam; unchanged byte-identical reads may reuse it. */
+  protected decodeStoredDocument(value: unknown, identity: string): FileAuthorityStoreDocument {
+    return decodeDocument(value, this.goalId, identity);
+  }
+
   private async readStoreIdentity(createIfMissing = !this.existingOnly): Promise<string> {
     try {
       const identity = await readFile(this.identityPath, "utf8");
@@ -213,19 +241,26 @@ export class FileAuthorityStore implements AuthorityStore {
     }
   }
 
-  private async readDocument(): Promise<FileAuthorityStoreDocument | null> {
-    let raw: string;
+  private async readDocument(knownIdentity?: string): Promise<FileAuthorityStoreDocument | null> {
+    let raw: Buffer;
     try {
-      raw = await readFile(this.path, "utf8");
+      raw = await readFile(this.path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw new FileStoreUnavailableError(
         error instanceof Error ? error.message : "authority document unavailable",
       );
     }
-    const identity = await this.readStoreIdentity();
+    const identity = knownIdentity ?? await this.readStoreIdentity();
     try {
-      return decodeDocument(JSON.parse(raw), this.goalId, identity);
+      const digest = documentDigest(raw);
+      if (verifiedDocument?.path === this.path &&
+          verifiedDocument.identity === identity && verifiedDocument.digest === digest) {
+        return verifiedDocument.document;
+      }
+      const document = this.decodeStoredDocument(JSON.parse(raw.toString("utf8")), identity);
+      rememberVerifiedDocument(this.path, identity, raw, digest, document);
+      return document;
     } catch (error) {
       if (error instanceof SyntaxError) {
         throw new AuthorityStoreProtocolError(`file authority store JSON is invalid: ${error.message}`);
@@ -284,7 +319,7 @@ export class FileAuthorityStore implements AuthorityStore {
           // A restored directory must not race a missing-head bootstrap and
           // bind new authority bytes to an identity observed before the lock.
           identity = await this.readStoreIdentity();
-          current = await this.readDocument();
+          current = await this.readDocument(identity);
         } catch (error) {
           return {
             status: "failed",
@@ -319,8 +354,14 @@ export class FileAuthorityStore implements AuthorityStore {
         const document: FileAuthorityStoreDocument = {schema_version: FILE_AUTHORITY_STORE_SCHEMA,
           goal_id: this.goalId, store_identity: identity, ...journal};
         try {
-          await this.replaceDurably(this.path, canonicalAuthorityBytes(document));
+          const bytes = canonicalAuthorityBytes(document);
+          await this.replaceDurably(this.path, bytes);
+          rememberVerifiedDocument(this.path, identity, bytes, documentDigest(bytes), document);
         } catch (error) {
+          // A failure after rename may already have published the new bytes.
+          // The next read must prove the actual file rather than reuse either
+          // the previous or attempted document.
+          verifiedDocument = null;
           return {
             status: "ambiguous",
             reason_code: "commit_outcome_unknown",

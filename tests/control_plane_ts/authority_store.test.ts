@@ -90,8 +90,12 @@ test("corrupt, cross-goal, or revision-divergent documents fail closed", async (
   const { store } = await fixture(t);
   const applied = await store.commitAuthority(commit(null, "operation-a", 1, 1));
   assert.equal(applied.status, "applied");
+  const otherHandle = new FileAuthorityStore(store.directory, "goal-a");
+  assert.deepEqual(await otherHandle.loadAuthority(), await store.loadAuthority());
   const original = JSON.parse(await readFile(store.path, "utf8"));
 
+  // A same-length replacement must not inherit the verified journal simply
+  // because its path or filesystem size is unchanged.
   await writeFile(store.path, JSON.stringify({ ...original, goal_id: "goal-b" }), "utf8");
   assert.equal((await store.loadAuthority()).status, "failed");
 
@@ -105,6 +109,38 @@ test("corrupt, cross-goal, or revision-divergent documents fail closed", async (
   const divergent = await store.loadAuthority();
   assert.equal(divergent.status, "failed");
   if (divergent.status === "failed") assert.match(divergent.reason, /revision lineage/);
+});
+
+test("file verification is reused only for exact bytes and store identity", async (t) => {
+  const { root, store } = await fixture(t);
+  const applied = await store.commitAuthority(commit(null, "operation-a", 1, 1));
+  assert.equal(applied.status, "applied");
+  const validBytes = await readFile(store.path, "utf8");
+  // A benign external rewrite forces one full validation; a second handle
+  // reads the same proven bytes without validating the whole journal again.
+  await writeFile(store.path, `${validBytes}\n`, "utf8");
+  class CountingStore extends FileAuthorityStore {
+    static validations = 0;
+    protected override decodeStoredDocument(value: unknown, identity: string) {
+      CountingStore.validations += 1;
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  const first = new CountingStore(root, "goal-a");
+  const second = new CountingStore(root, "goal-a");
+  assert.equal((await first.loadAuthority()).status, "loaded");
+  assert.equal((await second.loadAuthority()).status, "loaded");
+  assert.equal(CountingStore.validations, 1);
+
+  const originalIdentity = await readFile(store.identityPath, "utf8");
+  await writeFile(store.identityPath, `file:${"f".repeat(32)}`, "utf8");
+  assert.equal((await second.loadAuthority()).status, "failed");
+  assert.equal(CountingStore.validations, 2);
+  await writeFile(store.identityPath, originalIdentity, "utf8");
+
+  await writeFile(store.path, validBytes.replace('"goal-a"', '"goal-b"'), "utf8");
+  assert.equal((await second.loadAuthority()).status, "failed");
+  assert.equal(CountingStore.validations, 3);
 });
 
 test("store identity is one durable directory lineage and restored bytes are fenced", async (t) => {
