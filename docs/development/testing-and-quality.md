@@ -1009,10 +1009,13 @@ For focused thin/brief prompt-decision regression, use
 explicit release qualification. It defaults to no calls; missing credentials
 report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
 Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
-quiet-wait and required-vision-replan cases in each mode. Expected decisions
-remain outside model input. All attempts must pass; no answer correction or
-retry-until-pass is used. Ordinary pytest only checks the probe and negative
-oracles with scripted responses, without provider calls.
+quiet-wait, required-vision-replan and typed external-wait fallback cases in
+each mode. The fallback case uses the real compact quota projection: its wait
+transition already exists, so the host must advance the selected independent
+successor and notify rather than authoring another transition. Expected
+decisions remain outside model input. All attempts must pass; no answer
+correction or retry-until-pass is used. Ordinary pytest only checks the probe
+and negative oracles with scripted responses, without provider calls.
 
 This is a synthetic decision-level probe using current generated prompts,
 not proof of tool execution, host scheduling, upgrade delivery or full-Goal
