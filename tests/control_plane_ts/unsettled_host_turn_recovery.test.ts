@@ -398,6 +398,14 @@ test("a prior typed blocked writeback closes without a quota debit", async () =>
       todo_id: todoId,
       turn_instance_id: turn,
       settlement_identity: identity,
+      blocked_retry: {
+        schema_version: "quota_blocked_retry_v0",
+        source: "turn_settlement",
+        todo_id: todoId,
+        resume_when: "resume_at:2026-09-24T10:05:00Z",
+        observed_at: "2026-09-24T10:00:00Z",
+        due_at: "2026-09-24T10:05:00Z",
+      },
       progress_observation: {
         schema_version: "typed_progress_observation_v0",
         result_class: "blocked",

@@ -417,6 +417,35 @@ test("semantic closeout retains the strict material vision checkpoint", () => {
   ]);
 });
 
+test("a bounded blocked retry does not invent a vision change", () => {
+  const blockedRetry = {
+    schema_version: "quota_blocked_retry_v0",
+    source: "turn_settlement",
+    todo_id: "todo_current001",
+    observed_at: "2026-09-24T14:00:00Z",
+    due_at: "2026-09-24T14:05:00Z",
+    resume_when: "resume_at:2026-09-24T14:05:00Z",
+  };
+  const blocked = buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap", blocked_retry: blockedRetry,
+  }));
+  assert.equal(blocked.required, false);
+  assert.equal(blocked.satisfied, true);
+  assert.equal(blocked.decision, "not_required");
+  assert.deepEqual(blocked.triggers, []);
+
+  const changedAction = buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap", blocked_retry: blockedRetry,
+    active_state_next_action_would_update: true,
+  }));
+  assert.equal(changedAction.required, true);
+  assert.deepEqual(changedAction.triggers, [{kind: "durable_next_action_update"}]);
+  assert.throws(() => buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap",
+    blocked_retry: {...blockedRetry, todo_id: "todo_other"},
+  })), /blocked retry does not bind/);
+});
+
 test("explicit in-flight progress records continuity without vision repetition", () => {
   const result = buildVisionCheckpoint(finalizeRequest({
     delivery_boundary: "in_flight_continuation",

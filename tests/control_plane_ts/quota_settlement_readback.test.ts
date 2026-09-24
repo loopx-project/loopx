@@ -78,6 +78,7 @@ async function fixture(options: {
   monitor?: boolean;
   writebackOutcome?: string;
   progressObservation?: Record<string, unknown>;
+  blockedRetry?: boolean;
 } = {}) {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-settlement-readback-"));
   const goalRoot = join(runtimeRoot, "goals", goalId);
@@ -150,6 +151,14 @@ async function fixture(options: {
       todo_id: todoId,
       turn_instance_id: turnId,
       settlement_identity: identity,
+      ...(options.blockedRetry ? {blocked_retry: {
+        schema_version: "quota_blocked_retry_v0",
+        source: "todo",
+        todo_id: todoId,
+        resume_when: "resume_at:2026-09-24T10:05:00Z",
+        observed_at: "2026-09-24T10:00:00Z",
+        due_at: "2026-09-24T10:05:00Z",
+      }} : {}),
       ...(options.progressObservation
         ? { progress_observation: options.progressObservation }
         : {}),
@@ -684,6 +693,7 @@ test("accepts only an attributable typed blocker as an outcome-gap writeback", a
   const qualifiedRuntime = await fixture({
     writeback: true,
     writebackOutcome: "outcome_gap",
+    blockedRetry: true,
     progressObservation: {
       schema_version: "typed_progress_observation_v0",
       result_class: "blocked",
@@ -709,6 +719,7 @@ test("accepts only an attributable typed blocker as an outcome-gap writeback", a
     writeback: true,
     spend: true,
     writebackOutcome: "outcome_gap",
+    blockedRetry: true,
     progressObservation: {
       schema_version: "typed_progress_observation_v0",
       result_class: "blocked",
@@ -727,6 +738,7 @@ test("accepts only an attributable typed blocker as an outcome-gap writeback", a
   const incompleteSpendRuntime = await fixture({
     writeback: true,
     writebackOutcome: "outcome_gap",
+    blockedRetry: true,
     progressObservation: {
       schema_version: "typed_progress_observation_v0",
       result_class: "blocked",
@@ -748,6 +760,21 @@ test("accepts only an attributable typed blocker as an outcome-gap writeback", a
   const incompleteSpend = await readQuotaSettlement(request(incompleteSpendRuntime));
   assert.equal((incompleteSpend.settlement as any).payload.ok, false);
   assert.equal((incompleteSpend.progress as any).closeout_kind, undefined);
+
+  const unscheduledRuntime = await fixture({
+    writeback: true,
+    writebackOutcome: "outcome_gap",
+    progressObservation: {
+      schema_version: "typed_progress_observation_v0",
+      result_class: "blocked",
+      work_item_id: todoId,
+      blocker_id: "blocker-runtime-boundary",
+      evidence_ids: ["evidence-runtime-boundary"],
+    },
+  });
+  const unscheduled = await readQuotaSettlement(request(unscheduledRuntime));
+  assert.equal((unscheduled.progress as any).state, "spend_required");
+  assert.equal((unscheduled.progress as any).closeout_kind, undefined);
 
   const bareRuntime = await fixture({
     writeback: true,

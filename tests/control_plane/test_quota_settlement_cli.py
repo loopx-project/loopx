@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -310,8 +311,9 @@ def _configure_completion_validation_todo(project: Path) -> Path:
     state_text = state_path.read_text(encoding="utf-8")
     state_path.write_text(
         state_text.replace(
-            "action_kind=validate -->",
-            "action_kind=validate validation_command=pytest -->",
+            "action_kind=validate",
+            "action_kind=validate validation_command=pytest",
+            1,
         ),
         encoding="utf-8",
     )
@@ -900,6 +902,7 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         required_capability="filesystem_write",
     )
     _configure_completion_validation_todo(project)
+    _configure_selectable_alternative(project)
     turn_id = "turn-typed-blocker-settlement"
     binding = (
         "--agent-id",
@@ -986,6 +989,55 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
     assert mismatch_rc == 1, mismatch
     assert "settlement binding does not match" in mismatch["error"]
 
+    unscheduled_rc, unscheduled = _run_cli(
+        registry_path,
+        runtime,
+        *common_refresh_args,
+        "--progress-result-class",
+        "blocked",
+        "--progress-blocker-id",
+        "blocker:runtime-boundary",
+        "--progress-evidence-id",
+        "evidence:runtime-boundary",
+        cwd=project,
+    )
+    assert unscheduled_rc == 1, unscheduled
+    assert "pending resume_when=resume_at" in unscheduled["error"]
+    assert _classification_count(runtime, "typed_blocker_writeback") == 0
+
+    due_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
+    wait_rc, wait = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "update",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--status",
+        "open",
+        "--resume-when",
+        f"resume_at:{due_at}",
+        "--successor-todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+    assert wait_rc == 0, wait
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert listed_rc == 0, listed
+    waiting_todo = next(
+        item for item in listed["todos"] if item["todo_id"] == TODO_ID
+    )
+    assert waiting_todo["resume_when"] == f"resume_at:{due_at}"
+    assert waiting_todo["resume_ready"] is False
+    assert waiting_todo["successor_todo_ids"] == [ALTERNATIVE_TODO_ID]
+
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
@@ -998,10 +1050,11 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         "evidence:runtime-boundary",
         cwd=project,
     )
-    assert refresh_rc == 0, refresh
+    assert refresh_rc == 0, refresh.get("error") or refresh
     assert refresh["delivery_outcome"] == "outcome_gap"
     assert refresh["progress_observation"]["result_class"] == "blocked"
     assert refresh["progress_observation"]["work_item_id"] == TODO_ID
+    assert refresh["blocked_retry"]["resume_when"] == f"resume_at:{due_at}"
     assert [
         receipt["step_kind"]
         for receipt in refresh["settlement_result"]["receipts"]
@@ -1054,6 +1107,186 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
     )
     assert next_rc == 0, next_turn
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+
+
+def test_typed_blocked_retry_without_successor_defers_the_only_todo(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_completion_validation_todo(project)
+    turn_id = "turn-typed-blocker-only-todo"
+    binding = (
+        "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID,
+        "--turn-instance-id", turn_id,
+    )
+    guard_rc, guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project), cwd=project,
+    )
+    assert guard_rc == 0, guard
+    due_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
+    wait_rc, wait = _run_cli(
+        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+        "--status", "deferred", "--resume-when", f"resume_at:{due_at}",
+    )
+    assert wait_rc == 0, wait
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID
+    )
+    assert listed_rc == 0, listed
+    assert listed["todos"][0]["status"] == "deferred"
+    assert listed["todos"][0]["resume_ready"] is False
+
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "typed_blocker_writeback",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", *binding,
+        "--progress-result-class", "blocked",
+        "--progress-blocker-id", "blocker:runtime-boundary",
+        "--progress-evidence-id", "evidence:runtime-boundary",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["settlement_progress"]["state"] == "settled"
+    assert refresh["blocked_retry"]["resume_when"] == f"resume_at:{due_at}"
+    assert _spend_run_count(runtime) == 0
+
+    next_rc, next_turn = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-after-only-todo-blocked",
+        "--scan-path", str(project), cwd=project,
+    )
+    assert next_rc == 0, next_turn
+    assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert (next_turn.get("selected_todo") or {}).get("todo_id") != TODO_ID
+    assert next_turn["should_run"] is False, next_turn
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_typed_blocked_retry_with_peer_hard_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    """A peer's overlapping execution lease must not strand exact closeout."""
+    from canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state = _configure_completion_validation_todo(project)
+    _configure_selectable_alternative(project)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"]["registered_agents"].append("peer-agent")
+    registry["goals"][0]["coordination"]["write_scope"] = ["src/**"]
+    registry["goals"][0]["workspace_guard_policy"] = {
+        "peer_independent_worktree_required": False,
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    rc, listed = _run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, listed
+    todos = listed["todos"]
+    for todo in todos:
+        todo["required_write_scopes"] = ["src/**"]
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease", leases=[],
+    )
+    initialize_canonical_authority(
+        runtime, GOAL_ID, projection, state_path=state, provider=provider,
+    )
+
+    turn_id = f"turn-hard-lease-blocker-{provider}"
+    binding = (
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", turn_id,
+    )
+    guard_rc, guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project), cwd=project,
+    )
+    assert guard_rc == 0, guard
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+
+    lease_rc, lease = _run_cli(
+        registry_path, runtime, "task-lease", "acquire", "--goal-id", GOAL_ID,
+        "--todo-id", ALTERNATIVE_TODO_ID, "--owner", "peer-agent",
+        "--idempotency-key", f"peer-overlap-{provider}", "--expected-version", "0",
+        "--ttl-seconds", "600", "--write-scope", "src/**",
+    )
+    assert lease_rc == 0, lease
+    assert lease["acquired"] is True
+    assert lease["source_authority"] == f"{provider}_v0"
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "peer_hard_lease_blocker",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", *binding,
+        "--progress-result-class", "blocked",
+        "--progress-blocker-id", "blocker:peer-hard-lease",
+        "--progress-evidence-id", "evidence:peer-hard-lease",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert refresh_rc == 0, refresh.get("error") or refresh
+    assert refresh["settlement_progress"]["closeout_kind"] == (
+        "typed_blocked_writeback_no_spend"
+    )
+    assert refresh["blocked_retry"]["source"] == "turn_settlement"
+    due_at = datetime.fromisoformat(refresh["blocked_retry"]["due_at"].replace("Z", "+00:00"))
+    observed = datetime.fromisoformat(refresh["blocked_retry"]["observed_at"].replace("Z", "+00:00"))
+    assert due_at - observed == timedelta(minutes=5)
+    assert _spend_run_count(runtime) == 0
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "peer_hard_lease_blocker",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_gap", *binding,
+        "--progress-result-class", "blocked",
+        "--progress-blocker-id", "blocker:peer-hard-lease",
+        "--progress-evidence-id", "evidence:peer-hard-lease",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert replay_rc == 0, replay.get("error") or replay
+    assert replay["idempotent_replay"] is True
+    assert replay["blocked_retry"] == refresh["blocked_retry"]
+    assert _classification_count(runtime, "peer_hard_lease_blocker") == 1
+    spend_rc, spend = _run_cli(
+        registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--slots", "1", "--source", "heartbeat", "--execute", *binding,
+        "--scan-path", str(project), cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["appended"] is False
+    assert _spend_run_count(runtime) == 0
+    rc, after = _run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, after
+    original = next(todo for todo in after["todos"] if todo["todo_id"] == TODO_ID)
+    assert original["status"] == "open"
+    assert not original.get("resume_when")
+    assert original["completion_validation_required"] is True
+    assert original["completion_validation_sha256"]
+
+    next_rc, next_turn = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", f"turn-after-hard-lease-blocker-{provider}",
+        "--scan-path", str(project), cwd=project,
+    )
+    assert next_rc == 0, next_turn
+    assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert (next_turn.get("selected_todo") or {}).get("todo_id") != TODO_ID
 
 
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
