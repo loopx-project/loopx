@@ -1215,7 +1215,8 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     )
     guard_rc, guard = _run_cli(
         registry_path, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project), cwd=project,
+        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project),
+        "--write-projection-cache", cwd=project,
     )
     assert guard_rc == 0, guard
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
@@ -1282,7 +1283,7 @@ def test_typed_blocked_retry_with_peer_hard_lease(
         registry_path, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", f"turn-after-hard-lease-blocker-{provider}",
-        "--scan-path", str(project), cwd=project,
+        "--scan-path", str(project), "--use-projection-cache", cwd=project,
     )
     assert next_rc == 0, next_turn
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"

@@ -10,6 +10,7 @@ from ..control_plane.scheduler.provider_monitor_poll import (
 )
 from ..control_plane.quota.error_codes import QuotaCommandValidationError
 from ..control_plane.runtime.status_projection_cache import (
+    cached_goal_run_index_is_current,
     load_status_projection_cache,
     resolve_status_projection_cache_runtime_root,
     write_status_projection_cache,
@@ -321,6 +322,17 @@ def prepare_quota_command_context(
             available_capabilities=args.available_capabilities,
             agent_lane_id=args.agent_id,
         )
+        if (
+            status_payload is not None
+            and command in QUOTA_SCHEDULER_COMMANDS
+            and status_goal_id
+            and not cached_goal_run_index_is_current(
+                status_payload, runtime_root=runtime_root, goal_id=status_goal_id,
+            )
+        ):
+            status_payload = None
+            cache_metadata["hit"] = False
+            cache_metadata["miss_reason"] = "run_index_changed"
     if status_payload is None:
         collector = status_collector or collect_status
         status_payload = collector(
