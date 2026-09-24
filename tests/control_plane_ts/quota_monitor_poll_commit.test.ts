@@ -810,7 +810,7 @@ test("retry repairs a truncated owned index tail and rejects artifact drift", as
   );
 });
 
-test("provider retry fails before writeback when its preflight index fence is stale", async (t) => {
+test("pending provider effect settles after an unrelated append-only index commit", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const pending = request({
     phase: "preflight",
@@ -836,6 +836,52 @@ test("provider retry fails before writeback when its preflight index fence is st
     "written",
   );
 
+  const retry = await evaluateQuotaMonitorPollCommit(pending);
+  assert.equal(retry.status, "provider_required");
+  const receipt = {
+    schema_version: "monitor_poll_todo_writeback_v0",
+    monitor_effect_id: "quota-monitor-poll:pending-provider",
+    dry_run: false,
+    goal_id: goalId,
+    todo_id: "todo_public_monitor",
+    target_key: null,
+    result_hash: "unchanged-42",
+    material_change: false,
+    material_change_generation: 0,
+    consecutive_no_change: 1,
+    last_checked_at: pending.generated_at,
+    next_due_at: null,
+    cadence: null,
+    todo_update: {ok: true},
+    next_todos: [],
+    successor_receipts: [],
+  };
+  const settled = await evaluateQuotaMonitorPollCommit({
+    ...pending, phase: "commit", provider_receipt: receipt,
+  });
+  assert.equal(settled.status, "written");
+  assert.equal((await evaluateQuotaMonitorPollCommit({
+    ...pending, phase: "commit", provider_receipt: receipt,
+  })).status, "replayed");
+  const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
+  assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 2);
+});
+
+test("pending provider effect still rejects changed preflight index history", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const prior = request({phase: "commit", runtime_root: runtimeRoot, execute: true,
+    effect_id: "quota-monitor-poll:prior-history"});
+  const initial = await evaluateQuotaMonitorPollCommit(prior);
+  assert.equal(initial.status, "written");
+  const pending = request({phase: "preflight", runtime_root: runtimeRoot, execute: true,
+    expected_index_digest: initial.index_digest,
+    effect_id: "quota-monitor-poll:pending-history",
+    observation: observation({todo_id: "todo_public_monitor", result_hash: "unchanged-42"})});
+  assert.equal((await evaluateQuotaMonitorPollCommit(pending)).status, "provider_required");
+  const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
+  const original = await readFile(indexPath, "utf8");
+  assert.match(original, /quota-monitor-poll:prior-history/);
+  await writeFile(indexPath, original.replaceAll("quota-monitor-poll:prior-history", "quota-monitor-poll:alter-history"));
   const retry = await evaluateQuotaMonitorPollCommit(pending);
   assert.equal(retry.status, "conflict");
   assert.equal(retry.reason_code, "index_digest_conflict");

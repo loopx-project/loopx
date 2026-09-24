@@ -1326,6 +1326,20 @@ function matchingIndexRecord(
   return null;
 }
 
+function pendingIndexHistoryIntact(
+  pending: PendingMonitorReceipt,
+  current: Buffer | null,
+): boolean {
+  const expectedBytes = pending.expected_index_bytes;
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0 ||
+      (current?.length ?? 0) < expectedBytes) return false;
+  if (pending.expected_index_digest === null) {
+    return expectedBytes === 0;
+  }
+  return sha256Bytes((current ?? Buffer.alloc(0)).subarray(0, expectedBytes)) ===
+    pending.expected_index_digest;
+}
+
 function indexRecordFor(
   request: MonitorRequest,
   record: JsonObject,
@@ -2041,6 +2055,13 @@ export async function evaluateQuotaMonitorPollCommit(
       );
     }
     const records = indexRecords(indexContent);
+    if (existing?.status === "provider_pending" && matchingIndexRecord(records, request.effect_id)) {
+      return result(
+        request, fingerprint, "conflict", null, {ok: false, appended: false},
+        "quota monitor-poll effect identity exists while its provider receipt is pending",
+        currentDigest, null, null, {reason_code: "effect_id_conflict"},
+      );
+    }
     if (!existing && matchingIndexRecord(records, request.effect_id)) {
       return result(
         request,
@@ -2057,11 +2078,7 @@ export async function evaluateQuotaMonitorPollCommit(
     }
 
     if (request.phase === "preflight") {
-      if (
-        existing &&
-        (currentDigest !== existing.expected_index_digest ||
-          (indexBytes?.length ?? 0) !== existing.expected_index_bytes)
-      ) {
+      if (existing && !pendingIndexHistoryIntact(existing, indexBytes)) {
         return result(
           request,
           fingerprint,
@@ -2139,10 +2156,7 @@ export async function evaluateQuotaMonitorPollCommit(
           "malformed_transaction_receipt",
         );
       }
-      if (
-        currentDigest !== existing.expected_index_digest ||
-        (indexBytes?.length ?? 0) !== existing.expected_index_bytes
-      ) {
+      if (!pendingIndexHistoryIntact(existing, indexBytes)) {
         return result(
           request,
           fingerprint,
@@ -2161,8 +2175,12 @@ export async function evaluateQuotaMonitorPollCommit(
         plan,
         validatedProviderReceipt(request.provider_receipt, plan),
       );
-      expectedDigest = existing.expected_index_digest;
-      expectedBytes = existing.expected_index_bytes;
+      // The pending receipt freezes the admitted observation, not the entire
+      // append-only run index. An unrelated run may have committed while the
+      // provider wrote this exact effect. The new prepared WAL fences the
+      // current index under the same lock after its historical prefix passes.
+      expectedDigest = currentDigest;
+      expectedBytes = indexBytes?.length ?? 0;
     } else if (existing?.status === "provider_pending") {
       return effectConflict(request, fingerprint, currentDigest, existing);
     }
