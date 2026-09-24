@@ -22,6 +22,7 @@ from loopx.control_plane.status.autonomous_replan_projection import (
 from loopx.control_plane.quota.settlement_validation import (
     completion_validation_spend_error,
 )
+from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.rollout_event_log import build_rollout_event
@@ -898,6 +899,7 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         tmp_path,
         required_capability="filesystem_write",
     )
+    _configure_completion_validation_todo(project)
     turn_id = "turn-typed-blocker-settlement"
     binding = (
         "--agent-id",
@@ -1004,6 +1006,14 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         receipt["step_kind"]
         for receipt in refresh["settlement_result"]["receipts"]
     ] == ["validation", "durable_writeback"]
+    assert refresh["settlement_progress"]["state"] == "settled"
+    assert refresh["settlement_progress"]["closeout_kind"] == (
+        "typed_blocked_writeback_no_spend"
+    )
+    assert refresh.get("settlement_owed") is None
+    assert "- closeout: typed blocked writeback; no quota slot spent" in (
+        render_settlement_progress_markdown(refresh)
+    )
 
     spend_rc, spend = _run_cli(
         registry_path,
@@ -1023,11 +1033,27 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         cwd=project,
     )
     assert spend_rc == 0, spend
-    assert [
-        receipt["step_kind"]
-        for receipt in spend["settlement_result"]["receipts"]
-    ] == ["validation", "durable_writeback", "quota_spend"]
-    assert _spend_run_count(runtime) == 1
+    assert spend["appended"] is False
+    assert _spend_run_count(runtime) == 0
+
+    next_rc, next_turn = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        "turn-after-typed-blocker-settlement",
+        "--scan-path",
+        str(project),
+        cwd=project,
+    )
+    assert next_rc == 0, next_turn
+    assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
 
 
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(

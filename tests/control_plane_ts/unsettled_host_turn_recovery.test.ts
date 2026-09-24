@@ -365,6 +365,56 @@ test("a prior Turn that already validates its settlement needs no bound facts", 
   // end-to-end through the real entrypoint.
 });
 
+test("a prior typed blocked writeback closes without a quota debit", async () => {
+  const turn = "turn-blocked";
+  const todoId = "todo_blocked";
+  const identity = settlementIdentity({
+    goal_id: GOAL, agent_id: AGENT, todo_id: todoId, turn_instance_id: turn,
+  });
+  const runtime = await runtimeWith([
+    receipt(turn, {
+      todo_id: todoId,
+      settlement_effect_id: identity.effect_id,
+      closeout_required: true,
+    }),
+    {
+      schema_version: "loopx_rollout_event_v0",
+      event_id: "event-blocked-writeback",
+      event_kind: "refresh_state",
+      goal_id: GOAL,
+      agent_id: AGENT,
+      run_id: turn,
+      details: {settlement_effect_id: identity.effect_id},
+    },
+  ]);
+  try {
+    const runsRoot = join(runtime.root, "goals", GOAL, "runs");
+    await mkdir(runsRoot, {recursive: true});
+    await writeFile(join(runsRoot, "index.jsonl"), `${JSON.stringify({
+      classification: "state_refreshed",
+      delivery_outcome: "outcome_gap",
+      goal_id: GOAL,
+      agent_id: AGENT,
+      todo_id: todoId,
+      turn_instance_id: turn,
+      settlement_identity: identity,
+      progress_observation: {
+        schema_version: "typed_progress_observation_v0",
+        result_class: "blocked",
+        work_item_id: todoId,
+        blocker_id: "blocker-lease",
+        evidence_ids: ["evidence-lease"],
+      },
+    })}\n`);
+    const result = await preflight(runtime.root);
+    assert.equal(result.status, "none");
+    assert.equal(result.accepted_closeout, "typed_blocked_writeback_no_spend");
+    assert.equal(result.prior_turn_instance_id, turn);
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("a malformed or foreign log line fails the read instead of erasing a closeout", async () => {
   const runtime = await runtimeWith([
     receipt("turn-a", closeoutRequired("turn-a", "todo_alpha")),
