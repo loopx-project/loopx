@@ -908,7 +908,6 @@ def _resolve_quota_should_run_route(
             should_run,
         ) = (False,) * 8
         (
-            effective_action,
             reason,
             quota,
             heartbeat_recommendation,
@@ -916,6 +915,7 @@ def _resolve_quota_should_run_route(
             quota,
             heartbeat_recommendation,
         )
+        effective_action = EffectiveAction.QUOTA_SKIP.value
     monitor_quiet_skip = (
         not replan_decision_allowed
         and normal_delivery_allowed

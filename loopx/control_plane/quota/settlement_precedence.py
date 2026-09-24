@@ -98,18 +98,16 @@ def settled_replay_fields() -> dict[str, Any]:
 def deferred_receipt_bound_skip_fields(
     quota: dict[str, Any],
     heartbeat_recommendation: dict[str, Any],
-) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     """Project a deferred receipt without borrowing a successor's authority."""
 
-    effective_action = EffectiveAction.QUOTA_SKIP.value
     reason = RECEIPT_BOUND_DEFERRED_REASON
     return (
-        effective_action,
         reason,
         {**quota, "safe_bypass_allowed": False},
         {
             **heartbeat_recommendation,
-            "recommended_mode": effective_action,
+            "recommended_mode": EffectiveAction.QUOTA_SKIP.value,
             "notify": "DONT_NOTIFY",
             "reason": reason,
             "spend_policy": "no quota spend for a deferred receipt-bound Todo",
