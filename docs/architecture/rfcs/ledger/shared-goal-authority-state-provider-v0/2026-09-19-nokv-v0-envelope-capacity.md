@@ -14,7 +14,10 @@ a measurement instead of an estimate.
   store (`commitAuthority`, then `readReceipt` of the first and last operation
   and `loadAuthority`, sampled every 50 commits) until that refusal, once over
   an in-memory transport and once over the real JSON-lines helper against a
-  single-node NoKV 0.11.1 owner. Every transaction carried a fixed projection
+  single-node NoKV 0.11.0 owner, the release current on the measurement day
+  (the 0.11.1 incarnation fence is a separate change recorded in the
+  2026-09-22 entry; the capacity numbers were not re-measured on 0.11.1).
+  Every transaction carried a fixed projection
   plus about 0.6 KiB of events and receipts. The projection sizes were the
   production-scale history fixture as it is (21,858 bytes) and a 64 KiB
   synthetic one. Measured on LoopX `da6d79778` (2026-09-19, before the

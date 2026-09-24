@@ -10,7 +10,8 @@ NoKV 候选布局在 fail-closed 之前能装下多少，让 §7.2 的有界 hea
   `commitAuthority` 在任何 CAS 之前返回 `failed/authority_envelope_too_large`。一个仓库外的
   探针通过真实 store 逐笔提交（`commitAuthority`，每 50 笔采样一次首末操作的 `readReceipt`
   与 `loadAuthority`），直到收到该拒绝；一次走内存传输，一次走真实 JSON-lines helper 对单节点
-  NoKV 0.11.1 owner。每笔事务带固定投影加约 0.6 KiB 的事件与收据。投影尺寸取生产规模
+  NoKV 0.11.0 owner，即测量当日的现行发布版（0.11.1 的 incarnation 围栏是另一项改动，记录在
+  2026-09-22 条目里；容量数字没有在 0.11.1 上重测）。每笔事务带固定投影加约 0.6 KiB 的事件与收据。投影尺寸取生产规模
   history fixture 的自然大小（21,858 字节）和一个 64 KiB 的合成投影。测量基线为 LoopX
   `da6d79778`（2026-09-19，incarnation 围栏合入之前；信封布局在 `main` 上未变）。
 - **信封在哪里停。** 内存下，21,858 字节投影在第 739 笔到顶（最终信封 16,758,084 字节，每笔约增
