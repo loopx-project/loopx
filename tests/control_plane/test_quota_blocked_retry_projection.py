@@ -161,6 +161,34 @@ def test_turn_owned_retry_is_selection_only_and_expires() -> None:
     assert projected["resume_when"] == retry["resume_when"]
     assert projected["resume_ready"] is False
     assert "resume_when" not in original
+    new_subject = {
+        **status,
+        "attention_queue": {
+            "items": [
+                {
+                    **status["attention_queue"]["items"][0],
+                    "agent_todos": {
+                        "items": [
+                            original,
+                            {
+                                "todo_id": "todo_created_after_block",
+                                "task_class": "advancement_task",
+                                "status": "open",
+                            },
+                        ]
+                    },
+                }
+            ],
+        },
+    }
+    new_subject_rows = overlay_active_turn_retries(
+        new_subject,
+        goal_id="goal-a",
+        agent_id="agent-a",
+        observed_at="2026-09-24T14:02:00Z",
+    )["attention_queue"]["items"][0]["agent_todos"]["items"]
+    assert new_subject_rows[0]["resume_ready"] is False
+    assert "resume_when" not in new_subject_rows[1]
     assert (
         overlay_active_turn_retries(
             status,
