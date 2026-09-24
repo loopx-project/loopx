@@ -3528,9 +3528,22 @@ def test_pending_deferred_p0_allows_independent_p1_selection(
     assert payload["action_selection_qualification"]["state"] == "qualified"
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     tmp_path: Path,
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -3541,6 +3554,19 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         ),
         encoding="utf-8",
     )
+    if provider != "legacy":
+        listed_rc, listed = _run_cli(
+            registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID,
+        )
+        assert listed_rc == 0, listed
+        projection = build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID,
+            handoff_mode="soft_claim",
+            todos=listed["todos"],
+        )
+        initialize_canonical_authority(
+            runtime, GOAL_ID, projection, state_path=state_path, provider=provider,
+        )
     turn_id = "turn-bound-p0-then-deferred"
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -3550,14 +3576,25 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     first_rc, first = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
     assert first_rc == 0, first
     assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
-    state_path.write_text(
-        state_path.read_text(encoding="utf-8").replace(
-            f"todo_id={TODO_ID} status=open",
-            f"todo_id={TODO_ID} status=deferred "
-            "resume_when=resume_at:2099-01-01T00:00:00Z",
-        ),
-        encoding="utf-8",
-    )
+    if provider == "legacy":
+        state_path.write_text(
+            state_path.read_text(encoding="utf-8").replace(
+                f"todo_id={TODO_ID} status=open",
+                f"todo_id={TODO_ID} status=deferred "
+                "resume_when=resume_at:2099-01-01T00:00:00Z",
+            ),
+            encoding="utf-8",
+        )
+    else:
+        update_rc, update = _run_cli(
+            registry_path, runtime,
+            "todo", "update", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+            "--status", "deferred",
+            "--resume-when", "resume_at:2099-01-01T00:00:00Z",
+            "--reason", "Wait for the future resume condition.",
+        )
+        assert update_rc == 0, update
     replay_rc, replay = _run_cli(registry_path, runtime, *guard)
     assert replay_rc == 0, replay
     assert replay["effective_action"] == "quota_skip"
