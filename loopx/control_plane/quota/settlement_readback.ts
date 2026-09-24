@@ -35,6 +35,7 @@ import {
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
+import { isBoundedBlockedRetry } from "./blocked_retry.ts";
 import {
   decodeRefreshRetry,
   isMaterialMonitorPoll,
@@ -978,7 +979,8 @@ function readQuotaSettlementFromRequest(
   const blockedNoSpend = writeback.failure === null &&
     spendRun === null && spendEvent === null &&
     identity.binding_kind === "todo" &&
-    writebackRun?.delivery_outcome === "outcome_gap" &&
+    writebackRun !== null && writebackRun.delivery_outcome === "outcome_gap" &&
+    isBoundedBlockedRetry(writebackRun.blocked_retry, identity.todo_id) &&
     isTurnScopedSettlementOutcome(
       writebackRun.delivery_outcome,
       writebackRun.progress_observation,

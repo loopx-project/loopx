@@ -127,6 +127,7 @@ def build_vision_checkpoint(
     todo_id: str | None = None,
     completion_todo_id: str | None = None,
     autonomous_replan_recorded: bool = False,
+    blocked_retry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Finalize the TS-owned Vision transaction after replan qualification."""
 
@@ -149,6 +150,7 @@ def build_vision_checkpoint(
                 "todo_id": todo_id,
                 "completion_todo_id": completion_todo_id,
                 "autonomous_replan_recorded": bool(autonomous_replan_recorded),
+                "blocked_retry": blocked_retry,
             },
         )
     except EffectRuntimeRejected as exc:

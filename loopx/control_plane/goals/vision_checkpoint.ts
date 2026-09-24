@@ -1,5 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { isBoundedBlockedRetry } from "../quota/blocked_retry.ts";
 import {
   DELIVERY_BOUNDARIES,
   type DeliveryBoundary,
@@ -148,6 +149,7 @@ interface VisionRefreshFinalizeRequest {
   todo_id: string | null;
   completion_todo_id: string | null;
   autonomous_replan_recorded: boolean;
+  blocked_retry: JsonObject | null;
 }
 
 export type VisionCheckpointDecision =
@@ -721,6 +723,7 @@ export function decodeVisionCheckpointRequest(
       request.autonomous_replan_recorded,
       "autonomous_replan_recorded",
     ),
+    blocked_retry: optionalObject(request.blocked_retry, "blocked_retry"),
   };
 }
 
@@ -763,10 +766,20 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
   }
   const request = decodeVisionCheckpointRequest(value);
   validateInFlightBoundary(request);
+  if (request.blocked_retry !== null && (
+    request.delivery_outcome !== "outcome_gap" ||
+    request.delivery_boundary !== "semantic_closeout" ||
+    request.todo_id === null ||
+    request.completion_todo_id !== null ||
+    !isBoundedBlockedRetry(request.blocked_retry, request.todo_id)
+  )) {
+    throw new EffectRuntimeRequestError("blocked retry does not bind a typed outcome-gap Todo closeout");
+  }
   const triggers: JsonObject[] = [];
   if (
     isMaterialDeliveryOutcome(request.delivery_outcome) &&
-    request.delivery_boundary === "semantic_closeout"
+    request.delivery_boundary === "semantic_closeout" &&
+    request.blocked_retry === null
   ) {
     triggers.push({
       kind: "material_delivery_outcome",

@@ -94,6 +94,7 @@ RUN_BASE_COMPACT_FIELDS = (
     "progress_scope",
     "todo_id",
     "progress_observation",
+    "blocked_retry",
     "delivery_batch_scale",
     "delivery_outcome",
     "lifecycle_phase",

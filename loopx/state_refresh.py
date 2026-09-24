@@ -28,6 +28,9 @@ from .control_plane.agents.workspace_guard import (
 from .control_plane.quota.refresh_external_delivery import (
     finish_external_delivery_refresh, refresh_recovery_payload,
 )
+from .control_plane.quota.blocked_retry import require_blocked_retry_wait
+from .control_plane.coordination.local_authority import local_authority_is_promoted
+from .control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from .control_plane.quota.settlement import (
     SettlementIdentity,
     attach_settlement_progress,
@@ -515,6 +518,7 @@ def _build_state_refresh_output_projections(
         "delivery_outcome",
         "delivery_workspace",
         "settlement_identity",
+        "blocked_retry",
         "refresh_recovery",
         "turn_instance_id",
         "todo_id",
@@ -1174,6 +1178,34 @@ def refresh_state_run(
         effective_autonomous_replan_recorded = (
             replan_qualification.autonomous_replan_recorded
         )
+        blocked_retry = None
+        if checkpoint_supplement and prior_writeback_run is not None:
+            blocked_retry = prior_writeback_run.get("blocked_retry")
+        elif (
+            settlement_identity is not None
+            and settlement_identity.binding_kind.value == "todo"
+            and normalized_delivery_outcome == "outcome_gap"
+            and isinstance(normalized_progress_observation, dict)
+            and normalized_progress_observation.get("result_class") == "blocked"
+        ):
+            blocked_todo_fields = todo_fields
+            if blocked_todo_fields is None:
+                blocked_todo_fields = parse_active_state_todos(
+                    state_text,
+                    goal=registry_goal,
+                    state_path=resolved_state_file,
+                    preferred_todo_ids={settlement_identity.todo_id or ""},
+                    rollout_events=planning_events,
+                    item_limit=None,
+                )
+            blocked_retry = require_blocked_retry_wait(
+                blocked_todo_fields,
+                todo_id=settlement_identity.todo_id or "",
+                observed_at=generated_at,
+                allow_turn_settlement_retry=local_authority_is_promoted(
+                    runtime_root=runtime_root, goal_id=safe_goal_id,
+                ),
+            )
         # read_heartbeat_settlement admits checkpoint_supplement only for a
         # checkpoint-only retry of an already committed writeback with the
         # exact Goal/Agent/Todo/Turn and delivery identity. It rejects replayed
@@ -1206,6 +1238,7 @@ def refresh_state_run(
             todo_id=(settlement_identity.todo_id if settlement_identity else None),
             completion_todo_id=completion_todo_id,
             autonomous_replan_recorded=effective_autonomous_replan_recorded,
+            blocked_retry=blocked_retry,
         )
         if checkpoint_supplement and not vision_checkpoint.get("satisfied"):
             raise ValueError(
@@ -1312,6 +1345,8 @@ def refresh_state_run(
             settlement_identity=settlement_identity,
             todo_fields=todo_fields,
         )
+        if blocked_retry is not None:
+            record["blocked_retry"] = blocked_retry
         if delivery_workspace_causality:
             record["delivery_workspace_causality"] = delivery_workspace_causality
         if refresh_recovery:

@@ -9,11 +9,13 @@ from typing import Any
 from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry
 from ..agent_context import project_agent_context, project_goal_agent_context
+from ..runtime.time import now_utc_iso
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
     dispatch_interaction_projection_hooks,
 )
 from .effect_program import ReceiptBoundReplayPhase
+from .blocked_retry import overlay_active_turn_retries
 from .settlement import (
     read_heartbeat_settlement,
 )
@@ -564,6 +566,12 @@ def build_live_quota_should_run_decision(
                 for item in queue.get("items") or []
             ],
         }
+    decision_status_payload = overlay_active_turn_retries(
+        decision_status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        observed_at=now_utc_iso(),
+    )
     payload = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
