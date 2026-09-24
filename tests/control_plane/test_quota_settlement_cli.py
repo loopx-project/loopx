@@ -3606,6 +3606,9 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "wait_for_receipt_bound_deferred_todo"
     )
     assert replay["work_lane_contract"]["must_attempt_work"] is False
+    assert replay["recommended_action"] == replay["work_lane_contract"]["action"]
+    assert "independent alternative delivery" not in replay["recommended_action"]
+    assert replay.get("agent_lane_next_action") is None
     interaction = replay["interaction_contract"]
     assert interaction["agent_channel"]["must_attempt"] is False
     assert interaction["cli_channel"]["spend_after_validation"] is False

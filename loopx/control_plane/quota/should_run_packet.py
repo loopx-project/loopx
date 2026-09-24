@@ -890,12 +890,13 @@ def _resolve_quota_should_run_route(
             "reason": reason,
             "spend_policy": "no quota spend for an already-settled heartbeat turn",
         }
-    if (
+    receipt_bound_deferred = (
         prepared.receipt_bound_todo_id
         and isinstance(prepared.work_lane_contract, dict)
         and prepared.work_lane_contract.get("obligation")
         == WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION
-    ):
+    )
+    if receipt_bound_deferred:
         # Every action path is closed for this immutable, deferred receipt.
         (
             normal_delivery_allowed,
@@ -983,7 +984,11 @@ def _resolve_quota_should_run_route(
     )
     agent_scope_frontier = None
     agent_lane_frontier_hint = None
-    if not replan_decision_allowed and not receipt_bound_monitor_settled:
+    if receipt_bound_deferred:
+        # The no-spend route and its public next action must describe the
+        # same committed binding, even when summaries offer independent work.
+        selected_recommended_action = prepared.work_lane_contract["action"]
+    elif not replan_decision_allowed and not receipt_bound_monitor_settled:
         selected_recommended_action = selected_action_with_agent_lane(
             selected_recommended_action,
             agent_lane_next_action=agent_lane_next_action,
