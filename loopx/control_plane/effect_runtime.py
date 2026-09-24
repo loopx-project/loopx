@@ -511,7 +511,12 @@ def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
             params={},
             timeout=timeout,
         )
-    except (EffectRuntimeRejected, EffectRuntimeRemoteError, OSError):
+    except (
+        EffectRuntimeRejected,
+        EffectRuntimeRemoteError,
+        EffectRuntimeResponseAmbiguous,
+        OSError,
+    ):
         # A runtime that is already closing must still be reported as pending
         # rather than as a failed restart.
         pass

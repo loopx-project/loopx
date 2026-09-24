@@ -1,12 +1,19 @@
 """A reused managed runtime keeps its own Node; operators need a restart path."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
+import socket
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+import time
+
+import pytest
 
 from loopx.cli import build_parser
+from loopx.cli_commands import doctor as doctor_command
 from loopx.cli_commands.doctor import handle_doctor_command
 from loopx.control_plane import effect_runtime
 from loopx.doctor import render_doctor_markdown
@@ -33,6 +40,106 @@ def test_restart_reports_not_running_without_a_serving_runtime(
     assert result["status"] == "not_running"
     assert result["stopped"] is False
     assert result["previous_runtime_identity"] is None
+
+
+@pytest.mark.parametrize(
+    ("observed_token", "expected_status"),
+    [("replacement", "stopped"), ("serving", "shutdown_pending")],
+)
+def test_ambiguous_shutdown_still_observes_the_serving_runtime(
+    tmp_path: Path,
+    monkeypatch,
+    observed_token: str,
+    expected_status: str,
+) -> None:
+    """A lost shutdown response is not proof of failure or permission to retry."""
+
+    info = {"pid": 12345, "token": "serving"}
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", lambda: "fixture")
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_info_path", lambda _: tmp_path / "runtime.json"
+    )
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *_args, **_kwargs: info)
+    requests = []
+
+    def lost_shutdown_response(*_args, **kwargs):
+        requests.append(kwargs["method"])
+        raise effect_runtime.EffectRuntimeResponseAmbiguous(
+            "runtime.shutdown", timeout=0.01
+        )
+
+    monkeypatch.setattr(
+        effect_runtime,
+        "_request_with_info",
+        lost_shutdown_response,
+    )
+    monkeypatch.setattr(
+        effect_runtime, "_serving_token", lambda _: (True, observed_token)
+    )
+    monkeypatch.setattr(effect_runtime, "_pid_is_alive", lambda _: True)
+
+    result = effect_runtime.restart_effect_runtime(timeout=0.01)
+    assert result["status"] == expected_status
+    assert result["stopped"] is (expected_status == "stopped")
+    assert requests == ["runtime.shutdown"]
+
+    if observed_token == "replacement":
+        monkeypatch.setattr(doctor_command, "collect_doctor", lambda **_: {"ok": True})
+        captured: dict[str, object] = {}
+        args = SimpleNamespace(
+            deep=False,
+            agent_type=None,
+            installation_only=True,
+            restart_runtime=True,
+            subcommand_format="json",
+            format="json",
+        )
+        assert handle_doctor_command(
+            args, lambda payload, _format, _render: captured.update(payload)
+        ) == 0
+        assert captured["effect_runtime_restart"]["status"] == "stopped"
+        assert requests == ["runtime.shutdown", "runtime.shutdown"]
+
+
+@pytest.mark.parametrize("lost_response", ["eof", "timeout"])
+def test_restart_observes_real_shutdown_transport_loss_without_retry(
+    tmp_path: Path,
+    monkeypatch,
+    lost_response: str,
+) -> None:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        info = {
+            "host": "127.0.0.1",
+            "port": listener.getsockname()[1],
+            "pid": os.getpid(),
+            "token": "serving",
+        }
+        monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", lambda: "fixture")
+        monkeypatch.setattr(
+            effect_runtime, "_runtime_info_path", lambda _: tmp_path / "runtime.json"
+        )
+        monkeypatch.setattr(effect_runtime, "_read_info", lambda *_a, **_k: info)
+        monkeypatch.setattr(
+            effect_runtime, "_serving_token", lambda _: (True, "replacement")
+        )
+
+        def serve_one() -> str:
+            with listener.accept()[0] as connection:
+                request = b""
+                while b"\n" not in request:
+                    request += connection.recv(4096)
+                if lost_response == "timeout":
+                    time.sleep(0.1)
+                return json.loads(request)["method"]
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            received = executor.submit(serve_one)
+            result = effect_runtime.restart_effect_runtime(timeout=0.02)
+            assert received.result(timeout=2) == "runtime.shutdown"
+        assert result["status"] == "stopped"
+        assert result["stopped"] is True
 
 
 def test_restart_stops_the_runtime_that_carries_the_serving_identity(
