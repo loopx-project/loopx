@@ -123,7 +123,7 @@ def cached_goal_run_index_is_current(
         return expected is None
     except OSError:
         return False
-    return digest.hexdigest() == expected
+    return f"sha256:{digest.hexdigest()}" == expected
 
 
 def status_projection_cache_metadata(

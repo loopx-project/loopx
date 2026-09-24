@@ -1220,6 +1220,13 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     )
     assert guard_rc == 0, guard
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    cached_rc, cached_guard = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project),
+        "--use-projection-cache", cwd=project,
+    )
+    assert cached_rc == 0, cached_guard
+    assert cached_guard["status_projection_cache"]["hit"] is True
 
     lease_rc, lease = _run_cli(
         registry_path, runtime, "task-lease", "acquire", "--goal-id", GOAL_ID,
@@ -1287,6 +1294,7 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     )
     assert next_rc == 0, next_turn
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
+    assert next_turn["status_projection_cache"]["miss_reason"] == "run_index_changed"
     assert (next_turn.get("selected_todo") or {}).get("todo_id") != TODO_ID
 
 
