@@ -39,6 +39,9 @@ WORK_LANE_RECEIPT_BOUND_MONITOR_SETTLEMENT_OBLIGATION = (
 WORK_LANE_RECEIPT_BOUND_MONITOR_SETTLED_OBLIGATION = (
     "finish_settled_receipt_bound_monitor_turn"
 )
+WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION = (
+    "wait_for_receipt_bound_deferred_todo"
+)
 WORK_LANE_CURRENT_AGENT_MONITOR_REPAIR_OBLIGATIONS = {
     "attempt_due_monitor",
     "repair_monitor_schedule_metadata",
@@ -274,6 +277,33 @@ def preserve_heartbeat_receipt_bound_work_lane(
             "the Todo already bound to this heartbeat turn remains the only quota "
             "settlement target; a separately identified due monitor may record one "
             "no-spend observation receipt before that Todo continues"
+        ),
+    }
+
+
+def receipt_bound_deferred_work_lane(
+    *, todo_id: str,
+) -> dict[str, Any]:
+    """Keep an immutable Turn binding visible without executing a deferred Todo."""
+
+    normalized = normalize_todo_id(todo_id)
+    if not normalized:
+        raise ValueError("receipt-bound deferred work lane requires a Todo id")
+    return {
+        "schema_version": WORK_LANE_CONTRACT_SCHEMA_VERSION,
+        "lane": "advancement_task",
+        "obligation": WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION,
+        "must_attempt_work": False,
+        "selection_binding": "heartbeat_receipt",
+        "selected_todo_id": normalized,
+        "reason_codes": [
+            "heartbeat_receipt_bound_replay",
+            "receipt_bound_todo_deferred",
+            "successor_requires_fresh_turn",
+        ],
+        "action": (
+            "the Todo bound to this heartbeat turn is deferred; do not execute "
+            "or spend this turn, and select independent work under a fresh turn"
         ),
     }
 

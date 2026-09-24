@@ -69,6 +69,7 @@ from ..scheduler.execution_context import (
 )
 from ..todos.contract import (
     TODO_STATUS_BLOCKED,
+    TODO_STATUS_DEFERRED,
     TODO_STATUS_OPEN,
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_BLOCKER,
@@ -104,6 +105,7 @@ from ..work_items.work_lane import (
     lark_inbox_reply_due_work_lane_contract,
     operator_inbox_material_review_due_work_lane_contract,
     preserve_heartbeat_receipt_bound_work_lane,
+    receipt_bound_deferred_work_lane,
     scoped_user_gate_due_monitor_contract,
     work_lane_contract_is_lark_inbox_reply_due,
     work_lane_contract_is_operator_inbox_material_review_due,
@@ -742,6 +744,19 @@ def _prepare_quota_should_run_item(
             )
             if isinstance(preserved_work_lane, dict):
                 work_lane_contract = preserved_work_lane
+        elif any(
+            normalize_todo_id(source_item.get("todo_id")) == receipt_bound_todo_id
+            and normalize_todo_status(source_item.get("status"))
+            == TODO_STATUS_DEFERRED
+            for source_item in agent_todo_planning_source_items
+        ):
+            # The old Turn still owns its committed settlement identity, but a
+            # deferred Todo is not an executable candidate.  A successor may be
+            # selected only by a fresh Turn; do not leak it through work-lane
+            # fallback on this replay.
+            work_lane_contract = receipt_bound_deferred_work_lane(
+                todo_id=receipt_bound_todo_id,
+            )
     if inbox_priority_due:
         task_orchestration_contract = capability_gate = capability_monitor_contract = None
         capability_monitor_fallback = scoped_user_gate_fallback = workspace_guard = None

@@ -85,6 +85,7 @@ from ..scheduler.state import (
 )
 from ..todos.contract import (
     normalize_todo_claimed_by,
+    normalize_todo_id,
 )
 from ..todos.todo_semantics import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
@@ -123,6 +124,7 @@ from ..work_items.user_action_frontier import (
     user_action_owns_empty_agent_lane_from_summaries as _user_action_owns_empty_agent_lane,
 )
 from ..work_items.work_lane import (
+    WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION,
     work_lane_contract_is_due_monitor_attempt,
     work_lane_contract_is_receipt_bound_monitor_settled,
 )
@@ -533,6 +535,15 @@ def _resolve_agent_lane_delivery_route(
         # decision. A newly runnable Todo remains visible in summaries, but it
         # cannot become the selected settlement target in the same packet.
         fallback = None
+    if (
+        prepared.receipt_bound_todo_id
+        and isinstance(fallback, dict)
+        and normalize_todo_id(fallback.get("todo_id"))
+        != prepared.receipt_bound_todo_id
+    ):
+        # Feed only the committed identity into the TS delivery router.  The
+        # independent successor remains discoverable on a fresh Turn.
+        fallback = None
 
     delivery_agent_id = normalize_todo_claimed_by(
         (prepared.agent_identity or {}).get("agent_id")
@@ -616,6 +627,17 @@ def _resolve_agent_lane_delivery_route(
         selected_action = fallback
     else:
         selected_action = None
+
+    if (
+        prepared.receipt_bound_todo_id
+        and isinstance(selected_action, dict)
+        and normalize_todo_id(selected_action.get("todo_id"))
+        != prepared.receipt_bound_todo_id
+    ):
+        # The router may find an independent successor after the bound Todo
+        # becomes unavailable.  That successor cannot replace an already
+        # committed settlement identity inside the same heartbeat Turn.
+        return None
 
     boundary = delivery_route.get("boundary")
     if (
@@ -866,6 +888,31 @@ def _resolve_quota_should_run_route(
             "notify": "DONT_NOTIFY",
             "reason": reason,
             "spend_policy": "no quota spend for an already-settled heartbeat turn",
+        }
+    receipt_bound_deferred_wait = bool(
+        prepared.receipt_bound_todo_id
+        and isinstance(prepared.work_lane_contract, dict)
+        and prepared.work_lane_contract.get("obligation")
+        == WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION
+    )
+    if receipt_bound_deferred_wait:
+        normal_delivery_allowed = recovery_allowed = self_repair_allowed = False
+        capability_repair_allowed = workspace_repair_allowed = False
+        replan_decision_allowed = receipt_bound_replan_decision = False
+        should_run = False
+        effective_action = EffectiveAction.QUOTA_SKIP.value
+        reason = (
+            "the Todo bound to this heartbeat receipt is deferred; do not "
+            "select or spend an independent successor in the same Turn"
+        )
+        quota = {**quota, "safe_bypass_allowed": False}
+        heartbeat_recommendation = {
+            **heartbeat_recommendation,
+            "recommended_mode": effective_action,
+            "notify": "DONT_NOTIFY",
+            "reason": reason,
+            "spend_policy": "no quota spend for a deferred receipt-bound Todo",
+            "stop_if_unchanged": True,
         }
     monitor_quiet_skip = (
         not replan_decision_allowed

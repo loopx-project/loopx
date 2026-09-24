@@ -3528,6 +3528,79 @@ def test_pending_deferred_p0_allows_independent_p1_selection(
     assert payload["action_selection_qualification"]["state"] == "qualified"
 
 
+def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "[P1] Validate and settle the selected delivery.",
+            "[P0] Validate and settle the selected delivery.",
+        ),
+        encoding="utf-8",
+    )
+    turn_id = "turn-bound-p0-then-deferred"
+    guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
+        "--scan-path", str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+    assert first_rc == 0, first
+    assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            f"todo_id={TODO_ID} status=open",
+            f"todo_id={TODO_ID} status=deferred "
+            "resume_when=resume_at:2099-01-01T00:00:00Z",
+        ),
+        encoding="utf-8",
+    )
+    replay_rc, replay = _run_cli(registry_path, runtime, *guard)
+    assert replay_rc == 0, replay
+    assert replay["effective_action"] == "quota_skip"
+    assert replay["should_run"] is False
+    assert replay["heartbeat_receipt"]["status"] == "replayed"
+    assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert replay["selected_todo"]["todo_id"] == TODO_ID
+    assert replay["work_lane_contract"]["obligation"] == (
+        "wait_for_receipt_bound_deferred_todo"
+    )
+    assert replay["work_lane_contract"]["must_attempt_work"] is False
+    interaction = replay["interaction_contract"]
+    assert interaction["agent_channel"]["must_attempt"] is False
+    assert interaction["cli_channel"]["spend_after_validation"] is False
+    assert ALTERNATIVE_TODO_ID not in json.dumps(
+        interaction["cli_channel"].get("next_cli_actions", [])
+    )
+    plan = interaction["cli_channel"].get("settlement_plan")
+    assert plan is None or plan["identity"]["todo_id"] == TODO_ID
+    assert _heartbeat_receipt_count(runtime, turn_id) == 1
+    assert _spend_run_count(runtime) == 0
+
+    conflict_rc, conflict = _run_cli(
+        registry_path, runtime, *guard, "--todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert conflict_rc != 0, conflict
+    assert conflict["error_code"] in {
+        "heartbeat_receipt_identity_conflict",
+        "quota_action_selection_rejected",
+    }
+    assert _heartbeat_receipt_count(runtime, turn_id) == 1
+
+    next_rc, next_turn = _run_cli(
+        registry_path, runtime,
+        "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-after-bound-p0-deferred",
+        "--scan-path", str(project), "--todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert next_rc == 0, next_turn
+    assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+
+
 def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     tmp_path: Path,
 ) -> None:
