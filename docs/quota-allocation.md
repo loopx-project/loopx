@@ -135,12 +135,17 @@ Turn-scoped `refresh-state` and `quota spend-slot` expose
 `settlement_progress` from the TypeScript receipt readback. The states are
 `identity_required`, `writeback_required`, `writeback_receipt_required`,
 `spend_required`, `spend_receipt_required`, and `settled`. A durable run without
-its matching receipt is incomplete. `settled` certifies this writeback/spend
-chain; Todo completion and Goal acceptance retain their separate checks.
+its matching receipt is incomplete. Ordinarily, `settled` certifies the
+writeback/spend chain. An exact typed blocked writeback with a bounded retry
+instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
+Turn without a quota debit. Todo completion and Goal acceptance retain their
+separate checks in both cases.
 
-After verified writeback, `settlement_owed.command` carries the original Goal,
-Agent, Todo or replan obligation, Turn, registry/runtime route and spend source.
-Execute it unchanged. In `spend_receipt_required`, the same idempotent spend
+When a quota spend remains owed after verified writeback,
+`settlement_owed.command` carries the original Goal, Agent, Todo or replan
+obligation, Turn, registry/runtime route and spend source. Execute it unchanged.
+The typed blocked no-spend closeout has no spend command. In
+`spend_receipt_required`, the same idempotent spend
 writer restores the receipt without another debit. Refresh and recovery never
 spend automatically. JSON and normal/recovery Markdown expose the same step.
 Rejected recovery reports observed progress without offering a spend command.
@@ -313,12 +318,23 @@ from `classification`. New writes should use one of:
 execution-profile hints only as a compatibility fallback for historical runs;
 new control-plane decisions should be driven by the enum above.
 
-An `outcome_gap` does not become delivery progress. It may settle and spend one
-exact Todo-bound Turn only when the same writeback includes a
+An `outcome_gap` does not become delivery progress. A blocked writeback is
+eligible for exact Todo-bound Turn settlement only when it includes a
 `typed_progress_observation_v0` with `result_class=blocked`, the matching
 `work_item_id`, a stable `blocker_id`, and a non-empty array of stable
 `evidence_ids`. Missing schemas, prose-only blockers, malformed evidence, and
 Todo identity mismatches remain fail-closed.
+
+New Turn-bound blocked writebacks also require a bounded retry on the same
+unfinished advancement Todo. A legacy Todo must have a pending
+`resume_when=resume_at:<timezone-aware-time>` due in 1–30 minutes. With promoted
+File/SQLite authority, an open Todo without its own resume condition can use
+a five-minute retry stored on the committed Turn instead; the peer-gated Todo
+and its completion validator stay unchanged. That exact writeback settles the
+Turn without spending quota. The retry suppresses only the blocked Todo for
+the same Agent until due or superseded by newer work, so independent eligible
+Todos can still be selected. Historical blocked writebacks without a bounded
+retry retain their prior spend readback; no debit is retroactively erased.
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a
