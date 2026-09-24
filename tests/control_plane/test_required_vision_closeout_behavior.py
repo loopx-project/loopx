@@ -14,7 +14,7 @@ from loopx.control_plane.testing.model_tool_behavior import (
 from loopx.control_plane.testing.replan_semantic_action_behavior import (
     DoubaoReplanSemanticActionBehaviorActor, _build_fixture,
 )
-from loopx.control_plane.testing import vision_shell_host
+from loopx.control_plane.testing import replan_semantic_action_behavior, vision_shell_host
 from loopx.control_plane.testing.vision_shell_host import VisionShellHost, shell_isolation_available
 
 pytestmark = pytest.mark.skipif(not shell_isolation_available(), reason="Native shell needs sandbox-exec or bubblewrap")
@@ -120,6 +120,40 @@ def test_cli_validation_errors_are_correctable_in_the_same_draft(tmp_path: Path,
         oversized, projected_refresh, correct, projected_refresh, projected_spend,
     ])
     assert result["qualification_passed"] is True, result
+    assert result["vision_closeout"]["spend_count"] == 1
+
+
+def test_missing_durable_receipt_reaches_shell_and_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
+    execute = replan_semantic_action_behavior._execute_loopx
+    intercepted = False
+
+    def first_refresh_without_receipt(command: str, **kwargs: Any) -> str:
+        nonlocal intercepted
+        if "refresh-state" in command and not intercepted:
+            intercepted = True
+            return '{"ok": true}'
+        return execute(command, **kwargs)
+
+    def retry_after_error(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+        feedback = json.loads(request["messages"][-1]["content"])
+        assert feedback["exit_code"] != 0
+        assert "vision_closeout_durable_writeback_missing" in feedback["output"]
+        return projected_refresh(request)
+
+    monkeypatch.setattr(replan_semantic_action_behavior, "_execute_loopx", first_refresh_without_receipt)
+    result = _qualify(tmp_path, [
+        ScriptedExecToolAction(fixture.quota_guard_command),
+        ScriptedExecToolAction("cat fixture/permission-config.json"),
+        vision_patch_action,
+        projected_refresh,
+        retry_after_error,
+        projected_spend,
+    ])
+    assert intercepted is True
+    assert result["qualification_passed"] is True
     assert result["vision_closeout"]["spend_count"] == 1
 
 

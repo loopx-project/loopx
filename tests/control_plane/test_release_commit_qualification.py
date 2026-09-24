@@ -3,10 +3,12 @@ from __future__ import annotations
 import copy
 import json
 import os
+import runpy
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -327,3 +329,45 @@ def test_live_doubao_script_prefers_candidate_checkout_over_pythonpath(
     assert result.returncode == 0, result.stderr
     assert "Run the actual-default behavior portfolio" in result.stdout
     assert "loaded shadow loopx" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "ordinary_timeout", "vision_timeout"),
+    [([], 90.0, 180.0), (["--timeout-seconds", "12", "--required-vision-timeout-seconds", "34"], 12.0, 34.0)],
+)
+def test_live_doubao_timeout_extension_is_scoped_to_required_vision(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    extra_args: list[str],
+    ordinary_timeout: float,
+    vision_timeout: float,
+) -> None:
+    script = runpy.run_path(str(REPO_ROOT / "scripts" / "qualify-doubao-model-behavior-live.py"))
+    main = script["main"]
+    globals_ = main.__globals__
+    observed: dict[str, float] = {}
+    actor_names = (
+        "DoubaoModelBehaviorActor",
+        "DoubaoOnboardingModelBehaviorActor",
+        "DoubaoSelectedTodoToolBehaviorActor",
+        "DoubaoReplanSemanticActionBehaviorActor",
+        "DoubaoScopedGateSuccessorToolBehaviorActor",
+        "DoubaoCapabilityMonitorRepairToolBehaviorActor",
+        "DoubaoTerminalSettlementToolBehaviorActor",
+    )
+    for name in actor_names:
+        def make_actor(actor_name: str) -> SimpleNamespace:
+            def from_environment(**kwargs: object) -> object:
+                observed[actor_name] = float(kwargs["timeout_seconds"])
+                return object()
+            return SimpleNamespace(from_environment=from_environment)
+        monkeypatch.setitem(globals_, name, make_actor(name))
+    monkeypatch.setitem(globals_, "collect_release_source_identity", lambda _root: {"git_dirty": False})
+    monkeypatch.setitem(globals_, "build_actual_default_model_behavior_scenario_inputs", lambda _root: ({}, {}))
+    monkeypatch.setitem(globals_, "run_actual_default_model_behavior_portfolio", lambda *args, **kwargs: {"qualification_passed": True})
+    monkeypatch.setattr(sys, "argv", ["qualify-doubao-model-behavior-live.py", "--qualification-id", "timeout-scope", *extra_args])
+
+    assert main() == 0
+    assert json.loads(capsys.readouterr().out)["qualification_passed"] is True
+    assert observed["DoubaoReplanSemanticActionBehaviorActor"] == vision_timeout
+    assert all(observed[name] == ordinary_timeout for name in actor_names if name != "DoubaoReplanSemanticActionBehaviorActor")

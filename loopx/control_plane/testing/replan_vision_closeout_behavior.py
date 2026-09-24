@@ -33,7 +33,19 @@ class VisionHostAdmissionRejected(ValueError):
 VISION_HOST_INSTRUCTION = (
     "You are an agent working in an isolated LoopX project. Follow the heartbeat "
     "and current control-plane packet. Use the shell normally to inspect evidence, "
-    "author your decision and execute the real CLI writeback and settlement."
+    "author your decision and execute the real CLI writeback and settlement. "
+    "The ordered interaction_contract.cli_channel.next_cli_actions are templates, "
+    "not literal commands: first read the named source, start the decision file "
+    "from vision_authoring.minimal_example. Add path_delta.outcome, "
+    "prior_assumption, observed_reality, one retained/changed/stopped item and "
+    "observed evidence_refs. Keep every prose string under 80 characters; cite "
+    "the source instead of pasting it. Omit other optional fields unless the "
+    "evidence requires them, and check the projected vision_authoring limits "
+    "before the first refresh-state. Replace the first "
+    "action's path placeholder with your file path. Correct a failed action "
+    "using its error instead of repeating it unchanged. After a successful "
+    "writeback, execute the returned settlement_owed.command once in the same "
+    "turn and verify the settlement readback."
 )
 
 VISION_EXEC_TOOL_DESCRIPTION = (
@@ -107,6 +119,8 @@ def observe_shell_evidence(output: str, state: _QualificationState) -> None:
 def _rows(state: _QualificationState) -> list[dict[str, Any]]:
     goal_id = str((state.quota_packet or {})["goal_id"])
     index = state.fixture.runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
+    if not index.is_file():
+        return []
     return [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines() if line]
 
 
@@ -142,7 +156,13 @@ def dispatch_vision_closeout(
         if not refs.intersection(observed_refs):
             raise VisionHostAdmissionRejected("vision_closeout_evidence_not_observed", "No refresh was executed: path_delta.evidence_refs must identify the source evidence actually read. Accepted references: " + json.dumps(sorted(observed_refs)))
         output = execute(command, fixture=state.fixture, turn_instance_id=state.turn_instance_id)
-        row = _rows(state)[-1]
+        rows = _rows(state)
+        if not rows:
+            raise VisionHostAdmissionRejected(
+                "vision_closeout_durable_writeback_missing",
+                "No run receipt was written; revise the vision decision and retry.",
+            )
+        row = rows[-1]
         semantic = dict(row.get("autonomous_replan_ack") or {}).get("semantic_delta") or {}
         checkpoint = dict(row.get("vision_checkpoint") or {})
         identity = dict(row.get("settlement_identity") or {})

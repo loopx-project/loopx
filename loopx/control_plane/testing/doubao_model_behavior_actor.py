@@ -461,10 +461,14 @@ For phase=entry, derive the contract from the start-goal packet:
 - agent_id: copy top-level agent_id, falling back to
   host_loop_activation.agent_id or command_pack.host_loop_activation.agent_id;
   otherwise null.
-- action_command_ids: in this exact order, include each key whose value is a
-  non-empty string in top-level commands or command_pack.commands:
-  goal_start_connect_if_needed, goal_start_refresh_state,
-  goal_start_host_loop_activation, goal_start_quota_should_run.
+- action_command_ids must be a JSON array of command key names, never a
+  key/value object or command text. Start with []. Inspect top-level commands
+  when it is present; otherwise inspect command_pack.commands. Consider only
+  these four keys, in this exact order: goal_start_connect_if_needed,
+  goal_start_refresh_state, goal_start_host_loop_activation,
+  goal_start_quota_should_run. Include a key only when its value is a non-empty
+  string. Never add any other command key, even when another command looks
+  useful for the selected route.
 - host_loop_activation_available: true when top-level host_loop_activation or
   command_pack.host_loop_activation is a non-empty object.
 - host_loop_activation_after_todo_write: copy

@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 repo_root_text = str(REPO_ROOT)
@@ -52,6 +54,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--qualification-id", required=True)
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
+    parser.add_argument("--required-vision-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     return parser
 
@@ -66,11 +69,17 @@ def main() -> int:
     provider_call_count = 0
     provider_models: set[str] = set()
 
-    def counted_transport(**kwargs):
+    def counted_transport(
+        *, endpoint: str, headers: Mapping[str, str], body: bytes,
+        timeout_seconds: float,
+    ) -> Mapping[str, Any]:
         nonlocal provider_call_count
         provider_call_count += 1
-        provider_models.add(json.loads(kwargs["body"])["model"])
-        return _direct_ark_transport(**kwargs)
+        provider_models.add(json.loads(body)["model"])
+        return _direct_ark_transport(
+            endpoint=endpoint, headers=headers, body=body,
+            timeout_seconds=timeout_seconds,
+        )
 
     turn_actor = DoubaoModelBehaviorActor.from_environment(
         timeout_seconds=args.timeout_seconds, transport=counted_transport
@@ -82,7 +91,8 @@ def main() -> int:
         timeout_seconds=args.timeout_seconds, transport=counted_transport
     )
     replan_semantic_action_actor = DoubaoReplanSemanticActionBehaviorActor.from_environment(
-        timeout_seconds=args.timeout_seconds, transport=counted_transport
+        timeout_seconds=args.required_vision_timeout_seconds,
+        transport=counted_transport,
     )
     scoped_gate_successor_actor = (
         DoubaoScopedGateSuccessorToolBehaviorActor.from_environment(
