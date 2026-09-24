@@ -720,6 +720,37 @@ def _planning_projections(
     )
 
 
+def _resolve_external_evidence_observation(
+    prepared: _QuotaDecisionPreparation,
+    *,
+    state: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Suppress unchanged or premature polls before choosing a delivery route."""
+
+    external_evidence_observation = build_external_evidence_observation_obligation(
+        prepared.item,
+        state=state,
+        agent_todo_summary=prepared.agent_todo_summary,
+        work_lane_contract=prepared.work_lane_contract,
+    )
+    external_evidence_observation_recent = None
+    if external_evidence_observation:
+        external_evidence_observation_recent = _recent_external_monitor_observation_unchanged(
+            prepared.status_payload,
+            goal_id=prepared.safe_goal_id,
+            agent_id=(
+                normalize_todo_claimed_by(prepared.agent_identity.get("agent_id"))
+                if isinstance(prepared.agent_identity, dict)
+                else None
+            ),
+        )
+        if external_evidence_observation_recent or (
+            external_evidence_observation.get("poll_window_status") == "before_next_due"
+        ):
+            external_evidence_observation = None
+    return external_evidence_observation, external_evidence_observation_recent
+
+
 def _resolve_quota_should_run_route(
     prepared: _QuotaDecisionPreparation,
 ) -> _QuotaDecisionRoute:
@@ -817,27 +848,10 @@ def _resolve_quota_should_run_route(
         automation_prompt_upgrade_required=prepared.automation_prompt_upgrade_required,
         blocked_priority_fallback=prepared.blocked_priority_fallback,
     )
-    external_evidence_observation = build_external_evidence_observation_obligation(
-        item,
-        state=state,
-        agent_todo_summary=prepared.agent_todo_summary,
-        work_lane_contract=prepared.work_lane_contract,
-    )
-    external_evidence_observation_recent = None
-    if external_evidence_observation:
-        external_evidence_observation_recent = _recent_external_monitor_observation_unchanged(
-            prepared.status_payload,
-            goal_id=prepared.safe_goal_id,
-            agent_id=(
-                normalize_todo_claimed_by(prepared.agent_identity.get("agent_id"))
-                if isinstance(prepared.agent_identity, dict)
-                else None
-            ),
-        )
-        if external_evidence_observation_recent or (
-            external_evidence_observation.get("poll_window_status") == "before_next_due"
-        ):
-            external_evidence_observation = None
+    (
+        external_evidence_observation,
+        external_evidence_observation_recent,
+    ) = _resolve_external_evidence_observation(prepared, state=state)
     ready_deferred_resume_candidates: list[dict[str, Any]] = []
     if isinstance(prepared.agent_identity, dict) and isinstance(
         prepared.agent_todo_summary, dict
