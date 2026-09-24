@@ -214,6 +214,8 @@ def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
     if not isinstance(progress, dict):
         return []
     lines = [f"- settlement: `{progress.get('state')}`"]
+    if progress.get("closeout_kind") == "typed_blocked_writeback_no_spend":
+        lines.append("- closeout: typed blocked writeback; no quota slot spent")
     owed = payload.get("settlement_owed")
     if isinstance(owed, dict):
         lines.extend([f"- settlement_owed: {owed['reason']}", "", "```sh", owed["command"], "```"])

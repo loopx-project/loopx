@@ -53,6 +53,8 @@ export interface ReceiptBoundReplaySettlementState {
   completion_receipt_present: boolean;
   durable_writeback_present: boolean;
   quota_spend_present: boolean;
+  /** Exact typed blocked writeback closes a Turn without a quota debit. */
+  no_spend_closeout_present?: boolean;
 }
 
 export function receiptBoundReplayPhase(
@@ -63,7 +65,8 @@ export function receiptBoundReplayPhase(
     ? state.durable_writeback_present
     : state.completion_receipt_present;
   if (!bindingComplete) return "open";
-  return state.durable_writeback_present && state.quota_spend_present
+  return state.durable_writeback_present &&
+      (state.quota_spend_present || state.no_spend_closeout_present === true)
     ? "settled"
     : "settlement_pending";
 }

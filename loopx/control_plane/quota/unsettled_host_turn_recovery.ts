@@ -61,6 +61,7 @@ const MISSING_RECEIPT_NAMES = [WRITEBACK_RECEIPT, SPEND_RECEIPT] as const;
 
 export const ACCEPTED_CLOSEOUTS = [
   "validated_writeback_and_quota_spend",
+  "typed_blocked_writeback_no_spend",
   "exact_committed_quota_monitor_poll",
   "typed_external_wait_with_runnable_successor",
   "typed_blocker_or_lifecycle_transition",
@@ -240,6 +241,7 @@ export async function preflightPriorHostTurnCloseout(
     rolloutSnapshot,
   );
   let newestSettledTurn: string | null = null;
+  let newestAcceptedCloseout: AcceptedCloseout = "validated_writeback_and_quota_spend";
   for (const selected of candidates) {
     const readback = readQuotaSettlementFromSnapshot(
       settlementReadbackRequest(request, selected),
@@ -250,6 +252,12 @@ export async function preflightPriorHostTurnCloseout(
       // scanning in persisted newest-first order until the first unsettled
       // candidate is found.
       newestSettledTurn ??= selected.prior_turn_instance_id;
+      if (newestSettledTurn === selected.prior_turn_instance_id) {
+        const progress = jsonObject(readback.progress);
+        if (progress?.closeout_kind === "typed_blocked_writeback_no_spend") {
+          newestAcceptedCloseout = "typed_blocked_writeback_no_spend";
+        }
+      }
       continue;
     }
     const missingReceipts: string[] = [];
@@ -273,7 +281,7 @@ export async function preflightPriorHostTurnCloseout(
     reason: "prior_turn_settlement_validated",
     turns_validated: turnsValidated,
     prior_turn_instance_id: newestSettledTurn,
-    accepted_closeout: "validated_writeback_and_quota_spend",
+    accepted_closeout: newestAcceptedCloseout,
   };
 }
 

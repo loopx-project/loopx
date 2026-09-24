@@ -113,6 +113,7 @@ function settlementProgress(
   identity: SettlementResult, writeback: SettlementResult, spend: SettlementResult,
   writebackRun: JsonObject | null, spendRun: JsonObject | null,
   spendSource: unknown = "heartbeat",
+  blockedNoSpend = false,
 ): JsonObject {
   const source = spendSource ?? "heartbeat";
   if (source !== "heartbeat" && source !== "visible-goal") {
@@ -120,13 +121,17 @@ function settlementProgress(
   }
   const state: SettlementProgressState = identity.failure ? "identity_required"
     : writeback.failure ? (writebackRun ? "writeback_receipt_required" : "writeback_required")
+    : blockedNoSpend ? "settled"
     : spend.failure ? (spendRun ? "spend_receipt_required" : "spend_required")
     : "settled";
   return {
     schema_version: "quota_settlement_progress_v0", state,
     next_step: identity.failure ? "validation" : writeback.failure ? "durable_writeback"
-      : spend.failure ? "quota_spend" : null,
+      : blockedNoSpend ? null : spend.failure ? "quota_spend" : null,
     quota_spend_source: source,
+    ...(blockedNoSpend ? {
+      closeout_kind: "typed_blocked_writeback_no_spend",
+    } : {}),
   };
 }
 
@@ -966,9 +971,22 @@ function readQuotaSettlementFromRequest(
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
+  // The exact Turn-bound blocked writeback is itself a durable no-spend
+  // closeout. It cannot certify Todo completion or become delivery progress.
+  // A spend already committed for this identity remains an ordinary spend
+  // settlement, so readback never erases a historical debit.
+  const blockedNoSpend = writeback.failure === null &&
+    spendRun === null && spendEvent === null &&
+    identity.binding_kind === "todo" &&
+    writebackRun?.delivery_outcome === "outcome_gap" &&
+    isTurnScopedSettlementOutcome(
+      writebackRun.delivery_outcome,
+      writebackRun.progress_observation,
+      identity.todo_id,
+    );
   const terminalCloseout = terminalResult(identity, completionEvent);
   const withWriteback = settlementBindReduce(identityResult, writeback);
-  const settled = settlementBindReduce(withWriteback, spend);
+  const settled = blockedNoSpend ? withWriteback : settlementBindReduce(withWriteback, spend);
   const terminalSettlement = settlementBindReduce(settled, terminalCloseout);
   const monitorPoll = [...runs].reverse().find((run) =>
     run.classification === "quota_monitor_poll" &&
@@ -1020,7 +1038,7 @@ function readQuotaSettlementFromRequest(
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
     progress: settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-      receiptDetails.quota_spend_source ?? spendRun?.source),
+      receiptDetails.quota_spend_source ?? spendRun?.source, blockedNoSpend),
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
     writeback_run: writebackRun,
@@ -1042,10 +1060,11 @@ function readQuotaSettlementFromRequest(
     }),
     replay_phase: receiptBoundReplayPhase({
       binding_kind: identity.binding_kind,
-      writeback_completes_binding: todoBoundReplan,
+      writeback_completes_binding: todoBoundReplan || blockedNoSpend,
       completion_receipt_present: completionEvent !== null,
       durable_writeback_present: writeback.failure === null,
       quota_spend_present: spend.failure === null,
+      no_spend_closeout_present: blockedNoSpend,
     }),
   };
 }
