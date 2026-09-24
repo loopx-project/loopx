@@ -268,7 +268,7 @@ SWE-Marathon 与 LHTB 每个任务、每种模式仅保留一条有效轨迹；D
 
 ## 试用 LoopX
 
-要求：Python 3.11+ 与 Node.js 22.18.0+，推荐使用 Node.js 24 LTS。使用 console
+要求：Python 3.11+ 与 Node.js 22.22.3+，推荐使用 Node.js 24 LTS。使用 console
 scripts 已加入 `PATH` 的 Python 环境；macOS 和 Linux 使用 POSIX shell，原生
 Windows 使用 PowerShell 7。Node.js 运行 LoopX 自动启动、空闲退出的 TypeScript
 Effect core，无需手工维护 daemon。Git 仅用于源码贡献与 clone/canary 工作流。

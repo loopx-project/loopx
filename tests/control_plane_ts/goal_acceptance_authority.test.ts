@@ -120,9 +120,8 @@ async function update(store: AuthorityStore, todoId: string, patch: JsonObject) 
   assert.equal(result.status, "applied");
 }
 const providers = ["file", "sqlite", "postgresql"] as const;
-// SQLite authority needs the WAL-reset driver; the public Node minimum ships
-// an older one. Skip those rows there rather than fail, and keep the file
-// rows running: the qualified runtime job executes every row for real.
+// Developer runtimes outside the supported Node range may lack the WAL-reset
+// driver. CI asserts SQLite qualification and runs every provider row.
 const sqliteQualified = sqliteRuntimeIdentity().sqlite_authority_qualified === true;
 async function fixture(t: TestContext, provider: typeof providers[number]): Promise<AuthorityStore> {
   if (provider !== "postgresql") {

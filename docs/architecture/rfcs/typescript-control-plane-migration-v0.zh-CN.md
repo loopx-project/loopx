@@ -1400,6 +1400,7 @@ transaction 要和 matched durability baseline 比较，而不是套用 2 ms ker
 
 迁移不能要求用户管理服务。Python 过渡版本要求 Node.js 22.18.0 或更新版本，
 但 installer 与 `loopx doctor` 必须在正常控制面工作前检测，并给出精确修复方式。
+当前源码版本已将最低要求升至 Node.js 22.22.3，以覆盖内嵌 SQLite 的 WAL-reset 修复。
 Wheel 与 sdist 携带 TS source 和版本化 schema。
 
 Runtime 因 idle 退出时仍是健康状态：`stopped` 表示下一次控制面请求会自动拉起，

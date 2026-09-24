@@ -123,6 +123,8 @@ jobs:
           node-version: "22.22.3"
 
       - name: Qualify the TypeScript Effect core
+        env:
+          LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED: "1"
         run: |
           npm ci --ignore-scripts
           npm run typecheck:control-plane
@@ -213,31 +215,26 @@ jobs:
     needs: changes
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
-    # The full public-minimum suite has reached fifteen minutes on hosted runners.
-    # Keep a bounded margin above the measured workload without weakening coverage.
-    timeout-minutes: 20
+    # The full suite runs under this exact Node version in kernel-static-checks.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
-          node-version: "22.18.0"
+          node-version: "22.22.3"
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Qualify the public minimum Node.js runtime
+        env:
+          LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED: "1"
         run: |
           npm ci --ignore-scripts
           npm run typecheck:control-plane
-          # Default File/control-plane compatibility stays on the public minimum.
-          # SQLite requires a WAL-fixed embedded driver; its admission rejection
-          # runs here, while full SQLite suites run on the qualified runtime.
-          tests=()
-          for test in tests/control_plane_ts/*.test.ts; do
-            case "$test" in
-              */sqlite_authority_store.test.ts|*/sqlite_authority_bounded_profile.test.ts|*/sqlite_authority_migration.test.ts|*/local_authority_provider.test.ts|*/authority_provider_parity.test.ts|*/sqlite_capacity.test.ts) continue ;;
-            esac
-            tests+=("$test")
-          done
-          node --no-warnings --experimental-sqlite --experimental-strip-types --test "${tests[@]}"
+          # Prove the minimum itself admits SQLite and executes both provider
+          # lifecycle rows. The qualified core lane runs the complete suite.
+          node --no-warnings --experimental-sqlite --experimental-strip-types --test \
+            tests/control_plane_ts/sqlite_runtime_admission.test.ts \
+            tests/control_plane_ts/deferred_hard_lease_lifecycle.test.ts
 
   node-forward-compatibility:
     needs: changes

@@ -465,7 +465,7 @@ def main() -> int:
         "en/index.md",
         (
             (f"LoopX 发布锚点：`{release_tag}`", f"LoopX release anchor: `{release_tag}`"),
-            ("运行时前提：Python 3.11+ 与 Node.js 22.18.0+", "Runtime prerequisites: Python 3.11+ and Node.js 22.18.0+"),
+            ("运行时前提：Python 3.11+ 与 Node.js 22.22.3+", "Runtime prerequisites: Python 3.11+ and Node.js 22.22.3+"),
             ("TypeScript owner", "TypeScript owners"),
             ("这不是两套可独立演进的 控制面", "These are not two independently evolving control planes"),
         ),
@@ -476,7 +476,7 @@ def main() -> int:
         (
             ("语义镜像", "semantic mirrors"),
             ("Python 3.11+", "Python 3.11+"),
-            ("Node.js 22.18.0+", "Node.js 22.18.0+"),
+            ("Node.js 22.22.3+", "Node.js 22.22.3+"),
             ("用户不需要手工维护 daemon", "users do not operate that runtime as a manual daemon"),
             ("TypeScript 已拥有", "TypeScript owns"),
             ("Python CLI 仍负责", "Python CLI still owns"),
@@ -545,7 +545,7 @@ def main() -> int:
         "chapters/05-connect-existing-project.md",
         "en/chapters/05-connect-existing-project.md",
         (
-            ("Node.js 22.18.0", "Node.js 22.18.0"),
+            ("Node.js 22.22.3", "Node.js 22.22.3"),
             ("Windows PowerShell 7", "Windows PowerShell 7"),
             ("loopx doctor --deep", "loopx doctor --deep"),
             ("用户不需要手工维护 daemon", "users do not supervise a daemon manually"),

@@ -304,6 +304,13 @@ async function readRequest(): Promise<unknown> {
 
 async function main(): Promise<number> {
   try {
+    const [major, minor, patch] = process.versions.node.split(".").map(Number);
+    if (major < 22 || (major === 22 && (minor < 22 || (minor === 22 && patch < 3)))) {
+      throw new EffectRuntimeRequestError(
+        "native scheduler follow-up requires Node.js 22.22.3 or newer",
+        "node_unsupported",
+      );
+    }
     const fromArgs = process.argv.length > 2;
     const parsed = fromArgs
       ? requestFromArgs(process.argv.slice(2))

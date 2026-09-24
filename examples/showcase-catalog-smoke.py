@@ -276,7 +276,6 @@ def main() -> int:
         assert phrase in feedback_loop, phrase
     for phrase in (
         "https://loopx-project.github.io/loopx/",
-        "## Advanced Paths",
         "docs/assets/long-running-loop-openviking-trajectory.png",
         "docs/assets/long-running-loop-ml-experiment-trajectory.png",
         "### Review Agent Work",

@@ -62,14 +62,16 @@ def test_checks_aggregate_requires_both_parallel_lanes(
     assert (result.returncode == 0) == (kernel == dashboard == "success")
 
 
-def test_minimum_node_lane_keeps_full_coverage_with_runner_headroom() -> None:
+def test_minimum_node_lane_exercises_sqlite_without_a_skip_list() -> None:
     minimum = WORKFLOW.split("  node-minimum-compatibility:\n", 1)[1].split(
         "  node-forward-compatibility:\n", 1,
     )[0]
 
-    assert "timeout-minutes: 20" in minimum
-    assert "for test in tests/control_plane_ts/*.test.ts" in minimum
-    assert 'node --no-warnings --experimental-sqlite --experimental-strip-types --test "${tests[@]}"' in minimum
+    assert 'node-version: "22.22.3"' in minimum
+    assert 'LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED: "1"' in minimum
+    assert "tests/control_plane_ts/sqlite_runtime_admission.test.ts" in minimum
+    assert "tests/control_plane_ts/deferred_hard_lease_lifecycle.test.ts" in minimum
+    assert "for test in tests/control_plane_ts/*.test.ts" not in minimum
     assert "--test-name-pattern" not in minimum
     assert "shard" not in minimum
 

@@ -121,7 +121,7 @@ next_action: <one concrete next step>
 要求：
 
 - Python 3.11 或更高版本；
-- Node.js 22.18.0 或更高版本，用于 LoopX 自动管理的 TypeScript Effect runtime；
+- Node.js 22.22.3 或更高版本，用于 LoopX 自动管理的 TypeScript Effect runtime；
 - macOS/Linux shell，或 Windows PowerShell 7；
 - 一个已有 Git 项目。
 

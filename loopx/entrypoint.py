@@ -47,7 +47,7 @@ def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
         return None
     node = shutil.which("node")
     if node is None:
-        raise RuntimeError("native scheduler follow-up requires Node.js 22.18.0 or newer")
+        raise RuntimeError("native scheduler follow-up requires Node.js 22.22.3 or newer")
     entry = (
         Path(__file__).resolve().parent
         / "control_plane"

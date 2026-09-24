@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
-    "node": ">=22.18.0"
+    "node": ">=22.22.3"
   },
   "scripts": {
     "test:control-plane": "node --no-warnings --experimental-sqlite --experimental-strip-types --test tests/control_plane_ts/*.test.ts",

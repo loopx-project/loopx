@@ -1018,8 +1018,9 @@ rehearsal 证据（1000 次提交／64 KiB）现为 16 个 checkpoint、63 次 r
 headroom、完整领域负载、大历史恢复、fenced backup/restore、受支持升级/回滚、
 OS/runtime 覆盖和 >=10 天自然时间 soak 仍是 hold，工具跑完不能声称已满足。参见
 [SQLite 验证命令](../../reference/sqlite-authority-store.md#reproduce-validation)。
-公开 Node 最低版本 22.18 继续用于 File；SQLite 另需同步 finalization 与 WAL-reset
-修复，参考组合为 Node 22.22.3／SQLite 3.51.3。Node 24 主 runtime 与 Node 26
+公开 Node 最低版本已升至 22.22.3，适用于 File 和可选 SQLite；SQLite 仍需检查
+实际内嵌驱动的同步 finalization 与 WAL-reset 修复，参考组合为 Node 22.22.3／
+SQLite 3.51.3。Node 24 主 runtime 与 Node 26
 非阻塞 forward probe 保持原合同。
 
 **迁移决策点。** 首次迁移已有 Goal 前，先在 authority writer fence 下冻结精确的源

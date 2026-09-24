@@ -63,7 +63,7 @@ $isNativeSchedulerFollowup = (
 if ($isNativeSchedulerFollowup) {
     $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
     if ($null -eq $node) {
-        throw "Native scheduler follow-up requires Node.js 22.18.0 or newer"
+        throw "Native scheduler follow-up requires Node.js 22.22.3 or newer"
     }
     $nativeEntry = Join-Path $releaseRoot "loopx/control_plane/scheduler/heartbeat_followup_cli.ts"
     if (-not (Test-Path -LiteralPath $nativeEntry -PathType Leaf)) {

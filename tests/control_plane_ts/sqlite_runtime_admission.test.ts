@@ -73,12 +73,16 @@ test("a direct CLI run is told to rerun on a qualified Node instead", async () =
   assert.doesNotMatch(reason, /restart-runtime/);
 });
 
-test("runtime identity publishes the serving Node and SQLite pair", () => {
+test("runtime identity publishes the serving pair and enforces required qualification", () => {
   const identity = sqliteRuntimeIdentity();
   assert.equal(identity.schema_version, "loopx_sqlite_runtime_identity_v0");
   assert.equal(identity.node_version, process.version);
   assert.equal(typeof identity.sqlite_available, "boolean");
   assert.equal(typeof identity.sqlite_authority_qualified, "boolean");
+  if (process.env.LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED === "1") {
+    assert.equal(identity.sqlite_authority_qualified, true,
+      `qualified SQLite test lane cannot skip provider cases: ${identity.node_version}/${identity.sqlite_version}`);
+  }
   if (!identity.sqlite_available) {
     assert.equal(identity.sqlite_version, null);
     assert.equal(identity.sqlite_authority_qualified, false);

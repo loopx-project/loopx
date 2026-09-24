@@ -487,7 +487,7 @@ def test_inspection_has_no_python_fallback_when_typescript_runtime_is_missing(
     _write_journal(tmp_path, _journal())
 
     def missing_node(*_args: object, **_kwargs: object) -> object:
-        raise RuntimeError("Turn-journal inspection requires Node.js 22.18.0 or newer")
+        raise RuntimeError("Turn-journal inspection requires Node.js 22.22.3 or newer")
 
     monkeypatch.setattr(turn_journal_runtime, "effect_runtime_result", missing_node)
 
@@ -498,7 +498,7 @@ def test_inspection_has_no_python_fallback_when_typescript_runtime_is_missing(
     assert payload == {
         "ok": False,
         "schema_version": "loopx_turn_journal_inspection_v1",
-        "error": "Turn-journal inspection requires Node.js 22.18.0 or newer",
+        "error": "Turn-journal inspection requires Node.js 22.22.3 or newer",
         "effects": [],
     }
 

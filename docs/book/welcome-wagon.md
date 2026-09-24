@@ -62,7 +62,7 @@ loopx doctor
 git status --short --branch
 ```
 
-LoopX 当前要求 Python 3.11+ 与 Node.js 22.18.0+。如果 `doctor` 失败，先按
+此源码版本要求 Python 3.11+ 与 Node.js 22.22.3+。如果 `doctor` 失败，先按
 [安装指南](/loopx/docs/guides/installing-loopx/)修复安装，不要在错误环境里继续写项目状态。
 
 <!-- welcome-wagon:public-private-boundary -->

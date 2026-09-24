@@ -2,7 +2,7 @@
 
 Explore three connected projects in the real LoopX Personal Workspace: a 120-person community event, a home-energy buying guide, and a neighborhood website release. Each has four work roles, 18 delivery tasks across multiple phases, two owner decisions and two scheduled watches.
 
-From a source checkout with Python 3.11+ and Node 22.18.0+:
+From a source checkout with Python 3.11+ and Node 22.22.3+:
 
 ```bash
 python -m demo.workspace serve

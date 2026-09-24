@@ -418,4 +418,4 @@ def test_console_native_scheduler_followup_fails_closed_without_node(
     )
 
     assert entrypoint.main() == 2
-    assert "requires Node.js 22.18.0 or newer" in capsys.readouterr().err
+    assert "requires Node.js 22.22.3 or newer" in capsys.readouterr().err

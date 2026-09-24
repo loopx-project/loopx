@@ -19,7 +19,7 @@ NODE24_ACTION_MAJORS = {
 }
 
 PRIMARY_NODE_VERSION = "24"
-MINIMUM_NODE_VERSION = "22.18.0"
+MINIMUM_NODE_VERSION = "22.22.3"
 MINIMUM_NODE_ACTION_VERSION = MINIMUM_NODE_VERSION
 FORWARD_NODE_VERSION = "26"
 # SQLite needs both synchronous statement finalization and the WAL-reset fix.
@@ -88,7 +88,7 @@ def main() -> int:
         r"^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)",
         python_workflow, re.MULTILINE | re.DOTALL,
     ))
-    for name in ("kernel-static-checks", "dashboard-acceptance", "windows-powershell"):
+    for name in ("kernel-static-checks", "node-minimum-compatibility", "dashboard-acceptance", "windows-powershell"):
         assert SQLITE_NODE_VERSION in node_version_pattern.findall(jobs[name]), name
     postgresql_versions = node_version_pattern.findall(
         workflows["postgresql-integration.yml"]
@@ -102,8 +102,8 @@ def main() -> int:
     assert package["engines"]["node"] == f">={MINIMUM_NODE_VERSION}"
 
     print(
-        "github-actions-runtime-smoke ok: Node 24 primary, 22.18 minimum, "
-        "26 forward, 22.22.3 sqlite/authority"
+        "github-actions-runtime-smoke ok: Node 24 primary, "
+        "22.22.3 minimum and SQLite/authority reference, 26 forward"
     )
     return 0
 

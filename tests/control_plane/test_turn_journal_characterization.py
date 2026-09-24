@@ -35,7 +35,7 @@ def _corpus() -> dict[str, object]:
 def _probe() -> dict[str, object]:
     node = shutil.which("node")
     if node is None:
-        pytest.skip("TypeScript candidate requires Node.js 22.18.0 or newer")
+        pytest.skip("TypeScript candidate requires Node.js 22.22.3 or newer")
     return run_turn_journal_probe_command(
         _corpus(),
         command=[

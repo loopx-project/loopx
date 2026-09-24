@@ -1310,9 +1310,10 @@ large-history recovery, fenced backup/restore, supported upgrade/rollback,
 OS/runtime coverage and the >=10-day elapsed soak; runner completion cannot
 claim them. See the
 [SQLite qualification commands](../../reference/sqlite-authority-store.md#reproduce-validation).
-The public minimum remains Node 22.18 for File; SQLite additionally requires
-synchronous finalization and the WAL-reset fix, with Node 22.22.3/SQLite 3.51.3
-as the reference. Node 24 stays primary and Node 26 stays a non-blocking probe.
+The public minimum is now Node 22.22.3 for File and optional SQLite. SQLite
+still checks synchronous finalization and the actual WAL-reset-fixed driver;
+Node 22.22.3/SQLite 3.51.3 is the reference. Node 24 stays primary and Node 26
+stays a non-blocking probe.
 
 **Migration decision points.** Before the first existing-Goal cutover, freeze
 one exact source lineage/revision under the authority writer fence, import a

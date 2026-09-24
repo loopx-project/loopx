@@ -130,7 +130,7 @@ diagnosis and choices only. Do not write state, commit, or push.
 Prerequisites:
 
 - Python 3.11 or later;
-- Node.js 22.18.0 or later for the LoopX-managed TypeScript Effect runtime;
+- Node.js 22.22.3 or later for the LoopX-managed TypeScript Effect runtime;
 - a macOS or Linux shell, or Windows PowerShell 7;
 - an existing Git project.
 

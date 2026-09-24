@@ -28,7 +28,7 @@ owning a second copy. It does not use the app-server heartbeat agent.
 ## Run
 
 Prerequisites are an LHTB checkout with its Harbor virtual environment, Docker,
-the native Codex bundle, a portable Python 3.11+ tree, and Node 22.18.0+. Copy
+the native Codex bundle, a portable Python 3.11+ tree, and Node 22.22.3+. Copy
 `.env.example` to `.env`, set `LHTB_ROOT`, the model gateway, and local runtime
 paths, then run from this directory.
 

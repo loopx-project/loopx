@@ -65,7 +65,7 @@ loopx doctor
 git status --short --branch
 ```
 
-Current LoopX releases require Python 3.11+ and Node.js 22.18.0+. If `doctor` fails, repair the installation
+This checkout requires Python 3.11+ and Node.js 22.22.3+. If `doctor` fails, repair the installation
 through [Installing LoopX](/loopx/docs/guides/installing-loopx/) before writing project state in a broken
 environment.
 

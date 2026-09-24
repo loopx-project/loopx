@@ -112,9 +112,10 @@ qualify the complete D2 profile.
 
 This intentionally rejects SQLite runtimes previously accepted by the
 statement-only probe, including vulnerable drivers shipped with older Node 22
-releases. The public Node minimum remains 22.18 for the default File path;
-SQLite requires the additional fix. No provider selection changes and no
-fallback to File occur when an explicitly selected SQLite runtime is rejected.
+releases. The public Node minimum is now 22.22.3 for both File and optional
+SQLite use; SQLite also checks the actual embedded driver. Provider selection
+does not change, and an explicitly selected SQLite runtime never falls back to
+File when rejected.
 The optional driver is still opened only after opt-in. The serving runtime
 loads it in-process once at startup for the read-only identity probe described
 below; that probe opens no database file and creates no authority state, and
@@ -400,7 +401,8 @@ retained commit. That row stays `missing` for a rehearsal, exactly like every
 other formal budget.
 
 SQLite 资格参考使用 Node 22.22.3／SQLite 3.51.3；打开前同时检查实际 WAL 修复版本
-和 statement 关闭行为。公开 Node 最低版本 22.18 继续用于默认 File 路径。显式
+和 statement 关闭行为。公开 Node 最低版本已升至 22.22.3，同时适用于默认 File
+和可选 SQLite；SQLite 仍检查实际内嵌驱动。显式
 SQLite 选择遇到不合格 runtime 会拒绝，不会改默认 provider 或静默回退。
 
 托管 Effect runtime 按用户与源码修订复用，因此真正服务某个 Goal 的 Node／SQLite

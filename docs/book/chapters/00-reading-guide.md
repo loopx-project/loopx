@@ -109,7 +109,8 @@ lifecycle 选择，不是所有贡献的默认终点。
 ## 版本基线
 
 当前内容以 LoopX GitHub release `v1.1.0` 为发布锚点；本地命令示例已按 `loopx 1.1.0` 的
-公开 CLI 与协议表面复核。该版本要求 Python 3.11+ 与 Node.js 22.18.0+；后者运行由 LoopX 自动管理、
+公开 CLI 与协议表面复核。该历史版本要求 Python 3.11+ 与 Node.js 22.18.0+；此源码版本要求
+Node.js 22.22.3+。后者运行由 LoopX 自动管理、
 空闲后退出的 TypeScript Effect runtime，用户不需要手工维护 daemon。
 
 发布标签、已安装 CLI 与源码 checkout 可能处于不同 revision，因此以下表面尤其需要按实际环境复核：

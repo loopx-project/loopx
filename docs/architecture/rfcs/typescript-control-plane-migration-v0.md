@@ -1807,6 +1807,8 @@ cannot be silently relaxed.
 The migration must not ask users to manage a service. The Python-transition
 release requires Node.js 22.18.0 or newer, but installer and `loopx doctor`
 must detect it before normal control-plane work and provide exact remediation.
+The current source checkout raises that floor to Node.js 22.22.3 because this
+release embeds the WAL-reset-fixed SQLite driver.
 The wheel and sdist carry the TS source and versioned schemas.
 
 The runtime is healthy while idle-exited: `stopped` means the next

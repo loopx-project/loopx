@@ -111,7 +111,7 @@ export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 
 Also set `CODEX_OFFLINE_DIR` (Codex, code-mode sidecar, rg),
 `LOOPX_PORTABLE_PYTHON` (Python >=3.11 distribution) and `LOOPX_NODE_DIR`
-(Node >=22.18.0 distribution). Staging archives the verified commit SHA, never local run
+(Node >=22.22.3 distribution). Staging archives the verified commit SHA, never local run
 artifacts. The host import must come from that checkout, whose tracked files
 must match HEAD. Commit the candidate before real validation. Baselines stage only
 the runner/native transport, without installing LoopX skills or initializing

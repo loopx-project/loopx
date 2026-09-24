@@ -56,7 +56,7 @@ if [[ "$loopx_command" == "quota" \
   && "$native_scheduler_turn" == "1" ]]; then
   native_scheduler_entry="$repo_root/loopx/control_plane/scheduler/heartbeat_followup_cli.ts"
   if ! command -v node >/dev/null 2>&1; then
-    echo "loopx runtime error: native scheduler follow-up requires Node.js 22.18.0 or newer" >&2
+    echo "loopx runtime error: native scheduler follow-up requires Node.js 22.22.3 or newer" >&2
     exit 2
   fi
   export LOOPX_RELEASE_ROOT="$repo_root"

@@ -120,7 +120,7 @@ full-CLI p95 regression is an owner review gate rather than a silent pass.
 
 RFC Section 7 projects only `running`/`stopped`/`unavailable` plus a stable
 diagnostic code; raw stderr, tokens, local paths, and private runtime metadata
-must not be projected. Node.js 22.18.0+ detection with exact remediation is
+must not be projected. Node.js 22.22.3+ detection with exact remediation is
 required before normal control-plane work.
 
 Verified status: `loopx check` runs a public-boundary scan over the RFC and
