@@ -144,17 +144,27 @@ export function ChannelTimeline({
   // visible; no prose-based inference that a waiting run is safe to ignore.
   const routineRuns = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
     item.kind === "run" && ["queued", "running", "completed"].includes(item.run.status));
-  const routineIds = new Set(routineRuns.map(item => item.id));
-  const primaryItems = items.filter(item => item.kind !== "proposal" && !routineIds.has(item.id));
+  const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> => item.kind === "schedule");
+  const backgroundIds = new Set([...routineRuns, ...scheduleItems].map(item => item.id));
+  const primaryItems = items.filter(item => item.kind !== "proposal" && !backgroundIds.has(item.id));
+  const pausedScheduleCount = scheduleItems.filter(item => item.schedule.status === "paused").length;
+  const enabledScheduleCount = scheduleItems.length - pausedScheduleCount;
   const workingCount = routineRuns.filter(item => item.run.status === "running" && Boolean(item.run.sessionId) && Boolean(item.run.canInterrupt)).length;
   const queuedCount = routineRuns.filter(item => item.run.status === "queued").length;
   const completedCount = routineRuns.filter(item => item.run.status === "completed").length;
   const progressCount = routineRuns.length - workingCount - queuedCount - completedCount;
-  const activitySummary = locale === "zh-CN"
-    ? [workingCount && `${workingCount} 个执行中`, queuedCount && `${queuedCount} 个排队中`, completedCount && `${completedCount} 次执行已结束`, progressCount && `${progressCount} 项进展更新`].filter(Boolean).join(" · ")
-    : [workingCount && `${workingCount} running`, queuedCount && `${queuedCount} queued`, completedCount && `${completedCount} runs finished`, progressCount && `${progressCount} progress updates`].filter(Boolean).join(" · ");
+  const activitySummary = ([
+    enabledScheduleCount ? t("timeline.backgroundSchedules", { count: enabledScheduleCount }) : null,
+    pausedScheduleCount ? t("timeline.backgroundPaused", { count: pausedScheduleCount }) : null,
+  ] as Array<string | number | null>).concat(locale === "zh-CN"
+    ? [workingCount && `${workingCount} 个执行中`, queuedCount && `${queuedCount} 个排队中`, completedCount && `${completedCount} 次执行已结束`, progressCount && `${progressCount} 项进展更新`]
+    : [workingCount && `${workingCount} running`, queuedCount && `${queuedCount} queued`, completedCount && `${completedCount} runs finished`, progressCount && `${progressCount} progress updates`]).filter(Boolean).join(" · ");
   const activeProposalItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
     item.kind === "proposal" && item.proposal.status !== "gated");
+  // Only drafts awaiting the owner fold behind the newest one; applying, applied and failed results stay visible.
+  const readyProposalItems = activeProposalItems.filter(item => item.proposal.status === "ready");
+  const foldedProposalIds = new Set(readyProposalItems.slice(0, -1).map(item => item.id));
+  const visibleProposalItems = activeProposalItems.filter(item => !foldedProposalIds.has(item.id));
 
   function renderItem(item: WorkspaceTimelineItem) {
     if (item.kind === "attention") {
@@ -172,10 +182,10 @@ export function ChannelTimeline({
     if (item.kind === "proposal") {
       const appliedTeamPlan = item.proposal.actionKind === "team.plan" && item.proposal.status === "applied";
       return (
-        <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
+        <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
           <span><small>{appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
-            : `${item.proposal.actionKind} · ${item.proposal.status}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
+            : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
           <b>{item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review") : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
         </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan
           && item.proposal.goalId && item.proposal.teamPlanTodoIds?.length
@@ -207,9 +217,9 @@ export function ChannelTimeline({
     <>
       <p aria-atomic="true" aria-live="polite" className="personal-live-region" role="status">{liveAnnouncement}</p>
       <div className="personal-channel-timeline">
-        {routineRuns.length ? <details className="personal-activity-summary">
-          <summary><Activity size={16} aria-hidden="true"/><strong>{locale === "zh-CN" ? "执行动态" : "Execution activity"}</strong><span>{activitySummary}</span></summary>
-          <div>{routineRuns.map(renderItem)}</div>
+        {backgroundIds.size ? <details className="personal-activity-summary">
+          <summary><Activity size={16} aria-hidden="true"/><strong>{t("timeline.background")}</strong><span>{activitySummary}</span></summary>
+          <div>{scheduleItems.map(renderItem)}{routineRuns.map(renderItem)}</div>
         </details> : null}
         {primaryItems.map(renderItem)}
         {gatedItems.length ? (
@@ -218,7 +228,13 @@ export function ChannelTimeline({
             <div>{gatedItems.map(renderItem)}</div>
           </details>
         ) : null}
-        {activeProposalItems.map(renderItem)}
+        {foldedProposalIds.size ? (
+          <details className="personal-proposal-backlog">
+            <summary><Sparkles size={16} aria-hidden="true" /><strong>{t("timeline.olderDrafts", { count: foldedProposalIds.size })}</strong></summary>
+            <div>{readyProposalItems.filter(item => foldedProposalIds.has(item.id)).map(renderItem)}</div>
+          </details>
+        ) : null}
+        {visibleProposalItems.map(renderItem)}
       </div>
     </>
   );
