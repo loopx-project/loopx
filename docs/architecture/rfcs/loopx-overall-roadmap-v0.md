@@ -23,6 +23,24 @@ Product scope includes reusable engineering delivery, research, material/knowled
 
 Two adoption routes share engineering assets but qualify independently: **native LoopX long-horizon coordination** prioritizes G1/G2; **observer-first reliability diagnostics** can demonstrate value without waiting for hundred-Agent scale or a shared service. Paid deployments, enterprise offerings and hosted services remain product hypotheses, not demonstrated market fit or operating commitments.
 
+### App-first conversation delivery
+
+The installed App is the primary interaction and qualification surface; Lark
+follows through the same semantics with independent transport evidence. Move
+ongoing managed **and attached** work conversations into LoopX: preserve the
+existing responsible worker, context and execution driver, show actual progress,
+accept corrections and return the result to the original conversation. Merely
+embedding a transcript or sending an inbox ACK does not complete that transition.
+
+[App conversations and asynchronous inbox](app-conversation-and-async-inbox-v0.md)
+refines R1–R3 without adding a milestone: repair ordinary input and durable
+entry; qualify connect/continue, truthful activity, stop/recovery and readable
+results; then complete G1's two real collaboration cycles. Prioritize these
+before cross-channel visual parity or scale. Lark's reusable inbox lifecycle
+should converge into the existing typed coordination owner, while provider
+authentication/addressing/reactions remain in its extension. Product-facing TS
+migration follows whole working journeys, not leaf-RPC counts or a rewrite gate.
+
 ### Relationship to Existing Documents
 
 - This is the product, engineering, research and adoption roadmap. Section 2 defines S1–S13 streams; Section 3 defines G0–G5 portfolio milestones; Section 4 maps every RFC; Sections 5–6 detail the multi-Agent core path; Section 8 preserves the focused audit.

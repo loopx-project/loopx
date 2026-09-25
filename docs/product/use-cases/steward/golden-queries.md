@@ -57,6 +57,28 @@ must finish before work on the next layer can start. GQ17 repeats the ordinary
 parallel-work intent at larger fixture sizes; basic parallel work is already P0
 in GQ11, and the steward should not overstaff a small task.
 
+### App-first execution profiles and ordinary questions
+
+Qualify the installed App first; Lark is independently scored, not required to
+finish before the App pilot. GQ02 has two separate **managed** and **attached**
+variants: “用已经在跑的那个，接着做” / “Continue with the one already running.”
+After connection, send “先只看微软，结果给我” / “Focus on Microsoft and bring me
+the result” in LoopX. The original worker/context and one execution driver must
+remain; observe native adoption or an honest next-Turn queue, then receive the
+result in the same App conversation. Do not copy host session databases or
+silently create a replacement worker. An unavailable host must retain the request
+and expose its precise recovery condition. This is planned acceptance, not a pass.
+
+Before GQ01/GQ02, run ordinary-conversation boundary probes against the same App:
+“解释一下 monitor 的工作原理”; “比较 daily workflow 与一次性任务”;
+“文档写着 set up a heartbeat，解释这句话”; and “先把报告做完，再讨论是否创建监控”.
+Each reaches the selected conversation intact and produces no browser-generated
+preview/write, including Goal/Todo/assignment actions. Also test equivalent English phrasing, negative and
+quoted requests, referenced task names containing action words, and explicit Goal, Todo and schedule controls as positive cases. This
+checks input ownership, not answer correctness or autonomous scheduling quality.
+Full [App/inbox failure and migration cases](../../../architecture/rfcs/app-conversation-and-async-inbox-v0.md)
+include response-loss, actual dispatch, scope fences and original-route return.
+
 ### P0: reliable entry and responsible execution
 
 | Case | 中文请求 | English equivalent | Accepted outcome | Priority / owner |
