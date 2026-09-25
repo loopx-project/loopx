@@ -1,13 +1,26 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 
+import { pageMetadata, type PublicPage } from "./page-metadata";
+
 type Language = "en" | "zh";
 const readLanguage = (): Language =>
-  new URLSearchParams(window.location.search).get("lang") === "zh" ? "zh" : "en";
+  new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("lang") === "zh" ? "zh" : "en";
 
-// Both public React pages share URL language and fragment navigation. The static
-// shell has no section IDs, so the browser's first fragment lookup can miss them.
-export function usePublicPageNavigation() {
+// Public pages share URL language and fragment navigation. Client rendering or
+// translation can move section positions after the initial static fragment lookup.
+export function usePublicPageNavigation(page: PublicPage = "home") {
   const [language, setLanguage] = useState<Language>(readLanguage);
+
+  useEffect(() => {
+    const { title, description } = pageMetadata[page][language];
+    document.title = title;
+    for (const selector of ['meta[name="description"]', 'meta[property="og:description"]', 'meta[name="twitter:description"]']) {
+      document.querySelector(selector)?.setAttribute("content", description);
+    }
+    for (const selector of ['meta[property="og:title"]', 'meta[name="twitter:title"]']) {
+      document.querySelector(selector)?.setAttribute("content", title);
+    }
+  }, [language, page]);
 
   useEffect(() => {
     const restoreLanguage = () => setLanguage(readLanguage());
@@ -30,7 +43,7 @@ export function usePublicPageNavigation() {
     }
     const target = document.getElementById(id);
     if (!target) return;
-    // :target can remain unresolved after parsing the empty shell. Reveal the
+    // :target can remain unresolved after the client replaces static content. Reveal the
     // destination before scrolling, including when translated content reflows.
     target.closest(".reveal-block")?.setAttribute("data-anchor-entry", "");
     const align = () => target.scrollIntoView({ behavior: "instant" });

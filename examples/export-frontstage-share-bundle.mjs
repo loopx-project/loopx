@@ -122,13 +122,11 @@ async function copyHomepage(siteDir, base) {
     cwd: homepageDir,
   });
   run(process.execPath, [
-    resolve(homepageDir, "node_modules/vite/bin/vite.js"),
-    "build",
+    resolve(homepageDir, "scripts/build.mjs"),
     "--base",
     base,
     "--outDir",
     buildDir,
-    "--emptyOutDir",
   ], { cwd: homepageDir });
   await cp(buildDir, siteDir, { force: true, recursive: true });
   await rm(buildDir, { force: true, recursive: true });
@@ -136,12 +134,6 @@ async function copyHomepage(siteDir, base) {
 }
 
 async function copyPublicSiteRoutes(siteDir) {
-  const homepage = resolve(siteDir, "index.html");
-  for (const route of ["benchmarks/swe-marathon", "benchmarks/lhtb"]) {
-    const routeDir = resolve(siteDir, route);
-    await mkdir(routeDir, { recursive: true });
-    await copyFile(homepage, resolve(routeDir, "index.html"));
-  }
   const deepSweRouteDir = resolve(
     siteDir,
     "benchmarks/deepswe/behavior-discovery",

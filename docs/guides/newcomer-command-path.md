@@ -10,6 +10,9 @@ For a first-time user, the default surface is:
 The full command set remains available for operators and contributors, but it
 should not be the first thing a newcomer has to understand.
 
+For a task-oriented walkthrough, see
+[long-running coding agents with Codex and Claude Code](long-running-coding-agents.md).
+
 ## The Two Commands To Remember
 
 | Need | Use | Expected result |

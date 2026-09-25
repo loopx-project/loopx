@@ -18,8 +18,6 @@
   --danger: #ee0000;
   --warning: #f5a623;
   --font-mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", monospace;
-  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
-  --font-display-zh: "Iowan Old Style", "Songti SC", STSong, "Noto Serif CJK SC", serif;
 }
 
 * {
@@ -219,13 +217,14 @@ button {
 .hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 0.93fr) minmax(500px, 1.07fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: center;
-  gap: 76px;
+  gap: 64px;
   width: min(calc(100% - 48px), 1200px);
-  min-height: 680px;
+  min-height: 660px;
   margin: 0 auto;
-  padding: 80px 0 92px;
+  padding: 80px 0;
+  isolation: isolate;
 }
 
 .hero-grid {
@@ -246,7 +245,7 @@ button {
   right: -260px;
   width: 820px;
   height: 620px;
-  opacity: 0.2;
+  opacity: 0.3;
   background: radial-gradient(circle at 35% 38%, #00dfd8 0, transparent 28%),
     radial-gradient(circle at 67% 33%, #7928ca 0, transparent 31%),
     radial-gradient(circle at 55% 70%, #ff4d4d 0, transparent 33%);
@@ -280,38 +279,81 @@ button {
 }
 
 .hero h1 {
-  max-width: 650px;
   margin: 0;
   color: var(--ink);
-  font-family: var(--font-display);
-  font-size: clamp(48px, 3.65vw, 52px);
-  font-weight: 400;
-  letter-spacing: -0.045em;
-  line-height: 0.98;
+  font-size: clamp(40px, 3.7vw, 56px);
+  font-weight: 600;
+  letter-spacing: -0.055em;
+  line-height: 1.12;
 }
 
 body[data-language="zh"] .hero h1 {
-  font-family: var(--font-display-zh);
-  font-size: clamp(48px, 3.65vw, 52px);
-  font-weight: 600;
-  letter-spacing: -0.035em;
-  line-height: 1.08;
+  letter-spacing: -0.045em;
+  line-height: 1.25;
 }
 
 .hero-title-line {
   display: block;
-  white-space: nowrap;
 }
 
-.hero-gradient-word {
-  display: inline-block;
-  white-space: nowrap;
-  color: #55555b;
-  font-style: italic;
-  text-decoration: underline;
-  text-decoration-color: #d7d7da;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.09em;
+.hero-accent {
+  color: #0070c9;
+}
+
+.hero-footnote {
+  margin: 24px 0 0;
+  color: #666;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.hero-system {
+  position: relative;
+  z-index: 3;
+  min-width: 0;
+}
+
+.runtime-rail {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-rail a {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #dedede;
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.runtime-rail a:hover {
+  border-color: var(--ink);
+}
+
+.runtime-bridge {
+  display: flex;
+  justify-content: space-around;
+  height: 28px;
+  margin: 0 48px;
+}
+
+.runtime-bridge span {
+  width: 1px;
+  background: #ccc;
+}
+
+.hero-system-caption {
+  margin: 16px 0 0;
+  text-align: center;
+  color: #666;
+  font-size: 11px;
+  line-height: 1.6;
 }
 
 .hero-body {
@@ -378,50 +420,13 @@ body[data-language="zh"] .hero h1 {
   transform: translateX(2px);
 }
 
-.supported-hosts {
-  display: grid;
-  gap: 12px;
-  margin-top: 42px;
-}
-
-.supported-hosts > span {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-}
-
-.supported-hosts > div {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: #707070;
-}
-
-.supported-hosts b {
-  color: #555;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-}
-
-.supported-hosts i {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: #c8c8c8;
-}
-
 .control-shell {
   position: relative;
   z-index: 3;
   overflow: hidden;
   border: 1px solid #dedede;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
-  animation: control-enter 800ms 120ms cubic-bezier(0.2, 0.72, 0, 1) both;
+  background: var(--surface);
 }
 
 .control-topline {
@@ -451,6 +456,12 @@ body[data-language="zh"] .hero h1 {
   border-radius: 50%;
   background: #18a957;
   box-shadow: 0 0 0 3px rgba(24, 169, 87, 0.12);
+  animation: status-blink 2.8s ease-in-out infinite;
+}
+
+@keyframes status-blink {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
 }
 
 .control-goal {
@@ -523,7 +534,6 @@ body[data-language="zh"] .hero h1 {
   height: 5px;
   border-radius: 50%;
   background: currentColor;
-  animation: status-blink 2.8s ease-in-out infinite;
 }
 
 .status-ok {
@@ -566,7 +576,6 @@ body[data-language="zh"] .hero h1 {
   width: 1px;
   height: 28px;
   background: linear-gradient(transparent, var(--blue), transparent);
-  animation: rail-flow 3.8s linear infinite;
 }
 
 .control-row {
@@ -615,7 +624,6 @@ body[data-language="zh"] .hero h1 {
   width: 58%;
   height: 100%;
   background: linear-gradient(90deg, #007cf0, #00c8c0);
-  animation: progress-breathe 2.5s ease-in-out infinite;
 }
 
 .next-action {
@@ -1641,36 +1649,6 @@ body.dialog-open {
   font-weight: 600;
 }
 
-@keyframes rail-flow {
-  from {
-    transform: translateY(0);
-  }
-  to {
-    transform: translateY(230px);
-  }
-}
-
-@keyframes control-enter {
-  from {
-    opacity: 0;
-    transform: translateX(36px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes status-blink {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 @keyframes setup-dialog-enter {
   from {
     opacity: 0;
@@ -1711,16 +1689,6 @@ body.dialog-open {
   }
 }
 
-@keyframes progress-breathe {
-  0%,
-  100% {
-    opacity: 0.75;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 @media (max-width: 1100px) {
   .site-header {
     grid-template-columns: 1fr auto;
@@ -1737,7 +1705,7 @@ body.dialog-open {
   .hero {
     grid-template-columns: 1fr;
     gap: 56px;
-    padding-top: 90px;
+    padding-top: 64px;
   }
 
   .hero-copy {
@@ -1806,15 +1774,15 @@ body.dialog-open {
 
   .hero {
     min-height: 0;
-    padding: 70px 0 72px;
+    padding: 48px 0 56px;
   }
 
   .hero h1 {
-    font-size: clamp(32px, 9vw, 38px);
+    font-size: clamp(29px, 7.5vw, 42px);
   }
 
   body[data-language="zh"] .hero h1 {
-    font-size: clamp(32px, 9vw, 38px);
+    font-size: clamp(29px, 7.5vw, 42px);
   }
 
   .hero-body {
@@ -1828,10 +1796,6 @@ body.dialog-open {
 
   .button {
     width: 100%;
-  }
-
-  .supported-hosts > div {
-    flex-wrap: wrap;
   }
 
   .control-goal {

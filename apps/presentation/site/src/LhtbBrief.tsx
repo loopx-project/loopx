@@ -8,7 +8,7 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { usePublicPageNavigation } from "./usePublicPageNavigation";
 import study from "../../../../benchmark/LHTB/studies/five-arm-gpt56sol-max/data.json";
 import taskGroups from "../../../../benchmark/LHTB/studies/five-arm-gpt56sol-max/task-groups.json";
@@ -77,7 +77,7 @@ function formatReward(value: number) {
 }
 
 export function LhtbBrief() {
-  const [language, setLanguage] = usePublicPageNavigation();
+  const [language, setLanguage] = usePublicPageNavigation("lhtb");
   const [query, setQuery] = useState("");
   const [tableMode, setTableMode] = useState<TableMode>("all");
   const [group, setGroup] = useState<GroupKey | "all">("all");
@@ -85,12 +85,6 @@ export function LhtbBrief() {
   const c = copy[language];
   const visibleArms = showHistory ? [...primaryArms, ...historicalArms] : primaryArms;
   const basePath = import.meta.env.BASE_URL;
-
-  useEffect(() => {
-    document.title = language === "zh"
-      ? "LoopX × LHTB：与 Plain、原生 Goal 的对比"
-      : "LoopX × LHTB: compared with Plain and native Goal";
-  }, [language]);
 
   const visibleTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -133,7 +127,7 @@ export function LhtbBrief() {
           <div key={arm}><dt>{c.armLabels[arm]}</dt><dd>{formatReward(row[arm])}</dd></div>
         ))}</dl>
         <p>{note}</p>
-        <a href={promptUrl(task)} target="_blank" rel="noreferrer">{c.promptLink} <ExternalLink size={11} /></a>
+        <a href={promptUrl(task)} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.promptLink} <ExternalLink size={11} /></a>
       </article>
     );
   });
@@ -150,7 +144,7 @@ export function LhtbBrief() {
             <button aria-pressed={language === "en"} className={language === "en" ? "is-active" : ""} onClick={() => setLanguage("en")} type="button">EN</button>
             <button aria-pressed={language === "zh"} className={language === "zh" ? "is-active" : ""} onClick={() => setLanguage("zh")} type="button">中文</button>
           </div>
-          <a href={studyUrl} target="_blank" rel="noreferrer">
+          <a href={studyUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
             {c.source} <ExternalLink size={13} />
           </a>
         </div>
@@ -167,7 +161,7 @@ export function LhtbBrief() {
               <p className="bm-contributors">
                 <span>{c.contributorsLabel}</span>
                 {contributorLinks.map((person) => (
-                  <a href={person.href} key={person.href} target="_blank" rel="noreferrer">
+                  <a href={person.href} key={person.href} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
                     {person.label}<ExternalLink size={11} />
                   </a>
                 ))}
@@ -229,7 +223,7 @@ export function LhtbBrief() {
           </div>
           <div className="lhtb-official-links">
             {c.officialLinks.map(([label, body, href]) => (
-              <a href={href} key={href} target="_blank" rel="noreferrer">
+              <a href={href} key={href} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
                 <div><strong>{label}</strong><p>{body}</p></div><ArrowUpRight size={18} />
               </a>
             ))}
@@ -241,7 +235,7 @@ export function LhtbBrief() {
           </div>
           <div className="lhtb-taxonomy" id="categories">
             <h3>{c.categoriesTitle}</h3>
-            <p>{c.categoriesBody} <a href="https://zli12321.github.io/LHTB/index.html#benchmark" target="_blank" rel="noreferrer">{c.categoriesSource}</a> · <a href="https://github.com/zli12321/LHTB#task-categories-46-tasks" target="_blank" rel="noreferrer">{c.categoriesExamplesSource}</a></p>
+            <p>{c.categoriesBody} <a href="https://zli12321.github.io/LHTB/index.html#benchmark" target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.categoriesSource}</a> · <a href="https://github.com/zli12321/LHTB#task-categories-46-tasks" target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.categoriesExamplesSource}</a></p>
             <div className="bm-table-wrap lhtb-category-table">
               <table>
                 <caption>{c.categoriesTitle}</caption>
@@ -355,7 +349,7 @@ export function LhtbBrief() {
                   const best = Math.max(...visibleArms.map((arm) => row[arm]));
                   return (
                     <tr key={row.task}>
-                      <th scope="row"><a href={promptUrl(row.task)} target="_blank" rel="noreferrer"><code>{row.task}</code></a><span>{c.groupLabels[taskGroup.get(row.task)!]}</span></th>
+                      <th scope="row"><a href={promptUrl(row.task)} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin"><code>{row.task}</code></a><span>{c.groupLabels[taskGroup.get(row.task)!]}</span></th>
                       {visibleArms.map((arm) => (
                         <td className={row[arm] === best ? "is-best" : undefined} key={arm}>{formatReward(row[arm])}</td>
                       ))}
@@ -379,7 +373,7 @@ export function LhtbBrief() {
             {c.programSteps.map(([title, body], index) => (
               <article key={title}><span>{index + 1}</span><div><h3>{title}</h3><p>{body}</p></div></article>
             ))}
-            <a href={c.programUrl} target="_blank" rel="noreferrer">{c.programAction}<ExternalLink size={14} /></a>
+            <a href={c.programUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.programAction}<ExternalLink size={14} /></a>
           </div>
         </section>
 
@@ -403,7 +397,7 @@ export function LhtbBrief() {
           </div>
           <div className="bm-source-list">
             {c.sourceItems.map(([title, body, href], index) => (
-              <a href={href} target="_blank" rel="noreferrer" key={title}>
+              <a href={href} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin" key={title}>
                 <span>0{index + 1}</span><div><strong>{title}</strong><p>{body}</p></div><ExternalLink size={15} />
               </a>
             ))}

@@ -1,3 +1,8 @@
+---
+title: "Codex, Claude Code and agent runtime connectors"
+description: "Compare LoopX connectors for Codex, Claude Code, OpenCode, DeepSeek Harness and custom runtimes: wake triggers, state writeback, budgets and authority boundaries."
+---
+
 # Runtime Connector Catalog
 
 Status: public-safe v0 catalog for LoopX host/runtime connectors.

@@ -1,0 +1,38 @@
+#loopx-analytics-consent {
+  position: fixed;
+  inset: auto 16px 16px;
+  z-index: 900;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 20px;
+  border: 1px solid #dedede;
+  border-radius: 12px;
+  background: #fff;
+  color: #171717;
+  font: 14px/1.5 "Geist", "Inter", "Helvetica Neue", Arial, sans-serif;
+  box-shadow: 0 4px 16px #0000000a;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+#loopx-analytics-consent[hidden] { display: none; }
+#loopx-analytics-consent p { margin: 0; flex: 1; }
+#loopx-analytics-consent a { color: #0070c9; font-size: 12px; text-decoration: underline; }
+#loopx-analytics-consent div { display: flex; gap: 8px; flex-shrink: 0; }
+#loopx-analytics-consent button, #loopx-analytics-settings {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid #dedede;
+  border-radius: 6px;
+  background: #fff;
+  color: #171717;
+  font: inherit;
+  cursor: pointer;
+}
+#loopx-analytics-settings { margin: 8px; font-size: 12px; }
+#loopx-analytics-consent button:focus-visible, #loopx-analytics-consent a:focus-visible, #loopx-analytics-settings:focus-visible { outline: 2px solid #0070f3; outline-offset: 3px; }
+@media (max-width: 640px) {
+  #loopx-analytics-consent { inset: auto 12px 12px; flex-wrap: wrap; gap: 12px; padding: 16px; }
+  #loopx-analytics-consent p { flex-basis: 100%; }
+  #loopx-analytics-consent div { margin-left: auto; }
+}

@@ -1,3 +1,8 @@
+---
+title: "DeepSeek Harness integration with LoopX"
+description: "Run bounded DeepSeek Harness agent sessions under LoopX goals, quota and validation. Install the optional SDK connector and verify its control-plane boundary."
+---
+
 # DeepSeek Harness Connector
 
 Status: public-safe v0 connector for using DeepSeek Harness (`dsh`) as a

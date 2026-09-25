@@ -1,4 +1,5 @@
 site_name: LoopX
+site_description: Documentation for the LoopX stateful control plane for long-running AI agents, including installation, runtime integrations, goals, tasks, approval gates and recovery.
 site_url: https://loopx-project.github.io/loopx/docs/
 repo_url: https://github.com/loopx-project/loopx
 edit_uri: edit/main/docs/
@@ -95,6 +96,7 @@ nav:
       - Installation: guides/installing-loopx.md
       - Personal Workspace Guide: guides/personal-workspace-user-guide.md
       - Newcomer Command Path: guides/newcomer-command-path.md
+      - Long-Running Coding Agents: guides/long-running-coding-agents.md
       - Minimal Custom Runtime Example: guides/minimal-custom-runtime-example.md
       - Custom Runner Integration: guides/custom-agent-runner-integration.md
       - Auto Research Stop/Takeover/Wake: guides/auto-research-stop-takeover-wake-walkthrough.md

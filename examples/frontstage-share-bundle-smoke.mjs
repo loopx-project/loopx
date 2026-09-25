@@ -200,8 +200,8 @@ if (!routerSource.includes("basepath:") || !routerSource.includes("import.meta.e
 }
 
 const homepageHtml = await readFile(resolve(siteDir, "index.html"), "utf8");
-if (!homepageHtml.includes('<div id="root"></div>')) {
-  throw new Error("homepage root must be the compiled React entry");
+if (!homepageHtml.includes('<div id="root">') || !homepageHtml.includes("<h1>")) {
+  throw new Error("homepage must include prerendered content inside its React root");
 }
 if (!homepageHtml.includes('src="/loopx/site-assets/') || !homepageHtml.includes('href="/loopx/site-assets/')) {
   throw new Error("homepage compiled assets did not resolve against the GitHub Pages base");
@@ -231,12 +231,12 @@ if (publishedInstaller !== canonicalInstaller) {
 const homepageSource = await readFile(resolve(repoRoot, "apps/presentation/site/src/App.tsx"), "utf8");
 const homepageStyles = await readFile(resolve(repoRoot, "apps/presentation/site/src/styles.css"), "utf8");
 const benchmarkHtml = await readFile(resolve(siteDir, "benchmarks/swe-marathon/index.html"), "utf8");
-if (benchmarkHtml !== homepageHtml) {
-  throw new Error("SWE-Marathon static route must reuse the compiled public-site entry");
+if (benchmarkHtml === homepageHtml || !benchmarkHtml.includes("<h1")) {
+  throw new Error("SWE-Marathon must publish its own prerendered research content");
 }
 const lhtbHtml = await readFile(resolve(siteDir, "benchmarks/lhtb/index.html"), "utf8");
-if (lhtbHtml !== homepageHtml) {
-  throw new Error("LHTB static route must reuse the compiled public-site entry");
+if (lhtbHtml === homepageHtml || !lhtbHtml.includes("<h1")) {
+  throw new Error("LHTB must publish its own prerendered research content");
 }
 const deepSweBehaviorHtml = await readFile(
   resolve(siteDir, "benchmarks/deepswe/behavior-discovery/index.html"),
@@ -250,16 +250,6 @@ if (deepSweBehaviorHtml !== canonicalDeepSweBehaviorHtml) {
   throw new Error("DeepSWE behavior article route must be byte-identical to the reviewed standalone source");
 }
 for (const sourceContract of [
-  "Your agents keep",
-  'secondPrefix: "the "',
-  'secondAccent: "night shift"',
-  'thirdPrefix: "You keep the "',
-  'thirdAccent: "judgment"',
-  'secondPrefix: "Agent "',
-  'secondAccent: "持续推进"',
-  'thirdPrefix: "判断始终"',
-  'thirdAccent: "由你掌握"',
-  "Provider-neutral",
   "Get started",
   "开始使用",
   "See in action",
@@ -276,7 +266,6 @@ for (const sourceContract of [
   "Prefer the shell? Install LoopX manually.",
   "Developer book",
   "benchmarks/swe-marathon/",
-  "Iowan Old Style",
   "Pi",
 ]) {
   if (!homepageSource.includes(sourceContract) && !homepageStyles.includes(sourceContract)) {

@@ -6,7 +6,7 @@ import {
   ShieldCheck,
   TimerReset,
 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import { usePublicPageNavigation } from "./usePublicPageNavigation";
 import benchmarkData from "../../../../benchmark/swe-marathon/data.json";
@@ -67,15 +67,9 @@ function HorizonDiagram({ language }: Readonly<{ language: Language }>) {
 }
 
 export function SweMarathonBrief() {
-  const [language, setLanguage] = usePublicPageNavigation();
+  const [language, setLanguage] = usePublicPageNavigation("sweMarathon");
   const c = copy[language];
   const basePath = import.meta.env.BASE_URL;
-
-  useEffect(() => {
-    document.title = language === "zh"
-      ? "LoopX × SWE-Marathon：持续自我验证"
-      : "LoopX × SWE-Marathon: Continued self-verification";
-  }, [language]);
 
   const summaries = useMemo(
     () =>
@@ -98,7 +92,7 @@ export function SweMarathonBrief() {
             <button aria-pressed={language === "en"} className={language === "en" ? "is-active" : ""} onClick={() => setLanguage("en")} type="button">EN</button>
             <button aria-pressed={language === "zh"} className={language === "zh" ? "is-active" : ""} onClick={() => setLanguage("zh")} type="button">中文</button>
           </div>
-          <a href={repositoryStudyUrl} target="_blank" rel="noreferrer">
+          <a href={repositoryStudyUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
             {c.source} <ExternalLink size={13} />
           </a>
         </div>
@@ -122,7 +116,7 @@ export function SweMarathonBrief() {
               <p className="bm-contributors">
                 <span>{c.contributorsLabel}</span>
                 {researchContributors.map((contributor) => (
-                  <a href={contributor.href} key={contributor.handle} rel="noreferrer" target="_blank">
+                  <a href={contributor.href} key={contributor.handle} rel="noopener" referrerPolicy="strict-origin-when-cross-origin" target="_blank">
                     @{contributor.handle}<ExternalLink aria-hidden="true" size={11} />
                   </a>
                 ))}
@@ -260,7 +254,7 @@ export function SweMarathonBrief() {
           </div>
           <div className="bm-source-list">
             {c.sourceItems.map(([title, body, href], index) => (
-              <a href={href} target="_blank" rel="noreferrer" key={title}>
+              <a href={href} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin" key={title}>
                 <span>0{index + 1}</span><div><strong>{title}</strong><p>{body}</p></div><ExternalLink size={15} />
               </a>
             ))}

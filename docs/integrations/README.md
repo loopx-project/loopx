@@ -1,8 +1,14 @@
+---
+title: "LoopX integrations for AI agent runtimes"
+description: "Connect LoopX to Codex, Claude Code, DeepSeek Harness and other agent hosts. Find runtime connectors, worker bridges and collaboration integrations."
+---
+
 # Integrations
 
 Integrations connect LoopX to agent hosts, runtimes, collaboration surfaces,
 and external systems while preserving one control-plane authority.
 
+- [Codex, Claude Code and DeepSeek Harness setup](../guides/long-running-coding-agents.md)
 - [Integration guide](../integration.md)
 - [Runtime connector catalog](runtime-connector-catalog.md)
 - [DeepSeek Harness connector](deepseek-harness-connector.md)
