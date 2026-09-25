@@ -110,6 +110,16 @@ export type WorkspaceGoal = {
   repository?: WorkspaceRepositoryContext;
   state: WorkspaceGoalState;
   subagentExecution?: WorkspaceGoalSubagentConfiguration;
+  nativeChildActivity?: {
+    turn_instance_id: string;
+    observation: "unknown" | "coordinator_reported";
+    host_attested: false;
+    launched_count: number;
+    skipped_count: number;
+    capacity_rejected_count: number;
+    host_failed_count: number;
+    parent_accepted_count: number;
+  } | null;
   title: string;
   usage?: WorkspaceGoalUsage | null;
 };

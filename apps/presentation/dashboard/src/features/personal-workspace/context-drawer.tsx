@@ -736,6 +736,18 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <button className="personal-secondary-action" onClick={() => callbacks.onRequestScheduleConfig?.("heartbeat", selection.item.goalId)} type="button"><Radio size={16} />{t("drawer.setupHeartbeat")}</button>
               <button className="personal-secondary-action" onClick={() => callbacks.onRequestScheduleConfig?.("monitor", selection.item.goalId)} type="button"><CalendarClock size={16} />{t("drawer.scheduleAdd")}</button>
             </div> : null}
+            {selection.item.nativeChildActivity?.observation === "coordinator_reported" ? (
+              <section className="personal-detail-card personal-native-child-activity">
+                <h3>{t("drawer.subagentReportTitle")}</h3>
+                <p>{t("drawer.subagentReportedActivity", {
+                  started: selection.item.nativeChildActivity.launched_count,
+                  skipped: selection.item.nativeChildActivity.skipped_count,
+                  rejected: selection.item.nativeChildActivity.capacity_rejected_count,
+                  failed: selection.item.nativeChildActivity.host_failed_count,
+                  accepted: selection.item.nativeChildActivity.parent_accepted_count,
+                })}</p>
+              </section>
+            ) : null}
             {selection.item.subagentExecution ? <section className="personal-detail-card personal-goal-subagents">
               <div className="personal-subagent-heading">
                 <div>
