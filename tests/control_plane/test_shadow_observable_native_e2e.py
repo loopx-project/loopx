@@ -179,4 +179,4 @@ print(json.dumps({'events':len(store.load())}))
     assert len(log.read_text().splitlines()) > 1
     if w.mode == 'enabled':
         result = w.call('coordination-shadow', 'qualify')
-        assert result['ok'] is False and result.get('error') == 'event_log_writer_not_bound', result
+        assert result['ok'] is False and result['qualification']['parity_matches'] is False, result

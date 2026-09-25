@@ -7,6 +7,7 @@ from loopx.event_sourced_state import (
     AppendOnlyStateEventStore,
     StateEventError,
     build_state_projection,
+    parse_state_event_log,
     render_active_state_sections,
 )
 
@@ -54,6 +55,7 @@ def active_state_event_projection_fields(
     rollout_events: list[dict[str, Any]] | None = None,
     item_limit: int | None = None,
     event_log_basename: str = DEFAULT_STATE_EVENT_LOG_BASENAME,
+    event_log_texts: dict[Path, str | None] | None = None,
 ) -> dict[str, Any]:
     goal_id = str(goal.get("id") or "").strip()
     first_warning: dict[str, Any] | None = None
@@ -63,10 +65,13 @@ def active_state_event_projection_fields(
         resolve_goal_local_path=resolve_goal_local_path,
         event_log_basename=event_log_basename,
     ):
-        if not event_log_path.exists():
-            continue
         try:
-            events = AppendOnlyStateEventStore(event_log_path).load()
+            if event_log_texts is None:
+                events = AppendOnlyStateEventStore(event_log_path).load()
+            else:
+                # Missing keys are a broken snapshot, never a disk fallback.
+                text = event_log_texts[event_log_path.resolve()]
+                events = parse_state_event_log(text or "")
             if not events:
                 continue
             projection = build_state_projection(events, goal_id=goal_id or None)
@@ -80,6 +85,8 @@ def active_state_event_projection_fields(
                 item_limit=item_limit,
             )
         except (OSError, StateEventError) as exc:
+            if event_log_texts is not None:
+                raise  # A transaction snapshot cannot silently change source.
             if first_warning is None:
                 first_warning = {
                     "state_event_projection_warning": {

@@ -1794,16 +1794,9 @@ def complete_goal_todo(
                     task_lease_fence,
                     committed=bool(event_result.get("changed")) and not dry_run,
                 )
-                # This branch can append multiple state-log events inside the
-                # event writer. Capturing after that call would be observation,
-                # not a transaction-bound prepare/commit pair. Keep the gap
-                # explicit until the event writer owns the outbox boundary.
-                shadow_capture.skip("event_log_writer_not_bound")
-                return settle_todo_runtime_shadow_capture(
-                    event_result, registry_path=registry_path,
-                    runtime_root=shadow_runtime_root, goal_id=goal_id,
-                    capture=shadow_capture,
-                )
+                # The event store prepares and commits inside its source lock.
+                # Drain remains a separate operation after these primary locks.
+                return event_result
         if not isinstance(completion_state, dict):
             raise RuntimeError(
                 "TypeScript Todo completion transaction did not authorize a commit"

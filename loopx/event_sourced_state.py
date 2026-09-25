@@ -5,10 +5,13 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .control_plane.goals.state_event_writer import StateEventWriteContext
 
 from .control_plane.runtime.time import now_utc_iso as runtime_now_utc_iso
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_cross_runtime_file_lock
 from .control_plane.todos.contract import (
     TODO_MONITOR_METADATA_FIELDS,
     TODO_STATUS_DONE,
@@ -571,22 +574,33 @@ def make_state_event(
     )
 
 
+def parse_state_event_log(text: str) -> list[dict[str, Any]]:
+    """Decode a disk read or frozen transaction snapshot with identical rules."""
+    events = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise StateEventError(f"invalid JSONL at line {line_number}: {exc}") from exc
+        events.append(normalize_state_event(raw))
+    return _dedupe_events(events)
+
+
 @dataclass
 class AppendOnlyStateEventStore:
     path: Path
+    write_context: StateEventWriteContext | None = None
+
+    def __post_init__(self) -> None:
+        if self.write_context is not None:
+            # Publish to the same physical source that the binding and lock
+            # name, rather than replacing a caller's symlink itself.
+            self.path = self.path.expanduser().resolve()
 
     def load(self) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
-        if self.path.exists():
-            for line_number, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), start=1):
-                if not line.strip():
-                    continue
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise StateEventError(f"invalid JSONL at line {line_number}: {exc}") from exc
-                events.append(normalize_state_event(raw))
-        return _dedupe_events(events)
+        return parse_state_event_log(self.path.read_text(encoding="utf-8") if self.path.exists() else "")
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         return self.append_many((event,))[0]
@@ -620,6 +634,8 @@ class AppendOnlyStateEventStore:
         normalized = [
             normalize_state_event(event, append_sequence=1) for event in events
         ]
+        if self.write_context is not None and any(item["goal_id"] != self.write_context.goal_id for item in normalized):
+            raise StateEventError("event goal differs from the managed writer goal")
         requested_ids = {item["event_id"] for item in normalized}
 
         def identity(item: dict[str, Any]) -> dict[str, Any]:
@@ -630,7 +646,8 @@ class AppendOnlyStateEventStore:
                 ).hexdigest(),
             }
 
-        with exclusive_file_lock(self.path):
+        transaction = self.write_context.transaction(self.path) if self.write_context else exclusive_cross_runtime_file_lock(self.path)
+        with transaction:
             stored = self.load()
             existing = {item["event_id"]: item for item in stored}
             plan = effect_runtime_result(
@@ -696,12 +713,17 @@ class AppendOnlyStateEventStore:
                     json.dumps(item, sort_keys=True, ensure_ascii=False) + "\n"
                     for item in additions
                 )
+                planned_text = prior_text + separator + suffix
+                if self.write_context is not None:
+                    self.write_context.prepare(self.path, prior_text, planned_text)
                 try:
-                    atomic_write_state_text(self.path, prior_text + separator + suffix)
+                    atomic_write_state_text(self.path, planned_text)
                 except OSError as error:
                     raise StateEventCommitUnknownError(
                         "event append outcome uncertain; read back the event stream before retrying the original operation"
                     ) from error
+                if self.write_context is not None:
+                    self.write_context.committed()
             else:
                 # A prior replace may have succeeded before directory fsync
                 # failed. Exact replay must establish durability, not just see it.

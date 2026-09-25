@@ -96,7 +96,7 @@ GROWTH_TEXT_TEMPLATE = "Growth workload todo %02d " + "x" * 160
 # byte delta may grow by about one Todo record per transaction. A larger jump
 # means something beyond the live projection is being re-published.
 GROWTH_DELTA_ACCELERATION_ENVELOPE_BYTES = 2048
-EVENT_ONLY_HOLD = "event_log_writer_not_bound"
+EVENT_ONLY_HOLD = "source_drift"
 CONTINUITY_HOLD = "source_partition_continuity_unproved"
 SHADOW_READ_MODULE = Path("loopx") / "control_plane" / "coordination" / "local_authority_shadow.ts"
 SHADOW_READ_REQUEST_SCHEMA = "loopx_coordination_runtime_shadow_outbox_read_v0"
@@ -946,7 +946,8 @@ def row_event_only_todo_source_holds(context: RowContext) -> RowOutcome:
     log_bytes = log.read_bytes()
     surfaces = {"inspect": inspect(workspace), "qualify": qualify(workspace), "read-candidate": read_candidate(workspace, todo_ids[0])}
     for label, payload in surfaces.items():
-        expect(payload.get("ok") is False and payload.get("error") == EVENT_ONLY_HOLD, f"{label} must hold on the unbound event source")
+        surface = payload.get({"inspect": "inspection", "qualify": "qualification", "read-candidate": "read_candidate"}[label])
+        expect(isinstance(surface, dict) and surface.get("parity_matches") is False, f"{label} must reject uncaptured event source drift")
     status = shadow_status(workspace)
     expect(status.get("ok") is True and management_status(status) == "active", "status must stay readable while the lineage is held")
     during = add_todo(workspace, "Markdown write during the event-only hold.")

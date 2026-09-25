@@ -165,6 +165,7 @@ def todo_partition_projector(
     *,
     state_path: Path,
     rollout_events: list[dict[str, Any]] | None = None,
+    event_fields: dict[str, Any] | None = None,
 ) -> outbox.TodoPartitionProjector:
     """Production projector: parse active-state text into the todos partition."""
 
@@ -182,6 +183,7 @@ def todo_partition_projector(
                 state_text=state_text,
                 state_path=state_path,
                 rollout_events=events,
+                event_fields=event_fields,
             ), state_text),
         )
 

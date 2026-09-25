@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
 import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import {
-  canonicalAuthorityBytes, canonicalAuthorityObject, canonicalAuthoritySha256,
+  canonicalAuthorityBytes, canonicalAuthorityObject, canonicalAuthoritySha256, authorityUnicodeCompare,
   hasExactAuthorityKeys, isAuthorityJsonObject, requireAuthorityStoreId,
 } from "./authority_store_codec.ts";
 import { FileAuthorityStore } from "./file_authority_store.ts";
@@ -168,7 +168,7 @@ export async function requireShadowCaptureBinding(root: string, goal: string): P
 /** Read the source path established by this active bootstrap. The caller owns
  * exclusion; this helper takes no locks and never creates or repairs files.
  */
-export async function readShadowBootstrapSourcePath(root: string, goal: string, binding: ShadowCaptureBinding): Promise<string> {
+export async function readShadowBootstrapSourceSnapshot(root: string, goal: string, binding: ShadowCaptureBinding): Promise<JsonObject> {
   const state = await readShadowManagementState(root, goal);
   if (!state || state.status === "inactive") throw new ShadowManagementError("bootstrap_required");
   if (state.status !== "active") throw new ShadowManagementError("shadow_management_in_progress");
@@ -194,7 +194,11 @@ export async function readShadowBootstrapSourcePath(root: string, goal: string, 
   if (!text(path) || !isAbsolute(path) || path.includes("\0")) return invalid();
   const current = await readShadowManagementState(root, goal);
   if (!same(current, state)) throw new ShadowManagementError("stale_generation");
-  return path;
+  return request.source_snapshot;
+}
+
+export async function readShadowBootstrapSourcePath(root: string, goal: string, binding: ShadowCaptureBinding): Promise<string> {
+  return String((await readShadowBootstrapSourceSnapshot(root, goal, binding)).state_path);
 }
 
 interface ManagementRequest extends JsonObject { runtime_root: string; goal_id: string; operation_id: string }
@@ -639,4 +643,13 @@ export async function rollbackManagedShadow(value: unknown, dependencies: Shadow
       });
     });
   } catch (error) { return failure(error); }
+}
+
+/** Paths frozen by a bootstrap, in the common multi-source lock order. */
+export function shadowEventSourcePaths(snapshot: JsonObject): string[] {
+  const paths = snapshot.event_log_paths ?? [];
+  if (!Array.isArray(paths) || paths.some(path => typeof path !== "string" ||
+      !isAbsolute(path) || resolve(path) !== path || path.includes("\0") || path === snapshot.state_path) ||
+      new Set(paths).size !== paths.length) throw new ShadowManagementError("event_source_binding_invalid");
+  return (paths as string[]).slice().sort(authorityUnicodeCompare);
 }

@@ -452,6 +452,12 @@ def list_entries(
     return sorted(entries, key=lambda entry: entry.seq)
 
 
+def require_source_recovered(directory: Path) -> None:
+    """A later write must preserve an unresolved transaction's byte witness."""
+    if any(entry.committed_path is None for entry in list_entries(directory)):
+        raise OutboxError("source_recovery_required", "drain the unresolved source transaction before writing")
+
+
 def cursor_path(directory: Path) -> Path:
     return directory / "drain-cursor.json"
 
@@ -829,11 +835,12 @@ class TodoPartitionCapture:
             "error_class": error.__class__.__name__,
         }
 
-    def prepare(self, new_text: str, *, event_id: str | None = None) -> None:
+    def prepare(self, new_text: str, *, event_id: str | None = None,
+                event_log_path: Path | None = None, previous_exists: bool = True) -> None:
         """Record the prepared entry for the bytes about to be written.
 
-        Event-only writers have no source-owned outbox transaction and return
-        an explicit hold without creating an entry.
+        Event batches carry their bound log path; an event id alone is not a
+        source transaction proof and retains the compatibility hold.
         """
 
         if not self.enabled or self._directory is None or self._runtime_root is None:
@@ -848,10 +855,13 @@ class TodoPartitionCapture:
         binding = binding_view["binding"]
         self._lineage_id = str(binding["capture_lineage_id"])
         source_root_digest = str(binding["source_root_digest"])
-        if event_id is not None:
+        if event_id is not None and event_log_path is None:
             self.outcome.skipped_reason = "event_log_writer_not_bound"
             return
         try:
+            # A later write must not erase the byte witness of an interrupted
+            # transaction, including when this write leaves Todos unchanged.
+            require_source_recovered(self._directory)
             projection = self._project(new_text)
             digest = partition_digest(projection)
             previous_digest = partition_digest(self._project(self._original_text))
@@ -860,7 +870,7 @@ class TodoPartitionCapture:
                 return
             source_ref = text_digest(new_text)
             bytes_digest = source_ref
-            source_kind = SOURCE_MARKDOWN
+            source_kind = SOURCE_STATE_EVENT_LOG if event_log_path is not None else SOURCE_MARKDOWN
             seq = next_seq(
                 self._directory, runtime_root=self._runtime_root, goal_id=self._goal_id
             )
@@ -884,11 +894,12 @@ class TodoPartitionCapture:
                 ),
                 source={
                     "kind": source_kind,
-                    "previous_bytes_digest": self._original_digest,
+                    "previous_bytes_digest": self._original_digest if previous_exists else None,
                     "previous_partition_digest": previous_digest,
                     "bytes_digest": bytes_digest,
                     "lease": None,
                     "event_id": event_id,
+                    **({"event_log_path": str(event_log_path.resolve())} if event_log_path is not None else {}),
                 },
                 source_root_digest=source_root_digest,
                 capture_lineage_id=self._lineage_id,
@@ -900,7 +911,7 @@ class TodoPartitionCapture:
                 record,
             )
         except Exception as error:  # noqa: BLE001 - the transaction owner enforces active preparation
-            self._fail("outbox_prepare_failed", error)
+            self._fail(error.reason_code if isinstance(error, OutboxError) else "outbox_prepare_failed", error)
             return
         self._seq = seq
         self._entry_id = entry_id

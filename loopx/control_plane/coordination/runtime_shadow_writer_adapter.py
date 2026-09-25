@@ -115,6 +115,9 @@ def require_runtime_shadow_capture_prepared(
     """Active lineage cannot admit a primary transition without durable preparation."""
 
     if capture.outcome.failure is not None and require_shadow_primary_write_allowed(runtime_root, goal_id) is not None:
+        if capture.outcome.failure.get("reason_code") == "source_recovery_required":
+            raise ShadowManagementError("source_recovery_required",
+                f"drain the unresolved source transaction with `loopx authority-shadow drain --goal-id {goal_id}` before retrying; primary bytes were not changed")
         raise ShadowManagementError(
             "shadow_capture_prepare_failed",
             "durable shadow preparation failed; the primary state was not changed",

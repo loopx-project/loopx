@@ -1,14 +1,14 @@
 /** Exact outbox bytes and primary-lock evidence for source transaction recovery.
  * No provider opening, candidate mutation or cleanup belongs to this owner. */
 import {createHash} from "node:crypto";
-import {readFile, readdir} from "node:fs/promises";
-import {join} from "node:path";
+import {readFile, readdir, open} from "node:fs/promises";
+import {join, dirname} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {withFileMutationLock} from "../effect_runtime_io.ts";
 import {EffectRuntimeLockTimeoutError} from "../effect_runtime_errors.ts";
 import {authorityUnicodeCompare, canonicalAuthorityBytes, hasExactAuthorityKeys} from "./authority_store_codec.ts";
-import {readShadowBootstrapSourcePath, requireShadowCaptureBinding} from "./shadow_management.ts";
+import {readShadowBootstrapSourcePath, readShadowBootstrapSourceSnapshot, shadowEventSourcePaths, requireShadowCaptureBinding} from "./shadow_management.ts";
 import {OUTBOX_ENTRY_FILE_PATTERN, ShadowLineageError} from "./local_authority_shadow_identity.ts";
 import {legacyCoordinationTodoLockPath, taskLeaseLockPath} from "./legacy_writer_lock_paths.ts";
 import type {CommitEntryRequest, ShadowPartition} from "./local_authority_shadow.ts";
@@ -86,6 +86,10 @@ export async function withMarkerlessSourceProof<T>(
   operation: () => Promise<T>,
   resolutionPolicy: "assert_recorded" | "derive_from_source",
 ): Promise<T> {
+  if (request.entry.source.kind === "state_event_log") {
+    const snapshot = await readShadowBootstrapSourceSnapshot(request.runtime_root, request.goal_id, binding);
+    requireLineage(shadowEventSourcePaths(snapshot).includes(request.entry.source.event_log_path), "event_source_binding_invalid");
+  }
   if (request.entry.committed_sha256 !== null) return await operation();
   const entry = request.entry;
   const proveAndCommit = async (sourcePath: string): Promise<T> => {
@@ -118,6 +122,16 @@ export async function withMarkerlessSourceProof<T>(
     const expected = entry.resolution === "abandoned" ? entry.source.previous_bytes_digest : entry.source.bytes_digest;
     requireLineage((entry.resolution === "abandoned" || entry.resolution === "committed_proven_by_readback") &&
       digest === expected, "source_transaction_unproved");
+    if (entry.source.kind === "state_event_log" && source !== null) {
+      // Replace may have landed before a failed fsync. A readback is not yet
+      // durable evidence: establish it before the candidate can acknowledge it.
+      const file = await open(sourcePath, "r");
+      try { await file.sync(); } finally { await file.close(); }
+      if (process.platform !== "win32") {
+        const directory = await open(dirname(sourcePath), "r");
+        try { await directory.sync(); } finally { await directory.close(); }
+      }
+    }
     return await operation();
   };
   // Do not wait behind a primary writer while holding maintenance exclusion.
@@ -125,8 +139,10 @@ export async function withMarkerlessSourceProof<T>(
   try {
     if (entry.partition === "todos") {
       const statePath = await readShadowBootstrapSourcePath(request.runtime_root, request.goal_id, binding);
+      const sourcePath = entry.source.kind === "state_event_log" ? entry.source.event_log_path : statePath;
       return await withFileMutationLock(legacyCoordinationTodoLockPath(request.runtime_root, request.goal_id), () =>
-        withFileMutationLock(statePath, () => proveAndCommit(statePath), timeout), timeout);
+        withFileMutationLock(statePath, () => sourcePath === statePath ? proveAndCommit(statePath) :
+          withFileMutationLock(sourcePath, () => proveAndCommit(sourcePath), timeout), timeout), timeout);
     }
     const todoId = entry.source.lease?.todo_id;
     requireLineage(typeof todoId === "string" && /^[A-Za-z0-9_.-]+$/.test(todoId) && todoId !== "." && todoId !== "..",

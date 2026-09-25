@@ -242,6 +242,11 @@ def handle_supervisor_control_command(
             renderer = render_supervisor_observation_markdown
         else:
             log_path = supervisor_event_log_path(runtime_root, args.goal_id)
+            from ..state_refresh import resolve_goal_state
+            from ..control_plane.goals.state_event_writer import StateEventWriteContext
+            _, _, state_path = resolve_goal_state(registry=registry, goal_id=args.goal_id,
+                project_override=None, state_file_override=None)
+            write_context = StateEventWriteContext(agent_registry_path, runtime_root, args.goal_id, state_path)
             if args.supervisor_event_action == "list":
                 if args.execute or args.decision_json or args.receipt_json:
                     raise ValueError("list does not accept event JSON or --execute")
@@ -256,6 +261,7 @@ def handle_supervisor_control_command(
                     supervisor=supervisor,
                     decision=decision,
                     execute=bool(args.execute),
+                    write_context=write_context,
                 )
             else:
                 if not args.receipt_json or args.decision_json:
@@ -266,6 +272,7 @@ def handle_supervisor_control_command(
                     goal_id=args.goal_id,
                     receipt=receipt,
                     execute=bool(args.execute),
+                    write_context=write_context,
                 )
             payload.setdefault("goal_id", args.goal_id)
             payload.setdefault("supervisor_agent_id", agent_id)

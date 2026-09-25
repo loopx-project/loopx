@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..goals.state_event_writer import StateEventWriteContext
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -88,6 +90,7 @@ def execute_supervisor_inject(
     authority_ref: str,
     adapter: SupervisorInjectHostAdapter,
     execute: bool,
+    write_context: StateEventWriteContext | None = None,
 ) -> dict:
     """Preview or execute one proposal through an explicitly supplied host adapter."""
 
@@ -169,6 +172,11 @@ def execute_supervisor_inject(
             "projection": projection,
         }
 
+    if write_context is not None:
+        # Admission precedes host execution. This is not an exactly-once claim
+        # for the separate external-effect interval.
+        with write_context.transaction(log_path):
+            pass
     result = adapter.inject(request)
     if not isinstance(result, SupervisorInjectResult):
         raise ValueError("inject adapter must return SupervisorInjectResult")
@@ -189,6 +197,7 @@ def execute_supervisor_inject(
         receipt=receipt_payload,
         host_capabilities=capabilities,
         execute=True,
+        write_context=write_context,
     )
     return {
         "ok": True,

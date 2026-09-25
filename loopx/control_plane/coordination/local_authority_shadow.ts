@@ -135,14 +135,16 @@ interface ShadowEntryWriter {
   operation_id: string | null;
 }
 
-interface ShadowEntrySource {
+type ShadowEntrySource = {
   previous_partition_digest: string;
-  kind: (typeof SOURCE_KINDS)[number];
   previous_bytes_digest: string | null;
   bytes_digest: string | null;
   lease: JsonObject | null;
   event_id: string | null;
-}
+} & (
+  | {kind: "state_event_log"; event_log_path: string}
+  | {kind: "markdown_active_state" | "task_lease_record"; event_log_path?: never}
+);
 
 interface ShadowEntry {
   prepared_sha256: string;
@@ -243,7 +245,14 @@ function decodeEntry(value: unknown): ShadowEntry {
   const writer = requireJsonObject(raw.writer, "entry.writer");
   const source = requireJsonObject(raw.source, "entry.source");
   rejectUnexpectedFields(writer, new Set(["runtime", "write_class", "operation_id"]), "entry.writer");
-  rejectUnexpectedFields(source, new Set(["kind", "previous_bytes_digest", "previous_partition_digest", "bytes_digest", "lease", "event_id"]), "entry.source");
+  rejectUnexpectedFields(source, new Set(["kind", "previous_bytes_digest", "previous_partition_digest", "bytes_digest", "lease", "event_id", "event_log_path"]), "entry.source");
+  const kind = requireStringLiteral(source.kind, SOURCE_KINDS, "entry.source.kind");
+  if (kind !== "state_event_log" && source.event_log_path !== undefined) {
+    throw new EffectRuntimeRequestError("only an event source can carry event_log_path");
+  }
+  const sourceIdentity = kind === "state_event_log"
+    ? {kind, event_log_path: requireNonEmptyString(source.event_log_path, "event_log_path")}
+    : {kind};
   const lease = source.lease === null || source.lease === undefined
     ? null
     : requireJsonObject(source.lease, "entry.source.lease");
@@ -262,7 +271,7 @@ function decodeEntry(value: unknown): ShadowEntry {
     source: {
       previous_partition_digest: optionalDigest(source.previous_partition_digest, "entry.source.previous_partition_digest") ??
         (() => { throw new Error("previous_partition_digest is required"); })(),
-      kind: requireStringLiteral(source.kind, SOURCE_KINDS, "entry.source.kind"),
+      ...sourceIdentity,
       previous_bytes_digest: optionalDigest(
         source.previous_bytes_digest,
         "entry.source.previous_bytes_digest",
@@ -506,6 +515,7 @@ function transactionReceipt(request: CommitEntryRequest, noOp: boolean): JsonObj
     source_previous_bytes_digest: entry.source.previous_bytes_digest,
     source_previous_partition_digest: entry.source.previous_partition_digest,
     source_event_id: entry.source.event_id,
+    ...(entry.source.event_log_path === undefined ? {} : {source_event_log_path: entry.source.event_log_path}),
     source_lease: entry.source.lease,
     source_root_digest: entry.source_root_digest,
     partition_digest: request.partition_digest,
@@ -675,8 +685,7 @@ function validateEntryIdentity(request: CommitEntryRequest, binding: ShadowLinea
     ),
       "partition_digest_mismatch");
   }
-  requireLineage(entry.source.kind !== "state_event_log", "event_log_writer_not_bound");
-  requireLineage(entry.source.kind === (entry.partition === "todos" ? "markdown_active_state" : "task_lease_record"),
+  requireLineage(entry.partition === "todos" ? ["markdown_active_state", "state_event_log"].includes(entry.source.kind) : entry.source.kind === "task_lease_record",
     "entry_source_partition_mismatch");
   requireLineage(entry.resolution !== "unproved" && entry.resolution !== "seed", "source_transaction_unproved");
 }
@@ -790,7 +799,8 @@ export async function loadValidatedShadowLineage(
         writer: { runtime: receipt.writer_runtime, write_class: receipt.write_class, operation_id: receipt.writer_operation_id },
         source: { kind: receipt.source_kind, bytes_digest: receipt.source_bytes_digest,
           previous_partition_digest: receipt.source_previous_partition_digest,
-          previous_bytes_digest: receipt.source_previous_bytes_digest, event_id: receipt.source_event_id, lease: receipt.source_lease },
+          previous_bytes_digest: receipt.source_previous_bytes_digest, event_id: receipt.source_event_id, lease: receipt.source_lease,
+          ...(receipt.source_event_log_path === undefined ? {} : {event_log_path: receipt.source_event_log_path}) },
         source_root_digest: receipt.source_root_digest, prepared_at: receipt.prepared_at,
         committed_at: receipt.committed_at, resolution: receipt.resolution,
       }),
