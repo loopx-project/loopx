@@ -1,4 +1,5 @@
 import { Bot, Eye, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { GoalActivityChip } from "./goal-activity-view";
 
 import { localizedGoalState, useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
@@ -135,7 +136,7 @@ export function ChannelHeader({
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
         <h1>{selectedGoal?.title ?? t("header.manager")}</h1>
-        {selectedGoal && !selectedGoal.loadState && !["安静运行", "推进中"].includes(selectedGoal.state) ? <p>{localizedGoalState(selectedGoal.state, locale)}</p> : null}
+        {selectedGoal && !selectedGoal.loadState ? <p className="personal-channel-activity"><GoalActivityChip goal={selectedGoal} /></p> : null}
         {!selectedGoal && managerChannelBinding ? (
           <p className="personal-manager-execution">
             <span className={managerExecutionUnavailable ? "personal-execution-chip is-unavailable" : "personal-execution-chip"}>

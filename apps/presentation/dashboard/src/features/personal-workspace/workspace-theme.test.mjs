@@ -27,7 +27,7 @@ assert.match(styles, /--pw-bg: #fafafa/, "LoopX standard uses the design-system 
 assert.match(styles, /--pw-text: #171717/, "LoopX standard uses the design-system ink");
 assert.match(styles, /--pw-line: #ebebeb/, "LoopX standard uses the design-system hairline");
 assert.ok(styles.includes('.personal-home-lanes { gap: 0; border-block: 1px solid #ebebeb'), "LoopX standard uses continuous lane dividers");
-assert.ok(styles.includes('.personal-goal-row:nth-child(n) .personal-goal-state-dot'), "LoopX standard removes decorative Goal tile colors");
+assert.ok(styles.includes('[data-pw-theme="loopx"] .personal-goal-mark { border: 1px solid #ebebeb; border-radius: 8px; background: #fff; color: #171717; }'), "LoopX standard removes decorative Goal tile colors");
 assert.match(styles, /personal-home-goal-card { border-radius: 12px/, "LoopX standard uses the card radius for Goal cards");
 assert.match(styles, /personal-channel-composer { border-radius: 6px/, "LoopX standard uses the control radius for the composer");
 assert.match(styles, /personal-channel-composer > button,[\s\S]*background: #171717/, "LoopX standard uses an ink command button");

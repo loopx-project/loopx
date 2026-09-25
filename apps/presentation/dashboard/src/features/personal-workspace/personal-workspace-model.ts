@@ -4,11 +4,12 @@ import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/pre
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError } from "../../data/workspace-progressive-status";
+import type { WorkspaceGoalExecution } from "./goal-activity";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
   | "等待条件"
-  | "推进中"
+  | "已安排"
   | "安静运行"
   | "已完成"
   | "已停止";
@@ -102,6 +103,7 @@ export type WorkspaceGoal = {
   agentTodos: WorkspaceAgentTodo[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
+  execution?: WorkspaceGoalExecution;
   goalId: string;
   latestActivity?: string;
   needsYou?: string | null;
@@ -489,7 +491,7 @@ export function workspaceSessionStatusLabel(status?: string): string {
 
 /** A quiet persistent conversation must not masquerade as waiting work. */
 export function goalHasExecutionSummary(goal: Pick<WorkspaceGoal, "state">): boolean {
-  return ["推进中", "需修复", "等待条件"].includes(goal.state);
+  return ["已安排", "需修复", "等待条件"].includes(goal.state);
 }
 
 /**
@@ -500,7 +502,7 @@ export function workspaceHomeLaneForGoal(goal: WorkspaceGoal): WorkspaceHomeLane
   if (goal.activationState === "stopped" || goal.state === "已停止") return "stopped";
   if (goal.state === "已完成") return "history";
   if (goal.needsYou || goal.state === "等你") return "needs_you";
-  if (goal.state === "推进中" || goal.state === "需修复") return "running";
+  if (goal.execution?.kind === "running" || goal.state === "需修复") return "running";
   if (goal.state === "安静运行") return "observing";
   return "scheduled";
 }

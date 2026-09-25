@@ -3,19 +3,17 @@ import { useState } from "react";
 import { DesktopUpdate } from "./desktop-update";
 import { useGoalOrder } from "./use-goal-order";
 
-import { localizedGoalState, useWorkspaceI18n } from "./i18n";
+import { GoalIdentityMark, useGoalActivity } from "./goal-activity-view";
+import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceGoal, WorkspaceGoalArchiveLoadState } from "./personal-workspace-model";
 import { StatusSourceSwitcher, type StatusSourceControl } from "./status-source-switcher";
 
-const goalStateClass: Record<WorkspaceGoal["state"], string> = {
-  "需修复": "is-danger",
-  "等你": "is-warning",
-  "等待条件": "is-info",
-  "推进中": "is-success",
-  "安静运行": "is-quiet",
-  "已完成": "is-quiet",
-  "已停止": "is-stopped",
-};
+function GoalRowActivity({ goal, showLoad }: { goal: WorkspaceGoal; showLoad: boolean }) {
+  const { t } = useWorkspaceI18n();
+  const activity = useGoalActivity(goal);
+  if (goal.loadState && showLoad) return <small>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</small>;
+  return <small className={`is-${activity.tone}`}>{activity.text}</small>;
+}
 
 export function GoalSidebar({
   attentionCount,
@@ -44,7 +42,7 @@ export function GoalSidebar({
   selectedGoalId: string | null;
   statusSourceControl?: StatusSourceControl;
 }) {
-  const { locale, t } = useWorkspaceI18n();
+  const { t } = useWorkspaceI18n();
   const [sorting, setSorting] = useState(false);
   const ordering = useGoalOrder(goals.filter((goal) => goal.activationState !== "stopped"), statusSourceControl?.activeSource.statusUrl ?? "/status.json");
   const activeGoals = ordering.sorted;
@@ -63,10 +61,10 @@ export function GoalSidebar({
         onClick={() => onSelectGoal(goal.goalId)}
         type="button"
       >
-        <span className={`personal-goal-state-dot ${goal.loadState ? "" : goalStateClass[goal.state]}`} />
+        <GoalIdentityMark goal={goal} />
         <span className="personal-goal-link-copy">
           <strong>{goal.title}</strong>
-          <small>{(goal.loadState && (!stopped || selectedGoalId === goal.goalId) ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : localizedGoalState(goal.state, locale))}{goal.needsYou && !stopped ? ` · ${t("home.lane.needsYou")}` : ""}</small>
+          <GoalRowActivity goal={goal} showLoad={!stopped || selectedGoalId === goal.goalId} />
         </span>
         <ChevronRight size={15} />
       </button>

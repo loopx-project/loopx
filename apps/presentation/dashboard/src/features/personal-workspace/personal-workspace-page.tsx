@@ -61,6 +61,7 @@ import type {
 } from "./personal-workspace-model";
 import { goalHasExecutionSummary, goalTitleFor, workspaceHomeLaneForGoal } from "./personal-workspace-model";
 import { WorkspaceActionForm, type WorkspaceActionDraft } from "./workspace-action-form";
+import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
 import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
 import { WorkspaceShell } from "./workspace-shell";
@@ -116,12 +117,12 @@ function ManagerHomeBoard({
   });
   const goalCard = (goal: WorkspaceGoal) => (
     <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
-      <strong>{goal.title}</strong>
+      <span className="personal-home-goal-title"><GoalIdentityMark goal={goal} /><strong>{goal.title}</strong></span>
       <span className="personal-home-goal-meta">{goal.agentLaneCount && goal.agentLaneCount > 1
         ? t("header.workAgentCount", { count: goal.agentLaneCount })
         : goal.agentLabel ?? goal.agentId}</span>
       <p>{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.needsYou ?? goal.nextSentence}</p>
-      <footer><span>{(goal.loadState ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : localizedGoalState(goal.state, locale))}</span><small title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small></footer>
+      <footer>{goal.loadState ? <span>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</span> : <GoalActivityChip goal={goal} />}<small title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small></footer>
     </button>
   );
   return (
@@ -364,7 +365,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
         goalTitle: goal.title,
         latestActivity: goal.agentSentence,
         runId: `goal:${goal.goalId}`,
-        status: "running",
+        status: goal.execution?.kind === "running" ? "running" : "failed",
         title: goal.nextSentence,
         totalSteps: Math.max(
           (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,
@@ -401,7 +402,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
       goalTitle: goal.title,
       latestActivity: goal.agentSentence,
       runId: `goal:${goal.goalId}`,
-      status: goal.state === "推进中" ? "running" : goal.state === "需修复" ? "failed" : "waiting",
+      status: goal.execution?.kind === "running" ? "running" : goal.state === "需修复" ? "failed" : goal.state === "已安排" ? "queued" : "waiting",
       title: goal.nextSentence,
       totalSteps: Math.max(
         (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,

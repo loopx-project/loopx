@@ -115,20 +115,38 @@
 .personal-goal-link-copy strong { font-size: 13px; font-weight: 600; }
 .personal-goal-link-copy small { display: flex; align-items: center; gap: 5px; color: var(--pw-muted); font-size: 11px; }
 
-/* Goal tile: pastel rotation by position; the state dot sits on the corner. */
-.personal-goal-state-dot { position: relative; width: 30px; height: 30px; border-radius: 9px; background: #e8ecf1; }
-.personal-goal-state-dot::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-radius: 50%; background: #9aa3b2; box-shadow: 0 0 0 2px rgb(255 255 255 / 85%); }
-.personal-goal-row:nth-child(5n+1) .personal-goal-state-dot { background: #e3ebfd; }
-.personal-goal-row:nth-child(5n+2) .personal-goal-state-dot { background: #eee7fb; }
-.personal-goal-row:nth-child(5n+3) .personal-goal-state-dot { background: #e2f2e4; }
-.personal-goal-row:nth-child(5n+4) .personal-goal-state-dot { background: #fbf0dc; }
-.personal-goal-row:nth-child(5n) .personal-goal-state-dot { background: #e8ecf1; }
-.personal-goal-state-dot.is-danger::after { background: #dd5b47; }
-.personal-goal-state-dot.is-warning::after { background: #e5a33d; }
-.personal-goal-state-dot.is-info::after { background: #54a5e8; }
-.personal-goal-state-dot.is-success::after { background: #3fae7c; }
-.personal-goal-state-dot.is-quiet::after { background: #b6bcc9; }
-.personal-goal-state-dot.is-stopped::after { background: #8f96a4; }
+/* Goal mark: identity from the Goal itself; the corner dot and ring carry state. */
+@property --pw-orbit { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+@keyframes pw-orbit { to { --pw-orbit: 360deg; } }
+@keyframes pw-live-ping { 0% { transform: scale(1); opacity: .55; } 80%, 100% { transform: scale(2.4); opacity: 0; } }
+.personal-goal-mark { --pw-tone: #a1a1a1; position: relative; display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: hsl(var(--goal-hue) 60% 94%); color: hsl(var(--goal-hue) 45% 32%); }
+.personal-goal-mark.is-lg { width: 36px; height: 36px; border-radius: 10px; }
+.personal-goal-mark-glyph { font-size: 13px; font-weight: 600; line-height: 1; letter-spacing: -.02em; }
+.personal-goal-mark.is-lg .personal-goal-mark-glyph { font-size: 15px; }
+.personal-goal-mark::after { content: ""; position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%; background: var(--pw-tone); box-shadow: 0 0 0 2px var(--pw-card, #fff); }
+.personal-goal-mark.is-running, .personal-goal-activity-chip.is-running { --pw-tone: #0070f3; }
+.personal-goal-mark.is-attention, .personal-goal-activity-chip.is-attention { --pw-tone: #f5a623; }
+.personal-goal-mark.is-danger, .personal-goal-activity-chip.is-danger { --pw-tone: #ee0000; }
+.personal-goal-mark.is-waiting, .personal-goal-activity-chip.is-waiting { --pw-tone: #0070f3; }
+.personal-goal-mark.is-queued, .personal-goal-activity-chip.is-queued { --pw-tone: #8f8f8f; }
+.personal-goal-mark.is-quiet, .personal-goal-activity-chip.is-quiet { --pw-tone: #c7c7c7; }
+.personal-goal-mark.is-stopped, .personal-goal-activity-chip.is-stopped { --pw-tone: #d4d4d4; }
+/* Hollow dots: work exists but nothing is executing it. */
+.personal-goal-mark.is-queued::after, .personal-goal-mark.is-waiting::after { border: 2px solid var(--pw-tone); background: var(--pw-card, #fff); }
+.personal-goal-mark.is-live::before { content: ""; position: absolute; inset: -3px; padding: 2px; border-radius: 12px; background: conic-gradient(from var(--pw-orbit), #007cf0, #00dfd8 28%, transparent 52%, transparent 100%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; animation: pw-orbit 2.6s linear infinite; }
+.personal-goal-mark.is-lg.is-live::before { border-radius: 13px; }
+.personal-goal-link-copy small.is-running { color: var(--pw-text); }
+.personal-goal-link-copy small.is-attention { color: #a35d00; }
+.personal-goal-link-copy small.is-danger { color: var(--pw-red); }
+.personal-goal-activity-chip { --pw-tone: #a1a1a1; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--pw-muted); font-size: 12px; line-height: 16px; }
+.personal-goal-activity-chip > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.personal-goal-activity-dot { position: relative; flex: none; width: 7px; height: 7px; box-sizing: border-box; border-radius: 50%; background: var(--pw-tone); }
+.personal-goal-activity-chip.is-queued .personal-goal-activity-dot, .personal-goal-activity-chip.is-waiting .personal-goal-activity-dot { border: 1.5px solid var(--pw-tone); background: transparent; }
+.personal-goal-activity-chip.is-live { color: var(--pw-text); }
+.personal-goal-activity-chip.is-live .personal-goal-activity-dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--pw-tone); animation: pw-live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+.personal-channel-title p.personal-channel-activity { display: flex; }
+.personal-home-goal-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.personal-home-goal-title strong { overflow: hidden; font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .personal-stopped-goals { margin-top: 14px; padding-top: 8px; border-top: 1px solid var(--pw-line); }
 .personal-stopped-goals > summary { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 34px; padding: 5px 10px; border-radius: 9px; color: var(--pw-muted); cursor: pointer; font-size: 11px; font-weight: 650; letter-spacing: .04em; list-style: none; }
 .personal-stopped-goals > summary::-webkit-details-marker { display: none; }
@@ -271,10 +289,10 @@
 .personal-home-goal-card:hover { border-color: var(--pw-line-strong); transform: translateY(-1px); box-shadow: 0 4px 12px rgb(30 28 20 / 8%); }
 .personal-home-goal-card:focus-visible { outline: 2px solid #7da2ff; outline-offset: 2px; }
 .personal-home-goal-meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--pw-muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.personal-home-goal-card > strong { overflow: hidden; font-size: 13px; line-height: 1.45; text-overflow: ellipsis; }
 .personal-home-goal-card > p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--pw-muted); font-size: 11px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .personal-home-goal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 2px; }
-.personal-home-goal-card > footer span { flex: none; padding: 2px 7px; border-radius: 99px; background: #f2f1ed; color: var(--pw-muted); font-size: 9.5px; }
+.personal-home-goal-card > footer .personal-goal-activity-chip { font-size: 11px; }
+.personal-home-goal-card > footer > span:not(.personal-goal-activity-chip) { flex: none; padding: 2px 7px; border-radius: 99px; background: #f2f1ed; color: var(--pw-muted); font-size: 9.5px; }
 .personal-home-goal-card > footer small { overflow: hidden; color: var(--pw-faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .personal-home-history { border: 1px solid var(--pw-line); border-radius: 13px; background: rgb(255 255 255 / 60%); }
 .personal-home-history > summary { display: flex; align-items: center; gap: 9px; min-height: 44px; padding: 0 14px; cursor: pointer; list-style: none; }
@@ -1369,6 +1387,8 @@
 @media (prefers-reduced-motion: reduce) {
   .personal-timeline-row, .personal-diagnostics-trigger svg, .personal-workspace-sidebar, .personal-stopped-goals > summary > svg:first-child, .personal-subagent-switch > span, .personal-subagent-switch > span::after { transition: none; }
   .personal-goal-lifecycle.is-pending svg { animation: none; }
+  .personal-goal-mark.is-live::before { animation: none; background: linear-gradient(135deg, #007cf0, #00dfd8); }
+  .personal-goal-activity-chip.is-live .personal-goal-activity-dot::after { animation: none; }
   .personal-spin { animation: none; }
 }
 
@@ -1401,7 +1421,7 @@
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-sidebar-section-title { font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-link-copy strong,
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-home-lane > header span,
-.personal-workspace-shell[data-pw-theme="loopx"] .personal-home-goal-card > strong { font-size: 14px; line-height: 20px; font-weight: 600; }
+.personal-workspace-shell[data-pw-theme="loopx"] .personal-home-goal-title strong { font-size: 14px; line-height: 20px; font-weight: 600; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-link-copy small,
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-home-lane > p,
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-home-goal-card > p { font-size: 12px; line-height: 16px; }
@@ -1435,8 +1455,8 @@
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-tabs button[aria-current="page"] { background: transparent; box-shadow: none; color: #171717; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-tabs button[aria-current="page"]::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: #171717; content: ""; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-sidebar-count { background: #f2f2f2; color: #4d4d4d; }
-.personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-state-dot,
-.personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-row:nth-child(n) .personal-goal-state-dot { border: 1px solid #ebebeb; border-radius: 6px; background: #f2f2f2; }
+.personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-mark { border: 1px solid #ebebeb; border-radius: 8px; background: #fff; color: #171717; }
+.personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-mark.is-live::before { inset: -4px; border-radius: 11px; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-agent-select .personal-select-trigger,
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-read-only-source,
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-icon-button,

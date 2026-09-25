@@ -113,6 +113,7 @@ import {
   type WorkspaceActionPreview,
   type WorkspaceActionPreviewRequest,
 } from "../features/personal-workspace/personal-workspace-model";
+import { goalExecutionFromSessions } from "../features/personal-workspace/goal-activity";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
   delete: "删除",
@@ -438,7 +439,7 @@ function buildAgentManagementRows(
   });
 }
 
-type PersonalGoalState = "需修复" | "等你" | "等待条件" | "推进中" | "已完成" | "安静运行" | "已停止";
+type PersonalGoalState = "需修复" | "等你" | "等待条件" | "已安排" | "已完成" | "安静运行" | "已停止";
 
 type PersonalGoalItem = {
   acceptanceObservation?: GoalAcceptanceObservation | null;
@@ -598,7 +599,7 @@ const personalGoalStateVariant: Record<PersonalGoalState, BadgeVariant> = {
   "需修复": "danger",
   "等你": "warning",
   "等待条件": "info",
-  "推进中": "success",
+  "已安排": "info",
   "安静运行": "neutral",
   "已停止": "neutral",
   "已完成": "neutral",
@@ -948,8 +949,9 @@ function personalGoalState(payload: StatusPayload, row: GoalDirectoryRow): Perso
   if (row.waitingOn === "external_evidence") {
     return "等待条件";
   }
+  // Eligibility and open Todos mean work is queued; execution comes from the session owner.
   if (quotaStateForShare(row) === "eligible" || hasOpenAgentTodo) {
-    return "推进中";
+    return "已安排";
   }
   if (isPersonalGoalTerminal(row)) {
     return "已完成";
@@ -967,7 +969,7 @@ function personalAgentSentence(payload: StatusPayload, row: GoalDirectoryRow, st
   if (state === "等你") {
     return agentStatusSentence("needs_you", t);
   }
-  if (state === "推进中") {
+  if (state === "已安排") {
     const todoText = (getShareTodos(row, "agent")?.items ?? [])
       .filter((todo) => !todo.done)
       .flatMap((todo) => [todo.title, todo.text])
@@ -980,8 +982,8 @@ function personalAgentSentence(payload: StatusPayload, row: GoalDirectoryRow, st
     ].map((value) => cleanShareText(value))
       .find((value) => value !== "" && value !== "暂无");
     return progressText
-      ? projectionSentence(progressText, t, "projection.agentAdvancingGoal")
-      : agentStatusSentence("advancing", t);
+      ? projectionSentence(progressText, t, "projection.agentWorkQueued")
+      : agentStatusSentence("queued", t);
   }
   if (state === "等待条件") {
     return agentStatusSentence("waiting_external", t);
@@ -1375,6 +1377,8 @@ function PersonalGoalHome({
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
   const [executionDiscoveryError, setExecutionDiscoveryError] = useState<"partial" | "offline" | null>(null);
   const [executionSessionSnapshots, setExecutionSessionSnapshots] = useState<Record<string, ChatSessionSnapshot>>({});
+  // undefined: not read yet; null: the session owner could not be read.
+  const [goalSessionFacts, setGoalSessionFacts] = useState<ChatSessionSummary[] | null | undefined>(undefined);
   const managerMessageId = useRef(1);
   const proposalId = useRef(1);
   const sessionIds = useRef(new Map<string, string>());
@@ -1828,6 +1832,36 @@ function PersonalGoalHome({
       cancelled = true;
     };
   }, [readOnly, sessionDiscoveryKey, selectedGoal?.goalId]);
+
+  useEffect(() => {
+    if (readOnly) {
+      setGoalSessionFacts(null);
+      return;
+    }
+    let cancelled = false;
+    let timer = 0;
+    let failures = 0;
+    const read = async () => {
+      if (cancelled) return;
+      if (!document.hidden) {
+        try {
+          const listed = await fetchChatSessions({});
+          if (cancelled) return;
+          failures = 0;
+          setGoalSessionFacts(listed.sessions);
+        } catch {
+          failures += 1;
+          if (!cancelled) setGoalSessionFacts(null);
+        }
+      }
+      if (!cancelled) timer = window.setTimeout(() => void read(), document.hidden ? 20_000 : Math.min(60_000, 8_000 * 2 ** Math.min(failures, 3)));
+    };
+    void read();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [readOnly]);
 
   useEffect(() => {
     setExecutionDiscoveryError(null);
@@ -2588,8 +2622,13 @@ function PersonalGoalHome({
     item, statusSourceControl.activeSource.statusUrl,
     sourceIsReady && !progress?.errors[item.goalId], goalTitles.get(item.goalId),
   );
+  const normalizedModel = normalizePersonalHomeModel(model);
   const workspaceModel = {
-    ...normalizePersonalHomeModel(model),
+    ...normalizedModel,
+    goals: goalSessionFacts === undefined ? normalizedModel.goals : normalizedModel.goals.map((goal) => ({
+      ...goal,
+      execution: goalExecutionFromSessions(goalSessionFacts, goal.goalId),
+    })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),
     periodicReports: {

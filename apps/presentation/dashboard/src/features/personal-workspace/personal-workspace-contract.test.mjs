@@ -270,7 +270,7 @@ for (const lane of ["needs_you", "running", "observing", "scheduled", "history"]
   assert.match(model, new RegExp(`"${lane}"`), `Manager home models the ${lane} lane`);
 }
 assert.match(model, /function workspaceHomeLaneForGoal/, "Manager lane projection is centralized and testable");
-assert.match(model, /goal\.state === "推进中" \|\| goal\.state === "需修复"/, "Agent-owned repair work stays in the running lane");
+assert.match(model, /goal\.execution\?\.kind === "running" \|\| goal\.state === "需修复"/, "Only an observed active turn or agent-owned repair work enters the running lane");
 for (const key of ["needsYou", "running", "observing", "scheduled"]) {
   assert.match(page, new RegExp(`home\\.lane\\.${key}`), `Manager home renders localized ${key} lane copy`);
 }
