@@ -60,6 +60,10 @@ from .history import STATUS_NEUTRAL_CLASSIFICATIONS as HISTORY_STATUS_NEUTRAL_CL
 from .interface_budget import interface_budget_cadence_for_runs
 from .long_task_cadence import build_long_task_cadence_hint
 from .orchestration import compact_orchestration_policy
+from .capabilities.multi_subagent.native_child_receipts import (
+    latest_native_child_activity,
+    load_native_child_activity,
+)
 from .paths import resolve_runtime_root
 from .control_plane.work_items.task_graph import (
     build_task_graph_projection as _build_task_graph_projection_read_model,
@@ -1176,6 +1180,31 @@ def build_attention_queue(
             )
             if receipts:
                 item["evidence_log_read_receipts"] = receipts
+            project_asset = item.get("project_asset")
+            if not isinstance(project_asset, dict):
+                continue
+            orchestration = project_asset.get("orchestration")
+            if not isinstance(orchestration, dict) or not (
+                orchestration.get("mode") == "multi_subagent"
+                and orchestration.get("spawn_allowed") is True
+                and int(orchestration.get("max_children") or 0) > 0
+            ):
+                continue
+            native_activity = latest_native_child_activity(
+                events, goal_id=goal_id,
+                configured_limit=int(orchestration["max_children"]),
+            )
+            if native_activity:
+                # The shared status snapshot is bounded for Todo work. Once it
+                # reveals a native decision, read its exact Turn before showing
+                # counts, so older stages falling outside that window cannot
+                # silently undercount the activity.
+                project_asset["native_child_activity"] = load_native_child_activity(
+                    runtime_root, goal_id=goal_id,
+                    agent_id=native_activity["agent_id"],
+                    turn_instance_id=native_activity["turn_instance_id"],
+                    configured_limit=int(orchestration["max_children"]),
+                )
     return queue
 
 

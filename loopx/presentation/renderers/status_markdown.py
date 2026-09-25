@@ -1268,6 +1268,24 @@ def _append_project_asset_runtime_policy_markdown(
             f"{markdown_scalar(orchestration_policy_summary(asset_orchestration))}"
         )
 
+    native_child_activity = (
+        project_asset.get("native_child_activity")
+        if isinstance(project_asset.get("native_child_activity"), dict)
+        else {}
+    )
+    if native_child_activity.get("observation") == "coordinator_reported":
+        lines.append(
+            "    - native_child_activity: "
+            f"turn={markdown_scalar(native_child_activity.get('turn_instance_id'))} "
+            "source=coordinator_reported host_attested=false "
+            f"configured_max={native_child_activity.get('configured_limit')} "
+            f"starts={native_child_activity.get('launched_count')} "
+            f"skips={native_child_activity.get('skipped_count')} "
+            f"capacity_rejections={native_child_activity.get('capacity_rejected_count')} "
+            f"host_failures={native_child_activity.get('host_failed_count')} "
+            f"parent_accepted={native_child_activity.get('parent_accepted_count')}"
+        )
+
     subagent_activity = (
         project_asset.get("subagent_activity")
         if isinstance(project_asset.get("subagent_activity"), dict)
