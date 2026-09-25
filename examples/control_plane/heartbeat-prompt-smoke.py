@@ -1288,6 +1288,12 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as raw_tmp:
         root = Path(raw_tmp)
+        long_profile_scope = (
+            "Investigate product and runtime reliability, coordinate bounded peer work, "
+            "preserve task identity, qualify evidence and acceptance, and return actionable "
+            "results to the original conversation without claiming another agent's authority."
+        )
+        assert 180 < len(long_profile_scope) <= 320
         project = root / "project"
         state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
         registry_path = project / ".loopx" / "registry.json"
@@ -1313,6 +1319,10 @@ def main() -> int:
                                 "registered_agents": ["codex-main-control", "codex-side-bypass"],
                                 "agent_model": "peer_v1",
                                 "agent_profiles": {
+                                    "codex-main-control": {
+                                        "schema_version": "agent_profile_v1",
+                                        "scope_summary": long_profile_scope,
+                                    },
                                     "codex-side-bypass": {
                                         "schema_version": "agent_profile_v1",
                                         "scope_summary": "productization showcase docs lane",
@@ -1520,6 +1530,61 @@ def main() -> int:
         assert "productization showcase docs lane" in normalized(cli_profile_scoped_payload["task_body"]), (
             cli_profile_scoped_payload
         )
+
+        long_profile_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "--registry",
+                str(registry_path),
+                "heartbeat-prompt",
+                "--goal-id",
+                GOAL_ID,
+                "--thin",
+                "--agent-id",
+                "codex-main-control",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert long_profile_result.returncode == 0, long_profile_result.stdout
+        long_profile_payload = json.loads(long_profile_result.stdout)
+        assert long_profile_payload["ok"] is True, long_profile_payload
+        assert long_profile_scope in normalized(long_profile_payload["task_body"]), long_profile_payload
+
+        explicit_scope_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "--registry",
+                str(registry_path),
+                "heartbeat-prompt",
+                "--goal-id",
+                GOAL_ID,
+                "--thin",
+                "--agent-id",
+                "codex-main-control",
+                "--agent-scope",
+                "explicit bounded task",
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert explicit_scope_result.returncode == 0, explicit_scope_result.stdout
+        explicit_scope_payload = json.loads(explicit_scope_result.stdout)
+        assert explicit_scope_payload["ok"] is True, explicit_scope_payload
+        assert "explicit bounded task" in explicit_scope_payload["task_body"], explicit_scope_payload
+        assert long_profile_scope not in explicit_scope_payload["task_body"], explicit_scope_payload
 
         cli_unknown_scoped = subprocess.run(
             [
