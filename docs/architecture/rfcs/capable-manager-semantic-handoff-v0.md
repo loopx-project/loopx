@@ -356,6 +356,10 @@ The same contract works when a research worker asks another worker to counterche
 
 | Current seam | Target | Retirement condition |
 | --- | --- | --- |
+| `review_packet.py` context assembly | `handoff/project_agent_context.py`, shared by full packet and direct handoff-only | Shared source assembly is implemented; duplicate packet-owned derivation removed |
+| `review_packet.py` human judgment, gate display and rendering | Retained presentation adapter | Owns no generic handoff state or new authority |
+| Handoff length control, fragmentation and reassembly | Channel codec plus `handoff restore` receiver | Real producer/receiver CLI validates complete fields, strict errors and in-budget compatibility; no Lark/cross-host qualification |
+| Handoff request identity, assessment, result and recovery | M2/M3 collaboration owner | Separately qualified; codec digests are neither request identity nor ownership receipts |
 | Manager inherits Chat planning-only restrictions and JSON preview fallback | Dedicated capable-manager role using native host tools and accepted effect receipts; keep explicit plan-only mode for users who select it | M1 proves ordinary authorized actions and restricted-mode parity; remove contradictory manager instructions |
 | Manager context inbox plus same-Goal Todo-handoff rules | One collaboration work-request contract with referenced semantic context and intent-specific admission | M2 lossless migration and two-consumer conformance; remove duplicate identities and transitions |
 | `manager_context` owns generic dispatch/decision semantics in Python | Core TypeScript collaboration domain; Python calls the typed boundary and adapts runtime/channel I/O | Switch one writer after differential tests, then delete the old decision implementation |

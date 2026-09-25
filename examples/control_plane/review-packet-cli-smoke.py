@@ -750,6 +750,35 @@ def assert_dense_handoff_stays_within_budget() -> None:
     assert_handoff_only_top_level_budget(handoff_only, "dense handoff-only json")
 
 
+def assert_overflow_cli_roundtrip() -> None:
+    """The real producer preserves constraints and the receiver cannot execute them."""
+    with tempfile.TemporaryDirectory(prefix="loopx-handoff-overflow-") as tmp:
+        root = Path(tmp)
+        registry = write_planned_registry(root)
+        mark_owner_review_todo_done(root)
+        # An independent synthetic approved command makes the actual CLI overflow.
+        command = "printf '%s' '" + "preserve-source-evidence " * 100 + "RETURN-VALIDATION'"
+        append_operator_gate_approval_fixture(root, command=command)
+        for handoff_only in (False, True):
+            flags = ["--handoff-only"] if handoff_only else []
+            args = ["review-packet", "--goal-id", GOAL_ID, "--scan-root", str(root / "project"), *flags]
+            payload = json.loads(run_cli(root, registry, "--format", "json", *args).stdout)
+            complete = payload["project_agent_handoff"]
+            assert payload["handoff_interface_budget"]["within_budget"] is False
+            assert "authority/material: topics=2, materials=4" in complete
+            assert "Run the read-only map dry-run after owner todo resolution." in complete
+            assert "生产动作、更高权限" in complete
+            assert command in complete
+            for input_format in ("json", "markdown"):
+                source = root / f"received.{input_format}"
+                source.write_text(run_cli(root, registry, "--format", input_format, *args).stdout)
+                result = run_cli(root, registry, "--format", "json", "handoff", "restore",
+                                 "--input", str(source), "--input-format", input_format)
+                restored = json.loads(result.stdout)
+                assert restored == {"ok": True, "handoff_text": complete}, restored
+                assert "【人只需判断】" not in restored["handoff_text"]
+
+
 def main() -> int:
     help_result = subprocess.run(
         [sys.executable, "-m", "loopx.cli", "review-packet", "--help"],
@@ -762,6 +791,7 @@ def main() -> int:
     assert "JSON output returns a minimized handoff payload" in compact_help, help_result.stdout
     assert "JSON output keeps the full payload" not in compact_help, help_result.stdout
 
+    assert_overflow_cli_roundtrip()
     assert_status_data_contract_documents_handoff_budget()
     assert_attention_queue_drives_approved_handoff_over_stale_history()
     assert_project_agent_handoff_prioritizes_advancement_todos()

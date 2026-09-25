@@ -6,7 +6,6 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -197,7 +196,7 @@ def approved_command_with_local_paths(root: Path) -> str:
     )
 
 
-def append_operator_gate_approval_fixture(root: Path) -> None:
+def append_operator_gate_approval_fixture(root: Path, *, command: str | None = None) -> None:
     run_dir = root / "runtime" / "goals" / GOAL_ID / "runs"
     run_dir.mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -216,7 +215,7 @@ def append_operator_gate_approval_fixture(root: Path) -> None:
             "decision": "approve",
             "operator_question": f"是否同意 `{GOAL_ID}` 先执行 read-only map opt-in？",
             "reason_summary": f"同意 {GOAL_ID} 先做 read-only map dry-run，不授权写入或生产动作",
-            "agent_command": approved_command_with_local_paths(root),
+            "agent_command": command or approved_command_with_local_paths(root),
         },
     }
     json_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

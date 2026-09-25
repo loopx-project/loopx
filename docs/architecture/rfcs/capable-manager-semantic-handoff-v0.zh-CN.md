@@ -331,6 +331,10 @@ provider 缺失、索引过期/不完整、超时、零命中，保留 typed gap
 
 | 当前边界 | 目标 | 何时删除旧路径 |
 | --- | --- | --- |
+| `review_packet.py` 交接上下文组装 | `handoff/project_agent_context.py`，full packet 与直接 handoff-only 共用 | 共享来源组装已实现，删除 packet 内重复推导 |
+| `review_packet.py` 人工判断、gate 展示及渲染 | 保留为展示适配器 | 不拥有通用交接状态，不额外授予权限 |
+| 交接长度控制、分片与恢复 | 渠道 codec 与 `handoff restore` 接收入口 | 真实生产→接收 CLI 验证完整字段、严格错误及预算内兼容；不宣称飞书或跨主机验收 |
+| 交接请求身份、评估、结果及恢复关系 | M2/M3 collaboration owner | 独立验收；codec digest 不是请求身份或所有权回执 |
 | 管家继承 Chat planning-only 限制和 JSON 预览兜底 | 独立强能力管家角色，使用原生工具和已接受 effect 回执；用户主动选择时保留 plan-only 模式 | M1 验证普通授权操作、受限模式，再删矛盾指令 |
 | 管家上下文 inbox 与 same-Goal Todo-handoff 规则并存 | 一个工作请求契约，引用语义背景，按具体意图检查准入 | M2 无损迁移、双消费者验证后，删重复身份与转移 |
 | `manager_context` 在 Python 掌握通用 dispatch/decision 语义 | Core TS collaboration domain；Python 只调用 typed 边界、适配 runtime/通道 I/O | 差分验证后切单 writer，再删旧判断实现 |

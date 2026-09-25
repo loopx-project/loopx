@@ -88,15 +88,18 @@ def _render_digest(payload: dict) -> str:
 
 def register_todo_continuation(subparsers, add_format):
     parser = subparsers.add_parser(
-        "handoff", help="Explicit cross-agent Todo handoff: prepare, inspect, adopt (selected canonical authority)."
+        "handoff", help="Explicit cross-agent Todo handoff: prepare/inspect/adopt ownership, or restore content without authority changes."
     )
     # Note: we don't use add_format here because we need a custom --format
     # with a 'digest' choice. We add it manually below.
-    parser.add_argument("action", choices=["prepare", "inspect", "adopt"])
-    parser.add_argument("--goal-id", required=True)
-    parser.add_argument("--todo-id", required=True)
-    parser.add_argument("--agent-id", required=True)
-    parser.add_argument("--session-id", required=True, help="Current host session identifier; provenance, not authorization.")
+    parser.add_argument("action", choices=["prepare", "inspect", "adopt", "restore"])
+    parser.add_argument("--goal-id")
+    parser.add_argument("--todo-id")
+    parser.add_argument("--agent-id")
+    parser.add_argument("--session-id", help="Current host session identifier; provenance, not authorization.")
+    parser.add_argument("--input", help="restore only: producer output file, or - for stdin.")
+    parser.add_argument("--input-format", choices=["json", "markdown"], default="json",
+                        help="restore input representation; JSON is recommended for transport fidelity.")
     parser.add_argument("--operation-id", help="Stable retry identity, required for prepare/adopt.")
     parser.add_argument("--expected-revision", help="Exact revision from inspect, required for prepare/adopt.")
     parser.add_argument("--rationale", help="Decision rationale (legacy, prepare only). Prefer --from-context for rich handoff.")
@@ -114,7 +117,14 @@ def register_todo_continuation(subparsers, add_format):
 def handle_todo_continuation(args, *, registry_path, runtime_root_arg, output_format, print_payload):
     if args.command != "handoff":
         return None
+    if args.action == "restore":
+        from .handoff_restore import handle_handoff_restore
+        return handle_handoff_restore(args, output_format=output_format, print_payload=print_payload)
     try:
+        if args.input or args.input_format != "json":
+            raise ValueError("--input/--input-format are only valid for restore")
+        if not all((args.goal_id, args.todo_id, args.agent_id, args.session_id)):
+            raise ValueError("prepare/inspect/adopt require --goal-id, --todo-id, --agent-id and --session-id")
         if args.action != "inspect" and (not args.operation_id or not args.expected_revision):
             raise ValueError("prepare/adopt require --operation-id and --expected-revision; reuse both on retry")
         if args.action != "prepare" and (args.rationale or args.source_ref):
