@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="696" viewBox="0 0 1000 696" role="img" aria-labelledby="title desc">
+<title id="title">03  一个 envelope，由一个 owner 封装</title>
+<desc id="desc">适配层把每个信源的读取事实和覆盖范围交给 TypeScript kernel 的 projection.envelope.seal，返回一个包含时间、信源、覆盖和判定的 envelope；它以 JSON 字段和 Markdown 行呈现，告警时标红。消费者规则要求在把投影当成当前、完整之前先说出告警。</desc>
+<g font-family="Geist, Inter, PingFang SC, Noto Sans CJK SC, Microsoft YaHei, sans-serif">
+<rect x="0" y="0" width="1000" height="696" fill="#fafafa"/>
+<text x="40.0" y="49.0" font-size="28" fill="#171717" font-weight="600" text-anchor="start">03  一个 envelope，由一个 owner 封装</text>
+<text x="40.0" y="84.0" font-size="17" fill="#4d4d4d" font-weight="400" text-anchor="start">各适配层只报告自己读到了什么；fresh、complete、alert 只由 TypeScript kernel 判定。</text>
+<rect x="40" y="120" width="256" height="226" rx="12" fill="#fff" stroke="#ebebeb"/>
+<text x="60.0" y="152.0" font-size="18" fill="#171717" font-weight="600" text-anchor="start">读取事实</text>
+<text x="60.0" y="184.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">每个信源：read_status、</text>
+<text x="60.0" y="208.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">last_read_at、required、</text>
+<text x="60.0" y="232.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">条目数 / 不可读条数</text>
+<text x="60.0" y="256.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">覆盖范围：期望数、</text>
+<text x="60.0" y="280.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">包含数、省略项</text>
+<text x="40.0" y="374.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">status · global-summary · global-gates · Decision Context（下一步）</text>
+<path d="M300 233 L346 233" stroke="#0070f3" stroke-width="2.5"/><path d="M346 225 L358 233 L346 241 Z" fill="#0070f3"/>
+<rect x="362" y="150" width="252" height="166" rx="12" fill="#171717"/>
+<text x="386.0" y="196.0" font-size="20" fill="#fff" font-weight="600" text-anchor="start">TypeScript kernel</text>
+<text x="386.0" y="232.0" font-size="15" fill="#e6e6e6" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">projection.envelope.seal</text>
+<text x="386.0" y="270.0" font-size="15" fill="#bdbdbd" font-weight="400" text-anchor="start">唯一的语义 owner</text>
+<path d="M618 233 L664 233" stroke="#0070f3" stroke-width="2.5"/><path d="M664 225 L676 233 L664 241 Z" fill="#0070f3"/>
+<rect x="680" y="120" width="280" height="226" rx="12" fill="#fff" stroke="#0070f3" stroke-width="2"/>
+<text x="700.0" y="152.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">projection_envelope</text>
+<text x="700.0" y="184.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">observed_at · served_at</text>
+<text x="700.0" y="214.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">sources[] 带陈旧程度</text>
+<text x="700.0" y="244.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">相对请求范围的 coverage</text>
+<text x="700.0" y="274.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">继承 upstream[]</text>
+<text x="700.0" y="304.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">fresh · complete · alert</text>
+<path d="M820 350 L820 404" stroke="#0070f3" stroke-width="2.5"/><path d="M812 400 L820 412 L828 400 Z" fill="#0070f3"/>
+<rect x="40" y="416" width="920" height="120" rx="12" fill="#fff" stroke="#ebebeb"/>
+<text x="60.0" y="446.0" font-size="14" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">JSON：payload.projection_envelope</text>
+<text x="60.0" y="472.0" font-size="14" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Markdown：一行摘要，告警时标红</text>
+<circle cx="68" cy="500" r="7" fill="#d93036"/>
+<text x="84.0" y="505.0" font-size="14" fill="#171717" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">projection: observed_at=… coverage=1/48 scope=global</text>
+<circle cx="68" cy="522" r="7" fill="#d93036"/>
+<text x="84.0" y="527.0" font-size="14" fill="#d93036" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">alerts: incomplete_coverage omitted=outside_current_registry=47</text>
+<rect x="40" y="556" width="920" height="84" rx="12" fill="#fdeded"/>
+<text x="60.0" y="588.0" font-size="14" fill="#d93036" font-weight="600" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">消费者规则</text>
+<text x="60.0" y="618.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">把投影当成当前、完整的之前，先说出它携带的每一条告警。</text>
+<text x="40.0" y="672.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">缓存回放保留 observed_at、重盖 served_at，缓存的答案会如实变旧。</text>
+</g>
+</svg>

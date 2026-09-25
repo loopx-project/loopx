@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fafafa">
+  <title>Five freshness incidents in 47 days: a LoopX postmortem · LoopX</title>
+  <meta name="description" content="A long-running advisory agent on LoopX answered from stale, partial, or unread sources five times in 47 days while every health signal stayed green. What failed, why local fixes were not enough, and the contract that makes it visible.">
+  <link rel="canonical" href="https://loopx-project.github.io/loopx/blog/five-freshness-incidents/">
+  <link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/five-freshness-incidents/">
+  <link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/">
+  <link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/five-freshness-incidents/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="LoopX">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:title" content="Five freshness incidents in 47 days: a LoopX postmortem">
+  <meta property="og:description" content="A long-running advisory agent on LoopX answered from stale, partial, or unread sources five times in 47 days while every health signal stayed green. What failed, why local fixes were not enough, and the contract that makes it visible.">
+  <meta property="og:url" content="https://loopx-project.github.io/loopx/blog/five-freshness-incidents/">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../blog.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <a class="brand" href="../../" aria-label="LoopX home"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a>
+  <nav aria-label="Primary navigation"><a href="../" aria-current="true">Blog</a><a href="../../docs/book/en/">Docs</a></nav>
+  <div class="header-actions"><a class="language" href="../../blog/zh/five-freshness-incidents/" lang="zh-CN" hreflang="zh-CN" aria-label="阅读中文版">中文</a><a class="github" href="https://github.com/huangruiteng/loopx">GitHub <span aria-hidden="true">↗</span></a></div>
+</header>
+<main id="main">
+<div class="article-heading">
+  <a class="back" href="../">← All posts</a>
+  <p class="eyebrow">Postmortem · Field notes</p>
+  <h1>Five freshness incidents in 47 days: <span class="keep-together">a LoopX postmortem</span></h1>
+  <p class="lead">We ran a long-running advisory agent on LoopX for our own work. Five times in 47 days it answered from stale, partial, or unread sources while every health signal stayed green. This is what failed, why fixing each incident locally was not enough, and the contract that now makes the gap visible.</p>
+  <div class="byline"><a href="https://github.com/huangruiteng">Ruiteng Huang</a><span aria-hidden="true">·</span><time datetime="2026-09-26">September 26, 2026</time></div>
+</div>
+<div class="article-layout">
+  <aside class="toc"><details open><summary>In this article</summary><nav aria-label="Article contents">
+    <a href="#summary">Summary</a>
+    <a href="#deployment">The deployment</a>
+    <a href="#incidents">Five incidents</a>
+    <a href="#pattern">The common failure</a>
+    <a href="#local-fixes">Why local fixes were not enough</a>
+    <a href="#contract">The contract-level fix</a>
+    <a href="#limits">What this does not fix</a>
+    <a href="#lessons">Lessons for agent control planes</a>
+  </nav></details></aside>
+  <article class="prose" aria-label="Postmortem of five freshness incidents in a LoopX deployment">
+
+    <section id="summary">
+      <h2>Summary</h2>
+      <p>LoopX exists to keep long-running agent work honest: goals, evidence, and state that survive across sessions, so an agent cannot quietly treat an old picture of the world as the current one. Between August 10 and September 25, 2026, one of our own deployments failed in exactly that way, five times.</p>
+      <p>In every incident the agent gave a confident answer built on information that was a week old, never read, read only in part, or drawn from the wrong scope. In every incident the relevant health checks were accurate about their own layer and said nothing about freshness. <strong>LoopX raised none of the five.</strong> The operator caught two; the agent disclosed the other three, after the fact.</p>
+      <figure><div class="architecture-viewport kanban-figure" tabindex="0" role="region" aria-label="Timeline of five freshness incidents between August 10 and September 25, with the fix track below; scroll horizontally on narrow screens"><a href="../images/five-freshness-incidents/timeline-en.svg" target="_blank" rel="noopener" aria-label="Open the full-size incident timeline"><img src="../images/five-freshness-incidents/timeline-en.svg" alt="Timeline of five freshness incidents on days 4, 8, 33, 40, and 41, each marked LoopX alert: none, with fixes #3953, #4763, #5075, and #5085 below" loading="lazy" width="1000" height="624"></a></div><figcaption>Figure 1 · Five incidents, zero LoopX alerts. The capability fix (#4763) is merged; the two contract fixes (#5075, #5085) are in review.<span class="architecture-hint">Scroll horizontally on narrow screens; select the image to open it full size.</span></figcaption></figure>
+      <p>No data was lost. No review cursor was advanced to fake progress, and no unread batch was marked as read. The damage was quieter and, for an advisory agent, worse: advice that sounded current and was not. We fixed each incident where it happened, and then found we had to fix the same thing at the contract level, because each local fix left the next variant just as silent.</p>
+      <p>We think this is more useful than a benchmark delta. It is a real deployment failing in the specific way LoopX claims to prevent, and a record of what it took to make that failure visible.</p>
+    </section>
+
+    <section id="deployment">
+      <h2>The deployment</h2>
+      <p>The system is a long-running advisory agent on our own work: one agent thread bound to a LoopX Goal. It reads team chats, documents, GitHub, a memory provider, and social feeds through <a href="https://github.com/loopx-project/loopx/blob/71dbfd5e605da4e7efdb58c87cd3f4a96d39e0e5/loopx/capabilities/decision_context/README.md">Decision Context</a>, the LoopX capability that registers sources, captures increments, and settles them into reviewable projections. Over 47 days it ran 253 turns and grew from 21 registered sources to 39.</p>
+      <p>Two properties matter for what follows. First, the agent does not read raw sources on every turn; it reads settled projections, goal status, and summaries that LoopX assembles from earlier reads. Second, the operator trusts the agent to say when it is working from old or partial material. Both are normal for long-running agents. Together they mean that a projection's age and coverage are part of the answer, whether or not anyone displays them.</p>
+      <p>Every detail here comes from the deployment's own turn records and repair notes. Names, organizations, channels, accounts, and message content are removed. Dates, counts, and the order of events are unchanged.</p>
+    </section>
+
+    <section id="incidents">
+      <h2>Five incidents</h2>
+
+      <h3>1 · Day 4: a week-old projection read as current</h3>
+      <p><b>What happened.</b> Asked what had changed, the agent described a development that had already happened as something still to watch for. Two key chat sources had last been scanned nine days earlier. One extra exact read two days later had gone into the decision ledger, but the new messages since then never reached the settled projection. A scheduled three-day review had not run, because automatic capture was switched off in that mode.</p>
+      <p><b>Why it looked fine.</b> The doctor reported healthy and the profile reported enabled. Both were true. The agent read goal state, the settled projection, and a governance readback. Nothing on that path carried a per-source “last read at” time.</p>
+      <p><b>Local fix.</b> A working rule: with automation off, “pull Decision Context” means check the freshness of every key source and read stale increments by hand before answering.</p>
+
+      <h3>2 · Day 8: enabled, but never bound</h3>
+      <p><b>What happened.</b> The Decision Context configuration said enabled. The external providers behind it had never been bound in the runtime, so automatic pulls could not run at all. The agent read three chats by hand and said so.</p>
+      <p><b>Why it looked fine.</b> “Enabled” is a statement about configuration. Nothing compared it with whether any source had actually been read.</p>
+      <p><b>Local fix.</b> A private runtime host bound six of the seven providers. The seventh, a social feed, failed on read and was recorded as <code>provider_scan_failed</code> instead of a quiet “no change”. The repair also separated “provider bound” from “source currently healthy”.</p>
+
+      <h3>3 · Day 33: a capture host on a deleted checkout</h3>
+      <p><b>What happened.</b> The operator pointed out that the agent had been reading chats directly instead of through its own providers. Going back through the formal path exposed a failure that the direct reads had hidden. The background capture host was pinned to a temporary checkout that no longer existed, and it had been failing on every tick. Repairing it turned up a second gap: the “all enabled sources” refresh skipped the 8 on-demand sources out of 38.</p>
+      <p><b>Why it looked fine.</b> Capture was still enabled in configuration, and the spool's “checked” time advanced on every attempt, successful or not. A failing host and a healthy one looked the same from outside.</p>
+      <p><b>Local fix.</b> The host now follows the installed runtime. It records a failure streak, the last successful run, per-source status, and an expiring health record. The full refresh selects all 38 sources, and automatic capture went from 21 to 30 incremental sources. The verification read 37 sources successfully, found 1 unchanged, and had 0 failures. The backlog and review cursors were left untouched.</p>
+
+      <h3>4 · Day 40: read succeeded, body empty</h3>
+      <p><b>What happened.</b> The social-feed provider reported a successful read, but it returned only profile metadata; every post body was empty. The agent noticed, read the posts through a browser, and said so. A separate 1,000-batch backlog of unreviewed captures was being throttled, and the agent neither cleared it nor marked it as read.</p>
+      <p><b>Why it looked fine.</b> The read call succeeded. “Succeeded” said nothing about whether the content was there.</p>
+      <p><b>Local fix.</b> None at the provider level at the time. The agent reported what the provider could not read.</p>
+
+      <h3>5 · Day 41: the wrong registry, and a starved queue</h3>
+      <p><b>What happened.</b> The agent had just told the operator that the global summary showed many goals as stale or unhealthy, and that this could not be read as “no recent progress”. It was right to hedge. The summary had read one project's registry instead of the global one, so it missed recent progress on every other goal. Meanwhile automatic capture was blocked behind 1,000 pending batches. Some old snapshots could never be replayed, but they kept their place in the queue and starved every other source.</p>
+      <p><b>Why it looked fine.</b> The summary rendered without error. The capture status reported the queue but not that it had stopped moving.</p>
+      <p><b>Local fix.</b> The summary now reads the global registry explicitly. Queue capacity was raised from 1,000 to 2,000 as a stopgap, with all 1,016 backlog batches kept and the review cursor unchanged. The capability problem went upstream as <a href="https://github.com/loopx-project/loopx/issues/4760">#4760</a> and was fixed in <a href="https://github.com/loopx-project/loopx/pull/4763">#4763</a>: guarded hold, restart, and rollback for unreplayable batches, and isolation so one source's backlog cannot block the others.</p>
+    </section>
+
+    <section id="pattern">
+      <h2>The common failure</h2>
+      <p>Put the five incidents side by side and the shape is the same each time. Every signal the agent could see was accurate about its own layer: the configuration really was enabled, the doctor really was healthy, the read call really did succeed, the summary really did render. None of those signals said how old the underlying reads were, which sources had failed, or how much of the requested scope the answer covered.</p>
+      <figure><div class="architecture-viewport kanban-figure" tabindex="0" role="region" aria-label="Table-like diagram with three columns: what the system showed, what was true, and which field now exposes it, for each of the five incidents; scroll horizontally on narrow screens"><a href="../images/five-freshness-incidents/signals-en.svg" target="_blank" rel="noopener" aria-label="Open the full-size signals diagram"><img src="../images/five-freshness-incidents/signals-en.svg" alt="For each incident: a green signal the system showed, the red fact that was true, and the blue field that now exposes it" loading="lazy" width="1000" height="720"></a></div><figcaption>Figure 2 · Green is what the system showed, red is what was true, blue is the field that now makes the difference visible.<span class="architecture-hint">Scroll horizontally on narrow screens; select the image to open it full size.</span></figcaption></figure>
+      <p>The five incidents are really four distinct gaps:</p>
+      <ul>
+        <li><b>Age.</b> A projection has no visible “last read at” for its sources (incident 1).</li>
+        <li><b>Configured is not observed.</b> Enabled, bound, and checked describe intent or attempts, not successful reads (incidents 2 and 3).</li>
+        <li><b>Success is not content.</b> A read can succeed and return nothing usable (incident 4).</li>
+        <li><b>Scope.</b> An answer can cover 1 of 48 goals and still look like a whole answer (incident 5).</li>
+      </ul>
+      <p>There is also an asymmetry in who noticed. When the agent was reading carefully, it disclosed the gap. When it was reading projections, it did not, because nothing in the projection gave it a reason to doubt. An agent cannot report staleness it cannot see.</p>
+    </section>
+
+    <section id="local-fixes">
+      <h2>Why local fixes were not enough</h2>
+      <p>Every local fix was correct, and each one closed exactly one path. The working rule from incident 1 depended on the agent remembering it. The provider binding from incident 2 did nothing for a host that later broke. The host health record from incident 3 did not cover a provider that succeeded with empty bodies. The registry fix from incident 5 corrected one summary, while every other projection could still quietly drop scope.</p>
+      <p>The cost showed up as operator attention. Two of the five were caught only because the operator already knew something the agent did not. That is the opposite of what a control plane is for. If freshness depends on a person noticing that the advice sounds a week old, the person is the freshness check.</p>
+      <p>So the question changed from “how do we fix this incident” to “what must every projection carry, so that the next variant is visible without anyone noticing it first”.</p>
+    </section>
+
+    <section id="contract">
+      <h2>The contract-level fix</h2>
+      <p>The answer comes in two parts, one for sources and one for projections.</p>
+      <p><b>Source freshness</b> (<a href="https://github.com/loopx-project/loopx/pull/5075">#5075</a>, in review). Decision Context gains a <code>decision_source_freshness_v0</code> contract. Every source reports <code>last_read_at</code>, <code>staleness_seconds</code>, a status of fresh, stale, never_read, or not_scanned, and a failure streak. The contract states <code>enabled_state_implies_freshness: false</code> outright. The capture spool records <code>last_success_at</code> separately from <code>checked_at</code>, so a failing host can no longer look like a healthy one. The doctor gains a capture-host health check, and stale rows turn red in Markdown.</p>
+      <p><b>Projection envelope</b> (<a href="https://github.com/loopx-project/loopx/pull/5085">#5085</a>, in review). Every projection carries a <code>loopx_projection_envelope_v0</code> envelope, sealed by a single owner in the TypeScript kernel. Python adapters report only what they read. Whether a projection is fresh, complete, or alerting is decided in one place, so each surface cannot drift into its own definition.</p>
+      <figure><div class="architecture-viewport kanban-figure" tabindex="0" role="region" aria-label="Diagram of read facts flowing into the TypeScript kernel seal and out as a projection envelope rendered in JSON and Markdown, with the consumer rule; scroll horizontally on narrow screens"><a href="../images/five-freshness-incidents/envelope-en.svg" target="_blank" rel="noopener" aria-label="Open the full-size envelope diagram"><img src="../images/five-freshness-incidents/envelope-en.svg" alt="Read facts go into projection.envelope.seal in the TypeScript kernel, which emits a projection envelope rendered as JSON and as one Markdown line, followed by the consumer rule" loading="lazy" width="1000" height="696"></a></div><figcaption>Figure 3 · Adapters report read facts; the kernel alone seals the envelope. The same envelope is rendered in JSON and as one Markdown line.<span class="architecture-hint">Scroll horizontally on narrow screens; select the image to open it full size.</span></figcaption></figure>
+      <p>Here is incident 5 again, as the global summary would render it today against a single project registry:</p>
+      <pre><code>"projection_envelope": {
+  "schema_version": "loopx_projection_envelope_v0",
+  "projection": "global_summary",
+  "observed_at": "2026-09-26T03:10:00+08:00",
+  "served_at": "2026-09-26T03:10:00+08:00",
+  "fresh": true,
+  "complete": false,
+  "alert": true,
+  "alert_reasons": ["incomplete_coverage"],
+  "sources": [ … one row per read, with read_status, last_read_at, staleness_seconds … ],
+  "coverage": {
+    "scope": "global",
+    "expected_count": 48,
+    "included_count": 1,
+    "omitted": [{ "reason": "outside_current_registry", "count": 47 }],
+    "complete": false
+  }
+}
+
+🔴 projection: observed_at=2026-09-26T03:10:00+08:00 coverage=1/48 scope=global
+🔴 alerts: incomplete_coverage omitted=outside_current_registry=47</code></pre>
+      <p>The summary is fresh and incomplete at the same time, and it says so. An agent reading it can no longer say “no recent progress” without also saying “I saw 1 of 48 goals”.</p>
+      <div class="table-scroll"><table><caption>Each incident, the field that would have surfaced it, and what the reader sees</caption><thead><tr><th>Incident</th><th>Field</th><th>What the reader sees</th></tr></thead><tbody>
+        <tr><td>1 · week-old projection</td><td><code>sources[].last_read_at</code> against <code>window_seconds</code></td><td><code>stale_sources</code>, with the source ids</td></tr>
+        <tr><td>2 · enabled, never bound</td><td><code>read_status: not_read</code> on a required source</td><td><code>missing_required_sources</code></td></tr>
+        <tr><td>3 · host on a deleted checkout</td><td><code>last_success_at</code> apart from <code>checked_at</code>; failure streak; <code>not_scanned</code></td><td>A red row and a failing capture-host doctor check</td></tr>
+        <tr><td>4 · read succeeded, body empty</td><td><code>unreadable_count</code> above zero</td><td><code>partially_unreadable</code>, rolled up as <code>unreadable_sources</code></td></tr>
+        <tr><td>5 · wrong registry</td><td><code>coverage</code> against the requested scope, with typed omissions</td><td><code>incomplete_coverage</code>, <code>coverage=1/48</code></td></tr>
+      </tbody></table></div>
+      <p>Two smaller rules close the remaining loopholes. A derived projection inherits every upstream source row, so a summary is never fresher than the oldest read it depends on. A cached response keeps its original <code>observed_at</code> and restamps only <code>served_at</code>, so a cached answer ages honestly instead of looking new each time it is served.</p>
+      <div class="case-note"><b>Consumer rule</b><p>Before treating a projection as current or whole, state every alert it carries. The envelope makes gaps visible; this rule makes the agent say them out loud.</p></div>
+      <p>The envelope currently covers <code>status</code>, <code>global-summary</code>, and <code>global-gates</code>. We chose those three because they are what a long-running agent reads first when it resumes.</p>
+    </section>
+
+    <section id="limits">
+      <h2>What this does not fix</h2>
+      <ul>
+        <li><b>The contract fixes are not released.</b> #5075 and #5085 are open pull requests at the time of writing. Only the capability fix, #4763, is merged.</li>
+        <li><b>Incident 4 still depends on the provider.</b> An envelope can only report empty bodies if the provider counts them. A provider that reports success with no content and no unreadable count still passes as fresh.</li>
+        <li><b>The consumer rule depends on the agent.</b> The envelope makes a gap impossible to miss for a careful reader. It cannot force a careless one to mention it; that part is compliance, and we will measure it rather than assume it.</li>
+        <li><b>Other projections are still pending.</b> <code>global-todos</code>, <code>global-risks</code>, quota should-run, the review packet, and Decision Context's own outputs do not carry the envelope yet.</li>
+        <li><b>Backlog recovery still needs an operator.</b> #4763 isolates sources and adds guarded hold, restart, and rollback, but it does not decide on its own that an unreplayable batch can be dropped.</li>
+      </ul>
+    </section>
+
+    <section id="lessons">
+      <h2>Lessons for agent control planes</h2>
+      <p><strong>Green is a statement about one layer.</strong> Enabled, bound, checked, succeeded, and rendered each answered their own question correctly. The agent needed an answer to a different question, how old and how complete this is, and no layer owned it.</p>
+      <p><strong>Freshness belongs in the contract, not in the prompt.</strong> Our first fix was a rule the agent had to remember. It worked until the next variant. The durable fix is a field on every projection, sealed in one place, that the reader cannot avoid seeing.</p>
+      <p><strong>Coverage is as important as age.</strong> Incident 5 was fresh and wrong. “1 of 48” is a more useful sentence than any timestamp.</p>
+      <p><strong>Honest recovery beats fast recovery.</strong> In all five incidents, no cursor was advanced, no backlog was cleared, and no review was faked to make a status look better. That is why each incident could be reconstructed afterwards, and why this postmortem is possible.</p>
+      <p>We built LoopX to keep long-running agents from mistaking an old picture for the present. For 47 days it did not do that for our own agent. The fix is not finished, but it now sits where it should: in the contract every projection has to satisfy, rather than in the attention of the person reading the advice.</p>
+      <p class="edition">Code references are pinned to <a href="https://github.com/loopx-project/loopx/tree/71dbfd5e605da4e7efdb58c87cd3f4a96d39e0e5"><code>71dbfd5e6</code></a>; <a href="https://github.com/loopx-project/loopx/pull/5075">#5075</a> and <a href="https://github.com/loopx-project/loopx/pull/5085">#5085</a> are unmerged at the time of writing. Incident details come from the deployment's own records and are redacted: names, organizations, channels, accounts, and message content are removed; dates, counts, and ordering are unchanged. The JSON excerpt is abridged from the global-summary envelope in #5085.</p>
+    </section>
+  </article>
+</div>
+</main>
+<footer class="site-footer"><a class="brand" href="../../">LoopX</a><p>Keep the loop moving. Keep the judgment human.</p><a href="../">All posts ↑</a></footer>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="696" viewBox="0 0 1000 696" role="img" aria-labelledby="title desc">
+<title id="title">03  One envelope, sealed by one owner</title>
+<desc id="desc">Adapters pass per-source read facts and scope coverage to the TypeScript kernel method projection.envelope.seal, which returns one envelope with timing, sources, coverage and a verdict. It renders as a JSON field and a Markdown line that turns red when alerting. The consumer rule requires stating alerts before treating a projection as current or whole.</desc>
+<g font-family="Geist, Inter, Helvetica Neue, Arial, sans-serif">
+<rect x="0" y="0" width="1000" height="696" fill="#fafafa"/>
+<text x="40.0" y="49.0" font-size="28" fill="#171717" font-weight="600" text-anchor="start">03  One envelope, sealed by one owner</text>
+<text x="40.0" y="84.0" font-size="17" fill="#4d4d4d" font-weight="400" text-anchor="start">Adapters report what they read. The TypeScript kernel alone decides fresh, complete, and alert.</text>
+<rect x="40" y="120" width="256" height="226" rx="12" fill="#fff" stroke="#ebebeb"/>
+<text x="60.0" y="152.0" font-size="18" fill="#171717" font-weight="600" text-anchor="start">Read facts</text>
+<text x="60.0" y="184.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">per source: read_status,</text>
+<text x="60.0" y="208.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">last_read_at, required,</text>
+<text x="60.0" y="232.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">item / unreadable counts</text>
+<text x="60.0" y="256.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">coverage: expected,</text>
+<text x="60.0" y="280.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">included, omitted</text>
+<text x="40.0" y="374.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">status · global-summary · global-gates · Decision Context (next)</text>
+<path d="M300 233 L346 233" stroke="#0070f3" stroke-width="2.5"/><path d="M346 225 L358 233 L346 241 Z" fill="#0070f3"/>
+<rect x="362" y="150" width="252" height="166" rx="12" fill="#171717"/>
+<text x="386.0" y="196.0" font-size="20" fill="#fff" font-weight="600" text-anchor="start">TypeScript kernel</text>
+<text x="386.0" y="232.0" font-size="15" fill="#e6e6e6" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">projection.envelope.seal</text>
+<text x="386.0" y="270.0" font-size="15" fill="#bdbdbd" font-weight="400" text-anchor="start">one semantic owner</text>
+<path d="M618 233 L664 233" stroke="#0070f3" stroke-width="2.5"/><path d="M664 225 L676 233 L664 241 Z" fill="#0070f3"/>
+<rect x="680" y="120" width="280" height="226" rx="12" fill="#fff" stroke="#0070f3" stroke-width="2"/>
+<text x="700.0" y="152.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">projection_envelope</text>
+<text x="700.0" y="184.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">observed_at · served_at</text>
+<text x="700.0" y="214.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">sources[] with staleness</text>
+<text x="700.0" y="244.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">coverage vs requested scope</text>
+<text x="700.0" y="274.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">upstream[] inherited</text>
+<text x="700.0" y="304.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">fresh · complete · alert</text>
+<path d="M820 350 L820 404" stroke="#0070f3" stroke-width="2.5"/><path d="M812 400 L820 412 L828 400 Z" fill="#0070f3"/>
+<rect x="40" y="416" width="920" height="120" rx="12" fill="#fff" stroke="#ebebeb"/>
+<text x="60.0" y="446.0" font-size="14" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">JSON: payload.projection_envelope</text>
+<text x="60.0" y="472.0" font-size="14" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Markdown: one line, red when alerting</text>
+<circle cx="68" cy="500" r="7" fill="#d93036"/>
+<text x="84.0" y="505.0" font-size="14" fill="#171717" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">projection: observed_at=… coverage=1/48 scope=global</text>
+<circle cx="68" cy="522" r="7" fill="#d93036"/>
+<text x="84.0" y="527.0" font-size="14" fill="#d93036" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">alerts: incomplete_coverage omitted=outside_current_registry=47</text>
+<rect x="40" y="556" width="920" height="84" rx="12" fill="#fdeded"/>
+<text x="60.0" y="588.0" font-size="14" fill="#d93036" font-weight="600" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Consumer rule</text>
+<text x="60.0" y="618.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">Before treating a projection as current or whole, state every alert it carries.</text>
+<text x="40.0" y="672.0" font-size="15" fill="#4d4d4d" font-weight="400" text-anchor="start">Cache replay keeps observed_at and restamps served_at, so a cached answer ages honestly.</text>
+</g>
+</svg>

@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fafafa">
+  <title>47 天 5 次新鲜度事故：一次 LoopX 事故复盘 · LoopX</title>
+  <meta name="description" content="一个跑在 LoopX 上的长程顾问 Agent，47 天里 5 次基于过期、残缺或根本没读到的信源作答，而所有健康信号都是绿的。哪里坏了，为什么逐个修补不够，以及让缺口变得可见的合同。">
+  <link rel="canonical" href="https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/">
+  <link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/five-freshness-incidents/">
+  <link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/">
+  <link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/five-freshness-incidents/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="LoopX">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:title" content="47 天 5 次新鲜度事故：一次 LoopX 事故复盘">
+  <meta property="og:description" content="一个跑在 LoopX 上的长程顾问 Agent，47 天里 5 次基于过期、残缺或根本没读到的信源作答，而所有健康信号都是绿的。哪里坏了，为什么逐个修补不够，以及让缺口变得可见的合同。">
+  <meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/five-freshness-incidents/">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../blog.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳至正文</a>
+<header class="site-header">
+  <a class="brand" href="../../../?lang=zh" aria-label="LoopX 首页"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a>
+  <nav aria-label="主导航"><a href="../" aria-current="true">Blog</a><a href="../../../docs/book/">文档</a></nav>
+  <div class="header-actions"><a class="language" href="../../../blog/five-freshness-incidents/" lang="en" hreflang="en" aria-label="Read in English">EN</a><a class="github" href="https://github.com/huangruiteng/loopx">GitHub <span aria-hidden="true">↗</span></a></div>
+</header>
+<main id="main">
+<div class="article-heading">
+  <a class="back" href="../">← 全部文章</a>
+  <p class="eyebrow">事故复盘 · 实践记录</p>
+  <h1>47 天 5 次新鲜度事故：<span class="keep-together">一次 LoopX 事故复盘</span></h1>
+  <p class="lead">我们在自己的工作上跑了一个基于 LoopX 的长程顾问 Agent。47 天里，它 5 次基于过期、残缺或根本没读到的信源给出建议，而所有健康信号都是绿的。这篇复盘讲清楚哪里坏了、为什么逐个修补不够，以及现在让这个缺口变得可见的合同。</p>
+  <div class="byline"><a href="https://github.com/huangruiteng">Ruiteng Huang</a><span aria-hidden="true">·</span><time datetime="2026-09-26">2026 年 9 月 26 日</time></div>
+</div>
+<div class="article-layout">
+  <aside class="toc"><details open><summary>本文目录</summary><nav aria-label="文章目录">
+    <a href="#summary">摘要</a>
+    <a href="#deployment">部署背景</a>
+    <a href="#incidents">五次事故</a>
+    <a href="#pattern">共同的失效方式</a>
+    <a href="#local-fixes">为什么逐个修补不够</a>
+    <a href="#contract">合同层的修复</a>
+    <a href="#limits">还没解决的部分</a>
+    <a href="#lessons">对 Agent 控制面的启示</a>
+  </nav></details></aside>
+  <article class="prose" aria-label="一个 LoopX 部署中五次新鲜度事故的复盘">
+
+    <section id="summary">
+      <h2>摘要</h2>
+      <p>LoopX 要解决的核心问题之一，是让长程 Agent 的工作保持诚实：目标、证据和状态跨会话延续，Agent 不能悄悄把一张旧照片当成现在的世界。2026 年 8 月 10 日到 9 月 25 日，我们自己的一个部署恰好以这种方式失效了，而且是 5 次。</p>
+      <p>每一次，Agent 都给出了一个很笃定的回答，依据的却是一周前的信息、从没读到的信源、只读了一半的内容，或者范围错了的数据。每一次，相关的健康检查对它自己那一层都是准确的，但都没说新鲜度。<strong>5 次里，LoopX 一次都没报警。</strong>两次是操作者发现的，另外三次是 Agent 事后自己说出来的。</p>
+      <figure><div class="architecture-viewport kanban-figure" tabindex="0" role="region" aria-label="8 月 10 日至 9 月 25 日五次新鲜度事故的时间线，下方是修复轨道；窄屏可横向滚动"><a href="../../images/five-freshness-incidents/timeline-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的事故时间线"><img src="../../images/five-freshness-incidents/timeline-zh.svg" alt="第 4、8、33、40、41 天的五次新鲜度事故，每次都标注 LoopX 告警：无；下方是 #3953、#4763、#5075、#5085 的修复轨道" loading="lazy" width="1000" height="624"></a></div><figcaption>图 1 · 五次事故，零次 LoopX 告警。能力层修复 #4763 已合并；两个合同层修复 #5075、#5085 仍在审阅中。<span class="architecture-hint">窄屏可横向滚动；点击图片查看大图。</span></figcaption></figure>
+      <p>没有丢数据。没有为了看起来有进展而推进审阅游标，也没有把未读批次标成已读。损失更隐蔽，而对顾问型 Agent 来说更糟：建议听起来是最新的，实际不是。我们先在每次事故发生的地方修了，后来发现还得在合同层再修一遍，因为每个局部修复都让下一个变种同样悄无声息。</p>
+      <p>我们认为这比一个 benchmark 提升更有说服力：一个真实部署，以 LoopX 声称要防的方式失效，以及让这种失效变得可见到底花了什么。</p>
+    </section>
+
+    <section id="deployment">
+      <h2>部署背景</h2>
+      <p>这是一个服务我们自己工作的长程顾问 Agent：一个 Agent 线程绑定一个 LoopX Goal，通过 <a href="https://github.com/loopx-project/loopx/blob/71dbfd5e605da4e7efdb58c87cd3f4a96d39e0e5/loopx/capabilities/decision_context/README.md">Decision Context</a> 读取团队群聊、文档、GitHub、一个记忆 provider 和社交媒体。Decision Context 是 LoopX 里负责登记信源、采集增量、并把增量结算成可审阅投影的能力。47 天里它跑了 253 轮，登记的信源从 21 个增加到 39 个。</p>
+      <p>有两个特点对后面很关键。第一，Agent 不会每一轮都去读原始信源，它读的是 LoopX 基于之前的读取结算出来的投影、Goal 状态和摘要。第二，操作者默认信任 Agent 会主动说明自己依据的材料旧了或者不全。这两点在长程 Agent 里都很正常；放在一起，意味着投影的新旧和覆盖范围本身就是答案的一部分，不管有没有人把它显示出来。</p>
+      <p>文中细节都来自这个部署自己的轮次记录和修复记录。人名、组织、群、账号和消息内容均已移除；日期、数量和事件顺序保持原样。</p>
+    </section>
+
+    <section id="incidents">
+      <h2>五次事故</h2>
+
+      <h3>1 · 第 4 天：一周前的投影被当成现状</h3>
+      <p><b>发生了什么。</b>被问到最近有什么变化时，Agent 把一件已经发生的事说成了“接下来值得观察”。两个关键群聊信源的最后扫描停在 9 天前；两天后做过一次额外的精确读取并写进了决策账本，但此后的新消息从没进入已结算的投影。本该发生的三日复核也没跑，因为这个模式下自动采集是关着的。</p>
+      <p><b>为什么看起来正常。</b>doctor 报健康，profile 报已启用，两者都是真的。Agent 读了 Goal 状态、已结算投影和治理回读，这条路径上没有任何按信源的“最后读取时间”。</p>
+      <p><b>局部修复。</b>加了一条工作规则：自动化关闭时，“拉 Decision Context”的意思是先检查每个关键信源的新鲜度，手动补读过期增量，再回答。</p>
+
+      <h3>2 · 第 8 天：已启用，但从未绑定</h3>
+      <p><b>发生了什么。</b>Decision Context 的配置写着已启用，但背后的外部 provider 从来没在运行时绑定过，自动拉取根本跑不起来。Agent 手动读了三个群，并如实说明了这一点。</p>
+      <p><b>为什么看起来正常。</b>“已启用”说的是配置。没有任何东西把它和“是否真的读到过信源”对照。</p>
+      <p><b>局部修复。</b>用一个私有运行时宿主绑定了 7 个 provider 中的 6 个。第 7 个是社交媒体，读取失败后被记录为 <code>provider_scan_failed</code>，而不是悄悄变成“无变化”。这次修复也把“provider 已绑定”和“具体信源当前健康”拆成了两件事。</p>
+
+      <h3>3 · 第 33 天：采集宿主指向已删除的目录</h3>
+      <p><b>发生了什么。</b>操作者指出，Agent 一直在直接读群聊，没有走它自己的 provider。回到正式链路后，才暴露出被直接读取掩盖的故障：后台采集宿主固定指向一个早已删除的临时目录，每一轮都在失败。修它的时候又发现第二个缺口：“全部已启用信源”的刷新，实际上漏掉了 38 个里的 8 个按需信源。</p>
+      <p><b>为什么看起来正常。</b>配置里采集仍然是启用的；采集队列的“检查时间”每次尝试都会更新，不管成功还是失败。从外面看，一个一直失败的宿主和一个健康的宿主没有区别。</p>
+      <p><b>局部修复。</b>宿主改为跟随已安装的运行时，并记录连续失败次数、最后一次成功时间、每个信源的状态和会过期的健康记录。全量刷新改为真正选中全部 38 个信源；自动采集从 21 个增量信源增加到 30 个。验证结果是 37 个读取成功、1 个无变化、0 个失败。积压和审阅游标都没动。</p>
+
+      <h3>4 · 第 40 天：读取成功，正文为空</h3>
+      <p><b>发生了什么。</b>社交媒体 provider 报告读取成功，但只返回了主页资料，每条帖子的正文都是空的。Agent 注意到了，改用浏览器补读帖子，并说明了情况。另外还有 1,000 批未审阅的采集积压正在被限流，Agent 没有清空它，也没有把它标成已读。</p>
+      <p><b>为什么看起来正常。</b>读取调用成功了。“成功”并不说明内容在不在。</p>
+      <p><b>局部修复。</b>当时在 provider 层没有修，Agent 只是把 provider 读不到的部分报告了出来。</p>
+
+      <h3>5 · 第 41 天：读错注册表，队列被饿死</h3>
+      <p><b>发生了什么。</b>Agent 刚刚告诉操作者：全局摘要显示大量 Goal 陈旧或健康异常，不能据此得出“最近没有进展”。它有所保留是对的。全局摘要读的是一个项目的注册表而不是全局注册表，因此漏掉了其他所有 Goal 的近期进展。与此同时，自动采集被 1,000 个待处理批次堵住了：一部分旧快照永远无法回放，却一直占着队列，把其他信源都饿死了。</p>
+      <p><b>为什么看起来正常。</b>摘要正常生成，没有报错；采集状态显示了队列长度，但没说队列已经不动了。</p>
+      <p><b>局部修复。</b>摘要改为显式读取全局注册表。队列容量作为临时措施从 1,000 提到 2,000，1,016 批积压全部保留，审阅游标不变。能力层的问题提到上游，记为 <a href="https://github.com/loopx-project/loopx/issues/4760">#4760</a>，在 <a href="https://github.com/loopx-project/loopx/pull/4763">#4763</a> 中修复：对无法回放的批次提供受保护的暂停、重启和回滚，并做信源隔离，一个信源的积压不再堵住其他信源。</p>
+    </section>
+
+    <section id="pattern">
+      <h2>共同的失效方式</h2>
+      <p>把五次事故摆在一起，形状每次都一样。Agent 能看到的每个信号，对它自己那一层都是准确的：配置确实启用了，doctor 确实健康，读取调用确实成功，摘要确实生成了。但没有一个信号说明底层读取有多旧、哪些信源失败了、答案覆盖了请求范围的多少。</p>
+      <figure><div class="architecture-viewport kanban-figure" tabindex="0" role="region" aria-label="三列对照图：五次事故中系统显示了什么、实际情况是什么、现在由哪个字段暴露出来；窄屏可横向滚动"><a href="../../images/five-freshness-incidents/signals-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的信号对照图"><img src="../../images/five-freshness-incidents/signals-zh.svg" alt="每次事故一行：系统显示的绿色信号、实际为真的红色事实、现在负责暴露它的蓝色字段" loading="lazy" width="1000" height="720"></a></div><figcaption>图 2 · 绿色是系统显示的，红色是实际情况，蓝色是现在让两者差异可见的字段。<span class="architecture-hint">窄屏可横向滚动；点击图片查看大图。</span></figcaption></figure>
+      <p>五次事故，本质上是四个不同的缺口：</p>
+      <ul>
+        <li><b>新旧。</b>投影没有可见的、按信源的“最后读取时间”（事故 1）。</li>
+        <li><b>配置不等于观测。</b>已启用、已绑定、已检查描述的是意图或尝试，不是成功读取（事故 2、3）。</li>
+        <li><b>成功不等于有内容。</b>读取可以成功，却什么可用的都没拿到（事故 4）。</li>
+        <li><b>范围。</b>一个只覆盖 48 个 Goal 中 1 个的答案，看起来仍然像一个完整的答案（事故 5）。</li>
+      </ul>
+      <p>谁发现了问题，也有一个不对称。Agent 认真回源的时候，它会主动说明缺口；它读投影的时候就不会，因为投影里没有任何东西让它起疑。Agent 没法报告它看不见的陈旧。</p>
+    </section>
+
+    <section id="local-fixes">
+      <h2>为什么逐个修补不够</h2>
+      <p>每个局部修复都是对的，但每个只堵住一条路。事故 1 的工作规则依赖 Agent 记得它；事故 2 的 provider 绑定，管不了后来坏掉的宿主；事故 3 的宿主健康记录，覆盖不了“成功但正文为空”的 provider；事故 5 的注册表修复只修了一个摘要，其他投影照样可以悄悄丢掉范围。</p>
+      <p>代价最后落在操作者的注意力上。五次里有两次，是因为操作者恰好知道 Agent 不知道的事才被发现。这和控制面存在的意义正好相反：如果新鲜度要靠人察觉“这建议听起来像是一周前的”，那这个人就是新鲜度检查本身。</p>
+      <p>于是问题从“怎么修这一次”，变成了“每个投影必须携带什么，才能让下一个变种在没人先察觉的情况下就可见”。</p>
+    </section>
+
+    <section id="contract">
+      <h2>合同层的修复</h2>
+      <p>答案分两部分：一部分管信源，一部分管投影。</p>
+      <p><b>信源新鲜度</b>（<a href="https://github.com/loopx-project/loopx/pull/5075">#5075</a>，审阅中）。Decision Context 新增 <code>decision_source_freshness_v0</code> 合同。每个信源报告 <code>last_read_at</code>、<code>staleness_seconds</code>、状态（fresh、stale、never_read、not_scanned 之一）和连续失败次数。合同里直接写明 <code>enabled_state_implies_freshness: false</code>。采集队列把 <code>last_success_at</code> 和 <code>checked_at</code> 分开记录，失败的宿主再也不会看起来和健康的一样。doctor 增加采集宿主健康检查，陈旧的行在 Markdown 里标红。</p>
+      <p><b>投影 envelope</b>（<a href="https://github.com/loopx-project/loopx/pull/5085">#5085</a>，审阅中）。每个投影都带一个 <code>loopx_projection_envelope_v0</code> envelope，由 TypeScript kernel 中唯一的 owner 封装。Python 适配层只报告自己读到了什么；投影是否新鲜、是否完整、是否告警，只在一个地方判定，各个入口不会各自演化出不同的定义。</p>
+      <figure><div class="architecture-viewport kanban-figure" tabindex="0" role="region" aria-label="读取事实流入 TypeScript kernel 封装，输出投影 envelope，并以 JSON 和 Markdown 两种形式呈现，下方是消费者规则；窄屏可横向滚动"><a href="../../images/five-freshness-incidents/envelope-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的 envelope 结构图"><img src="../../images/five-freshness-incidents/envelope-zh.svg" alt="读取事实进入 TypeScript kernel 的 projection.envelope.seal，输出投影 envelope，分别渲染为 JSON 和一行 Markdown，下方是消费者规则" loading="lazy" width="1000" height="696"></a></div><figcaption>图 3 · 适配层只报告读取事实，envelope 只由 kernel 封装；同一个 envelope 渲染成 JSON 和一行 Markdown。<span class="architecture-hint">窄屏可横向滚动；点击图片查看大图。</span></figcaption></figure>
+      <p>回到事故 5：今天如果全局摘要同样只读到一个项目的注册表，它会这样输出：</p>
+      <pre><code>"projection_envelope": {
+  "schema_version": "loopx_projection_envelope_v0",
+  "projection": "global_summary",
+  "observed_at": "2026-09-26T03:10:00+08:00",
+  "served_at": "2026-09-26T03:10:00+08:00",
+  "fresh": true,
+  "complete": false,
+  "alert": true,
+  "alert_reasons": ["incomplete_coverage"],
+  "sources": [ … 每次读取一行，含 read_status、last_read_at、staleness_seconds … ],
+  "coverage": {
+    "scope": "global",
+    "expected_count": 48,
+    "included_count": 1,
+    "omitted": [{ "reason": "outside_current_registry", "count": 47 }],
+    "complete": false
+  }
+}
+
+🔴 projection: observed_at=2026-09-26T03:10:00+08:00 coverage=1/48 scope=global
+🔴 alerts: incomplete_coverage omitted=outside_current_registry=47</code></pre>
+      <p>这个摘要同时是新鲜的和不完整的，而且它自己说了出来。读到它的 Agent，不可能再只说“最近没有进展”，而不同时说“我只看到了 48 个 Goal 中的 1 个”。</p>
+      <div class="table-scroll"><table><caption>每次事故由哪个字段暴露，以及读者会看到什么</caption><thead><tr><th>事故</th><th>字段</th><th>读者看到什么</th></tr></thead><tbody>
+        <tr><td>1 · 一周前的投影</td><td><code>sources[].last_read_at</code> 对比 <code>window_seconds</code></td><td><code>stale_sources</code>，附信源 id</td></tr>
+        <tr><td>2 · 已启用但从未绑定</td><td>必需信源上的 <code>read_status: not_read</code></td><td><code>missing_required_sources</code></td></tr>
+        <tr><td>3 · 宿主指向已删除目录</td><td><code>last_success_at</code> 与 <code>checked_at</code> 分离；连续失败次数；<code>not_scanned</code></td><td>标红的行，以及失败的采集宿主 doctor 检查</td></tr>
+        <tr><td>4 · 读取成功但正文为空</td><td><code>unreadable_count</code> 大于 0</td><td><code>partially_unreadable</code>，汇总为 <code>unreadable_sources</code></td></tr>
+        <tr><td>5 · 读错注册表</td><td>相对请求范围的 <code>coverage</code>，带类型化的省略项</td><td><code>incomplete_coverage</code>，<code>coverage=1/48</code></td></tr>
+      </tbody></table></div>
+      <p>还有两条小规则堵住剩下的漏洞。派生投影继承所有上游的信源行，所以一个摘要永远不会比它依赖的最旧那次读取更新鲜。缓存回放保留原来的 <code>observed_at</code>，只重写 <code>served_at</code>，缓存的答案会如实变旧，而不是每次提供都像新的。</p>
+      <div class="case-note"><b>消费者规则</b><p>把一个投影当作当前、完整的之前，先说出它携带的每一条告警。envelope 让缺口可见，这条规则让 Agent 把缺口说出口。</p></div>
+      <p>envelope 目前覆盖 <code>status</code>、<code>global-summary</code> 和 <code>global-gates</code>。选这三个，是因为长程 Agent 恢复工作时最先读的就是它们。</p>
+    </section>
+
+    <section id="limits">
+      <h2>还没解决的部分</h2>
+      <ul>
+        <li><b>合同层修复还没发布。</b>写作时 #5075 和 #5085 都是未合并的 PR，只有能力层修复 #4763 已经合并。</li>
+        <li><b>事故 4 仍依赖 provider。</b>只有 provider 统计了空正文，envelope 才能报告它。一个“成功但没内容、也不报告不可读数量”的 provider，仍然会被判为新鲜。</li>
+        <li><b>消费者规则依赖 Agent 遵守。</b>envelope 能让认真的读者不可能错过缺口，但没法强迫粗心的读者提它。这部分是遵从度问题，我们会去度量，而不是默认它成立。</li>
+        <li><b>其他投影还没覆盖。</b><code>global-todos</code>、<code>global-risks</code>、quota should-run、review packet，以及 Decision Context 自己的输出，都还没带 envelope。</li>
+        <li><b>积压恢复仍需要操作者。</b>#4763 做了信源隔离和受保护的暂停、重启、回滚，但不会自行决定某个无法回放的批次可以丢弃。</li>
+      </ul>
+    </section>
+
+    <section id="lessons">
+      <h2>对 Agent 控制面的启示</h2>
+      <p><strong>绿灯只是关于某一层的陈述。</strong>已启用、已绑定、已检查、已成功、已生成，各自都正确回答了自己的问题。Agent 需要的是另一个问题的答案——这份东西有多旧、有多全——而没有哪一层对它负责。</p>
+      <p><strong>新鲜度应该写进合同，而不是写进 prompt。</strong>我们的第一个修复是一条要 Agent 记住的规则，它只管用到下一个变种出现。持久的修复是每个投影上的一个字段，在一个地方封装，读者不可能看不到。</p>
+      <p><strong>覆盖范围和新旧一样重要。</strong>事故 5 是新鲜的，但是错的。“48 个里的 1 个”比任何时间戳都有用。</p>
+      <p><strong>诚实的恢复比快速的恢复更重要。</strong>五次事故里，没有推进过游标，没有清空过积压，也没有为了让状态好看而伪造审阅。正因为如此，每次事故事后都能完整还原，这篇复盘才写得出来。</p>
+      <p>我们做 LoopX，是为了不让长程 Agent 把旧照片当成现在。整整 47 天，它没能为我们自己的 Agent 做到这一点。修复还没完成，但它现在落在了该在的地方：每个投影都必须满足的合同里，而不是读建议的那个人的注意力里。</p>
+      <p class="edition">代码引用固定在 <a href="https://github.com/loopx-project/loopx/tree/71dbfd5e605da4e7efdb58c87cd3f4a96d39e0e5"><code>71dbfd5e6</code></a>；写作时 <a href="https://github.com/loopx-project/loopx/pull/5075">#5075</a> 和 <a href="https://github.com/loopx-project/loopx/pull/5085">#5085</a> 尚未合并。事故细节来自该部署自己的记录并已脱敏：人名、组织、群、账号和消息内容均已移除，日期、数量和顺序保持原样。JSON 片段节选自 #5085 中全局摘要的 envelope。</p>
+    </section>
+  </article>
+</div>
+</main>
+<footer class="site-footer"><a class="brand" href="../../../?lang=zh">LoopX</a><p>让工作持续推进，让判断由人掌握。</p><a href="../">全部文章 ↑</a></footer>
+</body>
+</html>

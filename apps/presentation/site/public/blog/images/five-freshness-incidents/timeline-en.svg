@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="624" viewBox="0 0 1000 624" role="img" aria-labelledby="title desc">
+<title id="title">01  Five freshness incidents in 47 days</title>
+<desc id="desc">A 47-day timeline with five red incident markers on days 4, 8, 33, 40 and 41. None was raised by LoopX. Below the axis, the fix track: background capture shipped on day 26, capture recovery merged on day 41, and the two contract-level fixes are in review on day 47.</desc>
+<g font-family="Geist, Inter, Helvetica Neue, Arial, sans-serif">
+<rect x="0" y="0" width="1000" height="624" fill="#fafafa"/>
+<text x="40.0" y="49.0" font-size="28" fill="#171717" font-weight="600" text-anchor="start">01  Five freshness incidents in 47 days</text>
+<text x="40.0" y="84.0" font-size="17" fill="#4d4d4d" font-weight="400" text-anchor="start">One advisory deployment on LoopX, Aug 10 – Sep 25, 2026. LoopX itself raised none of the five.</text>
+<rect x="40" y="116" width="172" height="164" rx="12" fill="#fff" stroke="#ebebeb"/>
+<rect x="40" y="116" width="172" height="5" rx="2" fill="#d93036"/>
+<text x="56.0" y="146.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Aug 14 · day 4</text>
+<text x="56.0" y="176.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">Week-old projection</text>
+<text x="56.0" y="200.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">read as current</text>
+<text x="56.0" y="238.0" font-size="13" fill="#4d4d4d" font-weight="400" text-anchor="start">caught by the operator</text>
+<text x="56.0" y="262.0" font-size="13" fill="#d93036" font-weight="500" text-anchor="start">LoopX alert: none</text>
+<path d="M126 280 L134.9 359" stroke="#d93036" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+<rect x="228" y="116" width="172" height="164" rx="12" fill="#fff" stroke="#ebebeb"/>
+<rect x="228" y="116" width="172" height="5" rx="2" fill="#d93036"/>
+<text x="244.0" y="146.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Aug 18 · day 8</text>
+<text x="244.0" y="176.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">Enabled, but</text>
+<text x="244.0" y="200.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">never bound</text>
+<text x="244.0" y="238.0" font-size="13" fill="#4d4d4d" font-weight="400" text-anchor="start">disclosed by the agent</text>
+<text x="244.0" y="262.0" font-size="13" fill="#d93036" font-weight="500" text-anchor="start">LoopX alert: none</text>
+<path d="M314 280 L209.8 359" stroke="#d93036" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+<rect x="416" y="116" width="172" height="164" rx="12" fill="#fff" stroke="#ebebeb"/>
+<rect x="416" y="116" width="172" height="5" rx="2" fill="#d93036"/>
+<text x="432.0" y="146.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Sep 12 · day 33</text>
+<text x="432.0" y="176.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">Capture host on a</text>
+<text x="432.0" y="200.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">deleted checkout</text>
+<text x="432.0" y="238.0" font-size="13" fill="#4d4d4d" font-weight="400" text-anchor="start">caught by the operator</text>
+<text x="432.0" y="262.0" font-size="13" fill="#d93036" font-weight="500" text-anchor="start">LoopX alert: none</text>
+<path d="M502 280 L677.9 359" stroke="#d93036" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+<rect x="604" y="116" width="172" height="164" rx="12" fill="#fff" stroke="#ebebeb"/>
+<rect x="604" y="116" width="172" height="5" rx="2" fill="#d93036"/>
+<text x="620.0" y="146.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Sep 19 · day 40</text>
+<text x="620.0" y="176.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">Read succeeded,</text>
+<text x="620.0" y="200.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">body empty</text>
+<text x="620.0" y="238.0" font-size="13" fill="#4d4d4d" font-weight="400" text-anchor="start">disclosed by the agent</text>
+<text x="620.0" y="262.0" font-size="13" fill="#d93036" font-weight="500" text-anchor="start">LoopX alert: none</text>
+<path d="M690 280 L808.9 359" stroke="#d93036" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+<rect x="792" y="116" width="172" height="164" rx="12" fill="#fff" stroke="#ebebeb"/>
+<rect x="792" y="116" width="172" height="5" rx="2" fill="#d93036"/>
+<text x="808.0" y="146.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Sep 20 · day 41</text>
+<text x="808.0" y="176.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">Wrong registry,</text>
+<text x="808.0" y="200.0" font-size="17" fill="#171717" font-weight="600" text-anchor="start">starved queue</text>
+<text x="808.0" y="238.0" font-size="13" fill="#4d4d4d" font-weight="400" text-anchor="start">disclosed by the agent</text>
+<text x="808.0" y="262.0" font-size="13" fill="#d93036" font-weight="500" text-anchor="start">LoopX alert: none</text>
+<path d="M878 280 L827.7 359" stroke="#d93036" stroke-width="1.5" stroke-dasharray="4 4" fill="none"/>
+<path d="M60 372 L940 372" stroke="#171717" stroke-width="2"/>
+<path d="M60.0 366 L60.0 378" stroke="#171717" stroke-width="2"/>
+<text x="60.0" y="402.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="middle" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Aug 10</text>
+<path d="M471.9 366 L471.9 378" stroke="#171717" stroke-width="2"/>
+<text x="471.9" y="402.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="middle" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Sep 1</text>
+<path d="M921.3 366 L921.3 378" stroke="#171717" stroke-width="2"/>
+<text x="921.3" y="402.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="middle" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Sep 25</text>
+<circle cx="134.9" cy="372" r="12" fill="#d93036"/>
+<text x="134.9" y="377.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">1</text>
+<circle cx="209.8" cy="372" r="12" fill="#d93036"/>
+<text x="209.8" y="377.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">2</text>
+<circle cx="677.9" cy="372" r="12" fill="#d93036"/>
+<text x="677.9" y="377.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">3</text>
+<circle cx="808.9" cy="372" r="12" fill="#d93036"/>
+<text x="808.9" y="377.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">4</text>
+<circle cx="827.7" cy="372" r="12" fill="#d93036"/>
+<text x="827.7" y="377.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">5</text>
+<text x="40.0" y="452.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">Fix track</text>
+<path d="M546.8 416 L546.8 454" stroke="#b8d5fc" stroke-width="2"/>
+<circle cx="546.8" cy="448" r="7" fill="#8f8f8f"/>
+<text x="546.8" y="474.0" font-size="15" fill="#4d4d4d" font-weight="500" text-anchor="middle">#3953 opt-in source capture ships</text>
+<path d="M827.7 416 L827.7 488" stroke="#b8d5fc" stroke-width="2"/>
+<circle cx="827.7" cy="482" r="7" fill="#0070f3"/>
+<text x="813.7" y="508.0" font-size="15" fill="#171717" font-weight="500" text-anchor="end">#4763 capture recovery · merged</text>
+<path d="M940.0 416 L940.0 522" stroke="#b8d5fc" stroke-width="2"/>
+<circle cx="940.0" cy="516" r="7" fill="#fff" stroke="#0070f3" stroke-width="2.5"/>
+<text x="926.0" y="542.0" font-size="15" fill="#171717" font-weight="500" text-anchor="end">#5075 · #5085 contract fixes · in review</text>
+<path d="M40 572 L960 572" stroke="#ebebeb"/>
+<text x="40.0" y="600.0" font-size="14" fill="#4d4d4d" font-weight="400" text-anchor="start">Sources read: 21 at the start, 39 by day 40 · 253 turns · no data lost, no review or cursor forged</text>
+</g>
+</svg>

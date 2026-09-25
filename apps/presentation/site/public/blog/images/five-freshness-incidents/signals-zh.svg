@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="720" viewBox="0 0 1000 720" role="img" aria-labelledby="title desc">
+<title id="title">02  看起来是绿的，实际是什么</title>
+<desc id="desc">五行，每行对应一次事故：系统显示的绿色信号、实际的红色事实，以及现在让它显式暴露的 envelope 或采集字段。</desc>
+<g font-family="Geist, Inter, PingFang SC, Noto Sans CJK SC, Microsoft YaHei, sans-serif">
+<rect x="0" y="0" width="1000" height="720" fill="#fafafa"/>
+<text x="40.0" y="49.0" font-size="28" fill="#171717" font-weight="600" text-anchor="start">02  看起来是绿的，实际是什么</text>
+<text x="40.0" y="84.0" font-size="17" fill="#4d4d4d" font-weight="400" text-anchor="start">Agent 依赖的每个信号对它自己那一层都是准确的，但没有一个说明新鲜度。</text>
+<text x="84.0" y="128.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">系统显示</text>
+<text x="318.0" y="128.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">实际情况</text>
+<text x="690.0" y="128.0" font-size="13" fill="#4d4d4d" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">现在由什么暴露出来</text>
+<rect x="40" y="144" width="920" height="100" rx="12" fill="#fff" stroke="#ebebeb"/>
+<circle cx="60" cy="194" r="12" fill="#d93036"/>
+<text x="60.0" y="199.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">1</text>
+<rect x="84" y="162" width="214" height="64" rx="8" fill="#e7f5ec"/>
+<text x="98.0" y="188.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">✓ doctor 健康</text>
+<text x="98.0" y="210.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">   profile 已启用</text>
+<rect x="310" y="162" width="366" height="64" rx="8" fill="#fdeded"/>
+<text x="324.0" y="188.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">信源最后一次扫描在 9 天前；</text>
+<text x="324.0" y="210.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">回答用的是已结算的旧投影。</text>
+<text x="690.0" y="188.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">last_read_at + 窗口</text>
+<text x="690.0" y="210.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">→ stale_sources</text>
+<rect x="40" y="256" width="920" height="100" rx="12" fill="#fff" stroke="#ebebeb"/>
+<circle cx="60" cy="306" r="12" fill="#d93036"/>
+<text x="60.0" y="311.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">2</text>
+<rect x="84" y="274" width="214" height="64" rx="8" fill="#e7f5ec"/>
+<text x="98.0" y="311.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">✓ Decision Context 已启用</text>
+<rect x="310" y="274" width="366" height="64" rx="8" fill="#fdeded"/>
+<text x="324.0" y="300.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">外部 provider 从未在运行时绑定，</text>
+<text x="324.0" y="322.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">实际什么都读不到。</text>
+<text x="690.0" y="300.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">read_status = not_read</text>
+<text x="690.0" y="322.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">→ missing_required_sources</text>
+<rect x="40" y="368" width="920" height="100" rx="12" fill="#fff" stroke="#ebebeb"/>
+<circle cx="60" cy="418" r="12" fill="#d93036"/>
+<text x="60.0" y="423.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">3</text>
+<rect x="84" y="386" width="214" height="64" rx="8" fill="#e7f5ec"/>
+<text x="98.0" y="412.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">✓ 采集已启用</text>
+<text x="98.0" y="434.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">   “检查时间”在更新</text>
+<rect x="310" y="386" width="366" height="64" rx="8" fill="#fdeded"/>
+<text x="324.0" y="412.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">宿主指向已删除的目录，每轮都失败；</text>
+<text x="324.0" y="434.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">“全部信源”漏掉了 38 个里的 8 个。</text>
+<text x="690.0" y="412.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">last_success_at ≠ checked_at</text>
+<text x="690.0" y="434.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">宿主心跳 · not_scanned</text>
+<rect x="40" y="480" width="920" height="100" rx="12" fill="#fff" stroke="#ebebeb"/>
+<circle cx="60" cy="530" r="12" fill="#d93036"/>
+<text x="60.0" y="535.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">4</text>
+<rect x="84" y="498" width="214" height="64" rx="8" fill="#e7f5ec"/>
+<text x="98.0" y="535.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">✓ provider 读取：成功</text>
+<rect x="310" y="498" width="366" height="64" rx="8" fill="#fdeded"/>
+<text x="324.0" y="524.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">只返回了主页资料，</text>
+<text x="324.0" y="546.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">每条帖子正文都是空的。</text>
+<text x="690.0" y="524.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">unreadable_count &gt; 0</text>
+<text x="690.0" y="546.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">→ partially_unreadable</text>
+<rect x="40" y="592" width="920" height="100" rx="12" fill="#fff" stroke="#ebebeb"/>
+<circle cx="60" cy="642" r="12" fill="#d93036"/>
+<text x="60.0" y="647.0" font-size="13" fill="#fff" font-weight="600" text-anchor="middle">5</text>
+<rect x="84" y="610" width="214" height="64" rx="8" fill="#e7f5ec"/>
+<text x="98.0" y="636.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">✓ 全局摘要已生成</text>
+<text x="98.0" y="658.0" font-size="15" fill="#1a7f37" font-weight="500" text-anchor="start">   采集状态正常</text>
+<rect x="310" y="610" width="366" height="64" rx="8" fill="#fdeded"/>
+<text x="324.0" y="636.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">摘要只读了一个项目的注册表（1/48 个 goal）；</text>
+<text x="324.0" y="658.0" font-size="15" fill="#d93036" font-weight="500" text-anchor="start">1,000 个卡住的批次饿死了其他信源。</text>
+<text x="690.0" y="636.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">coverage 1/48 · omitted 47</text>
+<text x="690.0" y="658.0" font-size="14" fill="#0070f3" font-weight="500" text-anchor="start" font-family="Geist Mono, JetBrains Mono, SFMono-Regular, monospace">信源隔离（#4763）</text>
+</g>
+</svg>
