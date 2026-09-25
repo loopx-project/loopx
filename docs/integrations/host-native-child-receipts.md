@@ -19,16 +19,16 @@ Goal 事件流，以 Turn ID、稳定操作 ID 和不限定宿主的 `entrypoint
 `native-child record` currently accepts the coordinator's typed report. Its
 `observation` is `coordinator_reported` and `host_attested` is always `false`.
 LoopX cannot intercept an arbitrary external host's native tool call. A future
-host adapter can observe that call at its own boundary and use the same event
-and read-model contract, but must declare its provenance instead of silently
-upgrading a coordinator report into host attestation. Missing records remain
+host adapter must observe that call at its own boundary and extend this event
+and read-model contract with a separately verified provenance variant; this
+v0 recorder cannot claim host attestation. Missing records remain
 `unknown`; neither a missing record nor `max_children > 0` proves that a child
 was created or deliberately skipped.
 
 目前 `native-child record` 接受主 Agent 的类型化上报，因此 `observation` 为
 `coordinator_reported`，`host_attested` 始终为 `false`。LoopX 无法拦截任意
-外部宿主的原生工具调用。后续宿主适配器可在自己的边界观察调用并沿用同一
-事件和读模型，但必须明确来源，不能把主 Agent 转述升级为宿主核验。缺少回执
+外部宿主的原生工具调用。后续宿主适配器须在自己的边界观察调用，给事件与
+读模型扩展单独核验的来源类型；当前 v0 上报器不能声称宿主核验。缺少回执
 就是 `unknown`；没有回执或配置上限大于零，都不能证明已启动或主动跳过。
 
 ## Lifecycle / 生命周期
