@@ -1,32 +1,9 @@
-"""Read-only shared goal alignment projection adapter (RFC Stage 1).
+"""Read-only shared Goal alignment over the selected Todo/lease authority.
 
-This adapter collects typed facts for one registered Agent around one shared
-Goal — registry identity, the selected Todo/lease source, the append-only state
-event log, Todo claim/lease fields, and recorded replan obligations — and
-asks the TypeScript-owned reducer (``goal.shared_goal_alignment.project``)
-to project ``shared_goal_alignment_v0``.
-
-Derivation invariants (RFC shared-goal-alignment-and-governed-amendment-v0
-§3.3): every projected field is derived from typed facts only. Shared
-``Next Action`` prose, agent vision prose, and chat prose are never inputs.
-
-The projection is strictly read-only: no writer path is touched, and no
-approval or escalation semantics exist here. ``source_basis_digest`` is a
-typed source-facts basis summary (goal status, registered agents, and
-event-log basis facts, and canonical Todo revision when promoted), not a canonical intent-envelope digest — the full
-RFC §3.1 envelope (objective, non-goals, acceptance, permission scope,
-terminal conditions) has no typed storage yet, so nothing here claims
-canonical intent identity.
-
-Basis semantics: the only goal-level monotonic sequence carrier on this
-codebase is the state event log's ``append_sequence``, so
-``state_event_basis_sequence`` reports that event projection basis — it is
-NOT a canonical goal/intent revision. Goals without a parsable
-``events.jsonl`` use sequence 0 and an unbound Agent frontier. Before promotion
-this is ``markdown_active_state``; after promotion it is ``canonical_todo_snapshot``
-with a separate ``todo_basis`` token, never a fabricated event sequence;
-drift is then reported as ``frontier_basis_unverifiable`` instead of a
-fabricated behind fact.
+Promoted Goals carry a provider revision; legacy Markdown has no monotonic
+revision. Neither source fabricates an event sequence or an Agent frontier.
+The historical sequence fields remain zero/unbound for persisted proposal
+compatibility; typed alignment and amendment admission decide what is provable.
 """
 
 from __future__ import annotations
@@ -38,31 +15,21 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
-from ...event_sourced_state import (
-    AppendOnlyStateEventStore,
-    StateEventError,
-    build_state_projection,
-    event_sort_key,
-)
 from ...history import load_registry
 from ...registry import registry_goals
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..todos.contract import normalize_todo_claimed_by
 from .shared_goal_work_source import SharedGoalWorkSource, read_shared_goal_work_source
-from .active_state_event_projection import state_event_log_candidates
 from .active_state_metadata import parse_state_frontmatter
 from .goal_frontier import (
     autonomous_replan_is_required,
     select_autonomous_replan_obligation,
 )
-from .path_resolution import resolve_goal_local_path
 
 SHARED_GOAL_ALIGNMENT_EFFECT_METHOD = "goal.shared_goal_alignment.project"
 SHARED_GOAL_ALIGNMENT_REQUEST_SCHEMA_VERSION = "shared_goal_alignment_request_v0"
 SHARED_GOAL_ALIGNMENT_SCHEMA_VERSION = "shared_goal_alignment_v0"
-REVISION_BASIS_STATE_EVENT_LOG = "state_event_log"
 REVISION_BASIS_MARKDOWN_ACTIVE_STATE = "markdown_active_state"
-BASIS_SOURCE_STATE_EVENT_LOG = "state_event_log"
 BASIS_SOURCE_UNBOUND = "unbound"
 DEFAULT_REGISTRY_RELATIVE_PATH = Path(".loopx") / "registry.json"
 
@@ -87,82 +54,8 @@ def _registered_goal(
     raise ValueError(f"goal is not registered: {goal_id}")
 
 
-def _load_state_event_facts(
-    goal: Mapping[str, Any],
-    *,
-    state_path: Path,
-) -> dict[str, Any] | None:
-    """Load the first parsable state event log for the goal, read-only."""
-
-    for event_log_path in state_event_log_candidates(
-        dict(goal),
-        state_path=state_path,
-        resolve_goal_local_path=resolve_goal_local_path,
-    ):
-        if not event_log_path.exists():
-            continue
-        try:
-            events = AppendOnlyStateEventStore(event_log_path).load()
-            if not events:
-                continue
-            projection = build_state_projection(
-                events,
-                goal_id=str(goal.get("id") or "") or None,
-            )
-        except (OSError, StateEventError):
-            continue
-        return {"events": events, "projection": projection}
-    return None
 
 
-def _agent_frontier_basis(
-    event_facts: Mapping[str, Any] | None,
-    *,
-    agent_id: str,
-) -> dict[str, Any]:
-    """Derive the Agent's frontier basis from its own attributed events.
-
-    ``based_on_state_event_sequence`` is the highest append sequence among
-    events whose ``actor_agent_id`` belongs to this Agent. Events attributed
-    to peers never advance another Agent's basis.
-    """
-
-    events = event_facts.get("events") if event_facts else None
-    if not isinstance(events, list):
-        return {
-            "based_on_state_event_sequence": None,
-            "basis_source": BASIS_SOURCE_UNBOUND,
-            "last_agent_event_id": None,
-        }
-    based_on: int | None = None
-    last_agent_event_id: str | None = None
-    for event in sorted(
-        (item for item in events if isinstance(item, dict)),
-        key=event_sort_key,
-    ):
-        actor = normalize_todo_claimed_by(event.get("actor_agent_id"))
-        if actor != agent_id:
-            continue
-        try:
-            sequence = int(event.get("append_sequence") or 0)
-        except (TypeError, ValueError):
-            continue
-        if sequence < 1:
-            continue
-        based_on = sequence
-        event_id = str(event.get("event_id") or "").strip()
-        last_agent_event_id = event_id or None
-    if based_on is None:
-        return {
-            "based_on_state_event_sequence": None,
-            "basis_source": BASIS_SOURCE_UNBOUND,
-            "last_agent_event_id": None,
-        }
-    return {
-        "based_on_state_event_sequence": based_on,
-        "basis_source": BASIS_SOURCE_STATE_EVENT_LOG,
-        "last_agent_event_id": last_agent_event_id,
-    }
 
 
 def _source_basis_facts_envelope(
@@ -245,30 +138,18 @@ def _project_shared_goal_alignment(
     )
     if source.goal_id != normalized_goal_id:
         raise ValueError("shared work snapshot belongs to another Goal")
-    state_file, state_text = source.state_path, source.state_text
+    state_text = source.state_text
 
-    event_facts = _load_state_event_facts(goal, state_path=state_file)
     frontmatter = parse_state_frontmatter(state_text)
     state_updated_at = str(frontmatter.get("updated_at") or "").strip() or None
     goal_status = str(goal.get("status") or "").strip() or (
         str(frontmatter.get("status") or "").strip() or None
     )
 
-    if event_facts is not None:
-        projection = event_facts["projection"]
-        revision_basis = REVISION_BASIS_STATE_EVENT_LOG
-        try:
-            basis_sequence = int(projection.get("last_append_sequence") or 0)
-        except (TypeError, ValueError):
-            basis_sequence = 0
-        source_checksum = (
-            str(projection.get("source_checksum") or "").strip() or None
-        )
-    else:
-        revision_basis = ("canonical_todo_snapshot" if source.canonical_basis is not None
-            else REVISION_BASIS_MARKDOWN_ACTIVE_STATE)
-        basis_sequence = 0
-        source_checksum = None
+    revision_basis = ("canonical_todo_snapshot" if source.canonical_basis is not None
+        else REVISION_BASIS_MARKDOWN_ACTIVE_STATE)
+    basis_sequence = 0
+    source_checksum = None
 
     source_basis_digest = _canonical_digest(
         _source_basis_facts_envelope(
@@ -276,11 +157,7 @@ def _project_shared_goal_alignment(
             goal_status=goal_status,
             registered_agents=registered_agents,
             revision_basis=revision_basis,
-            last_append_sequence=(
-                basis_sequence
-                if revision_basis == REVISION_BASIS_STATE_EVENT_LOG
-                else None
-            ),
+            last_append_sequence=None,
             source_checksum=source_checksum,
             state_updated_at=state_updated_at,
             todo_basis=source.canonical_basis,
@@ -294,10 +171,8 @@ def _project_shared_goal_alignment(
         **({"todo_basis": source.canonical_basis} if source.canonical_basis is not None else {}),
     }
 
-    frontier_basis = _agent_frontier_basis(
-        event_facts,
-        agent_id=normalized_agent_id,
-    )
+    frontier_basis = {"based_on_state_event_sequence": None,
+        "basis_source": BASIS_SOURCE_UNBOUND, "last_agent_event_id": None}
 
     replan_obligation = select_autonomous_replan_obligation(
         dict(status_item) if isinstance(status_item, Mapping) else {},

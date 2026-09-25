@@ -149,7 +149,6 @@ files = [
   "loopx/control_plane/coordination/local_authority_shadow_projection.py",
   "loopx/control_plane/quota/effect_program.py",
   "loopx/control_plane/quota/states.py",
-  "loopx/control_plane/runtime/event_store_migration_bridge.py",
   "loopx/control_plane/runtime/time.py",
   "loopx/control_plane/runtime/trajectory_hygiene.py",
   "loopx/control_plane/scheduler/time.py",

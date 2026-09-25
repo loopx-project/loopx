@@ -20,10 +20,9 @@ from ..coordination.coordination_state_contract_generated import (
     TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA,
 )
 from ..coordination.runtime_shadow import resolve_coordination_runtime_shadow_config
-from ..goals.active_state_event_projection import (
+from ..goals.legacy_event_source import (
     state_event_log_candidates as _state_event_log_candidates,
 )
-from ..goals.path_resolution import resolve_goal_local_path
 from ..todos.contract import normalize_todo_id
 from ..todos.handoff_mode import HANDOFF_MODE_LEGACY
 from .local_lease_record import TASK_LEASE_SCHEMA_VERSION, TaskLeaseError
@@ -91,7 +90,6 @@ def _task_lease_authority_source_paths(
         _state_event_log_candidates(
             goal,
             state_path=state_file,
-            resolve_goal_local_path=resolve_goal_local_path,
         )
     ):
         sources.append((f"state_event_{index}", path))

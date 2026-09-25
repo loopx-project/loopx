@@ -109,7 +109,6 @@ CONTROL_PLANE_QUALIFICATION_PROFILES: tuple[dict[str, Any], ...] = (
             "loopx/control_plane/work_items/delivery_history.py",
             "loopx/control_plane/work_items/delivery_history.ts",
             "loopx/control_plane/work_items/work_lane.py",
-            "loopx/control_plane/runtime/event_store_migration_bridge.py",
             "control-plane-integrated-canary-smoke.py",
             "interaction-contract-state-machine-smoke.py",
             "interaction-scheduler-authority-smoke.py",
@@ -120,7 +119,7 @@ CONTROL_PLANE_QUALIFICATION_PROFILES: tuple[dict[str, Any], ...] = (
                 "command": "python3 examples/control_plane/control-plane-integrated-canary-smoke.py",
                 "tier": "deep",
                 "reason": (
-                    "samples the full event-sourced todo projection, status, quota interaction contract, "
+                    "samples the Markdown Todo projection, status, quota interaction contract, "
                     "work-lane contract, scheduler ack, refresh-state, spend-slot, and review-packet handoff path; "
                     "kept deep because it is a slow end-to-end fixture"
                 ),

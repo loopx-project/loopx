@@ -660,7 +660,7 @@ LADDER_ROWS: tuple[LadderRow, ...] = (
     LadderRow(
         id="s2c2.event_only_todo_source_holds",
         stage="2c2",
-        title="An event-only Todo source holds qualification and candidate reads fail-closed until rollback and rebootstrap",
+        title="A retired Todo event source refuses reads and primary writes without changing either source",
         product_path="real_cli",
         gate="deterministic",
         posix_only=False,

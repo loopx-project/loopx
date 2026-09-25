@@ -36,10 +36,9 @@ from .completion_state import (
     normalize_todo_completion_recovery,
 )
 from .completion_fence import evaluate_todo_completion_fence
-from .event_writeback import event_projection_todo_context
 
 
-TodoCompletionProjectionSource = Literal["materialized", "event_log"]
+TodoCompletionProjectionSource = Literal["materialized"]
 
 
 def read_persisted_todo_record(
@@ -132,26 +131,6 @@ def read_persisted_todo_record_with_source(
             item_todo_id = normalize_todo_id(item.get("todo_id"))
             if item_todo_id:
                 existing_todo_ids.add(item_todo_id)
-    if block is None and registry_path is not None and goal_id is not None:
-        context = event_projection_todo_context(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            state_path=state_file,
-            todo_id=todo_id,
-            role=None,
-        )
-        if context is not None:
-            block = dict(context["item"])
-            projection_source = "event_log"
-            for candidate_role in ("user", "agent"):
-                summary = context["fields"].get(f"{candidate_role}_todos")
-                items = summary.get("items") if isinstance(summary, dict) else []
-                for item in items if isinstance(items, list) else []:
-                    if not isinstance(item, dict):
-                        continue
-                    item_todo_id = normalize_todo_id(item.get("todo_id"))
-                    if item_todo_id:
-                        existing_todo_ids.add(item_todo_id)
     if block is None:
         normalized_todo_id = normalize_todo_id(todo_id) or todo_id
         raise ValueError(

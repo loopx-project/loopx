@@ -6,13 +6,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ...event_sourced_state import (
+from .supervisor_event_log import (
     LOCAL_PRIVATE_PRIVACY,
     SUPERVISOR_PROPOSED,
     SUPERVISOR_RECEIPT_RECORDED,
-    AppendOnlyStateEventStore,
-    StateEventConflictError,
-    make_state_event,
+    SupervisorEventStore,
+    make_supervisor_event,
 )
 from ..todos.contract import normalize_todo_claimed_by
 from .supervisor import normalize_supervisor_decision
@@ -91,7 +90,7 @@ def build_supervisor_proposal_event(
     _reject_inline_secrets(normalized, field="decision")
     decision_id = str(normalized["decision_id"])
     supervisor_agent_id = str(supervisor.get("agent_id") or "")
-    return make_state_event(
+    return make_supervisor_event(
         event_id=f"supervisor-proposal-{decision_id}",
         goal_id=safe_goal_id,
         event_type=SUPERVISOR_PROPOSED,
@@ -101,8 +100,6 @@ def build_supervisor_proposal_event(
         },
         payload={"decision": normalized},
         recorded_at=recorded_at,
-        producer="loopx.supervisor",
-        privacy=LOCAL_PRIVATE_PRIVACY,
     )
 
 
@@ -209,7 +206,7 @@ def build_supervisor_receipt_event(
         proposal=proposal,
         host_capabilities=host_capabilities,
     )
-    return make_state_event(
+    return make_supervisor_event(
         event_id=f"supervisor-receipt-{normalized['receipt_id']}",
         goal_id=safe_goal_id,
         event_type=SUPERVISOR_RECEIPT_RECORDED,
@@ -219,8 +216,6 @@ def build_supervisor_receipt_event(
         },
         payload={"receipt": normalized},
         recorded_at=recorded_at,
-        producer="loopx.supervisor",
-        privacy=LOCAL_PRIVATE_PRIVACY,
     )
 
 
@@ -242,38 +237,6 @@ def _matching_event(
     )
 
 
-def _append_idempotent(
-    store: AppendOnlyStateEventStore,
-    event: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
-    prior = next(
-        (item for item in store.load() if item.get("event_id") == event.get("event_id")),
-        None,
-    )
-    if prior is not None:
-        if prior.get("refs") != event.get("refs") or prior.get("payload") != event.get("payload"):
-            raise StateEventConflictError(f"conflicting event_id: {event.get('event_id')}")
-        return prior, False
-    try:
-        return store.append(event), True
-    except StateEventConflictError:
-        concurrent = next(
-            (
-                item
-                for item in store.load()
-                if item.get("event_id") == event.get("event_id")
-            ),
-            None,
-        )
-        if (
-            concurrent is not None
-            and concurrent.get("refs") == event.get("refs")
-            and concurrent.get("payload") == event.get("payload")
-        ):
-            return concurrent, False
-        raise
-
-
 def record_supervisor_proposal(
     *,
     log_path: Path,
@@ -282,35 +245,30 @@ def record_supervisor_proposal(
     decision: Mapping[str, Any],
     execute: bool,
 ) -> dict[str, Any]:
-    store = AppendOnlyStateEventStore(log_path)
-    events = store.load()
-    event = build_supervisor_proposal_event(
-        goal_id=goal_id,
-        supervisor=supervisor,
-        decision=decision,
-    )
-    prior = next(
-        (item for item in events if item.get("event_id") == event.get("event_id")),
-        None,
-    )
-    if execute:
-        appended, created = _append_idempotent(store, event)
-        projection_events = store.load()
-    elif prior is not None:
-        appended, created = _append_idempotent(store, event)
-        projection_events = events
-    else:
-        appended, created = event, False
-        projection_events = [*events, event]
-    return {
-        "ok": True,
-        "mode": "supervisor_proposal",
-        "dry_run": not execute,
-        "appended": created,
-        "would_append": prior is None,
-        "event": appended,
-        "projection": build_supervisor_event_projection(projection_events, goal_id=goal_id),
-    }
+    from ...file_lock import exclusive_file_lock
+    with exclusive_file_lock(log_path, operation="supervisor_event"):
+        store = SupervisorEventStore(log_path)
+        events = store.load()
+        event = build_supervisor_proposal_event(
+            goal_id=goal_id,
+            supervisor=supervisor,
+            decision=decision,
+        )
+        prior = next(
+            (item for item in events if item.get("event_id") == event.get("event_id")),
+            None,
+        )
+        appended, created = store.record_locked(event, execute=execute, events=events)
+        projection_events = events if prior is not None else [*events, appended]
+        return {
+            "ok": True,
+            "mode": "supervisor_proposal",
+            "dry_run": not execute,
+            "appended": created,
+            "would_append": prior is None,
+            "event": appended,
+            "projection": build_supervisor_event_projection(projection_events, goal_id=goal_id),
+        }
 
 
 def record_supervisor_receipt(
@@ -321,58 +279,53 @@ def record_supervisor_receipt(
     execute: bool,
     host_capabilities: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    store = AppendOnlyStateEventStore(log_path)
-    events = store.load()
-    decision_id = _required_token(receipt, "decision_id")
-    proposal = _matching_event(
-        events,
-        event_type=SUPERVISOR_PROPOSED,
-        ref_name="decision_id",
-        ref_value=decision_id,
-    )
-    if proposal is None:
-        raise ValueError(f"no recorded supervisor proposal for decision_id={decision_id}")
-    prior_executed = next(
-        (
-            event
-            for event in events
-            if event.get("event_type") == SUPERVISOR_RECEIPT_RECORDED
-            and (event.get("refs") or {}).get("decision_id") == decision_id
-            and ((event.get("payload") or {}).get("receipt") or {}).get("outcome")
-            == SupervisorReceiptOutcome.EXECUTED.value
-        ),
-        None,
-    )
-    event = build_supervisor_receipt_event(
-        goal_id=goal_id,
-        proposal_event=proposal,
-        receipt=receipt,
-        host_capabilities=host_capabilities,
-    )
-    if prior_executed is not None and prior_executed.get("event_id") != event.get("event_id"):
-        raise ValueError(f"decision_id={decision_id} already has an executed receipt")
-    prior = next(
-        (item for item in events if item.get("event_id") == event.get("event_id")),
-        None,
-    )
-    if execute:
-        appended, created = _append_idempotent(store, event)
-        projection_events = store.load()
-    elif prior is not None:
-        appended, created = _append_idempotent(store, event)
-        projection_events = events
-    else:
-        appended, created = event, False
-        projection_events = [*events, event]
-    return {
-        "ok": True,
-        "mode": "supervisor_receipt",
-        "dry_run": not execute,
-        "appended": created,
-        "would_append": prior is None,
-        "event": appended,
-        "projection": build_supervisor_event_projection(projection_events, goal_id=goal_id),
-    }
+    from ...file_lock import exclusive_file_lock
+    with exclusive_file_lock(log_path, operation="supervisor_event"):
+        store = SupervisorEventStore(log_path)
+        events = store.load()
+        decision_id = _required_token(receipt, "decision_id")
+        proposal = _matching_event(
+            events,
+            event_type=SUPERVISOR_PROPOSED,
+            ref_name="decision_id",
+            ref_value=decision_id,
+        )
+        if proposal is None:
+            raise ValueError(f"no recorded supervisor proposal for decision_id={decision_id}")
+        prior_executed = next(
+            (
+                event
+                for event in events
+                if event.get("event_type") == SUPERVISOR_RECEIPT_RECORDED
+                and (event.get("refs") or {}).get("decision_id") == decision_id
+                and ((event.get("payload") or {}).get("receipt") or {}).get("outcome")
+                == SupervisorReceiptOutcome.EXECUTED.value
+            ),
+            None,
+        )
+        event = build_supervisor_receipt_event(
+            goal_id=goal_id,
+            proposal_event=proposal,
+            receipt=receipt,
+            host_capabilities=host_capabilities,
+        )
+        if prior_executed is not None and prior_executed.get("event_id") != event.get("event_id"):
+            raise ValueError(f"decision_id={decision_id} already has an executed receipt")
+        prior = next(
+            (item for item in events if item.get("event_id") == event.get("event_id")),
+            None,
+        )
+        appended, created = store.record_locked(event, execute=execute, events=events)
+        projection_events = events if prior is not None else [*events, appended]
+        return {
+            "ok": True,
+            "mode": "supervisor_receipt",
+            "dry_run": not execute,
+            "appended": created,
+            "would_append": prior is None,
+            "event": appended,
+            "projection": build_supervisor_event_projection(projection_events, goal_id=goal_id),
+        }
 
 
 def build_supervisor_event_projection(
@@ -442,7 +395,7 @@ def build_supervisor_event_projection(
 
 def load_supervisor_event_projection(log_path: Path, *, goal_id: str) -> dict[str, Any]:
     return build_supervisor_event_projection(
-        AppendOnlyStateEventStore(log_path).load(),
+        SupervisorEventStore(log_path).load(),
         goal_id=goal_id,
     )
 

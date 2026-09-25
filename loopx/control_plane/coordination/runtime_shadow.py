@@ -321,11 +321,10 @@ def _build_runtime_shadow_source_snapshot(
     TS takes the shared source locks and verifies every byte/inventory before
     publishing a baseline or a bounded qualification result.
     """
-    from ...event_sourced_state import build_state_projection, normalize_state_event, render_active_state_sections
     from ...rollout_event_log import ROLLOUT_EVENT_SCHEMA_VERSION, rollout_event_log_path
     from ...paths import resolve_runtime_root
     from ...state_refresh import resolve_goal_state
-    from ..status.active_state_projection import state_event_log_candidates
+    from ..goals.legacy_event_source import state_event_log_candidates
     from ..todos.active_state_todo_parser import parse_active_state_todos
     from ..todos.goal_todo_projection import todo_summaries_from_fields
     from ..todos.handoff_mode import goal_handoff_mode
@@ -357,21 +356,16 @@ def _build_runtime_shadow_source_snapshot(
         if isinstance(value, dict) and value.get("schema_version") == ROLLOUT_EVENT_SCHEMA_VERSION:
             rollout_events.append(value)
 
-    # Use the production candidate selection and projection semantics. A log
-    # with no Todo projection is harmless; an unbound Todo overlay is a hold.
+    # Preserve absent/empty source witnesses; reject retired sources before publishing.
     for path in state_event_log_candidates(dict(goal), state_path=state_path):
         data = read_evidence(path)
         if not data:
             continue
-        events = [normalize_state_event(json.loads(line)) for line in data.decode("utf-8").splitlines() if line.strip()]
-        rendered = render_active_state_sections(build_state_projection(events, goal_id=goal_id))
-        fields = parse_active_state_todos(rendered, goal=dict(goal), state_path=state_path, item_limit=None, rollout_events=rollout_events)
-        if any(fields.get(f"{role}_todos") for role in ("user", "agent")):
-            raise ShadowManagementError("event_log_writer_not_bound")
+        raise ShadowManagementError("legacy_todo_event_source_retired",
+            "legacy_todo_event_source_retired: preserve and export legacy Todo events with a compatible older release before migration")
 
     fields = parse_active_state_todos(state_text, goal=dict(goal), state_path=state_path, item_limit=None, rollout_events=rollout_events)
-    todos = todo_summaries_from_fields(fields=fields, source="markdown_active_state", projection_fields={},
-        projection_overlay=None, rollout_events=rollout_events, roles=["user", "agent"], status=None,
+    todos = todo_summaries_from_fields(fields=fields, source="markdown_active_state", rollout_events=rollout_events, roles=["user", "agent"], status=None,
         todo_id=None, agent_id=None, limit=None).todos
     todos = capture_todo_archive_dependencies(todos, state_text)
     leases: list[dict[str, Any]] = []

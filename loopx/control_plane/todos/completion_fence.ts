@@ -21,7 +21,7 @@ const TODO_STATUSES = ["open", "done", "blocked", "deferred"] as const;
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 
 export type TodoStatus = (typeof TODO_STATUSES)[number];
-export type TodoCompletionProjectionSource = "materialized" | "event_log";
+export type TodoCompletionProjectionSource = "materialized";
 export type TodoCompletionIdentitySource =
   | "turn_settlement"
   | "unscoped_completion"
@@ -134,7 +134,7 @@ function todoStatus(value: unknown): TodoStatus {
 }
 
 function projectionSource(value: unknown): TodoCompletionProjectionSource {
-  if (value === "materialized" || value === "event_log") return value;
+  if (value === "materialized") return value;
   throw new EffectRuntimeRequestError("projection_source is unsupported");
 }
 
@@ -209,8 +209,7 @@ export function evaluateTodoCompletionFence(
     request.todo.completion_continuation,
   );
   const done = status === "done";
-  const terminalBeforeRequest = done ||
-    (request.projection_source === "event_log" && status === "deferred");
+  const terminalBeforeRequest = done;
   const requestedKey = request.requested_completion_turn_key;
   const storedKey = request.todo.completion_turn_key;
   const expectedLocalKey = request.goal_id !== null && request.todo_id !== null

@@ -22,9 +22,9 @@ Canonical mode, complete Todo/lease quiescence, CAS and replay share one TypeScr
 transaction. Stale or missing Markdown and local lease files are not fallback
 sources. The legacy mode below remains a frontmatter compatibility contract.
 
-Unpromoted transitions read the complete Todo event overlay under the append
-store locks and local leases under the lease mutex. The same typed quiescence
-rule governs both paths; malformed event sources cannot become empty evidence.
+Unpromoted transitions read complete Markdown Todos and local leases under
+their writer mutexes. The same typed quiescence rule governs both paths;
+nonempty retired Todo event sources are refused, never treated as empty.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ def _core_todos(registry_path, root, goal_id):
     result = list_goal_todos(
         registry_path=registry_path, runtime_root_arg=str(root), goal_id=goal_id
     )
-    if result.get("ok") is not True or result.get("state_event_projection_warning"):
+    if result.get("ok") is not True:
         raise ValueError("Core Todo authority unavailable")
     return {r["todo_id"]: r for r in result.get("todos", []) if r.get("todo_id")}
 
