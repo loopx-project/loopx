@@ -1,5 +1,11 @@
 # State Interaction Model
 
+> Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
+> examples below describe a retired experiment. Current Todos use legacy Markdown
+> or the selected File/SQLite authority. See the
+> [retirement contract](reference/protocols/event-sourced-state-contract-v0.md).
+
+
 LoopX should not grow by adding commands one at a time. New capabilities
 must fit a clear state model between the goal, the Codex App executor, the
 human operator, and the dashboard.

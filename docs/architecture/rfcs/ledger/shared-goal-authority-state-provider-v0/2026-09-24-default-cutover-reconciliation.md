@@ -20,7 +20,7 @@ them as though they were interchangeable PRs.
 | #4870 claim-preserving writes; #4888 reviewed cutover; #4920 drain planning | Implemented. Exercise their combined head; do not commission replacements. |
 | #4922 complete canonical snapshot pagination; #4960 qualified SQLite runtime admission; #4961 display refresh recovery; #4964 shared source summaries | Implemented. Consumer and packaged-client acceptance still needs integration evidence; a whole new pagination/recovery implementation is not pending. |
 | #4967 typed complete-source assembly; #4968 native outbox delivery/recovery | Implemented. Complete-source transport is also merged in #5013; capture assembly is not missing. |
-| #5003 atomic event-owned completion | Merged. Solves batch publication/retry, **not** the event writer's shadow-capture binding. |
+| #5003 atomic event-owned completion | Historical implementation; retired with its Todo event source in #5054. Do not rebuild capture for it. |
 | #4994 explicit leased Agent handoff; #4995 generated Monitor proof; #4991 rejected poll reservation; #4992 deferred receipt-bound Turn | Merged. Audit the integrated callers before deciding what remains; do not recreate them under a new caller-refactor PR. |
 | #4931 retained SQLite proof encoding, contributor #4224 | Open optimization plus incomplete D2 qualification. A speedup is not capacity/recovery/soak acceptance. |
 | #4915 default `.loopx` filesystem placement | Separate configuration migration; does not select File/SQLite authority. |
@@ -41,7 +41,7 @@ not implement another store or close the whole migration package or D2 gate.
 | Proposed PR | Observable result and owner | Exit |
 | --- | --- | --- |
 | 1. External-effect execution fencing | Lease/effect owners protect the actual execution interval, takeover, timeout, exit and uncertain completion. Reuse merged #4994/#4995. | Stale executors cannot continue or settle; real executor and receipt recovery matrix passes. A point-in-time proof check is insufficient. |
-| 2. Event-writer binding and whole-Goal migration/rollback | Bind event writer locks/atomic publication to existing outbox; integrate Markdown/event/lease capture, drain, saved cutover, consumers and fenced export/rollback; delete Python decisions replaced by TS. | Reuse #5003. Retain `event_log_writer_not_bound` until binding passes; close D1, command inventory and D3 cohort. One Goal without an event overlay does not prove this package. |
+| 2. Whole-Goal migration/rollback | Qualify existing Markdown/lease capture, drain, saved cutover, provider consumers and fenced export/rollback. Retire reachable Python decisions after TS adoption. | Close D1, command inventory and D3 cohort. #5054 removes the experimental event source; no new event-writer binding is planned. |
 | 3. Default entrypoints and bounded Python retirement | New Goals, settings, installation and packaged frontend/Lark/CLI select a qualified profile consistently; existing Goals have explicit migration/disable flows. | 1/2 and applicable D1–D3 pass; user entrypoints work; delete business writers only after their last callers migrate. Retain rendering, host IO and lawful import/export. |
 
 **Plan three named future implementation PRs, plus existing #4931 and outstanding

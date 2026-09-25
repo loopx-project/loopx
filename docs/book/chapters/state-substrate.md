@@ -1,5 +1,11 @@
 # 持久状态与只读投影
 
+> Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
+> examples below describe a retired experiment. Current Todos use legacy Markdown
+> or the selected File/SQLite authority. See the
+> [retirement contract](../../reference/protocols/event-sourced-state-contract-v0.md).
+
+
 长程任务能跨 session 恢复，不是因为系统保存了更多聊天记录，而是因为关键事实有稳定归属，
 并且能够被重新投影成当前决策。本章建立 LoopX 的状态底座：哪些表面保存事实，哪些表面只负责
 阅读，以及为什么“看起来像当前状态”的页面或 Markdown 不能自动成为写入入口。
@@ -87,7 +93,7 @@ Registry 不证明某个 Host 已经成功启动，也不保存每一轮 Agent �
 
 ### 2. Event ledger：发生过什么
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../reference/protocols/event-sourced-state-contract-v0.md)
 把 Todo、Gate、run、evidence、projection 和 quota 变化表达为 append-only events。
 
 事件至少需要满足四个不变量：
@@ -208,7 +214,7 @@ LoopX 当前是 **本地优先** 的控制面：项目 registry、active-state w
 runtime state 位于项目或用户本地。这个事实不意味着“Markdown 文件本身就是 authority”，也不
 意味着把目录换成数据库就自动获得正确的并发与恢复语义。
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../reference/protocols/event-sourced-state-contract-v0.md)
 明确允许 JSONL、SQLite 或其他 local-first append-only 实现，只要它们保持：
 
 - stable event id 与 ordered replay；
@@ -347,7 +353,7 @@ run_recorded(R1, tests_passed_at=commit-a)
 
 本章拥有概念顺序，不复制完整 schema。需要修改 LoopX 状态行为时，优先阅读：
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)：
+- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../reference/protocols/event-sourced-state-contract-v0.md)：
   event、replay、ordering、privacy；
 - [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
   Markdown workbench 的 typed read model；

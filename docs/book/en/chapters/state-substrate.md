@@ -1,5 +1,11 @@
 # Durable State and Read-Only Projections
 
+> Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
+> examples below describe a retired experiment. Current Todos use legacy Markdown
+> or the selected File/SQLite authority. See the
+> [retirement contract](../../../reference/protocols/event-sourced-state-contract-v0.md).
+
+
 Long-running work does not recover because a system stores more conversation. It recovers because each
 important fact has a stable owner and can be projected into a fresh decision. This chapter establishes
 the LoopX state substrate: which surfaces own facts, which surfaces only help readers, and why a page or
@@ -93,7 +99,7 @@ It owns connection and policy facts, not execution receipts.
 
 ### 2. Event ledger: what happened
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../../reference/protocols/event-sourced-state-contract-v0.md)
 represents Todo, Gate, run, evidence, projection, and quota changes as append-only events.
 
 At least four invariants matter:
@@ -223,7 +229,7 @@ run history, and runtime state live in project-local or user-local storage. This
 file the authority by itself, and replacing files with a database does not automatically create correct
 concurrency or recovery semantics.
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../../reference/protocols/event-sourced-state-contract-v0.md)
 allows JSONL, SQLite, or another local-first append-only implementation when it preserves:
 
 - stable event ids and ordered replay;
@@ -367,7 +373,7 @@ boundary probably needs to be split first.
 
 This chapter owns the learning sequence, not the complete schemas. For state changes, start with:
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
+- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../../reference/protocols/event-sourced-state-contract-v0.md)
   for events, replay, ordering, and privacy;
 - [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
   for the typed read model over the Markdown workbench;

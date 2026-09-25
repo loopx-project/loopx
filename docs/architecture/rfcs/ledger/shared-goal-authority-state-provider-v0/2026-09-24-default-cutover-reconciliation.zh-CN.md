@@ -17,7 +17,7 @@
 | #4870 保留 claim 的写入、#4888 reviewed cutover、#4920 drain 规划 | 已实现。验收组合 head，不再重新安排一套替代实现。 |
 | #4922 完整 canonical 快照分页、#4960 SQLite runtime 准入、#4961 显示刷新恢复、#4964 共享来源摘要 | 已实现。消费者和打包客户端仍需组合验收，不等于还缺一个全新的分页/恢复实现。 |
 | #4967 TS 完整来源组装、#4968 原生 outbox 交付/恢复 | 已实现。大型来源传输亦已通过 #5013 合入；不能再称为 capture 未做。 |
-| #5003 event-owned completion 原子提交 | 已合入。解决整批发布/重试，不负责 event writer 与 shadow capture 的绑定。 |
+| #5003 event-owned completion 原子提交 | 历史实现；在 #5054 中随旧 Todo 事件来源一起退役，不再补其 capture。 |
 | #4994 带 lease 的显式 Agent 交接、#4995 Monitor 命令 proof、#4991 拒绝 poll 后释放预约、#4992 延期且绑定 receipt 的 Turn | 已合入。组合现有实现盘点 caller，不能再开一个 caller 重构 PR 重做它们。 |
 | #4931 SQLite retained proof 编码、contributor #4224 | 优化 PR 开放，D2 资格未闭合。提速不等于容量、恢复和 soak 验收通过。 |
 | #4915 默认 `.loopx` 目录 | 独立的配置迁移，不会选择 File/SQLite authority。 |
@@ -37,7 +37,7 @@ scan 100 p95 801.81 ms / 250 ms），#4931 尚未提供精确 head 的正式复�
 | 拟议 PR | 可观察结果与 owner | 退出条件 |
 | --- | --- | --- |
 | 1. 外部动作执行区间保护 | lease/effect owner 将执行身份验证覆盖到实际外部动作、接管、超时、退出及不确定完成。复用已合入 #4994/#4995。 | 过期 executor 不能继续执行/结算；真实执行器及 receipt 恢复矩阵通过。执行前查一次 proof 不够。 |
-| 2. 事件 writer 绑定与整 Goal 迁移/回退闭环 | 将 event writer 锁和原子发布接入现有 outbox；组合 Markdown/event/lease writer、drain、saved cutover、消费者和 fenced export/rollback，删除被 TS 替代的 Python 决策。 | 复用 #5003，绑定通过前保留 `event_log_writer_not_bound`；闭合 D1、命令清单与 D3 cohort。单个无 event overlay 的 Goal 晋升不证明本项。 |
+| 2. 整 Goal 迁移／回退闭环 | 验证现有 Markdown／lease capture、drain、saved cutover、provider 消费者及 fenced export／rollback；TS 接管后删除仍可达的 Python 决策。 | 闭合 D1、命令清单和 D3 cohort。#5054 删除实验事件来源，不再规划新的 event writer 绑定。 |
 | 3. 默认入口与有界 Python 退役 | 新 Goal、settings、安装及 packaged frontend/Lark/CLI 一致选择合格 profile；存量有显式迁移与停用流程。 | 1/2 及适用 D1–D3 通过，验证用户入口，删除最后 caller 已转走的业务 writer；保留 renderer、host IO、合法导入导出。 |
 
 **计划是三个可命名的后续实现 PR，加已有 #4931 和未闭合证据；不是保证总计四个

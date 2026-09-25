@@ -1,5 +1,7 @@
 # 事件源完成事务：先建立完整提交，再接入捕获
 
+> Superseded by [Todo event retirement](2026-09-25-todo-event-retirement.md): this historical implementation is removed in #5054.
+
 基线：`90f21a5299188d54f984a5313e774c9ac48d6595`。对应总路线 R5/G2、
 shared-authority L2/L7 与 TS T1/T2。本批修复已有事件写入者的正确性，
 不授予该写入者 shadow capture 资格。
