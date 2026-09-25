@@ -661,6 +661,8 @@ export type ChatSessionSummary = {
   updated_at: string;
   last_activity_at: string;
   resumable: boolean;
+  session_mode?: string;
+  host_surface?: string | null;
   manager_runtime?: ManagerRuntimeSessionReadback | null;
 };
 

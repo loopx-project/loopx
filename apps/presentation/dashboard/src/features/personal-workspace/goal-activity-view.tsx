@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { goalIdentity, presentGoalActivity, type GoalActivity } from "./goal-activity";
+import { goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
 import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
@@ -16,15 +16,35 @@ export function relativeTime(value: string, locale: string): string | null {
   return format.format(Math.round(seconds / 86_400), "day");
 }
 
-export function useGoalActivity(goal: GoalActivitySubject): GoalActivity & { text: string } {
+function hostNames(execution: WorkspaceGoalExecution | undefined) {
+  return execution && execution.kind !== "unknown" ? execution.hostSurfaces.map(hostSurfaceLabel).join(" / ") : "";
+}
+
+/** Secondary line for an observed turn: host, then recency or silence. */
+export function useExecutionDetail(execution: WorkspaceGoalExecution | undefined): string[] {
   const { locale, t } = useWorkspaceI18n();
-  const activity = presentGoalActivity(goal);
-  const parts = [t(activity.labelKey as WorkspaceMessageKey)];
-  if (activity.alsoKey) parts.push(t(activity.alsoKey as WorkspaceMessageKey));
-  if (activity.labelKey === "activity.running" && goal.execution?.kind === "running" && goal.execution.lastActivityAt) {
-    const time = relativeTime(goal.execution.lastActivityAt, locale);
-    if (time) parts.push(time);
+  if (execution?.kind !== "running") return [];
+  const parts: string[] = [];
+  const hosts = hostNames(execution);
+  if (hosts) parts.push(t("activity.viaHost", { host: hosts }));
+  if (execution.lastActivityAt) {
+    if (execution.quiet) {
+      parts.push(t("activity.quiet", { minutes: Math.round((Date.now() - Date.parse(execution.lastActivityAt)) / 60_000) }));
+    } else {
+      const time = relativeTime(execution.lastActivityAt, locale);
+      if (time) parts.push(time);
+    }
   }
+  return parts;
+}
+
+export function useGoalActivity(goal: GoalActivitySubject): GoalActivity & { text: string } {
+  const { t } = useWorkspaceI18n();
+  const activity = presentGoalActivity(goal);
+  const detail = useExecutionDetail(goal.execution);
+  const parts = [t(activity.labelKey as WorkspaceMessageKey)];
+  if (activity.alsoKey) parts.push(t(activity.alsoKey as WorkspaceMessageKey, { host: hostNames(goal.execution) }));
+  if (activity.labelKey === "activity.running") parts.push(...detail);
   return { ...activity, text: parts.join(" · ") };
 }
 
@@ -45,7 +65,7 @@ export function GoalIdentityMark({ goal, size = "md" }: { goal: GoalActivitySubj
 export function GoalActivityChip({ goal }: { goal: GoalActivitySubject }) {
   const activity = useGoalActivity(goal);
   return (
-    <span className={`personal-goal-activity-chip is-${activity.tone}${activity.live ? " is-live" : ""}`}>
+    <span className={`personal-goal-activity-chip is-${activity.tone}${activity.live ? " is-live" : ""}`} title={activity.text}>
       <span aria-hidden="true" className="personal-goal-activity-dot" />
       <span>{activity.text}</span>
     </span>

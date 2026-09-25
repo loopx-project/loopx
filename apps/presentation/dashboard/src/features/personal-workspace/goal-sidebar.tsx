@@ -12,7 +12,7 @@ function GoalRowActivity({ goal, showLoad }: { goal: WorkspaceGoal; showLoad: bo
   const { t } = useWorkspaceI18n();
   const activity = useGoalActivity(goal);
   if (goal.loadState && showLoad) return <small>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</small>;
-  return <small className={`is-${activity.tone}`}>{activity.text}</small>;
+  return <small className={`is-${activity.tone}`} title={activity.text}>{activity.text}</small>;
 }
 
 export function GoalSidebar({

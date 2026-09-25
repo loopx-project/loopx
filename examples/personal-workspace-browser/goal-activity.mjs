@@ -4,8 +4,9 @@ import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
 // Execution is shown only from session-owner facts; open Todos and quota eligibility stay "queued".
-function taskSession(goalId, sessionId, activeTurnId, lastActivityAt) {
+function taskSession(goalId, sessionId, activeTurnId, lastActivityAt, host = null) {
   return {
+    ...(host ? { session_mode: "attached_host", host_surface: host } : { session_mode: "managed" }),
     session_id: sessionId, goal_id: goalId, agent_id: "codex", adapter_kind: "codex",
     channel_id: `task.${sessionId}`, status: activeTurnId ? "busy" : "ready", active_turn_id: activeTurnId,
     last_error_code: null, created_at: lastActivityAt, updated_at: lastActivityAt, last_activity_at: lastActivityAt, resumable: true,
@@ -20,11 +21,13 @@ export const goalActivityScenario = {
   id: "goal-activity",
   async run({ browser, collectCoverage, url }) {
     const recent = new Date(Date.now() - 2 * 60_000).toISOString();
+    const silent = new Date(Date.now() - 30 * 60_000).toISOString();
     const live = await openWorkspacePage(browser, url, {
       collectCoverage,
       beforeGoto: (_api, page) => {
-        page.__loopxRuntime.sessions.set("activity-live", taskSession("progress-projection", "activity-live", "turn-activity-live", recent));
-        page.__loopxRuntime.sessions.set("activity-idle", taskSession("multi-agent-projection", "activity-idle", null, recent));
+        page.__loopxRuntime.sessions.set("activity-live", taskSession("progress-projection", "activity-live", "turn-activity-live", recent, "codex"));
+        page.__loopxRuntime.sessions.set("activity-idle", taskSession("multi-agent-projection", "activity-idle", null, recent, "cursor"));
+        page.__loopxRuntime.sessions.set("activity-silent", taskSession("research-monitor", "activity-silent", "turn-activity-silent", silent));
       },
     });
     const coverageEntries = [];
@@ -33,14 +36,18 @@ export const goalActivityScenario = {
       const running = await goalRow(page, "Progress Projection");
       const queued = await goalRow(page, "Multi Agent Projection");
       await running.locator("small", { hasText: "执行中" }).waitFor({ timeout: 15_000 });
-      assert.match(await queued.locator("small").innerText(), /^已安排/, "Open agent work without an active turn must read as queued");
+      assert.match(await queued.locator("small").innerText(), /^已安排 · 在 Cursor 宿主中执行，状态以宿主为准/, "Queued work bound to an attached host defers live state to the host");
+      const silentRow = await goalRow(page, "Research Monitor");
+      assert.match(await silentRow.locator("small").innerText(), /^执行中 · 已 3\d 分钟无新动静/, "A silent claimed turn discloses its silence");
+      assert.equal(await silentRow.locator(".personal-goal-mark.is-live").count(), 0, "A silent turn is never shown as live");
       assert.doesNotMatch(await queued.innerText(), /执行中|推进中/);
       assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1, "Only the Goal with an active turn is live");
       assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
-      assert.match(await running.locator("small").innerText(), /执行中 · \d+\s*分钟前/, "Running discloses the observed activity time");
+      assert.match(await running.locator("small").innerText(), /执行中 · Codex 宿主 · \d+\s*分钟前/, "Running names the attached host and the observed activity time");
       const brief = page.locator(".personal-brief");
-      assert.equal(await brief.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 1, "The brief lists only the executing Goal");
-      assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Progress Projection[\s\S]*分钟前有活动/);
+      assert.equal(await brief.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 2, "The brief lists Goals with a claimed turn, including a silent one");
+      assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Research Monitor\s+已 3\d 分钟无新动静/);
+      assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Progress Projection[\s\S]*\d+\s*分钟前/);
       assert.equal(await brief.locator(".personal-brief-tile.is-live").count(), 1);
       assert.equal(
         await brief.getByTestId("personal-brief-needs").locator(".personal-brief-row").count(),

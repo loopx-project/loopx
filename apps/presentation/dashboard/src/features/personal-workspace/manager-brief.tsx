@@ -1,12 +1,17 @@
+import type { ReactNode } from "react";
 import { ArrowRight, Check } from "lucide-react";
 import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 import { workspaceHomeLaneForGoal } from "./personal-workspace-model";
-import { GoalIdentityMark, relativeTime } from "./goal-activity-view";
+import { GoalIdentityMark, useExecutionDetail } from "./goal-activity-view";
 
 const briefRowLimit = 3;
 
-type BriefRow = { goal: WorkspaceGoal; key: string; meta?: string | null; text: string };
+type BriefRow = { goal: WorkspaceGoal; key: string; meta?: ReactNode; text: string };
+
+function RunningMeta({ goal }: { goal: WorkspaceGoal }) {
+  return <>{useExecutionDetail(goal.execution).join(" · ") || goal.title}</>;
+}
 
 function BriefTile({ count, empty, kind, live = false, onSelectGoal, rows, title, total }: {
   count: number;
@@ -36,7 +41,7 @@ function BriefTile({ count, empty, kind, live = false, onSelectGoal, rows, title
 }
 
 export function ManagerBrief({ goals, onSelectGoal }: { goals: WorkspaceGoal[]; onSelectGoal: (goalId: string) => void }) {
-  const { locale, t } = useWorkspaceI18n();
+  const { t } = useWorkspaceI18n();
   const active = goals.filter((goal) => goal.activationState === "active" && !goal.loadState);
   const needs = active.filter((goal) => workspaceHomeLaneForGoal(goal) === "needs_you");
   const running = active.filter((goal) => goal.execution?.kind === "running");
@@ -55,11 +60,8 @@ export function ManagerBrief({ goals, onSelectGoal }: { goals: WorkspaceGoal[]; 
       <BriefTile count={needs.length} empty={t("brief.needsEmpty")} kind="needs" onSelectGoal={onSelectGoal}
         rows={needs.map((goal) => ({ goal, key: goal.goalId, meta: goal.title, text: goal.needsYou ?? goal.nextSentence }))}
         title={t("brief.needs")} />
-      <BriefTile count={running.length} empty={runningEmpty} kind="running" live={running.length > 0} onSelectGoal={onSelectGoal}
-        rows={running.map((goal) => {
-          const at = goal.execution?.kind === "running" && goal.execution.lastActivityAt ? relativeTime(goal.execution.lastActivityAt, locale) : null;
-          return { goal, key: goal.goalId, meta: at ? t("brief.runningSince", { time: at }) : null, text: goal.title };
-        })}
+      <BriefTile count={running.length} empty={runningEmpty} kind="running" live={running.some((goal) => goal.execution?.kind === "running" && !goal.execution.quiet)} onSelectGoal={onSelectGoal}
+        rows={running.map((goal) => ({ goal, key: goal.goalId, meta: <RunningMeta goal={goal} />, text: goal.title }))}
         title={t("brief.running")} total={running.length && queued ? t("brief.alsoQueued", { count: queued }) : null} />
       <BriefTile count={completed.length} empty={t("brief.completedEmpty")} kind="completed" onSelectGoal={onSelectGoal}
         rows={completed} title={t("brief.completed")}
