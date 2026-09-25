@@ -11,6 +11,8 @@ from urllib.parse import parse_qs, urlparse
 from .chat import redact_local_paths
 from .chat_goal_subagent_api import goal_subagent_configuration_enabled
 from .chat_workspace_directory import workspace_goal_directory
+from .codex_app_thread_activity import codex_thread_observers
+from .control_plane.agents.host_thread_activity import attach_host_thread_activity
 from .control_plane.effect_runtime import (
     EffectRuntimePermanentIOError,
     EffectRuntimeRemoteError,
@@ -144,6 +146,10 @@ class ChatStatusRequestMixin:
                 projection["workspace_registry_revision"] = directory[
                     "registry_revision"
                 ]
+            if not delivery_review:
+                attach_host_thread_activity(
+                    projection, observers=codex_thread_observers()
+                )
             if delivery_review:
                 if projection.get("ok") is not True:
                     self._send_error("Delivery review sources are unavailable.", status=503)
