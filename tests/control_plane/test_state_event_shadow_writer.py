@@ -175,6 +175,11 @@ def test_mixed_event_cutover_routes_native_writes_and_fences_old_writer(tmp_path
     with pytest.raises(LegacyCoordinationWriterFenced):
         store.append(event(w.goal, 4))
     assert store.path.read_bytes() == before
+    from loopx.event_sourced_state import REFRESH_RECORDED
+    independent = AppendOnlyStateEventStore(w.runtime / "goals" / w.goal / "supervisor-events.jsonl",
+        write_context=StateEventWriteContext(w.registry, w.runtime, w.goal, w.state))
+    independent.append(make_state_event(event_id="independent-log", goal_id=w.goal, event_type=REFRESH_RECORDED))
+    assert len(independent.load()) == 1  # The Todo fence does not disable independent supervision.
     created = w.add("Native work after event migration")
     readback = w.cli("todo", "list", "--todo-id", created["todo_id"])
     assert readback["authority_read"]["source_authority"] == f"{provider}_v0"
@@ -276,3 +281,27 @@ def test_managed_symlink_writes_the_bound_file_not_the_alias(tmp_path: Path) -> 
     assert alias.is_symlink() and target.exists()
     assert w.drain()["ok"] is True
     assert w.cli("coordination-shadow", "inspect")["inspection"]["parity_matches"] is True
+
+
+def test_log_classification_is_rechecked_after_source_lock_acquisition(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from contextlib import contextmanager
+    from loopx.control_plane.goals import state_event_writer
+    from loopx.control_plane.coordination.shadow_management import ShadowManagementError
+    w = workspace(tmp_path)
+    log = w.state.with_name("supervisor-events.jsonl")
+    lock = state_event_writer.legacy_todo_source_locks
+
+    @contextmanager
+    def registry_changes_before_admission(*args):
+        with lock(*args):
+            value = json.loads(w.registry.read_text())
+            value["goals"][0]["state_event_log"] = str(log)
+            w.registry.write_text(json.dumps(value))
+            yield
+
+    monkeypatch.setattr(state_event_writer, "legacy_todo_source_locks", registry_changes_before_admission)
+    store = AppendOnlyStateEventStore(log, write_context=StateEventWriteContext(w.registry, w.runtime, w.goal, w.state))
+    with pytest.raises(ShadowManagementError, match="event_source_rebootstrap_required"):
+        store.append(event(w.goal, 1))
+    assert not log.exists()

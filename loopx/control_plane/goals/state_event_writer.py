@@ -16,7 +16,9 @@ from ...file_lock import exclusive_cross_runtime_file_lock
 from ...history import load_registry
 from ...registry import find_registry_goal
 from ..coordination import local_authority_shadow_outbox as outbox
-from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_registry_source_write_allowed
+from ..coordination.legacy_writer_fence import (
+    legacy_todo_source_locks, require_legacy_coordination_write_allowed, require_registry_source_write_allowed,
+)
 from ..coordination.shadow_management import (
     ShadowManagementError, read_shadow_bootstrap_source_snapshot, require_shadow_primary_write_allowed,
 )
@@ -37,31 +39,25 @@ class StateEventWriteContext:
     @contextmanager
     def transaction(self, path: Path) -> Iterator[None]:
         from ..status.active_state_projection import state_event_log_candidates
-        self._goal = find_registry_goal(load_registry(self.registry_path), self.goal_id)
-        candidates = list(dict.fromkeys(p.resolve() for p in state_event_log_candidates(self._goal, state_path=self.state_path)))
-        if path.resolve() not in candidates:
-            self.capture = None
-            self._managed_source = False
-            with exclusive_cross_runtime_file_lock(path, operation="state_event_append"):
-                yield
-            return
-        outer = nullcontext() if self.primary_lock_held else legacy_todo_write_transaction(
-            self.registry_path, self.goal_id, self.state_path, None,
-            "state_event_append", False, runtime_root=self.runtime_root,
+        outer = nullcontext() if self.primary_lock_held else legacy_todo_source_locks(
+            self.runtime_root, self.goal_id, self.state_path, None, "state_event_append",
         )
-        self.capture = None
         with outer, ExitStack() as stack:
-            require_registry_source_write_allowed(registry_path=self.registry_path,
-                runtime_root=self.runtime_root, goal_id=self.goal_id, state_file=self.state_path)
-            binding = require_shadow_primary_write_allowed(self.runtime_root, self.goal_id)
+            self.capture = None
             self._goal = find_registry_goal(load_registry(self.registry_path), self.goal_id)
             candidates = list(dict.fromkeys(p.resolve() for p in state_event_log_candidates(self._goal, state_path=self.state_path)))
             if self.state_path.resolve() in candidates:
                 raise ShadowManagementError("event_source_binding_invalid")
             self._managed_source = path.resolve() in candidates
             if not self._managed_source:
-                raise ShadowManagementError("event_source_binding_changed")
-            if binding is not None and self._managed_source:
+                with exclusive_cross_runtime_file_lock(path, operation="state_event_append"):
+                    yield
+                return
+            require_registry_source_write_allowed(registry_path=self.registry_path,
+                runtime_root=self.runtime_root, goal_id=self.goal_id, state_file=self.state_path)
+            require_legacy_coordination_write_allowed(runtime_root=self.runtime_root, goal_id=self.goal_id)
+            binding = require_shadow_primary_write_allowed(self.runtime_root, self.goal_id)
+            if binding is not None:
                 snapshot = read_shadow_bootstrap_source_snapshot(self.runtime_root, self.goal_id, binding)
                 if snapshot.get("event_log_paths") != [str(p) for p in candidates]:
                     raise ShadowManagementError("event_source_rebootstrap_required")
