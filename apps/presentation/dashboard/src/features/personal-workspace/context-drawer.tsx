@@ -41,7 +41,7 @@ import type { LarkGoalConnection } from "../../data/chat";
 import { localizedAttentionAge, localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
-import { todoResumeWhenFromMessage } from "./personal-workspace-router";
+import { parseTodoResumeCondition } from "./todo-resume-condition";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
@@ -298,7 +298,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     || Boolean(selection.item.outputs?.length)
   );
   const attentionAge = selection.kind === "attention" ? localizedAttentionAge(selection.item.updatedAt, t) : null;
-  const normalizedTodoResumeWhen = todoResumeWhenFromMessage(todoResumeWhen);
+  const normalizedTodoResumeWhen = parseTodoResumeCondition(todoResumeWhen);
 
   async function sendCorrection() {
     if (selection.kind !== "run" || !correction.trim()) return;

@@ -664,20 +664,13 @@ export const typedActionsScenario = {
       const writesBeforeEnglishPreviews = api.durableWriteCount;
       await page.locator(".personal-manager-link").first().click();
       if (await page.locator(".personal-composer-tools").getAttribute("open") === null) await page.locator(".personal-composer-tools > summary").click();
-      await page.getByRole("button", { name: "Create Goal", description: "Insert a Goal template to review before creation" }).click();
-      const englishGoalDraft = await page.getByLabel("Send a message to LoopX").inputValue();
-      for (const field of ["Objective:", "Completion criteria:", "Execution boundary (optional):", "Related repository (optional):", "Notification method (optional):"]) {
-        if (!englishGoalDraft.includes(field)) throw new Error(`English Create Goal draft missing ${field}: ${englishGoalDraft}`);
-      }
-      await page.getByLabel("Send a message to LoopX").fill([
-        "Create a long-term Goal:",
-        "Objective: Prepare my weekly work review",
-        "Completion criteria: List completed work, blockers, and next-week plans",
-        "Execution boundary (optional): Read only; do not call external tools or modify repositories",
-        "Related repository (optional):",
-        "Notification method (optional):",
-      ].join("\n"));
-      await page.locator(".personal-channel-composer > button").last().click();
+      await page.getByRole("button", { name: "Create Goal", exact: true }).last().click();
+      const englishGoalForm = page.getByRole("dialog", { name: "Create Goal", exact: true });
+      await englishGoalForm.getByLabel("Execution permission", {exact: true}).selectOption("read_only");
+      await englishGoalForm.getByLabel("Objective", { exact: true }).fill("Prepare my weekly work review");
+      await englishGoalForm.getByLabel("Completion criteria", { exact: true }).fill("List completed work, blockers, and next-week plans");
+      await englishGoalForm.getByLabel("Execution boundary (optional)", { exact: true }).fill("Read only; do not call external tools or modify repositories");
+      await englishGoalForm.getByRole("button", { name: "Review configuration" }).click();
       await page.getByText("Confirm execution", { exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: "Create Goal and start first run", exact: true }).waitFor({ state: "visible" });
       const englishGoalPreview = api.actionPreviews.at(-1);
@@ -692,6 +685,7 @@ export const typedActionsScenario = {
       const writesBeforeEnglishMonitorShortcut = api.durableWriteCount;
       if (await page.locator(".personal-composer-tools").getAttribute("open") === null) await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "Configure scheduled check" }).click();
+      await page.getByRole("dialog", {name: "Configure scheduled check", exact: true}).getByRole("button", {name: "Review configuration"}).click();
       await page.getByText("Confirm execution", { exact: true }).waitFor({ state: "visible" });
       const englishMonitorShortcut = api.actionPreviews.findLast((preview) => preview.action_kind === "monitor.create");
       if (englishMonitorShortcut?.normalized_parameters.cadence !== "2h") throw new Error(`English scheduled-check shortcut cadence drifted: ${JSON.stringify(englishMonitorShortcut?.normalized_parameters)}`);
@@ -699,23 +693,15 @@ export const typedActionsScenario = {
       if (englishMonitorShortcut?.normalized_parameters.target !== "Check the current Goal for blockers, progress, and new outputs") throw new Error(`English scheduled-check shortcut did not fall back to the localized default check target: ${JSON.stringify(englishMonitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeEnglishMonitorShortcut) throw new Error("English scheduled-check shortcut wrote durable state before confirmation");
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: "Configure scheduled check" }).click();
+      const englishScheduleForm = page.getByRole("dialog", { name: "Configure scheduled check", exact: true });
       const previewsBeforeEnglishCalendarSchedule = api.actionPreviews.length;
-      await page.getByLabel("Send a message to LoopX").fill([
-        "Add a scheduled check for the current Goal:",
-        "Check target: Verify the weekly review",
-        "Frequency: Every Friday at 17:00",
-        "Stop condition: Goal completes",
-      ].join("\n"));
-      await page.locator(".personal-channel-composer > button").last().click();
-      await page.getByText("Scheduled checks do not currently support an exact weekday or time.", { exact: false }).waitFor({ state: "visible" });
-      if (api.actionPreviews.length !== previewsBeforeEnglishCalendarSchedule) throw new Error("Unsupported English calendar schedule created a misleading preview");
-      await page.getByLabel("Send a message to LoopX").fill([
-        "Add a scheduled check for the current Goal:",
-        "Check target: Verify the review includes completed work, blockers, and next-week plans",
-        "Frequency: Every 2 hours",
-        "Stop condition: Goal completes",
-      ].join("\n"));
-      await page.locator(".personal-channel-composer > button").last().click();
+      await englishScheduleForm.getByLabel("Interval", {exact: true}).fill("0");
+      await englishScheduleForm.getByRole("button", {name: "Review configuration"}).click();
+      if (api.actionPreviews.length !== previewsBeforeEnglishCalendarSchedule) throw new Error("Invalid interval created a preview");
+      await englishScheduleForm.getByLabel("Interval", {exact: true}).fill("2");
+      await englishScheduleForm.getByLabel("Check target", {exact: true}).fill("Verify the review includes completed work, blockers, and next-week plans");
+      await englishScheduleForm.getByRole("button", {name: "Review configuration"}).click();
       await page.getByText("Confirm execution", { exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: "Confirm and apply", exact: true }).waitFor({ state: "visible" });
       const englishMonitorPreview = api.actionPreviews.at(-1);
@@ -729,11 +715,7 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: "Overview", exact: true }).click();
       await page.getByRole("button", { name: "Goal information", exact: true }).click();
       await page.getByRole("button", { name: "Set up Heartbeat", exact: true }).click();
-      const englishHeartbeatDraft = await page.getByLabel("Send a message to LoopX").inputValue();
-      for (const field of ["Frequency: Daily", "Stop condition: Goal completes", "Notification: Only notify me when needed"]) {
-        if (!englishHeartbeatDraft.includes(field)) throw new Error("English Heartbeat draft missing " + field + ": " + englishHeartbeatDraft);
-      }
-      await page.locator(".personal-channel-composer > button").last().click();
+      await page.getByRole("dialog", { name: "Goal Heartbeat", exact: true }).getByRole("button", { name: "Review configuration" }).click();
       await page.getByText("Confirm execution", { exact: true }).waitFor({ state: "visible" });
       const englishHeartbeatPreview = api.actionPreviews.at(-1);
       if (englishHeartbeatPreview?.action_kind !== "heartbeat.bind") throw new Error("English Heartbeat input did not create a heartbeat preview: " + JSON.stringify(englishHeartbeatPreview));
@@ -772,20 +754,13 @@ export const typedActionsScenario = {
 
       const writesBeforeGoalCreate = api.durableWriteCount;
       if (await page.locator(".personal-composer-tools").getAttribute("open") === null) await page.locator(".personal-composer-tools > summary").click();
-      await page.getByRole("button", { name: "创建新 Goal" }).click();
-      const goalDraft = await page.getByLabel("向 LoopX 发送消息").inputValue();
-      for (const field of ["目标：", "完成标准：", "执行边界（可选）：", "关联仓库（可选）：", "通知方式（可选）："]) {
-        if (!goalDraft.includes(field)) throw new Error(`Create Goal draft missing ${field}`);
-      }
-      await page.getByLabel("向 LoopX 发送消息").fill([
-        "我想创建一个长期 Goal：",
-        "目标：整理我的每周工作复盘",
-        "完成标准：列出已完成、阻塞、下周计划",
-        "执行边界（可选）：不调用外部工具，不修改仓库",
-        "关联仓库（可选）：",
-        "通知方式（可选）：",
-      ].join("\n"));
-      await page.locator(".personal-channel-composer > button").last().click();
+      await page.getByRole("button", { name: "创建新 Goal", exact: true }).last().click();
+      const goalForm = page.getByRole("dialog", { name: "创建新 Goal", exact: true });
+      await goalForm.getByLabel("执行权限", {exact: true}).selectOption("read_only");
+      await goalForm.getByLabel("目标", {exact: true}).fill("整理我的每周工作复盘");
+      await goalForm.getByLabel("完成标准", {exact: true}).fill("列出已完成、阻塞、下周计划");
+      await goalForm.getByLabel("执行边界（可选）", {exact: true}).fill("不调用外部工具，不修改仓库");
+      await goalForm.getByRole("button", { name: "检查配置" }).click();
       await page.getByText("确认执行").waitFor({ state: "visible" });
       const goalPreview = api.actionPreviews.at(-1);
       for (const field of ["agent_id", "goal_id", "heartbeat", "initial_todos", "permission", "stop_condition", "workspace_ref"]) {
@@ -1578,13 +1553,12 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "semantic-protected-action-preview.png"), fullPage: false, animations: "disabled" });
       await page.getByRole("button", { name: "关闭", exact: true }).click();
 
-      await composer.fill("添加一个「补充回归测试」普通 Todo，并交给 Codex。不要设置 Heartbeat，也不要创建定时检查");
+      const beforeNaturalTodo = api.actionPreviews.length;
+      const naturalTodoRequest = "添加一个「补充回归测试」普通 Todo，并交给 Codex。不要设置 Heartbeat，也不要创建定时检查";
+      await composer.fill(naturalTodoRequest);
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.getByText("确认执行").waitFor({ state: "visible" });
-      const naturalTodo = api.actionPreviews.find((preview) => preview.action_kind === "todo.create" && preview.normalized_parameters.text === "补充回归测试");
-      if (naturalTodo?.normalized_parameters.endpoint_id !== "codex") throw new Error(`Natural-language Todo creation lost the selected Endpoint: ${JSON.stringify(api.actionPreviews.at(-1))}`);
-      if (api.actionPreviews.findLast((preview) => preview.summary.includes("补充回归测试"))?.action_kind !== "todo.create") throw new Error("A negated Heartbeat mention overrode explicit Todo creation");
-      await page.getByRole("button", { name: "关闭", exact: true }).click();
+      await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+      if (api.actionPreviews.length !== beforeNaturalTodo || api.turnRequests.at(-1)?.message !== naturalTodoRequest) throw new Error("Natural Todo request was intercepted before Chat");
 
       const previewCountBeforeAnalysis = api.actionPreviews.length;
       const turnCountBeforeAnalysis = api.turnRequests.length;
@@ -1611,17 +1585,16 @@ export const typedActionsScenario = {
       }, undefined, { timeout: 10_000 });
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       await page.getByRole("region", { name: "最近对话" }).getByRole("button", { name: "转为任务草稿" }).click();
-      if (!(await composer.inputValue()).startsWith("创建一个 Task：")) throw new Error("Converting the latest reply did not create an editable Task draft");
-      await page.getByText("已根据回复生成 Task 草稿。编辑后发送，LoopX 会先展示确认预览。", { exact: true }).waitFor({ state: "visible" });
-      await composer.fill("");
+      const taskDraftForm = page.getByRole("dialog", {name: "创建任务", exact: true});
+      if (!(await taskDraftForm.getByLabel("任务内容", {exact: true}).inputValue())) throw new Error("Task form lost the reply");
+      await taskDraftForm.getByRole("button", {name: "取消", exact: true}).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
 
+      const beforeNaturalBinding = api.actionPreviews.length;
       await composer.fill("让 Claude Code 负责管理这个 Goal");
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.getByText("确认执行").waitFor({ state: "visible" });
-      const naturalBinding = api.actionPreviews.find((preview) => preview.action_kind === "agent.bind" && preview.normalized_parameters.agent_id === "claude-code");
-      if (!naturalBinding) throw new Error("Natural-language Agent binding did not create a typed preview");
-      await page.getByRole("button", { name: "关闭", exact: true }).click();
+      await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+      if (api.actionPreviews.length !== beforeNaturalBinding || api.turnRequests.at(-1)?.message !== "让 Claude Code 负责管理这个 Goal") throw new Error("Assignment was interpreted by browser rules");
 
       const selectedGoalId = new URL(page.url()).searchParams.get("goalId");
       if (!selectedGoalId) throw new Error("Selected Goal URL did not preserve goalId for the Session authority smoke");
@@ -1686,8 +1659,10 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: /关闭详情/ }).click();
 
       const writesBeforeHeartbeat = api.durableWriteCount;
-      await composer.fill("每天推进这个 Goal，设置 heartbeat");
-      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await page.getByRole("button", {name: "概览", exact: true}).click();
+      await page.getByRole("button", {name: "Goal 信息", exact: true}).click();
+      await page.getByRole("button", {name: "设置 Heartbeat", exact: true}).click();
+      await page.getByRole("dialog", {name: "Goal Heartbeat", exact: true}).getByRole("button", {name: "检查配置"}).click();
       await page.getByText("确认执行").waitFor({ state: "visible" });
       await page.getByRole("button", { name: "确认并应用", exact: true }).click();
       await page.getByText("需要宿主确认").waitFor({ state: "visible" });
@@ -1789,6 +1764,7 @@ export const typedActionsScenario = {
       const writesBeforeMonitorShortcut = api.durableWriteCount;
       if (await page.locator(".personal-composer-tools").getAttribute("open") === null) await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "配置定时检查" }).click();
+      await page.getByRole("dialog", {name: "配置定时检查", exact: true}).getByRole("button", {name: "检查配置"}).click();
       await page.getByText("确认执行").waitFor({ state: "visible" });
       const monitorShortcut = api.actionPreviews.findLast((preview) => preview.action_kind === "monitor.create");
       if (monitorShortcut?.normalized_parameters.cadence !== "2h") throw new Error(`定时检查快捷方式频率漂移：${JSON.stringify(monitorShortcut?.normalized_parameters)}`);
@@ -1796,14 +1772,15 @@ export const typedActionsScenario = {
       if (monitorShortcut?.normalized_parameters.target !== "检查当前 Goal 的阻塞、进度与新产出") throw new Error(`定时检查快捷方式未回落到本地化默认检查目标：${JSON.stringify(monitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeMonitorShortcut) throw new Error("定时检查快捷方式在确认前写入了持久状态");
       await page.getByRole("button", { name: "关闭", exact: true }).click();
-      await page.getByLabel("向 LoopX 发送消息").fill("为当前 Goal 添加定时检查：\n检查内容：复盘是否包含已完成、阻塞、下周计划\n频率：每周五 17:00\n停止条件：Goal 完成");
+      await page.getByRole("button", {name: "配置定时检查"}).click();
+      const monitorForm = page.getByRole("dialog", {name: "配置定时检查", exact: true});
       const previewsBeforeUnsupportedSchedule = api.actionPreviews.length;
-      await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.getByText(/不支持精确到星期或时刻的日历计划/).waitFor({ state: "visible" });
-      if (api.actionPreviews.length !== previewsBeforeUnsupportedSchedule) throw new Error("Unsupported weekly schedule created a misleading preview");
-      if (!(await page.getByLabel("向 LoopX 发送消息").inputValue()).includes("每周五 17:00")) throw new Error("Unsupported schedule draft was discarded");
-      await page.getByLabel("向 LoopX 发送消息").fill("为当前 Goal 添加定时检查：\n检查内容：复盘是否包含已完成、阻塞、下周计划\n频率：每 2 小时\n停止条件：Goal 完成");
-      await page.getByRole("button", { name: "发送", exact: true }).click();
+      await monitorForm.getByLabel("检查间隔", {exact: true}).fill("0");
+      await monitorForm.getByRole("button", {name: "检查配置"}).click();
+      if (api.actionPreviews.length !== previewsBeforeUnsupportedSchedule) throw new Error("Invalid interval created a preview");
+      await monitorForm.getByLabel("检查间隔", {exact: true}).fill("2");
+      await monitorForm.getByLabel("检查内容", {exact: true}).fill("复盘是否包含已完成、阻塞、下周计划");
+      await monitorForm.getByRole("button", {name: "检查配置"}).click();
       await page.getByText("确认执行").waitFor({ state: "visible" });
       const monitorCreate = api.actionPreviews.findLast((preview) => preview.action_kind === "monitor.create");
       if (!monitorCreate) throw new Error("Bounded monitor configuration did not map to monitor.create");
@@ -1836,7 +1813,7 @@ export const typedActionsScenario = {
           await page.getByRole("button", { name: "关闭", exact: true }).click();
         }
       }
-      pass(10, "Continuation mapped to heartbeat.bind and bounded monitoring mapped to monitor.create/continuous_monitor UI.");
+      pass(10, "Explicit Heartbeat and monitor controls preview, gate, apply and read back typed schedules.");
 
       const agentSelect = page.getByRole("combobox", { name: "选择聊天 Runtime" });
       await agentSelect.click();

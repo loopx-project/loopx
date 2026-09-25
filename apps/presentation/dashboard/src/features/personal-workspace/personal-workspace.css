@@ -1817,3 +1817,18 @@
   .personal-run-row > .personal-row-status { display: inline-flex; }
   .personal-run-row .personal-row-copy strong, .personal-run-row .personal-row-copy small { overflow-wrap: anywhere; white-space: normal; }
 }
+
+.personal-action-form { margin: auto; width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid var(--pw-line-strong); border-radius: 16px; color: var(--pw-text); background: var(--pw-card); }
+.personal-action-form::backdrop { background: rgb(0 0 0 / 35%); }
+.personal-action-form form, .personal-action-form fieldset, .personal-action-form label { display: grid; gap: 12px; }
+.personal-action-form fieldset { padding: 0; border: 0; min-width: 0; }
+.personal-action-form h2 { margin: 0; font-size: 20px; }
+.personal-action-form header p { color: var(--pw-muted); }
+.personal-action-form label { gap: 6px; font-size: 14px; }
+.personal-action-form input, .personal-action-form select, .personal-action-form textarea { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); font: inherit; }
+.personal-action-form textarea { min-height: 64px; resize: vertical; }
+.personal-action-form footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+.personal-action-form button { padding: 8px 14px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; }
+.personal-action-form button[type="submit"] { background: var(--pw-text); color: var(--pw-card); }
+.personal-action-form button:disabled { opacity: .5; cursor: default; }
+.personal-action-form [role="alert"] { color: var(--pw-red); }
