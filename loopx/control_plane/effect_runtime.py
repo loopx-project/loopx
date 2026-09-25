@@ -12,7 +12,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -33,6 +33,13 @@ MINIMUM_NODE_VERSION = (22, 22, 3)
 MINIMUM_NODE_VERSION_TEXT = ".".join(str(part) for part in MINIMUM_NODE_VERSION)
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
+LOCAL_SNAPSHOT_METHODS = frozenset({
+    "goal.checkpoint_read_context.source",
+    "goal.checkpoint_read_context.evaluate",
+    "goal.checkpoint_read_context.commit",
+    "goal.checkpoint_read_context.inspect_replay",
+})
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
@@ -548,6 +555,7 @@ def _request_with_info(
     method: str,
     params: Mapping[str, Any],
     timeout: float,
+    large_local_snapshot: bool = False,
 ) -> dict[str, Any]:
     request = {
         "schema_version": EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
@@ -556,38 +564,74 @@ def _request_with_info(
         "method": method,
         "params": dict(params),
     }
-    encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
-    if len(encoded) > MAX_REQUEST_BYTES:
-        raise EffectRuntimeRejected(
-            "TypeScript Effect runtime request is oversized",
-            diagnostic_code="request_too_large",
-        )
-    chunks: list[bytes] = []
-    size = 0
-    with socket.create_connection(
-        (str(info["host"]), int(info["port"])), timeout=timeout
-    ) as connection:
+    with ExitStack() as stack:
+        response_sink: Path | None = None
+        encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        if large_local_snapshot:
+            if method not in LOCAL_SNAPSHOT_METHODS:
+                raise EffectRuntimeRejected(
+                    "local snapshot transport is unavailable for this method",
+                    diagnostic_code="invalid_request",
+                )
+            directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="loopx-effect-")))
+            response_sink = directory / "response.json"
+            descriptor = os.open(response_sink, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(descriptor)
+            request["response_sink"] = str(response_sink)
+            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+            if len(encoded) > MAX_REQUEST_BYTES:
+                params_bytes = json.dumps(dict(params), separators=(",", ":")).encode()
+                if len(params_bytes) > MAX_LOCAL_SNAPSHOT_BYTES:
+                    raise EffectRuntimeRejected(
+                        "TypeScript Effect runtime local snapshot is oversized",
+                        diagnostic_code="request_too_large",
+                    )
+                params_path = directory / "params.json"
+                descriptor = os.open(params_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                with os.fdopen(descriptor, "wb") as file:
+                    file.write(params_bytes)
+                request.pop("params")
+                request["params_ref"] = {
+                    "schema_version": "loopx_effect_runtime_snapshot_v0",
+                    "path": str(params_path), "byte_count": len(params_bytes),
+                    "sha256": hashlib.sha256(params_bytes).hexdigest(),
+                }
+                encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        if len(encoded) > MAX_REQUEST_BYTES:
+            raise EffectRuntimeRejected(
+                "TypeScript Effect runtime request is oversized",
+                diagnostic_code="request_too_large",
+            )
+        chunks: list[bytes] = []
+        size = 0
+        with socket.create_connection(
+            (str(info["host"]), int(info["port"])), timeout=timeout
+        ) as connection:
+            try:
+                connection.settimeout(timeout)
+                # sendall may have delivered a prefix before it raises. From this
+                # point onward the caller cannot prove that no effect ran.
+                connection.sendall(encoded)
+                while True:
+                    chunk = connection.recv(64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size > MAX_RESPONSE_BYTES:
+                        raise RuntimeError("TypeScript Effect runtime response is oversized")
+                    if b"\n" in chunk:
+                        break
+            except (OSError, RuntimeError) as exc:
+                raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
         try:
-            connection.settimeout(timeout)
-            # sendall may have delivered a prefix before it raises. From this
-            # point onward the caller cannot prove that no effect ran.
-            connection.sendall(encoded)
-            while True:
-                chunk = connection.recv(64 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                size += len(chunk)
-                if size > MAX_RESPONSE_BYTES:
-                    raise RuntimeError("TypeScript Effect runtime response is oversized")
-                if b"\n" in chunk:
-                    break
-        except (OSError, RuntimeError) as exc:
-            raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
-    try:
-        response = json.loads(b"".join(chunks).split(b"\n", 1)[0])
-    except (json.JSONDecodeError, IndexError):
-        raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from None
+            response = json.loads(b"".join(chunks).split(b"\n", 1)[0])
+        except (json.JSONDecodeError, IndexError):
+            raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from None
+        if isinstance(response, dict) and "result_ref" in response:
+            response = _read_local_snapshot_response(
+                response, response_sink, method=method, request_id=request_id, timeout=timeout,
+            )
     if (
         not isinstance(response, dict)
         or response.get("schema_version") != EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION
@@ -597,6 +641,39 @@ def _request_with_info(
     if response.get("ok") is not True:
         raise _remote_runtime_error(response.get("error"))
     return response
+
+
+def _read_local_snapshot_response(
+    envelope: dict[str, Any], sink: Path | None, *, method: str, request_id: str, timeout: float,
+) -> dict[str, Any]:
+    """Read an exact private response; unverifiable post-dispatch bytes are ambiguous."""
+    try:
+        ref = envelope["result_ref"]
+        if (sink is None or envelope.get("schema_version") != EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION
+                or envelope.get("request_id") != request_id or envelope.get("ok") is not True
+                or not isinstance(ref, dict)):
+            raise ValueError("invalid local snapshot envelope")
+        size, digest = ref.get("byte_count"), ref.get("sha256")
+        if (not isinstance(size, int) or isinstance(size, bool) or size <= 0
+                or size > MAX_LOCAL_SNAPSHOT_BYTES or not isinstance(digest, str)
+                or re.fullmatch(r"[a-f0-9]{64}", digest) is None):
+            raise ValueError("invalid local snapshot reference")
+        descriptor = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as file:
+            metadata = os.fstat(file.fileno())
+            if (not os.path.isfile(sink) or metadata.st_size != size
+                    or (hasattr(os, "getuid") and
+                        (metadata.st_uid != os.getuid() or metadata.st_mode & 0o077))):
+                raise ValueError("invalid local snapshot file")
+            data = file.read(MAX_LOCAL_SNAPSHOT_BYTES + 1)
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("local snapshot digest mismatch")
+        result = json.loads(data)
+        if not isinstance(result, dict):
+            raise ValueError("invalid local snapshot response")
+        return result
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
 
 
 def _remote_runtime_error(value: object) -> EffectRuntimeRemoteError:
@@ -805,6 +882,7 @@ def effect_runtime_request(
     *,
     timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     retry_safe: bool = True,
+    large_local_snapshot: bool = False,
 ) -> dict[str, Any]:
     """Call the managed TS runtime, retrying only idempotent typed effects."""
 
@@ -824,6 +902,7 @@ def effect_runtime_request(
                 method=method,
                 params=params,
                 timeout=timeout,
+                large_local_snapshot=large_local_snapshot,
             )
         except (EffectRuntimeRemoteError, EffectRuntimeResponseAmbiguous):
             raise
@@ -873,12 +952,14 @@ def effect_runtime_result(
     *,
     timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     retry_safe: bool = True,
+    large_local_snapshot: bool = False,
 ) -> Any:
     return effect_runtime_request(
         method,
         params,
         timeout=timeout,
         retry_safe=retry_safe,
+        large_local_snapshot=large_local_snapshot,
     ).get("result")
 
 

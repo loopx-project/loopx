@@ -77,6 +77,56 @@ def test_missing_replaced_stale_context_requires_reread_and_preserves_delivery(t
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_large_goal_context_keeps_complete_basis_and_checkpoint_only_recovery(
+    tmp_path, monkeypatch, provider,
+):
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, binding, delivery, original = _missing(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    if provider != "legacy":
+        todo = {"schema_version": "todo_item_v0", "todo_id": TODO_ID, "index": 1,
+                "role": "agent", "status": "open", "done": False,
+                "text": "Validate and settle the selected delivery.",
+                "task_class": "advancement_task", "archive_state": "active",
+                "source_section": "Agent Todo"}
+        projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo])
+        initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    # The original failure came from complete source prose, not from the
+    # small prior Turn receipt. Keep the source intact and cross both 2 MiB
+    # request and response boundaries through the real local CLI/runtime.
+    large_prose = "This is retained Goal context.\n" * 115_000
+    assert len(large_prose.encode()) > MAX_REQUEST_BYTES
+    state.write_text(state.read_text(encoding="utf-8") + "\n## Context\n\n" + large_prose,
+                     encoding="utf-8")
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
+    assert rc == 0, {key: value for key, value in context.items() if key != "basis"}
+    assert context["basis"]["goal"]["prose"].endswith(large_prose.strip())
+    assert context["basis"]["source"]["authority"] == (
+        "legacy_markdown" if provider == "legacy" else f"{provider}_v0")
+    state.write_text(state.read_text(encoding="utf-8") + "\nUpdated acceptance context.\n",
+                     encoding="utf-8")
+    supplement = (*delivery,
+        "--vision-unchanged-reason", "The current scope and acceptance still apply.")
+    rc, stale = _run_cli(registry, runtime, *supplement,
+        "--checkpoint-read-context", context["read_context_id"], cwd=project)
+    assert rc == 1 and stale["error_code"] == "checkpoint_read_context_stale", stale
+    assert "goal" in stale["checkpoint_read_context"]["changed_components"]
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
+    assert rc == 0 and context["basis"]["goal"]["prose"].endswith(
+        "Updated acceptance context."), context.get("error")
+    rc, result = _run_cli(registry, runtime, *supplement,
+        "--checkpoint-read-context", context["read_context_id"], cwd=project)
+    assert rc == 0 and result["vision_checkpoint"]["satisfied"], result
+    assert result["settlement_identity"] == original["settlement_identity"]
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_context_reads_real_canonical_todo_and_owner_acceptance(tmp_path, monkeypatch, provider):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime

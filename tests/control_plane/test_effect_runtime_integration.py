@@ -1006,6 +1006,22 @@ def test_oversized_request_is_rejected_before_runtime_dispatch(
     )
 
 
+def test_large_local_response_digest_failure_is_ambiguous(tmp_path: Path) -> None:
+    sink = tmp_path / "response.json"
+    sink.write_text('{"untrusted":"response"}', encoding="utf-8")
+    envelope = {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION,
+        "request_id": "request-1", "ok": True,
+        "result_ref": {"byte_count": sink.stat().st_size, "sha256": "0" * 64},
+    }
+    with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous) as error:
+        effect_runtime._read_local_snapshot_response(
+            envelope, sink, method="goal.checkpoint_read_context.commit",
+            request_id="request-1", timeout=10,
+        )
+    assert error.value.diagnostic_code == "runtime_response_ambiguous"
+
+
 @pytest.mark.parametrize("unit", [b"x", "界".encode()])
 def test_oversized_raw_socket_request_returns_typed_error(
     tmp_path: Path,

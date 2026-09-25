@@ -32,7 +32,10 @@ class CheckpointReadContextRejected(ValueError):
 
 def _checkpoint_effect(method: str, request: dict[str, Any]) -> Any:
     try:
-        return effect_runtime_result(method, request)
+        # The complete Goal prose and archived Todo basis can exceed the 2 MiB
+        # RPC wire. Only this locked local checkpoint path opts into the exact,
+        # digest-bound same-UID snapshot transport; default effects stay bounded.
+        return effect_runtime_result(method, request, large_local_snapshot=True)
     except EffectRuntimeRejected as error:
         raise CheckpointReadContextRejected({"ok": False, "error": str(error),
             "error_code": error.diagnostic_code, "reread_required": False}) from error
