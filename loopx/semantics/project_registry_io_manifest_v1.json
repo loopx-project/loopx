@@ -1375,7 +1375,7 @@
     },
     {
       "site": "loopx/control_plane/runtime/status_projection_cache.py::<module>.resolve_status_projection_cache_runtime_root::codec_read:load_registry#1",
-      "line": 39,
+      "line": 41,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1383,7 +1383,7 @@
     },
     {
       "site": "loopx/control_plane/status/collection.py::<module>.collect_status::codec_read:load_registry#1",
-      "line": 95,
+      "line": 97,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

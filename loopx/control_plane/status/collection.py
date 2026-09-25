@@ -19,6 +19,8 @@ from ..goals.activation import (
 from ..runtime.runtime_projection_route import (
     collect_runtime_projection_route_diagnostics,
 )
+from ..projection_envelope_facts import seal_projection_envelope, source_fact
+from ..runtime.time import now_utc_iso, parse_timestamp, utc_isoformat
 from ..todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from ...registry import registry_goals
 from ...rollout_event_log import RolloutEventSnapshot
@@ -93,6 +95,7 @@ def collect_status(
         else None
     )
     registry = context.load_registry(registry_path)
+    registry_read_at = now_utc_iso()
     runtime_root = context.resolve_runtime_root(
         registry,
         runtime_root_override,
@@ -107,6 +110,7 @@ def collect_status(
         runtime_root=runtime_root,
         current_registry=registry,
     )
+    global_registry_read_at = now_utc_iso()
     include_runtime_goals = bool(global_registry.get("current_registry_is_global"))
     history_collection = context.collect_status_history(
         registry_path=registry_path,
@@ -119,6 +123,7 @@ def collect_status(
         registry=registry,
     )
     history = history_collection.status_history
+    history_read_at = now_utc_iso()
     contract = context.check_contract(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
@@ -130,6 +135,7 @@ def collect_status(
         history_audit=history_collection.contract_audit,
         registry=registry,
     )
+    contract_read_at = now_utc_iso()
     contract = project_contract_health_for_goal(contract, goal_id=goal_filter)
     queue = context.build_attention_queue(
         contract=contract,
@@ -168,6 +174,7 @@ def collect_status(
         activation_state_filter=activation_filter,
         registry=registry,
     )
+    routes_read_at = now_utc_iso()
     runtime_projection_route_health = {
         "healthy": (
             bool(runtime_projection_routes.get("healthy"))
@@ -263,4 +270,97 @@ def collect_status(
         )
     attach_goal_acceptance_observations(payload, history=history)
     attach_goal_artifact_lifecycle_projections(payload, history=history)
+    payload["projection_envelope"] = seal_projection_envelope(
+        projection="status",
+        observed_at=now_utc_iso(),
+        sources=[
+            source_fact("registry", last_read_at=registry_read_at, item_count=len(registry_goals(registry))),
+            source_fact(
+                "global_registry",
+                read_status="read" if global_registry.get("available") else "missing",
+                last_read_at=global_registry_read_at if global_registry.get("available") else None,
+                required=False,
+                item_count=global_registry.get("global_goal_count"),
+            ),
+            _run_index_source(history, read_at=history_read_at),
+            source_fact("goal_state_contract", last_read_at=contract_read_at),
+            source_fact(
+                "runtime_projection_routes",
+                read_status="read" if runtime_projection_routes.get("available") else "missing",
+                last_read_at=routes_read_at if runtime_projection_routes.get("available") else None,
+                required=False,
+                item_count=runtime_projection_route_health["goal_count"],
+            ),
+        ],
+        coverage=_status_coverage(
+            registry,
+            history=history,
+            queue=queue,
+            goal_filter=goal_filter,
+            activation_filter=activation_filter,
+        ),
+    )
     return payload
+
+
+def _run_index_source(history: dict[str, Any], *, read_at: str) -> dict[str, Any]:
+    goals = [goal for goal in history.get("goals") or [] if isinstance(goal, dict)]
+    newest = None
+    for goal in goals:
+        for run in goal.get("latest_runs") or []:
+            generated = parse_timestamp(run.get("generated_at")) if isinstance(run, dict) else None
+            if generated is not None and generated.tzinfo is not None and (newest is None or generated > newest):
+                newest = generated
+    return source_fact(
+        "goal_run_indexes",
+        last_read_at=read_at,
+        source_updated_at=utc_isoformat(newest) if newest is not None else None,
+        item_count=len(goals),
+        missing_count=sum(1 for goal in goals if goal.get("index_exists") is False),
+    )
+
+
+def _status_coverage(
+    registry: dict[str, Any],
+    *,
+    history: dict[str, Any],
+    queue: dict[str, Any],
+    goal_filter: str | None,
+    activation_filter: GoalActivationState | None,
+) -> dict[str, Any]:
+    """Count registry members in the requested scope; legacy runtime goals are extra."""
+    members = registry_goals(registry)
+    if goal_filter is not None:
+        scope, expected = "goal", 1
+        expected_ids = {goal_filter}
+    elif activation_filter is not None:
+        scope = f"activation.{activation_filter.value}"
+        expected_ids = {
+            str(goal.get("id") or "") for goal in members if goal_activation_state(goal) is activation_filter
+        }
+        expected = len(expected_ids)
+    else:
+        scope = "registry"
+        expected_ids = {str(goal.get("id") or "") for goal in members}
+        expected = len(expected_ids)
+    projected = {
+        str(goal.get("id") or "")
+        for goal in history.get("goals") or []
+        if isinstance(goal, dict)
+        and (goal.get("registry_member") is True or (goal_filter is not None and goal.get("index_exists") is True))
+    }
+    missing = sorted(expected_ids - projected)
+    items = queue.get("items") if isinstance(queue.get("items"), list) else []
+    item_count = queue.get("item_count")
+    return {
+        "scope": scope,
+        "expected_count": expected,
+        "included_count": len(expected_ids & projected),
+        "omitted": (
+            [{"reason": "goal_not_found" if goal_filter else "not_projected", "count": len(missing), "refs": missing[:8]}]
+            if missing
+            else []
+        ),
+        "shown_count": len(items),
+        "available_count": item_count if isinstance(item_count, int) and item_count >= 0 else len(items),
+    }

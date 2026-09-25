@@ -186,6 +186,8 @@ def collect_global_registry_health(
         "current_registry_is_global": current_is_global,
         "global_goal_count": len(global_goals),
         "current_goal_count": len(current_goals),
+        "current_registry_excluded_goal_count": 0 if current_is_global else len(missing_from_current),
+        "current_registry_excluded_goal_ids": [] if current_is_global else missing_from_current[:8],
         "source_registry_count": len(source_registries),
         "summary": {
             "high": severity_counts.get("high", 0),

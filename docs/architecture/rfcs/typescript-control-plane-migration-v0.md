@@ -3,7 +3,7 @@
 - Status: Accepted, transaction-payoff phase in progress
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-09-13
+- Last revised: 2026-09-26
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -1407,6 +1407,52 @@ while public, persisted, RPC, or extension input still reaches its semantic
 core through an unvalidated assertion. TypeScript complements runtime
 validation; it does not replace it.
 
+### 2.6 Projection envelope is a kernel read contract
+
+The kernel already binds writes to receipts, fences and CAS. Reads need a
+matching contract. A read model such as status, a global summary or a context
+packet combines several sources read at different times, and it is often
+consumed later from a cache, a saved file or a pasted packet. Without a
+machine-checkable statement of what it observed, consumers, agents above all,
+treat an old or partial projection as the current whole state. `ok: true`, a
+passing check or a healthy host says nothing about that.
+
+Every operator- or agent-facing projection therefore carries one
+`projection_envelope` (`loopx_projection_envelope_v0`):
+
+- `observed_at` and `served_at`: when the sources were read and when this copy
+  was emitted. A cache hit or replay keeps the first and restamps the second.
+- One row per source with `last_read_at`, `read_status`, window, staleness and
+  alert reasons. A derived projection inherits its upstream rows, so it cannot
+  look fresher than the oldest read it depends on.
+- `coverage` of the requested scope: expected and included counts, and named
+  omissions. Display truncation is disclosed separately and is not an
+  incompleteness alert.
+
+Ownership follows this RFC instead of creating new migration debt.
+`projection_envelope.ts` alone decodes the facts and decides staleness, alerts
+and completeness, through runtime method `projection.envelope.seal`.
+Python-owned projections only pass compact read facts. That is one request per
+projection, on paths that already pin a runtime revision and make dozens of TS
+calls. It is not a leaf migration: it keeps a new cross-cutting rule from
+being born in Python and migrated later. The Python facts adapter exits with
+its projection: when status projection moves into the kernel (already a
+facade-exit condition in §4), TS gathers the facts directly and the adapter is
+deleted.
+
+Rollout. `status` (including `--goal-id` and projection-cache hits),
+`global-summary` and `global-gates` now carry the envelope. Every other
+`collect_status` caller receives the status envelope in its payload but does
+not yet emit its own. Next, in order: `global-todos` and `global-risks` (the
+same composition, one call each), `quota should-run`, `review-packet`, and
+Decision Context packets. A read model added to or migrated into TypeScript
+emits the envelope in the same PR; §6 makes this a promotion gate.
+
+Consumers treat a missing envelope as unknown freshness, and disclose an
+alerting one before stating any conclusion that depends on it. Field
+semantics and the consumer rule are in the
+[projection envelope contract](../../reference/contracts/projection-envelope-contract.md).
+
 ## 3. Current baseline and phase transition
 
 Effect Program moved first because it joins ordered steps, identity,
@@ -1426,6 +1472,7 @@ choice is now implemented rather than hypothetical.
 | Quota monitor-poll commit transaction | TypeScript owns monitor admission revalidation, target/event/result construction, effect replay/index CAS, provider intent, and repairable JSON/Markdown/index persistence | Python projects compact `should-run` facts, invokes the real Todo provider between at most two reductions, reloads legacy status, and holds the cross-writer index lock |
 | Runtime decoders ([#3443](https://github.com/huangruiteng/loopx/pull/3443)) | Stable primitive decoding has one small shared module; domain decoders remain local | No larger schema framework is justified |
 | Transaction payoff ([#3464](https://github.com/huangruiteng/loopx/pull/3464), [#3481](https://github.com/huangruiteng/loopx/pull/3481), and Todo completion) | Turn settlement, quota delivery routing, and Todo completion each cross one coarse TS boundary; the Todo transaction owns identity, replay fencing, validation planning/result reduction, continuation/recovery, and completion metadata | Python still executes explicitly external providers and materializes legacy Markdown/event results; other domains still need their own bounded cutovers |
+| Projection envelope | TypeScript owns decoding of `loopx_projection_envelope_v0` and every freshness, alert, completeness and replay decision | Python gathers read facts for `status`, `global-summary` and `global-gates` until those projections migrate |
 | Promoted-authority Todo claim | TypeScript owns the provider-head read, lifecycle validation, complete-record update, hard-lease check, CAS, receipt, and readback-safe result for claims after authority promotion | Default local Markdown mode remains on the legacy writer; other Todo mutations and Markdown regeneration remain bounded follow-ups |
 
 The scheduler facade exit now includes its first bounded Stage 3 route. A
@@ -1794,6 +1841,9 @@ not authorize a generic schema framework.
   concurrent same-key mutations are serialized or use a tested CAS contract,
   and retry identity distinguishes successive checkpoints within one Turn.
 - Process crash and retry cannot duplicate a committed internal effect.
+- An operator- or agent-facing read model that is added or migrated emits
+  `projection_envelope` through `projection.envelope.seal`. Its tests cover a
+  stale source, an unreadable source, an incomplete scope and a replayed copy.
 - Wheel and sdist are installed into fresh environments and execute deep
   semantic probes from packaged files.
 
