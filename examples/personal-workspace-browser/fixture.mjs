@@ -897,7 +897,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       executor_model: null,
       executor_reasoning_effort: null,
     };
-    const machineNamespaces = {
+    // Applied namespaces persist for the page; this handler runs once per request.
+    const machineNamespaces = state.machineNamespaces ??= {
       change_quality_qualification: changeQualityConfiguration,
       manager_runtime: managerRuntimeConfiguration,
       periodic_report: periodicConfiguration,
