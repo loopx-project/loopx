@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from ..goals.state_event_writer import StateEventWriteContext
-
 import re
 from collections.abc import Mapping
 from enum import Enum
@@ -283,9 +281,8 @@ def record_supervisor_proposal(
     supervisor: Mapping[str, Any],
     decision: Mapping[str, Any],
     execute: bool,
-    write_context: StateEventWriteContext | None = None,
 ) -> dict[str, Any]:
-    store = AppendOnlyStateEventStore(log_path, write_context=write_context)
+    store = AppendOnlyStateEventStore(log_path)
     events = store.load()
     event = build_supervisor_proposal_event(
         goal_id=goal_id,
@@ -323,9 +320,8 @@ def record_supervisor_receipt(
     receipt: Mapping[str, Any],
     execute: bool,
     host_capabilities: list[str] | tuple[str, ...] | None = None,
-    write_context: StateEventWriteContext | None = None,
 ) -> dict[str, Any]:
-    store = AppendOnlyStateEventStore(log_path, write_context=write_context)
+    store = AppendOnlyStateEventStore(log_path)
     events = store.load()
     decision_id = _required_token(receipt, "decision_id")
     proposal = _matching_event(

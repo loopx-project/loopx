@@ -275,27 +275,6 @@ def require_legacy_coordination_write_allowed(
 
 
 @contextmanager
-def legacy_todo_source_locks(
-    runtime_root: Path, goal_id: str, state_file: Path,
-    agent_id: str | None, operation: str,
-) -> Iterator[None]:
-    """Shared T→S exclusion before classifying and admitting a source writer."""
-    with exclusive_cross_runtime_file_lock(
-        legacy_coordination_todo_lock_path(
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-        ),
-        agent_id=agent_id,
-        operation="legacy_coordination_todo_write",
-    ), exclusive_cross_runtime_file_lock(
-        state_file,
-        agent_id=agent_id,
-        operation=operation,
-    ):
-        yield
-
-
-@contextmanager
 def legacy_todo_write_transaction(
     registry_path: Path,
     goal_id: str,
@@ -319,7 +298,18 @@ def legacy_todo_write_transaction(
         None,
         registry_path=registry_path,
     )
-    with legacy_todo_source_locks(resolved_runtime_root, goal_id, state_file, agent_id, operation):
+    with exclusive_cross_runtime_file_lock(
+        legacy_coordination_todo_lock_path(
+            runtime_root=resolved_runtime_root,
+            goal_id=goal_id,
+        ),
+        agent_id=agent_id,
+        operation="legacy_coordination_todo_write",
+    ), exclusive_cross_runtime_file_lock(
+        state_file,
+        agent_id=agent_id,
+        operation=operation,
+    ):
         if not dry_run:
             require_registry_source_write_allowed(
                 registry_path=registry_path, runtime_root=resolved_runtime_root, goal_id=goal_id,

@@ -210,7 +210,6 @@ def goal_todo_summaries(
     todo_id: str | None,
     agent_id: str | None,
     limit: int | None,
-    event_fields: dict[str, Any] | None = None,
 ) -> GoalTodoSummaries:
     """Project todo summaries from active-state text plus its event projection.
 
@@ -219,7 +218,7 @@ def goal_todo_summaries(
     commit; ``list_goal_todos`` passes the on-disk text.
     """
 
-    projection_fields = event_fields if event_fields is not None else active_state_event_projection_fields(
+    projection_fields = active_state_event_projection_fields(
         goal or {},
         state_path=state_path,
         item_limit=None,
@@ -377,7 +376,6 @@ def project_goal_todo_items(
     state_text: str,
     state_path: Path,
     rollout_events: list[dict[str, Any]],
-    event_fields: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Every user and agent todo item projected from one active-state text.
 
@@ -395,7 +393,6 @@ def project_goal_todo_items(
         todo_id=None,
         agent_id=None,
         limit=None,
-        event_fields=event_fields,
     ).todos
 
 

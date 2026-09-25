@@ -16,7 +16,7 @@ import { loadValidatedShadowLineage, localAuthorityShadowHeadDigest, ShadowLinea
 import { readOutboxCursor } from "./local_authority_shadow_outbox.ts";
 import {
   bootstrapManagedShadow, rollbackManagedShadow, requireShadowCaptureBinding,
-  withShadowMaintenanceLock, ShadowManagementError, requireShadowPrimaryWriteAllowed, shadowEventSourcePaths,
+  withShadowMaintenanceLock, ShadowManagementError, requireShadowPrimaryWriteAllowed,
 } from "./shadow_management.ts";
 import * as schemas from "./coordination_state_contract.generated.ts";
 
@@ -78,7 +78,7 @@ export function decodeRuntimeShadowRequest(value: unknown, schema: string, extra
 /** Source preconditions are ephemeral. They never become an alternative state ledger. */
 function sourceSnapshot(request: ShadowRequest): JsonObject {
   const snapshot = request.source_snapshot;
-  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files", "registry_source", ...(snapshot.event_log_paths === undefined ? [] : ["event_log_paths"])], "source_snapshot");
+  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files", "registry_source"], "source_snapshot");
   if (!isAbsolute(text(snapshot.state_path, "state_path")) ||
       !isAbsolute(text(snapshot.registered_runtime_root, "registered_runtime_root")) ||
       !isAbsolute(text(snapshot.registered_state_path, "registered_state_path")) ||
@@ -94,14 +94,10 @@ export async function withShadowSourceLocks<T>(request: ShadowRequest, operation
   if (!isAbsolute(text(snapshot.state_path, "state_path"))) throw new ShadowManagementError("source_snapshot_invalid");
   const root = request.runtime_root;
   const goal = request.goal_id;
-  const paths = shadowEventSourcePaths(snapshot);
-  const withEvents = async (index: number): Promise<T> => index === paths.length
-    ? await withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), () =>
-        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), () => registryMode === "current" ? withShadowRegistrySource(snapshot, operation) : operation()))
-    : await withFileMutationLock(paths[index]!, () => withEvents(index + 1));
   return await withFileMutationLock(legacyCoordinationTodoLockPath(root, goal), () =>
     withFileMutationLock(String(snapshot.state_path), () =>
-      withEvents(0)));
+      withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), () =>
+        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), () => registryMode === "current" ? withShadowRegistrySource(snapshot, operation) : operation()))));
 }
 async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   return await withShadowSourceLocks(request, async () => {

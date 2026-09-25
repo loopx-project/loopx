@@ -102,7 +102,7 @@ def test_append_many_preserves_lazy_iterable_visibility_and_reentrancy(
 
     monkeypatch.setattr(
         event_sourced_state,
-        "exclusive_cross_runtime_file_lock",
+        "exclusive_file_lock",
         non_reentrant_lock,
     )
     observed_prefix: list[str] = []
@@ -155,7 +155,7 @@ def test_append_many_does_not_iterate_list_subclasses_under_lock(
         finally:
             lock_held = False
 
-    monkeypatch.setattr(event_sourced_state, "exclusive_cross_runtime_file_lock", non_reentrant_lock)
+    monkeypatch.setattr(event_sourced_state, "exclusive_file_lock", non_reentrant_lock)
 
     class ReentrantList(list):
         def __iter__(self):

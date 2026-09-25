@@ -438,9 +438,7 @@ def complete_event_projected_goal_todo(
         effective_claimed_by = claimed_by or normalize_todo_claimed_by(
             item.get("claimed_by")
         )
-        from ..goals.state_event_writer import StateEventWriteContext
-        writer = StateEventWriteContext(registry_path, root, goal_id, state_path, primary_lock_held=True)
-        store = AppendOnlyStateEventStore(Path(context["event_log_path"]), write_context=writer)
+        store = AppendOnlyStateEventStore(Path(context["event_log_path"]))
         source_checksum = context["fields"]["state_event_projection"]["source_checksum"]
         if completion_fence is None or completion_state is None:
             transaction = reduce_todo_completion_transaction(
@@ -659,7 +657,4 @@ def complete_event_projected_goal_todo(
             "source": "event_log",
         }
         result["self_merged"] = self_merged
-        if writer.capture is not None:
-            from ..coordination.local_authority_shadow_adapter import capture_evidence
-            result["coordination_runtime_shadow"] = capture_evidence(goal_id=goal_id, capture=writer.capture.outcome, drain=None)
         return result

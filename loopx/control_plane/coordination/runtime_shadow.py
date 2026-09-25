@@ -321,11 +321,13 @@ def _build_runtime_shadow_source_snapshot(
     TS takes the shared source locks and verifies every byte/inventory before
     publishing a baseline or a bounded qualification result.
     """
+    from ...event_sourced_state import build_state_projection, normalize_state_event, render_active_state_sections
     from ...rollout_event_log import ROLLOUT_EVENT_SCHEMA_VERSION, rollout_event_log_path
     from ...paths import resolve_runtime_root
     from ...state_refresh import resolve_goal_state
     from ..status.active_state_projection import state_event_log_candidates
     from ..todos.active_state_todo_parser import parse_active_state_todos
+    from ..todos.goal_todo_projection import todo_summaries_from_fields
     from ..todos.handoff_mode import goal_handoff_mode
     from .local_authority_shadow_projection import canonical_bytes, compact_lease
     from .shadow_management import ShadowManagementError
@@ -355,20 +357,23 @@ def _build_runtime_shadow_source_snapshot(
         if isinstance(value, dict) and value.get("schema_version") == ROLLOUT_EVENT_SCHEMA_VERSION:
             rollout_events.append(value)
 
-    # Freeze every candidate, including absent paths. Native source locks verify
-    # these same bytes before publishing the baseline; never project a later read.
-    from ..goals.active_state_event_projection import active_state_event_projection_fields
-    from ..goals.path_resolution import resolve_goal_local_path
-    from .local_authority_shadow_adapter import todo_partition_projector
-    event_paths = list(dict.fromkeys(path.resolve() for path in state_event_log_candidates(dict(goal), state_path=state_path)))
-    event_texts = {path: (None if (data := read_evidence(path)) is None else data.decode("utf-8")) for path in event_paths}
-    event_fields = active_state_event_projection_fields(dict(goal), state_path=state_path,
-        resolve_goal_local_path=resolve_goal_local_path, parse_active_state_todos=parse_active_state_todos,
-        item_limit=None, rollout_events=rollout_events, event_log_texts=event_texts)
-    if event_fields.get("state_event_projection_warning"):
-        raise ShadowManagementError("event_source_invalid")
-    todos = todo_partition_projector(goal, state_path=state_path, rollout_events=rollout_events,
-        event_fields=event_fields)(state_text)["todos"]
+    # Use the production candidate selection and projection semantics. A log
+    # with no Todo projection is harmless; an unbound Todo overlay is a hold.
+    for path in state_event_log_candidates(dict(goal), state_path=state_path):
+        data = read_evidence(path)
+        if not data:
+            continue
+        events = [normalize_state_event(json.loads(line)) for line in data.decode("utf-8").splitlines() if line.strip()]
+        rendered = render_active_state_sections(build_state_projection(events, goal_id=goal_id))
+        fields = parse_active_state_todos(rendered, goal=dict(goal), state_path=state_path, item_limit=None, rollout_events=rollout_events)
+        if any(fields.get(f"{role}_todos") for role in ("user", "agent")):
+            raise ShadowManagementError("event_log_writer_not_bound")
+
+    fields = parse_active_state_todos(state_text, goal=dict(goal), state_path=state_path, item_limit=None, rollout_events=rollout_events)
+    todos = todo_summaries_from_fields(fields=fields, source="markdown_active_state", projection_fields={},
+        projection_overlay=None, rollout_events=rollout_events, roles=["user", "agent"], status=None,
+        todo_id=None, agent_id=None, limit=None).todos
+    todos = capture_todo_archive_dependencies(todos, state_text)
     leases: list[dict[str, Any]] = []
     inventory: list[dict[str, object]] = []
     for path in sorted((runtime_root / "goals" / goal_id / "task-leases").glob("*.json")):
@@ -386,7 +391,7 @@ def _build_runtime_shadow_source_snapshot(
         "registered_state_path": str(registered_state.expanduser().resolve()),
         "state_bytes_sha256": "sha256:" + hashlib.sha256(state_bytes).hexdigest(),
         "lease_inventory": inventory, "projection_sha256": hashlib.sha256(canonical_bytes(projection)).hexdigest(),
-        "evidence_files": evidence, "event_log_paths": [str(path) for path in event_paths]}
+        "evidence_files": evidence}
 
 
 def dispatch_coordination_runtime_shadow(

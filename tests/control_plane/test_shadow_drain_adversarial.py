@@ -173,7 +173,7 @@ def test_registry_runtime_override_cannot_bypass_an_active_source_binding(tmp_pa
 
 
 @pytest.mark.parametrize("overlay", [False, True], ids=["event_only", "event_overlay"])
-def test_public_qualification_and_candidate_reads_reject_uncaptured_event_drift(
+def test_public_qualification_and_candidate_reads_hold_unbound_event_todos(
     tmp_path: Path, overlay: bool,
 ) -> None:
     from loopx.event_sourced_state import AppendOnlyStateEventStore, TODO_ADDED, make_state_event
@@ -194,8 +194,7 @@ def test_public_qualification_and_candidate_reads_reject_uncaptured_event_drift(
     for command in (("qualify",), ("read-candidate", "--todo-id", ids[0])):
         result = w.cli("coordination-shadow", *command, success=False)
         assert result["ok"] is False, result
-        surface = result.get("qualification") or result.get("read_candidate")
-        assert surface["status"] == "drifted" and surface["parity_matches"] is False, result
+        assert result["error"] == "event_log_writer_not_bound", result
         assert result["decision_read_from_shadow"] is False
         assert log.read_bytes() == evidence
 

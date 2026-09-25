@@ -16,17 +16,11 @@
 
 ## 当前交付边界（2026-09-25）
 
-本次闭合 R5 的受管事件 writer 捕获切片：批次在源锁内先 prepare 再发布，
-由 TS delivery owner 对绑定的事件日志证明中断写入。Bootstrap 与 capture 共用
-正式的 Markdown/event 混合投影；Python 保留历史编码，序列/CAS/重放和候选提交
-规则继续由 TypeScript 拥有。
-
-剩余交付是：外部动作执行区间保护；整 Goal 命令/cohort 资格验证及 canonical
-写入后的受保护回退；默认入口与有界 Python 退役。第二项不再重复列“事件捕获
-尚未实现”。隔离 File/SQLite 晋升和 archive 恢复不等于支持回退为 legacy
-Markdown，也不关闭 D1–D3。#4931 与 D2 证据单列；这是退出条件清单，不是保证
-未来还需几个 PR。[唯一当前清单与退出条件](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md)。
-
+按 `37bbaec79` 与当前 PR 状态核对：完整来源传输、事务捕获、来源组装及此前五个
+在途 caller/event 修复都已合入，不再计入待开发。当前晋升准入修复之后，规划三个
+明确代码边界：外部动作执行区间保护、事件 writer 绑定与整 Goal 迁移/回退闭环、
+默认启用与最后一批有界 Python 退役。#4931 与 D2 的剩余资格证据单列；三个是
+可命名的开发批次，不是保证总 PR 数。[唯一当前清单与退出条件](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md)。
 
 ## 旧观测写入退役（2026-09-24）
 

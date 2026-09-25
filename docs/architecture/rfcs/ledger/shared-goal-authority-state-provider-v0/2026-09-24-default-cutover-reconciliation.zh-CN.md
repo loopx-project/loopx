@@ -34,13 +34,14 @@ scan 100 p95 801.81 ms / 250 ms），#4931 尚未提供精确 head 的正式复�
 后的模式转换参数被丢失。它是迁移闭环的缺陷修复，不是新的存储引擎，也不能据此
 将下表第三方资格门或整个迁移包标成完成。
 
-| 交付边界 | 可观察结果与 owner | 退出条件 |
+| 拟议 PR | 可观察结果与 owner | 退出条件 |
 | --- | --- | --- |
 | 1. 外部动作执行区间保护 | lease/effect owner 将执行身份验证覆盖到实际外部动作、接管、超时、退出及不确定完成。复用已合入 #4994/#4995。 | 过期 executor 不能继续执行/结算；真实执行器及 receipt 恢复矩阵通过。执行前查一次 proof 不够。 |
-| 2. 整 Goal 迁移/回退资格验证 | 受管事件捕获已接入现有 outbox、固定混合投影和 native 无标记恢复；覆盖真实 File/SQLite 审阅后晋升、native 读写与隔离 archive 恢复。 | 继续完成完整 caller 清单和 D3 cohort，包括 canonical 写入后的受保护回退。Archive restore 只创建隔离副本，不会重新启用 legacy Markdown。 |
+| 2. 事件 writer 绑定与整 Goal 迁移/回退闭环 | 将 event writer 锁和原子发布接入现有 outbox；组合 Markdown/event/lease writer、drain、saved cutover、消费者和 fenced export/rollback，删除被 TS 替代的 Python 决策。 | 复用 #5003，绑定通过前保留 `event_log_writer_not_bound`；闭合 D1、命令清单与 D3 cohort。单个无 event overlay 的 Goal 晋升不证明本项。 |
 | 3. 默认入口与有界 Python 退役 | 新 Goal、settings、安装及 packaged frontend/Lark/CLI 一致选择合格 profile；存量有显式迁移与停用流程。 | 1/2 及适用 D1–D3 通过，验证用户入口，删除最后 caller 已转走的业务 writer；保留 renderer、host IO、合法导入导出。 |
 
-**剩余是两个完整实现边界，加第 2 项尚未完成的集成/回退工作、#4931 与资格证据。** 若验收发现新缺陷，记录具体缺陷与修复 PR，不能重新报一个不变
+**计划是三个可命名的后续实现 PR，加已有 #4931 和未闭合证据；不是保证总计四个
+PR 即可切换。** 若验收发现新缺陷，记录具体缺陷与修复 PR，不能重新报一个不变
 的“5–8”。File-only 有界 opt-in、SQLite 合格默认、全部存量迁移分别验收。
 
 D2 的容量、crash/restore/upgrade/runtime 覆盖和**至少十天自然经过时间的 soak**，
@@ -114,26 +115,3 @@ source freshness、event writer hold 和 provider 晋升标准保持原有语义
 
 相邻 runtime 修复处理客户端未读完超大响应就断连时的 socket 错误，避免一个断连
 导致共享 runtime 退出。回归验证后续分页请求仍使用同一进程；不取消或重试业务操作。
-
-## 受管事件捕获与保留边界
-
-`StateEventWriteContext` 将 Goal 事件写入绑定到 registry、源路径及既有
-Todo/state/event 锁。Completion 和 supervisor CLI 的源写入使用此入口；
-单独的 `AppendOnlyStateEventStore(path)` 保留为不受管的编码/IO API，类似外部
-直接编辑 Markdown，不能证明 Goal 事务；若改变投影，候选一致性校验会拒绝。
-不属于 Goal 候选源的 supervisor 日志继续独立运行。
-
-既有不可变 bootstrap manifest 记录全部事件候选路径，包括尚不存在的文件。
-升级前的 binding 必须显式 rollback 后重新 bootstrap，才能捕获事件；修改别名
-同样需要重新建立 binding。Prepare 持久化失败时主数据不动；提交标记缺失时，
-必须先 drain 再继续写入，包括不改变 Todo 的事件。恢复会持有真实事件源锁并
-确认持久化，防止后一笔写入覆盖恢复证据。
-
-Bootstrap 与 capture 共用正式快照投影，删除原来的 Markdown-only 组装。
-TS 用可辨识联合表达来源：事件源必须携带绑定日志路径，Markdown/lease 源不能
-携带该字段。Python 历史事件字节和 fingerprint 保持兼容。
-
-验收覆盖真实 File/SQLite CLI 迁移、发布前后进程死亡、精确重放、混合来源、
-来源漂移及隔离恢复。不改变 provider 默认值、PostgreSQL 行为，不晋升活跃 Goal，
-也不宣称解决外部动作执行区间保护。改变的是 CLI 及其共享 Todo 后端；没有新增
-settings 或前端配置，UI 继续消费既有 Todo 结果和投影合同。

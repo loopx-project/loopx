@@ -144,9 +144,9 @@ def require_shadow_primary_write_allowed(runtime_root: Path, goal_id: str) -> di
     return dict(state["binding"])
 
 
-def read_shadow_bootstrap_source_snapshot(
+def read_shadow_bootstrap_source_path(
     runtime_root: Path, goal_id: str, binding: dict[str, Any],
-) -> dict[str, Any]:
+) -> Path:
     """Read this lineage's immutable source path under the caller's source lock.
 
     This does not acquire maintenance, consult the provider, or repair files.
@@ -181,22 +181,14 @@ def read_shadow_bootstrap_source_snapshot(
                 or sha256_digest(request) != manifest["request_digest"]):
             raise ValueError("bootstrap request binding differs")
         snapshot = request.get("source_snapshot")
-        if not isinstance(snapshot, dict):
-            raise ValueError("bootstrap source snapshot is invalid")
-        source = snapshot.get("state_path")
+        source = snapshot.get("state_path") if isinstance(snapshot, dict) else None
         if not isinstance(source, str) or not _text(source) or "\0" in source or not Path(source).is_absolute():
             raise ValueError("bootstrap source path is invalid")
     except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
         raise ShadowManagementError("shadow_management_manifest_invalid") from exc
     if read_shadow_management_state(runtime_root, goal_id) != state:
         raise ShadowManagementError("stale_generation")
-    return snapshot
-
-
-def read_shadow_bootstrap_source_path(
-    runtime_root: Path, goal_id: str, binding: dict[str, Any],
-) -> Path:
-    return Path(read_shadow_bootstrap_source_snapshot(runtime_root, goal_id, binding)["state_path"])
+    return Path(source)
 
 
 def read_shadow_capture_binding(runtime_root: Path, goal_id: str) -> dict[str, Any]:
