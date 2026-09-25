@@ -729,6 +729,9 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: "View updated Goal", exact: true }).click();
       await page.getByRole("navigation", { name: "Goal view" }).getByRole("button", { name: /^(Chat|对话)$/, exact: true }).click();
       const englishHeartbeatSchedule = page.locator(".personal-schedule-row", { hasText: "Goal Heartbeat" }).first();
+      await page.locator(".personal-activity-summary > summary", { hasText: "Background work" }).waitFor({ state: "visible" });
+      if (await englishHeartbeatSchedule.isVisible()) throw new Error("Schedules must fold under background work instead of crowding the conversation");
+      await page.locator(".personal-activity-summary > summary").click();
       await englishHeartbeatSchedule.waitFor({ state: "visible" });
       const englishHeartbeatScheduleText = await englishHeartbeatSchedule.innerText();
       if (!englishHeartbeatScheduleText.includes("1d")) throw new Error("Applied English Heartbeat lost cadence: " + englishHeartbeatScheduleText);
@@ -1793,6 +1796,7 @@ export const typedActionsScenario = {
 
       await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const schedule = page.locator(".personal-schedule-row").first();
+      if (!await schedule.isVisible()) await page.locator(".personal-activity-summary > summary").click();
       for (const [label, operation] of [["立即运行", "run_now"], ["暂停", "pause"], ["改为每 2 小时", "edit"], ["停止定时检查", "stop"]]) {
         await schedule.click();
         await page.getByText("定时检查", { exact: true }).last().waitFor({ state: "visible" });

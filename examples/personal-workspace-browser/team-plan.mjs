@@ -155,7 +155,7 @@ export const teamPlanScenario = {
           + ` body=${(await page.locator("body").innerText()).slice(0, 1500)}`,
         );
       }
-      check((await row.innerText()).includes("team.plan"), "the proposal row names the team.plan action kind");
+      check(await row.getAttribute("data-action-kind") === "team.plan" && (await row.innerText()).includes("团队分配"), "the proposal row is a team.plan action labelled for the owner");
 
       await row.click();
       const drawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
@@ -238,7 +238,7 @@ export const teamPlanScenario = {
         );
       }
       check(
-        (await managerCard.innerText()).includes("team.plan"),
+        await managerCard.getAttribute("data-action-kind") === "team.plan",
         "the manager conversation offers the team plan card it produced",
       );
       await page.screenshot({

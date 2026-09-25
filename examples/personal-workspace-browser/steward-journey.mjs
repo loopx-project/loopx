@@ -217,7 +217,7 @@ export const stewardJourneyScenario = {
         if (!turn) await page.waitForTimeout(50);
       }
       check(Boolean(turn), "the steward prompt reaches the Goal conversation as an accepted Turn");
-      const row = page.locator(".personal-proposal-row.is-ready", { hasText: "team.plan" })
+      const row = page.locator('.personal-proposal-row.is-ready[data-action-kind="team.plan"]')
         .filter({ hasText: GOAL_ID });
       await row.waitFor({ state: "visible", timeout: 15_000 });
       await row.click();
