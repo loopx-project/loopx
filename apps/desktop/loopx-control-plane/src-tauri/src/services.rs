@@ -7,6 +7,7 @@ use std::{
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Mutex,
     thread,
     time::{Duration, Instant},
 };
@@ -29,6 +30,17 @@ impl ServiceKind {
         match self {
             Self::Status => "status",
             Self::Chat => "chat",
+        }
+    }
+
+    /// Name the services a `connecting` phase is still waiting for. One
+    /// pending service keeps its own name so a stalled connection stays
+    /// diagnosable on the boot page; a concurrent connect reports the loopback
+    /// set, which the boot page renders as "local services".
+    pub fn pending_label(pending: &[Self]) -> &'static str {
+        match pending {
+            [kind] => kind.label(),
+            _ => "local",
         }
     }
 
@@ -121,11 +133,8 @@ pub struct ServiceSet {
 }
 
 impl ServiceSet {
-    pub fn start(mut progress: impl FnMut(ServiceKind)) -> Result<Self, ServiceError> {
-        Self::collect(SERVICE_KINDS.map(|kind| {
-            progress(kind);
-            connect(kind)
-        }))
+    pub fn start(progress: impl Fn(&[ServiceKind]) + Sync) -> Result<Self, ServiceError> {
+        Self::collect(connect_all(SERVICE_KINDS, connect, progress))
     }
 
     /// Fold finished connection attempts into one owned set. Every outcome
@@ -168,6 +177,45 @@ struct ServiceOutcome {
     owned: Option<OwnedService>,
     healed: bool,
     result: Result<(), ServiceError>,
+}
+
+/// Connect every loopback service at once.
+///
+/// The services own separate ports, commands and processes, and neither reads
+/// the other's readiness, so the window should wait for the slowest one rather
+/// than their sum. A start that follows a runtime update pays that difference
+/// twice over: each stale listener is replaced and then warms a fresh
+/// interpreter before it answers a readiness probe.
+///
+/// `progress` names the services still being waited on: the whole set while
+/// they run together, then whichever connection outlives its peer, so a
+/// stalled service is still named on the boot page.
+fn connect_all<const N: usize>(
+    kinds: [ServiceKind; N],
+    connect: impl Fn(ServiceKind) -> ServiceOutcome + Sync,
+    progress: impl Fn(&[ServiceKind]) + Sync,
+) -> [ServiceOutcome; N] {
+    let pending = Mutex::new(kinds.to_vec());
+    progress(&kinds);
+    thread::scope(|scope| {
+        kinds
+            .map(|kind| {
+                let (connect, progress, pending) = (&connect, &progress, &pending);
+                scope.spawn(move || {
+                    let outcome = connect(kind);
+                    let remaining = {
+                        let mut pending = pending.lock().expect("pending service lock");
+                        pending.retain(|entry| *entry != kind);
+                        pending.clone()
+                    };
+                    if !remaining.is_empty() {
+                        progress(&remaining);
+                    }
+                    outcome
+                })
+            })
+            .map(|handle| handle.join().expect("service connection thread"))
+    })
 }
 
 fn connect(kind: ServiceKind) -> ServiceOutcome {
