@@ -311,3 +311,25 @@ def test_reported_sites_carry_a_blocker_label_and_summarise():
     # paths a future slice could still resolve.
     assert 'argument_name_only=' in summary
     assert 'annotation_only=' in summary
+
+
+def test_typescript_scan_names_the_missing_setup_step(monkeypatch):
+    import subprocess
+
+    from loopx.semantics import production
+
+    source = [SourceFile('loopx/example.ts', '.ts', 'export const x = 1;\n')]
+    monkeypatch.setattr(production.shutil, 'which', lambda name: None)
+    with pytest.raises(ValueError, match='needs Node.js on PATH'):
+        production.run_typescript_scan(ROOT, source, {})
+
+    monkeypatch.setattr(production.shutil, 'which', lambda name: '/usr/bin/node')
+    missing = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'typescript' imported from x.mjs"
+    monkeypatch.setattr(
+        production.subprocess, 'run',
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, stdout='', stderr=missing),
+    )
+    with pytest.raises(ValueError) as raised:
+        production.run_typescript_scan(ROOT, source, {})
+    assert str(raised.value) == production.NPM_DEV_DEPENDENCIES_MISSING
+    assert 'x.mjs' not in str(raised.value), 'parser stderr must never reach public diagnostics'

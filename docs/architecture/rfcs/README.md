@@ -9,6 +9,30 @@ Start new proposals from the [RFC template](TEMPLATE.md). Existing RFCs should
 adopt its maintenance contract when substantial revision would otherwise mix
 stable design, current progress, and historical evidence.
 
+### When a change needs an RFC
+
+Write an RFC, or amend the normative sections of an existing one, when a
+change does any of the following:
+
+- creates, moves, or removes an owner or source of authority;
+- changes default behavior;
+- makes a state or schema change that is not purely additive;
+- introduces an irreversible or multi-step migration;
+- defines a contract that several capabilities or hosts must follow.
+
+Most changes do not need an RFC. Examples are an additive, backward-compatible
+field on an existing projection or packet; a bug fix that restores documented
+behavior; and new tests, smokes, diagnostics, or documentation. For these,
+update the owning [reference contract](../../reference/contracts/README.md) or
+capability README, and put a short design note in the pull request. The note
+covers the problem, the field semantics, compatibility, and validation.
+
+An RFC is sized by its decision, not by the template. The template's twelve
+sections are a checklist. A section that cannot apply takes one line,
+`Not applicable: <reason>`, and an appendix is added only when it first has
+content. The Chinese mirror follows the same compact shape and stays
+synchronized for normative sections.
+
 The [Current Technical Directions](../../project/technical-directions.md) page
 maps RFCs to strategic programs, contribution routes, and promotion gates.
 

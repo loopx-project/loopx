@@ -80,6 +80,41 @@ exact-read 完整度和未覆盖的 P0 source 投影为公开安全的回执。`
 不阻断安全的 LoopX lifecycle，但调用方必须显式标记结论为部分覆盖，或者先通过
 其他 authority 路径补齐 exact read；不能把 fail-open 误写成“所有关键上下文已检查”。
 
+## 代码地图
+
+一次决策按下表顺序经过各模块；只读你的改动涉及的那几行即可。
+
+| 模块 | 负责 |
+|---|---|
+| `profile.py` | 默认关闭、goal 级的 profile：关注哪些信源类别、新鲜度策略、扫描模式、权重；激活状态 |
+| `providers.py` | 可替换的 current-authority provider 注册表，以及本地文件 provider |
+| `sources.py` | provider 中立的信源合同：spec、item、scan、exact read、source manifest |
+| `runtime.py` | 从 profile 到 provider 再到 evidence assembly 与 advisory recall 的薄编排层 |
+| `assembler.py` | 确定性的 authority rebase、advisory recall 装配、`decision_source_coverage_v0` |
+| `packets.py` | 公开安全的 evidence、proposal、review、outcome packet |
+| `review_settlement.py` | 对单次 assembly 做 owner 把关或 quiet settlement |
+| `cursor_commit.py` | settlement 校验通过后提交私有 cursor |
+| `private_state.py` | 私有 cursor 与 pending settlement 的文件读写 |
+| `outcome_feedback.py` | 从 outcome 回流到 Reward Memory 的审计反馈 |
+| `capture.py` | opt-in 的 source-reference capture 与 `capture-status` |
+| `capture_recovery.py` | 保留引用的 capture 诊断与恢复 |
+| `extension_provider.py` | 由扩展交付的 advisory context provider（`decision_context_advisory_provider_v0`） |
+| `architecture.py` | 能力合同的 `architecture` 读回 |
+| `catalog_entry.py` | 能力 catalog 记录 |
+| `cli.py` | 所有 `loopx decision-context` 子命令及其渲染 |
+
+新增一个可观测字段时：
+
+- **单个信源的事实**（如读取时间、扫描状态）：在 `sources.py` 或 `providers.py`
+  的 provider 里产出，再在 `assembler.py` 带进 coverage。
+- **决策级字段**：加在 `assembler.py`；只有属于公开 packet 时才进 `packets.py`，
+  公开安全检查在那里。
+- **只和 capture 有关的事实**：加在 `capture.py`。
+- **对外暴露**：由 `cli.py` 渲染；只有需要新的顶层分发时才改 `loopx/cli.py`。
+- **文档与测试**：更新本 README 和英文 README 对应的入口段落；测试放在
+  `tests/capabilities/test_decision_context_<module>.py`，packet 形状用
+  `examples/decision-context-contract-smoke.py` 覆盖。
+
 ## 四类可审计产物
 
 | 产物 | 回答的问题 | 典型内容 |

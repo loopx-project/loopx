@@ -9,6 +9,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.canary.runner import SMOKE_SUITE_CHOICES  # noqa: E402
+from loopx.semantics.production import NPM_DEV_DEPENDENCIES_MISSING  # noqa: E402
 
 
 def pytest_addoption(parser) -> None:
@@ -99,3 +100,34 @@ def pytest_addoption(parser) -> None:
         dest="loopx_smoke_timeout",
         help="Per-check timeout in seconds for each subprocess smoke.",
     )
+
+
+def _typescript_dev_dependency_installed() -> bool:
+    return any(
+        (directory / "node_modules" / "typescript" / "package.json").is_file()
+        for directory in (REPO_ROOT, *REPO_ROOT.parents)
+    )
+
+
+def pytest_report_header(config) -> list[str]:
+    if _typescript_dev_dependency_installed():
+        return []
+    return [f"loopx: {NPM_DEV_DEPENDENCIES_MISSING}; TypeScript semantic scans will fail"]
+
+
+_SETUP_FAILURES: set[str] = set()
+
+
+def pytest_runtest_logreport(report) -> None:
+    if report.failed and NPM_DEV_DEPENDENCIES_MISSING in report.longreprtext:
+        _SETUP_FAILURES.add(report.nodeid)
+
+
+def pytest_unconfigure(config) -> None:
+    # Runs after the final totals line, so the remedy is the last thing shown.
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if _SETUP_FAILURES and reporter is not None:
+        reporter.write_sep("=", "loopx setup", yellow=True)
+        reporter.write_line(
+            f"{len(_SETUP_FAILURES)} failure(s) share one cause: {NPM_DEV_DEPENDENCIES_MISSING}."
+        )

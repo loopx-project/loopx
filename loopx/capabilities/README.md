@@ -95,6 +95,15 @@ loopx capability show <capability-id> --format json
 boundaries, protocols, smokes, and provider readiness from the same registered
 record used to build the documentation site.
 
+A capability README can also carry a `## Code Map` section. This is a table
+with one row per module that states which step it owns, followed by the files
+to touch for common changes. It lets a contributor add a field without first
+reading the whole package. Once a README has a code map,
+`tests/test_capability_code_maps.py` requires the map to list every module in
+the package, and the Chinese mirror to name the same modules, so the map
+cannot silently go stale. Add a code map when a package grows past a handful of
+modules.
+
 Supporting packages such as shared context-provider helpers may live under
 this namespace without a `catalog_entry.py`; they are internal modules, not
 product capabilities. Optional providers and extension-delivered capabilities

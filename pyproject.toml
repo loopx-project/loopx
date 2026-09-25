@@ -5,12 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "loopx"
 version = "1.2.0"
-description = "A lightweight Loop Engineering control plane for long-running agent goals."
+description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
 authors = [{ name = "LoopX contributors" }]
+# No Python runtime dependencies, but the TypeScript control plane needs a
+# system Node.js >= 22.22.3 (MINIMUM_NODE_VERSION); pip cannot install it.
 dependencies = []
 
 [project.urls]

@@ -4,11 +4,19 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any, Callable
 
 from .inventory import SourceFile
 from .python_production import Production, enum_members, scan_python_production
+
+
+# Matched verbatim by tests/conftest.py to collapse repeated failures into one hint.
+NPM_DEV_DEPENDENCIES_MISSING = (
+    'repository npm dev dependencies are not installed (the typescript package is missing); '
+    'run `npm ci --ignore-scripts` once from the repository root'
+)
 
 
 # This source boundary is code owned. It is not adjustable through registry data.
@@ -120,8 +128,11 @@ def run_typescript_scan(
     """Run repository semantic AST analysis with one bounded error boundary."""
     if not ts_sources:
         return []
+    node = shutil.which('node')
+    if node is None:
+        raise ValueError('TypeScript semantic scan needs Node.js on PATH; see the Node.js requirement in CONTRIBUTING.md')
     completed = subprocess.run(
-        ['node', str(root / 'scripts/semantic_production_scan.mjs')],
+        [node, str(root / 'scripts/semantic_production_scan.mjs')],
         input=json.dumps({**request, 'sources': [{'path': s.path, 'text': s.text} for s in ts_sources]}),
         capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
     )
@@ -137,6 +148,8 @@ def run_typescript_scan(
                 and error.get('path') in {s.path for s in ts_sources}
                 and isinstance(error.get('line'), int) and error['line'] > 0):
             raise ValueError(f"{error['path']}:{error['line']}: invalid TypeScript source; repair syntax before semantic scanning")
+        if 'ERR_MODULE_NOT_FOUND' in completed.stderr and "'typescript'" in completed.stderr:
+            raise ValueError(NPM_DEV_DEPENDENCIES_MISSING)
         raise ValueError('TypeScript production parser failed; run npm ci --ignore-scripts and check the Node runtime')
     return json.loads(completed.stdout)
 

@@ -92,6 +92,44 @@ the caller must label the conclusion as partial or exact-read the missing
 authority through another path. Fail-open must not masquerade as complete
 context coverage.
 
+## Code Map
+
+A decision runs through the modules in this order. Read only the rows your
+change touches.
+
+| Module | Owns |
+|---|---|
+| `profile.py` | Default-off, goal-scoped profile: which source classes matter, freshness policy, scan mode, weight; activation status |
+| `providers.py` | Registry of replaceable current-authority providers, plus the local-file provider |
+| `sources.py` | Provider-neutral source contracts: specs, items, scans, exact reads, source manifest |
+| `runtime.py` | Thin orchestration from profile to providers to evidence assembly and advisory recall |
+| `assembler.py` | Deterministic authority rebase, advisory recall assembly, `decision_source_coverage_v0` |
+| `packets.py` | Public-safe evidence, proposal, review and outcome packets |
+| `review_settlement.py` | Owner-gated or quiet settlement of one assembly |
+| `cursor_commit.py` | Validated private cursor commit after settlement |
+| `private_state.py` | Private cursor and pending-settlement file IO |
+| `outcome_feedback.py` | Audited feedback from outcomes into Reward Memory |
+| `capture.py` | Opt-in source-reference capture and `capture-status` |
+| `capture_recovery.py` | Reference-preserving capture diagnosis and recovery |
+| `extension_provider.py` | Advisory context provider delivered by an extension (`decision_context_advisory_provider_v0`) |
+| `architecture.py` | `architecture` readback of the capability contract |
+| `catalog_entry.py` | Capability catalog record |
+| `cli.py` | Every `loopx decision-context` subcommand and its rendering |
+
+To add an observable field:
+
+- **A per-source fact**, such as read time or scan status: produce it in
+  `sources.py` or the provider in `providers.py`, then carry it into coverage
+  in `assembler.py`.
+- **A decision-level field:** add it in `assembler.py`, and in `packets.py`
+  only if it belongs in a public packet, where the public-safety checks live.
+- **A capture-only fact:** add it in `capture.py`.
+- **Exposing it:** `cli.py` renders it. `loopx/cli.py` changes only when a new
+  top-level dispatch is needed.
+- **Documenting and testing it:** update the matching surface in this README
+  and `README.zh-CN.md`. Test it in `tests/capabilities/test_decision_context_<module>.py`
+  and, for packet shape, in `examples/decision-context-contract-smoke.py`.
+
 ## Four Auditable Outputs
 
 | Output | Answers | Typical contents |

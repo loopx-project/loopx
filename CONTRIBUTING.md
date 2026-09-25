@@ -79,14 +79,44 @@ Before adding or consolidating a public smoke, use the bilingual
 [good smoke guide](docs/development/good-smokes.md) to define its durable
 invariant, independent oracle, cadence, and public-safe fixture boundary.
 
-For source development, run commands from the repository or dedicated worktree
-root with `uv`. It manages a compatible Python and installs the current checkout
-in the project environment, keeping checks separate from a globally installed
-LoopX release. See the [local validation commands](docs/development/testing-and-quality.md#local-validation-environment--本地验证环境)
+### Prerequisites and one-time setup
+
+LoopX needs two runtimes:
+
+- **Python 3.11+.** `uv` installs a compatible one for you.
+- **Node.js 22.22.3 or newer**, with Node.js 24 LTS recommended. `pyproject.toml`
+  declares no Python dependencies, but the TypeScript control plane runs on the
+  system Node.js, both for `loopx` itself and for the test suite. `pip` and `uv`
+  cannot install Node.js for you.
+
+Run commands from the repository or dedicated worktree root with `uv`. It
+installs the current checkout in the project environment, which keeps your
+checks separate from any globally installed LoopX release. See the
+[local validation commands](docs/development/testing-and-quality.md#local-validation-environment--本地验证环境)
 for environment, lockfile, and CI boundaries.
 
 ```bash
 uv sync --extra test
+npm ci --ignore-scripts   # TypeScript compiler and test dependencies
+```
+
+Run `npm ci` once per checkout or worktree. The Python architecture tests parse
+TypeScript with the repository's `typescript` package, so without it they fail.
+In that case pytest prints a single `loopx setup` line that names this command.
+
+### Fast loop and full check
+
+While iterating, run only what your change touches:
+
+```bash
+uv run --extra test python -m pytest -q <the test files for your change>
+npm run -s typecheck:control-plane && npm run -s test:control-plane   # when you changed *.ts
+uv run --extra test loopx canary premerge --from-git-diff             # selects smokes for your diff
+```
+
+Before pushing, run the full local equivalent of CI:
+
+```bash
 uv run --extra test python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
 uv run --extra test python -m mypy
 uv run --extra test python examples/control_plane/cli-output-budget-regression-smoke.py
@@ -99,6 +129,47 @@ git diff --check
 Choose focused smokes and broader canaries by change risk; do not run every
 public smoke or a live model call for every patch. The quality guide explains
 the CI, local/manual, and release-only boundaries.
+
+### What CI runs on a pull request
+
+Only two checks block a merge:
+
+- `Sign-off`, the DCO check;
+- `merge-gate`, which aggregates the Python Tests workflow.
+
+`merge-gate` stays green only when these Python Tests jobs succeed or were
+correctly skipped for your paths: `checks`, `pytest`,
+`node-minimum-compatibility`, `stage2c-correctness-e2e`, `windows-powershell`,
+and `presentation`. The other workflows are path-filtered, advisory, or do not
+run on pull requests. If an advisory workflow fails on a path you did not
+touch, mention it in the PR instead of fixing it there.
+
+| Workflow file | Runs on a PR | Blocks merge | What it checks |
+| --- | --- | --- | --- |
+| `python-tests.yml` | every PR | yes (`merge-gate`) | lint, mypy, sharded pytest, TypeScript core and coverage, minimum Node.js, Windows PowerShell, dashboard presentation |
+| `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` trailer on every commit |
+| `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
+| `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
+| `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
+| `release-artifacts.yml` | `loopx/`, packaging, and lockfile paths | no | release identity and a release build from this source |
+| `ark-turn.yml` | Turn driver and collaboration paths | no | optional Ark Turn package, stdio MCP, and DSH parity |
+| `frontstage-pages.yml` | README, dashboard, and chat bundle paths | no | public Pages build |
+| `desktop-release-artifacts.yml` | desktop app and dashboard paths | no | macOS and Windows desktop builds |
+| `desktop-updater.yml` | desktop app paths | no | desktop app build and updater feed |
+| `full-public-smokes.yml` | no (push to `main`, schedule) | no | every public smoke, in shards |
+| `sonarcloud.yml` | no (called by Python Tests) | no | SonarCloud analysis of that run's coverage |
+| `stale.yml` | no (schedule) | no | stale-issue reminders (never closes issues) |
+| `update-notes.yml` | no (schedule) | no | biweekly update notes |
+
+### Design notes and RFCs
+
+Most changes do not need an RFC. For example, adding a backward-compatible
+field to an existing projection or packet needs no RFC: update the owning
+reference contract or capability README, and put the design note in the PR
+description. See
+[when a change needs an RFC](docs/architecture/rfcs/README.md#when-a-change-needs-an-rfc).
+Before extending a capability, read the **Code map** in its README, where one
+exists, instead of reading the whole package.
 
 ## License And DCO Sign-Off
 
