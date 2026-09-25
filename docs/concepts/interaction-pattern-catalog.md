@@ -38,6 +38,16 @@ Keep examples public-safe. Do not copy raw benchmark tasks, raw trajectories,
 private logs, verifier output tails, credentials, internal URLs, or local
 machine paths.
 
+### Admission Of New Patterns
+
+A new `IP-` entry is not a contributor task on its own. Since 2026-09-26 the
+catalog accepts a new pattern only when the same change, or a linked merged
+change, names the consumer that reads it: a controller decision, dashboard or
+notification copy, a smoke that asserts the pattern's state contract, or an
+RFC section that cites the entry. Patterns that only restate an existing
+`IP-` under a new trigger are folded into the existing entry. See the
+[Contributor Task Board](../development/contributor-tasks.md#task-admission-rule).
+
 ## Catalog Maintenance And Validation Design
 
 The catalog is for reusable user / agent / state interaction shapes. Do not add

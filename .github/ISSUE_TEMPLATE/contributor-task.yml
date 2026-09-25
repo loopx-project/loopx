@@ -38,15 +38,36 @@ body:
         - I found a bug
     validations:
       required: true
+  - type: dropdown
+    id: anchor_type
+    attributes:
+      label: Anchor type
+      description: A task is claimable only with one anchor from the board's Task Admission Rule (docs/development/contributor-tasks.md). Catalog entries, behavior-pinning tests, renames and doc restatements are not tasks on their own.
+      options:
+        - Roadmap stream / milestone / card (S, G, R) in loopx-overall-roadmap-v0
+        - Accepted or Active RFC section or invariant
+        - Reproduced adoption defect (public issue from a real install, run, upgrade or host)
+        - None yet; I am asking whether this should become a task
+    validations:
+      required: true
+  - type: input
+    id: anchor_ref
+    attributes:
+      label: Anchor reference
+      description: The exact card sentence, RFC file and section, or public issue number the task closes.
+      placeholder: "R1 · \"confirmed commitments survive materialization\" / shared-goal-authority-state-provider-v0 §D2 / #4941"
+    validations:
+      required: true
   - type: textarea
     id: summary
     attributes:
-      label: Goal and acceptance gap
-      description: Name the current request or contract, affected user/caller and observable result. Link an existing goal/direction when relevant; a roadmap id is not required.
+      label: Gap, who is blocked, and exit
+      description: Name the current request or contract, the user or caller blocked without this change, the observable result after it, and the condition that closes the task.
       placeholder: |
-        Goal/source:
         Current gap:
+        Who is blocked without it:
         Accepted outcome (before → after):
+        Exit condition:
     validations:
       required: true
   - type: textarea
@@ -98,4 +119,6 @@ body:
         - label: This issue does not include private benchmark traces, verifier output, credentials, internal document links, raw agent sessions, or local runtime state.
           required: true
         - label: I will not run or duplicate maintainer-owned benchmark cases unless a maintainer explicitly splits out a public task.
+          required: true
+        - label: This task is not a standalone catalog entry, behavior-pinning test, fixture dimension, rename, or docs restatement; if it includes one, the anchor above names the code, test, or copy that consumes it.
           required: true

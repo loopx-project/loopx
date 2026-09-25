@@ -759,9 +759,90 @@ def assert_effect_interpreter_docs_are_canonical() -> None:
         assert fragment in lecture, fragment
 
 
+CONTRIBUTOR_BOARD_CLAIMABLE_LANES = (
+    "## Lane A: Adoption Defects (P0)",
+    "## Lane B: Roadmap Gaps (R1 / R2 / G1)",
+    "## Lane C: RFC Obligations",
+)
+CONTRIBUTOR_BOARD_MAX_CLAIMABLE_ROWS = 25
+# A claimable row must cite a roadmap stream/milestone/card, an RFC document,
+# or a public issue/PR number in its Anchor column.
+CONTRIBUTOR_BOARD_ANCHOR_PATTERN = re.compile(
+    r"\b(S\d{1,2}|G[0-5]|R[1-7])\b|\.\./architecture/rfcs/|#\d{3,5}\b"
+)
+
+
+def contributor_board_claimable_rows(board: str) -> list[str]:
+    rows: list[str] = []
+    for lane in CONTRIBUTOR_BOARD_CLAIMABLE_LANES:
+        start = board.index(lane)
+        end = board.find("\n## ", start + len(lane))
+        section = board[start : end if end != -1 else len(board)]
+        for line in section.splitlines():
+            if not line.startswith("| GH-"):
+                continue
+            rows.append(line)
+    return rows
+
+
 def assert_contributor_task_board_is_current() -> None:
-    tasks = compact(read("docs/development/contributor-tasks.md"))
+    board = read("docs/development/contributor-tasks.md")
+    tasks = compact(board)
+    history = compact(read("docs/development/contributor-tasks-history.md"))
+
+    # The board only lists open, anchored work; landed context lives in the
+    # history file so the board cannot drift back into a progress log.
     for required in (
+        "## Task Admission Rule",
+        "## Retired Task Generators",
+        "contributor-tasks-history.md",
+        "| Roadmap |",
+        "| RFC obligation |",
+        "| Reproduced adoption defect |",
+    ):
+        assert required in tasks, required
+    for lane in CONTRIBUTOR_BOARD_CLAIMABLE_LANES:
+        assert lane in board, lane
+    rows = contributor_board_claimable_rows(board)
+    assert rows, "contributor board has no claimable rows"
+    assert len(rows) <= CONTRIBUTOR_BOARD_MAX_CLAIMABLE_ROWS, len(rows)
+    for row in rows:
+        cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+        assert len(cells) == 5, row
+        task_id, anchor, gap, validation, status = cells
+        assert CONTRIBUTOR_BOARD_ANCHOR_PATTERN.search(anchor), (
+            f"{task_id}: anchor column must cite S/G/R, an RFC, or a public issue: {anchor}"
+        )
+        assert "Exit:" in gap, f"{task_id}: gap column must state an exit"
+        assert validation, f"{task_id}: validation column is empty"
+        assert status.split(" ")[0] in {
+            "Available",
+            "Claimed",
+            "Needs",
+            "Blocked",
+        }, f"{task_id}: unexpected status {status}"
+    for stale in (
+        "## Product Manager Cut",
+        "## Recent Maintainer Progress",
+        "## Turn Loop Controller Plan",
+        "Contributor implication:",
+        "| GH-C37 | Design",
+        "| GH-C89 | governance | Claimed",
+    ):
+        assert stale not in tasks, stale
+    for landed in (
+        "| GH-C04 |",
+        "| GH-C06 |",
+        "| GH-C89 |",
+        "| GH-C96 |",
+        "| GH-C100 |",
+    ):
+        assert landed in history, landed
+    for required in (
+        "## Product Manager Cut",
+        "## Recent Maintainer Progress",
+        "## Turn Loop Controller Plan",
+        "contributor-tasks.md#task-admission-rule",
         "The four canonical global manager CLI commands are shipped",
         "`/loop-goal-summary` remains host-only and outside this contributor slice",
         "A shared typed Effect Program drives quota, Turn, task-lease, and todo-completion settlement",
@@ -771,7 +852,7 @@ def assert_contributor_task_board_is_current() -> None:
         "Landed: #4659 owns `update` registration and dispatch",
         "Landed via #4422: the provider-neutral parity fixture",
     ):
-        assert required in tasks, required
+        assert required in history, required
     for stale in (
         "Implement `/loopx-global-todos` or `/loopx-global-risks` next",
         "Implement `/loopx-global-risks` next",
@@ -802,6 +883,7 @@ def assert_contributor_task_board_is_current() -> None:
         "| GH-C97 |",
     ):
         assert stale not in tasks, stale
+        assert stale not in history, stale
 
 
 def assert_contributor_task_links_are_current() -> None:

@@ -33,9 +33,18 @@ to understand the active programs and their maturity, then use
 [docs/development/contributor-tasks.md](docs/development/contributor-tasks.md) to find public work that is useful,
 claimable, and safe to discuss in the repository.
 
+Every claimable board row carries an anchor, a gap and an exit under the
+board's [Task Admission Rule](docs/development/contributor-tasks.md#task-admission-rule):
+a roadmap stream/milestone/card, an Accepted or Active RFC section, or a
+reproduced adoption defect from a real install. A new catalog entry, a test that
+only pins current behavior, another fixture dimension, a rename or a docs
+restatement is not a task on its own; it is accepted as part of the anchored
+row that consumes it. Review credits the gap closed, not the PR count.
+
 If you do not see a matching task:
 
-1. open a GitHub issue with the contributor task template;
+1. open a GitHub issue with the contributor task template; it asks for the
+   anchor and for who is blocked without the change;
 2. explain the problem, proposed scope, touched files, and validation command;
 3. wait for maintainer feedback before starting large or behavior-changing
    work.
@@ -315,8 +324,10 @@ Before opening a pull request:
 - include docs or tests when changing user-visible behavior;
 - confirm that no private/local runtime state was committed.
 
-Use the [overall roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md) for
-cross-cutting work, without inventing roadmap ids for ordinary fixes. Existing
+Name the anchor the change closes: a card in the
+[overall roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md), an RFC
+section, or a reproduced public issue. Do not invent roadmap ids for ordinary
+fixes; an ordinary fix cites the issue it fixes. Existing
 issues and canonical Todos own execution; update them instead of duplicating
 follow-up work. A completed task needs no invented successor. Prerequisites,
 research, docs and maintenance can be useful delivered outcomes. A schema,

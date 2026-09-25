@@ -2,11 +2,15 @@
 
 <!-- Use a few concrete sentences; references are optional when the request or
 regression is self-contained. State the accepted outcome, not a list of files.
-For cross-cutting LoopX work, link the relevant overall-roadmap/domain acceptance
-when useful. A roadmap id is not required for ordinary fixes or maintenance.
+Name one anchor: the overall-roadmap card sentence, the RFC section, or the
+reproduced public issue this PR closes (docs/development/contributor-tasks.md,
+Task Admission Rule). Do not invent roadmap ids for ordinary fixes; an ordinary
+fix cites its issue. A catalog entry, behavior-pinning test, fixture dimension,
+rename or docs restatement without a consuming anchor is routed to discussion.
 These are author facts; the review capability independently judges delivery.
 -->
 
+- Anchor (roadmap card / RFC section / reproduced issue):
 - Goal/source and gap:
 - Observable before → after, with the validation row that proves it:
 - Issue/task and intended base: <!-- Use Closes only for the issue actually completed; otherwise Related to. -->
