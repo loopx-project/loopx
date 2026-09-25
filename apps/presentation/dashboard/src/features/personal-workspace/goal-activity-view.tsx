@@ -3,7 +3,7 @@ import { goalHostSurfaces, goalIdentity, hostSurfaceLabel, presentGoalActivity, 
 import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
-type GoalActivitySubject = Pick<WorkspaceGoal, "activationState" | "boundHostSurfaces" | "execution" | "goalId" | "loadState" | "needsYou" | "state" | "title">;
+type GoalActivitySubject = Pick<WorkspaceGoal, "activationState" | "boundHostSurfaces" | "execution" | "goalId" | "hostThreads" | "loadState" | "needsYou" | "state" | "title">;
 
 export function relativeTime(value: string, locale: string): string | null {
   const then = new Date(value).getTime();

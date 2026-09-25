@@ -74,6 +74,38 @@ export const goalActivityScenario = {
       throw error;
     }
 
+    const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const thread = (state, lastEventAt) => ({ agent_id: "codex", host_surface: "codex-app", state, last_event_at: lastEventAt });
+    const observed = await openWorkspacePage(browser, url, {
+      collectCoverage,
+      beforeGoto: (api) => {
+        api.hostThreadActivity = {
+          "product-release": { threads: [thread("turn_open", minutesAgo(1)), thread("idle", minutesAgo(90))] },
+          "multi-agent-projection": { threads: [thread("idle", minutesAgo(40)), thread("archived", null)] },
+          "research-monitor": { threads: [thread("turn_open", minutesAgo(8 * 60))] },
+        };
+      },
+    });
+    try {
+      const { page } = observed;
+      const running = await goalRow(page, "Product Release");
+      await running.locator("small", { hasText: "执行中" }).waitFor({ timeout: 15_000 });
+      assert.match(await running.locator("small").innerText(), /^执行中 · Codex App 宿主 · \d+\s*分钟前/, "An open host-recorded turn is execution with its last event time");
+      assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1, "A recently active host turn is live");
+      assert.match(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /^已安排 · Codex App 线程空闲/, "Observed idle threads are reported as idle");
+      const abandoned = await goalRow(page, "Research Monitor");
+      assert.doesNotMatch(await abandoned.locator("small").innerText(), /执行中/, "An open turn with no event for hours is not execution");
+      assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1);
+      assert.match(await page.getByTestId("personal-brief-running").innerText(), /Product Release\s+Codex App 宿主 · \d+\s*分钟前/);
+      assert.equal(await page.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 1);
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-host-observed.png"), animations: "disabled" });
+      coverageEntries.push(...await observed.close());
+    } catch (error) {
+      await observed.page.screenshot({ path: resolve(outputDir, "goal-activity-host-observed-failed.png") });
+      await observed.close();
+      throw error;
+    }
+
     const offline = await openWorkspacePage(browser, url, {
       collectCoverage,
       beforeGoto: async (_api, page) => {
@@ -95,6 +127,6 @@ export const goalActivityScenario = {
       await offline.close();
       throw error;
     }
-    return { coverageEntries, note: "Execution comes from active session turns; attached claims show claim time without a live ring, bound host threads stay queued, and unreadable session state is never running." };
+    return { coverageEntries, note: "Execution comes from active session turns and open host-recorded turns; attached claims show claim time without a live ring, idle or abandoned host threads stay queued, and unreadable session state is never running." };
   },
 };
