@@ -3,7 +3,7 @@
 > Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
 > examples below describe a retired experiment. Current Todos use legacy Markdown
 > or the selected File/SQLite authority. See the
-> [retirement contract](../../reference/protocols/event-sourced-state-contract-v0.md).
+> [retirement contract](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md).
 
 
 长程任务能跨 session 恢复，不是因为系统保存了更多聊天记录，而是因为关键事实有稳定归属，
@@ -93,7 +93,7 @@ Registry 不证明某个 Host 已经成功启动，也不保存每一轮 Agent �
 
 ### 2. Event ledger：发生过什么
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
 把 Todo、Gate、run、evidence、projection 和 quota 变化表达为 append-only events。
 
 事件至少需要满足四个不变量：
@@ -117,7 +117,7 @@ Progress。它是重要的工作台，但不能笼统地理解为“所有真相
 在迁移或兼容阶段，Markdown 可能仍参与 Todo 读取；规范写入仍应通过 LoopX lifecycle commands
 形成事件或受控 writeback。直接编辑一个被投影出来的段落，不等于完成状态转换。
 
-[`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
+[`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
 定义了如何从这个工作台生成 typed、read-only 的 Todo、Gate 与 Next Action 视图。协议明确：
 
 - projection 可以重算；
@@ -161,7 +161,7 @@ Goal lifecycle 仍由 Todo、Gate、events 与 acceptance 组合决定。
 - 通过修改卡片或图节点绕过 write API；
 - 把 stale external observation 当成当前事实。
 
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+[`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
 尤其强调：图中的 `blocks`、`validates`、`continues` 和 `hands_off_to` 是派生关系，不是新的调度
 命令。
 
@@ -214,7 +214,7 @@ LoopX 当前是 **本地优先** 的控制面：项目 registry、active-state w
 runtime state 位于项目或用户本地。这个事实不意味着“Markdown 文件本身就是 authority”，也不
 意味着把目录换成数据库就自动获得正确的并发与恢复语义。
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
 明确允许 JSONL、SQLite 或其他 local-first append-only 实现，只要它们保持：
 
 - stable event id 与 ordered replay；
@@ -223,7 +223,7 @@ runtime state 位于项目或用户本地。这个事实不意味着“Markdown 
 - public-safe、local-private 与 private-pointer 分区；
 - Markdown 继续作为 workbench/projection，而不是任意写入口。
 
-[`local_state_write_correctness_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
+[`local_state_write_correctness_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
 当前标记为 public-safe protocol draft。它把更强的写入正确性目标分成
 `prepare -> preview -> apply -> record -> project`：
 
@@ -290,7 +290,7 @@ LoopX 可以让研究、验证和决策产物不被静默改写，但这不等�
 变化后重新验证 applicability。无法确认时，把它标为 historical observation 或 stale evidence，
 不要删除历史，也不要继续把它当作 current authority。
 
-[`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
+[`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
 提供 bounded、read-only 的 Agent chronology，适合 replan 和 handoff；它不替代 current status、
 quota decision 或外部系统 readback。
 
@@ -353,17 +353,17 @@ run_recorded(R1, tests_passed_at=commit-a)
 
 本章拥有概念顺序，不复制完整 schema。需要修改 LoopX 状态行为时，优先阅读：
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../reference/protocols/event-sourced-state-contract-v0.md)：
+- [`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)：
   event、replay、ordering、privacy；
-- [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
+- [`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
   Markdown workbench 的 typed read model；
-- [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：
+- [`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：
   Todo、Gate、evidence 与 handoff 的只读关系图；
-- [`long_horizon_agent_state_protocol_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md)：
+- [`long_horizon_agent_state_protocol_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md)：
   长程工作中的 source/projection、并发 Agent 与 lifecycle；
-- [`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)：
+- [`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)：
   replan/handoff 前的 Agent-scoped chronological read model；
-- [Status Data Contract](https://github.com/huangruiteng/loopx/blob/main/docs/status-data-contract.md)：
+- [Status Data Contract](https://github.com/loopx-project/loopx/blob/main/docs/status-data-contract.md)：
   operator 与 Agent 读取的聚合表面。
 
 如果你准备修改 registry、event、Domain State、replay 或 projection builder，继续阅读

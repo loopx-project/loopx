@@ -938,7 +938,7 @@ projection 后的累计重写。这是 payload 解析估算，不是 SSD 物理�
 
 在既有 TypeScript `AuthorityStore` owner 后资格化**嵌入式事务存储，首选候选为
 SQLite**。本地 goal 不应依赖 PostgreSQL 服务。file-v0 保留作 conformance/import
-基线，通用十天 goal 晋升不能依靠其全历史重写。[PR #4121](https://github.com/huangruiteng/loopx/pull/4121)
+基线，通用十天 goal 晋升不能依靠其全历史重写。[PR #4121](https://github.com/loopx-project/loopx/pull/4121)
 在该 owner 后提供显式 opt-in 的 SQLite conformance 候选；它本身不证明长程耐久性，
 也不切换默认值。依赖／打包、Windows/macOS/Linux 与受支持 Node profile 的证据仍是
 显式门禁。分段文件日志作为比较候选；PostgreSQL 继续走独立的共享服务路线。

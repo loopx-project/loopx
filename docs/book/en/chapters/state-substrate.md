@@ -3,7 +3,7 @@
 > Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
 > examples below describe a retired experiment. Current Todos use legacy Markdown
 > or the selected File/SQLite authority. See the
-> [retirement contract](../../../reference/protocols/event-sourced-state-contract-v0.md).
+> [retirement contract](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md).
 
 
 Long-running work does not recover because a system stores more conversation. It recovers because each
@@ -99,7 +99,7 @@ It owns connection and policy facts, not execution receipts.
 
 ### 2. Event ledger: what happened
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../../reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
 represents Todo, Gate, run, evidence, projection, and quota changes as append-only events.
 
 At least four invariants matter:
@@ -124,7 +124,7 @@ During migration or compatibility windows, Markdown may still participate in Tod
 should still pass through LoopX lifecycle commands and controlled writeback so they form governed events.
 Editing a projected paragraph does not automatically perform a lifecycle transition.
 
-[`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
+[`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
 defines a typed, read-only view of Todos, Gates, and Next Action from that workbench. The contract preserves
 several boundaries:
 
@@ -169,7 +169,7 @@ They must not:
 - let card or graph edits bypass the write API;
 - treat a stale external observation as a current fact.
 
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+[`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
 is explicit about this boundary. Relationships such as `blocks`, `validates`, `continues`, and
 `hands_off_to` are derived graph edges, not new scheduling commands.
 
@@ -229,7 +229,7 @@ run history, and runtime state live in project-local or user-local storage. This
 file the authority by itself, and replacing files with a database does not automatically create correct
 concurrency or recovery semantics.
 
-[`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../../reference/protocols/event-sourced-state-contract-v0.md)
+[`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
 allows JSONL, SQLite, or another local-first append-only implementation when it preserves:
 
 - stable event ids and ordered replay;
@@ -238,7 +238,7 @@ allows JSONL, SQLite, or another local-first append-only implementation when it 
 - public-safe, local-private, and private-pointer partitions;
 - Markdown as a workbench or projection rather than an arbitrary write API.
 
-[`local_state_write_correctness_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
+[`local_state_write_correctness_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
 is currently marked as a public-safe protocol draft. Its stronger write-correctness target separates
 `prepare -> preview -> apply -> record -> project`:
 
@@ -308,7 +308,7 @@ fresh. Research notes, test results, and PR readbacks need stable join keys and 
 after material inputs change. When applicability is unknown, retain the artifact as a historical
 observation or stale evidence instead of deleting it or treating it as current authority.
 
-[`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
+[`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
 provides a bounded, read-only Agent chronology for replan and handoff. It does not replace current status,
 a quota decision, or external-system readback.
 
@@ -373,17 +373,17 @@ boundary probably needs to be split first.
 
 This chapter owns the learning sequence, not the complete schemas. For state changes, start with:
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs../../../reference/protocols/event-sourced-state-contract-v0.md)
+- [`event_sourced_state_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)
   for events, replay, ordering, and privacy;
-- [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
+- [`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
   for the typed read model over the Markdown workbench;
-- [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+- [`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
   for the read-only relation graph;
-- [`long_horizon_agent_state_protocol_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md)
+- [`long_horizon_agent_state_protocol_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md)
   for source and projection ownership, concurrent Agents, and lifecycle in long-running work;
-- [`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
+- [`agent_scoped_evidence_ledger_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md)
   for the Agent-scoped chronological read model used before replan and handoff;
-- the [Status Data Contract](https://github.com/huangruiteng/loopx/blob/main/docs/status-data-contract.md)
+- the [Status Data Contract](https://github.com/loopx-project/loopx/blob/main/docs/status-data-contract.md)
   for Agent and operator-facing aggregation.
 
 If you plan to change registry, event, Domain State, replay, or projection builders, continue to

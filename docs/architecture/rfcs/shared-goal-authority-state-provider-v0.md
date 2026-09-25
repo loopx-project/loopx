@@ -1197,7 +1197,7 @@ Qualify an **embedded transactional store, with SQLite as the first candidate**,
 behind the existing TypeScript `AuthorityStore` owner. A local goal must not
 require a PostgreSQL service. The file-v0 provider remains a conformance/import
 baseline; no general-purpose ten-day promotion may rely on its full-history
-rewrite. [PR #4121](https://github.com/huangruiteng/loopx/pull/4121) supplies an
+rewrite. [PR #4121](https://github.com/loopx-project/loopx/pull/4121) supplies an
 opt-in SQLite conformance candidate behind that owner; it does not by itself
 qualify long-goal durability or change the default. Dependency/package,
 Windows/macOS/Linux and supported Node-profile evidence remain explicit gates.
