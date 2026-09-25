@@ -113,7 +113,7 @@ import {
   type WorkspaceActionPreview,
   type WorkspaceActionPreviewRequest,
 } from "../features/personal-workspace/personal-workspace-model";
-import { goalExecutionFromSessions } from "../features/personal-workspace/goal-activity";
+import { goalExecution } from "../features/personal-workspace/goal-activity";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
   delete: "删除",
@@ -1112,6 +1112,11 @@ function buildPersonalHomeModel(
       boundHostSurfaces: Array.from(new Set((goal.coordination?.thread_agent_bindings ?? [])
         .flatMap((binding) => binding.host_surface ? [binding.host_surface] : []))),
       doneTodoCount: agentTodoFacts.doneTodoCount,
+      hostThreads: (goal.host_thread_activity?.threads ?? []).map((thread) => ({
+        hostSurface: thread.host_surface,
+        lastEventAt: thread.last_event_at ?? null,
+        state: thread.state,
+      })),
       acceptanceObservation: goal.acceptance_observation,
       goalId: goal.id,
       latestActivity: row.latestRun?.generated_at ?? "",
@@ -2627,9 +2632,9 @@ function PersonalGoalHome({
   const normalizedModel = normalizePersonalHomeModel(model);
   const workspaceModel = {
     ...normalizedModel,
-    goals: goalSessionFacts === undefined ? normalizedModel.goals : normalizedModel.goals.map((goal) => ({
+    goals: normalizedModel.goals.map((goal) => ({
       ...goal,
-      execution: goalExecutionFromSessions(goalSessionFacts, goal.goalId),
+      execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreads),
     })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),
