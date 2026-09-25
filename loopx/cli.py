@@ -639,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
             effective_runtime_root(registry_path, args.runtime_root)
             if args.command == "decision-context"
             and args.decision_context_command
-            in {"recall-context", "prepare-evidence", "prepare-review"}
+            in {"recall-context", "prepare-evidence", "prepare-review", "capture"}
             else None
         ),
         output_format=output_format,

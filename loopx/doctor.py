@@ -909,6 +909,12 @@ def collect_doctor(
             "items": [],
         }
     )
+    from .capabilities.decision_context.freshness import (
+        capture_host_diagnostics_detail,
+        collect_capture_host_diagnostics,
+    )
+
+    decision_context_capture = collect_capture_host_diagnostics(DEFAULT_RUNTIME_ROOT)
     typescript_control_plane = collect_effect_runtime_readiness(deep=deep)
     typescript_runtime_required = True
     deep_validation = None
@@ -1056,6 +1062,12 @@ def collect_doctor(
             ),
         },
         {
+            "id": "decision_context_capture_hosts_healthy",
+            "required": False,
+            "ok": bool(decision_context_capture["healthy"]),
+            "detail": capture_host_diagnostics_detail(decision_context_capture),
+        },
+        {
             "id": "typescript_effect_runtime_ready",
             "required": typescript_runtime_required,
             "ok": bool(typescript_control_plane.get("ready")),
@@ -1114,6 +1126,7 @@ def collect_doctor(
         "release_provenance": release_provenance,
         "global_registry_writability": global_registry_writability,
         "runtime_projection_routes": runtime_projection_routes,
+        "decision_context_capture": decision_context_capture,
         "typescript_control_plane": typescript_control_plane,
         "install_freshness": install_freshness,
         "upgrade_hint": install_freshness,
@@ -1201,6 +1214,9 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         f" (registry=`{(payload.get('runtime_projection_routes') or {}).get('registry')}`,"
         f" goals=`{(payload.get('runtime_projection_routes') or {}).get('goal_count')}`,"
         f" counts=`{json.dumps((payload.get('runtime_projection_routes') or {}).get('counts') or {}, sort_keys=True)}`)",
+        f"- decision_context_capture_hosts_healthy: `{(payload.get('decision_context_capture') or {}).get('healthy')}`"
+        f" (hosts=`{(payload.get('decision_context_capture') or {}).get('host_count')}`,"
+        f" unhealthy=`{(payload.get('decision_context_capture') or {}).get('unhealthy_count')}`)",
         f"- user_local_bin_on_path: `{(payload.get('path') or {}).get('user_local_bin_on_path')}`",
         f"- python: `{(payload.get('python') or {}).get('executable')}`",
         f"- typescript_control_plane: `{typescript_control_plane.get('status')}`",

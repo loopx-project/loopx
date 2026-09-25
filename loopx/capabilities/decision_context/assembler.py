@@ -16,6 +16,7 @@ from ..context_providers.base import (
     canonical_context_matches,
     opaque_provider_ref,
 )
+from .freshness import build_source_freshness_report, source_freshness_row
 from .packets import build_decision_evidence_packet
 from .sources import (
     DecisionSourceExactRead,
@@ -451,6 +452,47 @@ def _verified_changed_facts(
     return verified
 
 
+def _assembly_source_freshness(
+    *,
+    collected_sources: Sequence[_CollectedSource],
+    coverage_sources: Sequence[DecisionSourceSpec],
+    assembly_time: datetime,
+) -> dict[str, Any]:
+    collected_by_id = {
+        collected.source.source_id: collected for collected in collected_sources
+    }
+    rows = []
+    for source in coverage_sources:
+        collected = collected_by_id.get(source.source_id)
+        if collected is None:
+            rows.append(
+                source_freshness_row(
+                    source=source,
+                    observed_at=assembly_time,
+                    last_read_at=None,
+                    last_attempt_status=None,
+                    scanned=False,
+                )
+            )
+            continue
+        attempt = (
+            "exact_read_failed" if collected.exact_read_failed else collected.scan.status
+        )
+        rows.append(
+            source_freshness_row(
+                source=source,
+                observed_at=assembly_time,
+                last_read_at=(
+                    assembly_time.isoformat()
+                    if attempt in {"completed", "no_change"}
+                    else None
+                ),
+                last_attempt_status=attempt,
+            )
+        )
+    return build_source_freshness_report(observed_at=assembly_time, rows=rows)
+
+
 def _accounted_authority(
     evidence: Mapping[str, Any],
 ) -> tuple[set[tuple[str, str]], set[str]]:
@@ -558,12 +600,16 @@ def assemble_decision_evidence(
     recall_query_summary: str = "current decision evidence",
     recall_limit: int = 5,
     timeout_seconds: float = 10.0,
+    coverage_sources: Sequence[DecisionSourceSpec] | None = None,
 ) -> DecisionContextAssembly:
     """Collect, rebase, and assemble one public-safe decision evidence packet.
 
     Cursor values are returned only as private proposals. A caller may persist
     them after a reviewed proposal or explicit semantic no-change result has
     been written back and validated. Later outcome observation is separate.
+    ``coverage_sources`` lists every enabled source the freshness projection
+    must account for; enabled sources outside this scan are reported as
+    ``not_scanned`` instead of being silently omitted.
     """
 
     assembly_time = _timestamp(observed_at, field_name="observed_at")
@@ -812,6 +858,18 @@ def assemble_decision_evidence(
         "source_manifest": manifest,
         "source_scan_receipts": source_scan_receipts,
         "source_coverage": _source_coverage(collected_sources),
+        "source_freshness": _assembly_source_freshness(
+            collected_sources=collected_sources,
+            coverage_sources=sorted(
+                {
+                    source.source_id: source
+                    for source in (*(coverage_sources or ()), *enabled_sources)
+                    if source.enabled
+                }.values(),
+                key=lambda source: source.source_id,
+            ),
+            assembly_time=assembly_time,
+        ),
         "context_retrieval_receipt": retrieval_receipt,
         "evidence_packet": evidence,
         "semantic_rebase": {

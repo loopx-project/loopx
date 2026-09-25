@@ -302,6 +302,7 @@ def assemble_profile_decision_evidence(
         recall_query_summary="current decision evidence",
         recall_limit=int(context_config.get("max_results", 5)),
         timeout_seconds=effective_timeout,
+        coverage_sources=profile.sources,
     )
     if profile_path is None or profile_digest_before is None:
         raise ValueError("decision-context profile became unavailable")

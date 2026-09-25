@@ -326,10 +326,32 @@ python3 -m pytest -q tests/capabilities/test_decision_context_capture.py
 
 `capture-status` 分开报告 active pending、held 历史、每来源 acquisition hold，
 并明确 `semantic_review_completion=not_inferred_from_capture`。`last_checked_at`
-是尝试时间，不保证成功；服务存活和最近成功扫描时间仍由 host 独立报告。
+是尝试时间，不保证成功。
 仅看 status 不能证明历史可重放或决策覆盖完整。停用仍使用原 profile 开关；
 降级旧版本前必须停止调度器，因为旧运行时不认识 recovery hold。
 保留 spool 与回执，不能把软件降级当成状态回滚。
+
+#### 来源新鲜度合同
+
+profile 已启用、`loopx doctor` 健康或已有结算投影，都不代表来源是新鲜的。
+每个 `prepare-evidence` / `prepare-review` 组装结果，以及每次 `capture` /
+`capture-status` 输出，都携带 `source_freshness`（`decision_source_freshness_v0`）：
+每个已启用来源一行，包含 `last_read_at`（最近一次**成功**读取）、`staleness_seconds`、
+来源的 `freshness_seconds` 窗口、`status`（`fresh`、`stale`、`never_read`、
+`not_scanned`）、`failure_streak` 和 `alert_reasons`。不在本次扫描范围内的已启用来源
+（例如按需来源）以 `not_scanned` 出现，不会被静默省略。Markdown 输出对所有告警行标 🔴。
+消费方在把结论当作"当前情况"之前，必须先披露告警来源。
+
+provider 读取失败会更新 `last_checked_at` 并累加 `failure_streak`，但绝不推进
+`last_read_at`。已有 spool 原地迁移；旧记录若最后一次尝试成功，则以该次尝试作为最近读取。
+
+`loopx decision-context capture --execute` 会在
+`<runtime-root>/decision-context/capture-hosts/` 下写入本机 host 健康记录。
+直接调用 `capture_profile_sources` 的私有 host 应传入 `health_runtime_root` 获得同样效果。
+`loopx doctor` 不打开私有 spool，以可选检查 `decision_context_capture_hosts_healthy`
+报告：已登记 host 超过 `max(2 × interval, interval + 600s)` 未 tick（例如调度器仍指向
+已删除的 checkout）、最后一次 tick 失败、spool 丢失，或记录中的来源陈旧／持续失败时告警。
+主动退役的 host 需删除其记录。
 
 ## 与其他能力的关系
 
