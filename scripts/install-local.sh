@@ -955,6 +955,7 @@ $slash_line
 $claude_line
 $opencode_line
 - first-run feedback (optional): https://github.com/loopx-project/loopx/issues/new?template=first_run.yml
+- usage ping (off unless enabled): loopx usage-ping enable
 
 Current shell can use it with:
   export PATH="$bin_dir:\$PATH"

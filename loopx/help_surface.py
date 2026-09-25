@@ -30,6 +30,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Print a local first-run receipt and an optional public feedback issue link.",
             },
             {
+                "command": "loopx usage-ping [status|enable|disable]",
+                "purpose": "Show or change the off-by-default anonymous daily usage ping and its exact payload.",
+            },
+            {
                 "command": "loopx slash-commands --install",
                 "purpose": "Refresh host slash-command prompt and skill files.",
             },

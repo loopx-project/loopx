@@ -608,6 +608,12 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         rationale="explicit local feedback receipt invoked on demand and sends nothing",
     ),
     CliOutputCommandClassification(
+        command_id="usage-ping",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="operator-invoked consent toggle and payload preview; never sends from this command",
+    ),
+    CliOutputCommandClassification(
         command_id="slash-commands",
         qualification="explicit_cold_path_exception",
         surface_id=None,
