@@ -46,11 +46,14 @@ Keep source-document exports, private references, and unreviewed media outside
 the public tree. Follow `docs/development/design.md` and obtain first-screen
 review before changing the Blog or its homepage entry.
 
-The first-run CTA opens one setup dialog with a recommended Agent path and a
+The header and primary homepage CTA download the latest Apple Silicon Mac App
+preview through the release's stable `LoopX.app.zip` asset name. The homepage
+states the Python 3.11+ prerequisite and links to the desktop first-launch guide.
+The adjacent first-run CTA opens one setup dialog with an Agent path and a
 manual Shell path. The Agent option copies the localized, public-safe setup
 contract; the Shell option copies the commands shown in the terminal section.
-The `See in action` CTA scrolls to the public evidence showcase and restarts the
-Issue Fix replay.
+The `See in action` link scrolls to the public evidence showcase and restarts
+the Issue Fix replay.
 
 The homepage control-plane diagrams are synthetic UI. Finite, tabbed terminal
 replays summarize two public README trajectories; they are curated projections,
@@ -122,6 +125,7 @@ in tests; production collection still needs a real post-deployment check.
 | `page_view` | A canonical public page was opened; hash and locale-only changes do not add views. |
 | `setup_open` | Opened the homepage setup dialog. |
 | `setup_copy` | Successfully copied an Agent prompt or Shell setup command (`setup_method`). |
+| `desktop_download` | Clicked an official Mac App download link (`platform`, `artifact`); this records intent, not a completed download. |
 | `showcase_open` | Followed the homepage demonstration CTA. |
 | `github_click` | Clicked a repository or DSH plugin link (`destination`). |
 | `docs_open` | Followed a link into documentation. |
