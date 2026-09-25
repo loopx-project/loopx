@@ -38,14 +38,14 @@ This delivery repairs integrated migration admission: stale registry snapshots
 could bootstrap a shadow and saved execution dropped migration policy. It does
 not implement another store or close the whole migration package or D2 gate.
 
-| Proposed PR | Observable result and owner | Exit |
+| Delivery boundary | Observable result and owner | Exit |
 | --- | --- | --- |
 | 1. External-effect execution fencing | Lease/effect owners protect the actual execution interval, takeover, timeout, exit and uncertain completion. Reuse merged #4994/#4995. | Stale executors cannot continue or settle; real executor and receipt recovery matrix passes. A point-in-time proof check is insufficient. |
-| 2. Event-writer binding and whole-Goal migration/rollback | Bind event writer locks/atomic publication to existing outbox; integrate Markdown/event/lease capture, drain, saved cutover, consumers and fenced export/rollback; delete Python decisions replaced by TS. | Reuse #5003. Retain `event_log_writer_not_bound` until binding passes; close D1, command inventory and D3 cohort. One Goal without an event overlay does not prove this package. |
+| 2. Whole-Goal migration/return qualification | Managed event capture now joins the existing outbox, frozen mixed projection and native markerless recovery; real File/SQLite saved cutover, native reads/writes and isolated archive recovery are covered. | Finish the complete caller inventory and D3 cohort, including a fenced return after canonical writes. An archive restore creates an isolated copy; it does not reactivate legacy Markdown. |
 | 3. Default entrypoints and bounded Python retirement | New Goals, settings, installation and packaged frontend/Lark/CLI select a qualified profile consistently; existing Goals have explicit migration/disable flows. | 1/2 and applicable D1–D3 pass; user entrypoints work; delete business writers only after their last callers migrate. Retain rendering, host IO and lawful import/export. |
 
-**Plan three named future implementation PRs, plus existing #4931 and outstanding
-evidence; do not promise a total of four PRs.** Newly discovered defects must
+**Two full implementation boundaries and the remaining integration/return work
+of boundary 2 remain, plus #4931 and qualification evidence.** Newly discovered defects must
 name their own repair and evidence, not reset an unchanged “5–8” estimate.
 Bounded File opt-in, qualified SQLite default and all-existing-Goal migration
 are separate acceptance scopes.
@@ -148,3 +148,31 @@ A related runtime repair handles socket errors when a caller closes an oversized
 response before draining it. One disconnected caller no longer crashes the
 shared runtime; the regression asserts that subsequent paged reads retain the
 same process identity. It neither cancels nor retries the business operation.
+
+## Managed event capture and its remaining boundary
+
+`StateEventWriteContext` binds Goal event writes to the registry, source paths
+and existing Todo/state/event locks. Completion and supervisor CLI source writes
+use it; standalone `AppendOnlyStateEventStore(path)` remains an unmanaged codec
+and IO API, like an external Markdown edit. Such writes cannot certify a Goal
+transaction and invalidate candidate parity if they change the projection.
+A supervisor log outside the Goal source candidates remains independent.
+
+The existing immutable bootstrap manifest now records all event candidates,
+including absent ones. A pre-upgrade binding must be explicitly rolled back and
+bootstrapped again before capturing events; changing an alias requires the same
+reviewed rebootstrap. A durable prepare failure preserves primary bytes. A
+markerless transaction must be drained before later writes, including semantic
+no-ops; recovery holds the actual event source lock and establishes durability.
+
+The same snapshot projector serves bootstrap and capture instead of a separate
+Markdown-only assembly. The source kind is a TypeScript discriminated union:
+an event source requires its bound log path; Markdown/lease sources cannot carry
+one. Persisted Python event bytes/fingerprints remain unchanged.
+
+Validation uses real File/SQLite CLI migration, process death before and after
+publication, exact replay, mixed sources, source drift and isolated recovery.
+No provider default changes, PostgreSQL behavior, active Goal promotion or
+external-effect execution fencing are included. CLI and its shared Todo backend
+change; no settings or frontend configuration is introduced. The UI continues
+to consume the existing Todo result and projection contracts.

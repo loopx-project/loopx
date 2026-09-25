@@ -25,14 +25,21 @@
 
 ## Current delivery frontier (2026-09-25)
 
-Audit `37bbaec79` and current PR states: complete-source transport, transaction
-capture, source assembly and the five previously open caller/event fixes are
-merged, not future implementation. After the current promotion-admission repair,
-three named code boundaries remain planned: external-effect execution fencing;
-event-writer binding plus whole-Goal migration/rollback; default onboarding plus
-bounded Python retirement. #4931 and outstanding D2 evidence are tracked
-separately. Three is a delivery plan, not a guaranteed total PR count.
+This change closes the managed event-writer capture slice of R5: eager batches
+prepare under the source locks before publication; the TS delivery owner proves
+interrupted writes against the bound event log. Bootstrap and capture reuse the
+canonical mixed Markdown/event projection. Python keeps the historical codec;
+sequence/CAS/replay and candidate commit authority remain in TypeScript.
+
+The remaining delivery work is now: external-effect execution fencing;
+whole-Goal command/cohort qualification and fenced return after canonical
+writes; default onboarding and bounded Python retirement. Event capture is no
+longer an unimplemented item in the second boundary. Isolated File/SQLite
+cutover and archive recovery do not establish a supported return to legacy
+Markdown or completion of D1–D3. #4931 and D2 evidence remain separate; this is
+an inventory of exits, not a promised number of future PRs.
 [Current inventory and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md).
+
 
 ## Persistence route for steward scale (2026-09-16)
 

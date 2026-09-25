@@ -46,8 +46,8 @@ obligation. Todo/handoff/followup writers and native lease writers must still
 prepare before changing their bound primary. A failed durable prepare holds
 that mutation. A failure after primary replacement retains recovery evidence;
 it cannot truthfully report that the primary was unchanged. No-change, preview,
-idempotent retry, and prose-only changes produce no mutation receipt. Event-only
-Todo sources retain `event_log_writer_not_bound` and prevent qualification.
+idempotent retry, and prose-only changes produce no mutation receipt. Managed event batches now capture under source locks. Unmanaged event edits
+remain source drift and prevent qualification; an event id alone is not proof.
 
 To retire the candidate, obtain the exact current `provider_revision` from
 inspection and preview the target before execution. If an invalid cursor or
