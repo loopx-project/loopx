@@ -11,6 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Every loopback service the App must reach before it opens the workspace.
+pub const SERVICE_KINDS: [ServiceKind; 2] = [ServiceKind::Status, ServiceKind::Chat];
+
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_PROBE_RESPONSE_BYTES: u64 = 1024 * 1024;
@@ -119,114 +122,120 @@ pub struct ServiceSet {
 
 impl ServiceSet {
     pub fn start(mut progress: impl FnMut(ServiceKind)) -> Result<Self, ServiceError> {
+        Self::collect(SERVICE_KINDS.map(|kind| {
+            progress(kind);
+            connect(kind)
+        }))
+    }
+
+    /// Fold finished connection attempts into one owned set. Every outcome
+    /// surrenders its child here, so a set that fails still stops the
+    /// processes its successful peers started.
+    fn collect(outcomes: [ServiceOutcome; SERVICE_KINDS.len()]) -> Result<Self, ServiceError> {
         let mut services = Self {
             owned: Vec::new(),
             healed: false,
         };
-        for kind in [ServiceKind::Status, ServiceKind::Chat] {
-            progress(kind);
-            if let Err(error) = services.ensure(kind) {
-                services.stop();
-                return Err(error);
+        let mut failure = None;
+        for outcome in outcomes {
+            services.owned.extend(outcome.owned);
+            services.healed |= outcome.healed;
+            if let Err(error) = outcome.result {
+                failure.get_or_insert(error);
             }
         }
-        Ok(services)
+        match failure {
+            Some(error) => {
+                services.stop();
+                Err(error)
+            }
+            None => Ok(services),
+        }
     }
 
-    fn ensure(&mut self, kind: ServiceKind) -> Result<(), ServiceError> {
-        let executable = loopx_executable();
-        let expected_runtime_identity = runtime_identity_for_executable(&executable);
-        let stale_deadline = Instant::now() + STARTUP_TIMEOUT;
-        loop {
-            match probe(kind, expected_runtime_identity.as_ref()) {
-                Probe::Matching => return Ok(()),
-                Probe::NotReady => return Err(status_readiness_error(kind)),
-                Probe::Foreign => {
+    pub fn stop(&mut self) {
+        for service in self.owned.iter_mut().rev() {
+            service.stop();
+        }
+        self.owned.clear();
+    }
+}
+
+/// One service's connection attempt. The child this App spawned travels with
+/// the outcome even when the attempt failed, so `ServiceSet` can stop it
+/// instead of leaking a process that no longer has an owner.
+struct ServiceOutcome {
+    owned: Option<OwnedService>,
+    healed: bool,
+    result: Result<(), ServiceError>,
+}
+
+fn connect(kind: ServiceKind) -> ServiceOutcome {
+    let mut owned = None;
+    let mut healed = false;
+    let result = connect_service(kind, &mut owned, &mut healed);
+    ServiceOutcome {
+        owned,
+        healed,
+        result,
+    }
+}
+
+fn connect_service(
+    kind: ServiceKind,
+    owned: &mut Option<OwnedService>,
+    healed: &mut bool,
+) -> Result<(), ServiceError> {
+    let executable = loopx_executable();
+    let expected_runtime_identity = runtime_identity_for_executable(&executable);
+    let stale_deadline = Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        match probe(kind, expected_runtime_identity.as_ref()) {
+            Probe::Matching => return Ok(()),
+            Probe::NotReady => return Err(status_readiness_error(kind)),
+            Probe::Foreign => {
+                return Err(ServiceError(format!(
+                    "port {} is occupied by a service that is not LoopX {}",
+                    kind.port(),
+                    kind.label()
+                )));
+            }
+            Probe::Stale => {
+                // Self-heal: the port is owned by a LoopX service from a
+                // different installed release (for example after a
+                // `loopx update`). Terminate that stale listener and keep
+                // waiting up to the startup timeout so a LaunchAgent-managed
+                // service (KeepAlive + throttle) has time to restart on the
+                // current release; unknown (Foreign) processes keep the
+                // hard error.
+                terminate_verified_listener(kind, &executable, kind.port())?;
+                *healed = true;
+                if Instant::now() >= stale_deadline {
                     return Err(ServiceError(format!(
-                        "port {} is occupied by a service that is not LoopX {}",
-                        kind.port(),
-                        kind.label()
-                    )));
-                }
-                Probe::Stale => {
-                    // Self-heal: the port is owned by a LoopX service from a
-                    // different installed release (for example after a
-                    // `loopx update`). Terminate that stale listener and keep
-                    // waiting up to the startup timeout so a LaunchAgent-managed
-                    // service (KeepAlive + throttle) has time to restart on the
-                    // current release; unknown (Foreign) processes keep the
-                    // hard error.
-                    terminate_verified_listener(kind, &executable, kind.port())?;
-                    self.healed = true;
-                    if Instant::now() >= stale_deadline {
-                        return Err(ServiceError(format!(
                             "port {} is serving LoopX {} from a different installed runtime and could not be restarted",
                             kind.port(),
                             kind.label()
                         )));
-                    }
-                    thread::sleep(Duration::from_millis(200));
                 }
-                Probe::Unresponsive => {
-                    // A bound socket is not HTTP readiness. Give slow startup
-                    // a full grace period, then replace only a verified LoopX
-                    // listener; unknown processes still fail closed.
-                    if Instant::now() < stale_deadline {
-                        thread::sleep(Duration::from_millis(100));
-                        continue;
-                    }
-                    terminate_verified_listener(kind, &executable, kind.port())?;
-                    self.healed = true;
-                    break;
-                }
-                Probe::Unavailable => break,
+                thread::sleep(Duration::from_millis(200));
             }
-        }
-
-        if request_platform_managed_start(kind) {
-            let deadline = Instant::now() + STARTUP_TIMEOUT;
-            while Instant::now() < deadline {
-                match probe(kind, expected_runtime_identity.as_ref()) {
-                    Probe::Matching => return Ok(()),
-                    Probe::NotReady => return Err(status_readiness_error(kind)),
-                    Probe::Foreign => {
-                        return Err(ServiceError(format!(
-                            "LoopX {} startup reached an unexpected service on port {}",
-                            kind.label(),
-                            kind.port()
-                        )));
-                    }
-                    Probe::Stale => {
-                        terminate_verified_listener(kind, &executable, kind.port())?;
-                        self.healed = true;
-                        request_platform_managed_start(kind);
-                    }
-                    Probe::Unavailable | Probe::Unresponsive => {}
+            Probe::Unresponsive => {
+                // A bound socket is not HTTP readiness. Give slow startup
+                // a full grace period, then replace only a verified LoopX
+                // listener; unknown processes still fail closed.
+                if Instant::now() < stale_deadline {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
                 }
-                thread::sleep(Duration::from_millis(100));
+                terminate_verified_listener(kind, &executable, kind.port())?;
+                *healed = true;
+                break;
             }
-            return Err(ServiceError(format!(
-                "system-managed LoopX {} did not become ready on port {}",
-                kind.label(),
-                kind.port()
-            )));
+            Probe::Unavailable => break,
         }
+    }
 
-        let mut command = Command::new(&executable);
-        configure_runtime_environment(&mut command);
-        command
-            .args(kind.command_args())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let child = command.group_spawn().map_err(|error| {
-            ServiceError(format!(
-                "could not start LoopX {} with `{executable}`: {error}",
-                kind.label()
-            ))
-        })?;
-        self.owned.push(OwnedService { child });
-
+    if request_platform_managed_start(kind) {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         while Instant::now() < deadline {
             match probe(kind, expected_runtime_identity.as_ref()) {
@@ -241,27 +250,60 @@ impl ServiceSet {
                 }
                 Probe::Stale => {
                     terminate_verified_listener(kind, &executable, kind.port())?;
-                    self.healed = true;
-                    thread::sleep(Duration::from_millis(200));
+                    *healed = true;
+                    request_platform_managed_start(kind);
                 }
-                Probe::Unavailable | Probe::Unresponsive => {
-                    thread::sleep(Duration::from_millis(100))
-                }
+                Probe::Unavailable | Probe::Unresponsive => {}
             }
+            thread::sleep(Duration::from_millis(100));
         }
-        Err(ServiceError(format!(
-            "LoopX {} did not become ready on port {}",
+        return Err(ServiceError(format!(
+            "system-managed LoopX {} did not become ready on port {}",
             kind.label(),
             kind.port()
-        )))
+        )));
     }
 
-    pub fn stop(&mut self) {
-        for service in self.owned.iter_mut().rev() {
-            service.stop();
+    let mut command = Command::new(&executable);
+    configure_runtime_environment(&mut command);
+    command
+        .args(kind.command_args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = command.group_spawn().map_err(|error| {
+        ServiceError(format!(
+            "could not start LoopX {} with `{executable}`: {error}",
+            kind.label()
+        ))
+    })?;
+    *owned = Some(OwnedService { child });
+
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while Instant::now() < deadline {
+        match probe(kind, expected_runtime_identity.as_ref()) {
+            Probe::Matching => return Ok(()),
+            Probe::NotReady => return Err(status_readiness_error(kind)),
+            Probe::Foreign => {
+                return Err(ServiceError(format!(
+                    "LoopX {} startup reached an unexpected service on port {}",
+                    kind.label(),
+                    kind.port()
+                )));
+            }
+            Probe::Stale => {
+                terminate_verified_listener(kind, &executable, kind.port())?;
+                *healed = true;
+                thread::sleep(Duration::from_millis(200));
+            }
+            Probe::Unavailable | Probe::Unresponsive => thread::sleep(Duration::from_millis(100)),
         }
-        self.owned.clear();
     }
+    Err(ServiceError(format!(
+        "LoopX {} did not become ready on port {}",
+        kind.label(),
+        kind.port()
+    )))
 }
 
 #[cfg(target_os = "macos")]
