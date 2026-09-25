@@ -44,11 +44,6 @@ from loopx.control_plane.status.autonomous_replan_projection import (
 from loopx.control_plane.todos.active_state_todo_parser import (
     parse_active_state_todos,
 )
-from loopx.event_sourced_state import (
-    TODO_ADDED,
-    AppendOnlyStateEventStore,
-    make_state_event,
-)
 from loopx.history import load_index
 
 GOAL_ID = "goal-stage2"
@@ -291,7 +286,6 @@ def _goal_state_text(specs: list[dict[str, str]]) -> str:
 def _write_fixture(
     root: Path,
     *,
-    events: list[dict[str, str]] | None = None,
     with_other_goal: bool = False,
     runs: Any = _DEFAULT_RUNS,
     other_goal_runs: Any = _DEFAULT_RUNS,
@@ -359,21 +353,7 @@ def _write_fixture(
         encoding="utf-8",
     )
 
-    if events:
-        store = AppendOnlyStateEventStore(state_file.with_name(EVENT_LOG_NAME))
-        for event in events:
-            store.append(
-                make_state_event(
-                    event_id=event["event_id"],
-                    goal_id=GOAL_ID,
-                    event_type=TODO_ADDED,
-                    actor_agent_id=event["actor_agent_id"],
-                    refs={"todo_id": event["todo_id"]},
-                    payload={"text": f"Fixture event for {event['todo_id']}."},
-                )
-            )
-    else:
-        runtime.mkdir(parents=True, exist_ok=True)
+    runtime.mkdir(parents=True, exist_ok=True)
 
     # The quota run-history ledger is the causal authority: by default the
     # fixture carries a real open obligation (typed stall runs), and each
@@ -426,24 +406,6 @@ def _assert_fixture_todos_parsed(
         )
 
 
-def _default_events() -> list[dict[str, str]]:
-    return [
-        {
-            "event_id": "evt_stage2_001",
-            "actor_agent_id": "agent-a",
-            "todo_id": "todo_stage2_a",
-        },
-        {
-            "event_id": "evt_stage2_002",
-            "actor_agent_id": "agent-b",
-            "todo_id": "todo_stage2_b",
-        },
-        {
-            "event_id": "evt_stage2_003",
-            "actor_agent_id": "agent-a",
-            "todo_id": "todo_stage2_c",
-        },
-    ]
 
 
 def _derived_source_basis(paths: dict[str, Path]) -> dict[str, object]:
@@ -543,7 +505,7 @@ def _journal_rows(paths: dict[str, Path]) -> list[dict[str, object]]:
 
 
 def test_admits_and_retains_a_well_formed_proposal(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     record = _admit(paths, _proposal(paths))
 
@@ -553,7 +515,7 @@ def test_admits_and_retains_a_well_formed_proposal(tmp_path: Path) -> None:
     assert record["proposer_agent_id"] == "agent-a"
     assert record["amendment_class"] == "shared_acceptance"
     assert record["admission"] == "admitted"
-    assert record["admission_facts"] == []
+    assert record["admission_facts"] == ["base_source_basis_unverifiable"]
     assert record["canonical_effect"] == "none"
     assert record["journal_append_sequence"] == 1
     assert record["recorded_at"]
@@ -568,7 +530,7 @@ def test_admission_binds_the_authority_derived_obligation_id(
     # produced — never a free-standing well-shaped string. The derivation
     # helper used here is the same read-only status projection entry point
     # the adapter calls at submit time.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     record = _admit(paths, _proposal(paths))
 
@@ -587,7 +549,6 @@ def test_unscoped_goal_obligation_folds_into_a_deterministic_peer_lane(
     # lane admits, the other fails closed.
     paths = _write_fixture(
         tmp_path,
-        events=_default_events(),
         runs=_stall_runs(agent_id=None),
     )
     unscoped = _derived_obligation(paths, agent_id=None)
@@ -614,7 +575,7 @@ def test_unscoped_goal_obligation_folds_into_a_deterministic_peer_lane(
 
 
 def test_nonexistent_replan_obligation_fails_closed(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="does not match an open replan obligation"):
         _admit(
@@ -635,7 +596,7 @@ def test_settlement_ack_run_closes_the_derived_obligation(
     # run into the same ledger. Derivation stops at the ack, the open
     # inventory empties, and a proposal naming the previously open id
     # fails closed with nothing retained.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
     obligation_id = _derived_obligation(paths)["obligation_id"]
 
@@ -661,7 +622,6 @@ def test_later_utc_ack_closes_obligation_across_offsets(
     stalled_runs[1]["generated_at"] = "2026-09-01T08:01:00+08:00"
     paths = _write_fixture(
         tmp_path,
-        events=_default_events(),
         runs=stalled_runs,
     )
     proposal = _proposal(paths)
@@ -685,7 +645,6 @@ def test_cross_goal_replan_obligation_fails_closed(tmp_path: Path) -> None:
     # valid.
     paths = _write_fixture(
         tmp_path,
-        events=_default_events(),
         with_other_goal=True,
         other_goal_runs=_stall_runs(
             goal_id=OTHER_GOAL_ID, hypothesis="hypothesis-stage2-peer"
@@ -712,7 +671,6 @@ def test_mismatched_agent_lane_fails_closed(tmp_path: Path) -> None:
     # is agent-scoped to agent-b and agent-a's proposal fails closed.
     paths = _write_fixture(
         tmp_path,
-        events=_default_events(),
         runs=_stall_runs(agent_id="agent-b"),
     )
 
@@ -729,7 +687,7 @@ def test_mismatched_agent_lane_fails_closed(tmp_path: Path) -> None:
 def test_missing_run_history_fails_closed(tmp_path: Path) -> None:
     # No run ledger at all: the obligation inventory is empty and
     # admission must not trust a causal chain on string shape alone.
-    paths = _write_fixture(tmp_path, events=_default_events(), runs=[])
+    paths = _write_fixture(tmp_path, runs=[])
 
     with pytest.raises(ValueError, match="does not match an open replan obligation"):
         _admit(
@@ -762,7 +720,7 @@ def test_incomplete_run_rows_derive_no_obligation(tmp_path: Path) -> None:
             "progress_observation": {"result_class": "blocked"},
         },
     ]
-    paths = _write_fixture(tmp_path, events=_default_events(), runs=forged_rows)
+    paths = _write_fixture(tmp_path, runs=forged_rows)
 
     assert (
         autonomous_replan_obligation_from_runs(
@@ -796,7 +754,7 @@ def test_untyped_run_row_interrupting_the_streak_derives_no_obligation(
         },
         _stall_runs()[1],
     ]
-    paths = _write_fixture(tmp_path, events=_default_events(), runs=interrupted)
+    paths = _write_fixture(tmp_path, runs=interrupted)
 
     assert (
         autonomous_replan_obligation_from_runs(
@@ -840,7 +798,7 @@ def test_module_exposes_no_obligation_writer_api() -> None:
 def test_legacy_receipt_journal_is_inert(tmp_path: Path) -> None:
     # The retired receipts.jsonl path is read by nothing: appending a
     # self-minted "open" receipt row there does not change admission.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     legacy = (
         paths["runtime"] / "goals" / GOAL_ID / "replan-obligations" / "receipts.jsonl"
     )
@@ -867,7 +825,7 @@ def test_legacy_receipt_journal_is_inert(tmp_path: Path) -> None:
 def test_peer_claimed_affected_todo_still_admits(tmp_path: Path) -> None:
     # Shared amendments legitimately affect peer-claimed work: admission
     # checks goal membership and openness, not proposer ownership.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     record = _admit(
         paths,
@@ -879,7 +837,7 @@ def test_peer_claimed_affected_todo_still_admits(tmp_path: Path) -> None:
 
 
 def test_nonexistent_affected_todo_fails_closed(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="not open on goal"):
         _admit(
@@ -891,7 +849,7 @@ def test_nonexistent_affected_todo_fails_closed(tmp_path: Path) -> None:
 
 
 def test_done_affected_todo_fails_closed(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="not open on goal"):
         _admit(
@@ -903,7 +861,7 @@ def test_done_affected_todo_fails_closed(tmp_path: Path) -> None:
 
 
 def test_cross_goal_affected_todo_fails_closed(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events(), with_other_goal=True)
+    paths = _write_fixture(tmp_path, with_other_goal=True)
 
     with pytest.raises(ValueError, match="not open on goal"):
         _admit(
@@ -917,7 +875,7 @@ def test_cross_goal_affected_todo_fails_closed(tmp_path: Path) -> None:
 def test_proposal_digest_matches_the_python_canonical_recipe(
     tmp_path: Path,
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     proposal = _proposal(paths)
 
     record = _admit(paths, proposal)
@@ -929,44 +887,10 @@ def test_proposal_digest_matches_the_python_canonical_recipe(
     assert record["proposal_digest"] == expected
 
 
-def test_stale_base_is_retained_with_needs_rebase(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
-
-    record = _admit(paths, _proposal(paths, {"base_state_event_basis_sequence": 1}))
-
-    assert record["admission_facts"] == [
-        "base_state_event_basis_sequence_behind_derived_head"
-    ]
-    assert record["canonical_effect"] == "none"
-    assert len(_journal_rows(paths)) == 1, "a stale proposal must still be retained"
 
 
-def test_future_base_fails_closed_without_retention(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
-
-    with pytest.raises(ValueError, match="ahead of the derived state event basis head"):
-        _admit(paths, _proposal(paths, {"base_state_event_basis_sequence": 99}))
-
-    assert _journal_rows(paths) == []
 
 
-def test_equal_sequence_with_mismatched_digest_needs_rebase(
-    tmp_path: Path,
-) -> None:
-    # A proposal claiming the current sequence but binding to a different
-    # source basis identity must never be admitted fresh: the digest
-    # participates in admission, not only the sequence (review P1b).
-    paths = _write_fixture(tmp_path, events=_default_events())
-
-    record = _admit(
-        paths,
-        _proposal(paths, {"base_source_basis_digest": MISMATCHED_DIGEST}),
-    )
-
-    assert record["admission"] == "needs_rebase"
-    assert record["admission_facts"] == ["base_source_basis_digest_mismatch"]
-    assert record["canonical_effect"] == "none"
-    assert [row["admission"] for row in _journal_rows(paths)] == ["needs_rebase"]
 
 
 def test_replan_obligation_ids_follow_the_todo_contract(
@@ -976,7 +900,7 @@ def test_replan_obligation_ids_follow_the_todo_contract(
     # normalize_todo_replan_obligation_id's "replan-<16 lowercase hex>"
     # (real values such as the derived fixture id); the colon namespace
     # must be rejected end to end through the managed TS runtime.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     record = _admit(paths, _proposal(paths))  # default uses the derived id
 
@@ -998,7 +922,7 @@ def test_replan_obligation_ids_follow_the_todo_contract(
 def test_unknown_amendment_class_is_rejected_without_retention(
     tmp_path: Path,
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="amendment class is unsupported"):
         _admit(paths, _proposal(paths, {"amendment_class": "emergency_powers"}))
@@ -1007,7 +931,7 @@ def test_unknown_amendment_class_is_rejected_without_retention(
 
 
 def test_evidence_refs_over_budget_are_rejected(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="exceeds 8 pointers"):
         _admit(
@@ -1026,14 +950,14 @@ def test_evidence_refs_over_budget_are_rejected(tmp_path: Path) -> None:
 
 
 def test_unregistered_proposer_fails_closed(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="not registered"):
         _admit(paths, _proposal(paths, {"proposer_agent_id": "agent-z"}))
 
 
 def test_unknown_goal_fails_closed(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="not registered"):
         _admit(paths, _proposal(paths, {"goal_id": "goal-unknown"}))
@@ -1042,7 +966,7 @@ def test_unknown_goal_fails_closed(tmp_path: Path) -> None:
 def test_journal_is_append_only_and_replay_is_idempotent(
     tmp_path: Path,
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     journal = _proposal_journal(paths)
 
     _admit(paths, _proposal(paths))
@@ -1065,7 +989,7 @@ def test_journal_is_append_only_and_replay_is_idempotent(
 
 
 def test_conflicting_proposal_id_replay_fails_closed(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     _admit(paths, _proposal(paths))
 
     with pytest.raises(ValueError, match="conflicting proposal_id"):
@@ -1085,7 +1009,7 @@ def test_markdown_basis_zero_from_real_projection_admits(tmp_path: Path) -> None
     # proposal must be able to consume that real basis verbatim — a decoder
     # demanding a positive integer here forces proposers to fabricate
     # history. (_proposal binds the live derived basis, so sequence is 0.)
-    paths = _write_fixture(tmp_path, events=None)
+    paths = _write_fixture(tmp_path)
 
     proposal = _proposal(paths)
     assert proposal["base_state_event_basis_sequence"] == 0
@@ -1105,7 +1029,7 @@ def test_markdown_basis_with_fabricated_positive_sequence_fails_closed(
     # decoder happily admitted the proposal as unverifiable. 0 is the only
     # markdown basis the Stage 1 producer can emit, so any other value is
     # not a producible base and must fail closed instead of being retained.
-    paths = _write_fixture(tmp_path, events=None)
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="markdown_active_state"):
         _admit(paths, _proposal(paths, {"base_state_event_basis_sequence": 5}))
@@ -1117,84 +1041,28 @@ def test_event_log_basis_rejects_zero_sequence(tmp_path: Path) -> None:
     # Event-log bases stay strictly positive: an append sequence of 0 cannot
     # exist under revision_basis=state_event_log, so it is a schema-level
     # rejection, not a "behind the head" needs_rebase retention.
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="state_event_log"):
-        _admit(paths, _proposal(paths, {"base_state_event_basis_sequence": 0}))
+        _admit(paths, _proposal(paths, {"base_revision_basis": "state_event_log", "base_state_event_basis_sequence": 0}))
 
     assert _journal_rows(paths) == []
 
 
-def test_superseded_markdown_basis_is_retained_as_needs_rebase(
-    tmp_path: Path,
-) -> None:
-    # Review round 8 counterexample: the proposal binds the REAL markdown
-    # basis (sequence 0 from the live Stage 1 projection of an event-less
-    # Goal) and admits. The Goal then gains its first state event through
-    # the real AppendOnlyStateEventStore producer; replaying the same base
-    # under a new proposal id must not be rejected as a fabricated history —
-    # it enters the explicit needs_rebase reconciliation outcome, is
-    # retained, and reads back from the journal.
-    paths = _write_fixture(tmp_path, events=None)
-
-    markdown_proposal = _proposal(paths)
-    assert markdown_proposal["base_revision_basis"] == "markdown_active_state"
-    first = _admit(paths, markdown_proposal)
-    assert first["admission"] == "admitted"
-    assert first["admission_facts"] == ["base_source_basis_unverifiable"]
-
-    store = AppendOnlyStateEventStore(paths["state_file"].with_name(EVENT_LOG_NAME))
-    store.append(
-        make_state_event(
-            event_id="evt_stage2_first",
-            goal_id=GOAL_ID,
-            event_type=TODO_ADDED,
-            actor_agent_id="agent-a",
-            refs={"todo_id": "todo_stage2_a"},
-            payload={"text": "First fixture event for todo_stage2_a."},
-        )
-    )
-    evolved = _derived_source_basis(paths)
-    assert evolved["revision_basis"] == "state_event_log"
-    assert evolved["state_event_basis_sequence"] >= 1
-
-    replay = _admit(paths, {**markdown_proposal, "proposal_id": "gap_stage2_002"})
-
-    assert replay["admission"] == "needs_rebase"
-    assert replay["admission_facts"] == ["base_revision_basis_superseded"]
-    assert replay["canonical_effect"] == "none"
-    assert replay["base_revision_basis"] == "markdown_active_state"
-    assert replay["base_state_event_basis_sequence"] == 0
-    rows = _journal_rows(paths)
-    assert [row["admission"] for row in rows] == ["admitted", "needs_rebase"]
-
-    # Not every zero under the evolved basis is a superseded markdown base:
-    # a proposal claiming state_event_log with sequence 0 invents an append
-    # that can never have existed and still fails closed, nothing retained.
-    with pytest.raises(ValueError, match="state_event_log"):
-        _admit(
-            paths,
-            {
-                **markdown_proposal,
-                "proposal_id": "gap_stage2_003",
-                "base_revision_basis": "state_event_log",
-            },
-        )
-    assert len(_journal_rows(paths)) == 2
 
 
 def test_admission_has_zero_canonical_effect(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     event_log = paths["state_file"].with_name(EVENT_LOG_NAME)
     before_state = paths["state_file"].read_bytes()
-    before_events = event_log.read_bytes()
+    assert not event_log.exists()
     before_registry = paths["registry"].read_bytes()
 
     _admit(paths, _proposal(paths))
     _admit(paths, _proposal(paths, {"proposal_id": "gap_stage2_002"}))
 
     assert paths["state_file"].read_bytes() == before_state
-    assert event_log.read_bytes() == before_events
+    assert not event_log.exists()
     assert paths["registry"].read_bytes() == before_registry
     assert _journal_rows(paths)[0]["canonical_effect"] == "none"
 
@@ -1240,7 +1108,7 @@ def test_registered_effect_method_rejects_an_illegal_request() -> None:
 def test_concurrent_admissions_serialize_journal_appends(
     tmp_path: Path,
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     repo_root = Path(__file__).resolve().parents[2]
     child_code = """
 import json
@@ -1307,7 +1175,7 @@ print(record["proposal_id"], record["journal_append_sequence"])
 def test_corrupt_journal_line_fails_closed_and_retains_nothing(
     tmp_path: Path,
 ) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     _admit(paths, _proposal(paths))
     journal = _proposal_journal(paths)
     with journal.open("a", encoding="utf-8") as stream:
@@ -1329,7 +1197,7 @@ def test_corrupt_journal_line_fails_closed_and_retains_nothing(
 
 
 def test_retention_does_not_advance_the_derived_head(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
+    paths = _write_fixture(tmp_path)
     before_tree = _canonical_tree_snapshot(paths)
 
     first = _admit(paths, _proposal(paths))
@@ -1339,29 +1207,11 @@ def test_retention_does_not_advance_the_derived_head(tmp_path: Path) -> None:
     )
 
     assert first["admission"] == "admitted"
-    assert first["admission_facts"] == []
+    assert first["admission_facts"] == ["base_source_basis_unverifiable"]
     # The first journal append must not move the canonical head the second
     # proposal reports against: retention lives outside the revision
     # carrier, so the same base stays fresh (not needs_rebase) and every
     # non-journal runtime byte is unchanged.
     assert second["admission"] == "admitted"
-    assert second["admission_facts"] == []
+    assert second["admission_facts"] == ["base_source_basis_unverifiable"]
     assert _canonical_tree_snapshot(paths) == before_tree
-
-
-def test_needs_rebase_admission_has_zero_canonical_effect(
-    tmp_path: Path,
-) -> None:
-    paths = _write_fixture(tmp_path, events=_default_events())
-    before_tree = _canonical_tree_snapshot(paths)
-
-    record = _admit(paths, _proposal(paths, {"base_state_event_basis_sequence": 1}))
-
-    assert record["admission"] == "needs_rebase"
-    assert record["admission_facts"] == [
-        "base_state_event_basis_sequence_behind_derived_head"
-    ]
-    assert _canonical_tree_snapshot(paths) == before_tree
-    rows = _journal_rows(paths)
-    assert [row["admission"] for row in rows] == ["needs_rebase"]
-    assert rows[0]["canonical_effect"] == "none"

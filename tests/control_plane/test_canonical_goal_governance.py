@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority
-from test_goal_amendment_proposal import _write_fixture, _proposal, _admit, _default_events, GOAL_ID
+from test_goal_amendment_proposal import _write_fixture, _proposal, _admit, GOAL_ID
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from loopx.control_plane.goals.shared_goal_alignment import project_shared_goal_alignment
@@ -21,7 +21,7 @@ def _record(todo_id="todo_current", **fields):
 
 
 def _canonical(tmp_path, records=None, *, events=None, leases=None, native=False):
-    paths = _write_fixture(tmp_path, events=events)
+    paths = _write_fixture(tmp_path)
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
         todos=[_record()] if records is None else records, leases=leases or [], handoff_mode="soft_claim")
     if native:
@@ -38,6 +38,8 @@ def _canonical(tmp_path, records=None, *, events=None, leases=None, native=False
             "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS), "todo_count": len(projection["todos"]),
             "records_sha256": sha256(canonical_bytes(projection["todos"])).hexdigest()}
     initialize_canonical_authority(paths["runtime"], GOAL_ID, projection, state_path=paths["state_file"])
+    if events:
+        paths["state_file"].with_name("events.jsonl").write_text("retired unrelated source\n")
     return paths
 
 
@@ -96,7 +98,7 @@ def test_empty_canonical_is_authoritative_and_missing_display_is_not_repaired(tm
     assert not paths["state_file"].exists()
 
 
-@pytest.mark.parametrize("events", [None, _default_events()])
+@pytest.mark.parametrize("events", [False, True])
 def test_canonical_revision_changes_proposal_basis_without_changing_event_sequence(tmp_path, events):
     paths = _canonical(tmp_path, events=events)
     proposal = _proposal(paths, {"affected_todo_ids": ["todo_current"]})

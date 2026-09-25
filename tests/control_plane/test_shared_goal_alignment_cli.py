@@ -17,7 +17,6 @@ from loopx.cli import main as cli_main
 
 from tests.control_plane.test_shared_goal_alignment import (
     GOAL_ID,
-    _default_events,
     _default_todo_specs,
     _write_fixture,
 )
@@ -43,7 +42,6 @@ def test_cli_projects_shared_goal_alignment_json(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -66,8 +64,8 @@ def test_cli_projects_shared_goal_alignment_json(
     assert payload["goal_id"] == GOAL_ID
     assert payload["agent_id"] == "agent-a"
     assert payload["read_only"] is True
-    assert payload["source_basis"]["state_event_basis_sequence"] == 3
-    assert payload["frontier_basis"]["based_on_state_event_sequence"] == 3
+    assert payload["source_basis"]["state_event_basis_sequence"] == 0
+    assert payload["frontier_basis"]["based_on_state_event_sequence"] is None
     assert payload["frontier_counts"]["current_agent_claimed_advancement_count"] == 1
     assert payload["unclaimed_eligible_work"][0]["todo_id"] == "todo_unclaimed"
 
@@ -79,7 +77,6 @@ def test_cli_projects_shared_goal_alignment_markdown(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, _, stdout = _run_alignment_cli(
@@ -111,7 +108,6 @@ def test_cli_alias_goal_alignment(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -140,7 +136,6 @@ def test_cli_unregistered_agent_fails_closed(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -169,7 +164,6 @@ def test_cli_missing_goal_fails_closed(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
 
     exit_code, payload, _ = _run_alignment_cli(
@@ -198,7 +192,6 @@ def test_cli_missing_state_file_fails_closed(
     paths = _write_fixture(
         tmp_path,
         todo_specs=_default_todo_specs(),
-        events=_default_events(),
     )
     paths["state_file"].unlink()
 

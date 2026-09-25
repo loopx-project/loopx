@@ -6,11 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from loopx.event_sourced_state import (
-    AppendOnlyStateEventStore,
-    TODO_ADDED,
-    make_state_event,
-)
 from loopx.todos import list_goal_todos
 
 GOAL_ID = "todo-list-explicit-limit-goal"
@@ -318,68 +313,3 @@ def test_cli_limit_path_and_typed_rejections(tmp_path: Path) -> None:
     non_integer = _run_cli(registry_path, "--limit", "many")
     assert non_integer.returncode == 2
     assert "invalid int value" in non_integer.stderr
-
-
-def test_explicit_limit_bounds_projection_overlay_lineage(
-    tmp_path: Path,
-) -> None:
-    registry_path = _write_fixture(
-        tmp_path,
-        item_count_per_role=200,
-        agent_id=AGENT_ID,
-    )
-    state_file = (
-        tmp_path / "project" / ".local/goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
-    )
-    store = AppendOnlyStateEventStore(state_file.with_name("events.jsonl"))
-    store.append(
-        make_state_event(
-            event_id="evt-explicit-limit-overlay",
-            goal_id=GOAL_ID,
-            event_type=TODO_ADDED,
-            refs={"todo_id": "todo_agent_open_000"},
-            payload={
-                "role": "agent",
-                "title": "Overlay the first advancement step.",
-                "task_class": "continuous_monitor",
-                "claimed_by": AGENT_ID,
-            },
-            recorded_at="2026-01-01T00:00:00Z",
-            producer="todo-list-explicit-limit-overlay",
-        )
-    )
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "loopx.cli",
-            "todo",
-            "list",
-            "--format",
-            "json",
-            "--goal-id",
-            GOAL_ID,
-            "--limit",
-            "3",
-        ],
-        cwd=REPO_ROOT,
-        env={**os.environ, "LOOPX_REGISTRY": str(registry_path)},
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-
-    assert payload["source"] == "event_projection_with_markdown_overlay"
-    assert payload["explicit_limit"] == 3
-    assert payload["returned_todo_count"] == 6
-    overlay = payload["projection_overlay"]
-    assert overlay["overlaid_count"] == 1
-    assert overlay["event_only_count"] == 0
-    assert overlay["markdown_only_count"] == 399
-    assert overlay["full_detail_cold_path"] == (
-        "todo list without --limit or active state"
-    )
-    assert [key for key in overlay if key.endswith("_todo_ids")] == []

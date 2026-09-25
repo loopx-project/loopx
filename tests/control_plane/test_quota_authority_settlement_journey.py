@@ -12,7 +12,6 @@ from canonical_authority_fixture import initialize_canonical_authority
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
-from loopx.event_sourced_state import AppendOnlyStateEventStore, TODO_ADDED, make_state_event
 from loopx.rollout_event_log import rollout_event_log_path
 from loopx.presentation.renderers.quota_event_markdown import render_quota_slot_preview_markdown
 from loopx.state_refresh import render_state_refresh_markdown
@@ -116,21 +115,6 @@ def test_failed_canonical_read_cannot_fall_back_to_markdown(tmp_path):
     assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 0
 
 
-def test_legacy_event_overlay_keeps_current_role_over_stale_markdown(tmp_path):
-    project, runtime, registry, path, _ = _source(tmp_path, provider="legacy")
-    AppendOnlyStateEventStore(path.with_name("events.jsonl")).append(make_state_event(
-        event_id="event-current-role", goal_id=cli.GOAL_ID, event_type=TODO_ADDED,
-        refs={"todo_id": cli.TODO_ID},
-        payload={"role": "user", "title": "Review the proposed result", "task_class": "user_action"},
-        recorded_at="2026-08-04T00:00:00Z", producer="regression-fixture",
-    ))
-    listed = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
-                            runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)
-    assert listed["todo"]["role"] == "user"
-    code, guard = _guard(project, runtime, registry)
-    assert code == 1
-    assert guard["decision"] == "skip"
-    assert guard["heartbeat_receipt"]["status"] == "not_committed"
 
 
 def _refresh(project: Path, runtime: Path, registry: Path):

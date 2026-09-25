@@ -156,27 +156,14 @@ def test_http_reward_preserves_preview_gate_and_persisted_arguments(caller: Call
     assert w.read(todo) == record
 
 
-def test_event_writer_retains_primary_semantics_and_cannot_qualify(caller: Caller) -> None:
+
+
+def test_retired_event_source_refuses_without_primary_write(caller: Caller) -> None:
     w = caller
-    seed = """
-import json,sys
-from pathlib import Path
-from loopx.event_sourced_state import AppendOnlyStateEventStore, TODO_ADDED, make_state_event
-store=AppendOnlyStateEventStore(Path(sys.argv[1]))
-store.append(make_state_event(event_id='evt-caller-fixture', goal_id='observable',event_type=TODO_ADDED,
- refs={'todo_id':'todo_event_fixture'},payload={'role':'agent','title':'Event-owned task',
- 'task_class':'advancement_task','claimed_by':'agent-a'},recorded_at='2026-09-01T00:00:00Z'))
-print(json.dumps({'events':len(store.load())}))
-"""
-    log = w.path / 'events.jsonl'
-    assert w.invoke([sys.executable, '-c', seed, str(log)], ['event-source', 'seed'])['events'] == 1
-    before = w.state.read_bytes()
-    completed = w.call('todo', 'complete', '--todo-id', 'todo_event_fixture', '--agent-id', 'agent-a',
-        '--evidence', 'validation://event-caller', '--no-follow-up')
-    assert completed['ok'] is True, completed
-    assert w.state.read_bytes() == before
-    assert w.read('todo_event_fixture')['done'] is True
-    assert len(log.read_text().splitlines()) > 1
-    if w.mode == 'enabled':
-        result = w.call('coordination-shadow', 'qualify')
-        assert result['ok'] is False and result.get('error') == 'event_log_writer_not_bound', result
+    log = w.path / "events.jsonl"
+    log.write_text('{"event_type":"todo_added","refs":{"todo_id":"todo_event_fixture"}}\n')
+    before = w.state.read_bytes(), log.read_bytes()
+    result = w.call('todo', 'complete', '--todo-id', 'todo_event_fixture', '--agent-id', 'agent-a',
+        '--evidence', 'validation://retired-source', '--no-follow-up')
+    assert result['ok'] is False, result
+    assert (w.state.read_bytes(), log.read_bytes()) == before

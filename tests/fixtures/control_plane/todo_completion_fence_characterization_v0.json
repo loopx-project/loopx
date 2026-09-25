@@ -51,30 +51,6 @@
       }
     },
     {
-      "name": "event-projected deferred Todo replays",
-      "request": {
-        "schema_version": "loopx_todo_completion_fence_request_v0",
-        "projection_source": "event_log",
-        "todo": {
-          "status": "deferred",
-          "no_followup": null,
-          "completion_continuation": null,
-          "completion_turn_key": null,
-          "successor_todo_ids": []
-        },
-        "requested_no_followup": true,
-        "requested_completion_turn_key": null
-      },
-      "expected_result": {
-        "schema_version": "loopx_todo_completion_fence_result_v0",
-        "outcome": "replay",
-        "reason": "already_terminal",
-        "status": "deferred",
-        "terminal_before_request": true,
-        "completion_continuation": null
-      }
-    },
-    {
       "name": "typed done Todo replays",
       "request": {
         "schema_version": "loopx_todo_completion_fence_request_v0",
@@ -123,30 +99,6 @@
       }
     },
     {
-      "name": "same-turn terminal upgrade continues",
-      "request": {
-        "schema_version": "loopx_todo_completion_fence_request_v0",
-        "projection_source": "event_log",
-        "todo": {
-          "status": "done",
-          "no_followup": "false",
-          "completion_continuation": "active_goal",
-          "completion_turn_key": "turn-a",
-          "successor_todo_ids": []
-        },
-        "requested_no_followup": true,
-        "requested_completion_turn_key": "turn-a"
-      },
-      "expected_result": {
-        "schema_version": "loopx_todo_completion_fence_result_v0",
-        "outcome": "continue",
-        "reason": "same_turn_terminal_upgrade",
-        "status": "done",
-        "terminal_before_request": true,
-        "completion_continuation": "active_goal"
-      }
-    },
-    {
       "name": "cross-turn replay is rejected",
       "request": {
         "schema_version": "loopx_todo_completion_fence_request_v0",
@@ -173,7 +125,9 @@
           "no_followup": false,
           "completion_continuation": "successor",
           "completion_turn_key": "turn-a",
-          "successor_todo_ids": ["todo_successor"]
+          "successor_todo_ids": [
+            "todo_successor"
+          ]
         },
         "requested_no_followup": true,
         "requested_completion_turn_key": "turn-a"
