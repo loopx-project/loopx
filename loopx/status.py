@@ -1196,7 +1196,7 @@ def build_attention_queue(
             )
             if native_activity:
                 # The shared status snapshot is bounded for Todo work. Once it
-                # reveals a native decision, read its exact Turn before showing
+                # reveals a native event, read its exact Turn before showing
                 # counts, so older stages falling outside that window cannot
                 # silently undercount the activity.
                 project_asset["native_child_activity"] = load_native_child_activity(

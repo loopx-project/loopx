@@ -18,6 +18,7 @@ from ...control_plane.runtime.public_safety import validate_public_safe_value
 from ...rollout_event_log import (
     append_rollout_event_once,
     build_rollout_event,
+    iter_rollout_events,
     load_rollout_events,
     rollout_event_log_path,
 )
@@ -131,9 +132,13 @@ def native_child_activity(
 
 def load_native_child_activity(
     runtime_root: Path, *, goal_id: str, agent_id: str,
-    turn_instance_id: str, configured_limit: int, limit: int | None = None,
+    turn_instance_id: str, configured_limit: int,
 ) -> dict[str, Any]:
-    events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id), limit=limit)
+    source = iter_rollout_events(rollout_event_log_path(runtime_root, goal_id))
+    events = [event for event in source
+              if event.get("event_kind") in EVENT_KINDS.values()
+              and event.get("agent_id") == agent_id
+              and event.get("run_id") == turn_instance_id]
     return native_child_activity(
         events, goal_id=goal_id, agent_id=agent_id,
         turn_instance_id=turn_instance_id, configured_limit=configured_limit,
@@ -144,13 +149,13 @@ def latest_native_child_activity(
     events: Sequence[Mapping[str, Any]], *, goal_id: str, configured_limit: int,
 ) -> dict[str, Any] | None:
     """Expose only the latest reported Turn in existing Goal status surfaces."""
-    decisions = [event for event in events
-                 if event.get("goal_id") == goal_id
-                 and event.get("event_kind") == EVENT_KINDS["decision"]
-                 and event.get("agent_id") and event.get("run_id")]
-    if not decisions:
+    observations = [event for event in events
+                    if event.get("goal_id") == goal_id
+                    and event.get("event_kind") in EVENT_KINDS.values()
+                    and event.get("agent_id") and event.get("run_id")]
+    if not observations:
         return None
-    latest = max(decisions, key=lambda event: str(event.get("recorded_at") or ""))
+    latest = max(observations, key=lambda event: str(event.get("recorded_at") or ""))
     return native_child_activity(
         events, goal_id=goal_id, agent_id=str(latest["agent_id"]),
         turn_instance_id=str(latest["run_id"]), configured_limit=configured_limit,

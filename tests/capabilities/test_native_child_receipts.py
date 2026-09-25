@@ -236,6 +236,21 @@ def test_goal_status_only_attaches_reported_activity_to_enabled_goal(
     assert activity["skipped_count"] == 1
     assert activity["observation"] == "coordinator_reported"
 
+    # A bounded status snapshot may retain a later result but not its decision.
+    # The status projection must recover the complete Turn from the event log.
+    _record(tmp_path, "op-2", stage="decision", operation="spawn",
+            outcome="started", entrypoint_id="generic_host")
+    _record(tmp_path, "op-2", stage="result", outcome="completed")
+    projected = status.build_attention_queue(
+        contract={}, history={}, global_registry={}, runtime_root=tmp_path,
+        events_for_goal=lambda _goal_id, *, limit: load_rollout_events(
+            rollout_event_log_path(tmp_path, GOAL), limit=limit,
+        )[-1:],
+    )
+    activity = projected["items"][0]["project_asset"]["native_child_activity"]
+    assert activity["launched_count"] == 1
+    assert activity["skipped_count"] == 1
+
     queue["items"][0]["project_asset"] = {
         "orchestration": {**policy, "spawn_allowed": False},
     }
