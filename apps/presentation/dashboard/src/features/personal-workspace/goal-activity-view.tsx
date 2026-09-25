@@ -5,7 +5,7 @@ import type { WorkspaceGoal } from "./personal-workspace-model";
 
 type GoalActivitySubject = Pick<WorkspaceGoal, "activationState" | "execution" | "goalId" | "loadState" | "needsYou" | "state" | "title">;
 
-function relativeTime(value: string, locale: string): string | null {
+export function relativeTime(value: string, locale: string): string | null {
   const then = new Date(value).getTime();
   if (Number.isNaN(then)) return null;
   const seconds = Math.round((then - Date.now()) / 1000);

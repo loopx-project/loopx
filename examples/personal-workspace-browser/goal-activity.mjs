@@ -38,6 +38,16 @@ export const goalActivityScenario = {
       assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1, "Only the Goal with an active turn is live");
       assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
       assert.match(await running.locator("small").innerText(), /执行中 · \d+\s*分钟前/, "Running discloses the observed activity time");
+      const brief = page.locator(".personal-brief");
+      assert.equal(await brief.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 1, "The brief lists only the executing Goal");
+      assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Progress Projection[\s\S]*分钟前有活动/);
+      assert.equal(await brief.locator(".personal-brief-tile.is-live").count(), 1);
+      assert.equal(
+        await brief.getByTestId("personal-brief-needs").locator(".personal-brief-row").count(),
+        await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count(),
+        "The brief and the needs-you lane agree",
+      );
+      assert.ok(await brief.getByTestId("personal-brief-completed").locator(".personal-brief-row").count() > 0, "Recently completed work is surfaced");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-sidebar.png"), animations: "disabled" });
       await running.locator(".personal-goal-link").click();
       await page.locator(".personal-channel-activity", { hasText: "执行中" }).waitFor();
@@ -66,6 +76,7 @@ export const goalActivityScenario = {
       const queued = await goalRow(page, "Multi Agent Projection");
       await queued.locator("small", { hasText: "暂时读不到执行状态" }).waitFor({ timeout: 15_000 });
       assert.equal(await page.locator(".personal-goal-mark.is-live").count(), 0, "An unreadable session owner never produces a live Goal");
+      assert.match(await page.getByTestId("personal-brief-running").innerText(), /暂时读不到执行状态/, "The brief discloses unreadable run state");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-unavailable.png"), animations: "disabled" });
       coverageEntries.push(...await offline.close());
     } catch (error) {
