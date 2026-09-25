@@ -1832,3 +1832,4 @@
 .personal-action-form button[type="submit"] { background: var(--pw-text); color: var(--pw-card); }
 .personal-action-form button:disabled { opacity: .5; cursor: default; }
 .personal-action-form [role="alert"] { color: var(--pw-red); }
+.personal-action-form-limit { margin: 0; color: var(--pw-amber); font-size: 13px; }

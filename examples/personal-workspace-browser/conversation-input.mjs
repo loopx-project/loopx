@@ -66,6 +66,10 @@ export const conversationInputScenario = {
       await goal.getByLabel("目标", { exact: true }).fill("研究微软的现金流");
       await goal.getByLabel("完成标准", { exact: true }).fill("给出数据来源和可读报告");
       await goal.getByLabel("执行边界（可选）", { exact: true }).fill("每天研究不代表要创建监控");
+      await goal.getByLabel("完成标准", { exact: true }).fill("数".repeat(400));
+      await goal.getByRole("status").waitFor();
+      assert.equal(await goal.getByRole("button", { name: "检查配置" }).isDisabled(), true, "Over-limit Goal fields reached preview");
+      await goal.getByLabel("完成标准", { exact: true }).fill("给出数据来源和可读报告");
       api.failNextActionPreview = true;
       await goal.getByRole("button", { name: "检查配置" }).click();
       await goal.getByRole("alert").waitFor();

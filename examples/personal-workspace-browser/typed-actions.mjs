@@ -1587,6 +1587,9 @@ export const typedActionsScenario = {
       await page.getByRole("region", { name: "最近对话" }).getByRole("button", { name: "转为任务草稿" }).click();
       const taskDraftForm = page.getByRole("dialog", {name: "创建任务", exact: true});
       if (!(await taskDraftForm.getByLabel("任务内容", {exact: true}).inputValue())) throw new Error("Task form lost the reply");
+      await taskDraftForm.getByLabel("任务内容", {exact: true}).fill(`${"长".repeat(200)}\n\n${"文".repeat(201)}`);
+      await taskDraftForm.getByRole("status").waitFor();
+      if (!(await taskDraftForm.getByRole("button", {name: "检查配置"}).isDisabled())) throw new Error("Over-limit task text reached preview");
       await taskDraftForm.getByRole("button", {name: "取消", exact: true}).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
 

@@ -11,6 +11,13 @@ export type WorkspaceActionDraft = {
   text?: string;
 };
 
+// Mirrors the backend preview normalizer: whitespace is collapsed, then code points are counted.
+const todoTextLimit = 400;
+const goalObjectiveLimit = 1000;
+function boundedLength(value: string) {
+  return Array.from(value.split(/\s+/u).filter(Boolean).join(" ")).length;
+}
+
 export function WorkspaceActionForm({ draft, onClose, onPreview }: {
   draft: WorkspaceActionDraft;
   onClose: () => void;
@@ -33,6 +40,15 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
   const [target, setTarget] = useState(t("schedule.defaultTarget"));
   const scheduled = draft.kind === "heartbeat" || draft.kind === "monitor";
   const title = draft.kind === "goal" ? t("composer.createGoal") : draft.kind === "todo" ? (zh ? "创建任务" : "Create task") : draft.kind === "heartbeat" ? t("schedule.heartbeat") : t("composer.monitor");
+  const goalObjective = [objective.trim(), t("goal.objectiveCompletion", { criteria: completion.trim() }), boundary.trim() ? t("goal.objectiveBoundary", { boundary: boundary.trim() }) : ""].filter(Boolean).join("\n");
+  const goalInitialTodo = t("goal.initialTodo", { criteria: completion.trim() });
+  const lengthIssue = draft.kind === "todo" && boundedLength(objective) > todoTextLimit
+    ? (zh ? `任务内容 ${boundedLength(objective)}/${todoTextLimit} 字，请精简后再检查。` : `Task is ${boundedLength(objective)}/${todoTextLimit} characters. Shorten it before review.`)
+    : draft.kind === "goal" && boundedLength(goalObjective) > goalObjectiveLimit
+      ? (zh ? `目标、完成标准和执行边界合计 ${boundedLength(goalObjective)}/${goalObjectiveLimit} 字，请精简。` : `Objective, completion criteria and boundary total ${boundedLength(goalObjective)}/${goalObjectiveLimit} characters. Shorten them.`)
+      : draft.kind === "goal" && boundedLength(goalInitialTodo) > todoTextLimit
+        ? (zh ? `完成标准过长（首个任务 ${boundedLength(goalInitialTodo)}/${todoTextLimit} 字），请精简。` : `Completion criteria are too long for the first task (${boundedLength(goalInitialTodo)}/${todoTextLimit}). Shorten them.`)
+        : "";
   useEffect(() => {
     const node = dialog.current;
     node?.showModal();
@@ -40,7 +56,7 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
   }, []);
 
   async function preview() {
-    if (submitting.current) return;
+    if (submitting.current || lengthIssue) return;
     submitting.current = true;
     setBusy(true);
     setError("");
@@ -50,9 +66,9 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
       const actionKind = draft.kind === "goal" ? "goal.create" : draft.kind === "todo" ? "todo.create" : draft.kind === "heartbeat" ? "heartbeat.bind" : "monitor.create";
       const parameters = draft.kind === "goal" ? {
         goal_id: goalId, agent_id: draft.agentId, title: objective.trim().slice(0, 80),
-        objective: [objective.trim(), t("goal.objectiveCompletion", { criteria: completion.trim() }), boundary.trim() ? t("goal.objectiveBoundary", { boundary: boundary.trim() }) : ""].filter(Boolean).join("\n"),
+        objective: goalObjective,
         completion_criteria: completion.trim(), execution_boundary: boundary.trim(),
-        initial_todos: [t("goal.initialTodo", { criteria: completion.trim() })], permission,
+        initial_todos: [goalInitialTodo], permission,
         workspace_ref: "current", heartbeat: { enabled: false, cadence: "1d", timezone: "Asia/Shanghai" }, stop_condition: "goal_complete",
       } : draft.kind === "todo" ? { goal_id: goalId, text: objective.trim() } : {
         goal_id: goalId, agent_id: draft.agentId, cadence: `${interval}${unit}`, stop_condition: stop,
@@ -88,8 +104,9 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
           </> : null}
         </>}
       </fieldset>
+      {lengthIssue ? <p className="personal-action-form-limit" role="status">{lengthIssue}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
-      <footer><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="submit" disabled={busy || (!scheduled && !objective.trim()) || (draft.kind === "goal" && !completion.trim()) || (draft.kind === "monitor" && !target.trim())}>{busy ? (zh ? "正在准备…" : "Preparing…") : (zh ? "检查配置" : "Review configuration")}</button></footer>
+      <footer><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="submit" disabled={busy || Boolean(lengthIssue) || (!scheduled && !objective.trim()) || (draft.kind === "goal" && !completion.trim()) || (draft.kind === "monitor" && !target.trim())}>{busy ? (zh ? "正在准备…" : "Preparing…") : (zh ? "检查配置" : "Review configuration")}</button></footer>
     </form>
   </dialog>;
 }
