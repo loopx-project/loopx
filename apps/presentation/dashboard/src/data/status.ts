@@ -521,6 +521,11 @@ export const runGoalSchema = z.object({
   coordination: z.object({
     agent_model: z.string().optional().nullable(),
     registered_agents: z.array(z.string()).optional().default([]),
+    // Opaque host thread ids stay out of the App state.
+    thread_agent_bindings: z.array(z.object({
+      agent_id: z.string().optional().nullable(),
+      host_surface: z.string().optional().nullable(),
+    })).optional().default([]).catch([]),
   }).optional().nullable(),
   index_exists: z.boolean().optional().default(false),
   raw_index_records: z.number().optional().default(0),

@@ -662,6 +662,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         adapter_kind: "generic_project_goal_v0", adapter_status: "connected",
         lifecycle_phase: "registered", lifecycle_flags: ["registered"],
         quota: { compute: 1, window_hours: 24, slot_minutes: 1, allowed_slots: 1440, spent_slots: 0, state: "eligible" },
+        coordination: { thread_agent_bindings: [{ agent_id: "codex-latest-lane", host_surface: "codex-app", thread_id: "fixture-bound-thread" }] },
         index_exists: false, raw_index_records: 0, unique_runs: 0, latest_runs: [],
       });
       fixture.attention_queue.items.push({

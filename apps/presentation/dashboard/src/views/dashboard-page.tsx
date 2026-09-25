@@ -1109,6 +1109,8 @@ function buildPersonalHomeModel(
       agentLabel: agentRow?.agentId,
       agentSentence: personalAgentSentence(payload, row, state, t),
       agentTodos: [...goalAgentTodos, ...agentTodoFacts.recentCompleted],
+      boundHostSurfaces: Array.from(new Set((goal.coordination?.thread_agent_bindings ?? [])
+        .flatMap((binding) => binding.host_surface ? [binding.host_surface] : []))),
       doneTodoCount: agentTodoFacts.doneTodoCount,
       acceptanceObservation: goal.acceptance_observation,
       goalId: goal.id,

@@ -1,9 +1,11 @@
 // Execution is a fact read from the chat/session owner. Open Todos, quota
 // eligibility, registration or a persistent session never imply it.
-// Attached hosts only surface turns they claimed from LoopX; work a host starts
-// on its own is invisible here, so an attached Goal is labelled as host-owned.
+// Attached hosts only surface turns they claimed from LoopX, and the claim
+// timestamp is their only activity fact; work a host starts on its own, and
+// every turn of a bound host thread, is invisible here. Such Goals are
+// labelled as host-owned instead of running.
 export type WorkspaceGoalExecution =
-  | { kind: "running"; agentIds: string[]; hostSurfaces: string[]; lastActivityAt: string | null; quiet: boolean; sessionCount: number }
+  | { kind: "running"; agentIds: string[]; hostClaimed: boolean; hostSurfaces: string[]; lastActivityAt: string | null; quiet: boolean; sessionCount: number }
   | { kind: "idle"; hostSurfaces: string[] }
   | { kind: "unknown" };
 
@@ -39,23 +41,35 @@ export function goalExecutionFromSessions(sessions: readonly GoalSessionFact[] |
     .sort()
     .at(-1) ?? null;
   const lastActivityMs = lastActivityAt ? Date.parse(lastActivityAt) : Number.NaN;
+  const hostClaimed = active.every((session) => session.session_mode === "attached_host");
   return {
     kind: "running",
     agentIds: Array.from(new Set(active.map((session) => session.agent_id))),
+    hostClaimed,
     hostSurfaces: hostSurfacesOf(active),
     lastActivityAt,
-    quiet: !Number.isNaN(lastActivityMs) && now - lastActivityMs > quietTurnMinutes * 60_000,
+    quiet: !hostClaimed && !Number.isNaN(lastActivityMs) && now - lastActivityMs > quietTurnMinutes * 60_000,
     sessionCount: active.length,
   };
 }
 
+/** Surface ids as registered by `bind-agent-thread`; anything else is shown verbatim. */
+const hostSurfaceNames: Readonly<Record<string, string>> = {
+  "claude-code": "Claude Code",
+  "codex-app": "Codex App",
+  "codex-app-ssh": "Codex App (SSH)",
+  cursor: "Cursor",
+  kiro: "Kiro",
+};
+
 export function hostSurfaceLabel(surface: string) {
-  const value = surface.toLowerCase();
-  if (value.includes("cursor")) return "Cursor";
-  if (value.includes("claude")) return "Claude Code";
-  if (value.includes("codex")) return "Codex";
-  if (value.includes("kiro")) return "Kiro";
-  return surface;
+  return hostSurfaceNames[surface] ?? surface;
+}
+
+/** Hosts that own work for this Goal outside LoopX: bound threads plus idle attached sessions. */
+export function goalHostSurfaces(goal: Pick<GoalActivityInput, "boundHostSurfaces" | "execution">): string[] {
+  const attached = goal.execution && goal.execution.kind !== "unknown" ? goal.execution.hostSurfaces : [];
+  return Array.from(new Set([...(goal.boundHostSurfaces ?? []), ...attached]));
 }
 
 export type GoalActivityTone = "running" | "attention" | "danger" | "waiting" | "queued" | "quiet" | "stopped";
@@ -72,22 +86,26 @@ export type GoalActivity = {
 
 type GoalActivityInput = {
   activationState: "active" | "stopped";
+  /** `host_surface` of each thread bound to this Goal in the status projection. */
+  boundHostSurfaces?: string[];
   execution?: WorkspaceGoalExecution;
   needsYou?: string | null;
   state: string;
 };
 
 export function presentGoalActivity(goal: GoalActivityInput): GoalActivity {
-  const running = goal.activationState === "active" && goal.execution?.kind === "running";
-  const live = running && goal.execution?.kind === "running" && !goal.execution.quiet;
+  const execution = goal.activationState === "active" && goal.execution?.kind === "running" ? goal.execution : null;
+  const running = execution !== null;
+  const live = execution !== null && !execution.quiet && !execution.hostClaimed;
   if (goal.activationState === "stopped" || goal.state === "已停止") return { labelKey: "state.stopped", tone: "stopped", live: false, alsoKey: null };
   if (goal.state === "等你" || goal.needsYou) return { labelKey: "state.needsYou", tone: "attention", live, alsoKey: running ? "activity.alsoRunning" : null };
   if (goal.state === "需修复") return { labelKey: "state.needsRepair", tone: "danger", live, alsoKey: running ? "activity.alsoRunning" : null };
+  if (execution?.hostClaimed) return { labelKey: "activity.hostClaimed", tone: "running", live: false, alsoKey: null };
   if (running) return { labelKey: "activity.running", tone: live ? "running" : "attention", live, alsoKey: null };
   if (goal.state === "等待条件") return { labelKey: "state.waiting", tone: "waiting", live: false, alsoKey: null };
   if (goal.state === "已安排") {
-    const inHost = goal.execution?.kind === "idle" && goal.execution.hostSurfaces.length > 0;
-    return { labelKey: "state.queued", tone: "queued", live: false, alsoKey: goal.execution?.kind === "unknown" ? "activity.executionUnknown" : inHost ? "activity.inHost" : null };
+    const alsoKey = goal.execution?.kind === "unknown" ? "activity.executionUnknown" : goalHostSurfaces(goal).length > 0 ? "activity.inHost" : null;
+    return { labelKey: "state.queued", tone: "queued", live: false, alsoKey };
   }
   if (goal.state === "已完成") return { labelKey: "state.completed", tone: "quiet", live: false, alsoKey: null };
   return { labelKey: "state.quiet", tone: "quiet", live: false, alsoKey: null };

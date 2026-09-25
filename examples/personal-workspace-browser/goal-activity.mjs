@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
-// Execution is shown only from session-owner facts; open Todos and quota eligibility stay "queued".
+// Execution is shown only from session-owner facts; open Todos, quota eligibility and bound host threads stay "queued".
 function taskSession(goalId, sessionId, activeTurnId, lastActivityAt, host = null) {
   return {
     ...(host ? { session_mode: "attached_host", host_surface: host } : { session_mode: "managed" }),
@@ -25,8 +25,8 @@ export const goalActivityScenario = {
     const live = await openWorkspacePage(browser, url, {
       collectCoverage,
       beforeGoto: (_api, page) => {
-        page.__loopxRuntime.sessions.set("activity-live", taskSession("progress-projection", "activity-live", "turn-activity-live", recent, "codex"));
-        page.__loopxRuntime.sessions.set("activity-idle", taskSession("multi-agent-projection", "activity-idle", null, recent, "cursor"));
+        page.__loopxRuntime.sessions.set("activity-live", taskSession("progress-projection", "activity-live", "turn-activity-live", recent));
+        page.__loopxRuntime.sessions.set("activity-claimed", taskSession("product-release", "activity-claimed", "turn-activity-claimed", recent, "codex-app"));
         page.__loopxRuntime.sessions.set("activity-silent", taskSession("research-monitor", "activity-silent", "turn-activity-silent", silent));
       },
     });
@@ -36,16 +36,20 @@ export const goalActivityScenario = {
       const running = await goalRow(page, "Progress Projection");
       const queued = await goalRow(page, "Multi Agent Projection");
       await running.locator("small", { hasText: "执行中" }).waitFor({ timeout: 15_000 });
-      assert.match(await queued.locator("small").innerText(), /^已安排 · 在 Cursor 宿主中执行，状态以宿主为准/, "Queued work bound to an attached host defers live state to the host");
-      const silentRow = await goalRow(page, "Research Monitor");
-      assert.match(await silentRow.locator("small").innerText(), /^执行中 · 已 3\d 分钟无新动静/, "A silent claimed turn discloses its silence");
-      assert.equal(await silentRow.locator(".personal-goal-mark.is-live").count(), 0, "A silent turn is never shown as live");
+      assert.match(await queued.locator("small").innerText(), /^已安排 · 由 Codex App 线程负责，执行情况以宿主为准/, "A Goal owned by a bound host thread defers execution to the host");
       assert.doesNotMatch(await queued.innerText(), /执行中|推进中/);
-      assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1, "Only the Goal with an active turn is live");
+      const claimed = await goalRow(page, "Product Release");
+      assert.match(await claimed.locator("small").innerText(), /^宿主已领取 · Codex App 宿主 · 领取于\d+\s*分钟前/, "An attached claim reports its claim time, not ongoing activity");
+      assert.equal(await claimed.locator(".personal-goal-mark.is-live").count(), 0, "An attached claim is never shown as live");
+      const silentRow = await goalRow(page, "Research Monitor");
+      assert.match(await silentRow.locator("small").innerText(), /^执行中 · 已 3\d 分钟无新动静/, "A silent turn discloses its silence");
+      assert.equal(await silentRow.locator(".personal-goal-mark.is-live").count(), 0, "A silent turn is never shown as live");
+      assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1, "Only the Goal with a recently active managed turn is live");
       assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
-      assert.match(await running.locator("small").innerText(), /执行中 · Codex 宿主 · \d+\s*分钟前/, "Running names the attached host and the observed activity time");
+      assert.match(await running.locator("small").innerText(), /^执行中 · \d+\s*分钟前/, "A managed turn shows its observed activity time");
       const brief = page.locator(".personal-brief");
-      assert.equal(await brief.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 2, "The brief lists Goals with a claimed turn, including a silent one");
+      assert.equal(await brief.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 3, "The brief lists every Goal with an unfinished turn, including silent and host-claimed ones");
+      assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Product Release\s+Codex App 宿主 · 领取于\d+\s*分钟前/);
       assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Research Monitor\s+已 3\d 分钟无新动静/);
       assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Progress Projection[\s\S]*\d+\s*分钟前/);
       assert.equal(await brief.locator(".personal-brief-tile.is-live").count(), 1);
@@ -91,6 +95,6 @@ export const goalActivityScenario = {
       await offline.close();
       throw error;
     }
-    return { coverageEntries, note: "Execution comes from active session turns; queued work and unreadable session state are never shown as running." };
+    return { coverageEntries, note: "Execution comes from active session turns; attached claims show claim time without a live ring, bound host threads stay queued, and unreadable session state is never running." };
   },
 };

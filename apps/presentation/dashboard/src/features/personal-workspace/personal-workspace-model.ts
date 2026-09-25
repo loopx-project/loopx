@@ -101,6 +101,8 @@ export type WorkspaceGoal = {
   agentLabel?: string;
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
+  /** Host surfaces of threads bound to this Goal; binding proves ownership, never execution. */
+  boundHostSurfaces?: string[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
   execution?: WorkspaceGoalExecution;

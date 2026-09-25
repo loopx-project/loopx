@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
-import { goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import { goalHostSurfaces, goalIdentity, hostSurfaceLabel, presentGoalActivity, type GoalActivity, type WorkspaceGoalExecution } from "./goal-activity";
 import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
-type GoalActivitySubject = Pick<WorkspaceGoal, "activationState" | "execution" | "goalId" | "loadState" | "needsYou" | "state" | "title">;
+type GoalActivitySubject = Pick<WorkspaceGoal, "activationState" | "boundHostSurfaces" | "execution" | "goalId" | "loadState" | "needsYou" | "state" | "title">;
 
 export function relativeTime(value: string, locale: string): string | null {
   const then = new Date(value).getTime();
@@ -16,19 +16,22 @@ export function relativeTime(value: string, locale: string): string | null {
   return format.format(Math.round(seconds / 86_400), "day");
 }
 
-function hostNames(execution: WorkspaceGoalExecution | undefined) {
-  return execution && execution.kind !== "unknown" ? execution.hostSurfaces.map(hostSurfaceLabel).join(" / ") : "";
+function hostNames(surfaces: readonly string[]) {
+  return surfaces.map(hostSurfaceLabel).join(" / ");
 }
 
-/** Secondary line for an observed turn: host, then recency or silence. */
+/** Secondary line for an observed turn: host, then claim time, recency or silence. */
 export function useExecutionDetail(execution: WorkspaceGoalExecution | undefined): string[] {
   const { locale, t } = useWorkspaceI18n();
   if (execution?.kind !== "running") return [];
   const parts: string[] = [];
-  const hosts = hostNames(execution);
+  const hosts = hostNames(execution.hostSurfaces);
   if (hosts) parts.push(t("activity.viaHost", { host: hosts }));
   if (execution.lastActivityAt) {
-    if (execution.quiet) {
+    if (execution.hostClaimed) {
+      const time = relativeTime(execution.lastActivityAt, locale);
+      if (time) parts.push(t("activity.claimedAt", { time }));
+    } else if (execution.quiet) {
       parts.push(t("activity.quiet", { minutes: Math.round((Date.now() - Date.parse(execution.lastActivityAt)) / 60_000) }));
     } else {
       const time = relativeTime(execution.lastActivityAt, locale);
@@ -43,8 +46,8 @@ export function useGoalActivity(goal: GoalActivitySubject): GoalActivity & { tex
   const activity = presentGoalActivity(goal);
   const detail = useExecutionDetail(goal.execution);
   const parts = [t(activity.labelKey as WorkspaceMessageKey)];
-  if (activity.alsoKey) parts.push(t(activity.alsoKey as WorkspaceMessageKey, { host: hostNames(goal.execution) }));
-  if (activity.labelKey === "activity.running") parts.push(...detail);
+  if (activity.alsoKey) parts.push(t(activity.alsoKey as WorkspaceMessageKey, { host: hostNames(goalHostSurfaces(goal)) }));
+  if (activity.labelKey === "activity.running" || activity.labelKey === "activity.hostClaimed") parts.push(...detail);
   return { ...activity, text: parts.join(" · ") };
 }
 
