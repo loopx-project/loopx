@@ -4,11 +4,12 @@ import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/pre
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError } from "../../data/workspace-progressive-status";
+import type { WorkspaceGoalExecution } from "./goal-activity";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
   | "等待条件"
-  | "推进中"
+  | "已安排"
   | "安静运行"
   | "已完成"
   | "已停止";
@@ -100,8 +101,11 @@ export type WorkspaceGoal = {
   agentLabel?: string;
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
+  /** Host surfaces of threads bound to this Goal; binding proves ownership, never execution. */
+  boundHostSurfaces?: string[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
+  execution?: WorkspaceGoalExecution;
   goalId: string;
   latestActivity?: string;
   needsYou?: string | null;
@@ -243,6 +247,12 @@ export type WorkspaceActionPreview = {
     nextAction?: string;
     summary: string;
   };
+  // The stored typed action's own times. The workspace restores the list in
+  // `ChatActionStore.list` order, which is (`updated_at`, `proposal_id`)
+  // newest first, while a draft created in this session is appended last; a
+  // reader that needs the newest draft compares these instead of the position.
+  // See proposal-recency.ts.
+  createdAt?: string;
   previewId: string;
   primaryLabel?: string;
   errorMessage?: string;
@@ -256,6 +266,7 @@ export type WorkspaceActionPreview = {
   teamPlanTodoIds?: string[];
   title: string;
   sourceRequest?: WorkspaceActionPreviewRequest;
+  updatedAt?: string;
   workspaceCandidates?: Array<{ label: string; workspaceRef: string }>;
 };
 
@@ -489,7 +500,7 @@ export function workspaceSessionStatusLabel(status?: string): string {
 
 /** A quiet persistent conversation must not masquerade as waiting work. */
 export function goalHasExecutionSummary(goal: Pick<WorkspaceGoal, "state">): boolean {
-  return ["推进中", "需修复", "等待条件"].includes(goal.state);
+  return ["已安排", "需修复", "等待条件"].includes(goal.state);
 }
 
 /**
@@ -500,7 +511,7 @@ export function workspaceHomeLaneForGoal(goal: WorkspaceGoal): WorkspaceHomeLane
   if (goal.activationState === "stopped" || goal.state === "已停止") return "stopped";
   if (goal.state === "已完成") return "history";
   if (goal.needsYou || goal.state === "等你") return "needs_you";
-  if (goal.state === "推进中" || goal.state === "需修复") return "running";
+  if (goal.execution?.kind === "running" || goal.state === "需修复") return "running";
   if (goal.state === "安静运行") return "observing";
   return "scheduled";
 }

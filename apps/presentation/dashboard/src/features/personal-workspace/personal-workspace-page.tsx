@@ -61,8 +61,11 @@ import type {
 } from "./personal-workspace-model";
 import { goalHasExecutionSummary, goalTitleFor, workspaceHomeLaneForGoal } from "./personal-workspace-model";
 import { WorkspaceActionForm, type WorkspaceActionDraft } from "./workspace-action-form";
+import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
+import { ManagerBrief } from "./manager-brief";
 import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
+import { compareProposalRecency } from "./proposal-recency";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
 import "./personal-workspace.css";
@@ -72,7 +75,11 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
     const key = [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
-    latest.set(key, proposal);
+    // Two records can describe the same draft; keep the newest by its stored
+    // time rather than whichever one this list happened to end with, since a
+    // restored list and a session-created draft arrive in opposite orders.
+    const current = latest.get(key);
+    if (!current || compareProposalRecency(proposal, current) < 0) latest.set(key, proposal);
   });
   return [...latest.values()];
 }
@@ -116,12 +123,12 @@ function ManagerHomeBoard({
   });
   const goalCard = (goal: WorkspaceGoal) => (
     <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
-      <strong>{goal.title}</strong>
+      <span className="personal-home-goal-title"><GoalIdentityMark goal={goal} /><strong>{goal.title}</strong></span>
       <span className="personal-home-goal-meta">{goal.agentLaneCount && goal.agentLaneCount > 1
         ? t("header.workAgentCount", { count: goal.agentLaneCount })
         : goal.agentLabel ?? goal.agentId}</span>
       <p>{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.needsYou ?? goal.nextSentence}</p>
-      <footer><span>{(goal.loadState ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : localizedGoalState(goal.state, locale))}</span><small title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small></footer>
+      <footer>{goal.loadState ? <span>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</span> : <GoalActivityChip goal={goal} />}<small title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small></footer>
     </button>
   );
   return (
@@ -148,6 +155,8 @@ function ManagerHomeBoard({
           <button className="min-h-11 rounded-md border px-3 py-2 text-sm" onClick={onRetry} type="button">{t("startup.retryFailed")}</button></div> : null}
         {currentGoals.filter((goal) => goal.loadState).map(goalCard)}
       </section> : null}
+      {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal} /> : null}
+      <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>
       <div className="personal-home-lanes">
         {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
           <section className={`personal-home-lane is-${lane.key}`} data-testid={`personal-home-lane-${lane.key}`} key={lane.key}>
@@ -364,7 +373,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
         goalTitle: goal.title,
         latestActivity: goal.agentSentence,
         runId: `goal:${goal.goalId}`,
-        status: "running",
+        status: goal.execution?.kind === "running" ? "running" : "failed",
         title: goal.nextSentence,
         totalSteps: Math.max(
           (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,
@@ -401,7 +410,7 @@ function defaultTimeline(model: WorkspaceModel, selectedGoalId: string | null, t
       goalTitle: goal.title,
       latestActivity: goal.agentSentence,
       runId: `goal:${goal.goalId}`,
-      status: goal.state === "推进中" ? "running" : goal.state === "需修复" ? "failed" : "waiting",
+      status: goal.execution?.kind === "running" ? "running" : goal.state === "需修复" ? "failed" : goal.state === "已安排" ? "queued" : "waiting",
       title: goal.nextSentence,
       totalSteps: Math.max(
         (goal.doneTodoCount ?? 0) + goal.agentTodos.filter((todo) => !todo.done).length,
@@ -682,6 +691,8 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       ? teamPlanReceiptGapLanes(proposal.receipt, proposal.normalized_parameters)
       : undefined,
     title: localizedSummary,
+    updatedAt: proposal.updated_at,
+    createdAt: proposal.created_at,
   };
 }
 
@@ -1718,7 +1729,7 @@ export function PersonalWorkspacePage({
             {!selectedGoal && !managerChatOpen ? (
               <section className="personal-manager-greeting">
                 <span><Bot size={20} /></span>
-                <div><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null}</>}</p></div>
+                <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null}</>}</p></div>
               </section>
             ) : null}
             {selectedGoal?.loadState ? (

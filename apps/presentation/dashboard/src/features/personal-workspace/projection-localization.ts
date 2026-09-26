@@ -1,5 +1,5 @@
 export type ProjectionMessageKey =
-  | "projection.agentAdvancingGoal"
+  | "projection.agentWorkQueued"
   | "projection.agentIdle"
   | "projection.agentNeedsDecision"
   | "projection.agentPreparingNextStep"
@@ -17,7 +17,7 @@ export type ProjectionTranslate = (
   values?: Record<string, string | number>,
 ) => string;
 
-export type ProjectionAgentStatus = "advancing" | "idle" | "needs_you" | "stopped" | "waiting_external";
+export type ProjectionAgentStatus = "queued" | "idle" | "needs_you" | "stopped" | "waiting_external";
 
 function cleanProjectionText(value: string | null | undefined) {
   return (value ?? "").replace(/\s+/gu, " ").trim();
@@ -54,7 +54,7 @@ export function projectionSentence(
 
 export function agentStatusSentence(status: ProjectionAgentStatus, t: ProjectionTranslate) {
   const keyByStatus: Record<ProjectionAgentStatus, ProjectionMessageKey> = {
-    advancing: "projection.agentAdvancingGoal",
+    queued: "projection.agentWorkQueued",
     idle: "projection.agentIdle",
     needs_you: "projection.agentNeedsDecision",
     stopped: "projection.agentStopped",

@@ -42,10 +42,10 @@ export const stewardModelSettingsScenario = {
         throw new Error("Steward settings did not apply the selected model and effort");
       }
       await detail.getByLabel("模型").waitFor();
-      if (await detail.getByLabel("模型").inputValue() !== "gpt-6-sol"
-          || await detail.getByLabel("推理档位").inputValue() !== "xhigh") {
-        throw new Error("Steward model and effort were not read back after apply");
-      }
+      const readBack = async () => await detail.getByLabel("模型").inputValue() === "gpt-6-sol"
+        && await detail.getByLabel("推理档位").inputValue() === "xhigh";
+      for (let attempt = 0; attempt < 50 && !await readBack(); attempt += 1) await page.waitForTimeout(100);
+      if (!await readBack()) throw new Error("Steward model and effort were not read back after apply");
       await page.setViewportSize({ width: 390, height: 844 });
       await stewardTab.waitFor({ state: "visible" });
       if (await stewardTab.getAttribute("aria-current") !== "page") {

@@ -6,7 +6,7 @@ import {
 type Values = Record<string, string | number>;
 
 const english = {
-  "projection.agentAdvancingGoal": "Agent is advancing the current Goal",
+  "projection.agentWorkQueued": "Agent work is queued for this Goal",
   "projection.agentIdle": "Nothing needs your attention",
   "projection.agentNeedsDecision": "Agent is waiting for your decision",
   "projection.agentPreparingNextStep": "Agent is preparing the next step",
@@ -21,7 +21,7 @@ const english = {
 } as const;
 
 const chinese = {
-  "projection.agentAdvancingGoal": "Agent 正在推进当前 Goal",
+  "projection.agentWorkQueued": "这个 Goal 有待 Agent 推进的工作",
   "projection.agentIdle": "暂无需要你处理",
   "projection.agentNeedsDecision": "Agent 等待你的决定",
   "projection.agentPreparingNextStep": "Agent 正在整理下一步",
@@ -63,23 +63,23 @@ const en = translator(english);
 const zhCN = translator(chinese);
 
 equal(
-  projectionSentence("loopx check --format json", en, "projection.agentAdvancingGoal"),
-  "Agent is advancing the current Goal",
-  "English command-like projection uses the localized advancing fallback",
+  projectionSentence("loopx check --format json", en, "projection.agentWorkQueued"),
+  "Agent work is queued for this Goal",
+  "English command-like projection uses the localized queued-work fallback",
 );
 equal(
-  projectionSentence("loopx check --format json", zhCN, "projection.agentAdvancingGoal"),
-  "Agent 正在推进当前 Goal",
-  "Chinese command-like projection preserves the localized advancing fallback",
+  projectionSentence("loopx check --format json", zhCN, "projection.agentWorkQueued"),
+  "这个 Goal 有待 Agent 推进的工作",
+  "Chinese command-like projection preserves the localized queued-work fallback",
 );
 equal(
-  projectionSentence("Review the project-specific adapter signal", en, "projection.agentAdvancingGoal"),
+  projectionSentence("Review the project-specific adapter signal", en, "projection.agentWorkQueued"),
   "Review the project-specific adapter signal",
   "Source-authored projection text remains unchanged",
 );
 
 equal(agentStatusSentence("needs_you", en), "Agent is waiting for your decision", "English needs-you status");
-equal(agentStatusSentence("advancing", en), "Agent is advancing the current Goal", "English advancing status");
+equal(agentStatusSentence("queued", en), "Agent work is queued for this Goal", "English queued-work status");
 equal(agentStatusSentence("waiting_external", en), "Waiting for an external condition", "English external-wait status");
 equal(agentStatusSentence("idle", en), "Nothing needs your attention", "English idle status");
 equal(

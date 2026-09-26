@@ -662,6 +662,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         adapter_kind: "generic_project_goal_v0", adapter_status: "connected",
         lifecycle_phase: "registered", lifecycle_flags: ["registered"],
         quota: { compute: 1, window_hours: 24, slot_minutes: 1, allowed_slots: 1440, spent_slots: 0, state: "eligible" },
+        coordination: { thread_agent_bindings: [{ agent_id: "codex-latest-lane", host_surface: "codex-app", thread_id: "fixture-bound-thread" }] },
         index_exists: false, raw_index_records: 0, unique_runs: 0, latest_runs: [],
       });
       fixture.attention_queue.items.push({
@@ -897,7 +898,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       executor_model: null,
       executor_reasoning_effort: null,
     };
-    const machineNamespaces = {
+    // Applied namespaces persist for the page; this handler runs once per request.
+    const machineNamespaces = state.machineNamespaces ??= {
       change_quality_qualification: changeQualityConfiguration,
       manager_runtime: managerRuntimeConfiguration,
       periodic_report: periodicConfiguration,
@@ -1675,10 +1677,20 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
-    const proposals = Array.from(actionProposals.values()).filter((proposal) => {
+    const matching = Array.from(actionProposals.values()).filter((proposal) => {
       if (proposal.status === "cancelled") return false;
       if (goalId && (proposal.context?.goal_id ?? proposal.normalized_parameters?.goal_id) !== goalId) return false;
       return !contextKind || proposal.context?.kind === contextKind;
+    });
+    // `ChatActionStore.list` sorts by (`updated_at`, `proposal_id`) newest first.
+    // Serving insertion order instead let a positional reader pass here and keep
+    // the wrong draft on the first screen of the real workspace.
+    const proposals = matching.sort((a, b) => {
+      const [aTime, aId] = [a.updated_at ?? "", a.proposal_id ?? ""];
+      const [bTime, bId] = [b.updated_at ?? "", b.proposal_id ?? ""];
+      if (aTime !== bTime) return aTime < bTime ? 1 : -1;
+      if (aId === bId) return 0;
+      return aId < bId ? 1 : -1;
     });
     await route.fulfill({ contentType: "application/json", json: { ok: true, schema_version: "loopx_chat_action_list_v1", proposals }, status: 200 });
   });
