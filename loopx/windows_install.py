@@ -332,6 +332,10 @@ def install_windows(
             _entry_command(release_root, python, ["--format", "json", "authority-archive", "upgrade",
                                                  "--all-known", "--execute"]),
             capture_output=True, text=True, timeout=600,
+            # Same decoding contract as the other helper invocations in this
+            # module: without it, a non-UTF-8 host fails here while decoding the
+            # output, which hides the upgrade result this branch reports on.
+            encoding="utf-8", errors="replace",
         )
         if upgrade.returncode != 0:
             raise RuntimeError("Authority format upgrade failed before launcher activation; "
