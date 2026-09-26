@@ -1,5 +1,7 @@
 # Event-owned completion: one publication before capture integration
 
+> Superseded by [Todo event retirement](2026-09-25-todo-event-retirement.md): this historical implementation is removed in #5054.
+
 Baseline: `90f21a5299188d54f984a5313e774c9ac48d6595`. This advances overall
 roadmap R5/G2, shared-authority L2/L7 and TS T1/T2. It closes an existing event
 writer correctness gap; it does not qualify that writer for shadow capture.

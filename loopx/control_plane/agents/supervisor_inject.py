@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from ...event_sourced_state import SUPERVISOR_PROPOSED, AppendOnlyStateEventStore
+from .supervisor_event_log import SUPERVISOR_PROPOSED, SupervisorEventStore
 from ..todos.contract import normalize_todo_claimed_by
 from .supervisor_events import (
     SupervisorReceiptOutcome,
@@ -69,7 +69,7 @@ def _capabilities(adapter: SupervisorInjectHostAdapter) -> list[str]:
 
 
 def _proposal(log_path: Path, *, goal_id: str, decision_id: str) -> dict:
-    for event in AppendOnlyStateEventStore(log_path).load():
+    for event in SupervisorEventStore(log_path).load():
         if (
             event.get("event_type") == SUPERVISOR_PROPOSED
             and event.get("goal_id") == goal_id

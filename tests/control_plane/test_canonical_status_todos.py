@@ -78,7 +78,7 @@ def test_status_uses_provider_and_allows_native_monitor_writeback_without_displa
     original = state.read_bytes()
     if display == "missing":
         state.unlink()
-    for name in ("active_state_event_projection_fields", "parse_active_state_todos"):
+    for name in ("parse_active_state_todos",):
         monkeypatch.setattr(
             f"loopx.status.{name}",
             lambda *_args, **_kwargs: pytest.fail("promoted read must not parse legacy Todos"),

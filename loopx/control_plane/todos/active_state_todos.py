@@ -11,37 +11,6 @@ from ..coordination.local_authority import (
 
 from .succession_warning import public_todo_summary
 
-MONITOR_WRITEBACK_CONTRACT_SCHEMA_VERSION = "monitor_writeback_contract_v0"
-
-
-def _attach_monitor_writeback_contract(
-    fields: dict[str, Any],
-    *,
-    supported: bool,
-    source: str,
-) -> None:
-    if supported:
-        return
-    contract = {
-        "schema_version": MONITOR_WRITEBACK_CONTRACT_SCHEMA_VERSION,
-        "supported": False,
-        "source": source,
-    }
-    for key in ("user_todos", "agent_todos"):
-        summary = fields.get(key)
-        if isinstance(summary, dict):
-            summary["monitor_writeback"] = dict(contract)
-
-
-def attach_monitor_writeback_contract(
-    fields: dict[str, Any],
-    *,
-    supported: bool,
-    source: str,
-) -> None:
-    _attach_monitor_writeback_contract(fields, supported=supported, source=source)
-
-
 def _redacted_status_todo_fields(fields: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(fields)
     for key in ("user_todos", "agent_todos"):
@@ -87,16 +56,13 @@ def active_state_todo_fields(
     load_rollout_events: Callable[..., list[dict[str, Any]]],
     rollout_event_log_path: Callable[[Path, str], Path],
     max_todo_index_rollout_events_per_goal: int,
-    active_state_event_projection_fields: Callable[..., dict[str, Any]],
     parse_active_state_todos: Callable[..., dict[str, Any]],
     parse_issue_meta_surface: Callable[[str], dict[str, Any] | None],
     backlog_hygiene_warning: Callable[..., dict[str, Any] | None],
     completed_todo_archive_warning: Callable[[dict[str, Any] | None], dict[str, Any] | None],
     state_projection_gap_warning: Callable[..., dict[str, Any] | None],
-    attach_monitor_writeback_contract: Callable[..., None] | None = None,
     redacted_status_todo_fields: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    monitor_writeback_contract_writer = attach_monitor_writeback_contract or _attach_monitor_writeback_contract
     todo_field_redactor = redacted_status_todo_fields or _redacted_status_todo_fields
     goal_id = str(goal.get("id") or "").strip()
     # Inspect authority before the display file. A missing/stale projection is
@@ -106,6 +72,9 @@ def active_state_todo_fields(
         if runtime_root is not None and goal_id else None
     )
     state_path = resolve_goal_local_path(goal.get("state_file"), goal, fallback_base=Path.cwd())
+    if canonical is None and state_path is not None:
+        from ..goals.legacy_event_source import require_no_legacy_todo_events
+        require_no_legacy_todo_events(goal, state_path=state_path)
     if canonical is None and (state_path is None or not state_path.exists()):
         return {}
     try:
@@ -132,12 +101,6 @@ def active_state_todo_fields(
             rollout_event_log_path(runtime_root, goal_id),
             limit=max_todo_index_rollout_events_per_goal,
         )
-    event_fields = {} if canonical is not None else active_state_event_projection_fields(
-        goal,
-        state_path=state_path,
-        preferred_todo_ids=preferred_todo_ids,
-        rollout_events=events,
-    )
     if canonical is not None:
         fields = canonical_todo_summary_fields(
             canonical["todos"],
@@ -150,23 +113,6 @@ def active_state_todo_fields(
         # Canonical observation/successor transactions now support current
         # lease proof. Scheduling exposes due work; mutation admission still
         # validates the caller's proof and never falls back to the old writer.
-    elif event_fields.get("user_todos") or event_fields.get("agent_todos"):
-        fields = event_fields
-        markdown_fields = parse_active_state_todos(
-            state_text,
-            goal=goal,
-            state_path=state_path,
-            preferred_todo_ids=preferred_todo_ids,
-            rollout_events=events,
-        )
-        standing_decision_authority = markdown_fields.get("standing_decision_authority")
-        if isinstance(standing_decision_authority, dict):
-            fields["standing_decision_authority"] = standing_decision_authority
-        monitor_writeback_contract_writer(
-            fields,
-            supported=False,
-            source="event_projection_read_model",
-        )
     else:
         fields = parse_active_state_todos(
             state_text,
@@ -175,13 +121,6 @@ def active_state_todo_fields(
             preferred_todo_ids=preferred_todo_ids,
             rollout_events=events,
         )
-        monitor_writeback_contract_writer(
-            fields,
-            supported=True,
-            source="markdown_active_state",
-        )
-        if event_fields:
-            fields.update(event_fields)
     issue_meta_surface = parse_issue_meta_surface(state_text)
     if issue_meta_surface:
         fields["issue_meta_surface"] = issue_meta_surface

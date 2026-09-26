@@ -17,12 +17,7 @@ from loopx.cli_commands.status import review_packet_handoff_only_payload  # noqa
 from loopx.control_plane.todos.handoff_note import (  # noqa: E402
     attach_todo_handoff_note,
 )
-from loopx.event_sourced_state import (  # noqa: E402
-    TODO_ADDED,
-    TODO_UPDATED,
-    build_state_projection,
-    make_state_event,
-)
+
 from loopx.review_packet import build_review_packet  # noqa: E402
 from loopx.status import build_task_graph_projection  # noqa: E402
 
@@ -365,48 +360,11 @@ def assert_predecessor_budget_and_actor_contract() -> None:
     assert source_limits["predecessor_truncated"] is False, source_limits
     assert source_limits["source_truncated"] is True, source_limits
 
-    def state_event(
-        event_id: str,
-        event_type: str,
-        payload: dict[str, object],
-        *,
-        actor_agent_id: str | None = None,
-    ) -> dict[str, object]:
-        return make_state_event(
-            event_id=event_id,
-            goal_id="task-graph-actor-clearing",
-            event_type=event_type,
-            refs={"todo_id": "todo_actor_audit"},
-            payload=payload,
-            actor_agent_id=actor_agent_id,
-            recorded_at=f"2026-08-06T00:00:{len(event_id):02d}Z",
-        )
-
-    actor_projection = build_state_projection(
-        [
-            state_event(
-                "evt-add-actor",
-                TODO_ADDED,
-                {"role": "agent", "text": "Audit actor projection"},
-                actor_agent_id="creator-agent",
-            ),
-            state_event(
-                "evt-update-actor",
-                TODO_UPDATED,
-                {"title": "Audit actor projection after mutation"},
-                actor_agent_id="mutator-agent",
-            ),
-            state_event(
-                "evt-update-no-actor",
-                TODO_UPDATED,
-                {"title": "Audit actor projection after cleared actor"},
-            ),
-        ],
-        goal_id="task-graph-actor-clearing",
-    )
-    actor_todo = actor_projection["agent_todos"]["items"][0]
-    assert actor_todo["created_by"] == "creator-agent", actor_todo
-    assert "last_actor_agent_id" not in actor_todo, actor_todo
+    actor_todo = {"todo_id": "todo_actor_audit", "role": "agent", "status": "open",
+        "title": "Audit actor projection", "text": "Audit actor projection",
+        "created_by": "creator-agent", "task_class": "advancement_task"}
+    actor_projection = {"agent_todos": {"items": [actor_todo], "total_count": 1, "open_count": 1},
+        "user_todos": {"items": [], "total_count": 0, "open_count": 0}}
     actor_graph = build_task_graph_projection(
         {
             "goal_id": "task-graph-actor-clearing",

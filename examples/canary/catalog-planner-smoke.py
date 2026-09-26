@@ -53,7 +53,6 @@ def assert_profiles_come_from_catalog_matrix() -> None:
         "status-read-path",
         "status-projection-cache",
         "review-packet-read-path",
-        "event-sourced-read-path",
         "cli-command-contract",
         "todo-lifecycle",
         "monitor-scheduler",
@@ -507,23 +506,6 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
     assert all(check["tier"] == "default" for check in review_packet_profile["checks"]), review_packet_profile
     assert review_packet_profile["deep_checks_available"] is True, review_packet_profile
     assert review_packet_profile["deep_checks_included"] is False, review_packet_profile
-
-    event_read_payload = build_catalog_canary_plan(
-        changed_files=["loopx/event_sourced_state.py", "loopx/rollout_event_log.py"],
-        surfaces=["event projection downstream read event-store read-path"],
-    )
-    event_read_profiles = {
-        profile["id"]: profile for profile in event_read_payload["domain_profiles"]
-    }
-    assert "event-sourced-read-path" in event_read_profiles, event_read_payload
-    event_read_profile = event_read_profiles["event-sourced-read-path"]
-    event_read_commands = [check["command"] for check in event_read_profile["checks"]]
-    assert "python3 examples/control_plane/event-sourced-state-api-smoke.py" in event_read_commands, event_read_profile
-    assert "python3 examples/control_plane/event-sourced-status-read-path-smoke.py" in event_read_commands, event_read_profile
-    assert "python3 examples/control_plane/event-sourced-downstream-read-path-smoke.py" in event_read_commands, event_read_profile
-    assert all(check["tier"] == "default" for check in event_read_profile["checks"]), event_read_profile
-    assert event_read_profile["deep_checks_available"] is True, event_read_profile
-    assert event_read_profile["deep_checks_included"] is False, event_read_profile
 
     cli_payload = build_catalog_canary_plan(
         changed_files=["loopx/cli.py", "loopx/cli_commands/version.py"],

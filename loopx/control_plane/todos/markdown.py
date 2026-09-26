@@ -119,18 +119,6 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
             lines.append(
                 f"- returned_todo_count: `{payload.get('returned_todo_count')}`"
             )
-        state_event_projection = payload.get("state_event_projection")
-        if isinstance(state_event_projection, dict):
-            lines.extend(
-                [
-                    f"- event_log: `{state_event_projection.get('event_log')}`",
-                    (
-                        "- source_event_count: `"
-                        f"{state_event_projection.get('source_event_count')}`"
-                    ),
-                    f"- last_event_id: `{state_event_projection.get('last_event_id')}`",
-                ]
-            )
         for key, heading in (
             ("user_todos", "User Todo"),
             ("agent_todos", "Agent Todo"),

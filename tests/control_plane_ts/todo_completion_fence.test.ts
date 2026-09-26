@@ -27,13 +27,13 @@ const fixture = JSON.parse(
   }>;
 };
 
-test("pinned Python completion-fence characterization remains exact", () => {
+test("surviving materialized completion-fence characterization remains exact", () => {
   assert.equal(
     fixture.schema_version,
     "loopx_todo_completion_fence_characterization_v0",
   );
   assert.equal(fixture.source_baseline, "58adc1783");
-  assert.equal(fixture.cases.length >= 8, true);
+  assert.equal(fixture.cases.length >= 7, true);
   for (const item of fixture.cases) {
     if (item.expected_error) {
       assert.throws(

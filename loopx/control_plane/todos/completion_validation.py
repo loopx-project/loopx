@@ -36,10 +36,6 @@ from .completion_validation_store import (
     read_completion_validation_declaration,
 )
 from .contract import TODO_STATUS_DONE, normalize_todo_status
-from .event_writeback import (
-    event_projection_source_authority,
-    event_projection_todo_context,
-)
 
 # Kept safely under the 30s outer CLI/MCP subprocess budget so a timed-out
 # validation still produces a typed receipt before the outer call is killed.
@@ -467,18 +463,6 @@ def resolve_private_completion_validation_declaration(
             todo_id=todo_id,
             role=role,
         )
-        if source is None:
-            event_context = event_projection_todo_context(
-                registry_path=registry_path,
-                goal_id=goal_id,
-                state_path=state_file,
-                todo_id=todo_id,
-                role=role,
-            )
-            if event_context is not None:
-                source = dict(
-                    event_context.get("raw_item") or event_context.get("item") or {}
-                )
         declaration = (
             completion_validation_declaration(source)
             if isinstance(source, dict)
@@ -529,29 +513,17 @@ def run_completion_validation_gate_with_source(
     w.r.t. the state file and safe to call before acquiring the mutation lock,
     so a multi-second validation command does not block concurrent Todo writes.
     """
+    from ...history import load_registry
+    from ...registry import registry_goals
+    from ..goals.legacy_event_source import require_no_legacy_todo_events
+    goal = next((item for item in registry_goals(load_registry(registry_path)) if item.get("id") == goal_id), {})
+    require_no_legacy_todo_events(goal, state_path=state_file)
     projection_source = "materialized"
     source_authority: dict[str, Any] | None = None
-    event_context: dict[str, Any] | None = None
     todo = _materialized_todo_item(state_file=state_file, todo_id=todo_id, role=role)
     if todo is None:
-        event_context = event_projection_todo_context(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            state_path=state_file,
-            todo_id=todo_id,
-            role=role,
-        )
-        if event_context is None:
-            return {
-                "failure": None,
-                "source_authority": None,
-                "source_snapshot": None,
-                "transaction": None,
-            }
-        projection_source = "event_log"
-        todo = dict(event_context.get("raw_item") or event_context["item"])
-        todo["role"] = event_context["role"]
-        source_authority = event_projection_source_authority(event_context)
+        return {"todo": None, "validation": None, "failure": None,
+            "source_authority": None, "source_snapshot": None, "transaction": None}
     source_snapshot = todo_completion_source_snapshot(todo)
     completion_policy_source = None
     if completion_policy_facts is not None:
@@ -564,9 +536,6 @@ def run_completion_validation_gate_with_source(
             goal_id=goal_id,
             lines=lines,
             successor_todo_ids=requested_successor_todo_ids or [],
-            event_fields=(
-                event_context.get("fields") if event_context is not None else None
-            ),
             facts=completion_policy_facts,
         )
     transaction = reduce_todo_completion_transaction(
@@ -645,7 +614,6 @@ def completion_policy_source_from_state(
     goal_id: str,
     lines: list[str],
     successor_todo_ids: list[str],
-    event_fields: Mapping[str, Any] | None,
     facts: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Project lock-comparable facts for the TS completion policy."""
@@ -666,7 +634,6 @@ def completion_policy_source_from_state(
             linked_successors=linked_successors_from_state(
                 lines=lines,
                 successor_todo_ids=successor_todo_ids,
-                event_fields=event_fields,
             ),
         ),
     )
@@ -716,29 +683,16 @@ def locked_todo_completion_source(
     goal_id: str,
     todo_id: str,
     role: str | None,
-) -> tuple[Any, dict[str, Any] | None, dict[str, Any] | None]:
-    """Resolve the materialized or event-projected Todo under the write lock."""
+) -> tuple[Any, dict[str, Any] | None]:
+    """Resolve the materialized Todo under the write lock."""
 
     match = find_todo_block(lines, todo_id=todo_id, role=role)
     if match:
         item_role, _section, _start, _end, block = match
         todo = dict(block)
         todo["role"] = item_role
-        return match, todo, None
-    event_context = event_projection_todo_context(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        state_path=state_file,
-        todo_id=todo_id,
-        role=role,
-    )
-    if event_context is None:
-        return None, None, None
-    event_context["state_file"] = state_file
-    event_context["project"] = project
-    todo = dict(event_context["item"])
-    todo["role"] = event_context["role"]
-    return None, todo, event_context
+        return match, todo
+    return None, None
 
 
 def execute_completion_validation_effects(

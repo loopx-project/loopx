@@ -36,6 +36,8 @@ def read_shared_goal_work_source(*, goal: dict[str, Any], project: Path,
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id,
         include_leases=True) if runtime_root is not None else None
     if canonical is None:
+        from .legacy_event_source import require_no_legacy_todo_events
+        require_no_legacy_todo_events(goal, state_path=state_path)
         if not state_path.is_file():
             raise ValueError(f"goal state file is missing for {goal_id}")
         state_text = state_path.read_text(encoding="utf-8")

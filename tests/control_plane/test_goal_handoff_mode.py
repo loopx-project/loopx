@@ -48,16 +48,10 @@ from loopx.control_plane.work_items.task_lease import (
     transfer_task_lease,
     write_lease,
 )
-from loopx.event_sourced_state import (
-    TODO_ADDED,
-    AppendOnlyStateEventStore,
-    make_state_event,
-)
 from loopx.status import parse_active_state_todos
 from loopx.todos import (
     add_goal_todo,
     complete_goal_todo,
-    list_goal_todos,
     supersede_goal_todo,
     update_goal_todo,
 )
@@ -258,28 +252,6 @@ def test_goal_handoff_mode_without_frontmatter_is_legacy() -> None:
     assert goal_handoff_mode("## Agent Todo\n") == HANDOFF_MODE_LEGACY
 
 
-def test_event_only_claim_blocks_mode_switch_without_mutating_either_source(tmp_path: Path) -> None:
-    """Unmaterialized claims are ownership facts, including during migration."""
-    registry, state = _write_workspace(tmp_path)
-    event_log = state.with_name("events.jsonl")
-    todo_id = "todo_event_only_claimed"
-    AppendOnlyStateEventStore(event_log).append(make_state_event(
-        event_id="evt-event-only-claimed", goal_id=GOAL_ID, event_type=TODO_ADDED,
-        refs={"todo_id": todo_id}, payload={"role": "agent", "title": "Complete the event-only task.",
-            "task_class": "advancement_task", "claimed_by": AGENT_A},
-        recorded_at="2026-08-01T00:01:00+00:00", producer="handoff-mode-regression"))
-    assert todo_id not in state.read_text(encoding="utf-8")
-    projected = list_goal_todos(registry_path=registry, goal_id=GOAL_ID, todo_id=todo_id)
-    assert projected["todo"]["claimed_by"] == AGENT_A
-    before = state.read_bytes(), event_log.read_bytes()
-    for dry_run in (True, False):
-        with pytest.raises(HandoffModeError) as error:
-            set_goal_handoff_mode(registry_path=registry, goal_id=GOAL_ID,
-                mode=HANDOFF_MODE_HARD_LEASE, dry_run=dry_run)
-        assert error.value.code == "handoff_mode_not_quiescent"
-        assert error.value.payload["claimed_todos"] == [
-            {"todo_id": todo_id, "claimed_by": AGENT_A, "status": "open"}]
-        assert (state.read_bytes(), event_log.read_bytes()) == before
 
 
 # ---------------------------------------------------------------------------

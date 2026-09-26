@@ -1,5 +1,11 @@
 # 第 4 讲：状态底座与可重放事实
 
+> Update (2026-09-25): the Todo `events.jsonl` API, replay, backfill and completion
+> examples below describe a retired experiment. Current Todos use legacy Markdown
+> or the selected File/SQLite authority. See the
+> [retirement contract](../../reference/protocols/event-sourced-state-contract-v0.md).
+
+
 > **本讲结论：** Canonical event/state contract 拥有长期事实；active state、status 和
 > dashboard 是可重建 read model；session context 不能替代 project memory。
 
@@ -193,7 +199,7 @@ Registry 适合保存：
 
 ### 2. Event ledger：追加式事实
 
-事件流保存“发生过什么”。协议见 `docs/reference/protocols/event-sourced-state-contract-v0.md`。
+事件流保存“发生过什么”。协议见 `docs../../reference/protocols/event-sourced-state-contract-v0.md`。
 
 代表性事件包括：
 
@@ -686,7 +692,7 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>
 | --- | --- | --- |
 | 1 | `examples/registry.example.json` | 注册配置的边界 |
 | 2 | `examples/active-goal-state.example.md` | 人可读工作台 |
-| 3 | `docs/reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
+| 3 | `docs../../reference/protocols/event-sourced-state-contract-v0.md` | 事件与 replay |
 | 4 | `docs/reference/protocols/active-state-structured-projection-v0.md` | projection 非写 API |
 | 5 | `docs/status-data-contract.md` | status read model |
 | 6 | `loopx/control_plane/todos/`、`loopx/control_plane/work_items/lifecycle.py` | todo contract 与 transition lifecycle |
@@ -694,7 +700,7 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>
 
 ## 代表性 Smoke
 
-- `examples/control_plane/event-sourced-state-api-smoke.py`
+- `tests/control_plane/test_retired_todo_event_source.py` (retirement regression)
 - `examples/control_plane/todo-lifecycle-cli-smoke.py`
 - `examples/state-projection-gap-smoke.py`
 - `examples/control_plane/todo-projection-shared-helper-smoke.py`

@@ -24,11 +24,6 @@ from loopx.control_plane.testing.cli_output_budget import (
     measure_cli_output,
     public_manifest,
 )
-from loopx.event_sourced_state import (
-    AppendOnlyStateEventStore,
-    TODO_ADDED,
-    make_state_event,
-)
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.help_surface import COMMAND_GROUPS
 from loopx.rollout_event_log import rollout_event_log_path
@@ -309,48 +304,6 @@ def _write_todo_list_limit_stress_fixture(state_file: Path) -> None:
     state_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _write_todo_list_limit_overlay_stress_fixture(state_file: Path) -> None:
-    lines = [
-        "---",
-        "status: active",
-        "updated_at: 2026-01-01T00:00:00+00:00",
-        "---",
-        "",
-        "# Todo List Limit Overlay Stress Fixture",
-        "",
-        "## Agent Todo",
-        "",
-    ]
-    for index in range(3_000):
-        lines.extend(
-            [
-                f"- [ ] Observe overlay lineage {index:04d}.",
-                (
-                    "  <!-- loopx:todo "
-                    f"todo_id=todo_overlay_{index:04d} status=open "
-                    "task_class=continuous_monitor "
-                    f"action_kind=observe_{index % 4} claimed_by=codex-alpha -->"
-                ),
-            ]
-        )
-    state_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    store = AppendOnlyStateEventStore(state_file.with_name("events.jsonl"))
-    store.append(
-        make_state_event(
-            event_id="evt-limit-overlay",
-            goal_id=GOAL_ID,
-            event_type=TODO_ADDED,
-            refs={"todo_id": "todo_overlay_0000"},
-            payload={
-                "role": "agent",
-                "title": "Overlay the first advancement step.",
-                "task_class": "continuous_monitor",
-                "claimed_by": AGENT_IDS[0],
-            },
-            recorded_at="2026-01-01T00:00:00Z",
-            producer="todo-list-limit-overlay-budget",
-        )
-    )
 
 
 def _invoke_cli(args: list[str]) -> tuple[int, str]:
@@ -1736,44 +1689,6 @@ def test_todo_list_explicit_limit_bounds_monitor_and_blocker_lanes(
     }
 
 
-def test_todo_list_explicit_limit_bounds_projection_overlay_ids(
-    tmp_path: Path,
-) -> None:
-    with _stable_budget_fixture_root(
-        tmp_path / "todo-list-limit-overlay",
-    ) as stable_root:
-        project, runtime, registry_path, state_file = _write_fixture(
-            stable_root,
-            SCENARIOS[1],
-        )
-        _write_todo_list_limit_overlay_stress_fixture(state_file)
-        command = _mode_variant_commands(
-            project=project,
-            runtime=runtime,
-            registry_path=registry_path,
-            state_file=state_file,
-            output_format="json",
-        )["todo_list_limited"]
-        exit_code, text = _invoke_cli(command)
-
-    assert exit_code == 0, text
-    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_limited"]
-    measurement = measure_cli_output(text, output_format="json")
-    assert_cli_output_mode_variant(
-        spec,
-        output_format="json",
-        text=text,
-        measurement=measurement,
-    )
-    payload = json.loads(text)
-    overlay = payload["projection_overlay"]
-    assert overlay["markdown_only_count"] == 2_999
-    assert overlay["event_only_count"] == 0
-    assert overlay["overlaid_count"] == 1
-    assert overlay["full_detail_cold_path"] == (
-        "todo list without --limit or active state"
-    )
-    assert [key for key in overlay if key.endswith("_todo_ids")] == []
 
 
 def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(

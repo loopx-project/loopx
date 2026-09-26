@@ -44,7 +44,7 @@ export type TodoCompletionValidationPlanResult =
 function projectionSource(value: unknown): TodoCompletionProjectionSource {
   return requireStringLiteral(
     value,
-    ["materialized", "event_log"] as const,
+    ["materialized"] as const,
     "projection_source",
   );
 }

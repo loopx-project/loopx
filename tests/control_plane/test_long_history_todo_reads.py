@@ -33,8 +33,8 @@ def test_public_list_preserves_completed_dependency_after_archive(tmp_path: Path
     fields = parse_active_state_todos(after.decode(), item_limit=None)
     assert fields["agent_todos"]["items"][0]["resume_ready"] is True
     for limit in [None, 1]:
-        projected = todo_summaries_from_fields(fields=fields, source="markdown_active_state", projection_fields={},
-            projection_overlay=None, rollout_events=[], roles=["agent"], status="open", todo_id="todo_successor",
+        projected = todo_summaries_from_fields(fields=fields, source="markdown_active_state",
+             rollout_events=[], roles=["agent"], status="open", todo_id="todo_successor",
             agent_id="agent-a", limit=limit)
         assert projected.todos[0]["resume_ready"] is True
         if limit is None:

@@ -262,20 +262,6 @@ def test_disabled_capture_creates_nothing(tmp_path: Path) -> None:
     assert not (runtime_root / "authority-shadow").exists()
 
 
-def test_event_only_capture_holds_without_inventing_projection_or_retiring_entries(tmp_path: Path) -> None:
-    registry, state, runtime_root = _fixture(tmp_path)
-    _record_change(registry, state, runtime_root, "Baseline coordination fact.")
-    original = state.read_text()
-    before = _files(_todo_dir(runtime_root))
-    for event_id, proposed in (("evt-noop", original), ("evt-change", original + "\n## Operator Notes\nEvent evidence.\n")):
-        capture = _capture(registry, state, runtime_root, original_text=original,
-                           write_class="todo_complete_event_projection")
-        capture.prepare(proposed, event_id=event_id)
-        capture.committed()
-        assert capture.outcome.entry_id is None
-        assert capture.outcome.skipped_reason == "event_log_writer_not_bound"
-        assert _files(_todo_dir(runtime_root)) == before
-    assert [entry.seq for entry in outbox.list_entries(_todo_dir(runtime_root))] == [1]
 
 
 def test_cursor_allocation_hint_does_not_authorize_a_gap_or_candidate_write(tmp_path: Path) -> None:
