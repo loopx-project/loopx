@@ -91,7 +91,7 @@ Without `subagent_spawn`, LoopX preserves the existing
 long-lived peer identity, leases, worktrees, and multi-round collaboration
 explicit instead of turning them into the default child-worker mechanism.
 
-## Fresh, Fork, Or Resume
+## Worker Context
 
 The temporary task coordinator chooses a worker context from the work shape:
 
@@ -99,7 +99,7 @@ The temporary task coordinator chooses a worker context from the work shape:
 | --- | --- | --- |
 | Broad mapping, prior-art search, risk discovery | Fresh worker | Objective, authority source, allowed sources, boundary, expected output, non-goals |
 | Independent review or adversarial validation | Fresh worker | Claim under review, exact evidence, validation command, acceptance and merge rules |
-| Failed-smoke repair or review-comment follow-up | Resume or fork | Worktree, failing evidence, latest patch, next bounded repair |
+| Failed-smoke repair or review-comment follow-up | Fresh worker or supported forked snapshot | Worktree, failing evidence, latest patch, next bounded repair |
 | Disjoint implementation | Fresh worker in an independent worktree | Claimed todo, allowed paths, write scope, validation, continuation policy |
 | Long-running claimed lane | Resume the registered peer task | Agent id, todo or lease, latest accepted evidence |
 | Production action or emergency rollback | No automatic worker | Operator approval, stop condition, reversible command plan |
@@ -124,7 +124,7 @@ not create durable rank:
 - `quota_gate_snapshot`: current eligibility, wait, or gate state;
 - `evidence_boundary`: allowed sources, paths, and public/private rule;
 - `writeback_spend_contract`: who may accept evidence and account for the turn;
-- `child_decision`: `continue`, `wait`, or `reuse_existing_evidence`.
+- `child_guard_policy`: `prevention_first_v0`, checked before launch.
 
 Only then should the brief include todo id, work scope, expected artifact,
 validation, and continuation policy. The compact rule is: child worker reports
@@ -138,7 +138,7 @@ subagent_control_plane_handoff_v0:
   quota_gate_snapshot: eligible
   evidence_boundary: public-safe read-only repository map
   writeback_spend_contract: child worker reports evidence only; task coordinator writes accepted state and spends
-  child_decision: continue
+  child_guard_policy: prevention_first_v0
 goal_id: example-peer-task-goal
 todo_id: todo_docs_map
 work_scope: inspect docs and return evidence paths
@@ -151,14 +151,21 @@ legitimate host metadata only to map supported native context operations. The
 host name does not admit child work. The task coordinator chooses from that
 catalog:
 
-- Codex exposes `fresh` and `resume`;
-- Claude Code exposes `fresh` through its native Task surface;
-- generic adapters expose no child capability unless the adapter declares one.
+| Host | Supported child contexts | Native operation |
+| --- | --- | --- |
+| Codex CLI | `fresh`, `forked_snapshot` | `spawn_agent` with `fork_turns="none"` or `fork_turns="all"` |
+| Claude Code | `fresh` | `Task` |
 
-`fork` stays out of the public execution catalog until a real host adapter
-proves versioned execution state, copy-on-write workspace isolation, capacity
-reservation, branch lease, held-result settlement, cancellation, and recovery.
-Context choice is advisory execution strategy and cannot widen LoopX authority.
+`forked_snapshot` copies the parent conversation context. It does not create a
+workspace snapshot, transfer a lease, or grant write authority. The Goal's
+admission must also allow `subagent_context_fork`; otherwise `fresh` remains
+the only Codex child context. Repository-writing children still need independent
+worktrees and admitted write scopes.
+
+The schema can express `resume`, but neither built-in adapter currently offers
+a native child-session resume operation. Resuming a registered peer task is a
+separate host workflow. An unknown adapter exposes no child contexts. Context
+choice cannot widen LoopX authority.
 
 ## Receipt And Enforcement Boundary
 
@@ -169,6 +176,11 @@ remains an opaque host child reference. LoopX rejects receipts that copy local
 paths or fail to bind the planned bundle, lane, task-packet digest, context,
 workspace, or effect classes. Evidence references are one or more opaque tokens
 such as `artifact:child-result`, never prose, URLs, transcripts, or local paths.
+
+The current Turn projections are `subagent_execution_topology_v0`,
+`subagent_host_execution_receipt_v0`, and
+`subagent_control_plane_reconciliation_v0`. The per-child packet remains
+`child_execution_task_packet_v0`.
 
 The prevention-first packet check is enforced before launch. Result
 reconciliation is currently observation-only: it can mark missing, rejected,

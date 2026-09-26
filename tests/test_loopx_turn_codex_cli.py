@@ -342,8 +342,8 @@ def test_codex_cli_prompt_isolates_subagent_instructions_to_enabled_request() ->
     }
     prompt = _prompt(request)
     assert "execute the separate host_adapter projection" in prompt
-    assert "fresh maps to fork_context=false" in prompt
-    assert "forked_snapshot maps to fork_context=true" in prompt
+    assert 'fresh maps to fork_turns="none"' in prompt
+    assert 'forked_snapshot maps to fork_turns="all"' in prompt
     assert "never infer native arguments inside the generic LoopX task packet" in prompt
     assert "set runtime_id to the stable host id codex-cli" in prompt
     assert "Never use an executable, workspace, session-file" in prompt

@@ -411,7 +411,7 @@ def main() -> int:
     assert codex_request["child_operations"][0]["host_adapter"] == {
         "host": "codex-cli",
         "native_operation": "spawn_agent",
-        "arguments": {"fork_context": False},
+        "arguments": {"fork_turns": "none"},
         "requires_session": False,
     }
 
