@@ -65,6 +65,7 @@ import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
 import { ManagerBrief } from "./manager-brief";
 import { WorkspaceSettingsPage } from "./workspace-settings-page";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
+import { compareProposalRecency } from "./proposal-recency";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
 import "./personal-workspace.css";
@@ -74,7 +75,11 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
     const key = [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
-    latest.set(key, proposal);
+    // Two records can describe the same draft; keep the newest by its stored
+    // time rather than whichever one this list happened to end with, since a
+    // restored list and a session-created draft arrive in opposite orders.
+    const current = latest.get(key);
+    if (!current || compareProposalRecency(proposal, current) < 0) latest.set(key, proposal);
   });
   return [...latest.values()];
 }
@@ -686,6 +691,8 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       ? teamPlanReceiptGapLanes(proposal.receipt, proposal.normalized_parameters)
       : undefined,
     title: localizedSummary,
+    updatedAt: proposal.updated_at,
+    createdAt: proposal.created_at,
   };
 }
 

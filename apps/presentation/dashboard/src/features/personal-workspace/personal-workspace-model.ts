@@ -247,6 +247,12 @@ export type WorkspaceActionPreview = {
     nextAction?: string;
     summary: string;
   };
+  // The stored typed action's own times. The workspace restores the list in
+  // `ChatActionStore.list` order, which is (`updated_at`, `proposal_id`)
+  // newest first, while a draft created in this session is appended last; a
+  // reader that needs the newest draft compares these instead of the position.
+  // See proposal-recency.ts.
+  createdAt?: string;
   previewId: string;
   primaryLabel?: string;
   errorMessage?: string;
@@ -260,6 +266,7 @@ export type WorkspaceActionPreview = {
   teamPlanTodoIds?: string[];
   title: string;
   sourceRequest?: WorkspaceActionPreviewRequest;
+  updatedAt?: string;
   workspaceCandidates?: Array<{ label: string; workspaceRef: string }>;
 };
 

@@ -94,6 +94,12 @@ function managerTeamPlanProposal() {
     proposal_id: MANAGER_PROPOSAL_ID,
     summary: MANAGER_PROPOSAL_TITLE,
     context: { kind: "manager", goal_id: GOAL_ID },
+    // Two independently stored drafts never share a timestamp, and the Goal view
+    // leads with the newest unconfirmed one. The manager-channel plan is the
+    // earlier draft, so this Goal keeps offering its own card on the first screen
+    // while the manager plan stays reachable in the conversation that stored it.
+    created_at: "2026-09-15T18:00:00Z",
+    updated_at: "2026-09-15T18:00:01Z",
     normalized_parameters: {
       ...parameters,
       plan: {
@@ -155,7 +161,7 @@ export const teamPlanScenario = {
           + ` body=${(await page.locator("body").innerText()).slice(0, 1500)}`,
         );
       }
-      check((await row.innerText()).includes("team.plan"), "the proposal row names the team.plan action kind");
+      check(await row.getAttribute("data-action-kind") === "team.plan" && (await row.innerText()).includes("团队分配"), "the proposal row is a team.plan action labelled for the owner");
 
       await row.click();
       const drawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
@@ -238,7 +244,7 @@ export const teamPlanScenario = {
         );
       }
       check(
-        (await managerCard.innerText()).includes("team.plan"),
+        await managerCard.getAttribute("data-action-kind") === "team.plan",
         "the manager conversation offers the team plan card it produced",
       );
       await page.screenshot({

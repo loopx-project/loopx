@@ -1843,11 +1843,11 @@
 /* Whole-channel attention hierarchy: conversation first, details on demand. */
 .personal-channel:has(> .goal-loopx-mode) { grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .personal-run-row { grid-template-columns: 38px minmax(0, 1fr) auto 16px; }
-.personal-activity-summary { border-bottom: 1px solid var(--pw-line); }
-.personal-activity-summary > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px; color: var(--pw-muted); font-size: 12px; flex-wrap: wrap; }
-.personal-activity-summary > summary::after { content: "+"; margin-left: auto; }
-.personal-activity-summary[open] > summary::after { content: "−"; }
-.personal-activity-summary > div { display: grid; gap: 8px; padding: 8px 0 16px; }
+.personal-activity-summary, .personal-proposal-backlog { border-bottom: 1px solid var(--pw-line); }
+.personal-activity-summary > summary, .personal-proposal-backlog > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px; color: var(--pw-muted); font-size: 12px; flex-wrap: wrap; }
+.personal-activity-summary > summary::after, .personal-proposal-backlog > summary::after { content: "+"; margin-left: auto; }
+.personal-activity-summary[open] > summary::after, .personal-proposal-backlog[open] > summary::after { content: "−"; }
+.personal-activity-summary > div, .personal-proposal-backlog > div { display: grid; gap: 8px; padding: 8px 0 16px; }
 .personal-composer-tools { margin-bottom: 6px; }
 .personal-composer-tools > summary, .personal-runtime-details > summary { cursor: pointer; color: var(--pw-muted); font-size: 12px; min-height: 44px; padding-block: 12px; }
 .personal-composer-tools .personal-quick-prompts { flex-wrap: wrap; overflow: visible; }
