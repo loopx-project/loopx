@@ -3,6 +3,8 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { type JsonObject } from "../effect_program.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
 import {leaseEpoch, utcIsoformat, type LeaseRecord} from "./task_lease_acquire.ts";
+import {normalizeTodoRepository} from "../todos/work_requirements.ts";
+import {leaseWriteRepository, leaseRepositoryRejection} from "./task_lease_repository.ts";
 
 export const TASK_LEASE_LIFECYCLE_DECISION_OPERATIONS = [
   "renew",
@@ -18,6 +20,7 @@ export type TaskLeaseLifecycleDecisionOutcome =
   | "rejected";
 
 export interface TaskLeaseLifecycleDecisionTodo {
+  task_repository?: string | null;
   todo_id: string;
   status: string;
   claimed_by: string | null;
@@ -25,6 +28,7 @@ export interface TaskLeaseLifecycleDecisionTodo {
 }
 
 export interface TaskLeaseLifecycleDecisionLease {
+  write_repository?: string | null;
   present: boolean;
   active: boolean;
   status: string | null;
@@ -123,6 +127,7 @@ function decodeTodo(value: unknown): TaskLeaseLifecycleDecisionTodo | null {
   const todo = requireJsonObject(value, "task lease lifecycle decision todo");
   return {
     todo_id: stringValue(todo.todo_id, "todo.todo_id"),
+    task_repository: normalizeTodoRepository(todo.task_repository),
     status: stringValue(todo.status, "todo.status"),
     claimed_by: nullableString(todo.claimed_by, "todo.claimed_by"),
     excluded_agents: stringArray(todo.excluded_agents, "todo.excluded_agents"),
@@ -144,6 +149,7 @@ function decodeLease(value: unknown): TaskLeaseLifecycleDecisionLease | null {
     version: integerValue(lease.version, "lease.version"),
     lease_epoch: integerValue(lease.lease_epoch, "lease.lease_epoch"),
     write_scopes: stringArray(lease.write_scopes, "lease.write_scopes"),
+    ...(lease.write_repository == null ? {} : {write_repository: leaseWriteRepository(lease.write_repository)}),
     acquire_ttl_seconds: optionalInteger(
       lease.acquire_ttl_seconds,
       "lease.acquire_ttl_seconds",
@@ -233,6 +239,8 @@ export function decideTaskLeaseLifecycle(
       input.registered_agents,
     );
     if (rejection !== null) return result("rejected", rejection);
+    const repositoryRejection = leaseRepositoryRejection(input.todo, lease);
+    if (repositoryRejection !== null) return result("rejected", repositoryRejection);
   }
   const actualVersion = lease !== null && lease.present ? lease.version : 0;
   if (actualVersion !== command.expected_version) {

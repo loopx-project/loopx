@@ -12,6 +12,7 @@ import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {leaseEpoch} from "../work_items/task_lease_acquire.ts";
+import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {evaluateCoordinationTerminalFence, COORDINATION_TERMINAL_FENCE_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
 
 export interface TaskLeaseProof {
@@ -123,6 +124,9 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: {
     requires_flags: ["--task-lease-idempotency-key", "--task-lease-expected-version"],
     proof_source: "current_owner_lease_readback"};
   if (lease?.active) {
+    const repositoryRejection = leaseRepositoryRejection(facts.todo, lease);
+    if (repositoryRejection !== null) return {...base, action: "resolve_acquire_rejection",
+      reason_code: repositoryRejection, reason: "Todo repository differs from its frozen execution grant. Reconcile the owning lifecycle; inspection cannot grant replacement authority."};
     const eligible = sameOwner && leaseOwnerRejection(facts.todo,
       input.actor_agent_id, input.registered_agents) === null;
     return {...base, action: eligible ? "inspect_current_proof" : "reconcile_lease_owner",

@@ -787,6 +787,7 @@ async function commitTerminalResult(
 function todoFact(todo: JsonObject): JsonObject {
   return {
     todo_id: todo.todo_id,
+    task_repository: todo.task_repository ?? null,
     status: todo.status,
     role: todo.role,
     task_class: todo.task_class ?? null,
@@ -820,6 +821,7 @@ function leaseFact(lease: JsonObject | undefined, now: Date): JsonObject | null 
     version: leaseInteger(lease, "version") ?? 0,
     lease_epoch: leaseEpoch(lease),
     write_scopes: normalizeWriteScopes(lease.write_scopes),
+    ...(lease.write_repository == null ? {} : {write_repository: lease.write_repository}),
     acquire_ttl_seconds: leaseInteger(lease, "acquire_ttl_seconds"),
   };
 }

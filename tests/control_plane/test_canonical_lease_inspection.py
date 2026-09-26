@@ -17,7 +17,7 @@ GOAL = "goal-lease-reader"
 TODO = "todo_current"
 
 
-def _fixture(root: Path, provider: str, *, retained: bool = True, excluded: bool = False, todo_patch=None, lease_patch=None):
+def _fixture(root: Path, provider: str, *, retained: bool = True, excluded: bool = False, todo_patch=None, lease_patch=None, peer: bool = False):
     runtime = root / "runtime"
     state = root / "ACTIVE_GOAL_STATE.md"
     state.write_text("---\nhandoff_mode: soft_claim\n---\n# Obsolete display\n")
@@ -34,7 +34,10 @@ def _fixture(root: Path, provider: str, *, retained: bool = True, excluded: bool
              "expires_at": "2099-01-01T00:00:00Z", "lease_epoch": 3, "version": 2}
     todo.update(todo_patch or {})
     lease.update(lease_patch or {})
-    projection = build_todo_runtime_shadow_projection(goal_id=GOAL, todos=[todo],
+    todos = [todo]
+    if peer:
+        todos.append({**todo, "todo_id": "todo_peer", "task_repository": "git:github.com/team/b"})
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL, todos=todos,
         leases=[lease] if retained else [], handoff_mode="hard_lease")
     # Preserve retained provider history even when a legacy capture would omit it.
     projection["leases"] = [lease] if retained else []
@@ -220,3 +223,35 @@ def test_legacy_inspection_reloads_lease_after_demanding_todo_facts(tmp_path, mo
     assert result["active"] is False
     assert result["lease"]["status"] == "released"
     assert "todo_projection_required" not in result
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_repository_scoped_cli_acquire_and_json_markdown_readback(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _, obsolete = _fixture(tmp_path, provider, retained=False, peer=True,
+        todo_patch={"task_repository": "git:github.com/team/a", "required_write_scopes": ["tests/**"]})
+    obsolete_before = obsolete.read_bytes()
+
+    def cli(action, todo, *args, output="json"):
+        process = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--format", output, "task-lease", action, "--goal-id", GOAL, "--todo-id", todo, *args],
+            capture_output=True, text=True, timeout=30)
+        assert process.returncode == 0, process.stderr + process.stdout
+        return json.loads(process.stdout) if output == "json" else process.stdout
+
+    grants = []
+    for todo, agent, name in [(TODO, "agent-a", "a"), ("todo_peer", "agent-b", "b")]:
+        acquired = cli("acquire", todo, "--owner", agent, "--idempotency-key", f"repository-{name}",
+            "--expected-version", "0", "--ttl-seconds", "120", "--write-scope", "tests/**")
+        grants.append((acquired, name))
+    for acquired, name in grants:
+        assert acquired["lease"]["write_repository"] == f"git:github.com/team/{name}"
+        assert acquired["lease"]["write_scopes"] == ["tests/**"]
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL, include_leases=True)
+    for todo, name in [(TODO, "a"), ("todo_peer", "b")]:
+        observed = cli("inspect", todo)
+        assert observed["active"] is True
+        assert observed["lease"]["write_repository"] == f"git:github.com/team/{name}"
+        assert f"write_repository: `git:github.com/team/{name}`" in cli("inspect", todo, output="markdown")
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL, include_leases=True) == before
+    assert obsolete.read_bytes() == obsolete_before

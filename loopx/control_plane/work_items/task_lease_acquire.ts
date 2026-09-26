@@ -64,6 +64,7 @@ export interface TodoFact {
   task_class?: string | null;
   bound_agent?: string | null;
   blocks_agent?: string | null;
+  task_repository?: string | null;
   /** Fields explicitly supplied by a legacy caller snapshot, if known. */
   provided_fields?: readonly TodoFactField[];
 }
@@ -97,6 +98,7 @@ export interface LeaseRecord extends JsonObject {
   owner?: unknown;
   idempotency_key?: unknown;
   write_scopes?: unknown;
+  write_repository?: unknown;
   acquire_ttl_seconds?: unknown;
   version?: unknown;
   lease_epoch?: unknown;

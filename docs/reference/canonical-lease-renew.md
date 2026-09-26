@@ -25,6 +25,49 @@ uses all retained records, not the bounded operator display. Atomic
 Standalone acquire uses requested scopes; atomic claim retains its existing
 Todo-required scope intent. Neither operation expands a permission grant.
 
+## Repository-relative scope identity
+
+New canonical acquisitions freeze the canonical Todo's normalized
+`task_repository` as `lease.write_repository`. There is no caller repository
+override and no inference from the CLI working directory. Within one Goal,
+overlapping relative paths conflict unless **both** execution grants have known,
+different repository identities. Host/path case aliases remain overlapping.
+The existing complete-head scan, owner eligibility, TTL, generations, CAS and
+receipt identities are unchanged; an empty scope set still does not conflict.
+
+Old grants without `write_repository` (or with null) remain unknown and
+conservatively overlap any repository. Reading or renewing them does not
+backfill a namespace from today's Todo. Fresh acquisition after legal retirement
+can freeze the current Todo identity. Malformed frozen identities fail closed.
+Renewal, transfer and release preserve the frozen value and historical receipts.
+Current execution proof, acquire replay and inspection reject known repository
+drift with `lease_repository_divergence`; cleanup still uses exact owner/key/version.
+Changing retained work requirements is not a metadata-edit shortcut.
+
+JSON inspection exposes `lease.write_repository`; Markdown lease readback also
+shows the identity or `unknown (conservative overlap)`. This is a Goal-local,
+logical repository mutex, not a physical filesystem/symlink alias check or a
+cross-Goal lock. Unknown legacy storage remains conservative. No configuration,
+provider promotion or automatic cross-agent dispatch is added. CLI and native
+provider inspection cover this boundary; broader frontend/Lark collaboration
+delivery remains separate work, not an end-to-end completion claim.
+
+### 仓库相对路径的冲突边界
+
+新的 canonical 租约从权威 Todo 的 `task_repository` 冻结
+`lease.write_repository`，不接受调用者覆盖，也不从 CLI 当前目录猜测。同一 Goal
+内，只有双方都是已知且不同的仓库，才隔离同名相对路径；大小写别名仍互斥。
+完整 head 扫描、owner 资格、TTL、generation、CAS 与回执身份保持原规则，空 scope
+仍不产生写冲突。旧记录缺少该字段或为 null 时保持未知、保守互斥，读回和续租不
+回填；合法退役后的新执行才冻结当前仓库。损坏身份拒绝执行，续租、转交和释放
+保留冻结值与原历史回执。当前执行证明、领取重放与 inspect 拒绝已知仓库漂移
+（`lease_repository_divergence`）；清理仍凭精确 owner/key/version，不能借 metadata
+编辑替换已有执行契约。
+
+JSON 与 Markdown 读回同一仓库字段或未知状态。这只是 Goal 内逻辑仓库互斥，
+不识别物理目录、软链接别名，也不是跨 Goal 锁；不新增配置、promotion 或自动
+委派。CLI 与 native provider 检查已覆盖该边界，完整前端/Lark 协作旅程仍需单独交付。
+
 ## Operate the current lease
 
 Read the current canonical lease and use its owner, execution key and version:
