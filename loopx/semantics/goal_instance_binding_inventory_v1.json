@@ -16,19 +16,23 @@
       "locator": "<runtime_root>/chat/sessions/<session_id>/session.json",
       "revision_signal": "last_activity_at",
       "content_digest_signal": "none",
-      "observed_reference": "goal_id",
+      "observed_reference": "goal_id + goal_instance_id",
       "producer_sites": [
         "loopx/attached_session.py::bind_attached_agent_session",
-        "loopx/chat_store.py::ChatSessionStore.create_session"
+        "loopx/attached_session.py::enqueue_attached_agent_turn",
+        "loopx/chat_store.py::ChatSessionStore.create_session",
+        "loopx/control_plane/goals/chat_session_lifecycle.ts::decideChatSessionLifecycle"
       ],
       "consumer_sites": [
+        "loopx/attached_session.py::claim_attached_agent_turn",
+        "loopx/attached_session.py::complete_attached_agent_turn",
         "loopx/chat_runtime.py::ChatRuntimeController.resume_session"
       ],
-      "effect_boundary": "loopx/attached_session.py::bind_attached_agent_session",
+      "effect_boundary": "loopx/control_plane/goals/chat_session_lifecycle.ts::decideChatSessionLifecycle",
       "authority_role": "runtime_session_binding",
-      "current_identity_strength": "goal_alias_only",
-      "cleanup_support": "session_close",
-      "m1_disposition": "alias_only_inventory",
+      "current_identity_strength": "exact_goal_ref_enforced",
+      "cleanup_support": "historical_completion_and_session_close",
+      "m1_disposition": "m3_qualified",
       "target_milestone": "M3"
     },
     {

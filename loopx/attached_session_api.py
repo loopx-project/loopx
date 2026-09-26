@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .attached_session import bind_attached_agent_session
+from .attached_session import (
+    bind_attached_agent_session,
+    load_attached_session_registry,
+)
 
 
 def _compact_id(value: Any, *, limit: int = 160) -> str:
@@ -60,10 +63,15 @@ class AttachedSessionRequestMixin:
             missing = [key for key, value in required.items() if not value]
             if missing:
                 raise ValueError(f"missing attached session fields: {', '.join(missing)}")
-            registry, _goal = self._registry_and_goal(required["goal_id"])
+            registry_path = getattr(self.server, "registry_path", None)
+            if registry_path is None:
+                registry, _goal = self._registry_and_goal(required["goal_id"])
+            else:
+                registry = load_attached_session_registry(registry_path)
             packet = bind_attached_agent_session(
                 store=self.server.chat_store,
                 registry=registry,
+                registry_path=registry_path,
                 goal_id=required["goal_id"],
                 agent_id=required["agent_id"],
                 host_surface=required["host_surface"],

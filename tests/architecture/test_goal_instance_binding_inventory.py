@@ -50,6 +50,7 @@ OBSERVED_OWNER_IDS = {
     "global_goal_projection",
     "project_registry_goal",
 }
+QUALIFIED_OWNER_IDS = {"attached_host_chat_session"}
 TYPESCRIPT_DECLARATION = re.compile(
     r"^(?:export\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
     re.MULTILINE,
@@ -156,6 +157,10 @@ def test_m1_observation_claims_are_bounded_to_the_selected_lifecycle() -> None:
                 "build_goal_action_catalog"
             )
             assert owner["target_milestone"] == "M2"
+        elif owner["owner_id"] in QUALIFIED_OWNER_IDS:
+            assert owner["m1_disposition"] == "m3_qualified"
+            assert owner["current_identity_strength"] == "exact_goal_ref_enforced"
+            assert owner["target_milestone"] == "M3"
         else:
             assert owner["m1_disposition"] == "alias_only_inventory"
             assert owner["current_identity_strength"] == "goal_alias_only"

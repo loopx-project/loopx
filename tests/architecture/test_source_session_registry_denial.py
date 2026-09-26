@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIRECT_LOADER_ALLOWLIST = {
     "loopx/authority.py",
+    "loopx/attached_session.py",
     "loopx/bootstrap.py",
     "loopx/claude_goal_mode/scripts/connect.py",
     "loopx/configure_goal.py",
@@ -31,9 +32,17 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
             callers.add(path.relative_to(REPO_ROOT).as_posix())
 
     assert callers == DIRECT_LOADER_ALLOWLIST
-    for relative in callers - {"loopx/control_plane/projects/registry.py"}:
+    for relative in callers - {
+        "loopx/attached_session.py",
+        "loopx/control_plane/projects/registry.py",
+    }:
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert "require_runtime_compatible_project_registry(" in source, relative
+    attached_owner = (REPO_ROOT / "loopx/attached_session.py").read_text(
+        encoding="utf-8"
+    )
+    assert "SOURCE_SESSION_PROFILE_ID" in attached_owner
+    assert "source_session_goal_lifetime" in attached_owner
 
 
 def test_generic_registry_decoder_enforces_source_session_denial() -> None:
