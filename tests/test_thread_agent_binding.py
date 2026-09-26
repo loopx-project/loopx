@@ -16,6 +16,7 @@ from loopx.thread_agent_binding import (
     normalize_thread_id,
     resolve_registry_thread_agent_binding,
     resolve_thread_agent_binding,
+    summarize_agent_binding_routes,
     unbind_thread_agent_in_registry,
 )
 
@@ -688,3 +689,127 @@ def test_unbind_is_idempotent_and_expected_agent_mismatch_fails_closed(
     assert missing["ok"] is True
     assert missing["changed"] is False
     assert path.read_bytes() == before
+
+
+def _route_binding(thread_id: str, host_surface: str, agent_id: str) -> dict[str, str]:
+    return {"thread_id": thread_id, "host_surface": host_surface, "agent_id": agent_id}
+
+
+def _route_goals(*bindings: dict[str, object]) -> list[dict[str, object]]:
+    return [{"coordination": {"thread_agent_bindings": list(bindings)}}]
+
+
+def test_summarize_agent_binding_routes_reports_every_candidate_in_first_seen_order():
+    goals = _route_goals(
+        _route_binding("thread-1", "codex-cli", "agent-a"),
+        _route_binding("thread-2", "claude-code", "agent-a"),
+    )
+
+    summary = summarize_agent_binding_routes(goals, agent_id="agent-a")
+
+    assert summary["outcome"] == "multiple_candidates"
+    assert summary["candidate_count"] == 2
+    assert summary["candidates"] == [
+        {"thread_id": "thread-1", "host_surface": "codex-cli"},
+        {"thread_id": "thread-2", "host_surface": "claude-code"},
+    ]
+    # A candidate summary selects nothing: the caller still has to resolve a link.
+    assert summary["address_shared"] is False
+    assert summary["scope"] == "goals_supplied"
+    assert summary["provenance"] == {
+        "source": "coordination.thread_agent_bindings",
+        "goals_supplied": 1,
+        "selects_route": False,
+    }
+
+
+def test_summarize_agent_binding_routes_reports_no_candidate_without_bindings():
+    summary = summarize_agent_binding_routes([], agent_id="agent-a")
+
+    assert summary["outcome"] == "no_candidate"
+    assert summary["candidates"] == []
+    assert summary["candidate_count"] == 0
+    assert summary["limitations"] == []
+
+
+@pytest.mark.parametrize("agent_id", [None, "", 17, "x" * 200])
+def test_summarize_agent_binding_routes_rejects_an_unusable_agent_id(agent_id: object):
+    goals = _route_goals(_route_binding("thread-1", "codex-cli", "agent-a"))
+
+    summary = summarize_agent_binding_routes(goals, agent_id=agent_id)
+
+    assert summary["outcome"] == "no_candidate"
+    assert summary["candidates"] == []
+    assert summary["agent_id"] is None
+
+
+def test_summarize_agent_binding_routes_counts_a_republished_binding_once():
+    goals = [
+        {
+            "coordination": {
+                "thread_agent_bindings": [
+                    _route_binding("thread-1", "codex-cli", "agent-a")
+                ]
+            }
+        },
+        {
+            "coordination": {
+                "thread_agent_bindings": [
+                    _route_binding("thread-1", "codex-cli", "agent-a")
+                ]
+            }
+        },
+    ]
+
+    summary = summarize_agent_binding_routes(goals, agent_id="agent-a")
+
+    assert summary["outcome"] == "single_candidate"
+    assert summary["candidate_count"] == 1
+    assert summary["provenance"]["goals_supplied"] == 2
+
+
+def test_summarize_agent_binding_routes_caps_the_list_and_keeps_the_true_count():
+    bindings = [
+        _route_binding(f"thread-{index}", "codex-cli", "agent-a") for index in range(5)
+    ]
+
+    summary = summarize_agent_binding_routes(_route_goals(*bindings), agent_id="agent-a")
+
+    assert summary["candidate_count"] == 5
+    assert len(summary["candidates"]) == 3
+    assert summary["outcome"] == "multiple_candidates"
+    assert "candidates_truncated_at_cap" in summary["limitations"]
+
+
+def test_summarize_agent_binding_routes_flags_an_address_shared_with_another_agent():
+    goals = _route_goals(
+        _route_binding("thread-1", "codex-cli", "agent-a"),
+        _route_binding("thread-1", "codex-cli", "agent-b"),
+    )
+
+    summary = summarize_agent_binding_routes(goals, agent_id="agent-a")
+
+    assert summary["outcome"] == "single_candidate"
+    assert summary["address_shared"] is True
+    # The forward resolver answers `conflict` for exactly this data.
+    forward = resolve_thread_agent_binding(
+        goals[0], host_surface="codex-cli", thread_id="thread-1"
+    )
+    assert forward["status"] == "conflict"
+
+
+def test_summarize_agent_binding_routes_excludes_other_agents_and_malformed_rows():
+    bindings = [
+        _route_binding("thread-1", "codex-cli", "agent-a"),
+        _route_binding("thread-2", "codex-cli", "agent-b"),
+        {"thread_id": "thread-3", "agent_id": "agent-a"},
+        "not-a-binding",
+    ]
+
+    summary = summarize_agent_binding_routes(_route_goals(*bindings), agent_id="agent-a")
+
+    assert summary["candidate_count"] == 1
+    assert summary["candidates"] == [
+        {"thread_id": "thread-1", "host_surface": "codex-cli"}
+    ]
+    assert summary["address_shared"] is False

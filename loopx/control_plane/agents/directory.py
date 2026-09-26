@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from ...thread_agent_binding import summarize_agent_binding_routes
 from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.time import now_utc_iso
 from ..todos.contract import normalize_todo_id
@@ -167,6 +168,8 @@ def build_peer_agent_directory(
         for agent_id in (_compact(row.get("agent_id"), limit=120) for row in agent_rows)
         if agent_id
     ]
+    # The bindings live on the same run history the rows are projected from.
+    goals = _as_mapping(payload.get("run_history")).get("goals")
 
     limitations = [
         LIMITATION_PRESENCE_PROVIDER_UNAVAILABLE,
@@ -204,6 +207,10 @@ def build_peer_agent_directory(
             "registered": True,
             "agent_model": _compact(row.get("agent_model"), limit=60),
             "work": work,
+            # What the recorded bindings say about addressing this peer: a bounded
+            # candidate summary plus the true distinct count, never one binding
+            # silently selected for the row. It selects no route either.
+            "peer_route": summarize_agent_binding_routes(goals, agent_id=agent_id),
             "observation_refs": _compact_refs(
                 row.get("evidence_refs"), limit=MAX_OBSERVATION_REFS
             ),

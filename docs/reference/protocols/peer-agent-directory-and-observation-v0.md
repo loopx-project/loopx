@@ -121,7 +121,25 @@ an identity.
         "observed_at": "2026-09-16T09:59:58Z",
         "basis": "provider_detection"
       },
-      "observation_limits": ["provider_scrollback_bounded"]
+      "observation_limits": ["provider_scrollback_bounded"],
+      "peer_route": {
+        "schema_version": "loopx_agent_binding_route_summary_v0",
+        "agent_id": "codex-alpha",
+        "outcome": "multiple_candidates",
+        "address_shared": false,
+        "candidate_count": 5,
+        "candidates": [
+          { "thread_id": "thread-7f3", "host_surface": "codex-cli" },
+          { "thread_id": "thread-91c", "host_surface": "traex" }
+        ],
+        "scope": "goals_supplied",
+        "limitations": ["candidates_truncated_at_cap"],
+        "provenance": {
+          "source": "coordination.thread_agent_bindings",
+          "goals_supplied": 2,
+          "selects_route": false
+        }
+      }
     }
   ],
   "limitations": ["presence_is_advisory", "presence_stale_after_provider_restart"]
@@ -139,7 +157,17 @@ Rules:
 - a provider's own in-space proof of context (for example an environment flag and
   injected pane identifiers) may strengthen "I am inside this space". It never
   replaces registry registration, and a failure of that proof means the reader
-  reports `unknown`, not `absent`.
+  reports `unknown`, not `absent`;
+- `peer_route` reports what the supplied Goals record about addressing that peer.
+  `candidates` is a bounded, first-seen list of distinct `{thread_id,
+  host_surface}` entries and `candidate_count` is the full distinct total, so a
+  list shorter than the count reads as a cap rather than as a disproved
+  remainder. Neither field selects a route: `outcome` is `single_candidate`,
+  `multiple_candidates` or `no_candidate`, and `address_shared` marks a candidate
+  whose host thread also names a different registered Agent — the condition the
+  forward resolver answers `conflict` for. `scope` is `goals_supplied`, so a lone
+  candidate here is not a project-level uniqueness claim. A candidate withheld by
+  the public boundary stays counted and is declared in `limitations`.
 
 ## Presence Vocabulary
 

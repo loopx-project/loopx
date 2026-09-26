@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .control_plane.projects.registry_codec import mutate_project_registry
+from .control_plane.runtime.public_safety import public_safe_compact_text
 from .control_plane.todos.contract import normalize_todo_claimed_by
 from .history import load_registry
 from .registry import find_registry_goal, registry_goals
@@ -17,6 +18,16 @@ THREAD_ID_MAX_LENGTH = 128
 THREAD_BINDING_SCHEMA_VERSION = "loopx_thread_agent_binding_v0"
 THREAD_BINDING_RESOLUTION_SCHEMA_VERSION = "loopx_thread_agent_binding_resolution_v0"
 HOST_SESSION_LOCATOR_SCHEMA_VERSION = "loopx_host_session_locator_v0"
+AGENT_BINDING_ROUTE_SUMMARY_SCHEMA_VERSION = "loopx_agent_binding_route_summary_v0"
+AGENT_BINDING_ROUTE_SCOPE_GOALS_SUPPLIED = "goals_supplied"
+# Bounded display budget: a row reports a readable candidate list and the true
+# distinct total, so a shorter list reads as a cap rather than as a remainder.
+AGENT_BINDING_ROUTE_CANDIDATE_LIMIT = 3
+AGENT_BINDING_ROUTE_OUTCOME_SINGLE = "single_candidate"
+AGENT_BINDING_ROUTE_OUTCOME_MULTIPLE = "multiple_candidates"
+AGENT_BINDING_ROUTE_OUTCOME_NONE = "no_candidate"
+AGENT_BINDING_ROUTE_LIMITATION_WITHHELD = "candidate_withheld_by_public_boundary"
+AGENT_BINDING_ROUTE_LIMITATION_TRUNCATED = "candidates_truncated_at_cap"
 CODEX_THREAD_HOST_SURFACES = frozenset(
     {
         "codex-app",
@@ -166,6 +177,91 @@ def resolve_thread_agent_binding(
         base["status"] = "conflict"
         base["reason"] = "one thread is bound to multiple agent lanes"
     return base
+
+
+def summarize_agent_binding_routes(goals: Any, *, agent_id: Any) -> dict[str, Any]:
+    """Summarize the recorded bindings that address one Agent.
+
+    This is the reverse direction of :func:`resolve_thread_agent_binding`, and it
+    keeps the same discipline: it reports every binding the supplied Goals record
+    for the Agent, in first-seen order, and never lets array order or recency
+    stand in for "the route that should receive new work". It selects no
+    execution route and grants no lease, capability or cross-host resume
+    authority; this module remains the owner of exact-link resolution.
+
+    `scope` is `goals_supplied`, so a single candidate here is a statement about
+    these Goals only, not a project-level uniqueness claim. An unknown, empty or
+    malformed `agent_id` returns `no_candidate` instead of matching loosely.
+    """
+
+    requested = normalize_todo_claimed_by(agent_id)
+    goals_supplied = 0
+    candidates: list[tuple[tuple[str, str], dict[str, str]]] = []
+    seen_addresses: set[tuple[str, str]] = set()
+    other_agent_addresses: set[tuple[str, str]] = set()
+    withheld = 0
+
+    for goal in goals if isinstance(goals, list) else []:
+        if not isinstance(goal, dict):
+            continue
+        goals_supplied += 1
+        if not requested:
+            continue
+        for binding in _bindings_for_goal(goal):
+            address = (binding["host_surface"], binding["thread_id"])
+            if binding["agent_id"] != requested:
+                other_agent_addresses.add(address)
+                continue
+            if address in seen_addresses:
+                # A binding republished across Goals is one candidate.
+                continue
+            seen_addresses.add(address)
+            thread_id = public_safe_compact_text(
+                binding["thread_id"], limit=THREAD_ID_MAX_LENGTH
+            )
+            host_surface = public_safe_compact_text(binding["host_surface"], limit=64)
+            if not thread_id or not host_surface:
+                # Withheld by the public boundary, still counted: the row must not
+                # present a boundary as a disproved remainder.
+                withheld += 1
+                continue
+            candidates.append(
+                (address, {"thread_id": thread_id, "host_surface": host_surface})
+            )
+
+    if not seen_addresses:
+        outcome = AGENT_BINDING_ROUTE_OUTCOME_NONE
+    elif len(seen_addresses) == 1:
+        outcome = AGENT_BINDING_ROUTE_OUTCOME_SINGLE
+    else:
+        outcome = AGENT_BINDING_ROUTE_OUTCOME_MULTIPLE
+
+    limitations: list[str] = []
+    if withheld:
+        limitations.append(AGENT_BINDING_ROUTE_LIMITATION_WITHHELD)
+    if len(candidates) > AGENT_BINDING_ROUTE_CANDIDATE_LIMIT:
+        limitations.append(AGENT_BINDING_ROUTE_LIMITATION_TRUNCATED)
+
+    return {
+        "schema_version": AGENT_BINDING_ROUTE_SUMMARY_SCHEMA_VERSION,
+        "agent_id": requested,
+        "outcome": outcome,
+        "address_shared": any(
+            address in other_agent_addresses for address, _ in candidates
+        ),
+        "candidate_count": len(seen_addresses),
+        "candidates": [
+            candidate
+            for _, candidate in candidates[:AGENT_BINDING_ROUTE_CANDIDATE_LIMIT]
+        ],
+        "scope": AGENT_BINDING_ROUTE_SCOPE_GOALS_SUPPLIED,
+        "limitations": limitations,
+        "provenance": {
+            "source": "coordination.thread_agent_bindings",
+            "goals_supplied": goals_supplied,
+            "selects_route": False,
+        },
+    }
 
 
 def _registry_thread_binding_request(

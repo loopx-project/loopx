@@ -150,3 +150,63 @@ def test_truncated_directory_declares_the_rows_it_omitted() -> None:
     )
     assert packet["omitted_row_count"] > 0
     assert LIMITATION_ROWS_TRUNCATED in packet["limitations"]  # type: ignore[operator]
+
+
+def _payload_with_bindings(bindings: list[dict[str, str]]) -> dict[str, object]:
+    payload = _status_payload()
+    goals = payload["run_history"]["goals"]  # type: ignore[index]
+    goals[0]["coordination"]["thread_agent_bindings"] = bindings  # type: ignore[index]
+    return payload
+
+
+def test_directory_rows_publish_peer_route_candidates_without_selecting_one():
+    payload = _payload_with_bindings(
+        [
+            {
+                "thread_id": "thread-1",
+                "host_surface": "codex-cli",
+                "agent_id": WORKING_AGENT,
+            },
+            {
+                "thread_id": "thread-2",
+                "host_surface": "claude-code",
+                "agent_id": WORKING_AGENT,
+            },
+        ]
+    )
+
+    packet = build_peer_agent_directory(payload)
+
+    row = next(item for item in packet["rows"] if item["agent_id"] == WORKING_AGENT)
+    route = row["peer_route"]
+    assert route["schema_version"] == "loopx_agent_binding_route_summary_v0"
+    assert route["outcome"] == "multiple_candidates"
+    assert route["candidate_count"] == 2
+    assert route["candidates"] == [
+        {"thread_id": "thread-1", "host_surface": "codex-cli"},
+        {"thread_id": "thread-2", "host_surface": "claude-code"},
+    ]
+    assert route["provenance"]["selects_route"] is False
+    # The packet's existing non-authorization guarantees are unchanged.
+    assert packet["authority"]["writes"] is False
+    assert packet["scope"]["caller_membership"] == "local_surface"
+    assert LIMITATION_LEASE_STATE_NOT_PROJECTED in packet["limitations"]
+
+
+def test_directory_row_reports_no_candidate_for_an_agent_without_bindings():
+    payload = _payload_with_bindings(
+        [
+            {
+                "thread_id": "thread-1",
+                "host_surface": "codex-cli",
+                "agent_id": IDLE_AGENT,
+            }
+        ]
+    )
+
+    packet = build_peer_agent_directory(payload)
+
+    row = next(item for item in packet["rows"] if item["agent_id"] == WORKING_AGENT)
+    assert row["peer_route"]["outcome"] == "no_candidate"
+    assert row["peer_route"]["candidates"] == []
+    assert row["peer_route"]["candidate_count"] == 0
