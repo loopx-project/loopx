@@ -120,3 +120,29 @@ def test_upgrade_cli_requires_migration_and_keeps_verified_backup(tmp_path, monk
     assert json.loads((backup / "manifest.json").read_text())["cursor"] == document["cursor"]
     assert json.loads(store.read_text())["provider_revision"] == document["provider_revision"]
     subprocess.run([*command, "--require-current"], capture_output=True, text=True, check=True, timeout=60)
+
+
+def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp_path, monkeypatch):
+    from loopx.cli_commands import authority_archive
+
+    common, project = tmp_path / "common", tmp_path / "project"
+    common.mkdir()
+    (project / ".loopx").mkdir(parents=True)
+    project_registry = project / ".loopx" / "registry.json"
+    project_registry.write_text(json.dumps({"common_runtime_root": ".loopx/runtime", "goals": [
+        {"id": "markdown-only"}, {"id": "another-goal"}]}))
+    global_registry = common / "registry.global.json"
+    global_registry.write_text(json.dumps({"goals": [
+        {"id": "markdown-only", "source_registry": str(project_registry)},
+        {"id": "another-goal", "source_registry": str(project_registry)},
+        {"id": "disconnected", "source_registry": str(tmp_path / "removed" / "registry.json")},
+    ]}))
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    monkeypatch.setattr(authority_archive, "DEFAULT_RUNTIME_ROOT", common)
+    before = {p: p.read_bytes() for p in (global_registry, project_registry)}
+    roots = authority_archive.authority_upgrade_roots(project_registry, None, all_known=True)
+    assert roots == sorted(map(str, [common, project / ".loopx/runtime"]))
+    assert authority_archive.authority_upgrade_roots(project_registry, None, all_known=False) == [str(project / ".loopx/runtime")]
+    assert all(p.read_bytes() == data for p, data in before.items())
+    assert not (project / ".loopx/runtime").exists()
+    assert not (common / "authority").exists()
