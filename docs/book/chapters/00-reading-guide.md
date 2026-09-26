@@ -108,7 +108,7 @@ lifecycle 选择，不是所有贡献的默认终点。
 
 ## 版本基线
 
-当前内容面向 LoopX release `v1.2.0`；本地命令示例已按 `loopx 1.2.0` 的
+当前内容面向 LoopX release `v1.2.1`；本地命令示例已按 `loopx 1.2.1` 的
 公开 CLI 与协议表面复核。该版本要求 Python 3.11+ 与 Node.js 22.22.3+。LoopX 会自动管理
 空闲后退出的 TypeScript Effect runtime，用户不需要手工维护 daemon。
 
