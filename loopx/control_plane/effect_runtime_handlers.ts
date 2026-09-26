@@ -231,6 +231,10 @@ import {
   projectExternalEvidenceRetirement,
   recordExternalEvidenceReceiptObservation,
 } from "./capabilities/external_evidence.ts";
+import {
+  planRewardMemoryDecision,
+  projectRewardMemoryDecision,
+} from "./capabilities/reward_memory_decision.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
@@ -726,6 +730,8 @@ export function createEffectRuntimeHandlers(
     ["external_evidence.receipt", recordExternalEvidenceReceiptObservation],
     ["external_evidence.admit", evaluateExternalEvidenceAdmission],
     ["external_evidence.retire", projectExternalEvidenceRetirement],
+    ["reward_memory.decision.plan", planRewardMemoryDecision],
+    ["reward_memory.decision.project", projectRewardMemoryDecision],
     [
       "manager.return_delivery.normalize_attempt",
       (params) => normalizeManagerReturnDeliveryAttempt(params.attempt),
