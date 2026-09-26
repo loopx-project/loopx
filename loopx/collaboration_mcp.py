@@ -20,6 +20,7 @@ import sys
 import time
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -309,11 +310,27 @@ class Delegations:
     def __init__(self, root: Path, registry: Path, goal_id: str, agent_id: str, config: Path):
         self.root, self.registry = root.resolve(), registry.resolve()
         self.goal_id, self.agent_id, self.config = goal_id, agent_id, config.resolve()
-        self.goal_ref = capture_collaboration_goal_ref(
-            self.registry,
-            goal_id=self.goal_id,
-            agent_id=self.agent_id,
-        )
+        self._goal_ref_lock = Lock()
+        try:
+            self.goal_ref = capture_collaboration_goal_ref(
+                self.registry,
+                goal_id=self.goal_id,
+                agent_id=self.agent_id,
+            )
+        except FileNotFoundError:
+            self.goal_ref = None
+
+    def _caller_goal_ref(self) -> dict[str, str] | None:
+        if self.goal_ref is not None:
+            return self.goal_ref
+        with self._goal_ref_lock:
+            if self.goal_ref is None:
+                self.goal_ref = capture_collaboration_goal_ref(
+                    self.registry,
+                    goal_id=self.goal_id,
+                    agent_id=self.agent_id,
+                )
+        return self.goal_ref
 
     def binding(self, binding_id: str, *, require_active: bool = False) -> dict:
         _goal(self.registry, self.goal_id, self.agent_id, require_active=require_active)
@@ -435,7 +452,7 @@ class Delegations:
                 delegation_results.require_dependencies(self, binding, brief)
             delivered = request(self.root, self.registry, self.goal_id, self.agent_id,
                                 binding["agent_id"], operation_id, brief, parent_request_id,
-                                caller_goal_ref=self.goal_ref)
+                                caller_goal_ref=self._caller_goal_ref())
             identity = {"binding": binding, "request_id": delivered["request_id"], "operation_id": operation_id}
             if exists:
                 if _read(path).get("identity") != identity:
@@ -767,7 +784,7 @@ class Delegations:
             self.registry,
             goal_id=self.goal_id,
             agents=(),
-            caller_goal_ref=self.goal_ref,
+            caller_goal_ref=self._caller_goal_ref(),
         ) as goal_scope:
             entry = _entry(
                 self.root,
@@ -794,7 +811,7 @@ class Delegations:
             self.registry,
             goal_id=self.goal_id,
             agents=(),
-            caller_goal_ref=self.goal_ref,
+            caller_goal_ref=self._caller_goal_ref(),
         ) as goal_scope:
             entry = _entry(
                 self.root,
@@ -1054,7 +1071,7 @@ class Delegations:
                         }
                     ),
                     registry=self.registry,
-                    caller_goal_ref=self.goal_ref,
+                    caller_goal_ref=self._caller_goal_ref(),
                 )
             self._observe(path, row, "accepted", canonical_done=True, acceptance_ready=True, artifacts_current=True)
         except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:

@@ -83,6 +83,29 @@ def test_worker_rejects_unbounded_operation_arguments(tmp_path, monkeypatch, ope
     assert calls == []
 
 
+def test_delegation_captures_goal_ref_after_registry_becomes_available(tmp_path, monkeypatch):
+    from loopx import collaboration_mcp as delegation
+
+    runner = Delegations(
+        tmp_path,
+        tmp_path / "registry.json",
+        "goal",
+        "lead",
+        tmp_path / "config.json",
+    )
+    captured = {"goal_id": "goal", "goal_instance_id": "instance-a"}
+    calls = []
+    monkeypatch.setattr(
+        delegation,
+        "capture_collaboration_goal_ref",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or captured,
+    )
+
+    assert runner._caller_goal_ref() == captured
+    assert runner._caller_goal_ref() == captured
+    assert len(calls) == 1
+
+
 def test_worker_waits_for_a_transient_status_probe(service, monkeypatch):
     """A reader temporarily holding the lock must not discard admitted work."""
     from loopx import collaboration_mcp as delegation
