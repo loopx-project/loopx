@@ -578,7 +578,7 @@ class AppendOnlyStateEventStore:
     def load(self) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         if self.path.exists():
-            for line_number, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), start=1):
+            for line_number, line in enumerate(self.path.read_text(encoding="utf-8").split("\n"), start=1):
                 if not line.strip():
                     continue
                 try:
