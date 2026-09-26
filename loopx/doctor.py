@@ -22,6 +22,7 @@ from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path
 from .python_install_owner import PythonInstallOwner, python_distribution_upgrade_command, resolve_python_install_owner
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
+from .release_advisories import build_release_advisories_section
 from .release_manifest import load_release_manifest, release_version_tag
 from .skill_install_readback import (
     ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
@@ -829,6 +830,7 @@ def collect_doctor(
             latest_promotion_readiness_event(DEFAULT_RUNTIME_ROOT)
         ),
     }
+    release_advisories = build_release_advisories_section(__version__)
     install_freshness = build_install_freshness(
         command_path=command_path,
         release_root=release_root,
@@ -1116,6 +1118,7 @@ def collect_doctor(
         "typescript_control_plane": typescript_control_plane,
         "install_freshness": install_freshness,
         "upgrade_hint": install_freshness,
+        "release_advisories": release_advisories,
         "skill": {
             "path": str(skill_path),
             "exists": bool(project_skill.get("exists")),
@@ -1297,6 +1300,26 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
                 "```bash",
                 str(freshness.get("upgrade_command") or ""),
                 "```",
+            ]
+        )
+    advisories_section = (
+        payload.get("release_advisories")
+        if isinstance(payload.get("release_advisories"), dict)
+        else {}
+    )
+    for advisory in advisories_section.get("advisories") or []:
+        if not isinstance(advisory, dict):
+            continue
+        lines.extend(
+            [
+                "",
+                "## Release Advisory",
+                f"- id: `{advisory.get('id')}`",
+                f"- current_version: `{advisories_section.get('current_version')}`",
+                f"- last_affected_release: `{advisory.get('last_affected_release')}`",
+                f"- fixed_in_release: `{advisory.get('fixed_in_release')}`",
+                f"- summary: {advisory.get('summary')}",
+                f"- guidance: {advisory.get('guidance')}",
             ]
         )
     if typescript_control_plane:
