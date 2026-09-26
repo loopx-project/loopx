@@ -158,6 +158,14 @@ At session start, expose the effective host, model/effort, accessible resource c
 
 ### 5.2 Target boundaries: refactor around work, not the manager
 
+The [App-first conversation/inbox design](app-conversation-and-async-inbox-v0.md)
+is the delivery sequence for this boundary: connect managed or attached work,
+keep subsequent requests and results in LoopX, then converge the reusable
+accept/read/disposition/return lifecycle into its existing TS owner. Lark is an
+adapter, not the owner of generic asynchronous coordination. This plan preserves
+its identity, authority and reply behavior while the App path is qualified first.
+
+
 The steward's cross-project relationship and a project coordinator's scoped
 delivery commitment are distinct product responsibilities. Neither is a new
 authority rank or runtime type. The [project coordination contract](../../reference/project-coordination.md)

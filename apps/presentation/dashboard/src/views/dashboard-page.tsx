@@ -113,7 +113,6 @@ import {
   type WorkspaceActionPreview,
   type WorkspaceActionPreviewRequest,
 } from "../features/personal-workspace/personal-workspace-model";
-import { routeWorkspaceInput } from "../features/personal-workspace/personal-workspace-router";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
   delete: "删除",
@@ -990,104 +989,17 @@ function personalAgentSentence(payload: StatusPayload, row: GoalDirectoryRow, st
   return agentStatusSentence("idle", t);
 }
 
-function personalManagerMatches(question: string, keywords: string[]) {
-  return keywords.some((keyword) => question.includes(keyword));
-}
-
-
-
-function answerPersonalManagerQuestion(
-  payload: StatusPayload,
-  model: PersonalHomeModel,
-  question: string,
-): PersonalManagerAnswer {
+// The explicit status-only profile is a snapshot, not a keyword-driven answer.
+function personalManagerSnapshot(model: PersonalHomeModel): PersonalManagerAnswer {
   if (model.goals.some((goal) => goal.activationState === "active" && goal.loadState)) return {
-    text: "Goal 状态尚未全部加载，暂不能给出完整统计。可先打开已加载的 Goal，失败项可重试。", lines: [],
+    text: "Goal 状态尚未全部加载。当前是只读状态模式；切换到 Agent 后可继续提问或执行任务。", lines: [],
   };
-  if (personalManagerMatches(question, ["Agent", "agent", "推进", "在做"])) {
-    const activeGoals = model.goals.filter((goal) =>
-      !["安静运行", "已完成", "已停止"].includes(goal.state)
-    );
-    const shownGoals = (activeGoals.length > 0 ? activeGoals : model.goals).slice(0, 3);
-    if (shownGoals.length === 0) {
-      return { text: "当前状态里还没有 Goal 可供汇总。", lines: [] };
-    }
-    return {
-      text: activeGoals.length > 0 ? "Agent 当前关注这些 Goal：" : "当前 Goal 都比较安静：",
-      lines: shownGoals.map((goal) => `${goal.title} · ${goal.state} · ${goal.agentSentence}`),
-    };
-  }
-
-  const asksForNextAction = personalManagerMatches(question, ["现在", "下一步", "我该", "该做什么", "优先处理"]);
-  if (asksForNextAction) {
-    const nextTodo = model.userTodos[0];
-    if (nextTodo) {
-      return {
-        text: nextTodo.blocking
-          ? `先处理「${personalGoalTitle(nextTodo.goalId)}」：${nextTodo.text}`
-          : `当前最先处理「${personalGoalTitle(nextTodo.goalId)}」：${nextTodo.text}`,
-        lines: [],
-      };
-    }
-    const repairGoal = model.goals.find((goal) => goal.state === "需修复");
-    if (repairGoal) {
-      return {
-        text: "没有待办，但这个 Goal 需要先修复。",
-        lines: [`${repairGoal.title} · ${repairGoal.agentSentence}`],
-      };
-    }
-    const progressingGoal = model.goals.find((goal) => goal.state === "推进中");
-    if (progressingGoal) {
-      return {
-        text: "目前不需要你介入，Agent 正在推进。",
-        lines: [`${progressingGoal.title} · ${progressingGoal.agentSentence}`],
-      };
-    }
-    return { text: "当前系统很安静，没有需要你立即处理的事项。", lines: [] };
-  }
-
-  if (personalManagerMatches(question, ["等我", "阻塞", "需要我", "全局待办"])) {
-    if (model.userTodos.length === 0) {
-      return { text: "目前没有 Goal 在等你，开放用户待办为 0。", lines: [] };
-    }
-    return {
-      text: `有 ${model.userTodos.length} 项开放用户待办，阻塞项优先：`,
-      lines: model.userTodos.slice(0, 3).map((todo) =>
-        `${personalGoalTitle(todo.goalId)} · ${todo.blocking ? "阻塞" : "待处理"} · ${todo.text}`
-      ),
-    };
-  }
-
-  if (personalManagerMatches(question, ["状态", "异常", "修复", "健康"])) {
-    const globalHealthFailed = model.systemHealth ? !model.systemHealth.ok : !payload.ok
-      || !payload.contract?.ok
-      || !payload.global_registry?.ok
-      || (payload.global_registry?.summary?.high ?? 0) > 0;
-    const repairGoals = model.goals.filter((goal) => goal.state === "需修复");
-    const lines = repairGoals.slice(0, globalHealthFailed ? 2 : 3)
-      .map((goal) => `${goal.title} · ${goal.agentSentence}`);
-    if (globalHealthFailed) {
-      lines.push("全局状态、契约或注册表健康检查未通过，请进入管理页检查。");
-    }
-    if (lines.length === 0) {
-      return { text: "当前没有发现 Goal 级或全局健康异常。", lines: [] };
-    }
-    return {
-      text: repairGoals.length > 0 ? "当前需要关注这些健康问题：" : "Goal 状态正常，但全局健康需要检查：",
-      lines,
-    };
-  }
-
   return {
-    text: "当前管家支持三类问题：下一步、等待你的事项、Agent 与健康状态。",
-    lines: [
-      "问“我现在该做什么？”",
-      "问“哪些 Goal 在等我？”",
-      "问“Agent 在做什么？”或当前健康状态",
-    ],
+    text: "这是当前只读状态快照，未调用 Agent。切换到 Agent 后可继续提问或执行任务。",
+    lines: model.goals.filter((goal) => goal.activationState === "active").slice(0, 3)
+      .map((goal) => `${goal.title} · ${goal.state} · ${goal.agentSentence}`),
   };
 }
-
 
 function buildPersonalHomeModel(
   payload: StatusPayload,
@@ -2097,7 +2009,7 @@ function PersonalGoalHome({
     setSendingContextId(targetContextId);
 
     if (selectedRoute.agentId === "status-only" || (!targetGoal && targetContextId !== "manager")) {
-      const answer = answerPersonalManagerQuestion(selectedPayload, targetQuestionModel, question);
+      const answer = personalManagerSnapshot(targetQuestionModel);
       const usesStatusOnlyRoute = selectedRoute.agentId === "status-only";
       appendManagerAssistantMessage(targetContextId, {
         agentLabel: usesStatusOnlyRoute ? "仅查状态" : "LoopX 管家",

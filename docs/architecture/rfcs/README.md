@@ -58,6 +58,13 @@ changes.
     kernel, hosts, memory, cost, security, operations, research, releases,
     community and adoption. Domain contracts retain their authority gates.
 
+- [App conversations and reusable asynchronous work delivery](app-conversation-and-async-inbox-v0.md)
+  - **RFC status:** Draft integration proposal under R1–R3/T0–T4.
+  - **Delivery on `main`:** Existing Chat, collaboration and provider inbox owners;
+    the full managed/attached App journey is not qualified.
+  - **Current boundary:** App-first conversation continuity, truthful activity,
+    public-safe golden queries and a replacement-first TS async inbox plan.
+
 ## Control-Plane Kernel, State, And Migration
 
 - [Automatic Execution Admission v0](automatic-execution-admission-v0.md)

@@ -687,6 +687,16 @@ they do not close cross-channel or governed settlement acceptance here.
 
 ### 8.8 Reusable conversation work surface
 
+**App-first continuation.** The [App/inbox integration design](app-conversation-and-async-inbox-v0.md)
+turns this surface into the working conversation for managed and attached
+LoopX Agents. Preserve the existing runtime binding and work lineage, show
+native steering versus next-Turn delivery honestly, and return artifacts here.
+Named conversations, compact owner/return lines and a dominant readable answer
+area take precedence over a dashboard of protocol fields. Lark uses the same
+facts after separate qualification; visual parity is not an App release blocker.
+The design includes the Lorca screenshot's observed hierarchy, its evidence
+limits, failure matrix and existing-owner refactor cadence.
+
 Steward Chat, Goal Chat, direct Agent conversations and their frontend/Lark
 projections share one interaction pattern. A short factual question deserves a
 direct answer and source; a complex investigation deserves a leading conclusion,

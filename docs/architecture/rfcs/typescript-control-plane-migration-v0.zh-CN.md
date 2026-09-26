@@ -14,6 +14,18 @@
 ---
 
 
+### 产品对话与通用异步 inbox
+
+R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
+[App/inbox 融合设计](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
+按调用者修复、行为刻画、完整异步生命周期切换、真实 adapter 恢复与旧代码删除推进。
+复用 Chat ingress、Agent 通用 collaboration 和 operator inbox 的既有 owner；
+将与 Lark 无关的 pending／重放／处理决定规则归入 TS，provider IO、认证与回复格式
+保留在扩展。managed／attached 保持唯一执行驱动与原请求身份。
+首个 App 结果不需要第二份 inbox 存储、逐字段 RPC 或全量重写。
+这里是 T0–T4 的产品消费计划，不新增 provider promotion，也不声称迁移完成。
+
+
 ## 当前交付边界（2026-09-25）
 
 按 `37bbaec79` 与当前 PR 状态核对：完整来源传输、事务捕获、来源组装及此前五个

@@ -7,8 +7,9 @@ const model = source("./personal-workspace-model.ts");
 const drawer = source("./context-drawer.tsx");
 const header = source("./channel-header.tsx");
 const sidebar = source("./goal-sidebar.tsx");
+const actionForm = source("./workspace-action-form.tsx");
 const page = source("./personal-workspace-page.tsx");
-const router = source("./personal-workspace-router.ts");
+
 const shell = source("./workspace-shell.tsx");
 const timeline = source("./channel-timeline.tsx");
 const returnDelivery = source("./return-delivery-status.tsx");
@@ -89,12 +90,6 @@ assert.doesNotMatch(
   /onCorrectRun:[\s\S]{0,240}sendManagerQuestion/,
   "Run correction does not fall back to the read-only manager Chat",
 );
-assert.match(page, /routeWorkspaceInput\(message,/, "Every free-text send enters the unified Router contract");
-assert.match(router, /route: "projection" \| "typed_action" \| "agent_chat" \| "clarify"/, "Router exposes the constrained route contract");
-assert.match(router, /function executionIntent/, "Execution intent stays inside the Router implementation");
-assert.match(router, /function negates/, "Router can honor explicit negation");
-assert.doesNotMatch(router, /protectedActionIntent|protectedActionRules/, "Free-text protected operations are not interpreted by browser keyword rules");
-assert.doesNotMatch(router, /"goal\.update"/, "The browser Router type cannot emit a protected Goal action");
 assert.doesNotMatch(page, /intentRoute\.actionKind === "goal\.update"|workspace-protected-/, "Free-text send has no legacy protected-action preview branch");
 assert.match(chatData, /protected_action: protectedActionProposalSchema/, "Chat accepts one narrow semantic protected-action proposal");
 assert.match(chatData, /"operation\.execute"/, "Dashboard accepts canonical operation proposals");
@@ -151,10 +146,8 @@ for (const inputKind of ["boolean", "number", "select", "string_list"]) {
   assert.match(capabilityFields, new RegExp(`input_kind === "${inputKind}"`), `Shared capability fields render ${inputKind}`);
 }
 assert.match(tasks, /t\("tasks\.convertToTask"\)/, "Tasks offer an explicit preview-first bridge from a reply to task management");
-assert.match(page, /function todoTextFromMessage[\s\S]*标题[\s\S]*内容/, "Todo parsing preserves structured title and content fields");
 assert.match(page, /t\("home\.taskCount"/, "Home cards expose durable activity when a new Goal has Todos but no run timestamp yet");
 assert.match(page, /t\("proposal\.primary\.goalCreate"\)/, "Goal creation names the localized immediate first-turn effect");
-assert.match(router, /const asksForMutation/, "Execution routing remains explicit inside the Router contract");
 assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated proposals are grouped into a compact summary");
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
@@ -171,9 +164,6 @@ assert.match(dashboard, /attachments: route\?\.attachments/, "Image attachments 
 assert.match(page, /sendMessage\(t\("composer\.agentProgressPrompt"\)\)/, "Progress report shortcut sends a scoped read-only request immediately");
 assert.match(page, /t\("composer\.agentProgress"\)/, "Progress report shortcut makes its immediate-send behavior explicit");
 assert.match(page, /t\("composer\.nextAction"\)[\s\S]*sendMessage\(t\("composer\.nextActionPrompt"\)\)/, "Advice shortcut sends its scoped question immediately");
-assert.match(page, /t\("composer\.monitor"\)[\s\S]*sendMessage\(t\("composer\.monitorShortcutTemplate", \{ target: t\("schedule\.defaultTarget"\) \}\)\)/, "Monitor shortcut sends its bounded template with a named check target immediately");
-assert.match(page, /goalDraftActive[\s\S]*t\("composer\.createGoalDraft"\)[\s\S]*t\("composer\.createGoal"/, "Create Goal mode is visibly distinct from a normal chat draft");
-assert.match(page, /setComposerDraft\(`manager:\$\{selectedAgentId\}`,\s*t\("composer\.createGoalTemplate"\)\)/, "Create Goal writes the localized template to the manager draft even when invoked from a Goal");
 assert.match(page, /personal-action-feedback/, "Typed actions surface a persistent visible receipt");
 assert.match(page, /visibleTimelineItems[\s\S]*item\.run\.runId === activeSessionRun\.runId/, "Session record mode filters unrelated Goal activity");
 assert.match(page, /function openGoalConversation\(\)[\s\S]*setActiveSessionRun\(null\)[\s\S]*scrollIntoView\(\{ block: "start" \}\)/, "Opening a Goal reply exits a nested Session and reveals the latest answer");
@@ -184,13 +174,6 @@ assert.match(drawer, /t\("drawer\.proposalApplyFailed"\)/, "Failed preview commu
 assert.match(drawer, /onClick=\{onClose\} type="button">\{t\("drawer\.proposalClose"\)\}/, "Closing a proposal is a pure UI action with zero state transition");
 assert.match(drawer, /drawer\.copyRepositoryDone[\s\S]*drawer\.copyRepositorySuccess/, "Repository copy action exposes a visible receipt");
 assert.doesNotMatch(drawer, />打开 Goal</, "Goal details do not repeat navigation to the already-open Goal");
-assert.match(page, /function prepareScheduleDraft[\s\S]*composer\.monitorTemplateWithoutGoal[\s\S]*composer\.monitorTemplate/, "Manager monitor action opens a localized complete editable configuration draft");
-assert.match(page, /function prepareScheduleDraft[\s\S]*composer\.heartbeatTemplateWithoutGoal[\s\S]*composer\.heartbeatTemplate/, "Goal heartbeat action opens a localized editable configuration draft before preview");
-assert.match(page, /function structuredGoalIntentFromMessage/, "Goal creation parses the visible form as structured fields");
-assert.match(page, /\["目标", "Objective"\]/, "Goal creation accepts Chinese and English objective fields");
-assert.match(page, /"Execution boundary \(optional\)"/, "Goal creation accepts an English execution boundary");
-assert.match(page, /t\("schedule\.unsupportedCalendar"\)/, "Unsupported calendar schedules use localized fail-closed feedback");
-assert.match(page, /function monitorTargetFromMessage/, "Monitor creation preserves the user's requested check target");
 assert.match(model, /fields: Array<\{ key: string; label: string; value: string \}>/, "Every action preview field retains a stable semantic key beside its localized label");
 assert.match(page, /\.map\(\(\[key, value\]\) => \(\{[\s\S]*key,[\s\S]*label: fieldLabels\[key\]/, "Typed action projection preserves semantic parameter keys while localizing labels");
 assert.match(page, /field\.key === "cadence"[\s\S]*field\.key === "stop_condition"[\s\S]*field\.key === "timezone"/, "Applied Heartbeat readback consumes stable semantic keys");
@@ -298,8 +281,6 @@ assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Work
 assert.match(workspaceTheme, /workspaceThemeStorageKey = "loopx-pw-theme"/, "Theme preference persists across reloads");
 assert.doesNotMatch(dashboard, /isManagerProjectionQuestion/, "Ordinary manager questions do not silently bypass the selected model by matching phrases");
 assert.match(dashboard, /if \(selectedRoute\.agentId === "status-only" \|\| \(!targetGoal && targetContextId !== "manager"\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback");
-assert.match(dashboard, /const asksForNextAction[\s\S]*if \(asksForNextAction\)[\s\S]*personalManagerMatches\(question, \["状态"/, "A next-step question outranks a read-only boundary that mentions state");
-assert.match(dashboard, /先处理「\$\{personalGoalTitle\(nextTodo\.goalId\)\}」：\$\{nextTodo\.text\}/, "The compact manager answer names the Goal and concrete blocking action");
 assert.match(drawer, /t\("drawer\.decisionReview"\)/, "Blocked items preview their decision boundary before any write");
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
@@ -367,12 +348,10 @@ assert.match(page, /proposal\.status === "applied"/, "Unconfirmed Heartbeat prev
 assert.match(drawer, /actionKind === "goal\.create" \? t\("drawer\.proposalEnterGoal"\) : t\(selection\.item\.actionKind === "team\.plan" \? "proposal\.teamPlan\.openGoal" : "drawer\.proposalViewGoal"\)/, "Applied actions offer scoped refreshed navigation labels");
 assert.doesNotMatch(sidebar, /Agent 设置/, "The sidebar omits the read-only Agent settings dead end");
 assert.doesNotMatch(sidebar, /野兽主题|默认主题/, "The sidebar keeps one owner-reviewed visual theme");
-for (const key of ["composer.createGoalTemplate", "composer.monitorTemplate", "composer.heartbeatTemplate", "proposal.primary.goalCreate", "proposal.impact.goalCreate"]) {
+for (const key of ["proposal.primary.goalCreate", "proposal.impact.goalCreate"]) {
   assert.match(i18n, new RegExp(`"${key.replaceAll(".", "\\.")}"`), `${key} has a typed locale resource`);
 }
-assert.match(i18n, /Create a long-term Goal:[\s\S]*Completion criteria:[\s\S]*Related repository \(optional\):[\s\S]*Notification method \(optional\):/, "English Create Goal starts with a useful objective form instead of a host gate");
-assert.match(i18n, /我想创建一个长期 Goal：[\s\S]*完成标准：[\s\S]*关联仓库（可选）：[\s\S]*通知方式（可选）：/, "Chinese Create Goal keeps its useful objective form");
-assert.match(page, /workspace_ref:\s*"current"/, "Create Goal does not leak another Goal id as its execution workspace");
+assert.match(actionForm, /workspace_ref:\s*"current"/, "Create Goal does not leak another Goal id as its execution workspace");
 assert.match(page, /t\("proposal\.workspace\.current"\)/, "Create Goal localizes its execution workspace explanation");
 assert.match(i18n, /Current local workspace \(no Repository bound\)/, "English workspace copy explains that no repository is bound");
 assert.match(i18n, /当前本地工作区（未绑定 Repository）/, "Chinese workspace copy explains that no repository is bound");
