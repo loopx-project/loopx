@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+import importlib.util
 import json
-from math import log1p
 from pathlib import Path
 import re
 
 
 CATALOG = Path(__file__).resolve().parents[1] / "references" / "repair-patterns.md"
 FIELDS = ("pattern", "symptoms", "evidence", "likely_root", "durable_repair")
+
+# The installer/wheel bundles the canonical stdlib-only module beside this
+# script. Source checkout execution reads that same file from the package.
+_scorer_path = Path(__file__).with_name("lexical_retrieval.py")
+if not _scorer_path.is_file():
+    _scorer_path = Path(__file__).resolve().parents[3] / "loopx" / "lexical_retrieval.py"
+_spec = importlib.util.spec_from_file_location("repair_lexical_retrieval", _scorer_path)
+assert _spec is not None and _spec.loader is not None
+_scorer = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_scorer)
 
 
 def read_patterns(path: Path) -> list[dict[str, str]]:
@@ -48,25 +57,15 @@ def read_patterns(path: Path) -> list[dict[str, str]]:
 def search_patterns(
     patterns: list[dict[str, str]], query: str, *, offset: int, limit: int
 ) -> dict[str, object]:
-    # BM25 (k1=1.2, b=0.75), with Lucene's positive IDF. Whole identifiers
-    # remain addressable by --id; tokenization also exposes their components.
-    terms = set(re.findall(r"[^\W_]+", query.casefold()))
-    documents = [Counter(re.findall(r"[^\W_]+", "\n".join(row.values()).casefold())) for row in patterns]
-    lengths = [sum(doc.values()) for doc in documents]
-    average = sum(lengths) / len(lengths) if lengths else 1
-    frequencies = Counter(term for doc in documents for term in doc)
+    texts = ["\n".join(row.values()) for row in patterns]
+    ranking = _scorer.score_bm25(texts, query)
     scored = []
-    for row, document, length in zip(patterns, documents, lengths):
-        matched_terms = sorted(terms & document.keys())
-        score = sum(
-            log1p((len(patterns) - frequencies[term] + 0.5) / (frequencies[term] + 0.5))
-            * document[term] * 2.2
-            / (document[term] + 1.2 * (0.25 + 0.75 * length / (average or 1)))
-            for term in matched_terms
-        )
+    for row, text, hit in zip(patterns, texts, ranking.documents):
+        score = hit.score
+        matched_terms = list(hit.matched_terms)
         exact_id = row["pattern"].casefold() == query.strip().casefold()
         exact_code = any(query.strip().casefold() == code.casefold()
-                         for code in re.findall(r"`([^`\n]+)`", "\n".join(row.values())))
+                         for code in re.findall(r"`([^`\n]+)`", text))
         if score > 0 or exact_id or not query:
             scored.append((exact_id, exact_code, score, row, matched_terms))
     # Stable id tie-break keeps pagination reproducible; scores are not confidence.
@@ -82,7 +81,7 @@ def search_patterns(
         "ok": True,
         "query": query,
         "match_mode": "bm25_exact_first" if query else "catalog_order",
-        "unmatched_terms": sorted(terms - frequencies.keys()),
+        "unmatched_terms": list(ranking.unmatched_terms),
         "total_matches": len(matched),
         "offset": offset,
         "next_offset": end if end < len(matched) else None,

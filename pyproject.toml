@@ -131,6 +131,7 @@ include = ["loopx*"]
 ]
 "share/loopx/skills/loopx-self-repair/scripts" = [
   "skills/loopx-self-repair/scripts/find_pattern.py",
+  "loopx/lexical_retrieval.py",
 ]
 
 [tool.pytest.ini_options]

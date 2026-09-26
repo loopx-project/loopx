@@ -378,6 +378,8 @@ def test_frozen_bundle_install_lifecycle(
     bundled_skills = bundle / layout
     for skill_id in PACKAGED_HOST_SKILL_IDS:
         shutil.copytree(canonical / skill_id, bundled_skills / skill_id)
+    shutil.copy2(Path(install_module.__file__).with_name("lexical_retrieval.py"),
+                 bundled_skills / "loopx-self-repair/scripts/lexical_retrieval.py")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     if with_meipass:
         monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
@@ -412,7 +414,7 @@ def test_frozen_bundle_install_lifecycle(
             target / skill_id,
             ignored_relative_paths=(SKILL_VERSION_MARKER_FILENAME,),
         ) == install_module.hash_skill_tree(
-            canonical / skill_id,
+            bundled_skills / skill_id,
             ignored_relative_paths=(SKILL_VERSION_MARKER_FILENAME,),
         )
     repeated = workflow_skill_install(skills_dir=target, execute=True)
@@ -427,6 +429,18 @@ def test_frozen_bundle_install_lifecycle(
     removed = workflow_skill_install(skills_dir=target, execute=True, uninstall=True)
     assert removed["ok"] is True
     assert sorted(removed["result"]["removed"]) == sorted(ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS)
+
+
+def test_frozen_bundle_missing_shared_scorer_does_not_borrow_ambient_code(tmp_path, monkeypatch):
+    canonical = Path(resolve_workflow_skill_source()["skills_root"])
+    bundle = tmp_path / "incomplete bundle"
+    for skill_id in PACKAGED_HOST_SKILL_IDS:
+        shutil.copytree(canonical / skill_id, bundle / "skills" / skill_id)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+    result = workflow_skill_install(skills_dir=tmp_path / "host skills", execute=True)
+    assert result["ok"] is False
+    assert result["source"]["kind"] == "missing"
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -469,6 +483,10 @@ def test_frozen_bundle_layout_precedence(
             path = tmp_path / layout / skill_id / "SKILL.md"
             path.parent.mkdir(parents=True)
             path.write_text(f"# {layout}: {skill_id}\n", encoding="utf-8")
+        if not layout.startswith("share/") or complete_wheel_layout:
+            scorer = tmp_path / layout / "loopx-self-repair/scripts/lexical_retrieval.py"
+            scorer.parent.mkdir(parents=True)
+            scorer.write_text("# bundled scorer\n", encoding="utf-8")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     source = resolve_workflow_skill_source()

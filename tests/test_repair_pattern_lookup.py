@@ -115,6 +115,13 @@ def test_real_install_delivers_lookup_and_runs_without_loopx_on_path(tmp_path):
 
     assert installed_skill_summary((destination,))["loopx-self-repair"]["required_phrases"]
     installed = destination / "loopx-self-repair" / "scripts" / "find_pattern.py"
+    bundled = installed.with_name("lexical_retrieval.py")
+    assert bundled.read_bytes() == (ROOT / "loopx/lexical_retrieval.py").read_bytes()
+    again = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--format", "json", "workflow-skills",
+        "--install", "--skills-dir", str(destination),
+    ], cwd=ROOT, capture_output=True, text=True, check=True)
+    assert json.loads(again.stdout)["installed"]["loopx-self-repair"] == "unchanged"
     result = subprocess.run([
         sys.executable, "-I", str(installed), "--query", "closeout recovery",
     ], cwd=tmp_path, env={"PATH": str(tmp_path)}, capture_output=True, text=True, check=True)
@@ -130,6 +137,7 @@ def test_real_install_delivers_lookup_and_runs_without_loopx_on_path(tmp_path):
     with (ROOT / "pyproject.toml").open("rb") as stream:
         data = tomllib.load(stream)["tool"]["setuptools"]["data-files"]
     included = {file for files in data.values() for file in files}
+    assert "loopx/lexical_retrieval.py" in included
     for path in SKILL.rglob("*"):
         if path.is_file() and "__pycache__" not in path.parts:
             assert str(path.relative_to(ROOT)) in included
