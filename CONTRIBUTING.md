@@ -161,7 +161,7 @@ touch, mention it in the PR instead of fixing it there.
 | Workflow file | Runs on a PR | Blocks merge | What it checks |
 | --- | --- | --- | --- |
 | `python-tests.yml` | every PR | yes (`merge-gate`) | lint, mypy, sharded pytest, TypeScript core and coverage, minimum Node.js, Windows PowerShell, dashboard presentation |
-| `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` trailer on every commit |
+| `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` on contribution commits; verified GitHub-generated two-parent merges are exempt |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
 | `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
 | `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
@@ -211,6 +211,11 @@ be information you are permitted to publish in the permanent Git history. If a
 commit is missing the trailer, amend it with `git commit --amend -s` or use an
 interactive rebase to sign the affected commits, then update the pull-request
 branch. The `DCO` pull-request check rejects unsigned commits.
+This includes manual merge commits and web edits. The check exempts only
+two-parent integration commits whose exact SHA, parents and `web-flow` identity
+have a valid signature verification in GitHub's commit record; it still checks
+the underlying contribution commits. A GitHub-looking name or email is not
+enough. If the provenance API is unavailable, the check fails with retry guidance.
 
 Releases through `v0.4.7` remain under their original MIT terms. See the
 [licensing and v0.4.8 transition policy](docs/project/licensing.md) for the

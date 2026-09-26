@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -74,6 +76,7 @@ def check_dco(
         "${{ github.event.pull_request.base.sha }}": old_base,
         "${{ github.event.pull_request.base.ref }}": base_ref,
         "${{ github.event.pull_request.head.sha }}": head,
+        "${{ github.token }}": "synthetic-read-only-token",
     }
     steps = [step for step in workflow["jobs"]["signoff"]["steps"] if "run" in step]
     for step in steps:
@@ -86,6 +89,112 @@ def check_dco(
         if result.returncode:
             return result
     return result
+
+
+@pytest.fixture
+def github_api(tmp_path: Path, git_env: dict[str, str]):
+    """Only GitHub metadata is substituted; the shipped shell and Git are real."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "api-calls.txt"
+    executable = bin_dir / "gh"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "with Path(os.environ['DCO_TEST_CALLS']).open('a') as log:\n"
+        "    log.write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "print(os.environ.get('DCO_TEST_METADATA', '{}'))\n"
+        "sys.exit(int(os.environ.get('DCO_TEST_API_EXIT', '0')))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    env = {
+        **git_env, "PATH": f"{bin_dir}{os.pathsep}{git_env['PATH']}",
+        "GITHUB_REPOSITORY": "qualification/dco",
+        "DCO_TEST_CALLS": str(calls),
+    }
+    return env, calls
+
+
+def github_merge(repo: Path, env: dict[str, str], *, unsigned_topic: bool = False) -> str:
+    git(repo, env, "checkout", "-b", "topic")
+    commit(repo, env, "Topic contribution", signed=not unsigned_topic)
+    git(repo, env, "checkout", "contribution")
+    commit(repo, env, "Mainline contribution")
+    git(repo, {**env, "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"},
+        "merge", "--no-ff", "topic", "-m", "Platform integration merge")
+    return git(repo, env, "rev-parse", "HEAD")
+
+
+def verified_merge_record(repo: Path, env: dict[str, str], sha: str) -> dict:
+    return {
+        "sha": sha, "committer": {"login": "web-flow"},
+        "commit": {
+            "committer": {"name": "GitHub", "email": "noreply@github.com"},
+            "verification": {"verified": True, "reason": "valid"},
+        },
+        "parents": [{"sha": parent} for parent in git(repo, env, "show", "-s", "--format=%P", sha).split()],
+    }
+
+
+@pytest.mark.parametrize("unsigned_topic", [False, True])
+def test_verified_platform_merge_does_not_exempt_its_contributions(history, github_api, unsigned_topic):
+    runner, old_base, _ = history
+    env, calls = github_api
+    head = github_merge(runner, env, unsigned_topic=unsigned_topic)
+    metadata = verified_merge_record(runner, env, head)
+    result = check_dco(runner, {**env, "DCO_TEST_METADATA": json.dumps(metadata)}, old_base, head)
+    assert (result.returncode == 0) == (not unsigned_topic), result.stdout + result.stderr
+    assert f"Verified GitHub-generated merge {head}" in result.stdout
+    assert f"Commit {head} is missing" not in result.stdout
+    if unsigned_topic:
+        topic = git(runner, env, "rev-parse", "topic")
+        assert f"Commit {topic} is missing" in result.stdout
+    assert calls.read_text().strip() == f"api repos/qualification/dco/commits/{head}"
+
+
+@pytest.mark.parametrize("mutation", ["unsigned", "other-signer", "wrong-sha", "wrong-parent", "missing-verification"])
+def test_merge_identity_without_exact_verified_provenance_is_not_exempt(history, github_api, mutation):
+    runner, old_base, _ = history
+    env, _ = github_api
+    head = github_merge(runner, env)
+    metadata = verified_merge_record(runner, env, head)
+    if mutation == "unsigned":
+        metadata["commit"]["verification"] = {"verified": False, "reason": "unsigned"}
+    elif mutation == "other-signer":
+        metadata["committer"]["login"] = "contributor"
+    elif mutation == "wrong-sha":
+        metadata["sha"] = "0" * 40
+    elif mutation == "wrong-parent":
+        metadata["parents"][0]["sha"] = "0" * 40
+    else:
+        del metadata["commit"]["verification"]
+    result = check_dco(runner, {**env, "DCO_TEST_METADATA": json.dumps(metadata)}, old_base, head)
+    assert result.returncode != 0
+    assert f"Commit {head} is missing" in result.stdout
+
+
+def test_platform_provenance_api_failure_fails_closed_with_retry_guidance(history, github_api):
+    runner, old_base, _ = history
+    env, _ = github_api
+    head = github_merge(runner, env)
+    result = check_dco(runner, {**env, "DCO_TEST_API_EXIT": "1"}, old_base, head)
+    assert result.returncode != 0
+    assert "Cannot verify GitHub merge provenance" in result.stdout
+    assert "retry the check" in result.stdout
+
+
+def test_unsigned_single_parent_web_commit_still_requires_dco(history, github_api):
+    runner, old_base, _ = history
+    env, calls = github_api
+    head = commit(runner, {**env, "GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com"},
+                  "Web suggestion without DCO", signed=False)
+    metadata = verified_merge_record(runner, env, head)
+    result = check_dco(runner, {**env, "DCO_TEST_METADATA": json.dumps(metadata)}, old_base, head)
+    assert result.returncode != 0
+    assert f"Commit {head} is missing" in result.stdout
+    assert not calls.exists()
 
 
 @pytest.mark.parametrize("change", ["code", "docs"])
