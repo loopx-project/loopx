@@ -1,6 +1,6 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
-import { chmod, readFile, rm } from "node:fs/promises";
+import { chmod, readFile, rm, type FileHandle } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./effect_runtime_errors.ts";
 import { atomicWriteJson, withFileMutationLock } from "./effect_runtime_io.ts";
 import { sqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
+import {openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse} from "./effect_runtime_snapshot.ts";
 import {
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
@@ -23,6 +24,14 @@ const RESPONSE_SCHEMA = "loopx_effect_runtime_response_v1";
 const INFO_SCHEMA = "loopx_effect_runtime_info_v0";
 const STARTUP_ERROR_SCHEMA = "loopx_effect_runtime_startup_error_v0";
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
+// Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
+const LOCAL_SNAPSHOT_METHODS = new Set([
+  "goal.checkpoint_read_context.source",
+  "goal.checkpoint_read_context.evaluate",
+  "goal.checkpoint_read_context.commit",
+  "goal.checkpoint_read_context.inspect_replay",
+]);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest
 // delay `setTimeout` accepts: a larger delay overflows and fires immediately,
@@ -108,8 +117,21 @@ function resetIdleTimer(server: ReturnType<typeof createServer>): void {
   idleTimer.unref();
 }
 
-function writeResponse(socket: Socket, response: JsonObject): void {
-  socket.end(`${JSON.stringify(response)}\n`);
+async function writeResponse(socket: Socket, response: JsonObject, sink: FileHandle | null): Promise<void> {
+  const encoded = Buffer.from(`${JSON.stringify(response)}\n`);
+  if (encoded.length <= MAX_INLINE_RESPONSE_BYTES) {
+    socket.end(encoded);
+    return;
+  }
+  if (sink === null) {
+    // The operation may already have committed. Never downgrade a lost large
+    // response to a safe request rejection or retry it automatically.
+    socket.destroy();
+    return;
+  }
+  const ref = await writePrivateResponse(sink, encoded);
+  socket.end(`${JSON.stringify({schema_version: RESPONSE_SCHEMA,
+    request_id: response.request_id, ok: true, result_ref: ref})}\n`);
 }
 
 const server = createServer((socket) => {
@@ -128,7 +150,7 @@ const server = createServer((socket) => {
       raw = "";
       socket.pause();
       socket.removeAllListeners("data");
-      writeResponse(socket, {
+      socket.end(`${JSON.stringify({
         schema_version: RESPONSE_SCHEMA,
         request_id: "unknown",
         ok: false,
@@ -136,7 +158,7 @@ const server = createServer((socket) => {
           "Effect runtime request exceeds the 2 MiB limit",
           "request_too_large",
         )),
-      });
+      })}\n`);
       return;
     }
     raw += chunk;
@@ -144,6 +166,8 @@ const server = createServer((socket) => {
     socket.pause();
     void (async () => {
       let requestId = "unknown";
+      let sink: FileHandle | null = null;
+      let dispatched = false;
       try {
         let parsed: unknown;
         try {
@@ -164,25 +188,51 @@ const server = createServer((socket) => {
             "authentication_failed",
           );
         }
+        const method = requiredString(request.method, "method");
+        if (request.params_ref !== undefined || request.response_sink !== undefined) {
+          if (!LOCAL_SNAPSHOT_METHODS.has(method) || request.response_sink === undefined ||
+              (request.params_ref !== undefined && request.params !== undefined)) {
+            throw new EffectRuntimeRequestError("local snapshot transport is unavailable for this request");
+          }
+          sink = await openPrivateResponseSink(request.response_sink);
+        }
+        let params: JsonObject;
+        if (request.params_ref !== undefined) {
+          const ref = requiredObject(request.params_ref, "params snapshot reference");
+          if (ref.schema_version !== "loopx_effect_runtime_snapshot_v0") {
+            throw new EffectRuntimeRequestError("invalid local snapshot schema");
+          }
+          params = requiredObject(await readPrivateJsonSnapshot(ref), "snapshot params");
+        } else {
+          params = asObject(request.params);
+        }
         const result = await dispatchEffectRuntimeMethod(
           handlers,
-          requiredString(request.method, "method"),
-          asObject(request.params),
+          method,
+          params,
         );
-        writeResponse(socket, {
+        dispatched = true;
+        await writeResponse(socket, {
           schema_version: RESPONSE_SCHEMA,
           request_id: requestId,
           ok: true,
           result,
-        });
+        }, sink);
         if (shutdownRequested) setImmediate(() => server.close());
       } catch (error) {
-        writeResponse(socket, {
-          schema_version: RESPONSE_SCHEMA,
-          request_id: requestId,
-          ok: false,
-          error: effectRuntimeErrorPayload(error),
-        });
+        if (dispatched) socket.destroy();
+        else {
+          try {
+            await writeResponse(socket, {
+              schema_version: RESPONSE_SCHEMA,
+              request_id: requestId,
+              ok: false,
+              error: effectRuntimeErrorPayload(error),
+            }, sink);
+          } catch { socket.destroy(); }
+        }
+      } finally {
+        await sink?.close();
       }
     })();
   });

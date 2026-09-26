@@ -306,6 +306,12 @@ The basis covers the selected Todo, its dependency closure and recorded results,
 shared Goal prose and User Todos, the owner acceptance document/revision when
 configured, the current agent vision, and the local source binding. A replan
 obligation covers the full Todo frontier. Archived dependencies remain inputs.
+Large local bases use digest-checked private files across the Python/TypeScript
+runtime boundary, including the response; the CLI still returns the complete
+basis. The 2 MiB default RPC guard remains for other effects. File size is
+bounded and an unverifiable response after a possible commit is ambiguous,
+so the caller reads the exact receipt before retrying any mutation. Neither
+transport nor a future paged presentation may silently omit a basis component.
 Todo display positions, source headings, and the Goal's global `updated_at` are
 excluded; an unrelated Agent Todo or run-history append does not invalidate an
 otherwise unchanged Todo-bound basis. Shared prose is deliberately conservative:
