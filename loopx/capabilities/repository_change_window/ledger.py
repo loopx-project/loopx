@@ -135,7 +135,7 @@ def _read_events(path: Path) -> list[dict[str, Any]]:
         return []
     result: list[dict[str, Any]] = []
     for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), 1
+        path.read_text(encoding="utf-8").split("\n"), 1
     ):
         if not line.strip():
             continue

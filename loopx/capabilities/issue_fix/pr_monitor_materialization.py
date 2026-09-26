@@ -28,7 +28,7 @@ DEFAULT_ISSUE_FIX_MONITOR_CADENCE = "30m"
 def _load_lifecycle_rows(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line_number, raw_line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
+        path.read_text(encoding="utf-8").split("\n"), start=1
     ):
         if not raw_line.strip():
             continue

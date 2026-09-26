@@ -312,7 +312,7 @@ def session_usage_baseline(
     snapshot_first_booked_at: Any = None
     binding_recorded = False
     seen_rows: set[tuple[str, str, str]] = set()
-    for line_number, line in enumerate(raw.splitlines(), start=1):
+    for line_number, line in enumerate(raw.split("\n"), start=1):
         line = line.strip()
         if not line:
             continue

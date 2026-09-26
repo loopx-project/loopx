@@ -45,7 +45,7 @@ def load_jsonl_row(
         raise ValueError(f"issue-fix domain-state source is missing: {path.name}")
     match: dict[str, Any] | None = None
     for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
+        path.read_text(encoding="utf-8").split("\n"), start=1
     ):
         if not line.strip():
             continue
@@ -73,7 +73,7 @@ def load_jsonl_rows(path: Path) -> list[dict[str, Any]]:
         raise ValueError(f"issue-fix domain-state source is missing: {path.name}")
     rows: list[dict[str, Any]] = []
     for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
+        path.read_text(encoding="utf-8").split("\n"), start=1
     ):
         if not line.strip():
             continue

@@ -501,7 +501,7 @@ def _find_domain_row(
     if not path.is_file():
         return None
     match = None
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").split("\n"):
         if not line.strip():
             continue
         row = json.loads(line)

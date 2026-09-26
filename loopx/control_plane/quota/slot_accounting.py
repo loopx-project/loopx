@@ -348,7 +348,7 @@ def _load_goal_run_index_records(runtime_root: Path, goal_id: str) -> list[dict[
         return []
     records: list[dict[str, Any]] = []
     try:
-        lines = index_path.read_text(encoding="utf-8").splitlines()
+        lines = index_path.read_text(encoding="utf-8").split("\n")
     except OSError:
         return []
     for line in lines:

@@ -864,7 +864,7 @@ def _load_domain_packets(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     packets: list[dict[str, Any]] = []
     warnings: list[str] = []
     for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
+        path.read_text(encoding="utf-8").split("\n"), start=1
     ):
         if not line.strip():
             continue
