@@ -424,6 +424,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     interrupts: [],
     goalConfigurationRequests: [],
     machineConfigurationRequests: [],
+    // Machine namespaces outlive a single request: the apply route writes the
+    // applied configuration here, and the next GET has to serve it back. A
+    // per-request literal made apply write-blind, so a reload after apply
+    // returned the previous configuration.
+    machineNamespaces: null,
     machineInspectionStatus: "configured",
     failNextMachineInspection: false,
     invalidMachineNamespaces: [],
@@ -897,7 +902,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       executor_model: null,
       executor_reasoning_effort: null,
     };
-    const machineNamespaces = {
+    const machineNamespaces = state.machineNamespaces ??= {
       change_quality_qualification: changeQualityConfiguration,
       manager_runtime: managerRuntimeConfiguration,
       periodic_report: periodicConfiguration,
