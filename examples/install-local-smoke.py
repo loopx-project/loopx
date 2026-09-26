@@ -291,6 +291,16 @@ def main() -> int:
         release_python = release_root / ".loopx-python"
         assert release_python.read_text(encoding="utf-8").strip() == sys.executable
         assert (release_root / "loopx" / "cli.py").is_file(), release_root
+        repair = codex_home / "skills" / "loopx-self-repair" / "scripts" / "find_pattern.py"
+        assert repair.with_name("lexical_retrieval.py").read_bytes() == (
+            release_root / "loopx" / "lexical_retrieval.py"
+        ).read_bytes()
+        repair_query = subprocess.run(
+            [sys.executable, "-I", str(repair), "--query", "closeout recovery"],
+            cwd=root, env={"PATH": str(root / "empty-path")},
+            check=True, capture_output=True, text=True,
+        )
+        assert json.loads(repair_query.stdout)["total_matches"] > 0
         runtime_package = release_root / "loopx" / "control_plane" / "runtime"
         assert (runtime_package / "run_compaction.py").is_file(), release_root
         assert (runtime_package / "session_runtime.py").is_file(), release_root

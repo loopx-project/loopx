@@ -390,7 +390,16 @@ PY
     fi
     skill_target="$skills_dir/$skill_name"
     skill_tmp="$(mktemp -d "$skills_dir/.${skill_name}.tmp.XXXXXX")"
-    if ! cp -R "$skill_source"/. "$skill_tmp"/; then
+    if ! PYTHONSAFEPATH=1 PYTHONPATH="$source_root${PYTHONPATH:+:$PYTHONPATH}" \
+      "${LOOPX_PYTHON:-python3}" - "$skill_source" "$skill_tmp" <<'PY'
+import sys
+from pathlib import Path
+
+from loopx.workflow_skill_install import _install_one_skill
+
+_install_one_skill(Path(sys.argv[1]), Path(sys.argv[2]))
+PY
+    then
       rm -rf "$skill_tmp"
       return 1
     fi
