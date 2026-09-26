@@ -152,6 +152,18 @@ def test_recall_only_and_old_optional_callback_sdk_remain_legitimate(tmp_path):
     assert original["application"]["receipt"]["reasoning_summary"] == "model_application_callback_not_supplied"
 
 
+def test_invalid_original_request_retains_safe_boundary_reason(tmp_path):
+    config, arguments, records = context(tmp_path)
+    arguments["freshness_context"]["age_seconds"] = 1.5
+    provider = Provider(records)
+    result = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+                                       apply_memory=delivery, provider=provider, **arguments)
+    assert result.public_packet["reason_code"] == "recall_boundary_rejected"
+    assert result.public_packet["boundary_reason_code"] == "exact_corpus_request_invalid"
+    assert result.public_packet["provider_call_count"] == provider.calls == 0
+    assert "freshness_context" not in json.dumps(result.public_packet)
+
+
 @pytest.mark.parametrize("disposition", ["applied", "applied_unchanged", "ignored", "refuted"])
 def test_delivery_then_actual_bound_assessment_and_exact_replay(tmp_path, disposition):
     outcome = "applied" if disposition == "applied_unchanged" else disposition

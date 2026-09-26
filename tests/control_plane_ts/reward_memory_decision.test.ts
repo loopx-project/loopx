@@ -49,7 +49,18 @@ test("decode unknown transport values strictly", () => {
     {artifact_ref: "private content with spaces"}]) {
     assert.throws(() => planRewardMemoryDecision({...request, ...patch}));
   }
-  for (const patch of [{provider_call_count: -1}, {filtered_count: 1.5}, {status: "success"}]) {
+  for (const patch of [{provider_call_count: -1}, {filtered_count: 1.5}, {status: "success"},
+    {boundary_reason_code: "private exception text"}]) {
     assert.throws(() => projectRewardMemoryDecision({request, observation: {...observation, ...patch}}));
   }
+});
+
+test("project only the original hook's safe typed boundary reason", () => {
+  const rejected = projectRewardMemoryDecision({request, observation: {...observation,
+    status: "guard_rejected", recall_status: null, provider_call_count: 0,
+    result_readback_verified: false, boundary_reason_code: "exact_corpus_request_invalid"}});
+  assert.equal(rejected.status, "incomplete");
+  assert.equal(rejected.reason_code, "recall_boundary_rejected");
+  assert.equal(rejected.boundary_reason_code, "exact_corpus_request_invalid");
+  assert.equal(rejected.provider_call_count, 0);
 });

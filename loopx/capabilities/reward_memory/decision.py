@@ -60,6 +60,7 @@ def _recall_telemetry(hook: Mapping[str, Any]) -> dict[str, Any]:
         "provider_call_count": telemetry.get("provider_call_count", 0),
         "filtered_count": sum(item.get("filtered_item_count", 0) for item in attempts),
         "recall_status": attempts[-1].get("status") if attempts else None,
+        "boundary_reason_code": hook.get("reason_code"),
     }
 
 

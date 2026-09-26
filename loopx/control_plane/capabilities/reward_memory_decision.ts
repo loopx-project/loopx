@@ -70,6 +70,11 @@ export function projectRewardMemoryDecision(params: JsonObject): JsonObject {
     : requireStringLiteral(observation.recall_status, ["completed", "empty", "provider_unavailable", "guard_blocked"] as const, "recall_status");
   const packet: JsonObject = {
     ...plan, should_recall: false,
+    boundary_reason_code: observation.boundary_reason_code == null ? null
+      : requireStringLiteral(observation.boundary_reason_code, [
+        "automation_config_invalid", "surface_profile_or_query_invalid",
+        "exact_corpus_request_invalid", "surface_has_no_recall_corpus",
+      ] as const, "boundary_reason_code"),
     provider_call_count: count(observation.provider_call_count, "provider_call_count"),
     filtered_count: count(observation.filtered_count, "filtered_count"),
     result_readback_verified: readback,

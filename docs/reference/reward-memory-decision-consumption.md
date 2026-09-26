@@ -22,11 +22,21 @@ Add `query_ready`, the consumer mode and an explicit application strategy.
 not a fresh identity on every retry. The caller's baseline/arguments must be
 JSON-compatible; non-serializable input fails before recall.
 
+Read-authority checkpoints must match the exact consumer surface and corpus;
+a turn-admission checkpoint cannot authorize a different review surface.
+`freshness_context.age_seconds`, when supplied, is a nonnegative integer.
+Rejected requests expose only the original hook's allowlisted
+`boundary_reason_code`, never exception text or private input values.
+
 使用上述导出入口和 `resolve_reward_memory_experiment` 的原配置读回；不可用时
 不能拿未经验证的配置替代。原 hook 的范围、revision、问题、时点、时效/冲突、
 读授权 checkpoint 和 provider 原样传入，另加 `query_ready`、模式和应用策略。
 `application_id` / `artifact_ref` 绑定同一问题和当前产物，不因重试换身份。
 基线和参数须可 JSON 序列化，非法输入在 provider 调用前 fail-open。
+
+读授权 checkpoint 必须匹配本次 surface/corpus，不能拿 Turn 准入的 checkpoint
+授权另一评审入口；age_seconds 如提供，须为非负整数。拒绝回执仅投影原 hook
+白名单内的 boundary_reason_code，不暴露异常正文或私有参数。
 
 TypeScript owns admission and completion (`reward_memory.decision.plan/project`);
 Python adapts the existing provider/applier and retains transient private values.
