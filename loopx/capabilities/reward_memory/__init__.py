@@ -36,6 +36,11 @@ from .ingestion import (
     normalize_reward_memory_standing_policy,
 )
 from .evaluation import run_reward_memory_evaluation
+from .decision import (
+    RewardMemoryDecisionResult,
+    assess_reward_memory_decision,
+    run_reward_memory_decision,
+)
 from .dogfood import (
     build_reward_memory_dogfood_batch,
     build_reward_memory_dogfood_receipt,
@@ -65,6 +70,9 @@ from .outcome_lifecycle import (
 
 __all__ = [
     "build_reward_memory_architecture_packet",
+    "RewardMemoryDecisionResult",
+    "assess_reward_memory_decision",
+    "run_reward_memory_decision",
     "RewardMemoryFilteredRecallItem",
     "RewardMemoryRecallItem",
     "RewardMemoryRecallSession",
