@@ -18,13 +18,14 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (37)
+## Accepted (38)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
 | [RFC: Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | Accepted | none | — |
 | [RFC: Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.md) | Accepted | none | — |
 | [RFC: Agent Session Execution Modes (v0)](agent-session-execution-modes-v0.md) | Accepted | none | — |
+| [App conversations and reusable asynchronous work delivery](app-conversation-and-async-inbox-v0.md) | Accepted | none | — |
 | [RFC: Automatic Execution Admission (v0)](automatic-execution-admission-v0.md) | Accepted | none | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | Accepted | none | — |
 | [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | none | [1 entry](ledger/capable-manager-semantic-handoff-v0/) |

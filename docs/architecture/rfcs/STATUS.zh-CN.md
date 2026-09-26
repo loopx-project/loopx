@@ -15,13 +15,14 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (37)
+## 已接受 (38)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
 | [RFC: Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | 已接受 | none | — |
 | [RFC：Agent Loop Effect Interpreter（v0）](agent-loop-effect-interpreter-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Agent 会话执行模式（v0）](agent-session-execution-modes-v0.zh-CN.md) | 已接受 | 无 | — |
+| [App 会话与可复用的异步工作投递](app-conversation-and-async-inbox-v0.zh-CN.md) | 已接受 | none | — |
 | [RFC：自动执行准入（v0）](automatic-execution-admission-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | 已接受 | none | — |
 | [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/capable-manager-semantic-handoff-v0/) |

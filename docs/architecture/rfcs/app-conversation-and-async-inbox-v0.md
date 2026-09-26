@@ -1,12 +1,14 @@
 # App conversations and reusable asynchronous work delivery
 
-- Status: Draft integration proposal; no new provider, scheduler or authority.
+- Status: Accepted; design and work are claimable. Conversation-entry repair delivered; broader continuity and async-inbox acceptance remain open. No new provider, scheduler or authority.
+- **Supersedes / closes:** none
 - Baseline: `27f0fc93b`, inspected 2026-09-25. Implementation and live acceptance are separate.
 - Owners: [overall roadmap](loopx-overall-roadmap-v0.md) R1–R3/G0–G2;
   [semantic handoff](capable-manager-semantic-handoff-v0.md) M1–M3;
   [conversation surface](intelligent-review-presentation-surfaces-v0.md#88-reusable-conversation-work-surface);
   [TS migration](typescript-control-plane-migration-v0.md) T0–T4.
 - Evaluation: [steward golden queries](../../product/use-cases/steward/golden-queries.md).
+- Language: [Chinese semantic mirror](app-conversation-and-async-inbox-v0.zh-CN.md).
 
 ## Decision: make the App the place where work conversations continue
 
@@ -206,11 +208,11 @@ comparison; no measured improvement is claimed by this proposal.
 
 ## Delivery boundary
 
-Current candidate work removes all browser free-text action classification in the App and checks
+The delivered conversation-entry repair removes all browser free-text action classification in the App and checks
 its ordinary Chat path plus explicit scheduling controls. It changes no authority
 or stored message schema. Managed/attached conversation continuity, generic TS
 inbox extraction and live two-cycle small-team acceptance remain planned until
-their own evidence is recorded. The candidate can roll back as an App routing
+their own evidence is recorded. The entry repair can roll back as an App routing
 change; later persisted-contract migrations need their own compatibility plan.
 
 ### Entry behavior compatibility
