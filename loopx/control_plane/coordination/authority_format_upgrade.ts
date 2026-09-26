@@ -66,36 +66,41 @@ async function upgradeSqlite(directory: string, goal: string, execute: boolean):
  * All stores, including unselected shadows, must be readable by the new binary. */
 export async function upgradeAuthorityFormats(roots: readonly string[], execute: boolean): Promise<JsonObject> {
   const results: JsonObject[] = [];
-  for (const root of [...new Set(roots.map(requireLocalAuthorityRuntimeRoot))]) {
-    for (const provider of ["file", "sqlite"] as const) {
-      const directory = join(root, "authority", `${provider}-v0`);
-      const names = (await entries(directory)).filter(name =>
-        (provider === "file" ? /^authority-store-[0-9a-f]{16}\.json$/ : /^authority-[0-9a-f]{64}\.sqlite$/).test(name));
-      if (provider === "file") names.push(...(await entries(join(directory, "rollback")))
-        .filter(name => /^authority-store-[0-9a-f]{24}\.json$/.test(name)).map(name => join("rollback", name)));
-      for (const name of names.sort()) {
-        const path = join(directory, name);
-        let goal: string | null = null;
-        try {
-          const detected = await inspectAuthorityFormat(path);
-          if (detected.artifact_kind !== "authority_store" || detected.provider !== provider) {
-            throw new Error("Detected format does not match this provider directory; no migration selected");
+  try {
+    for (const root of [...new Set(roots.map(requireLocalAuthorityRuntimeRoot))]) {
+      for (const provider of ["file", "sqlite"] as const) {
+        const directory = join(root, "authority", `${provider}-v0`);
+        const names = (await entries(directory)).filter(name =>
+          (provider === "file" ? /^authority-store-[0-9a-f]{16}\.json$/ : /^authority-[0-9a-f]{64}\.sqlite$/).test(name));
+        if (provider === "file") names.push(...(await entries(join(directory, "rollback")))
+          .filter(name => /^authority-store-[0-9a-f]{24}\.json$/.test(name)).map(name => join("rollback", name)));
+        for (const name of names.sort()) {
+          const path = join(directory, name);
+          let goal: string | null = null;
+          try {
+            const detected = await inspectAuthorityFormat(path);
+            if (detected.artifact_kind !== "authority_store" || detected.provider !== provider) {
+              throw new Error("Detected format does not match this provider directory; no migration selected");
+            }
+            goal = detected.goal_id;
+            const expected = provider === "file" ? new FileAuthorityStore(directory, goal, {existingOnly: true}).path
+              : sqliteAuthorityPath(directory, goal);
+            if (!name.startsWith("rollback") && expected !== path) throw new Error("Authority filename does not match its goal");
+            const result = provider === "file" ? await migrateFileAuthorityStore(directory, goal, execute, {}, name.startsWith("rollback") ? path : undefined)
+              : await upgradeSqlite(directory, goal, execute);
+            results.push({goal_id: goal, detected_format: detected.format, ...result});
+          } catch (error) {
+            // Earlier stores may already have migrated. Never report global rollback
+            // or overwrite their later commits. Retry resumes per-store publication.
+            return {status: "failed", results, failed_provider: provider, failed_goal_id: goal,
+              reason: error instanceof Error ? error.message : "Format upgrade failed", retry_safe: true};
           }
-          goal = detected.goal_id;
-          const expected = provider === "file" ? new FileAuthorityStore(directory, goal, {existingOnly: true}).path
-            : sqliteAuthorityPath(directory, goal);
-          if (!name.startsWith("rollback") && expected !== path) throw new Error("Authority filename does not match its goal");
-          const result = provider === "file" ? await migrateFileAuthorityStore(directory, goal, execute, {}, name.startsWith("rollback") ? path : undefined)
-            : await upgradeSqlite(directory, goal, execute);
-          results.push({goal_id: goal, detected_format: detected.format, ...result});
-        } catch (error) {
-          // Earlier stores may already have migrated. Never report global rollback
-          // or overwrite their later commits. Retry resumes per-store publication.
-          return {status: "failed", results, failed_provider: provider, failed_goal_id: goal,
-            reason: error instanceof Error ? error.message : "Format upgrade failed", retry_safe: true};
         }
       }
     }
+  } catch (error) {
+    return {status: "failed", results, reason: error instanceof Error ? error.message : "Store discovery failed",
+      retry_safe: true};
   }
   return {status: execute ? "upgraded" : "planned", results, authority_changed: false};
 }
