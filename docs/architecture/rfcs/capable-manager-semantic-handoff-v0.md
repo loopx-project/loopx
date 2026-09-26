@@ -1,6 +1,6 @@
 # RFC: Capable Agent Manager and Semantic Work Handoff (v0)
 
-- **RFC status:** Draft, under maintainer review
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Partial; private runtime profile, team-plan confirmation and Todo materialization shipped; complete M1–M4 remain unqualified.
 - **Authors / owners:** LoopX maintainers; manager engineering owner

@@ -1,6 +1,6 @@
 # RFC：共享 Goal 对齐与受治理 Amendment 协议（v0）
 
-- 状态：草案；维护者评审中
+- 状态：已接受
 - 替代 / 关闭：无
 - 跟踪 Issue：[#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - 日期：2026-09-02

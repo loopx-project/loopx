@@ -1,6 +1,6 @@
 # RFC: Post-Outcome Memory Utility Attribution v0
 
-- Status: Draft, under maintainer review
+- Status: Accepted
 - Supersedes / closes: none
 - Date: 2026-08-15
 - Tracking issue: [#3214](https://github.com/huangruiteng/loopx/issues/3214)

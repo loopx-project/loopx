@@ -1,6 +1,6 @@
 # RFC：语义词表收敛与提交期漂移检查（v0）
 
-- **RFC status：** Draft
+- **RFC status：** 已接受
 - **替代 / 关闭：** 无
 - **Delivery maturity：** Partial（M0/M0.5 检查、M1 类型化动作域与 M2 Turn 契约生成已实现；M3/M4 退休仍未完成）
 - **Authors / owners：** LoopX 贡献者；控制面内核维护者拥有批准权
@@ -797,8 +797,7 @@ uv run --extra test python scripts/generate_semantic_inventory.py --report --con
 `bfbb5ac60` 上的实现读回（[讨论 #4738 的 PR-03 事实校正](https://github.com/loopx-project/loopx/discussions/4738#discussioncomment-18514184)）：
 M0/M0.5 检查已执行；Q3/Q6 已按第 12 节描述实现；M2 Turn 生成物已被
 `transaction.py`、`settlement.ts` 和 loop controller 消费。下表保留各里程碑的
-验收义务，不是“从未开始的工作”清单。历史测量保留原 SHA；本次读回不改变 Draft
-状态，也不推断批准。
+验收义务，不是“从未开始的工作”清单。历史测量保留原 SHA；本次读回不证明实现资格或晋升；RFC 合入另行接受设计。
 
 六个旧字段仍在写入。`protocol_action_packet` 退休仍需目标发布版本、消费者范围、
 历史签名和回滚契约。[PR #4747](https://github.com/loopx-project/loopx/pull/4747)

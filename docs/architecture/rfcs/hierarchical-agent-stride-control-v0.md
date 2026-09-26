@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft, research proposal |
+| Status | Accepted |
 | Supersedes / closes | none |
 | Date | 2026-08-15 |
 | Authors | LoopX maintainers |

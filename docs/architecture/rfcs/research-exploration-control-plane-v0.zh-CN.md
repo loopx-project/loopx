@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | Draft，等待维护者评审 |
+| 状态 | 已接受 |
 | 替代 / 关闭 | 无 |
 | 日期 | 2026-08-13 |
 | 作者 | LoopX maintainers |
@@ -736,7 +736,7 @@ rule，以及 model variance 与 control-plane failure 的分离。
 
 | Milestone | 交付物 | Promotion gate | 状态 |
 |---|---|---|---|
-| M0 | RFC、current-state inventory 与显式 ownership decision | Maintainer review；无 runtime behavior | Draft |
+| M0 | RFC、current-state inventory 与显式 ownership decision | Maintainer review；无 runtime behavior | 已接受的设计 |
 | M1 | Characterization fixture，以及 Explore 中的 typed research observation 与 closure contract | Deterministic normalization、privacy、compatibility 与 negative test | 未开始 |
 | M2 | Explicit-only composition candidate、canonical gap projection 与 read-only status shadow | 不做 pairwise inference；packet 有界；projection parity | 部分实现（#3173：显式 experiment 投影与 successor binding） |
 | M3 | Goal-frontier obligation、精确 Todo/experiment lineage 与共享 write-time gate | State/replay matrix 与 premerge canary 通过 | 未开始 |
@@ -839,7 +839,7 @@ evidence-backed terminal result。
 
 ## 20. RFC 验收标准
 
-满足以下条件后，RFC 可从 Draft 转为 Accepted：
+RFC 合入即接受设计依据。实现资格仍需要以下证据：
 
 - ownership boundary 不创建第二份 research graph 或 executor；
 - 第一切片不依赖 inferred pair generation 也有独立价值；

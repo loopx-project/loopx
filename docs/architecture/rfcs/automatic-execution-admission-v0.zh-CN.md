@@ -1,6 +1,6 @@
 # RFC：自动执行准入（v0）
 
-- **RFC 状态：** Draft
+- **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
 - **交付成熟度：** Partial，候选实现，尚未推广
 - **维护边界：** quota、scheduler、host runtime

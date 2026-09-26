@@ -1,6 +1,6 @@
 # RFC: Obelisk Session Evidence Provider v0
 
-- Status: Draft, integration proposal
+- Status: Accepted
 - Supersedes / closes: none
 - Date: 2026-09-01
 - Tracking issue: [#3792](https://github.com/huangruiteng/loopx/issues/3792)

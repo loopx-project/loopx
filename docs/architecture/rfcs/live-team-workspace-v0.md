@@ -1,6 +1,6 @@
 # RFC: Live Team Workspace v0
 
-- **RFC status:** Draft; proposed product and presentation decisions.
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Partial implementation: bounded team inspection and the Goal Chat readable result/comparison slice in merged [#4828](https://github.com/loopx-project/loopx/pull/4828) are shipped. Managed non-Chat result readback and spatial streaming remain unqualified.
 - **Owners:** existing workspace presentation, collaboration and runtime owners.

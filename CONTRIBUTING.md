@@ -35,22 +35,27 @@ claimable, and safe to discuss in the repository.
 
 Every claimable board row carries an anchor, a gap and an exit under the
 board's [Task Admission Rule](docs/development/contributor-tasks.md#task-admission-rule):
-a roadmap stream/milestone/card, an Accepted or Active RFC section, or a
-reproduced adoption defect from a real install. A new catalog entry, a test that
+a roadmap stream/milestone/card, an Accepted RFC section, or a
+reproduced adoption defect from a real install. For curated rows, a new catalog entry, a test that
 only pins current behavior, another fixture dimension, a rename or a docs
 restatement is not a task on its own; it is accepted as part of the anchored
 row that consumes it. Review credits the gap closed, not the PR count.
 
-If you do not see a matching task:
+If you do not see a matching board task, a self-contained reproduced defect,
+accepted request or concrete maintenance outcome can go directly to a PR.
+Describe the gap, affected consumer, observable result and validation; a
+pre-existing issue, roadmap card or RFC is optional. Do not create a ceremonial
+issue only to qualify an ordinary repair. Open an issue for coordination before
+large or behavior-changing work whose outcome is not yet agreed.
 
-1. open a GitHub issue with the contributor task template; it asks for the
-   anchor and for who is blocked without the change;
-2. explain the problem, proposed scope, touched files, and validation command;
-3. wait for maintainer feedback before starting large or behavior-changing
-   work.
+| Contribution case | Route | Required basis |
+| --- | --- | --- |
+| Self-contained reproduced defect, accepted request or maintenance outcome | Direct PR | Concrete gap, consumer, result and validation; external anchor optional |
+| Catalog, test or fixture addition without a consumer or gap | Discussion until a useful outcome is established | Adding another entry or pinning current output is not an outcome |
+| Curated board row | Board claim or contributor-task issue | Valid canonical anchor, gap, exit and validation |
 
-Small docs typo fixes and obviously safe cleanups can go straight to a pull
-request.
+Small docs typo fixes and obviously safe cleanups can go straight to a PR.
+
 
 ## Public And Private Boundaries
 

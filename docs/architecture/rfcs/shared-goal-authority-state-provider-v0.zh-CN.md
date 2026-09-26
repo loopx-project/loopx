@@ -1,6 +1,6 @@
 # RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）
 
-- 状态：Draft，正在接受 maintainer review
+- 状态：已接受
 - 替代 / 关闭：无
 - 最初提案方：NoKV Lab
 - 扩展修订方：LoopX maintainer

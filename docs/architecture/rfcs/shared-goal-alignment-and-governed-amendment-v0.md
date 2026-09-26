@@ -1,6 +1,6 @@
 # RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)
 
-- Status: Draft; under maintainer review
+- Status: Accepted
 - Supersedes / closes: none
 - Tracking issue: [#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - Date: 2026-09-02

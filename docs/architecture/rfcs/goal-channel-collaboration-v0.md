@@ -1,6 +1,6 @@
 # RFC: Goal Channel Collaboration v0
 
-- Status: Draft
+- Status: Accepted
 - Supersedes / closes: none
 - Scope: provider-backed collaboration channels for one LoopX goal
 - Decision type: product architecture and staged integration contract

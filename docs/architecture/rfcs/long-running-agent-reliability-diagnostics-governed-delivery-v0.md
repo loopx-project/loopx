@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft, product direction and delivery contract |
+| Status | Accepted |
 | Supersedes / closes | none |
 | Date | 2026-08-16 |
 | Authors | LoopX maintainers |

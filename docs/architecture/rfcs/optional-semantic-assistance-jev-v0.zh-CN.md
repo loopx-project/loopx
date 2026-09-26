@@ -1,8 +1,8 @@
 # RFC：Agent 判断与可选独立评估——以 Jev 为候选方案（v0）
 
-- **RFC status：** Draft；M0 **accepted-for-discussion（接受为讨论稿）**（[维护者决定](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204)）。Q1–Q7 仍待决；研究/设计未获实施批准。
+- **RFC status：** 已接受
 - **替代 / 关闭：** 无
-- **Delivery maturity：** 研究提案；附录 A 单独提出仅 D1 的可选 shadow 实现，没有建立模型质量资格或自动纠正效果。默认关闭的哨兵 capability 及其录制对照见 [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.zh-CN.md)；这些数字不改变本 Draft 的状态。
+- **Delivery maturity：** 研究提案；附录 A 单独提出仅 D1 的可选 shadow 实现，没有建立模型质量资格或自动纠正效果。默认关闭的哨兵 capability 及其录制对照见 [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.zh-CN.md)；这些数字不证明实现资格或产品采用。
 - **Created：** 2026-09-19。**Last normative revision：** 2026-09-20。
 - **Implementation baseline：** `9f1916960306b3650d795895b89f331eeae2516e`；在 PR 版本 `27812bd0fb437f831a541b564bcb5be8a96ff77e` 重新核对源码归属与触发器行为。历史 upstream 检查记于附录 A，不构成全系统认证。
 - **Authors / owners：** 提案作者；被选方向由现有领域维护者负责。不新增运行时权威，也未指派实施 owner。
@@ -11,7 +11,7 @@
 
 ## 文档地图与维护契约
 
-第 1–10 节提出研究问题、比较方法与边界；第 11 节定义有条件里程碑；第 12 节列未决问题。第 4 节记录具名基线的源码事实。附录保留历史、决定与证据。中文是英文的语义镜像（semantic mirror），两版须同步修订。D1–D8、I1–I8、F01–F12 是文档标识，不是新运行时枚举，也不因发布 Draft 自动产生执行义务。
+第 1–10 节提出研究问题、比较方法与边界；第 11 节定义有条件里程碑；第 12 节列未决问题。第 4 节记录具名基线的源码事实。附录保留历史、决定与证据。中文是英文的语义镜像（semantic mirror），两版须同步修订。D1–D8、I1–I8、F01–F12 是文档标识，不是新运行时枚举，也不因合入设计 自动产生执行义务。
 
 理解提案为何改变，请看[附录 E](#附录-e讨论演进与评审教训)；确认实际作出了什么决定，请看[附录 B](#附录-b决策日志)。
 
@@ -21,7 +21,9 @@
 
 **哪些判断现有 Agent 流程已经做得足够好，哪些地方可能受益于独立的有限评估，Jev 在这个角色上能否比现有模型提供额外价值？** 下列八种场景讨论这种分工，第 3 节给出基于预期价值的暂定调查顺序。保留原流程、只改善证据、使用现有模型、延期评估和不采用 Jev，都是合法结果。
 
-维护者已明确接受将这些材料收录为 Draft 讨论提案，仅限讨论：[M0 收录决定](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204)，对应已审 head `62db4478afbf2c947b1c864e52b690146fbf3f94`。三类决定的边界为：
+按[仓库生命周期契约](README.md#how-to-read-this-index)，已合入的 RFC 现在是已接受、可认领的设计依据。下述 M0 收录决定保留此前仅讨论的历史范围，不替代当前生命周期规则。Q1–Q7、研究选择、真实实验、数据/出站、支出与产品采用仍有独立门槛。
+
+此前维护者明确接受将这些材料收录为 Draft 讨论提案，仅限讨论：[M0 收录决定](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204)，对应已审 head `62db4478afbf2c947b1c864e52b690146fbf3f94`。三类决定的边界为：
 
 | 决定 | 请求范围 | 不批准的事项 |
 | --- | --- | --- |
@@ -198,7 +200,7 @@ D1 分别研究目标关系与证据增量。保留必要前置、合理阻塞�
 
 实验须固定请求模型、记录实际模型和问题版本，并披露不匹配。官方接口/模型文档不等于 live 资格、数据留存协议或中英文任务的实测价值。已公开的[模型限制](https://docs.typesafe.ai/model-jaggedness/jev-1.13) 支持针对间接关系、无关上下文和对抗内容设计测试。
 
-包位置、最终 CLI/API、profile 版本、持久化、请求生命周期与计费机制，等获选 caller 证明需要后再定。现有严格 profile v0 不能直接接受虚构字段；后续配置决定必须保留限制及旧 reader 行为。本 Draft 不选择替代 schema。
+包位置、最终 CLI/API、profile 版本、持久化、请求生命周期与计费机制，等获选 caller 证明需要后再定。现有严格 profile v0 不能直接接受虚构字段；后续配置决定必须保留限制及旧 reader 行为。本 RFC 不选择替代 schema。
 
 ## 6. 替代方案与采用逻辑
 
@@ -275,7 +277,7 @@ D1 应覆盖真实推进、必要测试/研究、负面实验、合理等待、I
 
 ### 9.3 有条件的产品义务
 
-F01–F12 保留为未来实施验收类别，不是当前测试结果，也不要求先实施 M2 才能讨论 Draft。获选 caller 决定适用性并记录有理由的排除项。
+F01–F12 保留为未来实施验收类别，不是当前测试结果，也不要求先实施 M2 才能认领设计。获选 caller 决定适用性并记录有理由的排除项。
 
 | ID | 案例 | 对应产品试点被接受前的必须结果 |
 | --- | --- | --- |

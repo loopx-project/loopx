@@ -1,8 +1,8 @@
 # RFC: Agent Judgment and Optional Independent Assessment — Jev as a Candidate (v0)
 
-- **RFC status:** Draft; M0 **accepted-for-discussion** ([maintainer decision](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204)). Q1–Q7 remain pending; the research/design is not accepted for implementation.
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Research proposal; a separate D1-only optional shadow implementation is proposed in Appendix A. No model qualification or automatic correction is established. The default-off sentinel capability and its recorded differential live in [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.md); those numbers do not change this Draft's status.
+- **Delivery maturity:** Research proposal; a separate D1-only optional shadow implementation is proposed in Appendix A. No model qualification or automatic correction is established. The default-off sentinel capability and its recorded differential live in [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.md); those numbers do not prove implementation qualification or product adoption.
 - **Created:** 2026-09-19. **Last normative revision:** 2026-09-20.
 - **Implementation baseline:** `9f1916960306b3650d795895b89f331eeae2516e`; source ownership and trigger behavior rechecked at PR revision `27812bd0fb437f831a541b564bcb5be8a96ff77e`. Historical upstream inspection is recorded in Appendix A, not a whole-system certification.
 - **Authors / owners:** Proposal author; existing domain maintainers own any direction selected. No new runtime authority or assigned implementation owner.
@@ -11,7 +11,7 @@
 
 ## Document map and maintenance contract
 
-Sections 1–10 propose the research question, comparison method and boundaries; section 11 defines conditional milestones; section 12 lists unresolved decisions. Section 4 records source facts at the named baseline. Appendices preserve history, decisions and evidence. The Chinese document is a semantic mirror; revise both together. D1–D8, I1–I8 and F01–F12 are document identifiers, not new runtime enums or obligations created by publishing this Draft.
+Sections 1–10 propose the research question, comparison method and boundaries; section 11 defines conditional milestones; section 12 lists unresolved decisions. Section 4 records source facts at the named baseline. Appendices preserve history, decisions and evidence. The Chinese document is a semantic mirror; revise both together. D1–D8, I1–I8 and F01–F12 are document identifiers, not new runtime enums or obligations created by merging this design.
 
 For why the proposal changed, read [Appendix E](#appendix-e-discussion-evolution-and-review-lessons); for what has actually been decided, read [Appendix B](#appendix-b-decision-log).
 
@@ -21,7 +21,9 @@ No direction, provider, package, profile version, command or storage design is a
 
 **Which judgments are already handled adequately by the existing Agent workflow, where could a separate bounded assessment help, and would Jev add value over an existing model in that role?** The eight scenarios below discuss that division of work, with a provisional expected-value investigation order in section 3. Retaining the current workflow, improving evidence alone, using an existing model, postponing evaluation and rejecting Jev are valid outcomes.
 
-The maintainer has accepted repository intake of this material as a Draft discussion proposal only: [M0 intake decision](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204), reviewed at `62db4478afbf2c947b1c864e52b690146fbf3f94`. The decision boundaries are:
+The merged RFC is now an Accepted, claimable design basis under the [repository lifecycle contract](README.md#how-to-read-this-index). The M0 intake decision below records the earlier discussion-only scope; it does not replace this current lifecycle rule. Q1–Q7, study selection, live research, data/egress, spend and product adoption retain their independent gates.
+
+Historically, the maintainer accepted repository intake of this material as a Draft discussion proposal only: [M0 intake decision](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204), reviewed at `62db4478afbf2c947b1c864e52b690146fbf3f94`. The decision boundaries are:
 
 | Decision | Requested scope | What it does not approve |
 | --- | --- | --- |
@@ -198,7 +200,7 @@ The [TypeSafe API](https://docs.typesafe.ai/api) accepts state, keyed typed ques
 
 A trial must pin its requested model, record the actual model and question version, and disclose mismatches. Official interface/model documentation is not live qualification, a retention agreement or measured value on English/Chinese workloads. The documented [model limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13) motivate tests for indirection, irrelevant context and adversarial content.
 
-Package placement, final CLI/API, profile version, persistence, request lifecycle and accounting are deferred until an adopted caller justifies them. Existing strict profile v0 cannot simply accept invented fields; a later configuration decision must preserve restrictions and old-reader behavior. This Draft selects no replacement schema.
+Package placement, final CLI/API, profile version, persistence, request lifecycle and accounting are deferred until an adopted caller justifies them. Existing strict profile v0 cannot simply accept invented fields; a later configuration decision must preserve restrictions and old-reader behavior. This RFC selects no replacement schema.
 
 ## 6. Alternatives and adoption logic
 
@@ -275,7 +277,7 @@ For D1 include actual useful progress, necessary tests/research, negative experi
 
 ### 9.3 Conditional product obligations
 
-F01–F12 remain future implementation acceptance categories. They are not present test results or requirements to implement M2 before this Draft can be discussed. The selected caller determines applicability and records justified exclusions.
+F01–F12 remain future implementation acceptance categories. They are not present test results or requirements to implement M2 before this design can be claimed. The selected caller determines applicability and records justified exclusions.
 
 | ID | Case | Required result before the applicable product pilot is accepted |
 | --- | --- | --- |

@@ -17,7 +17,7 @@ body:
     id: direction
     attributes:
       label: Technical direction
-      description: Choose the closest current program. This routes discussion; it does not make a draft implementation-ready.
+      description: Choose the closest current program. This routes discussion; merged active RFCs are Accepted and claimable, while implementation evidence and authorization remain separate.
       options:
         - Core control-plane hardening
         - Long-horizon benchmark evidence
@@ -42,22 +42,23 @@ body:
     id: anchor_type
     attributes:
       label: Anchor type
-      description: A task is claimable only with one anchor from the board's Task Admission Rule (docs/development/contributor-tasks.md). Catalog entries, behavior-pinning tests, renames and doc restatements are not tasks on their own.
+      description: Curated board work needs its canonical anchor. Ordinary self-contained contributions may use a reproduced defect, accepted request or concrete maintenance outcome without a pre-existing issue or RFC.
       options:
         - Roadmap stream / milestone / card (S, G, R) in loopx-overall-roadmap-v0
-        - Accepted or Active RFC section or invariant
+        - Accepted RFC section or invariant
         - Reproduced adoption defect (public issue from a real install, run, upgrade or host)
+        - Self-contained reproduced defect, accepted request or maintenance outcome
         - None yet; I am asking whether this should become a task
     validations:
       required: true
   - type: input
     id: anchor_ref
     attributes:
-      label: Anchor reference
-      description: The exact card sentence, RFC file and section, or public issue number the task closes.
+      label: Optional anchor reference
+      description: Required for curated board work; optional for an ordinary self-contained contribution. Cite the exact card, RFC section or public issue when one exists.
       placeholder: "R1 · \"confirmed commitments survive materialization\" / shared-goal-authority-state-provider-v0 §D2 / #4941"
     validations:
-      required: true
+      required: false
   - type: textarea
     id: summary
     attributes:

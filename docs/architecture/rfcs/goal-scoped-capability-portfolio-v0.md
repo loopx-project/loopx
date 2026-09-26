@@ -1,6 +1,6 @@
 # RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Proposal; existing catalog, hooks and external-evidence slices are partial prerequisites
 - **Authors / owners:** LoopX capability and control-plane maintainers

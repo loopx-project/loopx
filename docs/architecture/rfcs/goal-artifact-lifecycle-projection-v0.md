@@ -1,6 +1,6 @@
 # RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0
 
-- Status: Draft, under maintainer review
+- Status: Accepted
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-12

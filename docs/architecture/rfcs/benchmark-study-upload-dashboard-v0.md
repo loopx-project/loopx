@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft, integration proposal |
+| Status | Accepted |
 | Supersedes / closes | none |
 | Date | 2026-09-02 |
 | Authors | LoopX maintainers |
@@ -230,7 +230,7 @@ The v0 direction is accepted when:
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | 集成提案草案 |
+| 状态 | 已接受 |
 | 日期 | 2026-09-02 |
 | 作者 | LoopX 维护者 |
 | 范围 | Provider-neutral 的 benchmark study 描述、上传记录与只读看板投影 |

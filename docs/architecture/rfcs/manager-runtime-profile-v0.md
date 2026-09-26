@@ -1,6 +1,6 @@
 # Manager runtime profile v0
 
-- **RFC status:** Draft (M1 implementation candidate under
+- **RFC status:** Accepted
   [capable-manager-semantic-handoff-v0](capable-manager-semantic-handoff-v0.md))
 - **Supersedes / closes:** none
 

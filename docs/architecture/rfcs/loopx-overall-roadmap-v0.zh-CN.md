@@ -1,6 +1,6 @@
 # LoopX 整体路线总纲 v0：产品、协作、技术与交付
 
-- 状态：Draft 总体路线；不自动接受领域 RFC、不晋升 provider、不改变默认权限。
+- 状态：已接受
 - 替代 / 关闭：无
 - 范围基线：2026-09-16，`0aa6179de`；管家故障复现基线单独保留在第 8 节。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
@@ -212,37 +212,37 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | --- | --- | --- | --- |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | S2 | Accepted；核心已实现，继续采用 | P0：复用 effect/recovery，先补 R1 部分提交反例，保持 replan ACK domain-local |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.zh-CN.md) | S2 | Accepted；整笔事务迁移中 | P0/P1：R1–R4 热事务优先；T0–T4 caller/删除/成本证据；不是百 Agent 前全量重写 |
-| [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | Draft；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
-| [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.zh-CN.md) | S2/S3/S7 | Draft；store、局部事务和 service admission 基础已存在 | P1→P2：R5 本地 D1–D3；R6 认证跨 host；真实 backend/soak/恢复资格后才晋升 |
-| [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | S3 | Draft；Stage 1/2，完整 intent/commit 未闭合 | P1：R4 一个 work-graph amendment class；CAS/lease impact、冲突及丢响应回执 |
-| [Goal Direction Baseline (v0)](goal-direction-baseline-v0.zh-CN.md) | S3/S6 | Draft；只读设计 | P1：合成 fixture 验同 Agent/current revision 的材料阅读；不写 Vision、不自动建 Todo |
-| [Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | S3/S5 | Draft；只读设计 | P1：从现有 typed facts 显示 milestone/guard/next transition；不加流程引擎 |
-| [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.zh-CN.md) | S1/S3 | Draft；profile/intake 局部交付，M1–M4 未完整验收 | P0→P1：R1/R2 真实团队，R3 语义 peer 协作与持久回报；接续矩阵及 A1–A20 |
-| [Manager runtime profile v0](manager-runtime-profile-v0.zh-CN.md) | S1/S4 | Draft；private Codex profile 已有，通用资格未完成 | P0：真实工具/会话/恢复与权限分级；runtime label 不代替资格 |
+| [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | 已接受；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
+| [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.zh-CN.md) | S2/S3/S7 | 已接受；store、局部事务和 service admission 基础已存在 | P1→P2：R5 本地 D1–D3；R6 认证跨 host；真实 backend/soak/恢复资格后才晋升 |
+| [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | S3 | 已接受；Stage 1/2，完整 intent/commit 未闭合 | P1：R4 一个 work-graph amendment class；CAS/lease impact、冲突及丢响应回执 |
+| [Goal Direction Baseline (v0)](goal-direction-baseline-v0.zh-CN.md) | S3/S6 | 已接受；只读设计 | P1：合成 fixture 验同 Agent/current revision 的材料阅读；不写 Vision、不自动建 Todo |
+| [Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | S3/S5 | 已接受；只读设计 | P1：从现有 typed facts 显示 milestone/guard/next transition；不加流程引擎 |
+| [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.zh-CN.md) | S1/S3 | 已接受；profile/intake 局部交付，M1–M4 未完整验收 | P0→P1：R1/R2 真实团队，R3 语义 peer 协作与持久回报；接续矩阵及 A1–A20 |
+| [Manager runtime profile v0](manager-runtime-profile-v0.zh-CN.md) | S1/S4 | 已接受；private Codex profile 已有，通用资格未完成 | P0：真实工具/会话/恢复与权限分级；runtime label 不代替资格 |
 | [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.zh-CN.md) | S4 | 持续选型记录；局部 runtime 与 team card 证据 | P0：沿已合格 binding 验 R2；按 harness/model/profile/host 记录资格，不据一次 smoke 统一晋级 |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.zh-CN.md) | S3/S6 | Stage A 已交付；文件名不代表通用 memory substrate | P1：R3 复用 prepare/inspect/adopt；同机无 lease 限制保留至新接续路径验收 |
-| [Agent Session Execution Modes (v0)](agent-session-execution-modes-v0.zh-CN.md) | S4 | Draft；attached binding/broker/fence 局部实现 | P0→P2：一个 binding 一个 executor，managed supervision，再做跨 host admission；禁止静默模式切换 |
-| [Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | S4/S10 | Draft；现有 Desktop ownership repair 不等于 loopxd | P1：按 service-profile 唯一 owner/readiness/drain/restart 验最小组合；无第二 scheduler |
-| [LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.zh-CN.md) | S4/S5 | Draft；attached/managed/UI 基础存在，统一旅程未完整验收 | P0→P1：本地设置→绑定→团队→修订→恢复→回报，packaged frontend 实测；保留直接 worker 对话 |
-| [Goal Channel Collaboration v0](goal-channel-collaboration-v0.zh-CN.md) | S5 | Draft；Lark vertical 局部已交付 | P1：team card/回报/幂等/受众实测；Goal channel 与 Agent session binding 不混同 |
+| [Agent Session Execution Modes (v0)](agent-session-execution-modes-v0.zh-CN.md) | S4 | 已接受；attached binding/broker/fence 局部实现 | P0→P2：一个 binding 一个 executor，managed supervision，再做跨 host admission；禁止静默模式切换 |
+| [Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | S4/S10 | 已接受；现有 Desktop ownership repair 不等于 loopxd | P1：按 service-profile 唯一 owner/readiness/drain/restart 验最小组合；无第二 scheduler |
+| [LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.zh-CN.md) | S4/S5 | 已接受；attached/managed/UI 基础存在，统一旅程未完整验收 | P0→P1：本地设置→绑定→团队→修订→恢复→回报，packaged frontend 实测；保留直接 worker 对话 |
+| [Goal Channel Collaboration v0](goal-channel-collaboration-v0.zh-CN.md) | S5 | 已接受；Lark vertical 局部已交付 | P1：team card/回报/幂等/受众实测；Goal channel 与 Agent session binding 不混同 |
 | [Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | S3/S8 | 显式配置下已实现 | P0 硬化：有界读→语义 triage→ACK/replay；默认关闭与 provider 私有 cursor 保持 |
-| [Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | S3/S8 | Draft；periodic-report 首个 vertical 已实现 | P1：R3 返回/后继复用 durable intent；hook 失败隔离，不能加入主事务或直接执行 effect |
-| [Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | S3/S6/S8 | Draft；三 owner 集成仍待资格 | P1/P2：IM 投递、LoopX work authority、OV context 分离；断线重放/权限撤销/来源失效 |
-| [外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | S8/S11 | Draft；已实现类型化 Core plan/admission/retirement 与 CLI 切片 | P1：用同一 provenance 回执分别验收一个 host-method 与一个 connector 的真实执行，再补 frontend/Lark 同源投影 |
-| [自动执行准入 v0](automatic-execution-admission-v0.zh-CN.md) | S7/S2/S4 | Draft；本地候选，宿主未推广 | P0：App 调度建议下限优先；M2 原子启动/hook 验收，M3 设置验收 |
-| [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | S7/S5 | Draft；Codex aggregate/cost 展示已有切片 | P0 观测→P1 多 provider：未知不作零、重复扣费去重、价格来源/时效；usage 不自动授权预算 |
-| [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | S5 | Draft；action/attention 纵切及本地交付链/验收复盘已实现 | P1：跨渠道披露和受治理的修订/结算复盘；本地可见性不代表 G2 通过 |
-| [Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | S5/S11 | Draft；Held | P3：第二个重复真实需求出现才重开；sidecar 不改变 gate/quota/调度 |
-| [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.zh-CN.md) | S8/S9 | Draft；proposal only | P2：模拟 adapter 的一次不可变确认→effect→对账→原路回报；金融 provider 独立包，不扩普通协调权限 |
-| [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | Draft；M2 composition/successor 局部实现 | P1：observation/write-time gate/closure basis 独立验证；自选模型和推断触发继续 defer |
-| [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | Draft；M1 只读观测 | P2：matched shadow stride 实验，定义代价与事件；不直接改变生产节奏 |
-| [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.zh-CN.md) | S1/S3/S6/S8/S11 | Draft；只读配置/上下文检查切片 | P1：复用既有 owner 验收纠正→新会话决策，再做按需组合与可测方法演化；不建万能记忆库或第二个启用开关 |
-| [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | S6/S11 | Draft；Stage 1 verified-outcome 绑定 | P1 只读 reducer→P2 pilot：区分 recalled/applied/utility，归因不自动改 ranking |
-| [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | S6/S8 | Draft；可选只读评估 | P2：显式 gap recall、来源与权限可解析、关闭不影响主流程；不当 work authority |
-| [Frontier Science Research Program v0](frontier-science-research-program-v0.zh-CN.md) | S11 | Draft；十轨研究提案 | P2：优先 sequential evidence/continuation/stride；T01–T10 按现有 owner、冻结实验与升降级门槛 |
-| [Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | S11 | Draft；active research program | P1 持续：ALE/LHTB/DeepSWE 原生结果、matched arms、成本/恢复，研究环境不进入产品运行面 |
-| [Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | S11/S5 | Draft；manifest/upload projection 提案 | P2：紧凑 public-safe study→readback，保留 benchmark-native score authority；显式 opt-in upload |
-| [Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | S10/S13 | Draft；L1 default-off 原型与 DSH event adapter 存在，P0 未验收 | P1：C0 adapter fidelity/C1 non-interference/overhead；再讨论 L2 advice/L3 governed seams/L4 adoption |
+| [Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | S3/S8 | 已接受；periodic-report 首个 vertical 已实现 | P1：R3 返回/后继复用 durable intent；hook 失败隔离，不能加入主事务或直接执行 effect |
+| [Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | S3/S6/S8 | 已接受；三 owner 集成仍待资格 | P1/P2：IM 投递、LoopX work authority、OV context 分离；断线重放/权限撤销/来源失效 |
+| [外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | S8/S11 | 已接受；已实现类型化 Core plan/admission/retirement 与 CLI 切片 | P1：用同一 provenance 回执分别验收一个 host-method 与一个 connector 的真实执行，再补 frontend/Lark 同源投影 |
+| [自动执行准入 v0](automatic-execution-admission-v0.zh-CN.md) | S7/S2/S4 | 已接受；本地候选，宿主未推广 | P0：App 调度建议下限优先；M2 原子启动/hook 验收，M3 设置验收 |
+| [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | S7/S5 | 已接受；Codex aggregate/cost 展示已有切片 | P0 观测→P1 多 provider：未知不作零、重复扣费去重、价格来源/时效；usage 不自动授权预算 |
+| [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | S5 | 已接受；action/attention 纵切及本地交付链/验收复盘已实现 | P1：跨渠道披露和受治理的修订/结算复盘；本地可见性不代表 G2 通过 |
+| [Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | S5/S11 | 已接受；Held | P3：第二个重复真实需求出现才重开；sidecar 不改变 gate/quota/调度 |
+| [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.zh-CN.md) | S8/S9 | 已接受；proposal only | P2：模拟 adapter 的一次不可变确认→effect→对账→原路回报；金融 provider 独立包，不扩普通协调权限 |
+| [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现 | P1：observation/write-time gate/closure basis 独立验证；自选模型和推断触发继续 defer |
+| [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 只读观测 | P2：matched shadow stride 实验，定义代价与事件；不直接改变生产节奏 |
+| [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.zh-CN.md) | S1/S3/S6/S8/S11 | 已接受；只读配置/上下文检查切片 | P1：复用既有 owner 验收纠正→新会话决策，再做按需组合与可测方法演化；不建万能记忆库或第二个启用开关 |
+| [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | S6/S11 | 已接受；Stage 1 verified-outcome 绑定 | P1 只读 reducer→P2 pilot：区分 recalled/applied/utility，归因不自动改 ranking |
+| [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | S6/S8 | 已接受；可选只读评估 | P2：显式 gap recall、来源与权限可解析、关闭不影响主流程；不当 work authority |
+| [Frontier Science Research Program v0](frontier-science-research-program-v0.zh-CN.md) | S11 | 已接受；十轨研究提案 | P2：优先 sequential evidence/continuation/stride；T01–T10 按现有 owner、冻结实验与升降级门槛 |
+| [Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | S11 | 已接受；active research program | P1 持续：ALE/LHTB/DeepSWE 原生结果、matched arms、成本/恢复，研究环境不进入产品运行面 |
+| [Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | S11/S5 | 已接受；manifest/upload projection 提案 | P2：紧凑 public-safe study→readback，保留 benchmark-native score authority；显式 opt-in upload |
+| [Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | S10/S13 | 已接受；L1 default-off 原型与 DSH event adapter 存在，P0 未验收 | P1：C0 adapter fidelity/C1 non-interference/overhead；再讨论 L2 advice/L3 governed seams/L4 adoption |
 
 共享权威的[证据 companion](shared-goal-authority-state-provider-v0-evidence.zh-CN.md) 属于 S2/S10 的 backend/soak 资格；[RFC 模板](TEMPLATE.md) 和[索引](README.md) 属于 S12 的维护合同，不作为额外产品能力。未来新增主 RFC 必须补一行，删除/合并必须保留替代指针；历史文件名不能提升交付成熟度。
 
@@ -572,4 +572,4 @@ uv run --extra test python -m pytest -q tests/test_turn_managed_executor_binding
 
 这 177 项不是全仓测试，也不是云端、真实模型、packaged browser、Lark 或 PostgreSQL 现场资格。#4552 的 browser fixture 与选型 RFC 记录的既有现场读取为历史证据，本轮未复跑，不能推广到团队执行验收。F1–F4 的复现步骤在上表固定，实施时将对应的独立语义反例加入已有测试，不提交本次临时诊断脚本或私有运行日志。
 
-维护规则：本页只更新当前判断、卡的边界及通过证据；历史长账本移至 companion，领域 RFC 的状态与这里同步。领域状态/权限/迁移规则发生冲突时，停相关实现并修正文档，不用本路线覆盖已接受的 authority 合同。该文档合并表示路线可发现，不表示 R1–R7 已完成或 Draft 决策已晋升。
+维护规则：本页只更新当前判断、卡的边界及通过证据；历史长账本移至 companion，领域 RFC 的状态与这里同步。领域状态/权限/迁移规则发生冲突时，停相关实现并修正文档，不用本路线覆盖已接受的 authority 合同。该文档合并表示路线可发现，不表示 R1–R7 已完成或 实现或晋升门槛已通过。

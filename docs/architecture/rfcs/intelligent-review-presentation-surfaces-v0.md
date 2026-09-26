@@ -1,6 +1,6 @@
 # RFC: Intelligent Review and Dynamic Presentation Surfaces v0
 
-- Status: Draft, under maintainer review
+- Status: Accepted
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-09-01
@@ -682,7 +682,7 @@ semantic zoom and historical replay. Purposeful motion is a product objective;
 registration, execution, return, independent acceptance and requester adoption
 remain distinct. Preserve source/revision lineage and uncertainty; never infer
 activity from decorative motion or confidence from agreement counts. This is a
-Draft presentation slice, not a shipped team stream or new scheduling authority.
+Accepted design for a planned presentation slice; no shipped team stream or new scheduling authority is claimed.
 Its L1–L3 plan and V1–V7 acceptance extend this RFC's Stage 3 presentation journey;
 they do not close cross-channel or governed settlement acceptance here.
 
@@ -1152,7 +1152,7 @@ success.
 
 ## 18. Acceptance criteria for this RFC
 
-The RFC may move beyond Draft when maintainers agree on:
+Merge accepts this design basis. Implementation qualification still covers:
 
 1. the projection-only authority boundary;
 2. the closed interaction modes and precedence;

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft, under maintainer review |
+| Status | Accepted |
 | Supersedes / closes | none |
 | Date | 2026-08-26 |
 | Tracking issue | [#3479](https://github.com/huangruiteng/loopx/issues/3479) |
@@ -467,7 +467,7 @@ choices remain deliberately deferred to the first wiring PR:
    queue; both must preserve the same identity, failure isolation, and primary
    spend semantics.
 
-The design may move from Draft only after maintainers accept the ownership
-split and one public test packet proves the validation matrix through Slice 2.
+Merge accepts the design. General implementation qualification requires the
+ownership split and a public test packet proving the validation matrix through Slice 2.
 Automatic external delivery requires a separate accepted effect-boundary
 change.

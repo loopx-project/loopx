@@ -1,6 +1,6 @@
 # RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Partial (M0/M0.5 checks, M1 typed action domains and M2 Turn contract generation implemented; M3/M4 retirement remains incomplete)
 - **Authors / owners:** LoopX contributors; control-plane kernel maintainers own approval
@@ -989,7 +989,7 @@ M0/M0.5 checks run today; Q3/Q6 choices are implemented as described in Section 
 M2 Turn generation is consumed by `transaction.py`, `settlement.ts` and the loop
 controller. Milestone rows below retain their acceptance obligations; they are
 not a list of work that has never started. Original measurements keep their
-original SHA. This readback does not change Draft status or infer approval.
+original SHA. This readback does not imply implementation qualification or promotion; RFC merge separately accepts the design.
 
 The six legacy fields are still written. `protocol_action_packet` retirement
 still needs a target release, consumer scope and historical signature/rollback

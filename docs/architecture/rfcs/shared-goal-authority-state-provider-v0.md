@@ -1,6 +1,6 @@
 # RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)
 
-- Status: Draft, under maintainer review
+- Status: Accepted
 - Supersedes / closes: none
 - Initially proposed by: NoKV Lab
 - Widened by: LoopX maintainers

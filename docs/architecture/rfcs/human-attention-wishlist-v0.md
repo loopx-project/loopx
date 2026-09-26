@@ -1,6 +1,6 @@
 # RFC: Human Attention Wishlist v0
 
-- Status: Draft, under maintainer review
+- Status: Accepted
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-14

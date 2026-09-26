@@ -1,6 +1,6 @@
 # RFC：Goal Direction Baseline（目标方向基线）v0
 
-- **RFC 状态：** Draft；等待维护者评审
+- **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
 - **交付成熟度：** Proposal
 - **作者 / 负责人：** LoopX 维护者与贡献者

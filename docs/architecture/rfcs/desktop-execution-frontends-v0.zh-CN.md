@@ -1,6 +1,6 @@
 # RFC：LoopX 桌面执行前端 v0
 
-- 状态：Draft
+- 状态：已接受
 - 替代 / 关闭：无
 - 决策边界：同时支持挂接到外部拥有的 Agent 会话，以及端到端由 LoopX 托管的桌面运行时
 - 初始挂接运行时：Codex App / app-server

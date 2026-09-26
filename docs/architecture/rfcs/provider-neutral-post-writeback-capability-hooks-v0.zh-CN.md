@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | Draft，等待 maintainer 评审 |
+| 状态 | 已接受 |
 | 替代 / 关闭 | 无 |
 | 日期 | 2026-08-26 |
 | 跟踪 issue | [#3479](https://github.com/huangruiteng/loopx/issues/3479) |
@@ -407,4 +407,4 @@ sidecar journal 与 intent output。复用同一 schema 会掩盖实质不同的
    相同 identity、故障隔离与主 spend 语义。
 
 只有 maintainer 接受 ownership 拆分、且一份公开测试 packet 通过 Slice 2 的验证矩阵，
-本文才可从 Draft 晋级。自动 external delivery 还需要单独接受 effect-boundary 改动。
+一般实现才通过资格验证；RFC 合入即接受设计。自动 external delivery 还需要单独接受 effect-boundary 改动。

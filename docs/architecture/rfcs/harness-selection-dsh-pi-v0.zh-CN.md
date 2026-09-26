@@ -1,6 +1,6 @@
 # DSH / Pi：L1 观察与 Managed Runtime 选型
 
-- **RFC 状态：** Draft（有证据的实现评估，不是运行时晋级声明）
+- **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
 
 范围：[Reliability Diagnostics](./long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md)

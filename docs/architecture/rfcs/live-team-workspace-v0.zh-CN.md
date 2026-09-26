@@ -1,6 +1,6 @@
 # RFC：团队实时工作区 v0
 
-- **RFC 状态：** Draft；产品与展示决策提案。
+- **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
 - **交付成熟度：** 部分实现：有界团队检查及已合并 [#4828](https://github.com/loopx-project/loopx/pull/4828) 的 Goal 对话可读成果/对照切片已交付。托管非 Chat 成果回读与空间流式展示仍未完成资格验证。
 - **Owner：** 既有工作区展示、协作与 runtime owner。

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft, under maintainer review |
+| Status | Accepted |
 | Supersedes / closes | none |
 | Date | 2026-08-13 |
 | Authors | LoopX maintainers |
@@ -799,7 +799,7 @@ control-plane failures.
 
 | Milestone | Deliverable | Promotion gate | Status |
 |---|---|---|---|
-| M0 | RFC, current-state inventory, and explicit ownership decision | Maintainer review; no runtime behavior | Draft |
+| M0 | RFC, current-state inventory, and explicit ownership decision | Maintainer review; no runtime behavior | Accepted design |
 | M1 | Characterization fixtures plus typed research observation and closure contract in Explore | Deterministic normalization, privacy, compatibility, and negative tests | Not started |
 | M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | Partially implemented (#3173: explicit experiment projection and successor binding) |
 | M3 | Goal-frontier obligation, exact Todo/experiment lineage, and shared write-time gate | State/replay matrix and premerge canary pass | Not started |
@@ -909,7 +909,7 @@ This is a living RFC, not an append-only diary.
 
 ## 20. Acceptance Criteria for the RFC
 
-The RFC is ready to move from Draft to Accepted when maintainers agree that:
+Merge accepts this design basis. Implementation qualification still requires evidence that:
 
 - ownership boundaries do not create a second research graph or executor;
 - the first slice is useful without inferred pair generation;

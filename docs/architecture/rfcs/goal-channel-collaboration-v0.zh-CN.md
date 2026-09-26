@@ -1,6 +1,6 @@
 # RFC: Goal Channel 协作模型 v0
 
-- 状态：Draft
+- 状态：已接受
 - 替代 / 关闭：无
 - 范围：绑定到单个 LoopX goal 的 provider-backed 外部协作通道
 - 决策类型：产品架构与分阶段集成契约

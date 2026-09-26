@@ -1,6 +1,6 @@
 # RFC: Human-confirmed domain operations (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers and optional domain-provider maintainers

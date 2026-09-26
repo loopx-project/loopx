@@ -1,6 +1,6 @@
 # RFC: <Decision or Capability Name> (v0)
 
-- **RFC status:** Draft | Under review | Accepted | Rejected | Superseded | Retired
+- **RFC status:** Accepted
 - **Supersedes / closes:** none | <links to the RFCs this one replaces or closes>
 - **Superseded by:** <link> (only when the status is Superseded)
 - **Delivery maturity:** Proposal | Experiment | Partial | Implemented | Promoted
@@ -25,14 +25,20 @@ normative sections change:
 - Appendices contain the non-normative execution ledger, decision log, evidence
   registry, rejected alternatives, and incident lessons.
 
-RFC maturity and delivery maturity are independent. Dated progress entries do
+Merge accepts an active RFC as a qualified, claimable design basis. Do not keep
+Draft or Under review as merged lifecycle states. Design acceptance and delivery
+maturity are independent: implementation, live qualification, default changes
+and promotion still require their own evidence and authorization. Historical
+dispositions are Superseded, Retired and Rejected. Dated progress entries do
 not amend normative sections. Dated checkpoints live in
 [`ledger/<rfc-slug>/YYYY-MM-DD-slug.md`](ledger/README.md), never as a
-`checkpoint` heading inside the RFC body; the execution-ledger appendix only
+dated execution entry above the first appendix; the execution-ledger appendix only
 points at that directory. Lifecycle state is read from the header above into
-the generated [`STATUS.md`](STATUS.md): the value must start with one of the
-listed states, `Supersedes / closes` is mandatory (`none` is an explicit
-answer), and a `Superseded` RFC must name its successor.
+the generated [`STATUS.md`](STATUS.md): the value must be one of the
+lifecycle states, optionally followed by punctuation and a note, `Supersedes / closes` is mandatory (`none` is an explicit
+answer), and a `Superseded` RFC must link its successor that reciprocally names
+its predecessor. Normative checkpoint persistence/recovery headings and
+historical appendix records are legal.
 
 ---
 
@@ -138,8 +144,8 @@ this section only when the RFC cannot affect a running system, and say why.
 
 ## 11. Normative delivery plan
 
-Use cohesive milestones with explicit entry and exit gates. A milestone may
-ship while the RFC remains Draft.
+Use cohesive milestones with explicit entry and exit gates. An Accepted RFC
+may still have unimplemented or unqualified milestones.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |

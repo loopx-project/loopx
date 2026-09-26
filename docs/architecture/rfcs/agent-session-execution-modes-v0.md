@@ -1,6 +1,6 @@
 # RFC: Agent Session Execution Modes (v0)
 
-- **RFC status:** Draft, under maintainer review.
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Partial. The attached-host binding, broker, and runtime
   fencing already ship on `main`; the cross-host admission contract below is

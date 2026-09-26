@@ -1,6 +1,6 @@
 # DSH / Pi: L1 Observation and Managed Runtime Selection
 
-- **RFC status:** Draft (evidence-backed implementation assessment, not a runtime promotion)
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 
 Scope: the shared goals of [Reliability Diagnostics](./long-running-agent-reliability-diagnostics-governed-delivery-v0.md)

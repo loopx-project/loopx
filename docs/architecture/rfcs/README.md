@@ -42,15 +42,18 @@ The sections below are technical ownership areas, not maturity levels. Each
 primary RFC appears once under its nearest architectural owner even when it
 also affects other areas.
 
-Within each entry, RFC maturity and delivery maturity remain separate facts:
+A merged active RFC is **Accepted**: it is a qualified design basis and its
+bounded implementation slices are available to claim. Draft and review describe
+an unmerged proposal, not a lifecycle state in this repository. Superseded,
+Retired and Rejected documents remain historical, not claimable active designs.
 
-- **RFC status** records the decision state written in the RFC. `Draft` work
-  remains open to architectural change even when a bounded slice has shipped.
-- **Delivery on `main`** records the implementation state audited against the
-  repository. A merged experiment does not make its whole RFC accepted, and an
-  accepted RFC may still have later adoption work.
-- **Current boundary** names what is real now and what is still excluded. It is
-  a navigation aid, not a replacement for stable protocol documentation.
+Design acceptance and delivery maturity remain separate facts:
+
+- The generated [lifecycle index](STATUS.md) reads each RFC's canonical header.
+- **Delivery on `main`** records verified implementation maturity. Merge does not
+  prove implementation, live qualification, a new default, or promotion.
+- **Current boundary** names what is real now, remaining work and applicable
+  entry gates. Claiming a slice still respects its authorization and exit criteria.
 
 Within an RFC, keep the same separation:
 
@@ -62,8 +65,9 @@ Within an RFC, keep the same separation:
 
 Do not append progress reports to a normative delivery plan. Dated checkpoint
 logs live in [`ledger/<rfc-slug>/`](ledger/README.md), one entry per date and
-slice, with the RFC body keeping only a pointer; a heading containing
-`checkpoint` inside an RFC body fails the docs governance smoke. Schema
+slice, with the RFC body keeping only a pointer. The generator rejects dated
+execution headings above the first appendix, while permitting normative
+checkpoint contracts and historical appendix records. Schema
 reduction is never an incidental
 cleanup: the RFC or PR must name each removed field, document producer/reader/
 writer and compatibility research, define migration and rollback, prove the
@@ -76,35 +80,26 @@ changes.
 ### Lifecycle index and supersession
 
 [`STATUS.md`](STATUS.md) ([中文版](STATUS.zh-CN.md)) is the generated
-lifecycle index. It groups every RFC into `Accepted`, `Active` (`Draft`,
-`Under review`), `Superseded` and `Retired` (`Retired`, `Rejected`) from the
-status header inside each RFC, cross-checked against the status line in this
-README. Regenerate it with `python3 scripts/generate_rfc_status_index.py
---write`; `--check` fails when the file is stale or when any RFC violates the
-rules below, and the docs governance smoke runs that check.
+lifecycle index. It groups every RFC into `Accepted`, `Superseded` and
+`Retired` (`Retired`, `Rejected`) from its own header. README entries retain
+hand-audited delivery facts and do not cache lifecycle states. Change the English
+header and its Chinese mirror, then run
+`python3 scripts/generate_rfc_status_index.py --write`; `--check` rejects stale
+indexes, invalid headers, lineage and dated execution entries in normative sections. Validation
+failure leaves the generated files untouched.
 
-- Every RFC header carries `**RFC status:**` whose value begins with one
-  lifecycle state. A descriptive tail has to follow a delimiter (`,`, `;`, `:`,
-  `(` or `—`): `Draft, under maintainer review`, not `Drafting notes`. The
-  README entry for the same RFC repeats the state and is cross-checked against
-  the header, so changing a state means editing both.
-- `**Supersedes / closes:**` names the RFCs this one replaces or closes, or
-  `none`. A named RFC has to exist, has to be marked `Superseded`, and has to
-  point back with `**Superseded by:**`; that successor must in turn name this
-  RFC in its own `Supersedes / closes`. `Superseded by: none` is not a
-  supersession. A new RFC cannot land without the declaration; every current
-  RFC carries `none`.
-- The Chinese mirror carries the same `**替代 / 关闭：**` declaration.
-- Dated delivery logs live in [`ledger/<rfc-slug>/`](ledger/README.md), not in
-  an RFC body: no dated log heading may appear above the first appendix. An
-  appendix may keep append-only dated history, and a normative heading may say
-  "checkpoint" as long as it carries no date.
+- Use exactly `Accepted`, `Superseded`, `Retired` or `Rejected`, optionally followed
+  by punctuation and a note. New merged RFCs use `Accepted`.
+- Every header declares `**Supersedes / closes:**` as `none` or local RFC links.
+  Targets must exist, and English/Chinese declarations must identify the same RFCs.
+- A `Superseded` RFC names its successor in `**Superseded by:**`; the
+  successor reciprocally names that predecessor in `Supersedes / closes`.
+
 
 ## Overall Product and Delivery Roadmap
 
 - [LoopX Overall Roadmap v0](loopx-overall-roadmap-v0.md)
   ([中文版](loopx-overall-roadmap-v0.zh-CN.md))
-  - **RFC status:** Draft, portfolio roadmap.
   - **Delivery on `main`:** Planning and audit evidence, not runtime promotion.
   - **Current boundary:** Maps all 30 pre-existing primary RFCs and important
     non-RFC domains into 13 streams, G0–G5 product milestones and R1–R7 core
@@ -116,21 +111,18 @@ rules below, and the docs governance smoke runs that check.
 
 - [Automatic Execution Admission v0](automatic-execution-admission-v0.md)
   ([中文版](automatic-execution-admission-v0.zh-CN.md))
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Proposal; local implementation candidate under review.
   - **Current boundary:** S7 quota-owned minimum interval, S2 atomic local admission,
     S4 App recommendation floor first; managed Turn admission, App hook coverage and settings remain unqualified.
 
 - [Human-confirmed domain operations v0](human-confirmed-domain-operations-v0.md)
   ([中文版](human-confirmed-domain-operations-v0.zh-CN.md))
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Proposal only.
   - **Current boundary:** Separates generic authenticated interaction, optional
     financial execution and venue adapters. Defines shared frontend/Lark
     confirmation and automatic outcomes; no runtime or trading permission added.
 - [Agent Loop Effect Interpreter v0](agent-loop-effect-interpreter-v0.md)
   ([中文版](agent-loop-effect-interpreter-v0.zh-CN.md))
-  - **RFC status:** Accepted.
   - **Delivery on `main`:** Core implemented; bounded adoption continues.
   - **Current boundary:** Effect request, interpretation, observation,
     settlement, and typed Effect Program foundations are shipped. Replan
@@ -138,14 +130,12 @@ rules below, and the docs governance smoke runs that check.
     extraction.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
-  - **RFC status:** Accepted; transaction-payoff phase in progress.
   - **Delivery on `main`:** Substantially implemented; active migration.
   - **Current boundary:** Stage 1 and 2A are complete. Stage 2B is cutting over
     whole semantic transactions and retiring Python facades under parity and
     differential gates.
 - [Semantic Vocabulary Convergence and Commit-Time Drift Checks v0](semantic-vocabulary-convergence-v0.md)
   ([中文版](semantic-vocabulary-convergence-v0.zh-CN.md))
-  - **RFC status:** Draft.
   - **Delivery on `main`:** M0 registry, generated inventory, and drift smoke
     shipped with the RFC.
   - **Current boundary:** Repository-wide. A curated registry names 26 kernel
@@ -159,7 +149,6 @@ rules below, and the docs governance smoke runs that check.
 - [Shared-goal Online Authority and Pluggable Coordination Provider v0](shared-goal-authority-state-provider-v0.md)
   ([中文版](shared-goal-authority-state-provider-v0.zh-CN.md),
   [validation boundary](shared-goal-authority-state-provider-v0-evidence.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Foundation, provider-contract, and local promotion
     preparation slices implemented.
   - **Current boundary:** Recoverable shared-authority foundations, the
@@ -174,7 +163,6 @@ rules below, and the docs governance smoke runs that check.
     qualification gates.
 - [Shared Goal Alignment and Governed Amendment Protocol v0](shared-goal-alignment-and-governed-amendment-v0.md)
   ([中文版](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Stage 1/2 read-only alignment and proposal-admission
     foundations implemented; the RFC remains a draft.
   - **Current boundary:** Current Todo/lease source-basis projection and retained
@@ -184,7 +172,6 @@ rules below, and the docs governance smoke runs that check.
     it does not provide another amendment writer.
 - [Goal Direction Baseline v0](goal-direction-baseline-v0.md)
   ([中文版](goal-direction-baseline-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Proposal only.
   - **Current boundary:** A provider-neutral, Agent-scoped read model and
     synthetic drift fixture plan are proposed. No direction declaration,
@@ -192,14 +179,12 @@ rules below, and the docs governance smoke runs that check.
     integration has shipped.
 - [Goal Artifact Lifecycle Projection v0](goal-artifact-lifecycle-projection-v0.md)
   ([中文版](goal-artifact-lifecycle-projection-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Proposal only.
   - **Current boundary:** Milestones, blocking guards, and legal transitions are
     specified as a read-only projection; no canonical lifecycle projection has
     shipped.
 - [Goal Instance Identity and Orphan Recovery v0](goal-instance-identity-and-orphan-recovery-v0.md)
   ([中文版](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md))
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Identity/recovery proposal; the guided orphan fence
     and M0 registry codec shipped separately in #4808 and #4917.
   - **Current boundary:** Defines R5 lifetime fencing for R2/R3 consumers,
@@ -211,7 +196,6 @@ rules below, and the docs governance smoke runs that check.
 
 - [Goal-scoped Capability Portfolio and Connector Lifecycle v0](goal-scoped-capability-portfolio-v0.md)
   ([中文版](goal-scoped-capability-portfolio-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Proposal; catalog, Agent-context hooks and connector
     inventory are prerequisites rather than a shipped portfolio.
   - **Current boundary:** Existing Goal enablement activates supported capability
@@ -223,7 +207,6 @@ rules below, and the docs governance smoke runs that check.
 
 - [Agent Judgment and Optional Independent Assessment v0](optional-semantic-assistance-jev-v0.md)
   ([中文版](optional-semantic-assistance-jev-v0.zh-CN.md))
-  - **RFC status:** Draft; M0 [accepted-for-discussion](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204) only; Q1–Q7 remain pending.
   - **Delivery on `main`:** Proposal only; no Jev integration or qualification.
   - **Current boundary:** Discusses eight Agent/assessment opportunities with a
     provisional expected-value investigation order led by same-priority Todo
@@ -233,7 +216,6 @@ rules below, and the docs governance smoke runs that check.
 
 - [Frontier Science Research Program v0](frontier-science-research-program-v0.md)
   ([中文版](frontier-science-research-program-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Proposal only.
   - **Current boundary:** Ten cross-disciplinary research tracks, existing-owner
     routing, evidence limits and staged experiment gates. Prioritizes sequential
@@ -241,7 +223,6 @@ rules below, and the docs governance smoke runs that check.
     no runtime treatment, resource commitment or scientific uplift is promoted.
 - [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md)
   ([中文版](research-exploration-control-plane-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Partially implemented.
   - **Current boundary:** The explicit composition projection and successor
     binding from M2 shipped in
@@ -250,7 +231,6 @@ rules below, and the docs governance smoke runs that check.
     triggers have not been promoted.
 - [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md)
   ([中文版](hierarchical-agent-stride-control-v0.zh-CN.md))
-  - **RFC status:** Draft, research proposal.
   - **Delivery on `main`:** M1 observation slice implemented.
   - **Current boundary:** Read-only stride observation and its synthetic
     boundary fixture shipped in
@@ -259,7 +239,6 @@ rules below, and the docs governance smoke runs that check.
     delivery, and authority stride selection remains research-only.
 - [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md)
   ([中文版](post-outcome-memory-utility-attribution-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Stage 1 implemented.
   - **Current boundary:**
     [#3280](https://github.com/huangruiteng/loopx/pull/3280) binds utility
@@ -268,7 +247,6 @@ rules below, and the docs governance smoke runs that check.
     promotion remain open.
 - [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md)
   ([中文版](obelisk-session-evidence-provider-v0.zh-CN.md))
-  - **RFC status:** Draft, integration proposal.
   - **Delivery on `main`:** Evaluation only.
   - **Current boundary:** The default-off, read-only evidence-provider boundary
     is documented. Obelisk is not installed, promoted, or authoritative for
@@ -278,7 +256,6 @@ rules below, and the docs governance smoke runs that check.
 
 - [Capable Agent Manager and Semantic Work Handoff v0](capable-manager-semantic-handoff-v0.md)
   ([中文版](capable-manager-semantic-handoff-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Partial; private runtime profile, executor settings,
     team-plan confirmation and initial Todo materialization shipped.
   - **Current boundary:** Proposes ordinary host-tool autonomy, persistent scoped
@@ -291,7 +268,6 @@ rules below, and the docs governance smoke runs that check.
     Full runtime-profile qualification and generic handoff migration remain open.
 - [Manager Runtime Profile v0](manager-runtime-profile-v0.md)
   ([中文版](manager-runtime-profile-v0.zh-CN.md))
-  - **RFC status:** Draft; M1 implementation candidate under the capable-manager RFC.
   - **Delivery on `main`:** Partial; the explicit persistent `restricted` /
     `trusted_owner` machine-level grant and its readback are the shipped slice
     recorded by the parent RFC.
@@ -301,7 +277,6 @@ rules below, and the docs governance smoke runs that check.
     profile as the default manager mode stays with the parent RFC.
 - [Explicit Todo Continuation — Stage A](cross-session-memory-substrate-v0.md)
   ([中文版](cross-session-memory-substrate-v0.zh-CN.md))
-  - **RFC status:** Accepted; Stage A shipped, the historical filename is retained.
   - **Delivery on `main`:** #4094 shipped the explicit local CLI and rich/legacy
     continuation note with revision-guarded ownership adoption.
   - **Current boundary:** Registered agents, same host/Goal, lease-free promoted
@@ -310,13 +285,11 @@ rules below, and the docs governance smoke runs that check.
     adapter into M2/M3; the shipped CLI contract remains until replacement qualifies.
 
 - [Single-Owner Local Daemon v0](single-owner-local-daemon-v0.md)
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Proposal only; existing Desktop ownership repair is shipped.
   - **Current boundary:** Service-profile identity, component readiness, supervised
     composition, and recoverable migration are proposed for #3930. A unified
     `loopxd` service has not shipped.
 - [Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md)
-  - **RFC status:** Accepted; implemented behind explicit provider configuration.
   - **Delivery on `main`:** Implemented, opt-in.
   - **Current boundary:** The provider-neutral turn-start read contract and
     Lark ACK/replay path shipped in
@@ -325,7 +298,6 @@ rules below, and the docs governance smoke runs that check.
     enabled implicitly.
 - [Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.md)
   ([中文版](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** First end-to-end vertical implemented.
   - **Current boundary:** The periodic-report producer, durable intent
     lifecycle, terminal closeout dispatch, consumer, and approved Goal Channel
@@ -337,7 +309,6 @@ rules below, and the docs governance smoke runs that check.
     multi-capability promotion remains under review.
 - [LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md)
   ([中文版](desktop-execution-frontends-v0.zh-CN.md))
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Supporting foundations implemented.
   - **Current boundary:** Attached and managed runtime, desktop, and connector
     pieces exist, but the unified execution-frontend/session-ownership contract
@@ -345,8 +316,6 @@ rules below, and the docs governance smoke runs that check.
     boundary.
 - [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.md)
   ([中文版](harness-selection-dsh-pi-v0.zh-CN.md))
-  - **RFC status:** Draft; evidence-backed implementation assessment, not a
-    runtime promotion.
   - **Delivery on `main`:** Partial; the combined reliability-diagnostics
     readback and the bounded managed Turn host default-host resolution shipped,
     the steward channel transport and intake sections record dated increments.
@@ -356,7 +325,6 @@ rules below, and the docs governance smoke runs that check.
     retention and Mode B evidence rows.
 - [External Evidence Research Capability v0](external-evidence-research-capability-v0.md)
   ([中文版](external-evidence-research-capability-v0.zh-CN.md))
-  - **RFC status:** Draft, implementation slice.
   - **Delivery on `main`:** Bounded slice; see the RFC acceptance section for
     the audited state of the `external_evidence_research_v0` lifecycle.
   - **Current boundary:** Provider-neutral research planning, provenance
@@ -365,7 +333,6 @@ rules below, and the docs governance smoke runs that check.
     `ready`. Product surfaces and TypeScript ownership are proposed, not promoted.
 - [Agent Session Execution Modes v0](agent-session-execution-modes-v0.md)
   ([中文版](agent-session-execution-modes-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Partial; the attached-host binding, broker, and
     runtime fencing are implemented, while cross-host admission is proposed.
   - **Current boundary:** Normalizes the attached/managed session-ownership
@@ -377,14 +344,12 @@ rules below, and the docs governance smoke runs that check.
     rotation, and host promotion remain unapproved.
 - [Goal Channel Collaboration v0](goal-channel-collaboration-v0.md)
   ([中文版](goal-channel-collaboration-v0.zh-CN.md))
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Lark vertical implemented.
   - **Current boundary:** Goal-bound Lark groups, Kanban, gate notifications,
     shared targets, and Bot runtime integration are shipped. The
     provider-neutral multi-surface model remains draft, and interactive
     transport is refined by the Desktop Frontends RFC.
 - [Agent IM, LoopX, and OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md)
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Proposal only.
   - **Current boundary:** LoopX, IM, and OpenViking have adjacent
     implementations, but this three-owner collaboration contract has not
@@ -393,7 +358,6 @@ rules below, and the docs governance smoke runs that check.
 ## Operator Experience And Observability
 
 - [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md)
-  - **RFC status:** Draft.
   - **Delivery on `main`:** Core slice implemented.
   - **Current boundary:** Codex usage capture, normalized aggregation, and
     dashboard surfacing shipped in
@@ -401,7 +365,6 @@ rules below, and the docs governance smoke runs that check.
     runtime/provider coverage and cost semantics remain incomplete.
 - [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md)
   ([中文版](intelligent-review-presentation-surfaces-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Bounded action-review, attention-detail and local
     delivery-review verticals implemented.
   - **Current boundary:** Typed action plans serve Dashboard and the existing
@@ -410,7 +373,6 @@ rules below, and the docs governance smoke runs that check.
     living documents and governed amendment/settlement review remain open.
 - [Live Team Workspace v0](live-team-workspace-v0.md)
   ([中文版](live-team-workspace-v0.zh-CN.md))
-  - **RFC status:** Draft, presentation slice under intelligent presentation.
   - **Delivery on `main`:** Design proposal only; no live team-stream qualification.
   - **Current boundary:** A command surface plus spatial research studio, evidence
     handoff motion, conclusion revision and replay. L1 requires one real
@@ -419,7 +381,6 @@ rules below, and the docs governance smoke runs that check.
     L3 qualifies semantic zoom and display scale. No new scheduler or authority.
 - [Human Attention Wishlist v0](human-attention-wishlist-v0.md)
   ([中文版](human-attention-wishlist-v0.zh-CN.md))
-  - **RFC status:** Draft, under maintainer review.
   - **Delivery on `main`:** Intentionally deferred.
   - **Current boundary:** The RFC remains a discussion contract. Runtime work is
     held until repeated real usage demonstrates a second need without weakening
@@ -428,21 +389,18 @@ rules below, and the docs governance smoke runs that check.
 ## Benchmark And Reliability Engineering
 
 - [Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md)
-  - **RFC status:** Draft, integration proposal.
   - **Delivery on `main`:** Proposal only.
   - **Current boundary:** Experiment-board rows and benchmark-native scores
     remain authoritative; the study manifest, upload/readback envelope, and
     campaign-to-run dashboard projection are proposed but not implemented.
 - [Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.md)
   ([中文版](long-horizon-harness-benchmark-research-program-v0.zh-CN.md))
-  - **RFC status:** Draft, research program.
   - **Delivery on `main`:** Active research and engineering program.
   - **Current boundary:** ALE, LHTB, and DeepSWE form the external-validity
     portfolio; benchmark infrastructure and evidence workflows are being built
     without treating the research program as a runtime protocol.
 - [Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md)
   ([中文版](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md))
-  - **RFC status:** Draft, product direction and delivery contract.
   - **Delivery on `main`:** Default-off L1 diagnostic prototype and first DSH
     event-source adapter implemented.
   - **Current boundary:** The capability-owned README records the prototype;

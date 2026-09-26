@@ -1,16 +1,15 @@
 ## Goal And Delivered Outcome
 
-<!-- Use a few concrete sentences; references are optional when the request or
-regression is self-contained. State the accepted outcome, not a list of files.
-Name one anchor: the overall-roadmap card sentence, the RFC section, or the
-reproduced public issue this PR closes (docs/development/contributor-tasks.md,
-Task Admission Rule). Do not invent roadmap ids for ordinary fixes; an ordinary
-fix cites its issue. A catalog entry, behavior-pinning test, fixture dimension,
-rename or docs restatement without a consuming anchor is routed to discussion.
-These are author facts; the review capability independently judges delivery.
+<!-- State the reproduced defect, accepted request or concrete maintenance
+outcome. A public issue, roadmap card or RFC section is optional for a
+self-contained ordinary contribution. Curated board work follows its anchor
+rule; do not invent an issue or roadmap id only to admit a useful repair.
+Catalog entries, behavior-pinning tests and fixture dimensions still need a
+concrete gap and consumer. These author facts are independently reviewed.
 -->
 
-- Anchor (roadmap card / RFC section / reproduced issue):
+- Outcome basis / optional anchor:
+
 - Goal/source and gap:
 - Observable before → after, with the validation row that proves it:
 - Issue/task and intended base: <!-- Use Closes only for the issue actually completed; otherwise Related to. -->

@@ -24,14 +24,16 @@ delivery promise, a release plan, or a replacement for shipped contracts.
   [Current technical directions and known limitations](https://github.com/huangruiteng/loopx/discussions/2851)
   Discussion is the community-facing projection of this page.
 
-Use these maturity terms consistently:
+Merged active RFCs are Accepted and claimable under the [RFC lifecycle contract](../architecture/rfcs/README.md#how-to-read-this-index). Claiming work does not satisfy live qualification, spending, deployment or promotion gates.
+
+Use these delivery maturity terms consistently:
 
 | Stage | Meaning |
 | --- | --- |
 | Shipped / hardening | The behavior or architectural contract is in `main`; work improves reliability, parity, or usability. |
 | Incubating / qualification | A real candidate exists, but compatibility, evidence, or promotion gates remain. |
 | Active research | The program is running evidence-producing experiments; results do not automatically become defaults or product claims. |
-| Draft | Design review is welcome; implementation starts only from an agreed smallest useful slice. |
+| Design accepted / implementation pending | The merged RFC is a qualified design basis and bounded work may be claimed; implementation and promotion evidence remain separate. |
 | Held | The direction remains visible, but implementation should not begin until the stated gate changes. |
 
 ## Stable Foundation: Control-Plane Reliability
@@ -50,9 +52,9 @@ Cross-domain ordering, complete RFC coverage and product acceptance are maintain
 | Direction | Outcome | Stage | Start here |
 | --- | --- | --- | --- |
 | Long-Horizon Benchmarks and Evidence | Produce benchmark-native, reproducible evidence for long-horizon capability and use controlled tasks to study mechanisms. | Active research | [Tracker #3243](https://github.com/huangruiteng/loopx/issues/3243) · [RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md) |
-| Reliability Diagnostics and Governed Delivery | Prove an observer-first product entry that diagnoses long-running workflows without changing agent execution, then adds authority only at accepted seams. | Draft product direction / delivery qualification | [RFC](../architecture/rfcs/long-running-agent-reliability-diagnostics-governed-delivery-v0.md) |
+| Reliability Diagnostics and Governed Delivery | Prove an observer-first product entry that diagnoses long-running workflows without changing agent execution, then adds authority only at accepted seams. | Design accepted / delivery qualification | [RFC](../architecture/rfcs/long-running-agent-reliability-diagnostics-governed-delivery-v0.md) |
 | Operator Surface and IM Integration | Make goals, sessions, decisions, evidence, and bounded collaboration legible through a coherent operator workspace. | Partial delivery / unified-journey qualification | [Tracker #3244](https://github.com/huangruiteng/loopx/issues/3244) · [integration branch](https://github.com/huangruiteng/loopx/tree/frontend-control-plane-im-prototype-rfc) |
-| Shared Goal Authority and Cross-host Coordination | Coordinate explicitly shared goals across hosts without turning a provider or host session into control-plane authority. | Draft contract / provider qualification | [Tracker #3245](https://github.com/huangruiteng/loopx/issues/3245) · [RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md) |
+| Shared Goal Authority and Cross-host Coordination | Coordinate explicitly shared goals across hosts without turning a provider or host session into control-plane authority. | Design accepted / provider qualification | [Tracker #3245](https://github.com/huangruiteng/loopx/issues/3245) · [RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md) |
 | Architecture and Research Incubator | Qualify architectural changes and research mechanisms before they expand production scope. | Mixed; see the portfolio below | [Tracker #3246](https://github.com/huangruiteng/loopx/issues/3246) · [RFC index](../architecture/rfcs/README.md) |
 
 ## Long-Horizon Benchmarks And Evidence
@@ -123,16 +125,16 @@ Provider-neutral stores, File/SQLite candidates, PostgreSQL conformance and in-p
 
 | Exploration | Stage | Current entry | Implementation rule |
 | --- | --- | --- | --- |
-| Frontier science research portfolio | Draft / proposal only | [Bilingual RFC](../architecture/rfcs/frontier-science-research-program-v0.md) | Route ten tracks through existing owners; qualify sequential evidence, continuation compression and stride shadow experiments before active treatment. No research uplift or resource commitment is implied. |
+| Frontier science research portfolio | Design accepted / proposal only | [Bilingual RFC](../architecture/rfcs/frontier-science-research-program-v0.md) | Route ten tracks through existing owners; qualify sequential evidence, continuation compression and stride shadow experiments before active treatment. No research uplift or resource commitment is implied. |
 | Effect Program and settlement algebra | Accepted / runtime hardening | [RFC](../architecture/rfcs/agent-loop-effect-interpreter-v0.md) | Improve the shared typed contract and negative coverage; keep scheduler ownership and domain-local ACK semantics explicit. |
 | TypeScript control-plane migration | Accepted / transaction-payoff phase | [RFC](../architecture/rfcs/typescript-control-plane-migration-v0.md) | Cut over complete transactions, delete Python semantic/facade debt, and report bridge traffic plus migration economics; preserve delivery/vision decisions as domain-local reducers rather than generic Effect Program steps. |
 | Hierarchical agent stride | Active research | [#3203](https://github.com/huangruiteng/loopx/issues/3203) | Qualify read-only and shadow evidence before adaptive selection. |
-| Research exploration control plane | Draft / typed frontier | [RFC](../architecture/rfcs/research-exploration-control-plane-v0.md) | Keep Explore, goal-frontier, and execution authority separate. |
-| Human Attention Wishlist | Draft / non-blocking sidecar | [#3179](https://github.com/huangruiteng/loopx/issues/3179) | Do not change user gates, selected work, quota, or notification authority. |
-| Goal artifact lifecycle projection | Draft / read model | [RFC](../architecture/rfcs/goal-artifact-lifecycle-projection-v0.md) | Derive milestones and legal next transitions read-only before adding writes. |
-| Post-outcome memory utility | Draft / research | [#3214](https://github.com/huangruiteng/loopx/issues/3214) | Attribute utility only after verified outcomes; retrieval and model judgment remain advisory. |
-| Goal Channel and Agent IM/OpenViking boundaries | Draft / integration exploration | [RFC index](../architecture/rfcs/README.md) | Keep delivery, durable control state, and scoped context under separate owners. |
-| Agent session execution modes | Draft / cross-host admission contract | [RFC](../architecture/rfcs/agent-session-execution-modes-v0.md) | Require one explicit per-binding mode, one executor, and validated writeback before a host binds sessions; keep Desktop product flows, service lifecycle, and continuation in their owning documents. |
+| Research exploration control plane | Design accepted / typed frontier | [RFC](../architecture/rfcs/research-exploration-control-plane-v0.md) | Keep Explore, goal-frontier, and execution authority separate. |
+| Human Attention Wishlist | Design accepted / non-blocking sidecar | [#3179](https://github.com/huangruiteng/loopx/issues/3179) | Do not change user gates, selected work, quota, or notification authority. |
+| Goal artifact lifecycle projection | Design accepted / read model | [RFC](../architecture/rfcs/goal-artifact-lifecycle-projection-v0.md) | Derive milestones and legal next transitions read-only before adding writes. |
+| Post-outcome memory utility | Design accepted / research | [#3214](https://github.com/huangruiteng/loopx/issues/3214) | Attribute utility only after verified outcomes; retrieval and model judgment remain advisory. |
+| Goal Channel and Agent IM/OpenViking boundaries | Design accepted / integration exploration | [RFC index](../architecture/rfcs/README.md) | Keep delivery, durable control state, and scoped context under separate owners. |
+| Agent session execution modes | Design accepted / cross-host admission contract | [RFC](../architecture/rfcs/agent-session-execution-modes-v0.md) | Require one explicit per-binding mode, one executor, and validated writeback before a host binds sessions; keep Desktop product flows, service lifecycle, and continuation in their owning documents. |
 
 An exploration becomes implementation-ready only when it has a real caller or
 compatibility contract, an agreed smallest slice, and focused qualification.

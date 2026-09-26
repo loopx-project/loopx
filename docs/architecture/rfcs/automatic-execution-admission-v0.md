@@ -1,6 +1,6 @@
 # RFC: Automatic Execution Admission (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Partial, proposed implementation; not promoted
 - **Owners:** Quota, scheduler and host-runtime maintainers

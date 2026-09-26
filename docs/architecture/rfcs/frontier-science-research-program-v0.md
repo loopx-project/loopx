@@ -1,6 +1,6 @@
 # RFC: Frontier Science Research Program v0
 
-- **RFC status:** Draft, under maintainer review
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
 - **Delivery maturity:** Proposal; no research treatment promoted
 - **Authors / owners:** LoopX maintainers; experiment owners to be assigned separately

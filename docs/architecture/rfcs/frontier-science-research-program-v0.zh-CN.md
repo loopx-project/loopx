@@ -1,6 +1,6 @@
 # RFC：前沿科学研究计划 v0
 
-- **RFC 状态：** Draft，等待维护者评审
+- **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
 - **交付成熟度：** Proposal；没有研究 treatment 获得晋升
 - **作者 / owner：** LoopX maintainers；实验 owner 单独确定

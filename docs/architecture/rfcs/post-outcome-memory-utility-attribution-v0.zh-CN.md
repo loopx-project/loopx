@@ -1,6 +1,6 @@
 # RFC：结果后记忆效用归因 v0
 
-- 状态：草案，等待 maintainer review
+- 状态：已接受
 - 替代 / 关闭：无
 - 日期：2026-08-15
 - 跟踪 issue：[#3214](https://github.com/huangruiteng/loopx/issues/3214)

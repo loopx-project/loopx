@@ -17,20 +17,25 @@ that this board only lists work that is still open and anchored.
 
 ## Task Admission Rule
 
-A row is claimable only when it names **one anchor** and **one gap**:
+This curated board lists work with **one canonical anchor**, **one gap** and
+**one exit**. Ordinary self-contained contributions may go directly to a PR
+under [CONTRIBUTING](../../CONTRIBUTING.md#find-work) without a pre-existing
+issue, roadmap card or RFC. Merged active RFCs are Accepted, qualified design
+bases and available to claim; implementation evidence and live authorization
+remain separate under the [RFC lifecycle contract](../architecture/rfcs/README.md#how-to-read-this-index).
 
 | Anchor type | What to cite | Example |
 | --- | --- | --- |
 | Roadmap | An S stream, G milestone or R card in the [overall roadmap](../architecture/rfcs/loopx-overall-roadmap-v0.md), plus the sentence in that card that the task closes | `R1 · "confirmed commitments survive materialization"` |
-| RFC obligation | An RFC in [docs/architecture/rfcs](../architecture/rfcs/README.md) with status Accepted or Active, plus the section or invariant the task implements or pins | `shared-goal-authority-state-provider-v0 · §lease transfer` |
+| RFC obligation | An RFC in [docs/architecture/rfcs](../architecture/rfcs/README.md) with status Accepted, plus the section or invariant the task implements or pins | `shared-goal-authority-state-provider-v0 · §lease transfer` |
 | Reproduced adoption defect | A public issue with a reproduction from a real install, first run, upgrade, host or platform, opened by or confirmed with a user | `#4941 Windows non-UTF-8 locale` |
 
 The **gap** states who is blocked without the change and what they can do
 after it. The **exit** states when the row closes. A row without all three is
 not a task; it is a discussion.
 
-The following are **not tasks on their own**. They are accepted only as part of
-an anchored row that consumes them:
+The following do not establish a useful task by themselves. Name the concrete
+gap and consumer they serve; curated rows also need a canonical anchor:
 
 - a new entry in the [interaction pattern catalog](../concepts/interaction-pattern-catalog.md)
   (see its admission note);
@@ -38,7 +43,7 @@ an anchored row that consumes them:
   RFC invariant named in the row;
 - another dimension, provider arm or fixture row on an existing conformance
   fixture without a named invariant it newly covers;
-- renaming, re-wording or restating existing docs, vocabulary or protocol text;
+- renaming, re-wording or restating existing text without correcting a demonstrated defect or serving a concrete maintenance outcome;
 - a module split, extraction or "own X in its own module" change without a
   budget, boundary test or caller it unblocks.
 
@@ -81,6 +86,12 @@ unimplemented or a proposed slice is still useful. The
 [Technical Directions map](../project/technical-directions.md) owns contributor
 routing and current maturity; this board does not keep a second copy.
 
+Status values are `Available`, `Claimed`, `Needs design` and `Blocked`, with
+an optional parenthesized qualifier or `: reason`. `Needs design` names a
+pending task-specific scope decision; it never means a merged RFC is a draft.
+`Available` and `Claimed` RFC work require an Accepted canonical design. A
+completed row belongs in history, even if an earlier PR is still referenced.
+
 ## Lane A: Adoption Defects (P0)
 
 Real installs, first runs, upgrades and hosts are the demand signal LoopX has
@@ -116,13 +127,14 @@ ordering is R1 commitments and recovery, then G1 small-team qualification.
 
 ## Lane C: RFC Obligations
 
-Rows here implement or pin a named section of an Accepted or Active RFC. Name
+Rows here implement or pin a named section of an Accepted RFC. Merge qualifies
+the design for claiming; a row still respects its implementation entry gates. Name
 the section; "extend the fixture" is not an obligation.
 
 | ID | Anchor | Gap and exit | Validation | Status |
 | --- | --- | --- | --- | --- |
 | GH-C89b | [goal-direction-baseline-v0](../architecture/rfcs/goal-direction-baseline-v0.md) · §7 synthetic case F2 | The RFC landed in #4172 at milestone M0 (design note plus fixture plan F1–F8, no code). Nothing yet proves the M0 claim that a revision change exposes `re_evaluation_required` while inputs, Vision, Todos, leases and Goal route stay byte-identical. Exit: synthetic case F2 is implemented as a public-safe fixture with the RFC's key allowlist, and the RFC's milestone table advances past M0 or records why not. | New focused smoke or pytest implementing F2; public-boundary scan; `loopx check --scan-path docs/architecture/rfcs` | Available |
-| GH-R5A | R5 / [shared-goal-authority-state-provider-v0](../architecture/rfcs/shared-goal-authority-state-provider-v0.md) · D2 durability / [#4224](https://github.com/loopx-project/loopx/issues/4224) [#3245](https://github.com/loopx-project/loopx/issues/3245) | The SQLite local authority candidate has capacity profiles but no crash/replay boundary qualified against the D2 acceptance in the RFC. Exit: one crash-during-commit and one replay-after-partial-write case pass on the real backend with the RFC's stated outcome, or the RFC records why D2 changes. | `npm run test:control-plane`; the isolated SQLite integration suite | Needs design |
+| GH-R5A | R5 / [shared-goal-authority-state-provider-v0](../architecture/rfcs/shared-goal-authority-state-provider-v0.md) · D2 durability / [#4224](https://github.com/loopx-project/loopx/issues/4224) [#3245](https://github.com/loopx-project/loopx/issues/3245) | The SQLite local authority candidate has capacity profiles but no crash/replay boundary qualified against the D2 acceptance in the RFC. Exit: one crash-during-commit and one replay-after-partial-write case pass on the real backend with the RFC's stated outcome, or the RFC records why D2 changes. | `npm run test:control-plane`; the isolated SQLite integration suite | Available |
 | GH-C102 | [shared-goal-authority-state-provider-v0](../architecture/rfcs/shared-goal-authority-state-provider-v0.md) · one named invariant | Extend the shared production-scale coordination fixture only for an accepted RFC invariant or a reproduced public regression that the current envelope does not cover, naming the invariant section in the PR. Update the checked-in envelope, shared generator and an independent negative or mutation assertion; run the same dimension through every affected provider arm. Do not add a dimension because the fixture accepts one. Exit: the named invariant has a passing positive case and a failing mutation case on every affected arm. | `npm run test:control-plane`; for PostgreSQL, `LOOPX_TEST_POSTGRES_URL="$DISPOSABLE_POSTGRES_URL" npm run test:postgresql-authority-store`; `loopx check --scan-path tests/fixtures/control_plane --scan-path tests/control_plane_ts` | Available (named invariant required) |
 | GH-B01 | S11 / [long-horizon benchmark research program](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md) · treatment integrity / [#3243](https://github.com/loopx-project/loopx/issues/3243) | Adapter-fidelity and treatment-integrity gaps are asserted but not reproducible from public fixtures. Exit: one reproducible gap with the existing focused fixtures, reported without live scoring. | Deterministic fixtures in `tests/capabilities/test_benchmark_toolkit.py`; no live runs | Needs design |
 

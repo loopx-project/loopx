@@ -1,6 +1,6 @@
 # RFC: Per-Goal Usage, Token, and Cost Surfacing v0
 
-- Status: Draft
+- Status: Accepted
 - Supersedes / closes: none
 - Scope: core `usage_summary` token / cost / duration capture and existing-dashboard surfacing
 - Decision type: bounded public-contract change plus a provider-neutral capture layer

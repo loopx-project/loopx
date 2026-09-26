@@ -4,13 +4,13 @@
 
 This index is derived from the status header of every RFC in this directory.
 Change an RFC's state by editing its header and the matching `**RFC status:**`
-line in the [README index](README.md), then run
+in its Chinese mirror, then run
 `python3 scripts/generate_rfc_status_index.py --write`; `--check` fails while the
 index is stale and `examples/docs-governance-smoke.py` runs it.
 
-Lifecycle buckets: **Accepted**; **Active** (Draft, Under review);
+Merged active RFCs are **Accepted**: qualified design bases, available to claim.
 **Superseded** (must name `Superseded by`); **Retired** (Retired, Rejected).
-RFC status and delivery maturity are separate facts; delivery lives in the
+Merge does not prove implementation, live qualification or promotion; delivery lives in the
 [README index](README.md) `Delivery on main` lines. Every new RFC declares
 `**Supersedes / closes:**` in its header (`none` or links to the RFCs it
 replaces or closes). Dated delivery logs go to [ledger/](ledger/README.md); an
@@ -18,52 +18,47 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (4)
+## Accepted (37)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
+| [RFC: Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | Accepted | none | — |
 | [RFC: Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.md) | Accepted | none | — |
+| [RFC: Agent Session Execution Modes (v0)](agent-session-execution-modes-v0.md) | Accepted | none | — |
+| [RFC: Automatic Execution Admission (v0)](automatic-execution-admission-v0.md) | Accepted | none | — |
+| [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | Accepted | none | — |
+| [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | none | [1 entry](ledger/capable-manager-semantic-handoff-v0/) |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
+| [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
+| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | — |
+| [RFC: Frontier Science Research Program v0](frontier-science-research-program-v0.md) | Accepted | none | — |
+| [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Accepted | none | — |
+| [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Accepted | none | — |
+| [RFC: Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | Accepted | none | — |
+| [Goal Instance Identity and Orphan Recovery (v0)](goal-instance-identity-and-orphan-recovery-v0.md) | Accepted | none | — |
+| [RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)](goal-scoped-capability-portfolio-v0.md) | Accepted | none | — |
+| [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | Accepted | none | — |
+| [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.md) | Accepted | none | — |
+| [RFC: Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | Accepted | none | — |
+| [RFC: Human Attention Wishlist v0](human-attention-wishlist-v0.md) | Accepted | none | — |
+| [RFC: Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | Accepted | none | — |
+| [RFC: Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md) | Accepted | none | — |
+| [RFC: Live Team Workspace v0](live-team-workspace-v0.md) | Accepted | none | — |
+| [RFC: Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.md) | Accepted | none | — |
+| [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Accepted | none | — |
+| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | — |
+| [Manager runtime profile v0](manager-runtime-profile-v0.md) | Accepted | none | — |
+| [RFC: Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | Accepted | none | — |
+| [RFC: Agent Judgment and Optional Independent Assessment — Jev as a Candidate (v0)](optional-semantic-assistance-jev-v0.md) | Accepted | none | — |
+| [RFC: Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | Accepted | none | — |
+| [RFC: Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.md) | Accepted | none | — |
 | [RFC: Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | Accepted | none | — |
+| [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Accepted | none | — |
+| [RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | Accepted | none | [5 entries](ledger/semantic-vocabulary-convergence-v0/) |
+| [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Accepted | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
+| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [19 entries](ledger/shared-goal-authority-state-provider-v0/) |
+| [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
 | [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [12 entries](ledger/typescript-control-plane-migration-v0/) |
-
-## Active (33)
-
-| RFC | Header status | Supersedes / closes | Ledger |
-| --- | --- | --- | --- |
-| [RFC: Agent IM, LoopX, And OpenViking Collaboration v0](agent-im-openviking-collaboration-v0.md) | Draft | none | — |
-| [RFC: Agent Session Execution Modes (v0)](agent-session-execution-modes-v0.md) | Draft | none | — |
-| [RFC: Automatic Execution Admission (v0)](automatic-execution-admission-v0.md) | Draft | none | — |
-| [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | Draft | none | — |
-| [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Draft | none | [1 entry](ledger/capable-manager-semantic-handoff-v0/) |
-| [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Draft | none | — |
-| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Draft | none | — |
-| [RFC: Frontier Science Research Program v0](frontier-science-research-program-v0.md) | Draft | none | — |
-| [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Draft | none | — |
-| [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Draft | none | — |
-| [RFC: Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | Draft | none | — |
-| [Goal Instance Identity and Orphan Recovery (v0)](goal-instance-identity-and-orphan-recovery-v0.md) | Draft | none | — |
-| [RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)](goal-scoped-capability-portfolio-v0.md) | Draft | none | — |
-| [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | Draft | none | — |
-| [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.md) | Draft | none | — |
-| [RFC: Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | Draft | none | — |
-| [RFC: Human Attention Wishlist v0](human-attention-wishlist-v0.md) | Draft | none | — |
-| [RFC: Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | Draft | none | — |
-| [RFC: Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md) | Draft | none | — |
-| [RFC: Live Team Workspace v0](live-team-workspace-v0.md) | Draft | none | — |
-| [RFC: Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.md) | Draft | none | — |
-| [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Draft | none | — |
-| [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Draft | none | — |
-| [Manager runtime profile v0](manager-runtime-profile-v0.md) | Draft | none | — |
-| [RFC: Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | Draft | none | — |
-| [RFC: Agent Judgment and Optional Independent Assessment — Jev as a Candidate (v0)](optional-semantic-assistance-jev-v0.md) | Draft | none | — |
-| [RFC: Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | Draft | none | — |
-| [RFC: Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.md) | Draft | none | — |
-| [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Draft | none | — |
-| [RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | Draft | none | [5 entries](ledger/semantic-vocabulary-convergence-v0/) |
-| [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Draft | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
-| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Draft | none | [19 entries](ledger/shared-goal-authority-state-provider-v0/) |
-| [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Draft | none | — |
 
 ## Superseded (0)
 
