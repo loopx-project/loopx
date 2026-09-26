@@ -699,7 +699,11 @@ def repair_index_duplicates(
             else nullcontext()
         )
         with lock:
-            raw_lines = index_path.read_text(encoding="utf-8").splitlines()
+            # The index is one JSON document per LF. `json.dumps(..., ensure_ascii=False)`
+            # leaves U+0085/U+2028/U+2029 in a value verbatim, and `str.splitlines()`
+            # treats those as line breaks, which tore one record into two unparsable
+            # fragments. Frame on LF instead.
+            raw_lines = index_path.read_text(encoding="utf-8").split("\n")
             grouped: dict[tuple[str, str, str], list[tuple[int, dict[str, Any]]]] = {}
             for line_number, line in enumerate(raw_lines, start=1):
                 if not line.strip():
