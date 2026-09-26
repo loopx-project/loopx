@@ -3,7 +3,7 @@
 - Status：Accepted，transaction-payoff 阶段进行中
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-09-13
+- Last revised：2026-09-26
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/huangruiteng/loopx/issues/3225)
@@ -1049,6 +1049,43 @@ validator、负向边界覆盖和移除 owner。只要 public、持久化、RPC 
 输入仍通过未经验证的断言进入已迁 domain 的 semantic core，该 domain 就不能
 通过 promotion gate。TypeScript 补充运行时验证，而不是替代它。
 
+### 2.6 Projection envelope 是 kernel 级读合同
+
+kernel 已经用 receipt、fence 与 CAS 约束写入，读取也需要对应的合同。status、
+全局摘要、context packet 这类读模型由多个在不同时间读取的来源组合而成，而且常常
+在事后通过 cache、保存的文件或粘贴的 packet 被消费。如果没有机器可检查的"它看到
+了什么"，消费者（尤其是 agent）会把旧的或不完整的投影当作当前的全貌。`ok: true`、
+检查通过或 host 健康都不说明这一点。
+
+因此每个面向 operator 或 agent 的投影都携带一个 `projection_envelope`
+（`loopx_projection_envelope_v0`）：
+
+- `observed_at` 与 `served_at`：来源何时被读取、这份副本何时被输出。cache 命中或
+  重放保留前者、重盖后者。
+- 每个来源一行，含 `last_read_at`、`read_status`、窗口、staleness 与告警原因。
+  派生投影继承上游的来源行，因此不可能显得比它依赖的最旧读取更新。
+- 对所请求范围的 `coverage`：期望数与已包含数，以及具名的缺漏。显示截断单独披露，
+  不算不完整告警。
+
+归属遵循本 RFC，而不是制造新的迁移债务。只有 `projection_envelope.ts` 解码这些
+facts，并决定 staleness、告警与完整性，runtime 方法为 `projection.envelope.seal`。
+Python 拥有的投影只传入紧凑的读取 facts。每个投影一次请求，而这些路径本来就固定
+了 runtime revision、每次要发起几十次 TS 调用。这不是 leaf 迁移：它避免一条新的
+横切规则先在 Python 里诞生、之后再迁移。Python facts adapter 随其投影退出：当
+status projection 迁入 kernel（§4 已将其列为 facade 退出条件），由 TS 直接收集
+facts，adapter 随之删除。
+
+推广顺序。`status`（含 `--goal-id` 与 projection cache 命中）、`global-summary`
+与 `global-gates` 现已携带 envelope。其他 `collect_status` 调用方会在 payload 里
+收到 status envelope，但尚未输出自己的 envelope。下一步依次为：`global-todos` 与
+`global-risks`（同样的组合，各一次调用）、`quota should-run`、`review-packet`，
+以及 Decision Context packet。新加入或迁入 TypeScript 的读模型在同一个 PR 里输出
+envelope；§6 把这一条定为 promotion 门禁。
+
+消费者把缺失 envelope 视为新鲜度未知；envelope 告警时，必须先披露，再陈述依赖它的
+结论。字段语义与消费者规则见
+[projection envelope 合同](../../reference/contracts/projection-envelope-contract.md)（仅英文）。
+
 ## 3. 当前基线与阶段转换
 
 Effect Program 先迁，是因为它连接 ordered step、identity、short-circuit failure、
@@ -1067,6 +1104,7 @@ replay、receipt 与 settlement。这个架构选择已经落地，不再是假�
 | Quota monitor-poll commit transaction | TypeScript 拥有 monitor admission 复核、target/event/result 构造、effect replay/index CAS、provider intent，以及可修复的 JSON/Markdown/index persistence | Python 投影 compact `should-run` facts，在最多两次 reduction 之间调用真实 Todo provider，刷新 legacy status，并持有 cross-writer index lock |
 | Runtime decoder（[#3443](https://github.com/huangruiteng/loopx/pull/3443)） | 稳定 primitive decoding 进入一个很小的共享模块；domain decoder 仍留在本地 | 没有理由建设更大的 schema framework |
 | Transaction 兑现（[#3464](https://github.com/huangruiteng/loopx/pull/3464)、[#3481](https://github.com/huangruiteng/loopx/pull/3481) 与 Todo completion） | Turn settlement、quota delivery routing 与 Todo completion 均只跨一个粗粒度 TS boundary；Todo transaction 拥有 identity、replay fence、validation planning/result reduction、continuation/recovery 与 completion metadata | Python 仍执行显式 external provider，并物化 legacy Markdown/event result；其他 domain 仍需各自的 bounded cutover |
+| Projection envelope | TypeScript 拥有 `loopx_projection_envelope_v0` 的解码，以及全部 freshness、告警、完整性与重放判定 | 在 `status`、`global-summary`、`global-gates` 迁移前，Python 仍为它们收集读取 facts |
 
 Scheduler facade exit 已交付第一段有边界的 Stage 3 路径。带版本的
 `heartbeat_followup_cli.ts` 从生成的 ACK/failure hint 接收有大小上限的 compact host
@@ -1382,6 +1420,9 @@ happy path 及其 retry/recovery path 上实测，不能由 handler 数量推断
   并发 mutation 必须串行化或使用经过测试的 CAS 合同，retry identity 必须区分同一
   Turn 内连续发生的 checkpoint。
 - 进程 crash 与 retry 不得重复已经提交的内部 effect。
+- 新增或迁移的、面向 operator 或 agent 的读模型通过 `projection.envelope.seal`
+  输出 `projection_envelope`；其测试覆盖 stale 来源、不可读来源、不完整范围与
+  重放副本。
 - wheel 与 sdist 安装到全新环境后，从打包文件执行 deep semantic probe。
 
 #### Caller 可观测语义是 promotion 门禁

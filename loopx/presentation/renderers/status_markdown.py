@@ -4,6 +4,7 @@ from collections.abc import Collection
 from typing import Any
 
 from ...control_plane import control_plane_policy_summary
+from ...control_plane.projection_envelope_facts import render_projection_envelope_markdown
 from ...control_plane.runtime.event_ledger import EVENT_LEDGER_CLASSES
 from ...execution_profile import execution_profile_summary
 from ...long_task_cadence import long_task_cadence_hint_summary
@@ -61,6 +62,7 @@ def append_status_overview_markdown(
             f"- runtime_root: `{payload.get('runtime_root')}`",
             f"- goals: `{payload.get('goal_count')}`",
             f"- runs: `{payload.get('run_count')}`",
+            *render_projection_envelope_markdown(payload.get("projection_envelope")),
         ]
     )
 

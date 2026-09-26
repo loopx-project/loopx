@@ -328,6 +328,8 @@ goals must stay out of the eligible lane even when they have a high
     "current_registry_is_global": false,
     "global_goal_count": 4,
     "current_goal_count": 3,
+    "current_registry_excluded_goal_count": 1,
+    "current_registry_excluded_goal_ids": ["other-project-goal"],
     "source_registry_count": 2,
     "summary": {
       "high": 0,
@@ -2243,6 +2245,19 @@ release artifact under the LoopX runtime root.
 `scripts/install-local.sh` consumes the same readiness fact only to print a
 non-blocking warning; operators should still run `loopx doctor` or the
 canary-promotion readiness smoke for exact local release evidence.
+
+## Projection Envelope
+
+`projection_envelope` (`loopx_projection_envelope_v0`) records when status read
+the registry, global registry, run indexes, goal state contract, and runtime
+projection routes, and whether the requested scope (`registry`, `goal`, or
+`activation.<state>`) is fully covered. Registry members count toward
+coverage; legacy runtime goals are extra. An unknown `--goal-id` is reported as
+`goal_not_found` rather than as an empty but complete projection. A
+`--use-projection-cache` hit re-serves the stored envelope, keeping
+`observed_at` and restamping `served_at` and staleness. Field semantics and
+the consumer rule are in the
+[projection envelope contract](reference/contracts/projection-envelope-contract.md).
 
 ## Decision Freshness Summary
 

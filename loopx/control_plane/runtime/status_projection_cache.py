@@ -10,6 +10,8 @@ from typing import Any
 
 from ...history import load_registry
 from ...paths import resolve_runtime_root
+from ..effect_runtime import EffectRuntimeRejected
+from ..projection_envelope_facts import serve_projection_envelope
 from ..todos.contract import normalize_required_capabilities
 from .time import now_utc as runtime_now_utc
 from .time import now_utc_iso as runtime_now_utc_iso
@@ -222,9 +224,20 @@ def load_status_projection_cache(
     if not isinstance(payload, dict):
         metadata["miss_reason"] = "missing_payload"
         return None, metadata
+    envelope = payload.get("projection_envelope")
+    if not isinstance(envelope, dict):
+        metadata["miss_reason"] = "missing_projection_envelope"
+        return None, metadata
+    try:
+        served_envelope = serve_projection_envelope(envelope)
+    except EffectRuntimeRejected as exc:
+        metadata["miss_reason"] = "invalid_projection_envelope"
+        metadata["error"] = str(exc)
+        return None, metadata
     metadata["hit"] = True
     metadata["miss_reason"] = None
     payload = dict(payload)
+    payload["projection_envelope"] = served_envelope
     payload["projection_cache"] = dict(metadata)
     return payload, metadata
 

@@ -204,3 +204,9 @@ def markdown_headings(text: str) -> list[str]:
 
 def runtime_root_command_route_count(text: str) -> int:
     return len(_RUNTIME_ROOT_COMMAND_ROUTE.findall(text))
+
+
+def projection_envelope_schema_versions(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return sorted(set(re.findall(r"^- projection: (?:🔴 )?envelope=`([a-z0-9_]+)`", value, re.MULTILINE)))
+    return _schema_versions_for_key(value, "projection_envelope")

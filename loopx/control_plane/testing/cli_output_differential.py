@@ -622,6 +622,33 @@ def _schema_migration_growth_allowance(
     return max(allowances, default=0)
 
 
+# The unchanged status matrix adds 2,801 pretty JSON chars / 102 lines /
+# 1,910 compact chars for five source rows. This reviewed one-time transition
+# leaves headroom without changing absolute ceilings or ordinary v0-to-v0 growth.
+_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
+    ratio=0,
+    json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_048},
+    markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
+)
+
+
+def _projection_envelope_migration(
+    base: dict[str, Any], candidate: dict[str, Any], *, output_format: str,
+) -> tuple[dict[Metric, int], list[str], list[str]]:
+    """Qualify the one-time status schema transition, never unrelated growth."""
+    before = tuple(base.get("projection_envelope_schema_versions") or [])
+    after = tuple(candidate.get("projection_envelope_schema_versions") or [])
+    if before == after:
+        return {}, [], []
+    row_id = str(base["row_id"])
+    if (row_id.startswith(("surface/status/", "variant/status_task_graph_detail/"))
+            and before == () and after == ("loopx_projection_envelope_v0",)):
+        allowance = (_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.json
+                     if output_format == "json" else _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.markdown)
+        return allowance, [], ["projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
+    return {}, ["projection envelope schema coverage changed"], []
+
+
 def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     row_id = str(base["row_id"])
     failures: list[str] = []
@@ -656,6 +683,11 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         _runtime_root_route_growth_allowances(base, candidate)
     )
 
+    projection_allowance, projection_failures, projection_signals = _projection_envelope_migration(
+        base, candidate, output_format=output_format,
+    )
+    failures.extend(projection_failures)
+    review_signals.extend(projection_signals)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -692,6 +724,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 metric,
             ),
             _schema_migration_growth_allowance(migration, metric),
+            projection_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK

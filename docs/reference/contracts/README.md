@@ -7,6 +7,7 @@ implementation modules.
 - [Dashboard budget governance](dashboard-budget-governance-contract.md)
 - [Dashboard reward write boundary](dashboard-reward-write-boundary.md)
 - [Reward gate direct-write contract](reward-gate-direct-write-contract.md)
+- [Projection envelope contract](projection-envelope-contract.md)
 - [Status data contract](../../status-data-contract.md)
 - [Quota allocation](../../quota-allocation.md)
 - [Project agent todo contract](../../project-agent-todo-contract.md)
