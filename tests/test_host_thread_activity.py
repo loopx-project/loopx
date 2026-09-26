@@ -137,6 +137,16 @@ def test_malformed_event_payload_cannot_imply_an_open_turn(home: CodexHome, payl
     assert _observe(home, "t")["t"] == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
 
 
+@pytest.mark.parametrize("kind", ["task_complete", []])
+def test_escaped_event_type_keeps_typed_marker_semantics(home: CodexHome, kind: Any) -> None:
+    path = home.thread("t", [_event(T0, "task_started"), _event(T1, kind), _item(T2)])
+    lines = path.read_text().splitlines()
+    lines[1] = lines[1].replace('"event_msg"', '"event\\u005fmsg"')
+    path.write_text("\n".join(lines) + "\n")
+    expected = HostThreadState.IDLE if isinstance(kind, str) else HostThreadState.UNKNOWN
+    assert _observe(home, "t")["t"].state is expected
+
+
 @pytest.mark.parametrize(
     ("records", "tail_limit", "reason"),
     [

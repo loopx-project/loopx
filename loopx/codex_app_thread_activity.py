@@ -188,7 +188,7 @@ def _scan_rollout(path: Path) -> HostThreadActivity:
             if record is None:
                 return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
             last_event_at = record["timestamp"]
-        elif _EVENT_MSG_RECORD not in line:
+        elif _EVENT_MSG_RECORD not in line and b"\\u" not in line:
             continue
         else:
             record = _record(line)

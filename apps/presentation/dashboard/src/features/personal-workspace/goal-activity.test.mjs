@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { goalExecutionFromSessions, presentGoalActivity } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
+import { goalExecution, presentGoalActivity } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
 
 // One Goal's session facts, mixed by mode. `updated_at` stands for the time the
 // owner last recorded anything for that session.
@@ -19,8 +19,8 @@ const recent = minutesAgo(2);
 const silent = minutesAgo(30);
 const old = minutesAgo(45);
 
-function executionOf(sessions) {
-  const execution = goalExecutionFromSessions(sessions, "goal-a", now);
+function executionOf(sessions, observation) {
+  const execution = goalExecution(sessions, "goal-a", observation, now);
   assert.equal(execution.kind, "running");
   return execution;
 }
@@ -66,9 +66,35 @@ assert.equal(presentGoalActivity({ activationState: "active", execution: recentW
 
 // Several managed turns report the newest one; a closed session is not open work.
 assert.equal(executionOf([session("a", "managed", silent), session("b", "managed", recent)]).lastActivityAt, recent);
-assert.equal(goalExecutionFromSessions([{ ...session("closed", "managed", recent), status: "closed" }], "goal-a", now).kind, "idle");
-assert.equal(goalExecutionFromSessions([session("other", "managed", recent, null)], "goal-a", now).kind, "idle");
-assert.equal(goalExecutionFromSessions(null, "goal-a", now).kind, "unknown");
-assert.equal(goalExecutionFromSessions([session("other-goal", "managed", recent)], "goal-b", now).kind, "idle");
+assert.equal(goalExecution([{ ...session("closed", "managed", recent), status: "closed" }], "goal-a", undefined, now).kind, "idle");
+assert.equal(goalExecution([session("other", "managed", recent, null)], "goal-a", undefined, now).kind, "idle");
+assert.equal(goalExecution(null, "goal-a", undefined, now).kind, "unknown");
+assert.equal(goalExecution([session("other-goal", "managed", recent)], "goal-b", undefined, now).kind, "idle");
+
+// Native observation joins actual activity; it does not turn a fresh attached
+// claim into execution or let that claim refresh a silent host Turn.
+const hostObservation = (lastEventAt, completeness = "complete") => ({
+  completeness,
+  threads: [{ hostSurface: "codex-app", state: "turn_open", lastEventAt }],
+});
+const hostWithClaim = executionOf([session("attached", "attached_host", recent)], hostObservation(silent));
+assert.equal(hostWithClaim.lastActivityAt, silent);
+assert.equal(hostWithClaim.claimedAt, recent);
+assert.equal(hostWithClaim.hostClaimed, false);
+assert.equal(hostWithClaim.quiet, true);
+assert.equal(presentGoalActivity({ activationState: "active", execution: hostWithClaim, state: "推进" }).live, false);
+const freshHost = executionOf([session("managed", "managed", silent)], hostObservation(recent, "incomplete"));
+assert.equal(freshHost.lastActivityAt, recent);
+assert.equal(freshHost.quiet, false);
+assert.equal(presentGoalActivity({ activationState: "active", execution: freshHost, state: "推进" }).live, true);
+assert.equal(goalExecution(undefined, "goal-a", hostObservation(recent), now).kind, "running");
+assert.equal(goalExecution(null, "goal-a", hostObservation(minutesAgo(8 * 60)), now).kind, "unknown");
+for (const completeness of ["incomplete", undefined]) {
+  const partialIdle = presentGoalActivity({
+    activationState: "active", state: "已安排", boundHostSurfaces: ["codex-app"],
+    hostThreadActivity: { completeness, threads: [{ hostSurface: "codex-app", state: "idle", lastEventAt: recent }] },
+  });
+  assert.equal(partialIdle.alsoKey, "activity.inHost", "an incomplete sample never proves all threads idle");
+}
 
 console.log("Goal execution read-model invariants passed");
