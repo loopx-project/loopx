@@ -1,65 +1,72 @@
 # LoopX usage collector
 
-Receives the opt-in `loopx usage-ping` payload and publishes aggregate counts.
-The client contract (payload, switches, consent) is in
-[docs/reference/usage-ping.md](../../docs/reference/usage-ping.md).
+Cloudflare Worker + D1 for [basic usage statistics](../../docs/reference/usage-ping.md).
+The TypeScript client/collector allowlist lives in
+`loopx/control_plane/runtime/usage_statistics_contract.ts`.
 
-It is a Cloudflare Worker backed by a D1 (SQLite) database:
-
-| File | Role |
+| Endpoint | Contract |
 |---|---|
-| `src/collector.js` | Validation, storage, stats, and retention. No Cloudflare APIs, so tests run it on local SQLite. |
-| `src/worker.js` | Binds `collector.js` to the Worker `fetch` and `scheduled` handlers. |
-| `schema.sql` | `installs(install_id, first_day)` and `pings(day, install_id, version, os, python, channel)`. |
-| `wrangler.example.toml` | Deployment template. |
-| `test/collector.test.mjs` | `node --test` suite; `tests/test_usage_collector.py` runs it in the Python lane. |
+| `POST /v1/ping` | Daily random-ID heartbeat with version/OS/CPU/Python/channel; ≤1 KiB |
+| `POST /v1/aggregate` | Fixed CLI counts, no installation ID or join key; ≤16 KiB |
+| `GET /v0/stats` | Deduplicated active/new installations, including retained v0 clients; version/OS/CPU/channel breakdown |
+| `GET /v1/aggregate-stats` | Independent 30-day feature/result/duration/error totals; cells below 5 omitted |
+| `POST /v0/ping` | Retained six-field opt-in client contract; no new default-on clients use this route |
 
-## Endpoints
+Heartbeats are deduplicated by installation/day and retained 400 days.
+Aggregate requests merge directly into `usage_counts(day, feature, outcome,
+duration, error, count)` and are retained 30 days. No raw request rows, ID,
+version or per-request timestamps enter that table. Aggregate writes are lossy,
+not idempotent: clients make no retry. The server uses its UTC reception date.
+Counters are estimates, not people, accepted Goal outcomes or billing records.
 
-- `POST /v0/ping`: JSON body of at most 1024 bytes with exactly the six payload
-  fields. Returns `204`, or `400` / `413` / `415` for invalid input. One row is
-  kept per installation per UTC day; later pings that day update it.
-- `GET /v0/stats`: public `loopx_usage_stats_v0` document with 12 months of
-  `monthly_active` and `new_installs`, `rolling_30d_active`, 30 days of
-  `daily_active`, and a current-month version / OS / channel breakdown. Buckets
-  under 5 installations are merged into `other`. Cached for an hour and
-  CORS-open so the site or README badges can read it.
+Neither handler reads/stores IP, user agent or Cloudflare request metadata.
+The template disables Worker observability; Cloudflare still handles network
+metadata. Do not describe the identified heartbeat as fully anonymous, or the
+separate requests as impossible to correlate. The unauthenticated endpoint can
+be inflated; use edge rate limiting if needed, not a new stored IP identifier.
 
-## What is stored
-
-Only the payload fields and the UTC day. The Worker does not read or store the
-client IP, user agent, `cf` request metadata, or headers, and Workers
-observability logs are disabled in the template. A daily cron deletes pings
-older than 400 days and installations with no remaining pings (an
-installation that comes back after that counts as new).
-
-## Deploy
+## Fresh deployment
 
 ```bash
 cd apps/usage-collector
-npx wrangler d1 create loopx-usage              # note the database_id
-cp wrangler.example.toml wrangler.toml          # fill in database_id; wrangler.toml stays untracked
+npx wrangler d1 create loopx-usage
+cp wrangler.example.toml wrangler.toml   # set database_id; ignored local configuration
 npx wrangler d1 execute loopx-usage --remote --file schema.sql
 npx wrangler deploy
-curl -s https://<worker-host>/v0/stats          # should return loopx_usage_stats_v0 with zeros
 ```
 
-Then point a client at it without a release:
+## Upgrade an existing v0 deployment (including #5111)
+
+Back up D1 before changing it. Apply the additive migration exactly once using
+D1 migrations; **do not apply it to a fresh schema that already has `arch`**.
+The existing installs and pings are retained. Old clients continue to work.
 
 ```bash
-LOOPX_USAGE_PING_ENDPOINT=https://<worker-host>/v0/ping loopx usage-ping
+npx wrangler d1 export loopx-usage --remote --output /safe/backup/usage-before-v1.sql
+npx wrangler d1 migrations apply loopx-usage --remote
+npx wrangler deploy
 ```
 
-The project collector is deployed at
-`https://loopx-usage-collector.huangrt01.workers.dev`; its public statistics are
-available at [`/v0/stats`](https://loopx-usage-collector.huangrt01.workers.dev/v0/stats).
-This source version uses its `/v0/ping` endpoint by default after explicit
-machine opt-in. Older builds with an empty `DEFAULT_ENDPOINT` can use the
-environment override above. A deployment alone never enables a machine.
+Qualify `/v1/ping`, `/v1/aggregate`, both stats endpoints, and invalid-field/size
+rejections on a separate database first. Deploy the collector before releasing
+the new client default: the v0-only Worker does not accept v1 requests. Server
+rollback can restore the prior Worker without dropping the additive columns
+or counter table; v0 clients still work, v1 clients fail silently until restored.
 
-## Limits
+The existing project service is
+`https://loopx-usage-collector.huangrt01.workers.dev`; v1 deployment is a separate
+operational step from merging client code. Some networks cannot reach workers.dev.
+`LOOPX_USAGE_PING_ENDPOINT=https://<host>/v1/ping` selects another collector.
+Changing destinations requires new disclosure and rotates the local ID.
+Distribution owners can set `LOOPX_USAGE_POLICY=consent_required`; no region
+inference or legal-compliance assertion is supplied by this setting.
 
-- Counts are a lower bound: only opted-in machines are counted.
-- The endpoint is unauthenticated, so anyone can post random ids and inflate
-  counts. Validation caps the damage per request; if abuse shows up, add a
-  Cloudflare rate-limiting rule on `/v0/ping` rather than storing IPs.
+## Validate
+
+```bash
+node --no-warnings --experimental-strip-types --test apps/usage-collector/test/collector.test.mjs
+node --no-warnings --experimental-strip-types --test tests/control_plane_ts/usage_statistics.test.ts
+```
+
+Run from repository root. The collector suite executes actual SQL in SQLite,
+including the v0 migration; no production telemetry is needed for these tests.
