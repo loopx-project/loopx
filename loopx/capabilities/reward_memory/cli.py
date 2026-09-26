@@ -4,6 +4,7 @@ import argparse
 import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any, cast
 
 from ..issue_fix.reward_memory import ingest_issue_fix_reward_memory_event
 from .architecture import (
@@ -33,6 +34,10 @@ from .registry import build_reward_memory_corpus_registry_packet
 from .scoped_feedback import (
     SCOPED_FEEDBACK_ADAPTER,
     ingest_scoped_feedback_reward_memory_event,
+)
+from .utility_reducer import (
+    MEMORY_UTILITY_REDUCER_VERSION,
+    reduce_reward_memory_utility_observations,
 )
 
 
@@ -70,7 +75,7 @@ def _load_json_object(path_value: str) -> dict[str, object]:
 
 
 def register_reward_memory_commands(
-    subparsers: argparse._SubParsersAction,
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     parser = subparsers.add_parser(
@@ -182,6 +187,21 @@ def register_reward_memory_commands(
     )
     add_subcommand_format(evaluate)
 
+    utility_project = sub.add_parser(
+        "utility-project",
+        aliases=["utility-reduce"],
+        help="Reduce Stage-1 utility observations into a read-only projection.",
+    )
+    add_subcommand_format(utility_project)
+    utility_project.add_argument(
+        "--input",
+        required=True,
+        help=(
+            "JSON object with observations, scope, retrieval_snapshot_ref, "
+            "policy_snapshot_ref, and optional reducer_version."
+        ),
+    )
+
     dogfood = sub.add_parser(
         "dogfood-evaluate",
         help="Evaluate compact Stage-5 module outcomes after the Stage-4 gate.",
@@ -246,7 +266,9 @@ def handle_reward_memory_command(
     *,
     registry_path: Path,
     output_format: Callable[..., str],
-    print_payload: Callable[[dict[str, object], str, Callable], None],
+    print_payload: Callable[
+        [dict[str, object], str, Callable[[dict[str, object]], str]], None
+    ],
 ) -> int | None:
     if args.command != "reward-memory":
         return None
@@ -332,10 +354,11 @@ def handle_reward_memory_command(
             for key in ("event",):
                 if not isinstance(source.get(key), Mapping):
                     raise ValueError(f"{key} must be an object")
+            event = cast(Mapping[str, Any], source["event"])
             supplied_adapter = source.get("adapter")
             experiment_route: dict[str, object] | None = None
             if experiment_config is not None:
-                surface_id = str(source["event"].get("surface_id") or "")
+                surface_id = str(event.get("surface_id") or "")
                 experiment_route = resolve_reward_memory_surface_config(
                     experiment_config,
                     surface_id,
@@ -346,9 +369,7 @@ def handle_reward_memory_command(
             )
             adapter = configured_adapter or supplied_adapter
             corpus = (
-                experiment_route["corpus"]
-                if experiment_route
-                else source.get("corpus")
+                experiment_route["corpus"] if experiment_route else source.get("corpus")
             )
             standing_policy = (
                 experiment_route["standing_policy"]
@@ -394,6 +415,69 @@ def handle_reward_memory_command(
                     }
         elif args.reward_memory_command == "evaluate":
             payload = run_reward_memory_evaluation()
+        elif args.reward_memory_command in {"utility-project", "utility-reduce"}:
+            source = _load_json_object(args.input)
+            expected = {
+                "observations",
+                "scope",
+                "retrieval_snapshot_ref",
+                "policy_snapshot_ref",
+                "reducer_version",
+                "previous_projection",
+            }
+            missing = sorted(
+                key
+                for key in (
+                    "observations",
+                    "scope",
+                    "retrieval_snapshot_ref",
+                    "policy_snapshot_ref",
+                )
+                if key not in source
+            )
+            unexpected = sorted(set(source) - expected)
+            if missing:
+                raise ValueError(
+                    "utility projection input is missing: " + ", ".join(missing)
+                )
+            if unexpected:
+                raise ValueError(
+                    "utility projection input contains unsupported fields: "
+                    + ", ".join(unexpected)
+                )
+            observations = source["observations"]
+            if not isinstance(observations, list):
+                raise ValueError("observations must be a list")
+            scope = source["scope"]
+            if not isinstance(scope, Mapping):
+                raise ValueError("scope must be an object")
+            retrieval_snapshot_ref = source["retrieval_snapshot_ref"]
+            if not isinstance(retrieval_snapshot_ref, str):
+                raise ValueError("retrieval_snapshot_ref must be a string")
+            policy_snapshot_ref = source["policy_snapshot_ref"]
+            if not isinstance(policy_snapshot_ref, str):
+                raise ValueError("policy_snapshot_ref must be a string")
+            previous_projection = source.get("previous_projection")
+            if previous_projection is not None and not isinstance(
+                previous_projection, Mapping
+            ):
+                raise ValueError("previous_projection must be an object")
+            if "reducer_version" in source:
+                reducer_version = source["reducer_version"]
+                if not isinstance(reducer_version, str) or not reducer_version.strip():
+                    raise ValueError(
+                        "reducer_version must be a non-empty string when provided"
+                    )
+            else:
+                reducer_version = MEMORY_UTILITY_REDUCER_VERSION
+            payload = reduce_reward_memory_utility_observations(
+                cast(list[Mapping[str, Any]], observations),
+                scope=cast(Mapping[str, Any], scope),
+                retrieval_snapshot_ref=retrieval_snapshot_ref,
+                policy_snapshot_ref=policy_snapshot_ref,
+                reducer_version=reducer_version,
+                previous_projection=cast(Mapping[str, Any] | None, previous_projection),
+            )
         elif args.reward_memory_command == "dogfood-evaluate":
             source = _load_json_object(args.input)
             observations = source.get("observations")
@@ -469,8 +553,11 @@ def handle_reward_memory_command(
         print_payload(payload, output_format(args), _render)
         return 2
     print_payload(payload, output_format(args), _render)
-    if args.reward_memory_command in {"evaluate", "dogfood-evaluate"} and (
-        payload.get("ok") is not True
-    ):
+    if args.reward_memory_command in {
+        "evaluate",
+        "dogfood-evaluate",
+        "utility-project",
+        "utility-reduce",
+    } and (payload.get("ok") is not True):
         return 2
     return 0

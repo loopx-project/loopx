@@ -203,7 +203,10 @@ def _compact_text(value: object, label: str, *, maximum: int) -> str:
 def _confidence(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("confidence must be a finite number between 0 and 1")
-    result = float(value)
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("confidence must be a finite number between 0 and 1") from exc
     if not math.isfinite(result) or not 0.0 <= result <= 1.0:
         raise ValueError("confidence must be a finite number between 0 and 1")
     return result

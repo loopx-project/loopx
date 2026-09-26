@@ -117,7 +117,18 @@ def main() -> int:
     ]
     assert recall_application["automatic_recall"] is False
     assert recall_application["provider_failure_policy"] == ("fail_open_not_user_gate")
+    utility_attribution = architecture["existing_capability_reuse"][
+        "utility_attribution"
+    ]
+    assert utility_attribution["projection_schema"] == "memory_utility_projection_v0"
+    assert utility_attribution["reducer_version"] == "memory_utility_reducer_v0"
+    assert utility_attribution["duplicate_observation_replay_is_noop"] is True
+    assert utility_attribution["item_set_attribution_separate"] is True
+    assert utility_attribution["ranking_influence"] is False
     assert architecture["stage_boundaries"]["stage_3"].startswith("implemented_opt_in_")
+    assert architecture["stage_boundaries"]["utility_stage_2"].startswith(
+        "implemented_idempotent_"
+    )
     openviking = architecture["provider_alignment"]["openviking"]
     assert openviking["content_source_of_truth"] == "agfs_content"
     assert openviking["non_instruction_artifacts"]["openviking_cases"] == (

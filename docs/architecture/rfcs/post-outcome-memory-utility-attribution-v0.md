@@ -1,8 +1,8 @@
 # RFC: Post-Outcome Memory Utility Attribution v0
 
-- Status: Draft, under maintainer review
+- Status: Draft; Stage 1 shipped, Stage 2 implemented in follow-up issue #3824, Stage 3+ remain proposed
 - Date: 2026-08-15
-- Tracking issue: [#3214](https://github.com/huangruiteng/loopx/issues/3214)
+- Tracking issues: [#3214](https://github.com/huangruiteng/loopx/issues/3214), [#3824](https://github.com/huangruiteng/loopx/issues/3824)
 - Decision boundary: how LoopX attributes later, verified work outcomes to previously recalled memory and exposes a bounded utility projection
 - Capability owner: existing `reward_memory`
 - Provider boundary: optional evaluator providers and context-provider adapters, including OpenViking
@@ -213,8 +213,11 @@ remains scope-partitioned. This preserves the equal-peer rule in
 
 ## 6. Deterministic reducer
 
-The reducer accepts only schema-valid, in-scope, non-duplicate observations. It
-maintains, per eligible memory or set:
+Utility-attribution Stage 2 now implements the reducer as the
+`loopx.capabilities.reward_memory.utility_reducer` module and exposes it through
+`loopx reward-memory utility-project`. The reducer accepts only schema-valid,
+in-scope observations and emits a versioned, read-only
+`memory_utility_projection_v0`. It maintains, per eligible memory or set:
 
 - bounded utility estimate;
 - positive, negative, neutral, and unknown support counts;
@@ -223,17 +226,46 @@ maintains, per eligible memory or set:
 - last accepted observation id and reducer version;
 - quarantine or review proposal state, never implicit deletion.
 
-The exact statistical update is an implementation choice for a later stage,
-but it must satisfy these invariants:
+The v0 update is intentionally bounded and evidence-tiered rather than a claim
+of a learned value function:
+
+- `owner_correction` > `controlled_replay` > `deterministic_effect` >
+  `evaluator_inference` > `insufficient`;
+- the highest evidence tier governs the effective direction; an `unknown` at
+  that tier blocks weaker directional evidence, while otherwise only the
+  strongest directional tier contributes the effective label and utility
+  estimate; weaker observations remain support and history;
+- same-tier directional disagreement becomes `unknown` with a review proposal;
+- conflicting deliveries are excluded from subject state and carry a
+  rejection-level `quarantine_proposed` proposal with no mutation authority;
+- `item`, `set`, and `none` subjects are separate, and set-level credit is
+  never copied into item subjects.
+
+The implementation satisfies these invariants:
 
 - an observation cannot move utility outside configured bounds;
 - weak repeated inference cannot overwhelm a stronger correction or replay;
 - `unknown` improves lineage coverage without changing utility direction;
-- time decay reduces confidence, not historical evidence;
+- historical evidence remains append-only; any future time-decay policy must
+  be introduced as a separately versioned reducer contract;
 - scope mismatch fails closed for the observation while the main lane remains
   fail-open;
 - replaying the same observation is a no-op;
 - a reducer version change is explicit and reproducible.
+
+The projection includes bounded accepted/duplicate/conflicting/rejected
+counters, label and evidence-tier support counters, latest accepted observation
+identity and time, bounded public-safe history, and review proposals. Exact
+semantic retries under one `observation_id` are a no-op; retry-only
+`created_at` differences do not create another support record. The duplicate
+counter counts only additional deliveries with the same semantic fingerprint;
+conflicting deliveries are counted separately and the rejected counter counts
+all deliveries for a conflicting identity. A different payload under the same
+identity is a conflicting delivery and is excluded from the effective state.
+Scope, retrieval snapshot, policy snapshot, malformed observation, and
+reducer-identity mismatches return a fail-closed rejected packet with no
+subjects. The packet carries no provider effect, ranking hook, authority,
+lifecycle transition, raw content, credential, transcript, or local path.
 
 If utility later participates in retrieval ranking, semantic relevance remains
 the anchor. One admissible shape is:
@@ -430,8 +462,10 @@ that the proposed LoopX contract is already qualified for default-on use.
 ## 14. Relationship to existing contracts
 
 - [Reward Memory Architecture v0](../../../loopx/capabilities/reward_memory/README.md)
-  remains the stable recall, application, and lifecycle owner. This RFC proposes
-  a later attribution seam and Stage 5 semantic repair.
+  remains the stable recall, application, and lifecycle owner. This RFC defines
+  the post-outcome attribution seam; its Stage 1 observation contract and the
+  Stage 2 read-only reducer are implemented, while later provider effects remain
+  proposed.
 - [Peer Supervisor v0](../../reference/protocols/peer-supervisor-v0.md) supplies
   the equal-peer, public-safe, proposal-only authority boundary.
 - [Agent IM, LoopX, and OpenViking collaboration v0](agent-im-openviking-collaboration-v0.md)
@@ -442,5 +476,8 @@ that the proposed LoopX contract is already qualified for default-on use.
   a wish only when human input has incremental value; it is not automatically a
   gate.
 
-Until implementation and stable reference contracts are updated, this RFC is a
-proposal and does not change runtime behavior.
+The Stage 1 observation contract and Stage 2 reducer/projection are now backed by
+stable reference contracts and focused validation. They remain read-only and do
+not change default retrieval, ranking, provider state, authority, or the main
+work lane. OpenViking writeback, ranking influence, and qualification remain
+future Stage 3/4 work and require separate versioned contracts and review.

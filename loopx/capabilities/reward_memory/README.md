@@ -11,19 +11,23 @@ inferring what the contributor wants and inventing what the contributor is
 authorized to permit.
 
 This contract defines five memory classes, guarded precedence, and the
-pilot/meta delegation boundary. Stage 1 adds the corpus registry and health
-read model. Stage 2 adds the stateless candidate/review seam. Stage 3 adds
-explicit recall/application. The minimal ingest loop only composes those seams
-into one corpus-owner-authorized provider write and exact readback. It adds no
-second memory store, candidate scheduler, semantic router, evaluation harness,
-or rollout. The opt-in runtime hooks reuse these seams at module-owned
-boundaries; they do not create a background learner.
+pilot/meta delegation boundary. The architecture stages are: Stage 1 for the
+corpus registry and health read model, Stage 2 for the stateless
+candidate/review seam, and Stage 3 for explicit recall/application. The
+post-outcome utility stages use the existing observation contract: utility
+Stage 1 provides observations and utility Stage 2 provides the idempotent
+reducer and read-only projection. The minimal ingest loop only composes the
+existing seams into one corpus-owner-authorized provider write and exact
+readback. It adds no second memory store, candidate scheduler, semantic router,
+evaluation harness, or rollout. The opt-in runtime hooks reuse these seams at
+module-owned boundaries; they do not create a background learner.
 
 The machine-readable contract is available through:
 
 ```bash
 loopx reward-memory architecture --format json
 loopx reward-memory candidate-review --case issue-fix-verified-contributor --decision accept --format json
+loopx reward-memory utility-project --input utility-observations.json --format json
 loopx reward-memory ingest-event --input full-public-fixture.json --format json
 ```
 
@@ -643,6 +647,18 @@ loopx reward-memory route-check --case pr-3237 --format json
 - Stage 5: bounded cross-module dogfood, optional post-outcome utility
   attribution, and operator edit/retire controls.
 
+The post-outcome utility stages are deliberately separate from the architecture
+stage numbers above. Utility Stage 1 validates and emits
+`memory_utility_observation_v0`; utility Stage 2 reduces a complete observation
+stream into [`memory_utility_projection_v0`](../../../docs/reference/protocols/reward-memory-utility-projection-v0.md).
+The reducer is pure and default-off: it deduplicates semantic retries,
+quarantines conflicting deliveries through a rejection-level
+`quarantine_proposed` marker, applies typed evidence precedence, and keeps
+item, set, and unresolved lineage subjects separate. A highest-tier `unknown`
+also blocks weaker directional inference. It never changes
+retrieval ranking, provider state, memory lifecycle, authority, quota,
+scheduler, or the main work lane.
+
 Later stages must extend this contract rather than collapsing these classes,
 duplicating existing context/provider capabilities, or turning provider
 availability into a user gate. Stage 1 remains a stateless read model and
@@ -772,7 +788,8 @@ Evidence basis is typed rather than inferred from prose. `owner_correction`,
 at least one opaque `evidence_ref` in the evaluator proposal, even when the
 label remains `unknown`. `evaluator_inference` is weaker and `insufficient` is
 lineage-only. Stage 1 preserves that typed distinction; the Stage 2 reducer
-owns precedence between weak and strong observations.
+owns precedence between weak and strong observations, and a highest-tier
+`unknown` blocks weaker directional inference.
 
 The public observation contains only opaque references, canonical memory
 digests, typed reason codes, evaluator/version identity, and compact public-safe
@@ -784,9 +801,12 @@ application settlement, and dogfood readiness remain unchanged. The attribution
 subject, evidence, evaluator identity, and evaluation version produce a stable
 observation id for replay identity. A different judgment under the same key is
 a conflicting delivery, not additional support; a correction must cite new
-evidence or advance the evaluation version. Utility-attribution Stage 1 does not
-persist or reduce observations and therefore does not yet claim
-duplicate-delivery no-op behavior. The Stage 5 batch rejects duplicate
+evidence or advance the evaluation version. Utility Stage 2 reduces the complete
+stream into a bounded projection and treats exact semantic retries as a no-op.
+Conflicting deliveries remain outside subject state and carry a rejection-level
+quarantine proposal; a highest-tier `unknown` cannot be overridden by weaker
+directional inference.
+The Stage 5 batch rejects duplicate
 `application_receipt_id` values and counts each application settlement once.
 The settlement `receipt_id` deliberately excludes evaluator status and
 `observation_id`; utility retries and new evidence use the observation identity
@@ -799,8 +819,8 @@ the bounded batch contains at least one Issue Fix result, two distinct LoopX
 domain results, all three `applied`/`not_applied`/`refuted` application
 dispositions, and both operator controls. Utility observations do not affect
 this readiness decision. This is a trial-readiness statement; semantic uplift
-and production rollout remain false. The Stage 2 reducer and projection,
-ranking influence, and OpenViking writeback are outside this implementation.
+and production rollout remain false. Utility Stage 2 does not add ranking
+influence or OpenViking writeback.
 
 The edit/retire control is similarly narrow:
 

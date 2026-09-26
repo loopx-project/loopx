@@ -47,6 +47,17 @@ from .memory_utility import (
     reward_memory_application_receipt_id,
     validate_reward_memory_utility_observation,
 )
+from .utility_reducer import (
+    MEMORY_UTILITY_PROJECTION_SCHEMA_VERSION,
+    MEMORY_UTILITY_REDUCER_VERSION,
+    UTILITY_MAX,
+    UTILITY_MIN,
+    build_reward_memory_utility_projection,
+    reduce_reward_memory_utility,
+    reduce_reward_memory_utility_observations,
+    reward_memory_utility_reducer_identity,
+    validate_reward_memory_utility_projection,
+)
 from .registry import (
     build_reward_memory_corpus_registry_packet,
     normalize_reward_memory_corpus,
@@ -78,6 +89,10 @@ __all__ = [
     "build_reward_memory_dogfood_receipt",
     "build_reward_memory_operator_control",
     "build_reward_memory_utility_observation",
+    "build_reward_memory_utility_projection",
+    "reduce_reward_memory_utility",
+    "reduce_reward_memory_utility_observations",
+    "reward_memory_utility_reducer_identity",
     "reward_memory_application_receipt_id",
     "build_reward_memory_route_packet",
     "build_reward_memory_recall_request",
@@ -87,6 +102,10 @@ __all__ = [
     "normalize_reward_memory_standing_policy",
     "normalize_reward_memory_corpus",
     "MEMORY_UTILITY_OBSERVATION_SCHEMA_VERSION",
+    "MEMORY_UTILITY_PROJECTION_SCHEMA_VERSION",
+    "MEMORY_UTILITY_REDUCER_VERSION",
+    "UTILITY_MIN",
+    "UTILITY_MAX",
     "issue_fix_verified_contributor_candidate_fixture",
     "pr_3237_regression_observation",
     "reward_memory_health_case",
@@ -104,4 +123,5 @@ __all__ = [
     "stage_codex_app_turn_outcome_candidate",
     "stage_codex_app_turn_outcome_candidate_fail_open",
     "validate_reward_memory_utility_observation",
+    "validate_reward_memory_utility_projection",
 ]
