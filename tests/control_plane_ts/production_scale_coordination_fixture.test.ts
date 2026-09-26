@@ -9,7 +9,13 @@ import {
   TODO_ITEM_SCHEMA,
 } from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {validateCoordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
-import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
+import {
+  PRODUCTION_SCALE_AGENT_TODO_COUNT,
+  PRODUCTION_SCALE_COMPLETION_TARGET_INDEX,
+  PRODUCTION_SCALE_SUPERSEDE_TARGET_INDEX,
+  productionScaleCoordinationFixture,
+  requireProductionScaleTargetIndex,
+} from "./production_scale_coordination_fixture.ts";
 
 test("production-scale fixture is deterministic and explicitly ordered", () => {
   const first = productionScaleCoordinationFixture("fixture-goal", "legacy");
@@ -74,4 +80,43 @@ test("fixture rejects silent status-count drift at construction time", () => {
     TODO_DOMAIN_READ_RECORD_SCHEMA,
   );
   assert.notEqual(TODO_ITEM_SCHEMA, TODO_DOMAIN_ITEM_SCHEMA);
+});
+
+test("fixture rejects a target index that addresses no generated agent Todo", () => {
+  // Invariant (typescript-control-plane-migration-v0 §2.5): parsed JSON enters
+  // the system as unknown, and a type annotation does not prove the bytes
+  // satisfy the contract. The envelope's two target indices are the only
+  // envelope fields consumed as positional lookups, so they are validated at
+  // the boundary. The cases below are derived from that rule, not from the
+  // generated fixture: an index either addresses a generated agent Todo or it
+  // is rejected, whatever the fixture happens to contain.
+  const agentTodoCount = PRODUCTION_SCALE_AGENT_TODO_COUNT;
+  assert.ok(agentTodoCount > 0, "the envelope must generate at least one agent Todo");
+
+  assert.equal(requireProductionScaleTargetIndex(0, "test target index", agentTodoCount), 0);
+  assert.equal(
+    requireProductionScaleTargetIndex(agentTodoCount - 1, "test target index", agentTodoCount),
+    agentTodoCount - 1,
+  );
+
+  // Mutation: the boundary one past the last generated Todo. Before the
+  // validation existed this value reached `agents[value]` and produced
+  // `undefined` instead of a diagnosis.
+  assert.throws(
+    () => requireProductionScaleTargetIndex(agentTodoCount, "test target index", agentTodoCount),
+    /does not address a generated agent Todo/u,
+  );
+  assert.throws(
+    () => requireProductionScaleTargetIndex(-1, "test target index", agentTodoCount),
+    /does not address a generated agent Todo/u,
+  );
+  assert.throws(
+    () => requireProductionScaleTargetIndex(1.5, "test target index", agentTodoCount),
+    /does not address a generated agent Todo/u,
+  );
+
+  // The checked-in envelope must satisfy the rule its consumers rely on.
+  assert.ok(PRODUCTION_SCALE_COMPLETION_TARGET_INDEX < agentTodoCount);
+  assert.ok(PRODUCTION_SCALE_SUPERSEDE_TARGET_INDEX < agentTodoCount);
+  assert.notEqual(PRODUCTION_SCALE_COMPLETION_TARGET_INDEX, PRODUCTION_SCALE_SUPERSEDE_TARGET_INDEX);
 });
