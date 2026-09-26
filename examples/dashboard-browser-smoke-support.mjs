@@ -34,6 +34,10 @@ export function loadPlaywright() {
   throw new Error("Playwright package not found; install playwright or set LOOPX_PLAYWRIGHT_PACKAGE");
 }
 
+// Playwright names the shell `chrome-headless-shell` on POSIX and
+// `chrome-headless-shell.exe` on Windows.
+const CHROME_HEADLESS_SHELL_NAMES = new Set(["chrome-headless-shell", "chrome-headless-shell.exe"]);
+
 function findChromeHeadlessShell(root) {
   if (!existsSync(root)) {
     return null;
@@ -46,7 +50,7 @@ function findChromeHeadlessShell(root) {
       const path = resolve(current, entry.name);
       if (entry.isDirectory()) {
         pending.push(path);
-      } else if (entry.isFile() && entry.name === "chrome-headless-shell") {
+      } else if (entry.isFile() && CHROME_HEADLESS_SHELL_NAMES.has(entry.name)) {
         matches.push(path);
       }
     }
@@ -58,10 +62,14 @@ export async function launchBrowser(chromium) {
   const configuredPath = process.env.LOOPX_CHROME_HEADLESS_SHELL;
   const playwrightPath = chromium.executablePath();
   const executablePath = [configuredPath, playwrightPath]
-    .find((candidate) => candidate && basename(candidate) === "chrome-headless-shell" && existsSync(candidate))
+    .find((candidate) => candidate && CHROME_HEADLESS_SHELL_NAMES.has(basename(candidate)) && existsSync(candidate))
     ?? findChromeHeadlessShell(resolve(homedir(), ".cache/hyperframes/chrome"))
     ?? findChromeHeadlessShell(resolve(homedir(), ".cache/ms-playwright"))
-    ?? findChromeHeadlessShell(resolve(homedir(), "Library/Caches/ms-playwright"));
+    ?? findChromeHeadlessShell(resolve(homedir(), "Library/Caches/ms-playwright"))
+    // Windows installs the browser cache under %LOCALAPPDATA% instead.
+    ?? (process.env.LOCALAPPDATA
+      ? findChromeHeadlessShell(resolve(process.env.LOCALAPPDATA, "ms-playwright"))
+      : null);
   if (!executablePath) {
     throw new Error("chrome-headless-shell not found; set LOOPX_CHROME_HEADLESS_SHELL");
   }
