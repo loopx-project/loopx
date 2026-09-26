@@ -83,3 +83,10 @@ Its public `GET /v0/stats` endpoint publishes:
 
 These are lower bounds. They count only machines that opted in, and a machine
 that is disabled and re-enabled counts as a new installation.
+
+The frontend Settings → Global capabilities includes an optional usage reminder
+with the enable, status and disable commands. It does not change consent; the
+machine owner chooses explicitly in the terminal. Repeating enable preserves
+the current identity and daily attempt. Disable remains final even when an old
+background request finishes; re-enable creates a new identity. An already-sent
+request cannot be recalled.

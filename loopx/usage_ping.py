@@ -26,6 +26,7 @@ from typing import Any
 
 from . import __version__
 from .paths import DEFAULT_RUNTIME_ROOT
+from .file_lock import LockAcquisitionPolicy, exclusive_file_lock
 
 PAYLOAD_SCHEMA = "loopx_usage_ping_v0"
 STATE_SCHEMA = "loopx_usage_ping_state_v0"
@@ -71,25 +72,28 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 
 def enable(path: Path, *, now: datetime | None = None) -> dict[str, Any]:
-    state = load_state(path)
-    install_id = state.get("install_id") if state.get("consent") == "enabled" else None
-    state = {
-        "schema": STATE_SCHEMA,
-        "consent": "enabled",
-        "install_id": install_id or str(uuid.uuid4()),
-        "decided_on": _today(now),
-        "last_attempt_day": None,
-        "last_sent_day": None,
-    }
-    save_state(path, state)
-    return state
+    with exclusive_file_lock(path, operation="usage_ping_enable"):
+        state = load_state(path)
+        if state.get("consent") == "enabled" and state.get("install_id"):
+            return state  # Repeated enable must not reset today's attempt.
+        state = {
+            "schema": STATE_SCHEMA,
+            "consent": "enabled",
+            "install_id": str(uuid.uuid4()),
+            "decided_on": _today(now),
+            "last_attempt_day": None,
+            "last_sent_day": None,
+        }
+        save_state(path, state)
+        return state
 
 
 def disable(path: Path, *, now: datetime | None = None) -> dict[str, Any]:
     # Forget the id so a later re-enable is a new, unlinkable installation.
-    state = {"schema": STATE_SCHEMA, "consent": "disabled", "decided_on": _today(now)}
-    save_state(path, state)
-    return state
+    with exclusive_file_lock(path, operation="usage_ping_disable"):
+        state = {"schema": STATE_SCHEMA, "consent": "disabled", "decided_on": _today(now)}
+        save_state(path, state)
+        return state
 
 
 def env_block_reason(env: Mapping[str, str]) -> str | None:
@@ -163,25 +167,39 @@ def send(
     env: Mapping[str, str],
     now: datetime | None = None,
     post: Callable[[str, bytes, float], int] | None = None,
+    expected_install_id: str | None = None,
 ) -> dict[str, Any]:
     """Post today's ping once. Returns a small result; never raises for I/O."""
     today = _today(now)
-    state = load_state(path)
     endpoint = resolve_endpoint(env)
-    if env_block_reason(env) or not endpoint or state.get("consent") != "enabled":
+    if env_block_reason(env) or not endpoint or not path.exists():
         return {"sent": False, "reason": "not_enabled"}
-    if state.get("last_sent_day") == today:
-        return {"sent": False, "reason": "already_sent_today"}
-    state["last_attempt_day"] = today
-    save_state(path, state)
-    body = json.dumps(build_payload(state), separators=(",", ":")).encode("utf-8")
+    with exclusive_file_lock(path, operation="usage_ping_send"):
+        state = load_state(path)
+        if state.get("consent") != "enabled" or not state.get("install_id"):
+            return {"sent": False, "reason": "not_enabled"}
+        if expected_install_id is not None and state["install_id"] != expected_install_id:
+            return {"sent": False, "reason": "consent_changed"}
+        if state.get("last_sent_day") == today:
+            return {"sent": False, "reason": "already_sent_today"}
+        if state.get("last_started_day") == today:
+            return {"sent": False, "reason": "already_attempted_today"}
+        state["last_attempt_day"] = today
+        state["last_started_day"] = today
+        save_state(path, state)
+        install_id = state["install_id"]
+        body = json.dumps(build_payload(state), separators=(",", ":")).encode("utf-8")
+    # Never hold the consent lock across network I/O.
     try:
         code = (post or _post)(endpoint, body, REQUEST_TIMEOUT_SECONDS)
     except Exception as exc:  # network errors are expected and silent
         return {"sent": False, "reason": "request_failed", "error": str(exc)[:MAX_ERROR_CHARS]}
     if 200 <= code < 300:
-        state["last_sent_day"] = today
-        save_state(path, state)
+        with exclusive_file_lock(path, operation="usage_ping_complete"):
+            current = load_state(path)
+            if current.get("consent") == "enabled" and current.get("install_id") == install_id:
+                current["last_sent_day"] = max(today, current.get("last_sent_day") or today)
+                save_state(path, current)
         return {"sent": True, "status": code}
     return {"sent": False, "reason": "rejected", "status": code}
 
@@ -219,9 +237,15 @@ def maybe_schedule(
         today = _today(now)
         if not _due(state, today):
             return False
-        # Claim today's attempt before spawning so concurrent commands start one child.
-        state["last_attempt_day"] = today
-        save_state(path, state)
+        # The foreground skips contention; only short state changes hold this lock.
+        with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
+                                 operation="usage_ping_schedule"):
+            state = load_state(path)
+            if not _due(state, today):
+                return False
+            state["last_attempt_day"] = today
+            save_state(path, state)
+            install_id = state["install_id"]
         kwargs: dict[str, Any] = {
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
@@ -234,14 +258,14 @@ def maybe_schedule(
             )
         else:
             kwargs["start_new_session"] = True
-        spawn([sys.executable, "-m", "loopx.usage_ping", "--send", str(path.parent)], **kwargs)
+        spawn([sys.executable, "-m", "loopx.usage_ping", "--send", str(path.parent), install_id], **kwargs)
         return True
     except Exception:
         return False
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--send":
-        send(state_path(Path(sys.argv[2])), env=os.environ)
+    if len(sys.argv) == 4 and sys.argv[1] == "--send":
+        send(state_path(Path(sys.argv[2])), env=os.environ, expected_install_id=sys.argv[3])
         raise SystemExit(0)
     raise SystemExit(2)
