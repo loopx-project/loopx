@@ -119,7 +119,9 @@ immediate retries and no durable network queue. Clock rollback does not reopen
 a daily attempt. These are **lossy diagnostics**, not billing or audit records.
 
 Requests have a three-second deadline, do not block command completion, and
-cannot change its output or exit code. Disable deletes the local ID and buffered
+cannot change its output or exit code. They use the supported Node runtime's
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` settings; proxy addresses and credentials
+never enter telemetry payloads. Disable deletes the local ID and buffered
 counts; an old worker cannot restore them or send the next channel. A request
 already handed to the network cannot be recalled. Re-enable uses a new ID.
 Corrupt or unsupported state fails closed; explicit disable is the repair path.

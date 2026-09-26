@@ -44,7 +44,9 @@ def _command() -> list[str]:
     node = shutil.which("node")
     if node is None:
         raise RuntimeError("Usage settings require the supported Node.js runtime.")
-    return [node, "--no-warnings", "--experimental-strip-types", str(_ENTRY)]
+    # Keep the Python sender's proxy behavior when moving I/O to Node. This
+    # native flag is available in the repository's supported Node versions.
+    return [node, "--no-warnings", "--use-env-proxy", "--experimental-strip-types", str(_ENTRY)]
 
 
 def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, Any]:

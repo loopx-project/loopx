@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import select
+import socket
 import subprocess
 import sys
 import threading
@@ -20,6 +22,23 @@ def collector():
     received, accepted, release = [], threading.Event(), threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
+        def do_CONNECT(self):
+            # A tiny real tunnel lets Node's proxy transport reach this fixture
+            # without relying on the machine's proxy or external DNS.
+            with socket.create_connection(self.server.server_address) as upstream:
+                self.send_response(200)
+                self.end_headers()
+                sockets = (self.connection, upstream)
+                while True:
+                    ready, _, _ = select.select(sockets, [], [], 5)
+                    if not ready:
+                        return
+                    for source in ready:
+                        data = source.recv(65536)
+                        if not data:
+                            return
+                        (upstream if source is self.connection else self.connection).sendall(data)
+
         def do_POST(self):
             received.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
             accepted.set()
@@ -112,6 +131,27 @@ def test_business_failure_and_usage_failure_do_not_replace_original_result(isola
     monkeypatch.setattr(cli, '_run_command', lambda *_: 7)
     monkeypatch.setattr(usage_ping, '_command', lambda: (_ for _ in ()).throw(OSError('no node')))
     assert main(['version']) == 7
+
+
+@pytest.mark.parametrize('bypass_proxy', [False, True])
+def test_detached_sender_honors_proxy_and_no_proxy(isolated, collector, monkeypatch, bypass_proxy):
+    endpoint, received, accepted, release = collector
+    for key in ('http_proxy', 'https_proxy', 'no_proxy', 'ALL_PROXY', 'all_proxy'):
+        monkeypatch.delenv(key, raising=False)
+    proxy = endpoint.removesuffix('/v1/ping')
+    # Without proxy forwarding the first target is unreachable; with NO_PROXY
+    # the second target must succeed even though its configured proxy is dead.
+    monkeypatch.setenv('HTTP_PROXY', 'http://127.0.0.1:59999' if bypass_proxy else proxy)
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:59999' if bypass_proxy else proxy)
+    monkeypatch.setenv('NO_PROXY', '127.0.0.1' if bypass_proxy else '')
+    monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint if bypass_proxy else 'http://127.0.0.1:59999/v1/ping')
+    usage_ping.control('enable')
+    assert main(['version', '--format', 'json']) == 0
+    assert accepted.wait(4), 'detached sender ignored HTTP_PROXY or NO_PROXY'
+    assert received[0]['schema'] == 'loopx_usage_ping_v1'
+    assert not release.is_set(), 'CLI must finish before network response'
+    usage_ping.control('disable')
+    release.set()
 
 
 def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated):
