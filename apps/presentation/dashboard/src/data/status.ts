@@ -527,6 +527,18 @@ export const runGoalSchema = z.object({
       host_surface: z.string().optional().nullable(),
     })).optional().default([]).catch([]),
   }).optional().nullable(),
+  host_thread_activity: z.object({
+    observed_at: z.string().optional().nullable(),
+    threads: z.array(z.object({
+      agent_id: z.string().optional().nullable(),
+      host_surface: z.string(),
+      state: z.enum(["turn_open", "idle", "archived", "unknown"]).catch("unknown"),
+      reason: z.string().optional().nullable(),
+      turn_started_at: z.string().optional().nullable(),
+      last_turn_ended_at: z.string().optional().nullable(),
+      last_event_at: z.string().optional().nullable(),
+    })).optional().default([]),
+  }).optional().nullable().catch(null),
   index_exists: z.boolean().optional().default(false),
   raw_index_records: z.number().optional().default(0),
   unique_runs: z.number().optional().default(0),

@@ -453,6 +453,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    hostThreadActivity: {},
     answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
@@ -686,6 +687,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           goal_ids: ["multi-agent-projection"], last_activity_at: "2026-08-24T15:00:00+08:00", next_action: "Continue projected todo todo-latest-lane.", state: "running",
         },
       );
+    }
+    for (const [goalId, activity] of Object.entries(state.hostThreadActivity)) {
+      const goal = fixture.run_history.goals.find((item) => item.id === goalId);
+      if (goal) goal.host_thread_activity = activity;
     }
     const goalActivationScope = new URL(route.request().url()).searchParams.get("goal_activation");
     const isActiveScope = goalActivationScope === "active";

@@ -72,3 +72,28 @@ Opaque host identifiers, message bodies, and response files stay in the local
 runtime store. Public Session projections contain only the LoopX Session id,
 Goal/Agent binding, executor endpoint label, host surface, capability booleans,
 and lifecycle state.
+
+## Bound Codex Thread Activity
+
+The broker only sees turns a host claims. A host thread registered with
+`bind-agent-thread` but never attached is observed separately, read-only, from
+the host's own local store. The App status route (`/status.json`) adds
+`run_history.goals[].host_thread_activity` with one row per bound thread:
+`agent_id`, `host_surface`, `state`, and the `turn_started_at`,
+`last_turn_ended_at` and `last_event_at` timestamps when known. Thread ids,
+paths and message content are not included.
+
+| `state` | Meaning |
+| --- | --- |
+| `turn_open` | The host recorded a turn start without an end. A host that exits mid-turn leaves this behind, so the App shows it as running only while `last_event_at` is recent. |
+| `idle` | The latest recorded turn ended. |
+| `archived` | The host archived the thread. |
+| `unknown` | Not observable; `reason` is `unsupported_host`, `store_unavailable`, `thread_not_found`, `record_unrecognized` or `no_turn_marker`. |
+
+Codex local surfaces (`codex-app`, `codex-cli-tui`, `codex-ide-plugin`) are read
+from `<CODEX_HOME>/state_<n>.sqlite` and the thread's rollout JSONL. The Codex
+store is not a public contract: any shape the adapter does not recognize is
+`unknown`, never `turn_open`. Remote surfaces such as `codex-app-ssh` are
+`unsupported_host`. Homes are searched in the order `CODEX_HOME`, `~/.codex`,
+then sibling `~/.codex-*` directories; set `LOOPX_CODEX_HOMES` (an
+`os.pathsep`-separated list) to search exactly those homes instead.
