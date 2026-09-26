@@ -11,6 +11,7 @@ be bound to.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
@@ -54,7 +55,9 @@ def _receipt_recency(receipt: Mapping[str, Any]) -> tuple[float, int]:
 
     recorded = receipt.get("recorded_at")
     return (
-        float(recorded) if isinstance(recorded, (int, float)) and not isinstance(recorded, bool) else 0.0,
+        float(recorded)
+        if isinstance(recorded, (int, float)) and not isinstance(recorded, bool)
+        else 0.0,
         int(receipt.get("sequence") or 0),
     )
 
@@ -70,9 +73,15 @@ def _run_key(run: Mapping[str, Any]) -> RunKey:
 def _review_turn(run: Mapping[str, Any]) -> tuple[str | None, bool]:
     """Distinguish legacy absence from malformed or contradictory Turn claims."""
     settlement = run.get("settlement_identity")
-    settled = settlement.get("turn_instance_id") if isinstance(settlement, Mapping) else None
-    claims = [value for value in (run.get("turn_instance_id"), settled) if value is not None]
-    valid = [_progress_turn_instance_id({"turn_instance_id": value}) for value in claims]
+    settled = (
+        settlement.get("turn_instance_id") if isinstance(settlement, Mapping) else None
+    )
+    claims = [
+        value for value in (run.get("turn_instance_id"), settled) if value is not None
+    ]
+    valid = [
+        _progress_turn_instance_id({"turn_instance_id": value}) for value in claims
+    ]
     invalid = any(value is None for value in valid) or len(set(valid)) > 1
     return (None if invalid else next(iter(valid), None)), invalid
 
@@ -131,7 +140,10 @@ def _identity_conflict(run: Mapping[str, Any], receipt: Mapping[str, Any]) -> bo
     """Agent must be attributable; Todo absence matches only another absence."""
 
     receipt_run = receipt.get("run")
-    if not isinstance(receipt_run, Mapping) or not str(run.get("agent_id") or "").strip():
+    if (
+        not isinstance(receipt_run, Mapping)
+        or not str(run.get("agent_id") or "").strip()
+    ):
         return True
     for field in ("agent_id", "todo_id"):
         mine = str(run.get(field) or "").strip()
@@ -184,6 +196,62 @@ def _verdict(
     return "unevaluated", "undecided"
 
 
+@dataclass(frozen=True)
+class _ReviewScan:
+    """Attribution-safe inputs prepared before the streak reducer runs."""
+
+    normalized_agent_id: str
+    lane: list[dict[str, Any]]
+    fallback_counts: Counter[RunKey]
+    run_turn_owners: dict[str, set[tuple[str, str]]]
+    by_turn: dict[str, Mapping[str, Any] | None]
+    by_key: dict[RunKey, Mapping[str, Any] | None]
+
+
+def _prepare_review_scan(
+    newest_first_runs: Iterable[dict[str, Any]],
+    receipts: Iterable[Mapping[str, Any]],
+    *,
+    agent_id: str | None,
+    neutral: set[str],
+    ack_recorded: AckRecorded,
+) -> _ReviewScan | None:
+    """Select one accountable lane and pre-index only attributable evidence."""
+
+    runs = [run for run in newest_first_runs if isinstance(run, dict)]
+    normalized_agent_id = str(agent_id or "").strip() or _single_agent_id(runs)
+    if not normalized_agent_id:
+        return None
+    lane: list[dict[str, Any]] = []
+    for run in runs:
+        owner = str(run.get("agent_id") or "").strip()
+        if owner and owner != normalized_agent_id:
+            continue
+        _, invalid = _review_turn(run)
+        if owner == normalized_agent_id and not invalid and ack_recorded(run):
+            break
+        if str(run.get("classification") or "").strip() in neutral:
+            continue
+        lane.append(run)
+    fallback_counts = Counter(
+        _run_key(run) for run in lane if _review_turn(run) == (None, False)
+    )
+    run_turn_owners: dict[str, set[tuple[str, str]]] = {}
+    for run in lane:
+        turn, _ = _review_turn(run)
+        if turn:
+            run_turn_owners.setdefault(turn, set()).add(_run_key(run)[1:])
+    by_turn, by_key = index_progress_review_receipts(receipts)
+    return _ReviewScan(
+        normalized_agent_id=normalized_agent_id,
+        lane=lane,
+        fallback_counts=fallback_counts,
+        run_turn_owners=run_turn_owners,
+        by_turn=by_turn,
+        by_key=by_key,
+    )
+
+
 def external_progress_review_trigger(
     newest_first_runs: Iterable[dict[str, Any]],
     *,
@@ -227,30 +295,21 @@ def external_progress_review_trigger(
     if not pinned:
         return None
     required = max(2, int(threshold))
-    runs = [run for run in newest_first_runs if isinstance(run, dict)]
-    normalized_agent_id = str(agent_id or "").strip() or _single_agent_id(runs)
-    if not normalized_agent_id:
+    scan = _prepare_review_scan(
+        newest_first_runs,
+        receipts,
+        agent_id=agent_id,
+        neutral=neutral,
+        ack_recorded=ack_recorded,
+    )
+    if scan is None:
         return None
-    # Select the lane before interpreting ACKs. Anonymous rows remain unknown
-    # gaps, but can neither acknowledge nor supply that Agent's progress claims.
-    lane: list[dict[str, Any]] = []
-    for run in runs:
-        owner = str(run.get("agent_id") or "").strip()
-        if owner and owner != normalized_agent_id:
-            continue
-        _, invalid = _review_turn(run)
-        if owner == normalized_agent_id and not invalid and ack_recorded(run):
-            break
-        if str(run.get("classification") or "").strip() in neutral:
-            continue
-        lane.append(run)
-    fallback_counts = Counter(_run_key(run) for run in lane if _review_turn(run) == (None, False))
-    run_turn_owners: dict[str, set[tuple[str, str]]] = {}
-    for run in lane:
-        turn, _ = _review_turn(run)
-        if turn:
-            run_turn_owners.setdefault(turn, set()).add(_run_key(run)[1:])
-    by_turn, by_key = index_progress_review_receipts(receipts)
+    normalized_agent_id = scan.normalized_agent_id
+    lane = scan.lane
+    fallback_counts = scan.fallback_counts
+    run_turn_owners = scan.run_turn_owners
+    by_turn = scan.by_turn
+    by_key = scan.by_key
     segment: list[tuple[str, dict[str, Any], Mapping[str, Any] | None, str | None]] = []
     window_runs: list[dict[str, Any]] = []
     seen_turns: set[str] = set()
@@ -270,7 +329,9 @@ def external_progress_review_trigger(
                 continue
             seen_turns.add(turn)
             receipt = by_turn.get(turn)
-            ambiguous = (turn in by_turn and receipt is None) or len(run_turn_owners[turn]) > 1
+            ambiguous = (turn in by_turn and receipt is None) or len(
+                run_turn_owners[turn]
+            ) > 1
             if ambiguous:
                 receipt = None
         else:
@@ -304,7 +365,9 @@ def external_progress_review_trigger(
             window_runs.append(run)
     if longest < required:
         return None
-    drift_rows = [(run, receipt) for verdict, run, receipt, _ in segment if verdict == "drift"]
+    drift_rows = [
+        (run, receipt) for verdict, run, receipt, _ in segment if verdict == "drift"
+    ]
     latest_run, latest_receipt = drift_rows[0]
     assert latest_receipt is not None
     oldest_run = drift_rows[-1][0]
@@ -352,8 +415,12 @@ def external_progress_review_trigger(
         "agent_id": normalized_agent_id
         or _single_agent_id([run for run, _ in drift_rows]),
         "contract_revision": pinned,
-        "evidence_ids": [str(receipt["evidence_id"]) for _, receipt in drift_rows if receipt],
-        "receipt_ids": [str(receipt["receipt_id"]) for _, receipt in drift_rows if receipt],
+        "evidence_ids": [
+            str(receipt["evidence_id"]) for _, receipt in drift_rows if receipt
+        ],
+        "receipt_ids": [
+            str(receipt["receipt_id"]) for _, receipt in drift_rows if receipt
+        ],
         "latest_generated_at": str(latest_run.get("generated_at") or ""),
         "oldest_counted_generated_at": str(oldest_run.get("generated_at") or ""),
         "latest_judgments": latest_receipt.get("judgments"),
@@ -394,7 +461,9 @@ def external_progress_review_obligation(
         threshold=int(policy.get("drift_threshold") or 2),
         signal=str(policy.get("signal") or "noul"),
         contract_revision=(
-            str(policy["contract_revision"]) if policy.get("contract_revision") else None
+            str(policy["contract_revision"])
+            if policy.get("contract_revision")
+            else None
         ),
         ack_recorded=ack_recorded,
         neutral_classifications=neutral_classifications,
