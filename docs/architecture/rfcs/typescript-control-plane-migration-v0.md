@@ -25,6 +25,16 @@ bounded Python retirement. #4931 and outstanding D2 evidence are tracked
 separately. Three is a delivery plan, not a guaranteed total PR count.
 [Current inventory and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md).
 
+## Native authority qualification and prototype retirement (2026-09-26)
+
+The coverage-only Python coordination executor, head codec, File provider and
+bootstrap bridge are retired with their last example/test callers. Stage 0 now
+runs complete native File/SQLite conformance rather than the obsolete Python
+provider. The existing TS domain owners and shared fixtures are reused; Python
+`authority_core.py` remains a live adapter and is not removed. This is an early
+bounded T4 deletion slice, not default cutover or all Python retirement.
+[Coverage, behavior differences and format boundary](../../../examples/shared-goal-authority-e2e/README.md#native-qualification-and-prototype-retirement).
+
 ## Observation writer retirement (2026-09-24)
 
 The obsolete Python post-commit observer and TS observation commit path are

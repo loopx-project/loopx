@@ -32,8 +32,8 @@ and the transaction-bound outbox instead of requiring a second writable history.
 
 | Row | Stage | Path | Gate | Asserts |
 | --- | --- | --- | --- | --- |
-| `s0.file_matrix_twelve_rows` | 0 | store_direct | deterministic | `examples/nokv-shadow-provider/live_e2e.py` reports exactly the twelve known file-provider scenario rows, all true |
-| `s0.nokv_live_matrix` | 0 | store_direct | env:nokv_legacy | the same twelve rows plus `restored_lineage_fails_closed` are true on a live NoKV stack and file/NoKV outcomes are identical |
+| `s0.native_file_conformance` | 0 | store_direct | deterministic | Runs the complete `authority_store.test.ts` suite against the current TS FileAuthorityStore; every selected test must pass, with no skip or missing trailer |
+| `s0.native_sqlite_conformance` | 0 | store_direct | deterministic | Runs the complete `sqlite_authority_store.test.ts` suite against real SQLite files and the same shared conformance contract |
 | `s1.cli_document_decodes_through_ts_store` | 1 | real_cli | deterministic | Explicit bootstrap plus three CLI writes load at cursor `4`; paged `scanCommitted` returns four distinct transactions in source order and `readReceipt` finds the first source write |
 | `s2a.nokv_live_qualification` | 2a | store_direct | env:nokv_authority | runs the merged `examples/nokv-authority-store/live-qualification.ts --execute-live` against an existing workbench with a fresh tenant/goal pair; requires `ok=true`, the single-node store-conformance scope, every check `passed`, NoKV SDK `0.11.1` / API `1`, the two stale-incarnation fence checks (`stale_incarnation_fence_rejected`, `stale_incarnation_fence_left_generation_unchanged`), and no promotion or availability claim; evidence carries check ids, counts, and config and workbench digest prefixes, never a configuration value or the workbench name |
 | `s2b.postgresql_conformance_live` | 2b | store_direct | env:postgresql | `postgresql_authority_store.integration.test.ts` under node's TAP reporter: `# pass >= 9`, `# fail 0`, `# skipped 0` |
@@ -73,13 +73,65 @@ byte; every assertion still goes through `status`, `drain`, `inspect`,
 `qualify`, `read-candidate`, `rollback`, `migrate-state` and the retained
 TypeScript store read.
 
+## Native qualification and prototype retirement
+
+Stage 0 now exercises the providers used by current Goals. Run from a source
+checkout after `npm ci` and `uv sync --extra test`:
+
+```bash
+uv run --extra test python examples/shared-goal-authority-e2e/ladder.py --stage 0
+```
+
+These are complete suites, so allow several minutes. The regular TypeScript test
+job already runs them; the default pytest projection skips these two duplicate
+runs. Set `LOOPX_LADDER_FULL=1` for pytest to execute them too. The standalone
+ladder always executes selected rows. The test runner's successful
+exit is necessary but insufficient: all tests must pass, the selection must be
+nonempty, and failures, skips, cancellations or an incomplete TAP trailer fail
+qualification. Missing Node or source suites is explicitly `unverified`.
+Installing a wheel alone does not install the source qualification suite.
+
+The Python `CoordinationAuthorityExecutor`, head codec, `FileCoordinationProvider`
+and bootstrap bridge had no production CLI callers. Their remaining callers were
+the prototype examples, unit tests and the old ladder. They are removed together;
+current TS executors, stores, logical archives and File v0-to-v1 migration remain.
+`coordination-head-*.json` was the experimental head format, not a production
+`authority-store-*.json` journal. This retirement neither rewrites those prototype
+artifacts nor converts them into a full Goal. Historical probe records remain
+historical; `s0.file_matrix_twelve_rows` and `s0.nokv_live_matrix` are no longer
+selectable and are never aliases for current proof.
+
+Coverage follows the current semantic owner rather than reproducing prototype
+schemas or its superseded rules:
+
+| Retired prototype obligation | Retained native qualification |
+| --- | --- |
+| Same-Todo CAS winner, independent writes, stale revision and operation identity | `authority_store_conformance.ts`: CAS, replay/fencing, atomic Todo claim and lease acquisition |
+| Lost response, receipt recovery and bounded retries | `coordination_receipt_conformance.ts` and `claim_acquisition_proof_conformance.ts` |
+| Renew, release, transfer, expiry and stale ownership | `lease_lifecycle_conformance.ts`, `lease_acquisition_conformance.ts`, `claim_transfer_conformance.ts` and claim acquisition proof |
+| Completion plus successor, durable continuation and unchanged unrelated rows | Native terminal lifecycle and production-scale scenarios in `authority_store_conformance.ts` |
+| Restore lineage, corrupt records, publication and reopen | File/SQLite provider suites, authority source and promotion recovery conformance |
+| Large state and observation isolation | Existing production-scale coordination fixtures, complete snapshots and paginated authority scan conformance |
+
+Two intentional differences already belong to the current runtime: an expired
+lease may still be released by its matching holder for cleanup, and an original
+claim receipt does not authorize execution after the current lease has retired.
+Retiring the prototype must not reinstate its expired-release rejection or treat
+historical receipt replay as fresh execution authority.
+
+NoKV keeps its actual TS store and Stage 2A live qualification; removing the old
+head adapter does not remove that provider. Open #4726 touches both implementations:
+its native SDK routing/schema work remains relevant, while its prototype-only
+changes must be dropped when rebasing across this retirement. Local conformance does not certify
+SQLite D2 capacity/soak, production NoKV availability, PostgreSQL deployment or
+default cutover.
+
 ## Gates and environment variables
 
 | Gate | Requirement | Unverified reason when absent |
 | --- | --- | --- |
 | `deterministic` | none (needs `node` on `PATH` for the CLI's TypeScript runtime and the read-back probe) | `node_missing` when the probe cannot run |
 | `env:postgresql` | `LOOPX_TEST_POSTGRES_URL` plus `node_modules/pg` (`npm ci`) | `postgres_url_missing`, `pg_dependency_missing`, `node_missing` |
-| `env:nokv_legacy` | `NOKV_COORDINATION_LIVE=1` and `NOKV_ETCD`, `NOKV_ETCD_PREFIX`, `NOKV_ROOT_ID`, `NOKV_BUCKET`, `NOKV_OBJECT_ENDPOINT`, `NOKV_OBJECT_ROOT`, `NOKV_OBJECT_KEY`, `NOKV_OBJECT_SECRET`; the `nokv` SDK importable | `nokv_live_env_missing`, `nokv_coordination_live_not_enabled`, `nokv_sdk_missing` |
 | `env:nokv_authority` | `LOOPX_NOKV_AUTHORITY_LIVE=1` (the probe writes durable test data), `LOOPX_NOKV_AUTHORITY_CONFIG_JSON` (absolute path to the ignored NoKV client configuration), `LOOPX_NOKV_AUTHORITY_PYTHON` (absolute path to the Python executable that resolves NoKV SDK 0.11.1), `LOOPX_NOKV_AUTHORITY_WORKBENCH` (an existing workbench); `node` on `PATH` | `nokv_authority_env_missing`, `loopx_nokv_authority_live_not_enabled`, `nokv_authority_config_missing`, `nokv_authority_python_missing`, `node_missing` |
 
 POSIX-only rows report `unverified/posix_only` on Windows.

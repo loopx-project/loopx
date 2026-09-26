@@ -28,147 +28,74 @@ LEASE_NATURE = "optional runtime fence, not authority"
 
 # ── authority-boundary static table ─────────────────────────────────────────
 def _build_authority_boundary_table() -> list[dict[str, Any]]:
-    """Static map of each RFC proposal to its shipped-truth status.
+    """Implementation availability, not a claim that this Goal was promoted.
 
-    Sensitive tokens are split with ``+`` concatenation so the public-
-    boundary scanner never self-detects (same pattern as ``contract.py``).
+    Keep the original RFC section identifiers for report consumers. The original
+    prototype commands/formats are distinct from their shipped native successors.
+    Per-Goal authority must still be read from its actual binding and writer fence.
     """
     return [
         {
             "rfc_section": "3 -- State Classification",
-            "proposal": (
-                "Shared canonical: todo lifecycle, soft claims, dependency, "
-                "gate fields, hard task leases, operation receipts"
-            ),
-            "shipped": False,
+            "proposal": "Shared canonical Todo lifecycle, claims, leases and operation receipts",
+            "shipped": True,
             "shipped_equivalent": (
-                "Default runtime: task_lease.py file-backed leases + "
-                "ACTIVE_GOAL_STATE.md soft claims (two stores). Stage-2 "
-                "coordination head unifies them only on the additive path."
+                "Promoted Goals use native TS commands and AuthorityStore transactions. "
+                "Unpromoted Goals retain the Markdown/lease adapters."
             ),
-            "gap": (
-                "Default path still has separate lease/claim stores with no "
-                "shared revision counter; legacy handoff_mode keeps soft "
-                "claim overriding hard lease. Canonical shared state waits "
-                "on Stage 3 promotion."
-            ),
+            "gap": "Implementation availability does not select the default provider or migrate this Goal.",
         },
         {
             "rfc_section": "4 -- Coordination Ledger Shape",
-            "proposal": (
-                "loopx_coordination_head_v1: unified aggregate with "
-                "authority_revision, todo_revision, lease_epoch, "
-                "receipt_index, eligibility projections"
-            ),
+            "proposal": "Original coordination head aggregate with an embedded receipt index",
             "shipped": False,
             "shipped_equivalent": (
-                "Native task-lease acquire is owned by the TypeScript default "
-                "path. The coordination head codec + recoverable execution "
-                "reference executor + file/NoKV candidates exercise v1 behind "
-                "one CAS seam as coverage-only modules, not the runtime "
-                "source of truth. PostgreSQL remains an RFC workstream."
+                "The Python prototype is retired. Native File/SQLite journals retain "
+                "head, committed history and receipts through one AuthorityStore contract. "
+                "PostgreSQL and NoKV have separate candidate qualification."
             ),
-            "gap": (
-                "Runtime still writes Markdown/lease files; no production "
-                "provider-neutral transaction boundary or canonical "
-                "coordination head exists. Stage 3 contract proof is complete "
-                "at the reference boundary; canonical promotion still needs "
-                "migration, writer fencing, authorization, provider "
-                "qualification, rollback, projection, and retention decisions"
-            ),
+            "gap": "The retired prototype head is not a supported Goal journal or migration source.",
         },
         {
             "rfc_section": "5.1 -- claim_work command",
-            "proposal": (
-                "CAS claim+lease+receipt in one atomic transition against "
-                "the coordination head"
-            ),
+            "proposal": "Atomic claim, lease and receipt publication",
             "shipped": False,
             "shipped_equivalent": (
-                "The default path has task_lease_acquire.ts native hard-fence "
-                "acquire plus an independently versioned active-state soft "
-                "claim. The coverage-only coordination executor proves atomic "
-                "claim+lease+receipt behind the reference CAS seam."
+                "The experimental claim_work executor is retired. Native todo_claim.ts "
+                "owns atomic claim/lease acquisition on canonical providers."
             ),
             "gap": (
-                "claim_work is not a production write path. Default leases "
-                "remain an optional runtime fence rather than write authority, "
-                "and the soft claim still wins under legacy handoff_mode."
+                "A historical receipt is not current execution authority. Lease/effect "
+                "checks and the actual Goal binding remain required; claim_work is not a public command."
             ),
         },
         {
             "rfc_section": "7 -- Receipt Retention",
-            "proposal": (
-                "retain_all_v0: no GC; missing receipt -> fail closed"
-            ),
+            "proposal": "Retain original receipts and fail closed on unproved outcomes",
             "shipped": True,
-            "shipped_equivalent": (
-                "Stage-2 coordination head receipt_index under "
-                "retain_all_v0 (fail closed on missing receipt for that "
-                "path). Default runtime still uses turn-scoped quota "
-                "settlement receipts."
-            ),
-            "gap": (
-                "Default path has no goal-wide receipt_index. Stage-2 "
-                "retain_all_v0 is load-bearing for canary sizing; Section 12 "
-                "retention policy is still an open Stage-3 decision."
-            ),
+            "shipped_equivalent": "Native AuthorityStore readReceipt and committed history preserve replay evidence.",
+            "gap": "Receipt correctness does not qualify unbounded capacity or the SQLite D2 profile.",
         },
         {
             "rfc_section": "8 -- Local vs Shared Mode",
-            "proposal": (
-                "Explicit per-goal opt-in with provider binding, local "
-                "writer fencing during migration, parity validation"
-            ),
-            "shipped": False,
-            "shipped_equivalent": (
-                "Default local mode only -- project registry, Markdown "
-                "active state, run history, task leases, status, quota, "
-                "host behavior remain unchanged. Stage-2 file provider is "
-                "local shadow, not shared-authority mode."
-            ),
-            "gap": (
-                "No shared-authority mode is implemented; installing a "
-                "provider does not enable shared authority or replace "
-                "local writers"
-            ),
+            "proposal": "Explicit provider binding, writer fencing and migration parity",
+            "shipped": True,
+            "shipped_equivalent": "Reviewed per-Goal promotion and fenced rollback are implemented.",
+            "gap": "Whole-Goal cohort qualification and default onboarding remain separate from per-Goal opt-in.",
         },
         {
             "rfc_section": "Appendix B -- handoff_mode",
-            "proposal": (
-                "handoff_mode field on goal state front matter: "
-                "legacy | soft_claim | hard_lease"
-            ),
+            "proposal": "Explicit legacy, soft_claim or hard_lease coordination mode",
             "shipped": True,
-            "shipped_equivalent": (
-                "handoff_mode front-matter + loopx handoff-mode show|set "
-                "with quiescence gate; hard_lease gates claim/lease and "
-                "auto-acquire completion keys. Stage-2 head pins "
-                "hard_lease on bootstrap."
-            ),
-            "gap": (
-                "legacy remains the default and keeps the soft-claim / "
-                "hard-lease divergence hole by design"
-            ),
+            "shipped_equivalent": "The native handoff-mode command owns transition admission and quiescence checks.",
+            "gap": "Provider selection does not silently replace the Goal's chosen handoff mode.",
         },
         {
             "rfc_section": "9 -- Offline/Local Boundaries",
-            "proposal": (
-                "When shared-mode authority is unavailable: cached "
-                "projections may be read (stale), no new controlled writes "
-                "accepted, already-authorized local computation may "
-                "continue under existing lease/effect boundaries, NO "
-                "automatic local-file write fallback"
-            ),
+            "proposal": "Unavailable shared authority must not silently fall back to local writers",
             "shipped": False,
-            "shipped_equivalent": (
-                "No shared-mode path exists; Stage-2 file provider is still "
-                "local. Default writes go to the local file system."
-            ),
-            "gap": (
-                "Shared-mode offline boundary is aspirational -- no online "
-                "authority provider is the runtime source of truth"
-            ),
+            "shipped_equivalent": "Promoted local providers fail closed when canonical authority cannot be read.",
+            "gap": "Deployed cross-host service availability and execution-interval fencing need separate qualification.",
         },
     ]
 

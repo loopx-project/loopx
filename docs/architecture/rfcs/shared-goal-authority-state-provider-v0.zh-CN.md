@@ -1594,6 +1594,11 @@ provider-first，且不改变下述 typed outcome 合同。
 
 #### Stage 2 切片状态（2026-08-23）
 
+> 历史原型记录：Python head/executor/File provider 及其探针已退役。当前
+> Stage 0 验证正式 TS File/SQLite；下文历史通过记录不构成当前 provider 资格。
+> [覆盖映射与兼容边界](../../../examples/shared-goal-authority-e2e/README.md#native-qualification-and-prototype-retirement)。
+
+
 第一个 Stage 2 切片已通过 #3529 以增量方式合入 `main`：
 
 - `loopx.control_plane.coordination.head`：`loopx_coordination_head_v0`
@@ -1731,6 +1736,8 @@ CLI runner、observation-lock 窗口、候选回读）、只读 TypeScript 探�
 `examples/shared-goal-authority-e2e/ladder.py`。
 
 按阶段，本增量实现：
+
+下列 Stage 0 历史行已于 2026-09-26 退役；当前资格使用 native provider ladder。
 
 - Stage 0：`s0.file_matrix_twelve_rows` 运行保留的 live matrix 脚本，要求 file
   provider 上恰好十二个共享场景行全为 true；`s0.nokv_live_matrix` 要求 live

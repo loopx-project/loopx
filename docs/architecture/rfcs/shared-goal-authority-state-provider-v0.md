@@ -2011,6 +2011,11 @@ flips to provider-first without changing the typed outcome contract below.
 
 #### Stage 2 slice status (2026-08-23)
 
+> Historical prototype record. The Python head/executor/File provider and its
+> probes are now retired; current Stage 0 qualifies native TS File/SQLite.
+> See the [coverage and compatibility boundary](../../../examples/shared-goal-authority-e2e/README.md#native-qualification-and-prototype-retirement).
+
+
 The first Stage 2 slice is merged on `main` through #3529, additively:
 
 - `loopx.control_plane.coordination.head`: the `loopx_coordination_head_v0`
@@ -2194,6 +2199,8 @@ projection `tests/control_plane/test_shared_goal_authority_e2e.py`, and the
 entry point `examples/shared-goal-authority-e2e/ladder.py`.
 
 Per stage, this increment implements:
+
+Historical Stage 0 rows below were retired on 2026-09-26. Use the current ladder for native provider qualification.
 
 - Stage 0: `s0.file_matrix_twelve_rows` runs the retained live matrix script
   and requires exactly the twelve shared scenario rows to be true on the file
