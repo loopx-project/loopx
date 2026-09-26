@@ -203,7 +203,7 @@ flowchart TD
 [`event_writeback.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/event_writeback.py)、
 [`local_state_write_correctness.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py)、
 [`authority_store.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts)、
-[`coordination/executor.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/executor.py)
+[`coordination/authority_core.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_core.py)
 和 [`settlement.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py)。
 
 所以正确流程是“读 basis -> 提案 -> 验证/guard -> guarded commit -> 事件或 receipt -> 回读”，而不是
