@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 import loopx.event_sourced_state as event_sourced_state
+
+NEL = "\x85"
 from loopx.event_sourced_state import (
     TODO_ADDED,
     AppendOnlyStateEventStore,
@@ -429,3 +431,30 @@ AppendOnlyStateEventStore(Path(path)).append_many([
             if row["event_id"].startswith(f"{worker}-")
         ]
         assert positions == list(range(positions[0], positions[0] + 3))
+
+
+def test_load_reads_a_record_whose_value_carries_u0085(tmp_path: Path) -> None:
+    """The event log is one JSON document per LF.
+
+    `json.dumps(..., ensure_ascii=False)` keeps U+0085 inside a value verbatim,
+    and `str.splitlines()` treats it as a line break, so a valid event arrived
+    as two fragments and `load()` raised `StateEventError`.
+    """
+
+    event_log = tmp_path / "events.jsonl"
+    store = AppendOnlyStateEventStore(event_log)
+    event = make_state_event(
+        event_id="evt-raw-separator",
+        goal_id="goal-a",
+        event_type=TODO_ADDED,
+        refs={"todo_id": "todo_raw_separator"},
+        payload={"role": "agent", "title": f"Observe the durable event.{NEL}"},
+        recorded_at="2026-09-06T00:00:00Z",
+    )
+    event_log.write_text(
+        json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    loaded = store.load()
+
+    assert [item["event_id"] for item in loaded] == ["evt-raw-separator"]
