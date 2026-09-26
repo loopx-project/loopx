@@ -512,6 +512,12 @@ preflight through the actual Turn dry-run and selected executor/profile. Task
 admission, current pinned acceptance and runtime availability remain distinct;
 unprobed generic/cloud availability stays unknown. The same inspection is available
 to CLI and enabled MCP/new Chat tools, without a new state store or launch effect.
+Turn exception readback now distinguishes uncertain invocation effects from the
+original journal's checkpointed effects and prepared-effect recovery. This is a
+bounded R2 recovery slice, not runtime provisioning or G1 completion; caller
+admission, fresh task derivation and frontend/Lark qualification remain open.
+中文：异常读回区分本次调用未知副作用与原 Turn 的持久观察/待核对效果，只完成
+R2 的一个恢复切片；调用方准入、新任务生成与前端/Lark 验收仍未闭环。
 The same owner-local panel now opens current validated artifact text and its
 version/source identifiers, accepts feedback through the original coordinator
 inbox and exposes coordinator pause with its actual scope. Stale reads clear prior

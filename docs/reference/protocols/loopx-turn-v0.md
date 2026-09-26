@@ -383,6 +383,30 @@ quota construction, scheduler context, planning, host invocation, settlement,
 spend, or state writeback. Its `effects` field is therefore always an empty
 list.
 
+`recorded_effects` separately reports lower-bound observations of the **original
+Turn**, not effects performed by this inspection or a recovery invocation.
+Boolean values mean checkpointed execution or no recorded attempt; `null` means
+unknown. A saved Host attempt precedes launch confirmation; a `prepared` writeback
+or spend is not a commit receipt. Inconsistent/foreign lineage supplies only
+unknown effect facts. A scheduler phase does not imply host acknowledgement.
+
+If executing `run-once` raises unexpectedly, its error response retains the
+original error and resume key, marks uncertain current-invocation `effects` as
+`null`, and adds `journal_observation` from this same read-only TS owner. Its
+`scope=original_turn` prevents a saved Host result being mistaken for another
+launch. Unavailable inspection remains explicit; there is no Python fallback.
+Use the original `recovery_decision` and provider readback to recover, never a
+fresh task or repeated model call inferred from a failed CLI reply. This readback
+does not bypass controller completion validation, lease conflicts or quota gates.
+Pre-execution failures retain known Turn-start hook writes without claiming Host
+execution. Normal successful/replayed `effects` remain invocation-scoped.
+
+中文：`recorded_effects` 是原 Turn 的持久观察，不是本次检查或恢复又发生了副作用。
+`null` 表示未知：已登记 Host attempt 不等于模型已启动，`prepared` 不等于写回或扣额
+已提交。异常返回保留原错误/恢复身份，以同一 TS owner 的只读 `journal_observation`
+区分本次调用与原 Turn；读回失败不猜测“没有执行”。按原恢复判定和 provider 回执
+继续，不能因 CLI 报错新建任务重跑模型，也不放松验收、租约或扣额门禁。
+
 Exit zero means that inspection completed, including when `decision` is
 `replay_blocked`. A non-zero exit means the command could not inspect the
 requested journal because a selector, file, JSON document, or schema was
