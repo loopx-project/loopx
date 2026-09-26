@@ -630,6 +630,11 @@ path, and canary route rather than as a user-facing release baseline.
   owners. The published package, desktop artifacts, signed update feed, and
   website were verified before `stable` fast-forwarded.
 
+- `v1.2.0` on 2026-09-25 10:19 +08:00: recoverable authority, typed Todo
+  transitions, and inspectable host activation at commit `eb11130e1`.
+  The release separates package acquisition, delivered host material, runtime
+  activation, and enabled-extension readiness.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 
