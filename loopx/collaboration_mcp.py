@@ -40,6 +40,11 @@ from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
 from .control_plane.collaboration.peers import return_result
 from .control_plane.collaboration.inbox import acknowledge, _entry, normalize_request
+from .control_plane.collaboration.goal_instance_scope import (
+    capture_collaboration_goal_ref,
+    collaboration_goal_scope,
+    decide_collaboration_lifecycle,
+)
 from .control_plane.collaboration import delegation_results
 from .control_plane.collaboration.peers import (
     _goal,
@@ -188,7 +193,11 @@ def create_server(
 
 def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, goal_id: str,
                                  agent_id: str, workspace: Path) -> None:
-    _goal(registry, goal_id, agent_id)
+    caller_goal_ref = capture_collaboration_goal_ref(
+        registry,
+        goal_id=goal_id,
+        agent_id=agent_id,
+    )
 
     def check_scope():
         # Revocation is read on every tool call, including a long-lived server.
@@ -201,7 +210,15 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         Follow next_cursor for later requests. Omit cursor to start a fresh scan.
         Pages are live; reading all pages does not complete outstanding work.
         """
-        return read_inbox(root, registry, goal_id, agent_id, workspace=workspace, cursor=cursor)
+        return read_inbox(
+            root,
+            registry,
+            goal_id,
+            agent_id,
+            workspace=workspace,
+            cursor=cursor,
+            caller_goal_ref=caller_goal_ref,
+        )
 
     @server.tool()
     def assess_request(
@@ -211,7 +228,16 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
     ) -> dict:
         """Record your independent decision; this does not change task ownership or priority."""
         check_scope()
-        return acknowledge(root, goal_id, agent_id, request_id, decision, reason)
+        return acknowledge(
+            root,
+            goal_id,
+            agent_id,
+            request_id,
+            decision,
+            reason,
+            registry=registry,
+            caller_goal_ref=caller_goal_ref,
+        )
 
     @server.tool()
     def request_peer(
@@ -237,28 +263,40 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             operation_id,
             brief,
             parent_request_id,
+            caller_goal_ref=caller_goal_ref,
         )
 
     @server.tool()
     def return_result(request_id: str, text: str) -> dict:
         """Save an evidence-backed conclusion or explicit blocker for the original requester."""
         check_scope()
-        row = _entry(root, goal_id, agent_id, request_id)
-        if row.get("source_kind") == "peer":
-            from .control_plane.collaboration.peers import return_result as save_result
-
-            return save_result(root, goal_id, agent_id, request_id, text)
         # The host adapter selects Chat/Lark transport; the shared collaboration
         # owner never depends on presentation or manager capabilities.
         from .capabilities.manager_context.roundtrip import report
 
-        return report(root, goal_id, agent_id, request_id, "conclusion", text)
+        return report(
+            root,
+            goal_id,
+            agent_id,
+            request_id,
+            "conclusion",
+            text,
+            registry=registry,
+            caller_goal_ref=caller_goal_ref,
+        )
 
     @server.tool()
     def consume_peer_result(request_id: str) -> dict:
         """Acknowledge a peer result after reading and using/rejecting it; no work-state mutation."""
         check_scope()
-        return consume_return(root, goal_id, agent_id, request_id)
+        return consume_return(
+            root,
+            goal_id,
+            agent_id,
+            request_id,
+            registry=registry,
+            caller_goal_ref=caller_goal_ref,
+        )
 
 
 class Delegations:
@@ -271,6 +309,11 @@ class Delegations:
     def __init__(self, root: Path, registry: Path, goal_id: str, agent_id: str, config: Path):
         self.root, self.registry = root.resolve(), registry.resolve()
         self.goal_id, self.agent_id, self.config = goal_id, agent_id, config.resolve()
+        self.goal_ref = capture_collaboration_goal_ref(
+            self.registry,
+            goal_id=self.goal_id,
+            agent_id=self.agent_id,
+        )
 
     def binding(self, binding_id: str, *, require_active: bool = False) -> dict:
         _goal(self.registry, self.goal_id, self.agent_id, require_active=require_active)
@@ -391,7 +434,8 @@ class Delegations:
             if not exists:
                 delegation_results.require_dependencies(self, binding, brief)
             delivered = request(self.root, self.registry, self.goal_id, self.agent_id,
-                                binding["agent_id"], operation_id, brief, parent_request_id)
+                                binding["agent_id"], operation_id, brief, parent_request_id,
+                                caller_goal_ref=self.goal_ref)
             identity = {"binding": binding, "request_id": delivered["request_id"], "operation_id": operation_id}
             if exists:
                 if _read(path).get("identity") != identity:
@@ -719,20 +763,54 @@ class Delegations:
 
     def _receiver_adopted(self, row: dict, binding: dict) -> bool:
         request_id = row["identity"]["request_id"]
-        decision, error = _receipt(
-            self.root,
-            "decisions",
-            _entry(self.root, self.goal_id, binding["agent_id"], request_id),
-        )
+        with collaboration_goal_scope(
+            self.registry,
+            goal_id=self.goal_id,
+            agents=(),
+            caller_goal_ref=self.goal_ref,
+        ) as goal_scope:
+            entry = _entry(
+                self.root,
+                self.goal_id,
+                binding["agent_id"],
+                request_id,
+                scope=goal_scope,
+            )
+            decide_collaboration_lifecycle(
+                goal_scope,
+                operation="history_inspect",
+                record=entry,
+            )
+            decision, error = _receipt(
+                self.root,
+                "decisions",
+                entry,
+            )
         return not error and bool(decision) and decision["decision"] == "adopt"
 
     def _delegation_bootstrap(self, row: dict, binding: dict) -> dict:
         request_id = row["identity"]["request_id"]
+        with collaboration_goal_scope(
+            self.registry,
+            goal_id=self.goal_id,
+            agents=(),
+            caller_goal_ref=self.goal_ref,
+        ) as goal_scope:
+            entry = _entry(
+                self.root,
+                self.goal_id,
+                binding["agent_id"],
+                request_id,
+                scope=goal_scope,
+            )
+            decide_collaboration_lifecycle(
+                goal_scope,
+                operation="history_inspect",
+                record=entry,
+            )
         return {
             "request_id": request_id,
-            "brief": _entry(
-                self.root, self.goal_id, binding["agent_id"], request_id
-            )["brief"],
+            "brief": entry["brief"],
             "instruction": (
                 "Use the loopx_delegation tools to read_context and call "
                 "assess_request for this request before working. If you adopt "
@@ -960,9 +1038,24 @@ class Delegations:
                 self._complete_delegated_todo(row, binding)
             row["artifacts"] = self._accepted(binding)
             if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
-                return_result(self.root, self.goal_id, binding["agent_id"], request_id,
-                              json.dumps({"todo_id": binding["todo_id"], "status": "accepted",
-                                          "artifacts": [{k: v for k, v in item.items() if k != "text"} for item in row["artifacts"]]}))
+                return_result(
+                    self.root,
+                    self.goal_id,
+                    binding["agent_id"],
+                    request_id,
+                    json.dumps(
+                        {
+                            "todo_id": binding["todo_id"],
+                            "status": "accepted",
+                            "artifacts": [
+                                {k: v for k, v in item.items() if k != "text"}
+                                for item in row["artifacts"]
+                            ],
+                        }
+                    ),
+                    registry=self.registry,
+                    caller_goal_ref=self.goal_ref,
+                )
             self._observe(path, row, "accepted", canonical_done=True, acceptance_ready=True, artifacts_current=True)
         except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
             # Retain uncertain execution for explicit same-operation recovery.

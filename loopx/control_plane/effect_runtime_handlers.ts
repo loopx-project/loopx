@@ -221,6 +221,7 @@ import {
   classifyManagerReturnVerification,
   normalizeManagerReturnDeliveryAttempt,
 } from "./collaboration/return_delivery.ts";
+import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
 
 import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
 import {
@@ -718,6 +719,10 @@ export function createEffectRuntimeHandlers(
     [
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
+    ],
+    [
+      "collaboration.goal_instance.decide",
+      (params) => decideCollaborationLifecycle(params),
     ],
     ["external_evidence.discover", projectExternalEvidenceDiscovery],
     ["external_evidence.plan", planExternalEvidenceRequest],
