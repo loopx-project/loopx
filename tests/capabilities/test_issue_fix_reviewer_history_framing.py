@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from loopx.capabilities.issue_fix.reviewer_recommendation import _collect_history
+from loopx.capabilities.issue_fix.reviewer_recommendation import (
+    _collect_history,
+    _derive_changed_files,
+)
 
 AUTHOR_NAME_WITH_SEPARATOR = "Zo{separator}e"
 
@@ -77,3 +80,50 @@ def test_collect_history_keeps_ordinary_ascii_names_unchanged(tmp_path: Path) ->
     rows = _collect_history(repo, path, revision="HEAD", history_limit=10)
 
     assert rows == [("Zoe", "z@example.invalid")]
+
+
+def test_derive_changed_files_frames_records_on_lf_when_quote_path_is_disabled(
+    tmp_path: Path,
+) -> None:
+    """One changed pathname must stay one record whatever `core.quotePath` is.
+
+    `core.quotePath=false` is a legal repository setting. `git diff --name-only`
+    then emits a non-ASCII pathname verbatim, and `str.splitlines()` treated the
+    U+0085 inside it as a record boundary, so one changed file was reported as
+    the two paths `odd` and `name.txt`.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    _git(repo, "config", "core.quotePath", "false")
+
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "base.txt")
+    _git(repo, "commit", "-m", "base")
+
+    path = "odd\x85name.txt"
+    (repo / path).write_text("x\n", encoding="utf-8")
+    _git(repo, "add", path)
+    _git(repo, "commit", "-m", "add a pathname with a raw separator")
+
+    assert _derive_changed_files(repo, "HEAD~1") == [path]
+
+
+def test_derive_changed_files_keeps_ordinary_ascii_paths(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "base.txt")
+    _git(repo, "commit", "-m", "base")
+
+    (repo / "added.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "added.txt")
+    _git(repo, "commit", "-m", "add a plain path")
+
+    assert _derive_changed_files(repo, "HEAD~1") == ["added.txt"]

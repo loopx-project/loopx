@@ -625,12 +625,13 @@ def _apply_reviewer_sources_for_path(
 
 def _derive_changed_files(repo_path: Path, base_ref: str) -> list[str]:
     output = _run_git(repo_path, ["diff", "--name-only", f"{base_ref}...HEAD"])
-    # Deliberately left on `splitlines()`: `git diff --name-only` quotes
-    # non-ASCII pathnames as octal escapes (`core.quotePath` defaults to true),
-    # so this stream cannot carry a raw U+0085/U+2028 that would tear a record.
-    # Streams that emit substituted values verbatim are framed on LF instead;
-    # see `_collect_history`.
-    return _normalise_changed_files(output.splitlines())
+    # `git diff --name-only` frames one pathname per LF. Under the default
+    # `core.quotePath=true` a non-ASCII pathname arrives octal-escaped, but a
+    # repository may set `core.quotePath=false`, and a pathname carrying
+    # U+0085/U+2028/U+2029 is then emitted raw. `str.splitlines()` treats those
+    # as record boundaries and would tear one path into two, so frame on LF and
+    # drop the empty trailing record instead.
+    return _normalise_changed_files([line for line in output.split("\n") if line])
 
 
 def _collect_history(
