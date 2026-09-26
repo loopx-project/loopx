@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+from enum import Enum
 import sys
 
 
@@ -216,25 +217,6 @@ LEDGER_ENTRY_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$")
 LEDGER_APPENDIX_HEADING = re.compile(
     r"^## Appendix [A-Z]: (?:[A-Za-z ]+ and )?[Ee]xecution ledger", re.MULTILINE
 )
-# Dated delivery logs belong in ledger/<rfc-slug>/, never in an RFC body above
-# its appendices. A heading is a dated log when the date leads it or when it
-# names a checkpoint and carries a date, so a normative `## Checkpoint
-# persistence contract` and the append-only dated history an appendix keeps both
-# stay legal. This mirrors DATED_LOG_HEADING_RE in the generator; the fixture
-# check below runs the generator itself on both classes of heading.
-RFC_BODY_DATED_LOG_HEADING = re.compile(
-    r"(?:^#{1,6}\s*(?:\*\*)?(?:19|20)\d{2}-\d{2}-\d{2}\b"
-    r"|^#{1,6}\s.*(?:checkpoint|检查点).*(?:19|20)\d{2}-\d{2}-\d{2})",
-    re.IGNORECASE | re.MULTILINE,
-)
-RFC_APPENDIX_HEADING = re.compile(r"^##\s+(?:Appendix\b|附录)", re.MULTILINE)
-
-
-def rfc_body_above_appendices(text: str) -> str:
-    appendix = RFC_APPENDIX_HEADING.search(text)
-    return text[: appendix.start()] if appendix else text
-
-
 def check_rfc_status_index() -> None:
     """Derived lifecycle index must be current and every RFC header well-formed.
 
@@ -242,7 +224,7 @@ def check_rfc_status_index() -> None:
     STATUS.zh-CN.md is stale, when an RFC lacks a parseable lifecycle status or a
     `Supersedes / closes` declaration, or when a dated log heading is still above
     an RFC's appendices. The generated file is the only enumerating surface; the
-    README status lines it cross-checks are per-RFC entries, not a matrix.
+    README retains delivery facts and does not cache lifecycle states.
     """
     import subprocess
 
@@ -260,16 +242,6 @@ def check_rfc_status_index() -> None:
         "RFC status index check failed; run `python3 scripts/generate_rfc_status_index.py "
         f"--write` and fix reported headers:\n{result.stdout}{result.stderr}"
     )
-    rfc_dir = DOCS / "architecture" / "rfcs"
-    for rfc in sorted(rfc_dir.glob("*.md")):
-        if rfc.name in {"README.md", "TEMPLATE.md", "STATUS.md", "STATUS.zh-CN.md"}:
-            continue
-        offending = RFC_BODY_DATED_LOG_HEADING.findall(
-            rfc_body_above_appendices(rfc.read_text(encoding="utf-8"))
-        )
-        assert not offending, (
-            f"{rfc.name}: dated log heading belongs in ledger/{rfc.name.split('.')[0]}/"
-        )
 
 
 def check_rfc_status_index_rules() -> None:
@@ -335,7 +307,7 @@ def check_rfc_status_index_rules() -> None:
                     encoding="utf-8",
                 )
             staged.append(
-                f"\n- [Fixture {slug}]({slug}.md)\n  - **RFC status:** {status}\n"
+                f"\n- [Fixture {slug}]({slug}.md)\n"
             )
             readme.write_text(pristine_readme + "".join(staged), encoding="utf-8")
 
@@ -357,7 +329,7 @@ def check_rfc_status_index_rules() -> None:
 
         typed_tail = {
             "slug": "fixture-alpha-v0",
-            "status": "Draft, under maintainer review",
+            "status": "Accepted, with remaining implementation",
         }
         positive: list[tuple[str, list[dict[str, object]]]] = [
             ("a typed lifecycle value with a descriptive tail", [typed_tail]),
@@ -366,7 +338,7 @@ def check_rfc_status_index_rules() -> None:
                 [
                     {
                         "slug": "fixture-alpha-v0",
-                        "status": "Draft",
+                        "status": "Accepted",
                         "body": "\n## Checkpoint persistence contract\n\nState is flushed.\n",
                     }
                 ],
@@ -376,7 +348,7 @@ def check_rfc_status_index_rules() -> None:
                 [
                     {
                         "slug": "fixture-alpha-v0",
-                        "status": "Draft",
+                        "status": "Accepted",
                         "body": (
                             "\n## Appendix A: Execution ledger (non-normative)\n\n"
                             "### 2026-09-24 — shipped\n\nEntry text.\n"
@@ -401,7 +373,7 @@ def check_rfc_status_index_rules() -> None:
             ),
             (
                 "a Chinese mirror carrying the supersession declaration",
-                [{"slug": "fixture-alpha-v0", "status": "Draft", "mirror": True}],
+                [{"slug": "fixture-alpha-v0", "status": "Accepted", "mirror": True}],
             ),
         ]
         for case, fixtures in positive:
@@ -447,7 +419,7 @@ def check_rfc_status_index_rules() -> None:
             (
                 "a successor that never acknowledges its predecessor",
                 [
-                    {"slug": "fixture-new-v0", "status": "Draft"},
+                    {"slug": "fixture-new-v0", "status": "Accepted"},
                     {
                         "slug": "fixture-alpha-v0",
                         "status": "Superseded",
@@ -459,7 +431,7 @@ def check_rfc_status_index_rules() -> None:
             (
                 "a predecessor that never acknowledges its successor",
                 [
-                    {"slug": "fixture-old-v0", "status": "Draft"},
+                    {"slug": "fixture-old-v0", "status": "Accepted"},
                     {
                         "slug": "fixture-new-v0",
                         "status": "Accepted",
@@ -473,7 +445,7 @@ def check_rfc_status_index_rules() -> None:
                 [
                     {
                         "slug": "fixture-alpha-v0",
-                        "status": "Draft",
+                        "status": "Accepted",
                         "supersedes": "later",
                     }
                 ],
@@ -484,7 +456,7 @@ def check_rfc_status_index_rules() -> None:
                 [
                     {
                         "slug": "fixture-alpha-v0",
-                        "status": "Draft",
+                        "status": "Accepted",
                         "body": "\n### 2026-09-24 — shipped\n\nEntry text.\n",
                     }
                 ],
@@ -495,7 +467,7 @@ def check_rfc_status_index_rules() -> None:
                 [
                     {
                         "slug": "fixture-alpha-v0",
-                        "status": "Draft",
+                        "status": "Accepted",
                         "body": "\n### Checkpoint 2026-09-24 — shipped\n\nEntry text.\n",
                     }
                 ],
@@ -765,11 +737,18 @@ CONTRIBUTOR_BOARD_CLAIMABLE_LANES = (
     "## Lane C: RFC Obligations",
 )
 CONTRIBUTOR_BOARD_MAX_CLAIMABLE_ROWS = 25
-# A claimable row must cite a roadmap stream/milestone/card, an RFC document,
-# or a public issue/PR number in its Anchor column.
-CONTRIBUTOR_BOARD_ANCHOR_PATTERN = re.compile(
-    r"\b(S\d{1,2}|G[0-5]|R[1-7])\b|\.\./architecture/rfcs/|#\d{3,5}\b"
-)
+class ContributorTaskStatus(str, Enum):
+    AVAILABLE = "Available"
+    CLAIMED = "Claimed"
+    NEEDS_DESIGN = "Needs design"
+    BLOCKED = "Blocked"
+
+
+def contributor_task_status(raw: str) -> ContributorTaskStatus:
+    for state in ContributorTaskStatus:
+        if re.fullmatch(rf"{re.escape(state.value)}(?: \([^()]+\)|: .+)?", raw):
+            return state
+    raise AssertionError(f"unexpected contributor task status: {raw}")
 
 
 def contributor_board_claimable_rows(board: str) -> list[str]:
@@ -806,21 +785,37 @@ def assert_contributor_task_board_is_current() -> None:
     rows = contributor_board_claimable_rows(board)
     assert rows, "contributor board has no claimable rows"
     assert len(rows) <= CONTRIBUTOR_BOARD_MAX_CLAIMABLE_ROWS, len(rows)
+    import runpy
+
+    # The RFC generator owns lifecycle parsing; the board consumes that contract.
+    rfc_source = runpy.run_path(str(REPO_ROOT / "scripts/generate_rfc_status_index.py"))
+    rfcs = {record.path.name: record.state for record in rfc_source["collect"]()}
+    roadmap = read("docs/architecture/rfcs/loopx-overall-roadmap-v0.md")
+    canonical_cards = set()
+    for line in roadmap.splitlines():
+        plain = line.replace("**", "").replace("`", "")
+        match = re.match(r"^(?:#{2,6}\s+|\|\s*)([SGR]\d{1,2})(?=\s|[:：|.—–-])", plain)
+        if match:
+            canonical_cards.add(match.group(1))
+    landed_ids = {match.group(1) for match in re.finditer(r"^\| (GH-[A-Za-z0-9]+) \|", read("docs/development/contributor-tasks-history.md").split("## Product Manager Cut")[0], re.MULTILINE)}
     for row in rows:
         cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
         assert len(cells) == 5, row
         task_id, anchor, gap, validation, status = cells
-        assert CONTRIBUTOR_BOARD_ANCHOR_PATTERN.search(anchor), (
-            f"{task_id}: anchor column must cite S/G/R, an RFC, or a public issue: {anchor}"
-        )
+        state = contributor_task_status(status)
+        assert task_id not in landed_ids, f"{task_id}: already landed; cannot remain claimable"
+        cards = set(re.findall(r"\b[SGR]\d{1,3}\b", anchor))
+        assert cards <= canonical_cards, f"{task_id}: unknown roadmap card {cards - canonical_cards}"
+        links = re.findall(r"\]\(\.\./architecture/rfcs/([a-z0-9-]+(?:\.zh-CN)?\.md)(?:#[^)]*)?\)", anchor)
+        for filename in links:
+            canonical = filename.replace(".zh-CN.md", ".md")
+            assert canonical in rfcs, f"{task_id}: missing canonical RFC {canonical}"
+            if state in {ContributorTaskStatus.AVAILABLE, ContributorTaskStatus.CLAIMED}:
+                assert rfcs[canonical] == "Accepted", f"{task_id}: RFC is not an Accepted claimable design"
+        public_issue = re.search(r"https://github\.com/(?:loopx-project|huangruiteng)/loopx/(?:issues|pull)/[1-9]\d*", anchor)
+        assert cards or links or public_issue, f"{task_id}: missing canonical anchor"
         assert "Exit:" in gap, f"{task_id}: gap column must state an exit"
         assert validation, f"{task_id}: validation column is empty"
-        assert status.split(" ")[0] in {
-            "Available",
-            "Claimed",
-            "Needs",
-            "Blocked",
-        }, f"{task_id}: unexpected status {status}"
     for stale in (
         "## Product Manager Cut",
         "## Recent Maintainer Progress",

@@ -2,13 +2,13 @@
 """Generate the RFC status index from each RFC's own status header.
 
 The index is derived, never hand-edited: an RFC changes state by editing its
-header and the matching status line in ``README.md``, then running ``--write``;
+English header and its Chinese mirror, then running ``--write``;
 ``--check`` fails while ``STATUS.md`` / ``STATUS.zh-CN.md`` no longer match.
-Lifecycle buckets are Accepted, Active (Draft or Under review), Superseded and
-Retired (Retired or Rejected).
+Merged active RFCs are Accepted and claimable; historical dispositions are
+Superseded, Retired and Rejected.
 
 The script also reports the header rules the index depends on: an unparseable
-lifecycle value, an index entry that disagrees with the header, a supersession
+lifecycle value, a Chinese lifecycle that disagrees with the canonical header, a supersession
 declaration that does not name a real RFC (or that its successor does not
 mirror), and dated checkpoint headings still in an RFC body instead of
 ``ledger/<rfc-slug>/``.
@@ -21,6 +21,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from enum import Enum
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RFC_DIR = REPO_ROOT / "docs" / "architecture" / "rfcs"
@@ -30,22 +31,26 @@ INDEX_ZH = RFC_DIR / "STATUS.zh-CN.md"
 NON_RFC_FILES = {"README.md", "TEMPLATE.md", "STATUS.md"}
 HEADER_SCAN_LINES = 40
 
-LIFECYCLE_STATES = ("Draft", "Under review", "Accepted", "Superseded", "Retired", "Rejected")
+
+class LifecycleState(str, Enum):
+    ACCEPTED = "Accepted"
+    SUPERSEDED = "Superseded"
+    RETIRED = "Retired"
+    REJECTED = "Rejected"
+
+
+LIFECYCLE_STATES = tuple(state.value for state in LifecycleState)
 BUCKETS = (
     ("Accepted", ("Accepted",)),
-    ("Active", ("Draft", "Under review")),
     ("Superseded", ("Superseded",)),
     ("Retired", ("Retired", "Rejected")),
 )
 BUCKET_LABEL_ZH = {
     "Accepted": "已接受",
-    "Active": "进行中（Draft 或 Under review）",
     "Superseded": "已被替代",
     "Retired": "已退役（Retired 或 Rejected）",
 }
 STATE_LABEL_ZH = {
-    "Draft": "草案",
-    "Under review": "评审中",
     "Accepted": "已接受",
     "Superseded": "已被替代",
     "Retired": "已退役",
@@ -53,28 +58,24 @@ STATE_LABEL_ZH = {
 }
 
 _STATUS_LINE_PATTERNS = (
-    re.compile(r"\*\*RFC status:?\*\*[:：]?\s*(?P<value>.+?)\s*$", re.IGNORECASE),
+    re.compile(r"\*\*RFC 状态[:：]?\*\*[:：]?\s*(?P<value>.+?)\s*$"),
+    re.compile(r"^\s*-\s*状态[:：]\s*(?P<value>.+?)\s*$"),
+    re.compile(r"^\|\s*状态\s*\|\s*(?P<value>[^|]+?)\s*\|"),
+    re.compile(r"\*\*RFC status[:：]?\*\*[:：]?\s*(?P<value>.+?)\s*$", re.IGNORECASE),
     re.compile(r"^\s*-\s*Status[:：]\s*(?P<value>.+?)\s*$"),
     re.compile(r"^\|\s*Status\s*\|\s*(?P<value>[^|]+?)\s*\|", re.IGNORECASE),
 )
 # The lifecycle value is the exact state word, optionally followed by a
 # descriptive tail the maintainer wrote: `Accepted (Stage A shipped in #4094)`,
-# `Draft, under maintainer review`, `Draft; M1 implementation candidate`. A
-# prefix match alone would read `Drafting notes are not a lifecycle state` as
-# `Draft`, so the word has to end at a delimiter instead of any other text.
+# `Accepted, with remaining implementation milestones`. A
+# prefix match alone would read `Acceptedness` as
+# `Accepted`, so the word has to end at a delimiter instead of any other text.
 _STATE_RE = re.compile(
-    r"(?P<state>under review|accepted|superseded|retired|rejected|draft)"
-    r"(?=$|[\s]*[(\[,;:：\-—])",
+    r"(?P<state>" + "|".join(re.escape(state.value) for state in LifecycleState) + r")"
+    r"(?=$|[\s]*[(\[,;:：\-—（，；])",
     re.IGNORECASE,
 )
-_STATE_CANONICAL = {
-    "under review": "Under review",
-    "accepted": "Accepted",
-    "superseded": "Superseded",
-    "retired": "Retired",
-    "rejected": "Rejected",
-    "draft": "Draft",
-}
+_STATE_CANONICAL = {state.value.casefold(): state.value for state in LifecycleState}
 # Accepted forms: `- **Supersedes / closes:** none`, `- Supersedes / closes: none`,
 # `| Supersedes / closes | none |` (and the zh mirrors with `替代 / 关闭`).
 SUPERSEDES_RE = re.compile(
@@ -103,7 +104,9 @@ DATED_LOG_HEADING_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 APPENDIX_HEADING_RE = re.compile(r"^##\s+(?:Appendix\b|附录)", re.MULTILINE)
-INDEX_ENTRY_RE = re.compile(r"^- \[(?P<title>[^\]]+)\]\((?P<file>[a-z0-9-]+\.md)\)", re.MULTILINE)
+INDEX_ENTRY_RE = re.compile(
+    r"^- \[(?P<title>[^\]]+)\]\((?P<file>[a-z0-9-]+\.md)\)", re.MULTILINE
+)
 INDEX_STATUS_RE = re.compile(r"\*\*RFC status:\*\*\s*(?P<value>.+?)\s*$")
 RFC_REFERENCE_RE = re.compile(r"[a-z0-9][a-z0-9.-]*\.md")
 
@@ -130,6 +133,9 @@ class RfcRecord:
 def normalize_state(raw: str) -> str | None:
     """Return the canonical lifecycle state, or None when the value is untyped."""
     normalized = raw.strip().lstrip("*_` ").rstrip(".")
+    for state, label in STATE_LABEL_ZH.items():
+        if normalized == label or re.match(rf"^{re.escape(label)}[（，；]", normalized):
+            return state
     match = _STATE_RE.match(normalized)
     if match is None:
         return None
@@ -273,6 +279,13 @@ def validate(records: list[RfcRecord]) -> list[str]:
     by_name = {record.path.name: record for record in records}
     for record in records:
         name = record.path.name
+        zh_path = record.path.with_name(f"{record.slug}.zh-CN.md")
+        if zh_path.exists():
+            zh_status, _, _ = parse_header(zh_path.read_text(encoding="utf-8"))
+            if normalize_state(zh_status or "") != record.state:
+                problems.append(
+                    f"{name}: Chinese mirror lifecycle differs or is missing"
+                )
         if record.status_raw is None:
             problems.append(
                 f"{name}: no status header found in the first {HEADER_SCAN_LINES} lines"
@@ -284,12 +297,6 @@ def validate(records: list[RfcRecord]) -> list[str]:
             )
         if name not in readme_states:
             problems.append(f"{name}: not listed in README.md index")
-        elif (
-            record.state and readme_states[name] and readme_states[name] != record.state
-        ):
-            problems.append(
-                f"{name}: README.md says {readme_states[name]} but the RFC header says {record.state}"
-            )
         if record.supersedes is None:
             problems.append(
                 f"{name}: missing `**Supersedes / closes:**` declaration (none | <RFC links>)"
@@ -320,6 +327,12 @@ def validate(records: list[RfcRecord]) -> list[str]:
             problems.append(
                 f"{record.slug}.zh-CN.md: dated log heading belongs in ledger/{record.slug}/: {heading}"
             )
+    if re.search(
+        r"^  - \*\*RFC status:\*\*",
+        (RFC_DIR / "README.md").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    ):
+        problems.append("README.md must not cache lifecycle states; use STATUS.md")
     for listed in readme_states:
         if not (RFC_DIR / listed).exists():
             problems.append(f"README.md lists {listed}, which does not exist")
@@ -387,7 +400,7 @@ def _ledger_cell(record: RfcRecord, *, zh: bool) -> str:
 def render(records: list[RfcRecord], *, zh: bool) -> str:
     by_state: dict[str, list[RfcRecord]] = {state: [] for state in LIFECYCLE_STATES}
     for record in records:
-        by_state.setdefault(record.state or "Draft", []).append(record)
+        by_state.setdefault(record.state or "", []).append(record)
     lines: list[str] = []
     if zh:
         lines += [
@@ -396,13 +409,13 @@ def render(records: list[RfcRecord], *, zh: bool) -> str:
             "<!-- 由 scripts/generate_rfc_status_index.py 生成；不要手工编辑。 -->",
             "",
             "本索引从本目录每个 RFC 自己的状态头生成。改变一个 RFC 的状态只需要改它的头部，",
-            "和 [README 索引](README.md) 里对应条目（仅英文）的 `**RFC status:**` 行，",
+            "及其中文镜像的头部；README 不缓存生命周期状态。",
             "然后运行 `python3 scripts/generate_rfc_status_index.py --write`；"
             "`--check` 在索引过期时失败，`examples/docs-governance-smoke.py` 会调用它。",
             "",
-            "生命周期分档：**已接受**（Accepted）、**进行中**（Draft、Under review）、",
+            "合入的有效 RFC 即 **已接受**（Accepted），设计合格、可认领；",
             "**已被替代**（Superseded，必须写明 `Superseded by`）、**已退役**（Retired、Rejected）。",
-            "RFC 状态和交付成熟度是两件事；后者见 [README 索引](README.md)（仅英文）的 Delivery 行。",
+            "合入不证明实现、真实资格验证或晋升完成；交付成熟度见 [README 索引](README.md)。",
             "新 RFC 必须在头部声明 `**替代 / 关闭：**`（`无` 或所替代 / 关闭的旧 RFC 链接）。",
             "带日期的交付记录写进 [ledger/](ledger/README.zh-CN.md)；附录里可以留历史，",
             "但附录之前的正文不允许再出现带日期的记录标题。",
@@ -417,13 +430,13 @@ def render(records: list[RfcRecord], *, zh: bool) -> str:
             "",
             "This index is derived from the status header of every RFC in this directory.",
             "Change an RFC's state by editing its header and the matching `**RFC status:**`",
-            "line in the [README index](README.md), then run",
+            "in its Chinese mirror, then run",
             "`python3 scripts/generate_rfc_status_index.py --write`; `--check` fails while the",
             "index is stale and `examples/docs-governance-smoke.py` runs it.",
             "",
-            "Lifecycle buckets: **Accepted**; **Active** (Draft, Under review);",
+            "Merged active RFCs are **Accepted**: qualified design bases, available to claim.",
             "**Superseded** (must name `Superseded by`); **Retired** (Retired, Rejected).",
-            "RFC status and delivery maturity are separate facts; delivery lives in the",
+            "Merge does not prove implementation, live qualification or promotion; delivery lives in the",
             "[README index](README.md) `Delivery on main` lines. Every new RFC declares",
             "`**Supersedes / closes:**` in its header (`none` or links to the RFCs it",
             "replaces or closes). Dated delivery logs go to [ledger/](ledger/README.md); an",
@@ -442,15 +455,25 @@ def render(records: list[RfcRecord], *, zh: bool) -> str:
             lines.append("_无_" if zh else "_none_")
             continue
         if zh:
-            lines += ["| RFC | 头部状态 | 替代 / 关闭 | Ledger |", "| --- | --- | --- | --- |"]
+            lines += [
+                "| RFC | 头部状态 | 替代 / 关闭 | Ledger |",
+                "| --- | --- | --- | --- |",
+            ]
         else:
-            lines += ["| RFC | Header status | Supersedes / closes | Ledger |", "| --- | --- | --- | --- |"]
+            lines += [
+                "| RFC | Header status | Supersedes / closes | Ledger |",
+                "| --- | --- | --- | --- |",
+            ]
         for record in members:
             if zh:
-                target = f"{record.slug}.zh-CN.md" if record.title_zh else record.path.name
+                target = (
+                    f"{record.slug}.zh-CN.md" if record.title_zh else record.path.name
+                )
                 title = record.title_zh or record.title
                 status = STATE_LABEL_ZH.get(record.state or "", record.state or "?")
-                supersedes = record.supersedes_zh or ("—" if record.supersedes is None else record.supersedes)
+                supersedes = record.supersedes_zh or (
+                    "—" if record.supersedes is None else record.supersedes
+                )
             else:
                 target = record.path.name
                 title = record.title
@@ -459,20 +482,32 @@ def render(records: list[RfcRecord], *, zh: bool) -> str:
             if record.superseded_by:
                 supersedes = f"{supersedes}; superseded by {record.superseded_by}"
             title = title.replace("|", "\\|")
-            lines.append(f"| [{title}]({target}) | {status} | {supersedes} | {_ledger_cell(record, zh=zh)} |")
+            lines.append(
+                f"| [{title}]({target}) | {status} | {supersedes} | {_ledger_cell(record, zh=zh)} |"
+            )
     return "\n".join(lines) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--write", action="store_true", help="Rewrite STATUS.md and STATUS.zh-CN.md.")
-    mode.add_argument("--check", action="store_true", help="Fail when the checked-in index is stale.")
-    parser.add_argument("--report", action="store_true", help="Print header problems without failing.")
+    mode.add_argument(
+        "--write", action="store_true", help="Rewrite STATUS.md and STATUS.zh-CN.md."
+    )
+    mode.add_argument(
+        "--check", action="store_true", help="Fail when the checked-in index is stale."
+    )
+    parser.add_argument(
+        "--report", action="store_true", help="Print header problems without failing."
+    )
     args = parser.parse_args(argv)
 
     records = collect()
     problems = validate(records)
+    if problems and args.write:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        return 1
     rendered_en = render(records, zh=False)
     rendered_zh = render(records, zh=True)
 
@@ -488,7 +523,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.write:
         INDEX_EN.write_text(rendered_en, encoding="utf-8")
         INDEX_ZH.write_text(rendered_zh, encoding="utf-8")
-        print(f"wrote {INDEX_EN.relative_to(REPO_ROOT)} and {INDEX_ZH.relative_to(REPO_ROOT)}")
+        print(
+            f"wrote {INDEX_EN.relative_to(REPO_ROOT)} and {INDEX_ZH.relative_to(REPO_ROOT)}"
+        )
         return 1 if problems else 0
     stale = []
     for path, rendered in ((INDEX_EN, rendered_en), (INDEX_ZH, rendered_zh)):
@@ -496,7 +533,8 @@ def main(argv: list[str] | None = None) -> int:
             stale.append(path.relative_to(REPO_ROOT))
     if stale:
         print(
-            "stale RFC status index: " + ", ".join(map(str, stale))
+            "stale RFC status index: "
+            + ", ".join(map(str, stale))
             + "; run python3 scripts/generate_rfc_status_index.py --write",
             file=sys.stderr,
         )
