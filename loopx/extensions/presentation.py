@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import tempfile
 from typing import Any
+
+from ..control_plane.runtime.public_safety import SECRET_LIKE_SURFACE_PATTERN
 from urllib.parse import parse_qsl, urlparse
 
 from ..file_lock import exclusive_file_lock
@@ -52,6 +54,8 @@ _PRIVATE_RELATIVE_PATH_RE = re.compile(
     r"(?:^|[\s:=('/\\])\.(?:codex|git|local)(?:[/\\]|$)",
     re.IGNORECASE,
 )
+# Local threshold policy only: the credential *shapes* are decided once by
+# SECRET_LIKE_SURFACE_PATTERN, which this site consults in addition to this list.
 _CREDENTIAL_RE = re.compile(
     r"(?:bearer\s+[A-Za-z0-9._~+/=-]{8,}|"
     r"(?:api[_ -]?key|access[_ -]?token|secret|password)\s*[:=]\s*\S+)",
@@ -153,7 +157,7 @@ def _plain_text(
         raise ValueError(f"{context} must be plain text without markup")
     if _LOCAL_PATH_RE.search(text) or _PRIVATE_RELATIVE_PATH_RE.search(text):
         raise ValueError(f"{context} must not contain a local path")
-    if _CREDENTIAL_RE.search(text):
+    if SECRET_LIKE_SURFACE_PATTERN.search(text) or _CREDENTIAL_RE.search(text):
         raise ValueError(f"{context} must not contain credential material")
     if _SENSITIVE_TEXT_RE.search(text):
         raise ValueError(f"{context} must not contain sensitive material")

@@ -17,11 +17,14 @@ frontier/lane derivation instead of a second state machine.
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from ...public_safe_text import find_private_text_match
-from ..runtime.public_safety import public_safe_compact_text, validate_public_safe_value
+from ..runtime.public_safety import (
+    SECRET_LIKE_SURFACE_PATTERN,
+    public_safe_compact_text,
+    validate_public_safe_value,
+)
 from ..runtime.session_runtime import session_runtime_work_observation
 from .acceptance_observation import build_goal_acceptance_observation
 from ..work_items.work_lane import WorkLaneObservation
@@ -48,12 +51,6 @@ GUARD_KIND_EVIDENCE = "evidence_precondition"
 
 _TERMINAL_GOAL_STATUSES = {"closed", "retired", "archived", "done", "complete"}
 
-# Provider token shapes the shared private-text rules do not cover. A run
-# history reference is free text, so a leaked token there must never reach a
-# public projection just because the shared corpus did not list its prefix.
-_TOKEN_SHAPES = re.compile(
-    r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16})\b"
-)
 
 def _compact_text(value: Any, *, limit: int = 240) -> str | None:
     """Validate the complete source before bounding any public label/ref."""
@@ -65,7 +62,7 @@ def _compact_text(value: Any, *, limit: int = 240) -> str | None:
         return None
     # Preserve the stricter existing private-text/provider-token contract too;
     # these checks supplement, never replace, the shared public-safety owner.
-    if find_private_text_match(value) or _TOKEN_SHAPES.search(value):
+    if find_private_text_match(value) or SECRET_LIKE_SURFACE_PATTERN.search(value):
         return None
     return public_safe_compact_text(value, limit=limit)
 
