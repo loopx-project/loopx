@@ -384,11 +384,37 @@ available instead of waiting an additional scan interval.
 `capture-status` separates active `pending_batch_count`, unresolved
 `held_batch_count`, per-source `acquisition_held` and
 `semantic_review_completion=not_inferred_from_capture`. `last_checked_at` is
-the last attempt, not necessarily a successful scan; host service liveness and
-successful-scan timestamps remain separate. No status-only call proves historical
-replay or complete decision coverage. Disable capture using the existing profile
+the last attempt, not necessarily a successful scan. No status-only call proves
+historical replay or complete decision coverage. Disable capture using the existing profile
 switch; stop the scheduler before downgrading, since older runtimes do not honor
 recovery holds. Retain the spool/receipts rather than treating downgrade as rollback.
+
+#### Source freshness contract
+
+An enabled profile, a healthy `loopx doctor` or a settled projection never
+implies fresh sources. Every `prepare-evidence` / `prepare-review` assembly and
+every `capture` / `capture-status` result carries `source_freshness`
+(`decision_source_freshness_v0`): one row per enabled source with
+`last_read_at` (last *successful* read), `staleness_seconds`, the source
+`freshness_seconds` window, `status` (`fresh`, `stale`, `never_read`,
+`not_scanned`), `failure_streak` and `alert_reasons`. Enabled sources outside
+the current scan (for example on-demand sources) appear as `not_scanned`
+instead of disappearing. Markdown output marks every alerted row with 🔴.
+Consumers must disclose alerted sources before presenting a conclusion as current.
+
+A failed provider attempt updates `last_checked_at` and increments
+`failure_streak`, but never advances `last_read_at`. Existing spools migrate in
+place; a legacy row whose last attempt succeeded uses that attempt as its last read.
+
+`loopx decision-context capture --execute` records a local host health file
+under `<runtime-root>/decision-context/capture-hosts/`. Private hosts calling
+`capture_profile_sources` should pass `health_runtime_root` for the same effect.
+`loopx doctor` reports the optional `decision_context_capture_hosts_healthy`
+check without opening private spools. It alerts when a registered host has not
+ticked within `max(2 × interval, interval + 600s)` (for example a scheduler still
+pointing at a deleted checkout), when the last tick failed, when the spool is
+gone, or when a recorded source is stale or failing. Remove the record of a
+deliberately retired host.
 
 ## Relationship To Other Capabilities
 
