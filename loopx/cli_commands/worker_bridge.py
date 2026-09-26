@@ -10,10 +10,10 @@ from ..attached_session import (
     bind_attached_agent_session,
     claim_attached_agent_turn,
     complete_attached_agent_turn,
+    load_attached_session_registry,
     render_attached_session_broker_markdown,
 )
 from ..chat_store import CHAT_SESSION_MODE_ATTACHED, ChatSessionStore
-from ..history import load_registry
 from ..paths import resolve_runtime_root
 from ..worker_bridge import (
     DEFAULT_ACTIVE_USER_CODEX_BIN,
@@ -404,7 +404,7 @@ def handle_worker_bridge_command(
     try:
         if args.worker_bridge_command.startswith("attached-session-"):
             effective_registry_path = registry_path or Path(args.registry)
-            registry = load_registry(effective_registry_path)
+            registry = load_attached_session_registry(effective_registry_path)
             runtime_root = resolve_runtime_root(
                 registry,
                 args.runtime_root,
@@ -416,6 +416,7 @@ def handle_worker_bridge_command(
                 payload = bind_attached_agent_session(
                     store=store,
                     registry=registry,
+                    registry_path=effective_registry_path,
                     goal_id=args.goal_id,
                     agent_id=args.agent_id,
                     host_surface=args.host_surface,
@@ -441,6 +442,7 @@ def handle_worker_bridge_command(
             elif args.worker_bridge_command == "attached-session-claim":
                 payload = claim_attached_agent_turn(
                     store=store,
+                    registry_path=effective_registry_path,
                     session_id=args.session_id,
                     host_surface=args.host_surface,
                     host_session_id=args.host_session_id,
@@ -458,6 +460,7 @@ def handle_worker_bridge_command(
                     raise ValueError("response JSON must be an object")
                 payload = complete_attached_agent_turn(
                     store=store,
+                    registry_path=effective_registry_path,
                     session_id=args.session_id,
                     turn_id=args.turn_id,
                     host_surface=args.host_surface,
