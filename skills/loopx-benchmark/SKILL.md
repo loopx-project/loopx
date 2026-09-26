@@ -100,6 +100,26 @@ the task's normal tools instead of imposing this workflow.
    The fence fails closed unless the clean pinned source matches the observed
    reference head.
 
+   For runners that invoke multiple agent segments, also rotate fixed-path
+   transient artifacts before every segment, mint a fresh opaque nonce, and
+   qualify the returned receipt against that nonce and the observed segment
+   time window before accepting its result:
+
+   ```bash
+   loopx benchmark segment-receipt \
+     --expected-segment-nonce <RUNNER_NONCE> \
+     --receipt-segment-nonce <RECEIPT_NONCE> \
+     --segment-started-at <ISO_TIME> \
+     --receipt-written-at <ISO_TIME> \
+     --segment-ended-at <ISO_TIME> \
+     --prior-receipt-nonce <PRIOR_NONCE> \
+     --require-qualified --format json
+   ```
+
+   Missing, wrong-segment, outside-window, or replayed receipts fail closed.
+   The runner still owns cleanup, nonce generation, process execution, retries,
+   and the decision to launch another segment.
+
 3. **Preview, then preregister or mark the run row when it starts.**
    ```bash
    loopx benchmark experiment-board-upsert --goal-id <GOAL_ID> \

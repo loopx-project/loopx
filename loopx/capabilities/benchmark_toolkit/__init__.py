@@ -175,6 +175,12 @@ from .runtime_observation import (
     BenchmarkRuntimeTransition,
     build_benchmark_runtime_observation,
 )
+from .segment_receipt import (
+    BENCHMARK_SEGMENT_RECEIPT_SCHEMA_VERSION,
+    BenchmarkSegmentReceiptClassification,
+    BenchmarkSegmentReceiptTransition,
+    build_benchmark_segment_receipt,
+)
 from .source_revision_fence import (
     BENCHMARK_SOURCE_REVISION_FENCE_SCHEMA_VERSION,
     BenchmarkSourceRevisionFence,
@@ -243,6 +249,7 @@ __all__ = [
     "BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION",
     "BENCHMARK_RUNTIME_INTEGRITY_ATTESTATION_SCHEMA_VERSION",
     "BENCHMARK_RUNTIME_OBSERVATION_SCHEMA_VERSION",
+    "BENCHMARK_SEGMENT_RECEIPT_SCHEMA_VERSION",
     "BENCHMARK_SOURCE_REVISION_FENCE_SCHEMA_VERSION",
     "BENCHMARK_STUDY_DASHBOARD_SCHEMA_VERSION",
     "BENCHMARK_STUDY_MANIFEST_SCHEMA_VERSION",
@@ -271,6 +278,8 @@ __all__ = [
     "BenchmarkRuntimeContinuityClassification",
     "BenchmarkRuntimeContinuityTransition",
     "BenchmarkRuntimeTransition",
+    "BenchmarkSegmentReceiptClassification",
+    "BenchmarkSegmentReceiptTransition",
     "BenchmarkSourceRevisionFence",
     "BenchmarkSourceRevisionFenceError",
     "DockerContainerBinding",
@@ -311,6 +320,7 @@ __all__ = [
     "build_benchmark_integrity_qualification",
     "build_benchmark_runtime_continuity",
     "build_benchmark_runtime_observation",
+    "build_benchmark_segment_receipt",
     "build_benchmark_study_dashboard",
     "build_benchmark_treatment_continuation_receipt",
     "build_benchmark_upload_envelope",
