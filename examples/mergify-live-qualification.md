@@ -1,3 +1,3 @@
 # Disposable Mergify qualification
 
-State: initial
+State: base advanced
