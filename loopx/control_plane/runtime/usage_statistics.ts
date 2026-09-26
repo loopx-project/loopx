@@ -11,9 +11,12 @@ import { recordGoalUsage, goalPreview } from "./usage_statistics_goals.ts";
 import { validGoalAggregate } from "./usage_statistics_goal_contract.ts";
 import type { GoalAggregate, GoalObservation } from "./usage_statistics_goal_contract.ts";
 
+import { cycleObservations } from "./usage_statistics_cycles.ts";
+import type { CycleObservation } from "./usage_statistics_cycles.ts";
+
 export const STATE_SCHEMA = "loopx_usage_ping_state_v1";
 export const DEFAULT_ENDPOINT = "https://loopx-usage-collector.huangrt01.workers.dev/v1/ping";
-export const NOTICE_VERSION = 2;
+export const NOTICE_VERSION = 3;
 export type Env = Record<string, string | undefined>;
 export type Context = { env: Env; version: string; python: string; channel: string; now?: Date };
 type Notice = { version: number; endpoint: string; policy: string };
@@ -91,7 +94,7 @@ export async function inspect(path: string, ctx: Context) {
     aggregate_preview: state.consent === "disabled" || !state.counters?.length ? null : { schema: AGGREGATE_SCHEMA, counters: state.counters },
     goal_preview: state.consent === "disabled" ? null : await goalPreview(path + ".goals", state.generation).catch(() => null),
     aggregate_day: state.day ?? null,
-    disclosure: "LoopX basic usage statistics are on by default after this notice. Daily heartbeats send a random installation ID, version, OS, CPU architecture, Python version and install channel to the configured LoopX collector (Cloudflare). Fixed CLI feature/result/duration/error counts are sent separately without an ID. Observed Goal execution-span and Host-call duration buckets are separately aggregated without Goal or installation IDs. Measurements cover managed Turns and regular owner Goal chat, from observation onward; they are lower bounds, not completion or billing evidence. No prompts, code, paths, arguments, Goal contents or raw errors. Disable all with loopx usage-ping disable or LOOPX_USAGE_PING=0; inspect with loopx usage-ping status. Consent-required distributions wait for explicit enable. Recipient: " + (endpoint(ctx.env) || "not configured") };
+    disclosure: "LoopX basic usage statistics are on by default after this notice. Daily heartbeats send a random installation ID, version, OS, CPU architecture, Python version and install channel to the configured LoopX collector (Cloudflare). Fixed CLI feature/result/duration/error counts are sent separately without an ID. Goal span/duration buckets and fixed Host labels are aggregated without Goal or installation IDs. Common quota-to-spend cycles cover every Host using the quota CLI; bound Codex tasks add local timing-event reads; managed Turns and regular owner Goal chat add direct Host-call timing. These overlapping measurements are separate, partial and not completion or billing evidence. Raw session content is never uploaded. No prompts, code, paths, arguments, Goal contents or raw errors. Disable all with loopx usage-ping disable or LOOPX_USAGE_PING=0; inspect with loopx usage-ping status. Consent-required distributions wait for explicit enable. Recipient: " + (endpoint(ctx.env) || "not configured") };
 }
 export async function configure(path: string, ctx: Context, action: "enable" | "disable" | "acknowledge", expectedNotice?: unknown) {
   await withFileMutationLock(path, async () => {
@@ -100,6 +103,7 @@ export async function configure(path: string, ctx: Context, action: "enable" | "
     if (action === "disable") {
       await save(path, state);
       await rm(path + ".goals", { force: true });
+      await rm(path + ".cycles", { force: true });
       return;
     }
     if (action === "acknowledge" && JSON.stringify(expectedNotice) !== JSON.stringify(notice(ctx))) throw new Error("usage_notice_changed");
@@ -108,6 +112,7 @@ export async function configure(path: string, ctx: Context, action: "enable" | "
     if (state.notice && !sameNotice(state, ctx)) {
       state.counters = [];
       await rm(path + ".goals", { force: true });
+      await rm(path + ".cycles", { force: true });
       state.generation = randomUUID();
       if (state.notice.endpoint !== endpoint(ctx.env)) state.install_id = randomUUID();
     }
@@ -125,7 +130,7 @@ const post: Post = async (url, payload) => (await fetch(url, {
 })).status;
 
 /** Called in a detached process with one allowlisted observation, never raw argv/output. */
-export async function observe(path: string, ctx: Context, generation: string, counter: Counter | null, send: Post = post, goal?: GoalObservation) {
+export async function observe(path: string, ctx: Context, generation: string, counter: Counter | null, send: Post = post, goal?: GoalObservation, cycle?: CycleObservation) {
   if (counter !== null && (!validCounter(counter) || counter.count !== 1)) return { sent: false, reason: "invalid_observation" };
   let heartbeat: Ping | null = null;
   let aggregate: Aggregate | null = null;
@@ -136,7 +141,11 @@ export async function observe(path: string, ctx: Context, generation: string, co
     const blocked = blockedBy(state, ctx);
     if (blocked || !generation || generation !== state.generation) return false;
     if (state.day && state.day > today) return false;
-    try { goals = await recordGoalUsage(path + ".goals", generation, (ctx.now ?? new Date()).getTime(), goal); }
+    try {
+      const now = (ctx.now ?? new Date()).getTime();
+      const intervals = cycle ? await cycleObservations(path + ".cycles", generation, now, cycle) : [];
+      goals = await recordGoalUsage(path + ".goals", generation, now, [...(goal ? [goal] : []), ...intervals]);
+    }
     catch { /* A damaged optional measurement cannot block other diagnostics. */ }
     // Flush only a completed day's local aggregate. No event times or per-install key leave this boundary.
     if (state.day && state.day < today && state.counters?.length) {

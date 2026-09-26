@@ -639,8 +639,22 @@ def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
 
 
 def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
+    # Production quota CLI -> detached Python discovery -> TS cycle owner.
+    # The isolated home also proves telemetry never reads the operator's sessions.
+    from loopx import usage_ping
+    import time
+    home = tmp_path / "isolated-home"
+    machine = home / ".codex" / "loopx"
+    machine.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
+    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+        monkeypatch.delenv(key, raising=False)
+    usage_path = machine / "usage-ping.json"
+    usage_ping.control("enable", usage_path)
     project, runtime, registry_path = _write_fixture(
         tmp_path,
         required_capability="filesystem_write",
@@ -674,6 +688,18 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
         guard["heartbeat_receipt"]["delivery_workspace_causality"]["requirement"]
         == "required"
     )
+
+    # Preview/failed spend before validated delivery must not finish measurement.
+    cycles_path = Path(str(usage_path) + ".cycles")
+    deadline = time.monotonic() + 8
+    while not cycles_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.03)
+    assert "start" in json.loads(cycles_path.read_text())["cycles"][0]
+    for execute in (False, True):
+        _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+                 "--slots", "1", "--source", "heartbeat", *binding,
+                 *(["--execute"] if execute else []), "--scan-path", str(project), cwd=project)
+        assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -726,6 +752,26 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     assert spend["delivery_workspace_validated"] is True
     assert spend["delivery_workspace"]["workspace_identity"] == f"loopx:{GOAL_ID}"
     assert _spend_run_count(runtime) == 1
+    cycles_path = Path(str(usage_path) + ".cycles")
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        if cycles_path.exists():
+            cycles = json.loads(cycles_path.read_text())["cycles"]
+            if cycles and cycles[0].get("end"):
+                break
+        time.sleep(0.03)
+    else:
+        raise AssertionError("public quota/spend CLI did not complete a telemetry cycle")
+    assert len(cycles) == 1 and cycles[0]["exact"] is True
+    assert cycles[0]["start"] < cycles[0]["end"]
+    before_replay = cycles_path.read_bytes()
+    replay_rc, replay = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+                                 "--slots", "1", "--source", "heartbeat", *binding,
+                                 "--execute", "--scan-path", str(project), cwd=project)
+    assert replay_rc == 0 and replay["idempotent_replay"] is True
+    assert cycles_path.read_bytes() == before_replay
+    assert usage_ping.control("status", usage_path)["goal_preview"]["counters"][0]["measurement"] == "quota_cycle"
+    usage_ping.control("disable", usage_path)
 
 
 def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(

@@ -772,7 +772,7 @@ def _host_result_stage(
         if confirm_start is not None:
             confirm_start()
         from ...usage_goal import observe_goal_execution
-        with observe_goal_execution(usage_runtime_root or project, usage_goal_id):
+        with observe_goal_execution(usage_runtime_root or project, usage_goal_id, host=str((plan.get("host") or {}).get("kind") or "unknown")):
             host_observation = (
                 _run_host_runner(request, runner=host_runner)
                 if host_runner is not None

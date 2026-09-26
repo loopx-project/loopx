@@ -8,7 +8,7 @@ The TypeScript client/collector allowlist lives in
 |---|---|
 | `POST /v1/ping` | Daily random-ID heartbeat with version/OS/CPU/Python/channel; ≤1 KiB |
 | `POST /v1/aggregate` | Fixed CLI counts, no installation ID or join key; ≤16 KiB |
-| `POST /v1/goals` | Observed Goal-day span/execution buckets, no identity; ≤16 KiB |
+| `POST /v1/goals` | Independent Goal/measurement/Host-day span/duration buckets, no identity; ≤16 KiB |
 | `GET /v1/goal-stats` | Independent 30-day duration histograms; cells below 5 omitted |
 | `GET /v0/stats` | Deduplicated active/new installations, including retained v0 clients; version/OS/CPU/channel breakdown |
 | `GET /v1/aggregate-stats` | Independent 30-day feature/result/duration/error totals; cells below 5 omitted |
@@ -49,8 +49,13 @@ npx wrangler d1 migrations apply loopx-usage --remote
 npx wrangler deploy
 ```
 
-Existing v1 installations also apply `0002-goal-usage.sql` before deploying
-the Goal-duration Worker. Back up first; this only adds `goal_usage_counts`.
+Existing v1 installations also apply `0002-goal-usage.sql` and then
+`0003-goal-duration-sources.sql` before deploying the Goal-duration Worker.
+Back up first. The latter adds `goal_duration_counts` and copies prior counts
+as `host_call`/`unknown`, preserving the old table for rollback.
+`quota_cycle`, `codex_turn` and `host_call` are overlapping populations and
+must never be summed. The unreleased Goal payload requires measurement/Host
+labels and uses `duration` instead of `execution`.
 A Worker rollback can leave that additive table intact.
 
 Qualify `/v1/ping`, `/v1/aggregate`, `/v1/goals`, all stats endpoints, and invalid-field/size

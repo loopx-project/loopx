@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
+
+from ..usage_goal import observe_quota_result
 
 from ..capabilities.explore.composition_frontier import (
     project_live_explore_composition_frontier,
@@ -301,17 +304,33 @@ def _attach_turn_start_hook_dispatch(
 
 
 
-def _render_turn_envelope_payload(
+def _project_quota_cli_payload(
     payload: dict[str, object],
+    args: argparse.Namespace,
+    detail_sections: frozenset[str],
     scheduler_context: object,
 ) -> dict[str, object]:
-    """Render the Turn envelope, degrading to the typed payload on rejection.
+    """Project already-decided facts; preserve typed failures on envelope rejection.
 
     The envelope is an additive hot-path view over a decided payload. A typed
     validation/failure payload has no interaction contract to project, so a
     renderer rejection keeps the typed diagnostic itself (with the skip reason)
     instead of masking it with a crash (issue #3687).
     """
+    if not bool(getattr(args, "turn_envelope", False)):
+        if args.quota_command == "should-run":
+            return compact_quota_should_run_cli_payload(
+                payload,
+                include_todo_summary_detail="agent-todos" in detail_sections,
+                include_user_todo_summary_detail="user-todos" in detail_sections,
+                include_goal_boundary_detail="goal-boundary" in detail_sections,
+                include_vision_detail="vision" in detail_sections,
+            )
+        if args.quota_command == "monitor-poll":
+            return compact_quota_monitor_poll_cli_payload(
+                payload, include_decision_detail="decisions" in detail_sections,
+            )
+        return payload
     try:
         return build_turn_envelope(
             payload,
@@ -330,6 +349,7 @@ def handle_quota_command(
     print_payload: PrintPayload,
     append_cli_rollout_event: RolloutEventAppender,
 ) -> int:
+    usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
     heartbeat_receipt_existing_status = "replayed"
@@ -755,24 +775,16 @@ def handle_quota_command(
         goal_id=args.goal_id,
         agent_id=args.agent_id,
     )
-    if bool(getattr(args, "turn_envelope", False)):
-        payload = _render_turn_envelope_payload(
-            payload,
-            context.scheduler_context if context is not None else None,
+    if context is not None:
+        observe_quota_result(
+            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
+            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
+            started_at=usage_quota_started,
         )
-    elif args.quota_command == "should-run":
-        payload = compact_quota_should_run_cli_payload(
-            payload,
-            include_todo_summary_detail="agent-todos" in detail_sections,
-            include_user_todo_summary_detail="user-todos" in detail_sections,
-            include_goal_boundary_detail="goal-boundary" in detail_sections,
-            include_vision_detail="vision" in detail_sections,
-        )
-    elif args.quota_command == "monitor-poll":
-        payload = compact_quota_monitor_poll_cli_payload(
-            payload,
-            include_decision_detail="decisions" in detail_sections,
-        )
+    payload = _project_quota_cli_payload(
+        payload, args, detail_sections,
+        context.scheduler_context if context is not None else None,
+    )
     if args.quota_command == "should-run" and context is not None:
         attach_host_poll_receipt(
             context.status_payload,
