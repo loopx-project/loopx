@@ -1,5 +1,18 @@
 from __future__ import annotations
 
+import copy
+
+import pytest
+
+from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+from loopx.control_plane.quota.turn_envelope import (
+    build_turn_envelope, quota_action_signature_document,
+    turn_envelope_action_signature_document,
+)
+from loopx.control_plane.testing.control_plane_composition_scenarios import (
+    _required_vision_replan_source,
+)
+
 from loopx.control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
 )
@@ -114,7 +127,8 @@ def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
         "delivered_by": "quota_host_projection",
     }
     assert context["coverage_ledger"][0]["surface_id"] == "surface-existing"
-    assert action == {
+    assert len(action["planning_guidance"]) == 2
+    assert {key: value for key, value in action.items() if key != "planning_guidance"} == {
         "schema_version": "replan_action_packet_v0",
         "decision": "replan_required",
         "obligation_id": obligation["obligation_id"],
@@ -138,3 +152,37 @@ def test_manual_evidence_read_receipt_cannot_close_replan() -> None:
     assert payload["decision"] == "autonomous_replan_required"
     assert payload["autonomous_replan_obligation"]["required"] is True
     assert payload.get("replan_ack_feedback") is None
+
+
+@pytest.mark.parametrize("vision_gap", [False, True])
+def test_replan_guidance_survives_cli_and_host_compaction_without_new_authority(vision_gap: bool) -> None:
+    source = (_required_vision_replan_source(goal_id=GOAL_ID, agent_id=AGENT_ID)
+              if vision_gap else _quota_payload())
+    guidance = source["replan_action_packet"]["planning_guidance"]
+    # These are delivery assertions, not a claim that a model follows the advice.
+    assert len(guidance) == 2
+    assert "Never shrink requested goals" in guidance[0]
+    assert "honor user scope, authority, budget and stops" in guidance[0]
+    assert "current authoritative evidence for every requirement" in guidance[1]
+    assert "unproven" in guidance[1]
+    assert "blocked/exhausted/superseded is not achieved" in guidance[1]
+    compact = compact_quota_should_run_cli_payload(source)
+    envelope = build_turn_envelope(source)
+    for packet in (compact, envelope):
+        assert packet["replan_action_packet"]["planning_guidance"] == guidance
+
+    baseline = copy.deepcopy(source)
+    baseline["replan_action_packet"].pop("planning_guidance")
+    old_envelope = build_turn_envelope(baseline)
+    # Prompt advice cannot change executable actions, authority or settlement.
+    assert envelope["action"] == old_envelope["action"]
+    signature = quota_action_signature_document(source)
+    assert turn_envelope_action_signature_document(envelope) == signature
+    signature["replan_action_packet"].pop("planning_guidance")
+    assert signature == quota_action_signature_document(baseline)
+    # Preserve an existing budget warning; bounded advice adds no more than 360 bytes.
+    assert envelope["compaction"]["within_budget"] == old_envelope["compaction"]["within_budget"]
+    assert (envelope["compaction"]["envelope_json_bytes"]
+            - old_envelope["compaction"]["envelope_json_bytes"]) <= 360
+    envelope["replan_action_packet"].pop("planning_guidance")
+    assert envelope["replan_action_packet"] == old_envelope["replan_action_packet"]
