@@ -258,7 +258,17 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
     assert.equal((await mutate(store, {...request, operation: "renew", expected_version: 1})).reason_code, "lease_repository_divergence");
     assert.deepEqual(await loaded(store), before);
     // Cleanup still uses the exact holder/key/version, not the current repository.
-    assert.equal((await mutate(store, {...request, operation: "release", expected_version: 1, ttl_seconds: null})).status, "applied");
+    const released = await mutate(store, {...request, operation: "release", expected_version: 1, ttl_seconds: null});
+    assert.equal(released.status, "applied");
+    assert.equal((released.lease as JsonObject).version, 1);
+    const recovered = await acquire(contender, {...request, idempotency_key: "repository-recovered", expected_version: 1});
+    assert.equal(recovered.status, "applied", JSON.stringify(recovered));
+    assert.equal((recovered.lease as JsonObject).write_repository, "git:github.com/team/b");
+    assert.equal(evaluateCanonicalTaskLeaseProof({todo, lease: recovered.lease as JsonObject,
+      handoff_mode: "hard_lease", actor_agent_id: request.owner, registered_agents: request.registered_agents,
+      lease_idempotency_key: "repository-recovered", lease_expected_version: 2, now: request.now}).code, "terminal_fence_verified");
+    assert.equal((await acquire(store, request)).reason_code, "idempotency_key_reuse");
+    assert.deepEqual((await acquire(store, request)).original_receipt, first.original_receipt);
   });
 
   test(`${provider} malformed frozen repository fails closed with no mutation`, async t => {
