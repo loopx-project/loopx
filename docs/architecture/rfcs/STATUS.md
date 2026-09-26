@@ -62,7 +62,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Draft | none | — |
 | [RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | Draft | none | [5 entries](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Draft | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
-| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Draft | none | [19 entries](ledger/shared-goal-authority-state-provider-v0/) |
+| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Draft | none | [20 entries](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Draft | none | — |
 
 ## Superseded (0)
