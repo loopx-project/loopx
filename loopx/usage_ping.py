@@ -71,7 +71,7 @@ def begin(command: str) -> tuple[str, float] | None:
         state = json.loads(path.read_text()) if path.exists() else {}
         if state.get("consent") == "disabled":
             return None
-        if (state.get("notice") or {}).get("version") != 2:
+        if (state.get("notice") or {}).get("version") != 3:
             # Unattended machines remain silent until the owner sees the notice
             # or explicitly enables from CLI/settings. JSON stdout stays clean.
             if not sys.stderr.isatty():
@@ -112,14 +112,14 @@ def finish(ticket: tuple[str, float] | None, command: str, code: int, error: Bas
         pass  # Telemetry cannot replace the command's result.
 
 
-def _detach(request: dict[str, Any]) -> None:
+def _detach(request: dict[str, Any], *, command: list[str] | None = None) -> None:
     kwargs: dict[str, Any] = {"stdin": subprocess.PIPE, "stdout": subprocess.DEVNULL,
                               "stderr": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
-    child = subprocess.Popen(_command(), **kwargs)
+    child = subprocess.Popen(command or _command(), **kwargs)
     assert child.stdin is not None
     child.stdin.write(json.dumps(request).encode())
     child.stdin.close()

@@ -135,6 +135,7 @@ export async function purge(db, day) {
   const cutoff = shiftDays(day, -RETENTION_DAYS);
   await db.batch([
     db.prepare("DELETE FROM pings WHERE day < ?1").bind(cutoff),
+    db.prepare("DELETE FROM goal_duration_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM goal_usage_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM usage_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM installs WHERE install_id NOT IN (SELECT DISTINCT install_id FROM pings)"),

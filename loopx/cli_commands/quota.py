@@ -330,6 +330,8 @@ def handle_quota_command(
     print_payload: PrintPayload,
     append_cli_rollout_event: RolloutEventAppender,
 ) -> int:
+    import time
+    usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
     heartbeat_receipt_existing_status = "replayed"
@@ -755,6 +757,22 @@ def handle_quota_command(
         goal_id=args.goal_id,
         agent_id=args.agent_id,
     )
+    if context is not None and payload.get("ok"):
+        phase = (
+            "start" if args.quota_command == "should-run" and payload.get("should_run") is True
+            else "spend" if args.quota_command == "spend-slot" and bool(args.execute)
+            and payload.get("appended") else None
+        )
+        if phase:
+            from ..usage_goal import observe_quota_cycle
+            observe_quota_cycle(
+                registry_path=registry_path, runtime_root=context.runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id,
+                turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
+                phase=phase, at=usage_quota_started if phase == "start" else time.time_ns() // 1_000_000,
+                host=str(getattr(args, "host_surface", None) or getattr(args, "runtime_profile", None)
+                         or ("codex_app" if getattr(args, "codex_app", False) else "unknown")),
+            )
     if bool(getattr(args, "turn_envelope", False)):
         payload = _render_turn_envelope_payload(
             payload,

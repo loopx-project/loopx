@@ -33,3 +33,9 @@ CREATE TABLE IF NOT EXISTS goal_usage_counts (
   day TEXT NOT NULL, span TEXT NOT NULL, execution TEXT NOT NULL, count INTEGER NOT NULL,
   PRIMARY KEY (day, span, execution)
 );
+
+CREATE TABLE IF NOT EXISTS goal_duration_counts (
+  day TEXT NOT NULL, measurement TEXT NOT NULL, host TEXT NOT NULL,
+  span TEXT NOT NULL, duration TEXT NOT NULL, count INTEGER NOT NULL,
+  PRIMARY KEY (day, measurement, host, span, duration)
+);

@@ -1279,7 +1279,7 @@ class ChatRuntimeController:
                 # Manager/native/external conversations have different execution
                 # and waiting boundaries. Do not invent Goal timing for them.
                 observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
-                with observe_goal_execution(self.store.root.parent, observed_goal):
+                with observe_goal_execution(self.store.root.parent, observed_goal, host=str(session.get("agent_id") or "unknown")):
                     if attachments:
                         if not isinstance(adapter, CodexAppServerAdapter):
                             raise ValueError("image attachments currently require the Codex Agent endpoint")

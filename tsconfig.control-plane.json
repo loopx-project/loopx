@@ -16,6 +16,7 @@
     "loopx/control_plane/runtime/usage_statistics*.ts",
     "tests/control_plane_ts/usage_statistics.test.ts",
     "tests/control_plane_ts/usage_statistics_goals.test.ts",
+    "tests/control_plane_ts/usage_statistics_sources.test.ts",
     "loopx/control_plane/effect_program.ts",
     "loopx/control_plane/effect_runtime_errors.ts",
     "loopx/control_plane/effect_runtime_handlers.ts",
