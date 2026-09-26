@@ -56,6 +56,7 @@ _ITEM_KEYS = {
     "created_at",
     "updated_at",
     "autopublish_allowed",
+    "approval_sequence",
 }
 
 
@@ -283,7 +284,15 @@ def _validate_effect_records(item: Mapping[str, Any]) -> None:
             raise ValueError("readback_receipt content_digest does not match item")
 
 
-def _require_item(item: Mapping[str, Any]) -> dict[str, Any]:
+def require_content_ops_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize a raw content_ops_item_v0 mapping into a fresh,
+    fully-populated dict -- never mutates ``item`` in place. Every reader of
+    a caller-supplied item mapping (inside this module or elsewhere in
+    content-ops, e.g. computer_use_provider.py / computer_use_reducer.py)
+    must call this first and use its *return value*, not the raw input --
+    that's what makes old content_ops_item_v0 data (missing fields added
+    after it was written, e.g. approval_sequence) still safely readable."""
+
     candidate = copy.deepcopy(dict(item))
     extra = sorted(set(candidate) - _ITEM_KEYS)
     if extra:
@@ -299,6 +308,30 @@ def _require_item(item: Mapping[str, Any]) -> dict[str, Any]:
     revision = candidate.get("revision")
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
         raise ValueError("revision must be a positive integer")
+    if "approval_sequence" not in candidate:
+        # Backward compatibility: a persisted content_ops_item_v0 written before
+        # approval_sequence existed has no way to report its true historical
+        # approval count, and any approval it may already carry predates CUA
+        # gate semantics entirely. Default to 0 unconditionally rather than
+        # inferring 1 for a currently-approved item -- the migration point
+        # only needs future approvals to increment correctly, not a
+        # retroactively "correct" historical value. A consequence, not a bug:
+        # a pre-existing approved item cannot issue a CUA action request until
+        # a fresh approve event establishes CUA-aware gate authority for it
+        # (see build_content_ops_browser_action_request's own
+        # approval_sequence < 1 check, which is where that requirement
+        # belongs -- this generic item-lifecycle validation does not need to
+        # know anything about CUA). schema_version stays content_ops_item_v0
+        # on purpose: this is additive normalization at the read boundary,
+        # not a breaking schema change.
+        candidate["approval_sequence"] = 0
+    approval_sequence = candidate.get("approval_sequence")
+    if (
+        isinstance(approval_sequence, bool)
+        or not isinstance(approval_sequence, int)
+        or approval_sequence < 0
+    ):
+        raise ValueError("approval_sequence must be a non-negative integer")
     _digest(candidate.get("content_digest"), "content_digest")
     _token(candidate.get("content_ref"), "content_ref")
     _source_refs(candidate.get("source_refs"))
@@ -357,6 +390,7 @@ def build_content_ops_item(
         "content_digest": _digest(content_digest, "content_digest"),
         "content_ref": _token(content_ref, "content_ref"),
         "source_refs": _source_refs(source_refs),
+        "approval_sequence": 0,
         "approval": None,
         "delivery_intent": None,
         "delivery_receipt": None,
@@ -368,13 +402,13 @@ def build_content_ops_item(
         "updated_at": timestamp,
         "autopublish_allowed": False,
     }
-    return _require_item(item)
+    return require_content_ops_item(item)
 
 
 def validate_content_ops_item(item: Mapping[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     try:
-        _require_item(item)
+        require_content_ops_item(item)
     except ValueError as exc:
         errors.append(str(exc))
     return {
@@ -537,6 +571,7 @@ def _transition(item: dict[str, Any], event: Mapping[str, Any]) -> None:
         ):
             raise ValueError("valid_from must not be after valid_until")
         item["approval"] = approval
+        item["approval_sequence"] = int(item["approval_sequence"]) + 1
         item["state"] = "approved"
         return
 
@@ -687,7 +722,7 @@ def _transition(item: dict[str, Any], event: Mapping[str, Any]) -> None:
 
 
 def project_content_ops_item(item: Mapping[str, Any]) -> dict[str, Any]:
-    current = _require_item(item)
+    current = require_content_ops_item(item)
     state = str(current["state"])
     next_actions = {
         "captured": ["revise", "submit_review", "skip", "supersede"],
@@ -721,6 +756,7 @@ def project_content_ops_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "channel": current["channel"],
         "state": state,
         "revision": current["revision"],
+        "approval_sequence": current["approval_sequence"],
         "approval_present": current.get("approval") is not None,
         "delivery_intent_present": current.get("delivery_intent") is not None,
         "published_url": delivery.get("public_url"),
@@ -748,7 +784,7 @@ def build_content_ops_queue_projection(
     timestamp = _timestamp(generated_at, "generated_at")
     if not items:
         raise ValueError("content queue requires at least one item")
-    normalized = [_require_item(item) for item in items]
+    normalized = [require_content_ops_item(item) for item in items]
     item_projections = [project_content_ops_item(item) for item in normalized]
 
     counts: dict[str, int] = {}
@@ -856,7 +892,7 @@ def build_content_ops_item_packet(**kwargs: Any) -> dict[str, Any]:
 def apply_content_ops_item_event(
     item: Mapping[str, Any], event: Mapping[str, Any]
 ) -> dict[str, Any]:
-    current = _require_item(item)
+    current = require_content_ops_item(item)
     normalized_event, event_digest = _require_event(event)
     last_event = current.get("last_event")
     if (
@@ -897,7 +933,7 @@ def apply_content_ops_item_event(
         "event_digest": event_digest,
         "action": normalized_event["action"],
     }
-    _require_item(updated)
+    require_content_ops_item(updated)
     return {
         "ok": True,
         "schema_version": CONTENT_OPS_ITEM_TRANSITION_PACKET_SCHEMA_VERSION,

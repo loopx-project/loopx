@@ -1070,6 +1070,11 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "reason": "checks the computer_use_runtime_v0 provider boundary: gate-before-write, unknown-modal handling, raw-evidence stripping, and rejection of provider-authored writeback",
             },
             {
+                "command": "python3 examples/content-ops-computer-use-showcase-smoke.py",
+                "tier": "default",
+                "reason": "checks content-ops's computer_use_runtime_v0 vertical slice: draft-until-gate, unknown-modal handoff, stale-gate-revision rejection after a revoke/reapprove race, and idempotent receipt replay",
+            },
+            {
                 "command": "python3 examples/host-integration-surface-smoke.py",
                 "tier": "deep",
                 "reason": "samples the broader host integration surface when connector catalog changes are promoted",

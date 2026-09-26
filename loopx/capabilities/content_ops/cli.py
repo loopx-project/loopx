@@ -11,6 +11,14 @@ from ..issue_fix.content_ops_cli import (
     handle_content_ops_issue_fix_command,
     register_content_ops_issue_fix_commands,
 )
+from .computer_use_provider import (
+    build_content_ops_browser_action_request_packet,
+    render_content_ops_browser_action_request_markdown,
+)
+from .computer_use_reducer import (
+    apply_content_ops_browser_receipt,
+    render_content_ops_browser_receipt_markdown,
+)
 from .item_lifecycle import (
     apply_content_ops_item_event,
     build_content_ops_item_packet,
@@ -410,6 +418,67 @@ def register_content_ops_commands(
         required=True,
         help="Path to a content item event JSON object.",
     )
+    item_browser_request_parser = content_ops_sub.add_parser(
+        "item-browser-request",
+        help=(
+            "Generate a bounded computer_use_action_request_v0 for an item's "
+            "current state, for a host browser/CUA tool to attempt. For an "
+            "'approved' item this durably declares delivery intent first "
+            "(approved -> delivery_ready) -- WRITES to the item -- before "
+            "returning a request; you MUST persist the packet's `item` field "
+            "before invoking a provider, and calling this again on an "
+            "already-delivery_ready item fails closed rather than retrying."
+        ),
+    )
+    add_subcommand_format(item_browser_request_parser)
+    item_browser_request_parser.add_argument(
+        "--item-json",
+        required=True,
+        help="Path to content_ops_item_v0 JSON, or '-' for stdin.",
+    )
+    item_browser_request_parser.add_argument("--goal-id", required=True)
+    item_browser_request_parser.add_argument("--todo-id", required=True)
+    item_browser_request_parser.add_argument(
+        "--provider-id", default="computer_use_runtime"
+    )
+    item_browser_request_parser.add_argument(
+        "--occurred-at",
+        required=True,
+        help=(
+            "Used only if this call durably declares delivery intent "
+            "(approved item); ignored otherwise."
+        ),
+    )
+    item_browser_receipt_parser = content_ops_sub.add_parser(
+        "item-browser-receipt",
+        help=(
+            "Reduce one computer_use_receipt_v0 (answering a prior "
+            "item-browser-request) and apply the resulting item-lifecycle "
+            "transition, if any."
+        ),
+    )
+    add_subcommand_format(item_browser_receipt_parser)
+    item_browser_receipt_parser.add_argument(
+        "--item-json",
+        required=True,
+        help="Path to content_ops_item_v0 JSON, or '-' for stdin.",
+    )
+    item_browser_receipt_parser.add_argument(
+        "--action-request-json",
+        required=True,
+        help=(
+            "Path to the item-browser-request output this receipt answers "
+            "(preferred -- keeps a receipt replay safe even if the item has "
+            "since moved on), or a bare computer_use_action_request_v0 (only "
+            "safe to retry with an unrefreshed --item-json)."
+        ),
+    )
+    item_browser_receipt_parser.add_argument(
+        "--receipt-json",
+        required=True,
+        help="Path to the computer_use_receipt_v0 to reduce.",
+    )
+    item_browser_receipt_parser.add_argument("--occurred-at", required=True)
     queue_parser = content_ops_sub.add_parser(
         "queue-status",
         help=(
@@ -589,6 +658,47 @@ def handle_content_ops_command(
                 _load_json_object(args.event_json),
             )
             renderer = render_content_ops_item_packet_markdown
+        elif args.content_ops_command == "item-browser-request":
+            payload = build_content_ops_browser_action_request_packet(
+                item=_load_json_object(args.item_json),
+                goal_id=args.goal_id,
+                todo_id=args.todo_id,
+                provider_id=args.provider_id,
+                occurred_at=args.occurred_at,
+            )
+            renderer = render_content_ops_browser_action_request_markdown
+        elif args.content_ops_command == "item-browser-receipt":
+            action_request_payload = _load_json_object(args.action_request_json)
+            if "action_request" in action_request_payload:
+                # The full item-browser-request packet -- preferred. Carries
+                # expected_transition (safe replay even if the item has moved
+                # on) and item_id, which is *always* enforced on this path --
+                # a caller using the packet gets item-binding protection
+                # automatically, not as something they could forget to opt into.
+                action_request = action_request_payload["action_request"]
+                expected_transition = action_request_payload.get("expected_transition")
+                expected_item_id = action_request_payload.get("item_id")
+            else:
+                # A bare computer_use_action_request_v0 (e.g. hand-built by a
+                # caller that never went through item-browser-request). Retries
+                # are only safe here if the caller keeps resubmitting the same,
+                # unrefreshed --item-json; see apply_content_ops_browser_receipt.
+                # This path does NOT get the expected_item_id check (there is no
+                # packet to source it from) -- only the unconditional
+                # gate_id-derivation check inside the reducer still protects an
+                # external_write/credential_use request taken this way.
+                action_request = action_request_payload
+                expected_transition = None
+                expected_item_id = None
+            payload = apply_content_ops_browser_receipt(
+                item=_load_json_object(args.item_json),
+                action_request=action_request,
+                receipt=_load_json_object(args.receipt_json),
+                occurred_at=args.occurred_at,
+                expected_transition=expected_transition,
+                expected_item_id=expected_item_id,
+            )
+            renderer = render_content_ops_browser_receipt_markdown
         elif args.content_ops_command == "queue-status":
             payload = build_content_ops_queue_status_packet(
                 items=[
@@ -627,6 +737,7 @@ def handle_content_ops_command(
                 "`observe-public-handle`, `project-private-connector-gate`, "
                 "`aggregate-packets`, `project-chatview-report`, or "
                 "`walkthrough-artifact`, `item-create`, `item-transition`, "
+                "`item-browser-request`, `item-browser-receipt`, "
                 "`queue-status`, `template-list`, `template-show`, "
                 "`layout-plan`, or `layout-check`"
             )

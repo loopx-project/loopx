@@ -49,3 +49,10 @@ PUBLISH_GATE_SCHEMA_VERSION = "publish_gate_v0"
 MATERIAL_MEMORY_SCHEMA_VERSION = "material_memory_v0"
 CONNECTOR_TRIAL_SCHEMA_VERSION = "connector_trial_v0"
 CONTENT_OPS_VALIDATION_SCHEMA_VERSION = "content_ops_surface_validation_v0"
+
+CONTENT_OPS_BROWSER_ACTION_REQUEST_PACKET_SCHEMA_VERSION = (
+    "content_ops_browser_action_request_packet_v0"
+)
+CONTENT_OPS_BROWSER_RECEIPT_PACKET_SCHEMA_VERSION = (
+    "content_ops_browser_receipt_packet_v0"
+)
