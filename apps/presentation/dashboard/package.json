@@ -20,6 +20,7 @@
     "smoke:benchmark-study-browser": "node ../../../examples/dashboard-benchmark-study-browser-smoke.mjs",
     "smoke:capability-configuration": "rm -rf node_modules/.cache/loopx-capability-configuration-smoke && tsc --ignoreConfig --target ES2022 --module NodeNext --moduleResolution NodeNext --types node --skipLibCheck --strict --outDir node_modules/.cache/loopx-capability-configuration-smoke smoke/capability-configuration-smoke.ts src/data/capability-configuration.ts && node node_modules/.cache/loopx-capability-configuration-smoke/smoke/capability-configuration-smoke.js",
     "smoke:chat-route": "tsc --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir node_modules/.cache/loopx-chat-route-smoke smoke/chat-route-smoke.ts src/data/chat-model.ts src/vite-env.d.ts && node node_modules/.cache/loopx-chat-route-smoke/smoke/chat-route-smoke.js",
+    "smoke:chat-turn-acceptance-retry": "vite build --ssr smoke/chat-turn-acceptance-retry-smoke.ts --outDir node_modules/.cache/loopx-chat-turn-acceptance-retry --emptyOutDir && node node_modules/.cache/loopx-chat-turn-acceptance-retry/chat-turn-acceptance-retry-smoke.js",
     "smoke:demo-readiness": "bash ../../../scripts/loopx-python.sh --exec ../../../examples/dashboard-demo-readiness-smoke.py",
     "smoke:frontstage-browser": "node ../../../examples/dashboard-frontstage-browser-smoke.mjs",
     "smoke:frontstage-design-baseline": "node ../../../examples/dashboard-frontstage-design-baseline-smoke.mjs",

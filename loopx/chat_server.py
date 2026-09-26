@@ -721,6 +721,7 @@ class ChatRequestHandler(
                 str(exc),
                 status=424,
                 gate=exc.gate,
+                error_code=exc.error_code,
             )
             return
         except RuntimeError as exc:
