@@ -71,6 +71,31 @@ def write_lock_test_python(path: Path) -> None:
 
 def assert_install_waits_for_promotion_guard(root: Path) -> None:
     env = {**install_env(root), "LOOPX_RELEASE_ID": "guarded"}
+    python_wrapper = root / "guard-python"
+    # Record preparation without skipping the real guard, manifest, or install.
+    python_wrapper.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = \"-\" ]; then\n"
+        "  source=$(cat)\n"
+        "  case \"$source\" in\n"
+        "    *\"print(sys.executable)\"*) printf '%s\\n' \"$0\"; exit 0 ;;\n"
+        "  esac\n"
+        "  printf '%s' \"$source\" | \"$LOOPX_TEST_REAL_PYTHON\" \"$@\"\n"
+        "  exit $?\n"
+        "fi\n"
+        "case \"${1:-}\" in\n"
+        "  */scripts/chat_bundle.py) printf '%s\\n' prepared >\"$LOOPX_TEST_CHAT_PREP_MARKER\" ;;\n"
+        "esac\n"
+        "exec \"$LOOPX_TEST_REAL_PYTHON\" \"$@\"\n",
+        encoding="utf-8",
+    )
+    python_wrapper.chmod(0o755)
+    chat_marker = root / "chat-prepared"
+    env.update(
+        LOOPX_PYTHON=str(python_wrapper),
+        LOOPX_TEST_REAL_PYTHON=sys.executable,
+        LOOPX_TEST_CHAT_PREP_MARKER=str(chat_marker),
+    )
     releases_dir = Path(env["LOOPX_RELEASES_DIR"])
     releases_dir.mkdir(parents=True)
     guard_path = releases_dir / ".install-guard"
@@ -89,6 +114,7 @@ def assert_install_waits_for_promotion_guard(root: Path) -> None:
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline and process.poll() is None:
                 assert not legacy_lock.exists(), legacy_lock
+                assert not chat_marker.exists(), "Chat assets prepared before promotion guard"
                 time.sleep(0.05)
             assert process.poll() is None, process.communicate()
         except Exception:
@@ -105,6 +131,7 @@ def assert_install_waits_for_promotion_guard(root: Path) -> None:
     stdout, stderr = process.communicate(timeout=120)
     assert process.returncode == 0, (stdout, stderr)
     assert release_path(stdout).is_dir(), stdout
+    assert chat_marker.is_file(), "Guarded install did not prepare Chat assets"
 
 
 def assert_legacy_lock_timeout_preserves_live_owner(root: Path) -> None:

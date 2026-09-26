@@ -679,6 +679,15 @@ if [[ -z "$shell_profile" ]]; then
 fi
 
 configure_python_runtime
+promote_default=0
+if resolve_default_promotion; then
+  promote_default=1
+fi
+if [[ "$promote_default" == "1" ]]; then
+  # Preparing shared Chat assets is part of the guarded installation.
+  mkdir -p "$releases_dir"
+  run_under_install_guard "$@"
+fi
 chat_bundle_args=(ensure)
 if [[ -L "$bin_dir/loopx" ]]; then
   previous_chat_assets="$("${LOOPX_PYTHON:-python3}" - "$bin_dir/loopx" <<'PYTHON'
@@ -692,11 +701,6 @@ PYTHON
   fi
 fi
 "${LOOPX_PYTHON:-python3}" "$repo_root/scripts/chat_bundle.py" "${chat_bundle_args[@]}"
-
-promote_default=0
-if resolve_default_promotion; then
-  promote_default=1
-fi
 
 if [[ "$promote_default" == "0" ]]; then
   if [[ "$install_canary" == "0" ]]; then
@@ -730,8 +734,6 @@ fi
 
 export LOOPX_PROMOTION_MODE="$promotion_mode"
 
-mkdir -p "$releases_dir"
-run_under_install_guard "$@"
 warn_stale_promotion_readiness
 acquire_install_lock
 mkdir -p "$bin_dir"
