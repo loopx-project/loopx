@@ -157,6 +157,8 @@ test("journal replay uses its own decision without a quota action slot", () => {
       checks: [{ kind: "journal_consistency", outcome: "passed" }],
     },
     last_recovery: null,
+    recorded_effects: {host_invoked: true, state_written: true,
+      quota_spent: true, scheduler_acknowledged: null},
     effects: [],
   });
 });
@@ -179,6 +181,57 @@ test("non-terminal replay blocking does not block executor recovery", () => {
     retry_failed: false,
     checks: [{ kind: "journal_consistency", outcome: "passed" }],
   });
+});
+
+test("recorded effects distinguish checkpoint, prepared uncertainty and no attempt", () => {
+  const input = request("in_progress");
+  input.journal.completed_phases = ["host_execute", "typed_result", "validation"];
+  input.journal.effect_attempts = {durable_writeback: {status: "prepared"}};
+  const result = interpretTurnJournal(input);
+  assert.deepEqual(result.recorded_effects, {
+    host_invoked: true, state_written: null, quota_spent: false,
+    scheduler_acknowledged: false,
+  });
+  assert.equal(result.recovery_decision.reinvoke_host, false);
+
+  input.journal.completed_phases = [];
+  delete input.journal.effect_attempts;
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, false);
+  input.journal.host_attempt_count = 1;
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, null);
+});
+
+test("pending spend and foreign lineage cannot certify a quota charge", () => {
+  const input = request("in_progress");
+  input.journal.completed_phases = ["host_execute", "typed_result", "validation", "durable_writeback"];
+  input.journal.effect_attempts = {quota_spend: {status: "prepared"}};
+  assert.deepEqual(interpretTurnJournal(input).recorded_effects, {
+    host_invoked: true, state_written: true, quota_spent: null,
+    scheduler_acknowledged: false,
+  });
+  assert.deepEqual(interpretTurnJournal({...input, agent_id: "another-caller"}).recorded_effects, {
+    host_invoked: null, state_written: null, quota_spent: null,
+    scheduler_acknowledged: null,
+  });
+  input.journal.completed_phases = ["typed_result"];
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, null);
+});
+
+test("outer-controller completion does not manufacture scheduler acknowledgement", () => {
+  const input = request();
+  input.journal.scheduler = {completed: true, acknowledged: false};
+  assert.equal(interpretTurnJournal(input).recorded_effects.scheduler_acknowledged, false);
+});
+
+test("malformed attempt facts never certify absence of an effect", () => {
+  const input = request("in_progress");
+  input.journal.completed_phases = [];
+  input.journal.host_attempt_count = "1";
+  input.journal.effect_attempts = {durable_writeback: {status: "invalid"}};
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, null);
+  assert.equal(interpretTurnJournal(input).recorded_effects.state_written, null);
+  input.journal.effect_attempts = [];
+  assert.equal(interpretTurnJournal(input).recorded_effects.quota_spent, null);
 });
 
 test("scheduler recovery resumes only scheduler apply", () => {

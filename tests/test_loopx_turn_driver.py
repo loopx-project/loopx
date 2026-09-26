@@ -2274,6 +2274,13 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
 
     assert first_exit_code == 1, first
     assert first["error"] == "injected crash after canonical Todo commit"
+    assert first["effects"]["host_invoked"] is None
+    observation = first["journal_observation"]
+    assert observation["scope"] == "original_turn"
+    assert observation["recorded_effects"]["host_invoked"] is True
+    assert observation["recorded_effects"]["state_written"] is None
+    assert observation["recorded_effects"]["quota_spent"] is False
+    assert observation["recovery_decision"]["reinvoke_host"] is False
     assert committed_results[0]["status"] == "done"
     assert committed_results[0]["provider_status"] == "applied"
     assert committed_results[0]["idempotent_replay"] is False

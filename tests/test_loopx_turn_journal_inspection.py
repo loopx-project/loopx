@@ -246,6 +246,8 @@ def test_inspection_returns_versioned_allowlisted_projection_without_mutation(
             "checks": [{"kind": "journal_consistency", "outcome": "passed"}],
         },
         "last_recovery": None,
+        "recorded_effects": {"host_invoked": True, "state_written": True,
+                             "quota_spent": True, "scheduler_acknowledged": None},
         "effects": [],
     }
     assert journal_path.read_bytes() == before_bytes
@@ -391,6 +393,7 @@ def test_inspect_journal_cli_json_and_markdown_share_allowlisted_projection(
         "journal_consistent",
         "recovery_decision",
         "last_recovery",
+        "recorded_effects",
         "effects",
     }
     assert markdown_output == (
@@ -402,6 +405,8 @@ def test_inspect_journal_cli_json_and_markdown_share_allowlisted_projection(
         "- recovery_reason: terminal_result_retained\n"
         "- recovery_checks: journal_consistency:passed\n"
         "- journal_consistent: True\n"
+        "- original_turn_recorded_effects: {'host_invoked': True, 'state_written': True, "
+        "'quota_spent': True, 'scheduler_acknowledged': None}\n"
         "- replay_decision: replay_legal\n"
         "- journal_status: committed\n"
         "- replay_legal: True\n"
@@ -537,6 +542,8 @@ def test_typescript_runtime_uses_one_typed_rpc_call(
                 ],
             },
             "last_recovery": None,
+            "recorded_effects": {"host_invoked": True, "state_written": True,
+                                 "quota_spent": True, "scheduler_acknowledged": None},
             "effects": [],
         }
 
@@ -600,6 +607,8 @@ def test_typescript_runtime_rejects_malformed_projection_types(
             "checks": [{"kind": "journal_consistency", "outcome": "passed"}],
         },
         "last_recovery": None,
+        "recorded_effects": {"host_invoked": True, "state_written": True,
+                             "quota_spent": True, "scheduler_acknowledged": None},
         "effects": [],
     }
 
