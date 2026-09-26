@@ -1,3 +1,3 @@
 # Disposable Mergify qualification
 
-State: topic
+State: base advanced; topic recovered
