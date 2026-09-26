@@ -187,9 +187,14 @@ loopx configure-goal --goal-id <goal-id> --progress-review-mode assist \
 ```
 
 Receipts bound to any other revision are stale history and are never counted.
-A receipt found by `turn_instance_id` must also name the same Agent and Todo
-when both sides do; a `(generated_at, agent_id)` fallback that matches two
-different receipts is ambiguous and never attributed. A transition whose receipt
+A receipt found by `turn_instance_id` must name the same nonempty Agent and
+exact Todo, including matching absence for unbound work. Missing identity is
+not a wildcard. Only absent Turn identity permits the unique
+`(generated_at, agent_id, todo_id)` fallback; malformed/conflicting Turn claims
+cannot fall back. Conflicts in receipts or run retries are unattributable,
+and anonymous ACKs cannot discharge another Agent's obligation. These stricter
+assist rules also apply to historical receipts; see the
+[identity contract](../../loopx/capabilities/progress_review/README.md#receipts). A transition whose receipt
 is pending, failed, abstained, stale, undecided, mismatched, missing or bound to
 another revision is unevaluated: it never counts as drift, it breaks a streak
 that has not yet formed, and it neither extends nor dissolves an obligation

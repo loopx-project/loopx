@@ -93,7 +93,7 @@ loopx configure-goal --goal-id <goal-id> --progress-review-mode assist \
   --progress-review-contract-revision <drift init 打印的 sha256> --execute
 ```
 
-绑定到其他修订的回执是过期历史，永不计数。按 `turn_instance_id` 找到的回执，在双方都给出 Agent 与 Todo 时必须一致；按 `(generated_at, agent_id)` 回退匹配到两条不同回执视为歧义，不做归属。回执为 pending、failed、abstained、stale、undecided、不匹配、缺失或绑定到其他修订的转换是未评估的：它永不算作漂移，会打断尚未形成的连续段，但不会延长或解除已形成的义务。只有已确认的重规划或更新的 completed on-goal 判定能结束义务。pin 是手动的：最新回执绑定到非 pin 修订时，`loopx status` 报告 `rebind_hint: newer_receipts_under_unpinned_revision`。回执的 `sequence` 是本观察器状态的本地计数，`drift init` 新建状态时从 0 重新计数；核心按 run 的 `generated_at`、再 `recorded_at` 排序，重新初始化的观察器不会被读成比它替换的状态更旧。`assist` 下义务携带形成期间的全部类型化声明；回放其中任何一条，或只改标识沿用其 evidence id，都不算 ack。
+绑定到其他修订的回执是过期历史，永不计数。按 `turn_instance_id` 找到的回执必须具有相同非空 Agent 和完全一致的 Todo（未绑定工作允许双方都缺省）；缺失身份不是通配符。只有真正缺失 Turn 时才允许唯一的 `(generated_at, agent_id, todo_id)` 回退，无效或冲突 Turn 不能降级。回执或 run 重试中的身份冲突不予归属，匿名 ACK 不能解除其他 Agent 的义务。这些更严格的 assist 规则也适用于历史回执，详见[身份契约](../../loopx/capabilities/progress_review/README.zh-CN.md#回执)。回执为 pending、failed、abstained、stale、undecided、不匹配、缺失或绑定到其他修订的转换是未评估的：它永不算作漂移，会打断尚未形成的连续段，但不会延长或解除已形成的义务。只有已确认的重规划或更新的 completed on-goal 判定能结束义务。pin 是手动的：最新回执绑定到非 pin 修订时，`loopx status` 报告 `rebind_hint: newer_receipts_under_unpinned_revision`。回执的 `sequence` 是本观察器状态的本地计数，`drift init` 新建状态时从 0 重新计数；核心按 run 的 `generated_at`、再 `recorded_at` 排序，重新初始化的观察器不会被读成比它替换的状态更旧。`assist` 下义务携带形成期间的全部类型化声明；回放其中任何一条，或只改标识沿用其 evidence id，都不算 ack。
 
 `assist` 会改变 Agent 的工作契约：它产生带 stop condition 与 ack 要求的 `required` 义务。义务会把被评估窗口的类型化进展观察绑定为基线，现有 writeback 据此拒绝原样重提该观察或仅在同一 hypothesis 下更换 evidence id 的 ack；只有存在这样的观察时才会触发。它不授予暂停、gate 或验收权限，但不是被动建议。观察器自身的 `off/shadow` 开关控制模型调用与出站；Goal 的 `off/shadow/assist` 策略控制核心如何使用已经存在的回执。关闭观察器不会撤回已写出的回执；清除 Goal 策略才会。
 

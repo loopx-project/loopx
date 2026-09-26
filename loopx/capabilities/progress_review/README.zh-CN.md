@@ -11,7 +11,7 @@
 | 核心会 | 核心不会 |
 | --- | --- |
 | 只通过一个严格 schema `progress_review_receipt_v0` 读取回执 | 调用模型、读取原始 diff、导入观察器包 |
-| 按 `turn_instance_id` 关联 run 行，缺失时退回 `(generated_at, agent_id)` | 覆盖或补充 Agent 自己的 `progress_observation` |
+| 按 `turn_instance_id` 关联 run 行，缺失时退回 `(generated_at, agent_id, todo_id)` | 覆盖或补充 Agent 自己的 `progress_observation` |
 | 只计入状态为 `completed` 且所选漂移信号为 `True` 的回执 | 把 `unknown`、`abstained`、`failed`、`stale` 或缺失的回执算作漂移 |
 | 在已确认的自主重规划处停止计数并重新武装 | 暂停 Turn、打开 user gate、判定 Goal 验收 |
 | 把窗口内最新的类型化 `progress_observation` 绑定为义务的 `progress_baseline`，并把窗口内每条不同的声明作为 `progress_window` 一并携带；共享的出口策略拒绝回放其中任何一条、也拒绝只改标识但沿用其 evidence id 的 ack | 让观察器或其模型来 ack，或把改名、回放当成转向 |
@@ -59,7 +59,11 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 
 两道问题都针对检查点之间的变化而不是 after 状态整体：对已经满足验收的文件做改动是漂移，而服务验收条件或新增其证据的文档、负结果、前置测试不是。
 
-按 `turn_instance_id` 找到的回执在双方都给出 Agent 与 Todo 时必须一致；歧义的 `(generated_at, agent_id)` 回退匹配不做归属。每个被捕获的转换只有三种：**漂移**（completed、所选信号为 `true`、pin 修订）、**on-goal**（completed、信号为 `false`）或**未评估**，后者带一个类型化原因（`pending`、`failed`、`abstained`、`stale`、`undecided`、`missing`、`unattributed`、`identity_conflict`、`other_revision`、`not_evaluated`）。形成是保守的：义务需要 `drift_threshold` 个连续漂移转换，中间不能有未评估转换。存续则不然：一旦形成，更新的未评估转换既不延长也不解除义务，其数量作为 `unevaluated_transitions` 记在 trigger 上。只有已确认的重规划或更新的 completed on-goal 判定能结束它；Goal 负责人也可以把模式调回 `shadow` 或 `off`。绑定到非 pin 修订的回执是未评估的历史，永不计数。扫描范围是 Goal 保留的 run 历史（`latest_runs`），义务最多只能与该窗口同样老。
+按 `turn_instance_id` 找到的回执必须具有相同且非空的 Agent，Todo 必须完全一致（未绑定工作允许双方都缺省）。缺失身份不是通配符。同一 Turn 在回执或保留的重试历史中具有冲突的 Agent/Todo 时，不予归属；时钟不能解决身份冲突，同身份的后续评估仍按时间排序。只有真正缺少 Turn 时才允许 `(generated_at, agent_id, todo_id)` 回退，且 run 与证据两侧都必须唯一。无效或相互冲突的 direct/settlement Turn 不能降级匹配。ACK 仅作用于具名 Agent 泳道；匿名行不能结清其义务或提供进展 baseline。同一泳道有效 ACK 在配额记账行中仍然有效。
+
+这收紧了原 stage-0 `assist` 的兼容行为：身份不完整的历史回执仍可在 shadow/status 查看，但不能形成或解除义务。off 行为、模型请求、手动 revision pin 与类型化 replan 出口保持原契约。
+
+每个被捕获的转换只有三种：**漂移**（completed、所选信号为 `true`、pin 修订）、**on-goal**（completed、信号为 `false`）或**未评估**，后者带一个类型化原因（`pending`、`failed`、`abstained`、`stale`、`undecided`、`missing`、`unattributed`、`identity_conflict`、`other_revision`、`not_evaluated`）。形成是保守的：义务需要 `drift_threshold` 个连续漂移转换，中间不能有未评估转换。存续则不然：一旦形成，更新的未评估转换既不延长也不解除义务，其数量作为 `unevaluated_transitions` 记在 trigger 上。只有已确认的重规划或更新的 completed on-goal 判定能结束它；Goal 负责人也可以把模式调回 `shadow` 或 `off`。绑定到非 pin 修订的回执是未评估的历史，永不计数。扫描范围是 Goal 保留的 run 历史（`latest_runs`），义务最多只能与该窗口同样老。
 
 ## 解除
 
