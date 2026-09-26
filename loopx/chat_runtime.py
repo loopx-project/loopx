@@ -53,6 +53,12 @@ from .chat_store import (
     utc_now,
 )
 from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .attached_session import (
+    enqueue_attached_agent_turn,
+    require_current_attached_session,
+    resume_attached_agent_session,
+    select_current_attached_session,
+)
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
@@ -559,6 +565,23 @@ class ChatRuntimeController:
             route_lock = self.session_open_locks.setdefault(route_key, threading.Lock())
         with route_lock:
             latest = None
+            if not is_manager_channel(selected_channel):
+                exact_attached, strict_profile = select_current_attached_session(
+                    store=self.store,
+                    registry_path=self.registry_path,
+                    goal_id=goal_id,
+                    agent_id=agent_id,
+                    channel_id=selected_channel,
+                )
+                if strict_profile:
+                    if mode == "resume_latest" and exact_attached is not None:
+                        return exact_attached, True
+                    raise CodexChatAgentError(
+                        "Managed Chat execution is not qualified for the "
+                        "source-session profile.",
+                        error_code="source_session_managed_chat_unsupported",
+                        gate=None,
+                    )
             if mode == "resume_latest":
                 latest = self.store.latest_session(
                     goal_id=None if is_manager_channel(selected_channel) else goal_id,
@@ -868,8 +891,10 @@ class ChatRuntimeController:
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             if attachments:
                 raise ValueError("attached host session queue does not yet accept attachments")
-            return self.store.create_queued_turn(
-                session_id,
+            return enqueue_attached_agent_turn(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
                 client_turn_id=client_turn_id,
                 message=message,
                 origin="web",
@@ -923,6 +948,12 @@ class ChatRuntimeController:
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
+        if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+            session = require_current_attached_session(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
+            )
         receipt, created = self.store.create_ingress_receipt(
             session_id,
             client_ingress_id=client_ingress_id,
@@ -1050,13 +1081,22 @@ class ChatRuntimeController:
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
-        turn, created = self.store.create_queued_turn(
-            session_id,
-            client_turn_id=client_turn_id,
-            message=message,
-            origin=origin,
-        )
-        if session.get("session_mode") != CHAT_SESSION_MODE_ATTACHED:
+        if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
+            turn, created = enqueue_attached_agent_turn(
+                store=self.store,
+                registry_path=self.registry_path,
+                session_id=session_id,
+                client_turn_id=client_turn_id,
+                message=message,
+                origin=origin,
+            )
+        else:
+            turn, created = self.store.create_queued_turn(
+                session_id,
+                client_turn_id=client_turn_id,
+                message=message,
+                origin=origin,
+            )
             self.resume_session_queue(
                 session_id=session_id,
                 work_dir=work_dir,
@@ -1550,15 +1590,11 @@ class ChatRuntimeController:
                 raise KeyError("chat session was not found")
             self._check_codex_home(session)
             if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
-                if session.get("active_turn_id"):
-                    return session
-                restored = self.store.update_session(
-                    session_id,
-                    status="ready",
-                    active_turn_id=None,
-                    last_error_code=None,
+                return resume_attached_agent_session(
+                    store=self.store,
+                    registry_path=self.registry_path,
+                    session_id=session_id,
                 )
-                return restored
             with self.lock:
                 current = self.adapters.get(session_id)
                 adapter_healthy = current is not None and current.healthcheck()

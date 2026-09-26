@@ -129,6 +129,7 @@ import {
   decideProjectSessionBind,
   decideProjectSessionUnbind,
 } from "./goals/source_session_lifetime.ts";
+import { decideChatSessionLifecycle } from "./goals/chat_session_lifecycle.ts";
 import {
   evaluateDeliveryRoute,
 } from "./turn_driver/delivery_continuity.ts";
@@ -532,6 +533,7 @@ export function createEffectRuntimeHandlers(
     ["goal.source_session.bind.decide", decideProjectSessionBind],
     ["goal.source_session.unbind.decide", decideProjectSessionUnbind],
     ["goal.source_session.recreate.decide", decideGoalRecreation],
+    ["goal.chat_session.lifecycle.decide", decideChatSessionLifecycle],
     ["goal.acceptance.inspect", inspectLocalGoalAcceptance],
     ["goal.acceptance.configure", commitLocalGoalAcceptance],
     ["goal.acceptance.verify.commit", commitLocalGoalAcceptanceVerification],

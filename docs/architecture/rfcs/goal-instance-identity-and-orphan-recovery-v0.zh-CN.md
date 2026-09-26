@@ -697,6 +697,18 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
 - **剩余 hold：** 所有结果均为 `execution_authority: false`。M3 必须先完成其余
   effect owner 资格化，才能开放既有项目 activation 或 global routing。
 
+### 2026-09-26：M3 attached-host Chat 候选
+
+- **基线：** `9849366c6`。
+- **候选实现：** attached Chat Session 绑定当前精确 GoalRef；enqueue、resume
+  与新 claim 在 M2 lifetime guard 内重新校验。迟到结果只有在持久化 claim
+  admission 仍与历史 Session 一致时才能完成。
+- **兼容性：** 非 source profile 保留既有 writer、lookup、broker payload 与
+  序列化字节；客户端不提交 `goal_instance_id`。
+- **剩余 hold：** 本切片只资格化 `attached_host_chat_session`。Managed
+  provider 启动和下游 host effect 仍受独立 `first_party_host_runtime` 行与
+  M3 总 activation hold 阻断。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | Owner／批准 | 替代方案 | 变更的规范章节 |

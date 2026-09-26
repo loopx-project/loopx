@@ -768,6 +768,20 @@ promotion retain their own acceptance. No new paid cohort or soak is authorized.
   qualify the remaining effect owners before existing-project activation or
   global routing can open.
 
+### 2026-09-26: M3 attached-host Chat candidate
+
+- **Baseline:** `9849366c6`.
+- **Proposed:** Bind attached Chat sessions to the current exact GoalRef and
+  recheck it for enqueue, resume, and new claims under the M2 lifetime guard.
+  A delayed result may complete only when its persisted claim admission still
+  matches the historical session.
+- **Compatibility:** Non-source profiles keep the existing writers, lookup,
+  broker payloads, and serialized bytes. Clients do not submit
+  `goal_instance_id`.
+- **Remaining hold:** This qualifies only `attached_host_chat_session`.
+  Managed provider startup and downstream host effects remain blocked by the
+  separate `first_party_host_runtime` row and the overall M3 activation hold.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

@@ -49,6 +49,7 @@
     "loopx/control_plane/goals/shared_goal_alignment.ts",
     "loopx/control_plane/goals/goal_amendment_proposal.ts",
     "loopx/control_plane/goals/goal_instance_identity.ts",
+    "loopx/control_plane/goals/chat_session_lifecycle.ts",
     "loopx/control_plane/quota/settlement_workspace_causality.ts",
     "loopx/control_plane/quota/settlement_readback.ts",
     "loopx/control_plane/quota/heartbeat_receipt_identity.ts",
@@ -156,6 +157,7 @@
     "tests/control_plane_ts/replan_history.test.ts",
     "tests/control_plane_ts/goal_amendment_proposal.test.ts",
     "tests/control_plane_ts/goal_instance_identity.test.ts",
+    "tests/control_plane_ts/chat_session_lifecycle.test.ts",
     "tests/control_plane_ts/test_python_runtime.test.ts"
   ]
 }
