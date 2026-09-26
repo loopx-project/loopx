@@ -102,6 +102,14 @@ def assert_sync_reports_write_denied(root: Path) -> None:
     assert result["wrote"] is False, result
     assert result["global_registry_writability"]["ok"] is False, result
     assert result["requires_global_registry_repair"] is True, result
+    recovered = sync_project_registry_to_global(
+        registry_path=registry,
+        runtime_root_override=None,
+        goal_id=GOAL_ID,
+        dry_run=False,
+    )
+    assert recovered["ok"] is True and recovered["wrote"] is True, recovered
+    assert only_goal(runtime / "registry.global.json")["id"] == GOAL_ID
 
 
 def assert_connect_fails_without_partial_local_state(root: Path) -> None:
