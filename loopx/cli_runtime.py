@@ -374,9 +374,24 @@ def main(argv: list[str] | None = None) -> int:
 		print(render_concise_help(sys.argv[0] if argv is None else "loopx"), end="")
 		return 0
 	command = _top_level_command(raw_argv)
-	from .usage_ping import maybe_schedule
+	from .usage_ping import begin, finish
 
-	maybe_schedule([command] if command else [])
+	ticket = begin(command or "")
+	code = 1
+	error = None
+	try:
+		code = _run_command(command, raw_argv)
+		return code
+	except BaseException as exc:
+		error = exc
+		if isinstance(exc, SystemExit):
+			code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+		raise
+	finally:
+		finish(ticket, command or "", code, error)
+
+
+def _run_command(command: str | None, raw_argv: list[str]) -> int:
 	if command in _SELECTED_COMMANDS:
 		try:
 			args = _build_selected_parser(command).parse_args(raw_argv)

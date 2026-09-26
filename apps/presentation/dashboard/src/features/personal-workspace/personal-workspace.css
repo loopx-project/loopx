@@ -1817,3 +1817,10 @@
   .personal-run-row > .personal-row-status { display: inline-flex; }
   .personal-run-row .personal-row-copy strong, .personal-run-row .personal-row-copy small { overflow-wrap: anywhere; white-space: normal; }
 }
+
+/* Telemetry controls need room for the disclosure and keyboard-accessible opt-out. */
+.personal-usage-statistics { max-height: min(440px, 60dvh); }
+.personal-usage-statistics label { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; }
+.personal-usage-statistics > p { padding-left: 0; overflow-wrap: anywhere; }
+.personal-usage-statistics button { margin-block: 8px; }
+.personal-usage-statistics pre { max-height: 180px; overflow: auto; font-size: 12px; }

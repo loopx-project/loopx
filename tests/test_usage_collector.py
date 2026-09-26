@@ -25,7 +25,7 @@ def test_usage_collector_node_suite_passes():
     if node is None:
         pytest.skip("node with node:sqlite is required for the collector suite")
     result = subprocess.run(
-        [node, "--no-warnings", "--test", str(COLLECTOR_TEST)],
+        [node, "--no-warnings", "--experimental-strip-types", "--test", str(COLLECTOR_TEST)],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,

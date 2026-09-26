@@ -2065,3 +2065,15 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
     }),
   );
 }
+
+const usageStatisticsSchema = z.object({
+  consent: z.enum(["default", "enabled", "disabled"]),
+  sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
+  policy: z.string(), notice_required: z.boolean(),
+  next_payload: z.unknown(), aggregate_preview: z.unknown(),
+});
+export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
+export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {
+  return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
+    enabled === undefined ? undefined : { method: "POST", body: JSON.stringify({ enabled }) }));
+}

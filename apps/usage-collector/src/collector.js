@@ -1,3 +1,4 @@
+import { validAggregate, validPing, recordAggregate, aggregateStats } from "./basic-usage.ts";
 // Pure request handling for the LoopX usage collector. worker.js binds it to
 // Cloudflare; tests bind it to an in-memory database.
 
@@ -69,11 +70,11 @@ export async function recordPing(db, ping, day) {
     db.prepare("INSERT OR IGNORE INTO installs (install_id, first_day) VALUES (?1, ?2)").bind(ping.install_id, day),
     db
       .prepare(
-        "INSERT INTO pings (day, install_id, version, os, python, channel) VALUES (?1, ?2, ?3, ?4, ?5, ?6) " +
+        "INSERT INTO pings (day, install_id, version, os, python, channel, arch) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) " +
           "ON CONFLICT (day, install_id) DO UPDATE SET version = excluded.version, os = excluded.os, " +
-          "python = excluded.python, channel = excluded.channel",
+          "python = excluded.python, channel = excluded.channel, arch = excluded.arch",
       )
-      .bind(day, ping.install_id, ping.version, ping.os, ping.python, ping.channel),
+      .bind(day, ping.install_id, ping.version, ping.os, ping.python, ping.channel, ping.arch ?? "other"),
   ]);
 }
 
@@ -100,7 +101,7 @@ export async function buildStats(db, day) {
   const activeByMonth = byMonth(active);
   const freshByMonth = byMonth(fresh);
   const breakdown = {};
-  for (const column of ["version", "os", "channel"]) {
+  for (const column of ["version", "os", "channel", "arch"]) {
     // Latest attribute per installation this month, then count installations.
     const rows = await db
       .prepare(
@@ -116,7 +117,7 @@ export async function buildStats(db, day) {
     schema: "loopx_usage_stats_v0",
     generated_on: day,
     definition:
-      "Counts opted-in installations only. monthly_active: distinct installation ids with at least one ping " +
+      "Counts reporting installations only; defaults and suppression vary by client version. monthly_active: distinct installation ids with at least one ping " +
       "in the calendar month (UTC). new_installs: ids first seen that month. Buckets under " +
       `${MIN_BUCKET} installations are merged into "other".`,
     rolling_30d_active: rolling?.n ?? 0,
@@ -134,6 +135,7 @@ export async function purge(db, day) {
   const cutoff = shiftDays(day, -RETENTION_DAYS);
   await db.batch([
     db.prepare("DELETE FROM pings WHERE day < ?1").bind(cutoff),
+    db.prepare("DELETE FROM usage_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM installs WHERE install_id NOT IN (SELECT DISTINCT install_id FROM pings)"),
   ]);
 }
@@ -141,18 +143,47 @@ export async function purge(db, day) {
 export async function handle(request, db, now = new Date()) {
   const url = new URL(request.url);
   const day = utcDay(now);
-  if (url.pathname === "/v0/ping") {
+  if (url.pathname === "/v1/aggregate-stats") {
+    if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+    return json(await aggregateStats(db, shiftDays(day, -29)), 200, { "cache-control": "public, max-age=3600" });
+  }
+  if (["/v0/ping", "/v1/ping", "/v1/aggregate"].includes(url.pathname)) {
     if (request.method !== "POST") return json({ error: "method not allowed" }, 405, { allow: "POST" });
     if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) {
       return json({ error: "content-type must be application/json" }, 415);
     }
-    const raw = await request.text();
-    if (new TextEncoder().encode(raw).length > MAX_BODY_BYTES) return json({ error: "body too large" }, 413);
+    const limit = url.pathname === "/v1/aggregate" ? 16384 : MAX_BODY_BYTES;
+    // Bound streaming reads too: Content-Length can be absent or untrusted.
+    const reader = request.body?.getReader();
+    if (!reader) return json({ error: "missing body" }, 400);
+    const chunks = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) { await reader.cancel(); return json({ error: "body too large" }, 413); }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const raw = new TextDecoder().decode(bytes);
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
       return json({ error: "invalid JSON" }, 400);
+    }
+    if (url.pathname === "/v1/aggregate") {
+      if (!validAggregate(parsed)) return json({ error: "invalid aggregate" }, 400);
+      await recordAggregate(db, parsed, day);
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname === "/v1/ping") {
+      if (!validPing(parsed)) return json({ error: "invalid ping" }, 400);
+      await recordPing(db, parsed, day);
+      return new Response(null, { status: 204 });
     }
     const { ping, error } = validatePing(parsed);
     if (error) return json({ error }, 400);

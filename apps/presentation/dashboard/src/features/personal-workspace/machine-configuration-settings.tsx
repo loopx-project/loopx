@@ -1,3 +1,4 @@
+import { UsageStatisticsSettings } from "./usage-statistics-settings";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Code2, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 
@@ -340,18 +341,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
           <summary><ShieldCheck aria-hidden size={17} />{t("machine.liveDefault")}</summary>
           <p>{t("machine.liveDefaultDescription")}</p>
         </details>
-        {section === "other" ? (
-          <details className="personal-capability-scope-note">
-            <summary><ShieldCheck aria-hidden size={17} />{locale === "zh-CN" ? "帮助改进 LoopX：匿名使用统计（自愿开启）" : "Help improve LoopX: optional anonymous usage"}</summary>
-            <p>{locale === "zh-CN"
-              ? "默认关闭。开启后每天最多发送一次随机安装 ID、LoopX 版本、系统类型、Python 版本和安装渠道；不发送项目、Goal、路径或命令。此选择影响这台机器后续的 LoopX 命令。"
-              : "Off by default. If enabled, send a random installation ID, LoopX version, OS family, Python version and install channel at most once daily. No projects, Goals, paths or commands. Your choice applies to future LoopX commands on this machine."}</p>
-            <p>{locale === "zh-CN" ? "机器所有者在终端开启：" : "Owner opt-in:"} <code>loopx usage-ping enable</code> · {locale === "zh-CN" ? "检查：" : "Inspect:"} <code>loopx usage-ping status</code> · {locale === "zh-CN" ? "关闭并删除 ID：" : "Disable and forget ID:"} <code>loopx usage-ping disable</code></p>
-            <p><a href={locale === "zh-CN"
-              ? "https://github.com/loopx-project/loopx/blob/main/docs/reference/usage-ping.zh-CN.md"
-              : "https://github.com/loopx-project/loopx/blob/main/docs/reference/usage-ping.md"} target="_blank" rel="noreferrer">{locale === "zh-CN" ? "隐私与收集服务说明" : "Privacy and collector details"}</a></p>
-          </details>
-        ) : null}
+        {section === "other" ? <UsageStatisticsSettings /> : null}
       </div>
 
       {/* The catalog workbench is the only flexible block on this surface. It

@@ -85,7 +85,7 @@ test("one row per installation per day; first day kept; only payload fields stor
   const rows = db.raw.all("SELECT * FROM pings ORDER BY day");
   assert.equal(rows.length, 2);
   assert.equal(rows[0].version, "1.2.1");
-  assert.deepEqual(Object.keys(rows[0]).sort(), ["channel", "day", "install_id", "os", "python", "version"]);
+  assert.deepEqual(Object.keys(rows[0]).sort(), ["arch", "channel", "day", "install_id", "os", "python", "version"]);
   assert.deepEqual(db.raw.all("SELECT * FROM installs"), [{ install_id: id(1), first_day: "2026-10-01" }]);
 });
 
@@ -131,4 +131,34 @@ test("purge drops rows past retention and orphaned installs", async () => {
 
 test("unknown paths are 404", async () => {
   assert.equal((await handle(new Request("https://collector.example/"), d1())).status, 404);
+});
+
+
+test("v1 heartbeat has architecture; aggregates reject identifiers and store only counters", async () => {
+  const db = d1();
+  const request = (path, value) => new Request("https://collector.example" + path, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value),
+  });
+  const heartbeat = { ...ping(1), schema: "loopx_usage_ping_v1", arch: "arm64" };
+  assert.equal((await handle(request("/v1/ping", heartbeat), db)).status, 204);
+  const row = { feature: "todo", outcome: "ok", duration: "lt_1s", error: "none", count: 6 };
+  const aggregate = { schema: "loopx_usage_aggregate_v1", counters: [row] };
+  assert.equal((await handle(request("/v1/aggregate", { ...aggregate, install_id: id(1) }), db)).status, 400);
+  assert.equal((await handle(request("/v1/aggregate", aggregate), db)).status, 204);
+  assert.equal((await handle(request("/v1/aggregate", aggregate), db)).status, 204);
+  assert.equal(db.raw.get("SELECT count FROM usage_counts").count, 12);
+  assert.deepEqual(Object.keys(db.raw.get("SELECT * FROM usage_counts")).sort(), ["count", "day", "duration", "error", "feature", "outcome"]);
+  assert.equal(db.raw.get("SELECT arch FROM pings").arch, "arm64");
+  const stats = await (await handle(new Request("https://collector.example/v1/aggregate-stats"), db)).json();
+  assert.deepEqual(stats.totals.feature, { todo: 12 });
+  assert.equal("install_id" in stats, false);
+});
+
+test("existing v0 database upgrades without deleting heartbeat history", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE pings (day TEXT, install_id TEXT, version TEXT, os TEXT, python TEXT, channel TEXT, PRIMARY KEY(day, install_id)); INSERT INTO pings VALUES ('2026-09-26', 'old', '1.2.0', 'linux', '3.13', 'pip');");
+  db.exec(readFileSync(new URL("../migrations/0001-basic-usage.sql", import.meta.url), "utf8"));
+  assert.equal(db.prepare("SELECT arch FROM pings").get().arch, "other");
+  assert.equal(db.prepare("SELECT count(*) n FROM pings").get().n, 1);
+  db.close();
 });

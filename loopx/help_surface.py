@@ -31,7 +31,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {
                 "command": "loopx usage-ping [status|enable|disable]",
-                "purpose": "Show or change the off-by-default anonymous daily usage ping and its exact payload.",
+                "purpose": "Show or change the default-on basic usage statistics and its exact payload.",
             },
             {
                 "command": "loopx slash-commands --install",
