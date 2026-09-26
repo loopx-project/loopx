@@ -297,6 +297,20 @@ broader actor lifecycle or authority model than the implementation provides.
 
 ## Engineering Quality And Right-Sized Scope
 
+### TypeScript-First Implementation
+
+Prefer TypeScript for new or refactored domain-neutral LoopX capabilities,
+control-plane and orchestration logic, capability composition, context/memory
+composition, and shared projections. Follow the accepted
+[TypeScript migration RFC](docs/architecture/rfcs/typescript-control-plane-migration-v0.md)
+and reuse the existing typed owner. Do not introduce a parallel Python decision
+owner. Stable domain providers, specialized computation and transport adapters
+may remain Python with an explicit placement rationale; this preference does
+not require unrelated language-only rewrites or make a full migration a
+prerequisite for a bounded user outcome.
+
+尽量用 TypeScript 实现新增或重构的 LoopX 通用能力、控制面、编排、能力组合、上下文/记忆组合及共享投影，遵循 TS 重构 RFC 并复用既有类型化 owner，不新增平行的 Python 决策源。稳定领域 provider、专门计算与传输适配器可保留 Python，但须说明归属理由；不因语言偏好扩大无关重写，也不把全量迁移设为有界用户结果的前置条件。
+
 ### Source-Checkout Python Entry Points
 
 Run source development and validation from the intended worktree root with
