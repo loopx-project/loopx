@@ -222,7 +222,7 @@ The matching source anchors are
 [`event_writeback.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/event_writeback.py),
 [`local_state_write_correctness.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py),
 [`authority_store.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts),
-[`coordination/executor.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/executor.py),
+[`coordination/authority_core.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_core.py),
 and [`settlement.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py).
 
 The real pattern is “read basis -> propose -> validate/guard -> guarded commit -> event or receipt ->
