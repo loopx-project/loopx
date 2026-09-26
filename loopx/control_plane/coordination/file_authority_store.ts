@@ -50,6 +50,9 @@ interface VerifiedDocument {
   document?: FileAuthorityJournal;
 }
 let verifiedDocument: VerifiedDocument | null = null;
+// Only identical immutable input bytes share in-flight verification. Failed
+// proofs are removed too; neither a path nor a pending promise grants authority.
+const pendingVerification = new Map<string, Promise<FileAuthorityJournal>>();
 
 function documentDigest(raw: Uint8Array): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -153,7 +156,7 @@ function decodeDocument(
   value: unknown,
   goalId: string,
   storeIdentity: string,
-): FileAuthorityJournal {
+): Promise<FileAuthorityJournal> {
   return FileAuthorityJournal.decode(value, goalId, storeIdentity, (previous, transaction) =>
     fileAuthorityRevision(goalId, storeIdentity, previous, transaction));
 }
@@ -199,7 +202,7 @@ export class FileAuthorityStore implements AuthorityStore {
   protected async archiveRenamed(): Promise<void> {}
 
   /** Full-history verification seam; unchanged byte-identical reads may reuse it. */
-  protected decodeStoredDocument(value: unknown, identity: string): FileAuthorityJournal {
+  protected decodeStoredDocument(value: unknown, identity: string): Promise<FileAuthorityJournal> {
     return decodeDocument(value, this.goalId, identity);
   }
 
@@ -272,7 +275,17 @@ export class FileAuthorityStore implements AuthorityStore {
           (!requireHistory || verifiedDocument.document !== undefined)) {
         return verifiedDocument;
       }
-      const document = this.decodeStoredDocument(JSON.parse(raw.toString("utf8")), identity);
+      const key = JSON.stringify([this.path, identity, digest]);
+      let proof = pendingVerification.get(key);
+      if (!proof) {
+        proof = this.decodeStoredDocument(JSON.parse(raw.toString("utf8")), identity);
+        pendingVerification.set(key, proof);
+      }
+      let document: FileAuthorityJournal;
+      try { document = await proof; }
+      finally {
+        if (pendingVerification.get(key) === proof) pendingVerification.delete(key);
+      }
       return rememberVerifiedDocument(this.path, identity, raw, digest, document,
         this.fullDocumentCacheLimitBytes());
     } catch (error) {
@@ -473,7 +486,7 @@ export class FileAuthorityStore implements AuthorityStore {
         const identity = await this.readStoreIdentity(false);
         let archived: FileAuthorityJournal | null = null;
         try {
-          archived = decodeDocument(
+          archived = await decodeDocument(
             JSON.parse(await readFile(archivePath, "utf8")),
             this.goalId,
             identity,

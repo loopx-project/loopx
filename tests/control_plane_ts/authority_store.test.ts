@@ -249,3 +249,32 @@ test("ambiguous file commits reconcile only from durable receipt readback", asyn
   assert.equal(loaded.status, "loaded");
   if (loaded.status === "loaded") assert.equal(loaded.head.authority_revision, 1);
 });
+
+test("concurrent cold reads share only the same exact-byte proof and recover after failure", async t => {
+  const {root, store} = await fixture(t);
+  assert.equal((await store.commitAuthority(commit(null, "operation-shared", 1, 1))).status, "applied");
+  const valid = await readFile(store.path, "utf8");
+  await writeFile(store.path, valid + "\n");
+  class CountingStore extends FileAuthorityStore {
+    static validations = 0;
+    protected override async decodeStoredDocument(value: unknown, identity: string) {
+      CountingStore.validations++;
+      // Hold the asynchronous proof open while sibling handles enter the read.
+      await new Promise(resolve => setTimeout(resolve, 25));
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  const readers = Array.from({length: 6}, () => new CountingStore(root, "goal-a"));
+  const first = await Promise.all(readers.map(s => s.readReceipt("operation-shared")));
+  assert.ok(first.every(r => r.status === "found"));
+  assert.equal(CountingStore.validations, 1);
+  const corrupt = JSON.parse(valid); corrupt.committed[0].provider_revision = "corrupt";
+  await writeFile(store.path, JSON.stringify(corrupt));
+  assert.ok((await Promise.all(readers.map(s => s.loadAuthority()))).every(r => r.status === "failed"));
+  assert.equal(CountingStore.validations, 2);
+  assert.equal((await readers[0]!.loadAuthority()).status, "failed");
+  assert.equal(CountingStore.validations, 3, "a rejected promise must not remain in the in-flight registry");
+  await writeFile(store.path, valid + "\n\n");
+  assert.equal((await readers[0]!.loadAuthority()).status, "loaded");
+  assert.equal(CountingStore.validations, 4);
+});

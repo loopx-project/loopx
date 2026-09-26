@@ -1,5 +1,6 @@
 /** File's physical journal codec. Logical revisions, receipts and transactions
  * stay unchanged; only repeated projections become checkpoints and deltas. */
+import {setImmediate as yieldToRuntime} from "node:timers/promises";
 import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStoreCommit, AuthorityStoreCommittedTransaction} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
@@ -73,7 +74,7 @@ export class FileAuthorityJournal {
     this.operations = new Map(rows.map(row => [row.operation_id, row]));
   }
 
-  static decode(value: unknown, goal: string, identity: string, revisionFor: JournalRevision): FileAuthorityJournal {
+  static async decode(value: unknown, goal: string, identity: string, revisionFor: JournalRevision): Promise<FileAuthorityJournal> {
     if (!isAuthorityJsonObject(value) || !hasExactAuthorityKeys(value, HEADER_KEYS) ||
         value.schema_version !== FILE_AUTHORITY_JOURNAL_SCHEMA) {
       return invalid("schema mismatch; run loopx authority-archive upgrade --execute before opening this store");
@@ -87,6 +88,10 @@ export class FileAuthorityJournal {
         parseAuthorityCursor(cursor) !== BigInt(value.committed.length)) return invalid("lineage is invalid");
     const rows: StoredCommit[] = [], operations = new Set<string>();
     let previous: JsonObject | null = null, previousRevision: string | null = null;
+    // Historical verification is CPU work inside the shared Effect server.
+    // Yield between complete transactions, never publish a partially verified
+    // journal. Promise.resolve() would only drain microtasks and starve sockets.
+    let sliceStart = performance.now();
     for (const [index, raw] of value.committed.entries()) {
       if (!isAuthorityJsonObject(raw) || !hasExactAuthorityKeys(raw,
         ["cursor", "provider_revision", "operation_id", "events", "receipts", "state"])) {
@@ -104,6 +109,10 @@ export class FileAuthorityJournal {
       const {projection, ...entry} = transaction;
       rows.push({...entry, state});
       previous = projection; previousRevision = transaction.provider_revision;
+      if (performance.now() - sliceStart >= 8) {
+        await yieldToRuntime();
+        sliceStart = performance.now();
+      }
     }
     if (rows.at(-1)!.cursor !== cursor || previousRevision !== revision ||
         !canonicalAuthorityBytes(previous).equals(canonicalAuthorityBytes(head))) return invalid("head lineage is invalid");
@@ -123,8 +132,8 @@ export class FileAuthorityJournal {
 
   /** Migration boundary: callers supply fully verified logical transactions.
    * Decode the resulting wire format again before it can be adopted. */
-  static fromTransactions(goal: string, identity: string, rows: readonly AuthorityStoreCommittedTransaction[],
-    revisionFor: JournalRevision): FileAuthorityJournal {
+  static async fromTransactions(goal: string, identity: string, rows: readonly AuthorityStoreCommittedTransaction[],
+    revisionFor: JournalRevision): Promise<FileAuthorityJournal> {
     let previous: JsonObject | null = null;
     const compact = rows.map(transaction => {
       const encoded = retain(transaction, previous);
