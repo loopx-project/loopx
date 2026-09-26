@@ -11,7 +11,18 @@ from ..global_registry import (
     sync_project_registry_to_global,
 )
 from ..history import load_registry
-from ..paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from ..local_state_migration import (
+    migrate_local_state,
+    render_local_state_migration_markdown,
+    rollback_local_state_migration,
+)
+from ..paths import (
+    DEFAULT_RUNTIME_ROOT,
+    LEGACY_RUNTIME_ROOT as LEGACY_LOCAL_RUNTIME_ROOT,
+    global_registry_path,
+    resolve_runtime_root,
+    select_default_runtime_root,
+)
 from ..project_uninstall import render_project_uninstall_markdown, uninstall_project
 from ..runtime import archive_runtime_goal, render_archive_runtime_markdown
 from ..state_migration import (
@@ -35,12 +46,24 @@ REGISTRY_LIFECYCLE_COMMANDS = {
     "uninstall-project",
     "sync-global",
     "migrate-state",
+    "migrate-local-state",
 }
 
 
 def register_registry_lifecycle_commands(
     subparsers: argparse._SubParsersAction,
 ) -> None:
+    local_migration = subparsers.add_parser(
+        "migrate-local-state",
+        help="Preview or explicitly migrate default .codex LoopX state to .loopx; supports verified rollback.",
+    )
+    local_migration.add_argument("--source-runtime-root", type=Path, help="Legacy runtime root; defaults to ~/.codex/loopx.")
+    local_migration.add_argument("--target-runtime-root", type=Path, help="New runtime root; defaults to ~/.loopx.")
+    local_migration.add_argument("--backup-dir", type=Path, help="Private backup directory; defaults to a content-bound directory beside the source.")
+    local_migration.add_argument("--expected-plan-id", help="Exact plan_id from a fresh dry-run preview; required with --execute.")
+    local_migration.add_argument("--rollback-receipt", type=Path, help="Preview or roll back a completed migration receipt.")
+    local_migration.add_argument("--execute", action="store_true", help="Apply the previewed migration or verified rollback.")
+
     archive_runtime_parser = subparsers.add_parser(
         "archive-runtime",
         help="Move an obsolete runtime goal directory into the archive area. Defaults to dry-run.",
@@ -93,7 +116,7 @@ def register_registry_lifecycle_commands(
     uninstall_project_parser.add_argument(
         "--archive-state",
         action="store_true",
-        help="Move each selected project-local .codex/goals/<goal-id> state directory into .loopx/archived-project-state/.",
+        help="Archive each selected registered Goal state directory into .loopx/archived-project-state/.",
     )
     uninstall_project_parser.add_argument(
         "--remove-empty-registry",
@@ -134,7 +157,7 @@ def register_registry_lifecycle_commands(
     )
     migrate_state_parser.add_argument(
         "--target-runtime-root",
-        help="LoopX runtime root. Defaults to --runtime-root or ~/.codex/loopx.",
+        help="LoopX runtime root. Defaults to --runtime-root or ~/.loopx.",
     )
     migrate_goal_selector = migrate_state_parser.add_mutually_exclusive_group(required=True)
     migrate_goal_selector.add_argument(
@@ -191,6 +214,37 @@ def handle_registry_lifecycle_command(
 ) -> int | None:
     if args.command not in REGISTRY_LIFECYCLE_COMMANDS:
         return None
+
+    if args.command == "migrate-local-state":
+        try:
+            if args.rollback_receipt and any((
+                args.source_runtime_root,
+                args.target_runtime_root,
+                args.backup_dir,
+                args.expected_plan_id,
+                args.runtime_root,
+            )):
+                raise ValueError("--rollback-receipt cannot be combined with source, target, backup, or plan overrides")
+            if args.source_runtime_root and args.runtime_root:
+                raise ValueError("select one source root using --source-runtime-root or --runtime-root")
+            if args.rollback_receipt:
+                payload = rollback_local_state_migration(
+                    args.rollback_receipt, execute=bool(args.execute)
+                )
+            else:
+                payload = migrate_local_state(
+                    source_runtime_root=args.source_runtime_root or (
+                        Path(args.runtime_root) if args.runtime_root else LEGACY_LOCAL_RUNTIME_ROOT
+                    ),
+                    target_runtime_root=args.target_runtime_root or DEFAULT_RUNTIME_ROOT,
+                    backup_dir=args.backup_dir,
+                    expected_plan_id=args.expected_plan_id,
+                    execute=bool(args.execute),
+                )
+        except Exception as exc:
+            payload = {"ok": False, "schema_version": "loopx_local_state_migration_v1", "dry_run": not bool(args.execute), "error": str(exc)}
+        print_payload(payload, args.format, render_local_state_migration_markdown)
+        return 0 if payload.get("ok") else 1
 
     if args.command == "archive-runtime":
         try:
@@ -294,7 +348,7 @@ def handle_registry_lifecycle_command(
             target_runtime_root = (
                 Path(args.target_runtime_root).expanduser()
                 if args.target_runtime_root
-                else (Path(args.runtime_root).expanduser() if args.runtime_root else DEFAULT_RUNTIME_ROOT)
+                else (Path(args.runtime_root).expanduser() if args.runtime_root else select_default_runtime_root())
             )
             selected_goal_ids = (
                 legacy_registry_goal_ids(Path(args.legacy_registry))
@@ -344,7 +398,7 @@ def handle_registry_lifecycle_command(
                 "legacy_registry": args.legacy_registry,
                 "target_registry": str(registry_path),
                 "legacy_runtime_root": args.legacy_runtime_root,
-                "target_runtime_root": args.target_runtime_root or args.runtime_root or str(DEFAULT_RUNTIME_ROOT),
+                "target_runtime_root": args.target_runtime_root or args.runtime_root or str(select_default_runtime_root()),
                 "selected_goal_ids": args.goal_id or ([] if not getattr(args, "all_goals", False) else ["<all-goals>"]),
                 "error": str(exc),
                 **({"error_code": exc.code, **getattr(exc, "payload", {})} if isinstance(getattr(exc, "code", None), str) else {}),

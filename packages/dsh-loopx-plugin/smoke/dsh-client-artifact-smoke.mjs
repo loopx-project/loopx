@@ -53,6 +53,7 @@ const packedStaticEntries = new Set([
   'package/lib/types/driver.d.ts',
   'package/lib/types/goalbar/connection-rpc.d.ts',
   'package/lib/types/goalbar/events.d.ts',
+  'package/lib/types/goalbar/project-registry-wire.d.ts',
   'package/lib/types/goalbar/protocol.d.ts',
   'package/lib/types/goalbar/read-model.d.ts',
   'package/lib/types/goalbar/service.d.ts',

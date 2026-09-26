@@ -1,0 +1,25 @@
+[
+  {
+    "schema_version": "loopx_project_registry_envelope_v1",
+    "minimum_writer_protocol": "goal_instance_v1",
+    "payload_sha256": "sha256:701242ccd7a668c02de2aef1d72abf923d9f6504f4518277a639fa5f66635098"
+  },
+  {
+    "common_runtime_root": "legacy-runtime",
+    "goals": [
+      {
+        "id": "goal-fixture",
+        "state_file": ".codex/goals/goal-fixture/ACTIVE_GOAL_STATE.md"
+      }
+    ],
+    "meta": {
+      "label": "目标",
+      "fraction": 1.0,
+      "large": 123456789012345678901,
+      "nested": {
+        "z": 2,
+        "a": 1
+      }
+    }
+  }
+]

@@ -71,7 +71,7 @@ SPEND_MUST_HAVE = (
     "普通 state-only refresh 不能替代它",
     "然后原样（不加管道或过滤）append 一次 quota spend",
     "不能重跑",
-    'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id',
+    'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id',
     "--source adapter --execute",
     "在 spend 后仍需状态更新",
     "不要在 spend 后追加另一个 accountable progress refresh",
@@ -83,7 +83,7 @@ HEARTBEAT_PROMPT_MUST_HAVE = (
     "如果要给这个项目设置 recurring Codex App heartbeat",
     "默认每 3 分钟一次",
     "loopx heartbeat-prompt",
-    "--active-state .codex/goals/",
+    "--active-state .loopx/goals/",
     "再把输出复制进 automation",
 )
 HANDOFF_MUST_HAVE = (
@@ -108,7 +108,7 @@ def assert_quota_guard(text: str) -> None:
     assert 'export PATH="$HOME/.local/bin:$PATH"' in text, text
     assert 'install_script="$HOME/loopx/scripts/install-local.sh"' in text, text
     assert "loopx doctor >/dev/null" in text, text
-    assert 'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id' in text, text
+    assert 'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id' in text, text
     assert "--runtime-profile outer_controller" in normalized, text
     positions = []
     for phrase in MUST_HAVE:
@@ -165,12 +165,12 @@ def main() -> int:
         write_scope=None,
     )
     assert payload["quota_guard_command"] == (
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
         "quota should-run --goal-id new-project-main-control "
         "--runtime-profile outer_controller"
     ), payload
     assert payload["quota_spend_command"] == (
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
         "quota spend-slot --goal-id new-project-main-control --slots 1 --source adapter --execute"
     ), payload
     assert payload["progress_refresh_command"] == (

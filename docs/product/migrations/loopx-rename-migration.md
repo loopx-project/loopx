@@ -1,6 +1,8 @@
 # LoopX Rename Migration
 
-Status: active migration plan.
+Status: historical Goal Harness rename plan. The current default paths and
+explicit legacy migration are documented in
+[Local State Path Migration](local-state-path-migration.md).
 
 LoopX is the canonical product name and `loopx` is the canonical CLI command.
 The rename is intentionally fail-fast at the product surface: new installs and
@@ -14,7 +16,7 @@ missed migration work.
 - Legacy CLI command: none. `goal-harness` is not installed as an alias.
 - Python package/import: `loopx`.
 - Local project state: `.loopx/registry.json`.
-- Global runtime state: `~/.codex/loopx`.
+- Global runtime state at the time of this rename: `~/.codex/loopx`.
 - Skill names: `loopx-project`, `loopx-pr-review`, `loopx-doc-registry`, and
   `loopx-self-repair`.
 

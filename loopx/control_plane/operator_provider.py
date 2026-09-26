@@ -44,7 +44,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..paths import DEFAULT_RUNTIME_ROOT
+from ..paths import select_default_runtime_root
 from ..registry import atomic_write_json, read_json
 from .operator_credential import (
     OPERATOR_CREDENTIAL_ENV_VARS,
@@ -90,7 +90,7 @@ def machine_runtime_root(runtime_root: Path | None = None) -> Path:
 
     if runtime_root is not None:
         return Path(runtime_root).expanduser()
-    return DEFAULT_RUNTIME_ROOT
+    return select_default_runtime_root()
 
 
 def operator_provider_store_path(runtime_root: Path | None = None) -> Path:

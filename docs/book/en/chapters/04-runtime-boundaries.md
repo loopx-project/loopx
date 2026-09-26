@@ -368,7 +368,7 @@ The project-onboarding chapter requires these directories to stay outside Git:
 
 ```text
 .loopx/
-.codex/goals/
+.loopx/goals/
 .local/
 ```
 

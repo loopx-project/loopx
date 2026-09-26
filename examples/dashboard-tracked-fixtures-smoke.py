@@ -92,8 +92,8 @@ def main() -> int:
     assert_public_safe("/tmp/loopx-dashboard-smoke", label="temporary path")
 
     for private_text in [
-        "/Users/alice/.codex/loopx/registry.global.json",
-        "/home/alice/.codex/loopx/registry.global.json",
+        "/Users/alice/.loopx/registry.global.json",
+        "/home/alice/.loopx/registry.global.json",
         r"C:\\Users\\alice\\.codex\\loopx\\registry.global.json",
         "https://code.byted.org/private/project",
         "Bearer " + "abcdef123456",

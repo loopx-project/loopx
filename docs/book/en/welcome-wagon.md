@@ -72,7 +72,7 @@ environment.
 <!-- welcome-wagon:public-private-boundary -->
 
 Never put credentials, private project names, internal links, absolute machine paths, raw transcripts,
-`.loopx/`, `.codex/goals/`, or unsanitized logs in public feedback or contributions.
+`.loopx/`, `.loopx/goals/`, or unsanitized logs in public feedback or contributions.
 
 ## A. Run LoopX Once {#run-once}
 
@@ -118,7 +118,7 @@ A successful first run should prove at least:
   Host-specific checks, first use `loopx agent-onboard --list-agent-types` to
   select the exact type, then run `loopx doctor --agent-type <agent-type>`;
 - `loopx status` shows the exact Goal, current Gate, and next Todo;
-- `.loopx/`, `.codex/goals/`, and `.local/` remain outside Git;
+- `.loopx/`, `.loopx/goals/`, and `.local/` remain outside Git;
 - the current Host loop driver is active, or the output gives an explicit manual start step;
 - Goal selection, identity takeover, credentials, and external writes stop at a Gate.
 

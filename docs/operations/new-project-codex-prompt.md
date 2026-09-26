@@ -107,14 +107,14 @@ loopx new-project-prompt \
    active state/todo，必须同时加 `--preserve-todos`。
 
 3. 确认 `.loopx/registry.json` 和
-   `.codex/goals/<STABLE_GOAL_ID>/ACTIVE_GOAL_STATE.md` 已创建或更新。
+   `.loopx/goals/<STABLE_GOAL_ID>/ACTIVE_GOAL_STATE.md` 已创建或更新。
    接入输出里不再有 onboarding 扫描、候选 todo 或自主推进选择项；首连之后状态里
    没有可执行的 agent todo。请只读核对目标文档和 registry 的 `execution_profile`，
    用中文给出 1-3 个第一个交付 todo 的候选，问我确认后，用
    `loopx todo add ...` 写入被接受的条目，再运行
    `loopx refresh-state --goal-id <STABLE_GOAL_ID>` 并汇报。在用户确认前不要开始
    delivery。
-  如果目标状态包含私有证据，把 `.loopx/` 和 `.codex/goals/`
+  如果目标状态包含私有证据，把 `.loopx/` 和 `.loopx/goals/`
   加入该项目 `.gitignore`。
    `loopx connect` 默认会同步到共享全局 registry；不要手动编辑其他
    项目的 registry。
@@ -127,7 +127,7 @@ loopx new-project-prompt \
    先问 compute guard：
 
    ```bash
-   loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <STABLE_GOAL_ID> --runtime-profile outer_controller
+   loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <STABLE_GOAL_ID> --runtime-profile outer_controller
    ```
 
    Codex App 使用紧凑别名 `--codex-app`；其他常见宿主只传一个
@@ -195,7 +195,7 @@ loopx new-project-prompt \
    ```bash
    loopx heartbeat-prompt \
      --goal-id <STABLE_GOAL_ID> \
-     --active-state .codex/goals/<STABLE_GOAL_ID>/ACTIVE_GOAL_STATE.md
+     --active-state .loopx/goals/<STABLE_GOAL_ID>/ACTIVE_GOAL_STATE.md
    ```
 
 7. 生成一个 read-only project map 或 first pre-tick run。不要启动线上任务、
@@ -237,7 +237,7 @@ loopx new-project-prompt \
    quota status 核对，不能重跑：
 
    ```bash
-   loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id <STABLE_GOAL_ID> --slots 1 --source adapter --execute
+   loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <STABLE_GOAL_ID> --slots 1 --source adapter --execute
    ```
 
    如果 dashboard 或 controller 在 spend 后仍需状态更新，再运行第 8 步不带

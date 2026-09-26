@@ -349,7 +349,7 @@ Do not infer public work from maintainer-local state. Use public surfaces:
 
 Do not create public tasks from:
 
-- `.loopx/`, `.codex/goals/`, or live active state;
+- `.loopx/`, `.loopx/goals/`, or live active state;
 - private benchmark traces, raw Agent sessions, or verifier output;
 - internal documents, production credentials, or machine paths;
 - speculative duplication of `Maintainer-owned` live runs.

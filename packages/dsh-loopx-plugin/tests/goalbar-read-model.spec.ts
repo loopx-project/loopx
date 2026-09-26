@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -17,13 +17,14 @@ const sessionId = 'dsh-session-1'
 const goalId = 'goal-one'
 const loopxAgentId = 'codex-main-control'
 const hostilePath = ['', 'sensitive-host', 'project'].join('/')
+const strictRegistryFixture = new URL('./fixtures/project-registry-strict-v1.json', import.meta.url)
 
 describe('GoalBar source revision', () => {
   it('covers existence, equal-size replacement, and the bound active state', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-revision-'))
     try {
       const registryDir = join(cwd, '.loopx')
-      const stateDir = join(cwd, '.codex', 'goals', goalId)
+      const stateDir = join(cwd, '.loopx', 'goals', goalId)
       await mkdir(registryDir, { recursive: true })
       await mkdir(stateDir, { recursive: true })
       const registry = join(registryDir, 'registry.json')
@@ -47,6 +48,81 @@ describe('GoalBar source revision', () => {
         goalId,
         loopxAgentId: 'codex-side-control',
       })).not.toBe(equalSizeReplacement)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('follows the registered legacy state and the migrated state without dual reads', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-route-'))
+    try {
+      const registry = join(cwd, '.loopx', 'registry.json')
+      const oldState = join(cwd, '.codex', 'goals', goalId, 'ACTIVE_GOAL_STATE.md')
+      const newState = join(cwd, '.loopx', 'goals', goalId, 'ACTIVE_GOAL_STATE.md')
+      await mkdir(join(cwd, '.loopx', 'goals', goalId), { recursive: true })
+      await mkdir(join(cwd, '.codex', 'goals', goalId), { recursive: true })
+      const binding = { cwd, goalId, loopxAgentId }
+      await writeFile(oldState, 'old state', 'utf8')
+      await writeFile(newState, 'new state', 'utf8')
+      await writeFile(registry, JSON.stringify({ goals: [{ id: goalId,
+        state_file: `.codex/goals/${goalId}/ACTIVE_GOAL_STATE.md` }] }), 'utf8')
+      const legacy = await computeGoalBarSourceRevision(binding)
+      await writeFile(newState, 'newer state', 'utf8')
+      expect(await computeGoalBarSourceRevision(binding)).toBe(legacy)
+      await writeFile(registry, JSON.stringify({ goals: [{ id: goalId,
+        state_file: `.loopx/goals/${goalId}/ACTIVE_GOAL_STATE.md` }] }), 'utf8')
+      const migrated = await computeGoalBarSourceRevision(binding)
+      expect(migrated).not.toBe(legacy)
+      await writeFile(newState, 'final state', 'utf8')
+      expect(await computeGoalBarSourceRevision(binding)).not.toBe(migrated)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts the Python strict registry wire form and hashes only its declared legacy state', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-strict-route-'))
+    const registry = join(cwd, '.loopx', 'registry.json')
+    const oldState = join(cwd, '.codex', 'goals', 'goal-fixture', 'ACTIVE_GOAL_STATE.md')
+    const newState = join(cwd, '.loopx', 'goals', 'goal-fixture', 'ACTIVE_GOAL_STATE.md')
+    try {
+      await mkdir(join(cwd, '.loopx', 'goals', 'goal-fixture'), { recursive: true })
+      await mkdir(join(cwd, '.codex', 'goals', 'goal-fixture'), { recursive: true })
+      const fixture = await readFile(strictRegistryFixture)
+      await writeFile(registry, fixture)
+      await writeFile(oldState, 'legacy state', 'utf8')
+      await writeFile(newState, 'decoy state', 'utf8')
+      const binding = { cwd, goalId: 'goal-fixture', loopxAgentId }
+      const before = await computeGoalBarSourceRevision(binding)
+      await writeFile(newState, 'changed decoy', 'utf8')
+      expect(await computeGoalBarSourceRevision(binding)).toBe(before)
+      await writeFile(oldState, 'changed legacy', 'utf8')
+      const changedState = await computeGoalBarSourceRevision(binding)
+      expect(changedState).not.toBe(before)
+      await writeFile(registry, Buffer.concat([fixture, Buffer.from(' ')]))
+      expect(await computeGoalBarSourceRevision(binding)).not.toBe(changedState)
+      await writeFile(registry, fixture.toString('utf8').replace('"fraction": 1.0', '"fraction": 1.00'))
+      expect(await computeGoalBarSourceRevision(binding)).toMatch(/^sha256:[0-9a-f]{64}$/u)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects tampered and duplicate-key strict registry payloads', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-strict-invalid-'))
+    try {
+      const registry = join(cwd, '.loopx', 'registry.json')
+      await mkdir(join(cwd, '.loopx'), { recursive: true })
+      const fixture = await readFile(strictRegistryFixture, 'utf8')
+      const binding = { cwd, goalId: 'goal-fixture', loopxAgentId }
+      await writeFile(registry, fixture.replace('goal-fixture', 'other-goal'), 'utf8')
+      await expect(computeGoalBarSourceRevision(binding)).rejects.toThrow('digest')
+      await writeFile(registry, fixture.replace(
+        '"id": "goal-fixture",', '"id": "goal-fixture", "id": "goal-fixture",',
+      ), 'utf8')
+      await expect(computeGoalBarSourceRevision(binding)).rejects.toThrow('duplicate')
+      await writeFile(registry, fixture.replace('envelope_v1', 'envelope_v2'), 'utf8')
+      await expect(computeGoalBarSourceRevision(binding)).rejects.toThrow('lifecycle-only')
     } finally {
       await rm(cwd, { recursive: true, force: true })
     }

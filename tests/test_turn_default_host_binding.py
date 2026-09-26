@@ -22,7 +22,7 @@ from loopx.control_plane.turn_driver.host_binding import (
 @pytest.fixture(autouse=True)
 def isolated_machine_credential_store(tmp_path, monkeypatch):
     """CLI default tests must not read the developer machine's provider store."""
-    monkeypatch.setattr(operator_provider, "DEFAULT_RUNTIME_ROOT", tmp_path / "machine")
+    monkeypatch.setattr(operator_provider, "select_default_runtime_root", lambda: tmp_path / "machine")
 
 
 def test_managed_credential_selects_the_managed_default_host():

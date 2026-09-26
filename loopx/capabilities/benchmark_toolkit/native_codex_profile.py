@@ -32,7 +32,10 @@ NATIVE_CODEX_PROFILE_REQUIRED_SKILL_IDS = (
     "loopx",
     *PACKAGED_HOST_SKILL_IDS,
 )
-_DEFAULT_GLOBAL_REGISTRY_TOKEN = "$HOME/.codex/loopx/registry.global.json"
+_DEFAULT_GLOBAL_REGISTRY_TOKENS = (
+    "$HOME/.loopx/registry.global.json",
+    "$HOME/.codex/loopx/registry.global.json",  # Explicit legacy route before migration.
+)
 _SAFE_RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _SAFE_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INSTALL_ENV_PASSTHROUGH = (
@@ -382,10 +385,9 @@ def render_native_codex_goal_prompt(
     runtime_registry_bound = runtime_registry_path is None
     if runtime_registry_path is not None:
         runtime_registry = str(Path(runtime_registry_path).expanduser().resolve())
-        if _DEFAULT_GLOBAL_REGISTRY_TOKEN in task_body:
-            task_body = task_body.replace(
-                _DEFAULT_GLOBAL_REGISTRY_TOKEN, runtime_registry
-            )
+        if any(token in task_body for token in _DEFAULT_GLOBAL_REGISTRY_TOKENS):
+            for token in _DEFAULT_GLOBAL_REGISTRY_TOKENS:
+                task_body = task_body.replace(token, runtime_registry)
             runtime_registry_bound = runtime_registry in task_body
         else:
             # Explicit runtime-root commands resolve their own global registry;

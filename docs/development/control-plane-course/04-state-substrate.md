@@ -664,7 +664,7 @@ payload["agent_management_projection"] = (
 选一个 todo id，沿下面四处追同一个稳定标识：
 
 ```bash
-rg -n "<todo-id>" .codex/goals .loopx "$HOME/.codex/loopx" 2>/dev/null
+rg -n "<todo-id>" .loopx .codex/goals "$HOME/.loopx" "$HOME/.codex/loopx" 2>/dev/null
 loopx --format json todo list --goal-id <goal-id>
 loopx --format json status --goal-id <goal-id>
 loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>

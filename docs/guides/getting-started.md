@@ -36,14 +36,15 @@ Then run `loopx doctor`. Work only from the current project root:
    goal or the active objective.
 2. If the project is not connected, prefer `loopx connect`; use
    `loopx bootstrap` only when project state clearly needs initialization.
-3. Ensure `.loopx/`, `.codex/goals/`, and `.local/` are ignored.
+3. Ensure `.loopx/` and `.local/` are ignored; keep legacy `.codex/goals/`
+   ignored when it exists.
 4. Set up the thin LoopX heartbeat for this surface. For Codex App, start the
    recurring automation at 3 minutes, then follow
    `quota should-run.scheduler_hint` for backoff and self-stop behavior.
 5. Stop after setup and report the active state id, current user gate, top
    agent todo, and next safe action.
 
-Do not commit `.loopx/`, `.codex/goals/`, `.local/`, live ACTIVE_GOAL_STATE
+Do not commit `.loopx/`, legacy `.codex/goals/`, `.local/`, live ACTIVE_GOAL_STATE
 files, runtime registries, raw logs, credentials, or private local paths. Do
 not start longer delivery work in this setup turn.
 ```
@@ -63,9 +64,15 @@ Success looks like this:
 
 - `loopx doctor` passes;
 - the project has `.loopx/registry.json`;
-- the project has `.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`;
+- a new project has `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`;
 - `loopx status` shows the goal and who should act next;
 - local runtime state is ignored, not committed.
+
+For existing installations, `loopx doctor --format json` reports
+`local_state_route`. A legacy-only installation stays on its declared route
+until the operator follows the [explicit local-state migration](../product/migrations/local-state-path-migration.md).
+Keep the old project `.codex/goals/` directory ignored until migration and
+readback are complete.
 
 ## Command Skill Registration
 
@@ -179,10 +186,10 @@ Write the archive only when the preview looks right:
 loopx backup-state --project . --execute
 ```
 
-The backup is written under `~/.codex/loopx/backups` by default. It captures the
+The backup is written under `~/.loopx/backups` by default. It captures the
 shared LoopX runtime root, Codex App automations, installed `loopx-*` skills,
 the current project's state, and every reachable project's `.loopx`,
-`.codex/goals`, `.claude/goals`, `.local/goals`, registry-declared active state,
+`.loopx/goals`, `.claude/goals`, `.local/goals`, registry-declared active state,
 and source registry discovered from the global registry. Missing or stale
 project routes remain visible in the manifest. Use `--current-project-only`
 only when a deliberately narrow archive is sufficient. Treat the archive and
@@ -222,7 +229,7 @@ loopx workflow-skills --install
 Then run `loopx doctor`. Work only from this project root: if LoopX state
 already exists, reuse it and do not create or overwrite a goal or the active objective; if the project
 is not connected, prefer `loopx connect`, and use `loopx bootstrap` only when
-project state clearly needs initialization. Ensure `.loopx/`, `.codex/goals/`,
+project state clearly needs initialization. Ensure `.loopx/`, `.loopx/goals/`,
 and `.local/` are ignored. Keep me in this TUI, do not use hidden headless
 execution. After the project is connected, generate the thin heartbeat prompt
 and set the current Codex CLI task body with `/goal <thin task_body>`. Then
@@ -623,8 +630,8 @@ Keep three layers separate:
 
 - **Global skill behavior** belongs in `skills/` and is installed under
   `~/.codex/skills`.
-- **Project state** belongs in `.loopx/`, `.codex/goals/`, and
-  `~/.codex/loopx`; keep it local unless a sanitized fixture is
+- **Project state** belongs in `.loopx/`, `.loopx/goals/`, and
+  `~/.loopx`; keep it local unless a sanitized fixture is
   intentionally committed.
 - **Repository rules** belong in `AGENTS.md`, `CONTRIBUTING.md`, and public
   docs. They can constrain contributors and agents in this repository, but they
@@ -689,7 +696,7 @@ loopx uninstall-project --goal-id <goal-id> --archive-state --execute
 from the shared global registry only when the global entry's `source_registry`
 points back to this project. It does not uninstall the LoopX CLI and does not
 delete other projects' runtime history. Pass `--archive-state` to move this
-project's `.codex/goals/<goal-id>/` directory under
+project's registered Goal state directory under
 `.loopx/archived-project-state/` instead of leaving it in place.
 
 For manual cleanup of the reusable LoopX CLI and skill surfaces, remove only
@@ -706,7 +713,7 @@ rm -rf ~/.codex/skills/loopx-project \
 ```
 
 This does not archive connected project state or runtime history. Archive or
-remove `.loopx/`, `.codex/goals/`, and `~/.codex/loopx` only when
+remove `.loopx/` and `~/.loopx` only when
 you intentionally want to retire those local project records.
 
 ## Connect A Project Manually
@@ -732,9 +739,9 @@ This creates or connects:
 ```text
 your-project/
   .loopx/registry.json
-  .codex/goals/your-project-goal/ACTIVE_GOAL_STATE.md
+  .loopx/goals/your-project-goal/ACTIVE_GOAL_STATE.md
 
-~/.codex/loopx/
+~/.loopx/
   goals/<goal-id>/runs/
 ```
 
@@ -743,6 +750,7 @@ the connected project `.gitignore` before committing:
 
 ```gitignore
 .loopx/
+# Legacy projects only:
 .codex/goals/
 .opencode/goals/
 goals/**/ACTIVE_GOAL_STATE.md
@@ -1008,7 +1016,7 @@ the completed migration again.
 
 `register-agent` resolves the existing global entry's `source_registry`, writes
 the project-local source of truth, and then syncs the shared global projection.
-If `~/.codex/loopx/registry.global.json` is not writable, the command fails
+If `~/.loopx/registry.global.json` is not writable, the command fails
 before changing the source registry and reports a `global_registry_write_denied`
 health error. Fix the shared runtime permission or run from a host that can
 write the LoopX runtime root, then rerun the command. Use `--no-global-sync`

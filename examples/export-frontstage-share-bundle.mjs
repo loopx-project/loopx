@@ -402,7 +402,7 @@ async function scanPublicBoundary(outDir) {
     { label: "private temp path", pattern: /\/private\// },
     { label: "workspace owner name", pattern: new RegExp("byte" + "dance", "i") },
     { label: "internal doc host", pattern: new RegExp("lark" + "office", "i") },
-    { label: "private goal state", pattern: new RegExp("\\.codex/goals|\\.goal-" + "harness") },
+    { label: "private goal state", pattern: new RegExp("\\.(?:codex|loopx)/goals|\\.goal-" + "harness") },
     { label: "raw internal key", pattern: new RegExp("raw_" + "internal_note") },
     { label: "private key material", pattern: /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/ },
     { label: "token assignment", pattern: /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i },

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .bootstrap import default_goal_id
+from .paths import shell_selected_global_registry
 from .codex_cli_probe_markdown import (
     render_codex_cli_bounded_visible_pilot_adapter_markdown as render_codex_cli_bounded_visible_pilot_adapter_markdown,
     render_codex_cli_local_driver_plan_markdown as render_codex_cli_local_driver_plan_markdown,
@@ -391,7 +392,7 @@ def build_codex_cli_local_driver_plan(
     )
     quota_guard_command = (
         f"{_shell_arg(cli_bin)} --format json "
-        "--registry \"$HOME/.codex/loopx/registry.global.json\" "
+        f"--registry {shell_selected_global_registry()} "
         f"quota should-run --goal-id {_shell_arg(resolved_goal_id)}{agent_arg}"
         f"{CODEX_CLI_SCHEDULER_ARGS}"
     )

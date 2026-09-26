@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
-from .paths import DEFAULT_RUNTIME_ROOT, default_registry_path, global_registry_path
+from .paths import default_registry_path, global_registry_path, select_default_runtime_root
 
 
 GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format"})
@@ -54,6 +54,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"uninstall-project",
 		"version",
 		"host-mode-plan",
+		"migrate-local-state",
 	}
 )
 
@@ -158,11 +159,14 @@ def resolve_cli_registry(
 		and not registry_was_configured
 		and not registry_path.exists()
 	):
-		runtime_root = (
-			Path(args.runtime_root).expanduser()
-			if args.runtime_root
-			else DEFAULT_RUNTIME_ROOT
-		)
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
 		fallback_registry = global_registry_path(runtime_root)
 		if fallback_registry.exists():
 			registry_path = fallback_registry

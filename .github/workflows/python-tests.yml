@@ -652,6 +652,13 @@ jobs:
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
 
+      - name: Reject junction redirects during local-state migration
+        run: >-
+          python -m pytest -q
+          tests/test_local_state_migration.py::test_windows_junction_goal_source_never_reads_or_moves_outside_project
+          tests/test_local_state_migration.py::test_windows_junction_rollback_destination_never_writes_outside_project
+          tests/test_local_state_migration.py::test_windows_junction_goal_destination_never_writes_outside_project
+
       - name: Set up the qualified SQLite runtime
         uses: actions/setup-node@v6
         with:

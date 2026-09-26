@@ -48,7 +48,7 @@ request.
 LoopX coordinates local agent state, so some files are runtime data and
 must stay out of public contributions:
 
-- do not commit `.loopx/`, `.codex/goals/`, or live
+- do not commit `.loopx/`, legacy `.codex/goals/`, or live
   `ACTIVE_GOAL_STATE.md` files;
 - do not publish private benchmark traces, verifier output, raw agent sessions,
   credentials, internal document links, or local machine paths;

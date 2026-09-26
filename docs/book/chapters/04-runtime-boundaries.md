@@ -345,7 +345,7 @@ Host 应服从 current `interaction_contract` 与 `scheduler_hint`，不能把�
 
 ```text
 .loopx/
-.codex/goals/
+.loopx/goals/
 .local/
 ```
 

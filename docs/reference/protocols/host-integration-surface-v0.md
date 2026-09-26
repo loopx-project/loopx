@@ -280,7 +280,7 @@ Minimum fallback set:
 ```bash
 loopx doctor
 loopx --format json status --agent-id <agent-id>
-loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <goal-id> --agent-id <agent-id>
+loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <goal-id> --agent-id <agent-id>
 loopx todo claim --goal-id <goal-id> --todo-id <todo_id> --claimed-by <agent-id>
 loopx todo complete --goal-id <goal-id> --todo-id <todo_id> --claimed-by <agent-id> --evidence "<public-safe evidence>"
 loopx refresh-state --goal-id <goal-id> --agent-id <agent-id>

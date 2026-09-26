@@ -283,6 +283,7 @@ BENCHMARK_CANDIDATE_SOURCE_PUBLIC_DOC_PREFIXES = (
 BENCHMARK_CANDIDATE_SOURCE_ACTIVE_STATE_MARKERS = (
     "/active_goal_state.md",
     ".codex/goals/",
+    ".loopx/goals/",
     ".local/goals/",
 )
 BENCHMARK_CANDIDATE_SOURCE_PRIVATE_RUN_MARKERS = (

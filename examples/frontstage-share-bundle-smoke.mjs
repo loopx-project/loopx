@@ -57,7 +57,7 @@ function assertNoLeak(text, label) {
     /\/private\//,
     new RegExp("byte" + "dance", "i"),
     new RegExp("lark" + "office", "i"),
-    new RegExp("\\.codex/goals|\\.goal-" + "harness"),
+    new RegExp("\\.(?:codex|loopx)/goals|\\.goal-" + "harness"),
     new RegExp("raw_" + "internal_note"),
     /BEGIN (?:RSA |OPENSSH |EC |)PRIVATE KEY/,
     /\b(?:api[_-]?key|auth[_-]?token|access[_-]?token)\s*[:=]/i,

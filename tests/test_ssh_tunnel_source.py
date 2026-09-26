@@ -179,7 +179,7 @@ def test_apply_ssh_goal_lifecycle_uses_remote_typed_contract_without_local_fallb
     assert argv[:4] == ["ssh", "-o", "ConnectTimeout=5", "ark-devbox"]
     assert "goal-lifecycle" in argv[4]
     assert "--actor-kind owner" in argv[4]
-    assert '"$HOME/.codex/loopx/registry.global.json"' in argv[4]
+    assert "--registry" not in argv[4]
     assert result == {
         "ok": True,
         "schema_version": "loopx_remote_goal_lifecycle_v1",

@@ -19,10 +19,10 @@ When onboarding is complete:
 
 - `loopx doctor` reports a usable installation;
 - `.loopx/registry.json` exists in the project;
-- `.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md` exists;
+- `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md` exists;
 - `loopx status` can show the active state and the current frontier; a first connection creates no
   onboarding Todo, so the Agent writes the first delivery Todo after you confirm it;
-- `.loopx/` and `.codex/goals/` do not enter Git;
+- `.loopx/` and `.loopx/goals/` do not enter Git;
 - reconnecting reuses the exact existing `goal_id` instead of overwriting the Goal;
 - a new executor receives a fresh `agent_id` unless the user explicitly authorizes a takeover.
 
@@ -42,7 +42,7 @@ Goal:
 
 Execution contract:
 1. Begin with a read-only inspection of the project root, current branch, git status, .gitignore, and any
-   existing .loopx/registry.json, .codex/goals/, or other LoopX state. Do not overwrite, reset, or clean
+   existing .loopx/registry.json, .loopx/goals/, or other LoopX state. Do not overwrite, reset, or clean
    existing material.
 2. Run loopx --version and loopx doctor, then read the current --help for every command you need. Do not
    rely on remembered arguments from an older version. If LoopX is not installed, report what is missing
@@ -50,7 +50,7 @@ Execution contract:
    discovered install command as a completed installation.
 3. If LoopX state exists, read loopx registry, loopx status, and relevant history first. Prefer the exact
    existing goal_id. Do not force a reconnect or select a Goal from objective similarity.
-4. Ensure .loopx/, .codex/goals/, and .local/ are ignored by Git. If those paths already serve another
+4. Ensure .loopx/, .loopx/goals/, and .local/ are ignored by Git. If those paths already serve another
    project purpose or are tracked, stop and report the conflict. Do not delete or untrack them yourself.
 5. For a project that is not connected, run loopx connect --dry-run first and show the state it would
    create or change. Run loopx connect only after confirming there is no conflict. Do not bootstrap again
@@ -66,7 +66,7 @@ Execution contract:
 9. Stop at a Gate for user approval, external writes, credentials, wider permissions, Host selection, or
    destructive Git operations. Do not decide those for me.
 10. Verify loopx status, todo list, history, quota should-run, git status, and
-   git ls-files .loopx .codex/goals .local.
+   git ls-files .loopx .loopx/goals .local.
 11. Do not commit or push. Finish with an "onboarding report" that names goal_id, agent_id, Host, changed
     files, current Todos and Gates, executed mutations, verification, unresolved issues, and the next
     action. If you completed only a preview, explicitly say that onboarding is not complete.
@@ -168,7 +168,7 @@ Before connecting, add local control state to the project's `.gitignore`:
 
 ```text
 .loopx/
-.codex/goals/
+.loopx/goals/
 .local/
 ```
 
@@ -180,7 +180,7 @@ Confirm the ignore rules:
 
 ```bash
 git check-ignore -v .loopx/registry.json
-git check-ignore -v .codex/goals/example/ACTIVE_GOAL_STATE.md
+git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 ```
 
 For paths that do not yet exist, Git may need `--no-index`:
@@ -296,7 +296,7 @@ After connecting:
 
 ```bash
 git status --short
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
 ```
 
 The second command should print nothing. If it lists a path, Git is already tracking local control state;

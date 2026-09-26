@@ -18,7 +18,7 @@ the fallback behavior.
 Today a trusted Codex App heartbeat usually runs:
 
 ```bash
-loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" \
+loopx --format json --registry "$HOME/.loopx/registry.global.json" \
   quota should-run --goal-id <goal-id> --agent-id <agent-id>
 ```
 
@@ -169,7 +169,7 @@ Before default candidate:
 The fallback remains:
 
 ```bash
-loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" \
+loopx --format json --registry "$HOME/.loopx/registry.global.json" \
   quota should-run --goal-id <goal-id> --agent-id <agent-id>
 ```
 

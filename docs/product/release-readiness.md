@@ -804,7 +804,7 @@ host integrations when their focused smokes pass:
 - public slash command names: `/loopx`, `/loopx <goal>`,
   `/loopx-global-summary`, `/loopx-global-gates`, `/loopx-global-todos`, and
   `/loopx-global-risks`;
-- ignored local state boundaries under `~/.codex/loopx`, project-local registry
+- ignored local state boundaries under `~/.loopx`, project-local registry
   files, and project-local active-state workbench files recognized by
   `loopx doctor`, `loopx status`, and `loopx check`.
 

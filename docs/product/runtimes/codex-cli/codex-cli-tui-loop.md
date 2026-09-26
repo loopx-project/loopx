@@ -30,7 +30,7 @@ loopx workflow-skills --install
 Then run `loopx doctor`. Work only from this project root: if LoopX state
 already exists, reuse it and do not create or overwrite a goal; if the project
 is not connected, prefer `loopx connect`, and use `loopx bootstrap` only when
-goal state clearly needs initialization. Ensure `.loopx/`, `.codex/goals/`,
+goal state clearly needs initialization. Ensure `.loopx/`, `.loopx/goals/`,
 and `.local/` are ignored. Keep me in this TUI, do not use hidden headless
 execution. After the project is connected, generate the thin heartbeat prompt
 and set the current Codex CLI goal to `/goal <thin task_body>`. Then stop and
@@ -48,7 +48,7 @@ message should be enough for a terminal agent to:
   workflow-skill installer before asking the user to clone the LoopX repo;
 - reuse existing LoopX state without creating or overwriting a goal;
 - connect the repo when needed, using bootstrap only for clear initialization;
-- ensure `.loopx/`, `.codex/goals/`, and `.local/` stay local;
+- ensure `.loopx/`, `.loopx/goals/`, and `.local/` stay local;
 - generate `heartbeat-prompt --thin`;
 - set the current Codex CLI goal to `/goal <thin task_body>`;
 - report the goal id, user gate, top agent todo, and next safe action;

@@ -8,7 +8,7 @@
       "domain": "complex-project-control-plane",
       "status": "active",
       "repo": "/path/to/project",
-      "state_file": ".codex/goals/example-peer-task-goal/ACTIVE_GOAL_STATE.md",
+      "state_file": ".loopx/goals/example-peer-task-goal/ACTIVE_GOAL_STATE.md",
       "authority_sources": [
         {
           "kind": "goal_doc",

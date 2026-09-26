@@ -25,7 +25,7 @@ codex
 
 ```text
 连接当前项目到 LoopX。先运行 loopx doctor，复用已有 active state，
-确认 .loopx/、.codex/goals/ 和 .local/ 已被 Git 忽略。不要使用隐藏的
+确认 .loopx/、.loopx/goals/ 和 .local/ 已被 Git 忽略。不要使用隐藏的
 headless execution。连接完成后，生成 thin heartbeat task body，并把当前
 Codex CLI task 设置为可见的 /goal <task_body>。最后报告 active state id、
 当前 user gate、top agent todo 和 next safe action。

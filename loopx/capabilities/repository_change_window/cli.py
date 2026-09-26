@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 from ...history import load_registry
-from ...paths import DEFAULT_RUNTIME_ROOT, resolve_runtime_root
+from ...paths import resolve_runtime_root, select_default_runtime_root
 from .git_hook import (
     EnforcementLevel,
     git_hook_provider_status,
@@ -214,7 +214,7 @@ def _runtime_root(registry_path: Path, runtime_root_arg: str | None) -> Path:
     return (
         Path(runtime_root_arg).expanduser()
         if runtime_root_arg
-        else DEFAULT_RUNTIME_ROOT
+        else select_default_runtime_root()
     )
 
 

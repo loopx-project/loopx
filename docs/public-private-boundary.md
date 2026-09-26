@@ -181,7 +181,8 @@ The project repo should answer: "What is this specific goal currently doing?"
 The runtime root should answer: "What happened in recent goal ticks?"
 
 Real controller state belongs in ignored local files such as
-`.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`,
+`.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`,
+legacy `.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`,
 `.local/goals/<goal-id>/ACTIVE_GOAL_STATE.md`, or the shared runtime root. A
 public repository may track sanitized templates, fixtures, and compact
 projections, but not the live file that a controller updates on every turn.

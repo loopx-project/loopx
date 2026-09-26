@@ -153,7 +153,7 @@ loopx connect
 loopx start-goal --guided --project . --goal-text "你的长程目标"
 ```
 
-保持 `.loopx/`、`.codex/goals/`、`.local/` 忽略。接入后从宿主 agent 用
+保持 `.loopx/`、`.loopx/goals/`、`.local/` 忽略。接入后从宿主 agent 用
 `/loopx <task>`（Codex App/CLI）、`/loopx` + `/loop`（Claude Code）、goal
 bridge（OpenCode）或 Pi goal 扩展驱动目标。
 

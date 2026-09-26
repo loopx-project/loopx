@@ -46,8 +46,8 @@ that the stop/resume commands below could not address:
 export GOAL_ID="loopx-auto-research-demo"
 export WORKSPACE="$HOME/loopx-auto-research-demo"
 
-export LOOPX_REGISTRY="$HOME/.codex/loopx/registry.global.json"
-export LOOPX_RUNTIME_ROOT="$HOME/.codex/loopx"
+export LOOPX_REGISTRY="$HOME/.loopx/registry.global.json"
+export LOOPX_RUNTIME_ROOT="$HOME/.loopx"
 
 loopx --registry "$LOOPX_REGISTRY" \
   --runtime-root "$LOOPX_RUNTIME_ROOT" \

@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${LOOPX_REPO_ROOT:-$(cd "$script_dir/.." && pwd)}"
 bin_dir="${LOOPX_BIN_DIR:-$HOME/.local/bin}"
-registry="${LOOPX_GLOBAL_REGISTRY:-$HOME/.codex/loopx/registry.global.json}"
+registry_override="${LOOPX_GLOBAL_REGISTRY:-}"
 status_port="${LOOPX_STATUS_PORT:-8766}"
 status_limit="${LOOPX_STATUS_LIMIT:-80}"
 status_contract_min_version="${LOOPX_STATUS_CONTRACT_MIN_VERSION:-2}"
@@ -103,6 +103,15 @@ resolve_loopx_python() {
   resolve_python_command
 }
 
+resolve_global_registry() {
+  local python_command="$1"
+  if [[ -n "$registry_override" ]]; then
+    printf '%s\n' "$registry_override"
+    return 0
+  fi
+  "$python_command" -c 'from loopx.paths import global_registry_path, select_default_runtime_root; print(global_registry_path(select_default_runtime_root()))'
+}
+
 resolve_optional_command() {
   local command_name="$1"
   if command -v "$command_name" >/dev/null 2>&1; then
@@ -192,10 +201,11 @@ PY
 }
 
 write_plists() {
-  local status_command python_command codex_command claude_command lark_cli_command
+  local status_command python_command codex_command claude_command lark_cli_command registry
   local path_prefix command_path command_dir status_shell chat_shell control_plane_write_arg lark_cli_arg codex_home_export chat_codex_home
   status_command="$(resolve_status_command)"
   python_command="$(resolve_loopx_python)"
+  registry="$(resolve_global_registry "$python_command")"
   codex_command="$(resolve_optional_command codex)"
   claude_command="$(resolve_optional_command claude)"
   lark_cli_command="$(resolve_lark_cli_command "$python_command" 2>/dev/null || true)"

@@ -17,10 +17,10 @@
 
 - `loopx doctor` 报告安装可用；
 - 项目存在 `.loopx/registry.json`；
-- 项目存在 `.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`；
+- 项目存在 `.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`；
 - `loopx status` 能显示 active state 和当前 frontier；首连不会生成 onboarding todo，
   第一个交付 todo 由 Agent 与你确认后写入；
-- `.loopx/` 与 `.codex/goals/` 不会进入 Git；
+- `.loopx/` 与 `.loopx/goals/` 不会进入 Git；
 - 再次连接会按精确 `goal_id` 复用已有 Goal，而不是覆盖目标；
 - 新接入的执行者使用 fresh `agent_id`，除非用户明确授权 takeover。
 
@@ -40,13 +40,13 @@
 
 执行合同：
 1. 先只读检查项目根目录、当前分支、git status、.gitignore，以及是否已有
-   .loopx/registry.json、.codex/goals/ 或其他 LoopX 状态。不要覆盖、reset 或清理现有内容。
+   .loopx/registry.json、.loopx/goals/ 或其他 LoopX 状态。不要覆盖、reset 或清理现有内容。
 2. 运行 loopx --version、loopx doctor，并读取本次实际需要的 --help。不要依赖记忆中的旧参数。
    如果 LoopX 尚未安装，先报告缺失和官方 installer 将写入的位置，得到我授权后再安装；不要把
    “找到安装命令”写成“安装已完成”。
 3. 如果已有 LoopX 状态，先读 loopx registry、loopx status 和相关 history。优先复用精确
    goal_id；不要 force reconnect，不要按目标文字相似度选择 Goal。
-4. 确保 .loopx/、.codex/goals/ 和 .local/ 被 Git 忽略。如果这些目录已有项目用途或已被跟踪，
+4. 确保 .loopx/、.loopx/goals/ 和 .local/ 被 Git 忽略。如果这些目录已有项目用途或已被跟踪，
    停下来报告冲突，不要擅自删除或 untrack。
 5. 对尚未连接的项目，先运行 loopx connect --dry-run，展示将创建或修改的状态；确认没有冲突后
    再执行 loopx connect。已有 registry 时不要为了“重新开始”重复 bootstrap。
@@ -59,7 +59,7 @@
 9. 任何用户审批、外部写操作、凭据、权限扩大、Host 选择或 destructive Git 操作都必须停在
    Gate，不能替我决定。
 10. 完成后验证 loopx status、todo list、history、quota should-run、git status，以及
-   git ls-files .loopx .codex/goals .local。
+   git ls-files .loopx .loopx/goals .local。
 11. 不要提交或推送。最后给我一份“接入回报”，列出 goal_id、agent_id、Host、创建或修改的文件、
     当前 Todo/Gate、执行过的 mutation、验证结果、未解决问题和下一步。只完成 preview 时必须
     明确写“尚未接入完成”。
@@ -158,7 +158,7 @@ loopx doctor --deep
 
 ```text
 .loopx/
-.codex/goals/
+.loopx/goals/
 .local/
 ```
 
@@ -169,7 +169,7 @@ state、registry、lease 和本地证据指针；`.local/` 还可能包含其他
 
 ```bash
 git check-ignore -v .loopx/registry.json
-git check-ignore -v .codex/goals/example/ACTIVE_GOAL_STATE.md
+git check-ignore -v .loopx/goals/example/ACTIVE_GOAL_STATE.md
 ```
 
 文件尚不存在时，`git check-ignore` 可能需要 `--no-index`：
@@ -284,7 +284,7 @@ loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
 
 ```bash
 git status --short
-git ls-files .loopx .codex/goals .local
+git ls-files .loopx .loopx/goals .local
 ```
 
 第二条命令应无输出。如果输出了路径，说明本地控制状态已经被 Git 跟踪；仅增加 `.gitignore`

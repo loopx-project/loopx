@@ -41,6 +41,7 @@ from loopx.extensions.process_runtime import (  # noqa: E402
     CappedProcessResult,
     run_capped_process,
 )
+from loopx.paths import global_registry_path  # noqa: E402
 
 SCHEDULER_DETAIL_KEY = "local_scheduler"
 LOCAL_SCHEDULER_STOP_DIRECTIVE = "stop"
@@ -510,8 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cli-bin", default="loopx", help="LoopX CLI binary.")
     parser.add_argument(
         "--registry",
-        default=str(Path.home() / ".codex" / "loopx" / "registry.global.json"),
-        help="Path to the LoopX registry.",
+        help="Path to the LoopX registry; defaults to the selected current or legacy route.",
     )
     parser.add_argument("--runtime-root", help="Override registry common_runtime_root.")
     parser.add_argument(
@@ -556,6 +556,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Maximum duration of one configured wake command.",
     )
     args = parser.parse_args(argv)
+    if args.registry is None:
+        try:
+            args.registry = str(global_registry_path())
+        except ValueError as exc:
+            parser.error(str(exc))
     return run_worker(args)
 
 

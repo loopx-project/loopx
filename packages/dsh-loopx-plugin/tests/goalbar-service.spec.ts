@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -17,6 +17,7 @@ import type {
 import {
   GoalBarCoordinator,
 } from '../src/goalbar/events.ts'
+import { computeGoalBarSourceRevision } from '../src/goalbar/read-model.ts'
 import {
   createGoalBarService,
   decodeGoalBarLifecycleExecutionV1,
@@ -26,6 +27,9 @@ import type { GoalBarRequestV1 } from '../src/goalbar/protocol.ts'
 const sessionId = 'session-fixture'
 const goalId = 'goal-fixture'
 const loopxAgentId = 'agent-fixture'
+const defaultCwd = '/fixture/project'
+const defaultSourceRevision = await computeGoalBarSourceRevision({ cwd: defaultCwd })
+const strictRegistryFixture = new URL('./fixtures/project-registry-strict-v1.json', import.meta.url)
 const command: LoopXCommand = {
   file: 'loopx',
   prefix: [],
@@ -56,7 +60,7 @@ function agentFixture(
   id = sessionId,
   initialStatus: 'idle' | 'running' = 'idle',
   eventSource?: (() => SessionEvent[]) | undefined,
-  cwd = '/fixture/project',
+  cwd = defaultCwd,
 ): AgentFixture {
   const events: SessionEvent[] = []
   let status = initialStatus
@@ -366,8 +370,7 @@ function watchRequest(
     op: 'watch',
     sessionId,
     afterSessionEventSeq,
-    sourceRevision: options.sourceRevision
-      ?? 'sha256:04284a0332528476ac54e743cb76d5c0731985225b77926e7f6a32941db96c42',
+    sourceRevision: options.sourceRevision ?? defaultSourceRevision,
     expected: options.expected ?? null,
     agentStatus: options.agentStatus ?? 'idle',
   }
@@ -655,7 +658,7 @@ describe('GoalBar Host read/watch', () => {
 
   it('retries a read when the active state is atomically replaced during CLI reads', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-stable-read-'))
-    const stateDir = join(cwd, '.codex', 'goals', goalId)
+    const stateDir = join(cwd, '.loopx', 'goals', goalId)
     await mkdir(join(cwd, '.loopx'), { recursive: true })
     await mkdir(stateDir, { recursive: true })
     await writeFile(join(cwd, '.loopx', 'registry.json'), '{"goals":[]}', 'utf8')
@@ -685,6 +688,36 @@ describe('GoalBar Host read/watch', () => {
         },
       ), new AbortController().signal)
       expect(wrongAgent.result.kind).toBe('source_changed')
+    } finally {
+      await fixture.service.dispose()
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a strict registry with an unmigrated Goal through the stable service path', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-strict-service-'))
+    const legacy = join(cwd, '.codex', 'goals', goalId, 'ACTIVE_GOAL_STATE.md')
+    const decoy = join(cwd, '.loopx', 'goals', goalId, 'ACTIVE_GOAL_STATE.md')
+    await mkdir(join(cwd, '.codex', 'goals', goalId), { recursive: true })
+    await mkdir(join(cwd, '.loopx', 'goals', goalId), { recursive: true })
+    await writeFile(join(cwd, '.loopx', 'registry.json'), await readFile(strictRegistryFixture))
+    await writeFile(legacy, 'legacy state', 'utf8')
+    await writeFile(decoy, 'decoy state', 'utf8')
+    const fixture = harness({ cwd })
+    try {
+      const first = await fixture.service.handle(readRequest(), new AbortController().signal)
+      expect(first.result.kind).toBe('present')
+      if (first.result.kind !== 'present') throw new Error('expected present fixture')
+      await writeFile(decoy, 'changed decoy', 'utf8')
+      const unchanged = await fixture.service.handle(readRequest(), new AbortController().signal)
+      expect(unchanged.result.kind).toBe('present')
+      if (unchanged.result.kind !== 'present') throw new Error('expected present fixture')
+      expect(unchanged.result.sourceRevision).toBe(first.result.sourceRevision)
+      await writeFile(legacy, 'changed legacy', 'utf8')
+      const changed = await fixture.service.handle(readRequest(), new AbortController().signal)
+      expect(changed.result.kind).toBe('present')
+      if (changed.result.kind !== 'present') throw new Error('expected present fixture')
+      expect(changed.result.sourceRevision).not.toBe(first.result.sourceRevision)
     } finally {
       await fixture.service.dispose()
       await rm(cwd, { recursive: true, force: true })

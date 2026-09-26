@@ -14,7 +14,7 @@ from ..goals.activation import (
     normalize_goal_activation_state,
 )
 from ...history import load_index, load_registry
-from ...paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from ...paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from ...registry import registry_goals
 
 
@@ -240,7 +240,7 @@ def runtime_projection_candidate_roots(
         configured = str(os.environ.get("LOOPX_RUNTIME_ROOT") or "").strip()
         if configured:
             roots.append(Path(configured).expanduser())
-        roots.append(DEFAULT_RUNTIME_ROOT)
+        roots.append(select_default_runtime_root())
     else:
         roots.extend(Path(root).expanduser() for root in candidate_roots)
     roots.append(source_runtime_root.expanduser())

@@ -24,7 +24,7 @@ Ask the App Agent to begin with read-only inspection:
 ```text
 Inspect the current project's LoopX connection. Run loopx doctor, loopx registry,
 and loopx status first. Reuse existing active state and do not overwrite the Goal.
-Confirm that .loopx/, .codex/goals/, and .local/ are ignored by Git.
+Confirm that .loopx/, .loopx/goals/, and .local/ are ignored by Git.
 ```
 
 If the LoopX command facade is installed, select the `LoopX` skill or use:

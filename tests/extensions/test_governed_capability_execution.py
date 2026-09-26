@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import loopx.extensions.governed_capability_execution as governed_execution
+from loopx import paths
 from loopx.control_plane.effect_program import SettlementIdentity
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.extensions.capability_admission import (
@@ -22,6 +23,28 @@ from loopx.extensions.governed_capability_execution import (
 )
 from loopx.extensions.runtime import install_extension
 from loopx.todos import list_goal_todos
+
+
+def test_default_governed_run_dir_follows_single_runtime_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_root = tmp_path / ".loopx"
+    legacy_root = tmp_path / ".codex" / "loopx"
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current_root)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy_root)
+    suffix = Path("extensions") / "governed-capability-runs"
+
+    assert governed_execution.default_governed_capability_run_dir() == current_root / suffix
+    legacy_root.mkdir(parents=True)
+    (legacy_root / paths.GLOBAL_REGISTRY_FILENAME).write_text("{}", encoding="utf-8")
+    assert governed_execution.default_governed_capability_run_dir() == legacy_root / suffix
+
+    current_root.mkdir()
+    (current_root / paths.GLOBAL_REGISTRY_FILENAME).write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="Both default LoopX registries exist"):
+        governed_execution.default_governed_capability_run_dir()
+    assert governed_execution.default_governed_capability_run_dir(current_root) == current_root / suffix
 
 
 def _provider(path: Path, *, call_log: Path) -> Path:

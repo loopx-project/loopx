@@ -369,6 +369,9 @@ def _resolve_metadata_path(
         (
             marker
             for marker in (
+                "~/.loopx",
+                "$HOME/.loopx",
+                "${HOME}/.loopx",
                 "~/.codex/loopx",
                 "$HOME/.codex/loopx",
                 "${HOME}/.codex/loopx",

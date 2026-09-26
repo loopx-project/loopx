@@ -13,7 +13,6 @@ from loopx.capabilities.explore.result_log import (
     build_explore_node_event,
     explore_result_log_path,
 )
-from loopx.control_plane.runtime import runtime_projection_route
 from loopx.extensions.lark import goal_channel_contracts, goal_channel_runtime
 from loopx.extensions.lark.presentation import explore_results
 from loopx.extensions.runtime import install_extension
@@ -109,7 +108,8 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
     shared = tmp_path / "shared-runtime"
     monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(shared))
     monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
-    monkeypatch.setattr(runtime_projection_route, "DEFAULT_RUNTIME_ROOT", shared)
+    monkeypatch.setattr("loopx.paths.DEFAULT_RUNTIME_ROOT", shared)
+    monkeypatch.setattr("loopx.paths.LEGACY_RUNTIME_ROOT", tmp_path / "absent-legacy-runtime")
     monkeypatch.chdir(project)
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime)]
 

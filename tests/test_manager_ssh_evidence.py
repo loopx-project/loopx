@@ -82,7 +82,7 @@ def test_remote_source_is_discovered_and_read_without_local_host_metadata(remote
     argv, opts = calls[0]
     assert (
         argv[-2] == "research-host"
-        and '"$HOME/.codex/loopx/registry.global.json"' in argv[-1]
+        and "--registry" not in argv[-1]
     )
     assert "--manager-view todos" in argv[-1] and "--goal-id remote-goal" in argv[-1]
     assert "BatchMode=yes" in argv and opts["timeout"] == 45
@@ -234,7 +234,7 @@ def test_ssh_wire_arguments_execute_real_remote_cli_projection(remote, tmp_path)
 
     def execute_cli(argv, **kwargs):
         arguments = shlex.split(argv[-1].split("--format json ", 1)[1])
-        return subprocess.run(
+        completed = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -249,12 +249,14 @@ def test_ssh_wire_arguments_execute_real_remote_cli_projection(remote, tmp_path)
             ],
             **kwargs,
         )
+        assert completed.returncode == 0, completed.stderr
+        return completed
 
     tool.remote_runner = execute_cli
     result = tool.read(
         TOOL_NAME, {"view": "portfolio", "source_id": "ssh:research-host", "limit": 3}
     )
-    assert result["ok"]
+    assert result["ok"], result
     assert result["rows"][0]["goal_id"] == "remote-goal"
     assert result["rows"][0]["source_host"] == "research-host"
     assert result["rows"][0]["quality"] != "verified"

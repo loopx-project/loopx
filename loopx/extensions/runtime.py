@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..file_lock import exclusive_file_lock
+from ..paths import select_default_runtime_root
 from .manifest import load_extension_manifest
 from .process_runtime import run_capped_process
 from .runtime_location import located_runtime, probe_runtime_location, record_runtime_location
@@ -70,7 +71,7 @@ def default_extension_state_file(runtime_root: str | Path | None = None) -> Path
     root = (
         Path(runtime_root).expanduser()
         if runtime_root is not None
-        else Path.home() / ".codex" / "loopx"
+        else select_default_runtime_root()
     )
     return root / "extensions" / "state.json"
 

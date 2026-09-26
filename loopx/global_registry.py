@@ -13,7 +13,7 @@ from .control_plane.projects.contract import validate_project_record_bindings
 from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.time import now_local_iso
 from .file_lock import exclusive_cross_runtime_file_lock
-from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from .registry import read_json, registry_goals
 from .registry_writability import is_write_denied_error, probe_registry_write_path
 
@@ -383,7 +383,7 @@ def _merge_global_registry_payload(
         payload.get("schema_version") or schema_version_fallback or "0.1"
     )
     payload["updated_at"] = synced_at
-    payload["common_runtime_root"] = str(runtime_root or DEFAULT_RUNTIME_ROOT)
+    payload["common_runtime_root"] = str(runtime_root or select_default_runtime_root())
     payload["registry_role"] = "global-local"
     if merged_projects:
         payload["projects"] = merged_projects
@@ -538,7 +538,7 @@ def retire_global_registry_goals(
     runtime_root = (
         Path(runtime_root_override).expanduser()
         if runtime_root_override
-        else DEFAULT_RUNTIME_ROOT
+        else select_default_runtime_root()
     )
     global_path = global_registry_path(runtime_root)
     if not global_path.exists():

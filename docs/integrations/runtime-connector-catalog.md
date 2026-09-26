@@ -59,11 +59,15 @@ for generic visible CLI loops (for example TraeX CLI). Each tick runs
 `quota should-run --include-detail scheduler`, projects a one-line public-safe
 status (`waiting`/`should_run`/`terminal`, cadence class, next check minutes,
 unchanged count), and sleeps per the `local_scheduler` progression ladder. It
-tracks the consecutive-unchanged index in a small state file and resets it when
-`scheduler_hint.reset_policy.reset_token` changes. It is observe-only by
-default; pass `--wake-cmd` only to trigger a bounded headless turn (for example
-`loopx turn run-once ... --execute`). It cannot type into a visible TUI, so it
-does not replace the interactive host loop. A launchd template ships at
+selects the same default global registry as the LoopX CLI: `.loopx` for a new
+installation, or the registered `.codex/loopx` route until migration. If both
+default registries exist, pass an explicit `--registry` after resolving the
+route conflict. It tracks the consecutive-unchanged index in a small state file
+and resets it when `scheduler_hint.reset_policy.reset_token` changes. It is
+observe-only by default; pass `--wake-cmd` only to trigger a bounded headless
+turn (for example `loopx turn run-once ... --execute`). It cannot type into a
+visible TUI, so it does not replace the interactive host loop. A launchd
+template ships at
 `examples/external-scheduler-worker.launchd.plist` and the contract is guarded
 by `examples/external-scheduler-worker-smoke.py`. Producer-generated bounded-wait
 scheduler hints have a thin consumer-parity contract with Pi, including the

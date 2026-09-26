@@ -68,7 +68,7 @@ git status --short --branch
 <!-- welcome-wagon:public-private-boundary -->
 
 在任何公开反馈或贡献中，都不要粘贴凭据、私有项目名、内部链接、本机绝对路径、raw transcript、
-`.loopx/`、`.codex/goals/` 或未脱敏日志。
+`.loopx/`、`.loopx/goals/` 或未脱敏日志。
 
 ## A. 跑通一次 LoopX {#run-once}
 
@@ -113,7 +113,7 @@ Host 没有原生 `/loopx` 入口时，使用
   检查时，先用 `loopx agent-onboard --list-agent-types` 选择准确类型，再运行
   `loopx doctor --agent-type <agent-type>`；
 - `loopx status` 能看到精确 Goal、当前 Gate 和下一项 Todo；
-- `.loopx/`、`.codex/goals/` 与 `.local/` 没有进入 Git；
+- `.loopx/`、`.loopx/goals/` 与 `.local/` 没有进入 Git；
 - 当前 Host 的 loop driver 已激活，或返回了明确的人工启动步骤；
 - 遇到 Goal 选择、identity takeover、凭据或外部写入时，流程停在 Gate。
 

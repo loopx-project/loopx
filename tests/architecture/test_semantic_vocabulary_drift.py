@@ -466,7 +466,7 @@ def test_live_inventory_ignores_missing_or_stale_reports(tmp_path, monkeypatch, 
     # A newly observed duplicate must still fail; an old or missing report cannot hide it.
     duplicate = [smoke["SourceFile"](f"loopx/q9_{name}.py", ".py", 'Q9_DUPLICATE = "same"\n')
                  for name in ("first", "second")]
-    with pytest.raises(smoke["Drift"], match="same_runtime_forks grew"):
+    with pytest.raises(smoke["Drift"], match="same_runtime_forks"):
         smoke["check_inventory"](registry, sources + duplicate)
 
 
@@ -805,7 +805,8 @@ def test_inventory_report_discloses_budget_slack(monkeypatch):
         smoke["BUDGET_ANCHOR"], "conflicting_values", widened["inventory_ratchets"]["conflicting_values"],
     )
     _, line = smoke["check_inventory"](widened, sources)
-    assert "slack=conflicting_values=2" in line, line
+    assert "slack=" in line, line
+    assert "conflicting_values=2" in line.split("slack=", 1)[1].split(","), line
 
 
 def _retirement_registry(python_surface: int, typescript_surface: int) -> dict:

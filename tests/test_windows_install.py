@@ -244,10 +244,11 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
         env=launch_env,
     )
     assert todo.returncode == 0, todo.stderr
-    state_file = project / ".codex" / "goals" / "windows-probe" / "ACTIVE_GOAL_STATE.md"
+    state_file = project / ".loopx" / "goals" / "windows-probe" / "ACTIVE_GOAL_STATE.md"
     assert "[P0] Validate Windows PowerShell state writeback" in state_file.read_text(
         encoding="utf-8"
     )
+    assert not (project / ".codex" / "goals" / "windows-probe").exists()
 
     quota = _run_loopx(
         pwsh=pwsh,

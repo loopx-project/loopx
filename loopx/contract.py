@@ -30,7 +30,7 @@ from .history import (
     collect_history,
     load_registry,
 )
-from .paths import DEFAULT_RUNTIME_ROOT, rel_or_abs, resolve_runtime_root
+from .paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT, rel_or_abs, resolve_runtime_root
 from .registry import inspect_registry, inspect_registry_boundary, registry_goals, resolve_state_file
 from .state_projection import state_projection_gap_warning
 from .control_plane.todos.contract import (
@@ -1035,7 +1035,7 @@ def check_contract(
         runtime_root_override,
         registry_path=registry_path,
     )
-    if runtime_root == DEFAULT_RUNTIME_ROOT or runtime_root.exists():
+    if runtime_root in {DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT} or runtime_root.exists():
         checks.append(f"runtime root resolved: {runtime_root}")
     else:
         warnings.append(f"runtime root does not exist yet: {runtime_root}")

@@ -7,7 +7,7 @@ from typing import Any
 from .authority import compact_authority_registry
 from .feedback import validate_local_control_text, validate_public_safe_text
 from .history import load_registry
-from .paths import rel_or_abs, resolve_runtime_root
+from .paths import DEFAULT_PROJECT_GOALS, LEGACY_PROJECT_GOALS, rel_or_abs, resolve_runtime_root
 from .state_refresh import (
     derive_recommended_action,
     extract_section_lines,
@@ -38,7 +38,7 @@ PROJECT_INVENTORY_PATHS = (
     "README.md",
     "AGENTS.md",
     ".loopx/registry.json",
-    ".codex/goals",
+    ".loopx/goals",
     "docs",
     "tests",
     "package.json",
@@ -92,8 +92,18 @@ def collect_project_inventory(project: Path | None, *, goal_id: str | None = Non
             "files_checked": len(PROJECT_INVENTORY_PATHS),
             "checks": [],
         }
+    selected_goal_root = DEFAULT_PROJECT_GOALS
+    if state_file is not None:
+        try:
+            relative_state = state_file.relative_to(project)
+        except ValueError:
+            relative_state = None
+        if relative_state is not None and relative_state.parts[:2] == LEGACY_PROJECT_GOALS.parts:
+            selected_goal_root = LEGACY_PROJECT_GOALS
     checks = []
     for rel_path in PROJECT_INVENTORY_PATHS:
+        if rel_path == str(DEFAULT_PROJECT_GOALS):
+            rel_path = str(selected_goal_root)
         path = project / rel_path
         checks.append(
             {
@@ -104,10 +114,10 @@ def collect_project_inventory(project: Path | None, *, goal_id: str | None = Non
             }
         )
     if goal_id:
-        goal_state_dir = project / ".codex" / "goals" / goal_id
+        goal_state_dir = project / selected_goal_root / goal_id
         checks.append(
             {
-                "path": f".codex/goals/{goal_id}",
+                "path": str(selected_goal_root / goal_id),
                 "exists": goal_state_dir.exists(),
                 "kind": file_kind(goal_state_dir),
                 "role": "goal_state_dir",
@@ -268,12 +278,13 @@ def derive_residual_risks(record: dict[str, Any], *, opt_in_required: bool) -> l
     goal_id = str(record.get("goal_id") or "")
     if ".loopx/registry.json" in missing_paths:
         risks.append("project_local_registry_not_detected")
-    if ".codex/goals" in missing_paths:
+    if ".loopx/goals" in missing_paths or ".codex/goals" in missing_paths:
         risks.append("project_goal_root_not_detected")
     if "goal_state_dir" in missing_roles:
         risks.append(f"project_goal_state_dir_not_detected:{goal_id}" if goal_id else "project_goal_state_dir_not_detected")
     if (
         ".loopx/registry.json" in missing_paths
+        or ".loopx/goals" in missing_paths
         or ".codex/goals" in missing_paths
         or "goal_state_dir" in missing_roles
     ):

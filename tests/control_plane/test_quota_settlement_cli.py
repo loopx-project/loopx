@@ -26,6 +26,7 @@ from loopx.control_plane.quota.settlement_validation import (
 from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.heartbeat_prompt import build_heartbeat_prompt
+from loopx.paths import shell_selected_global_registry
 from loopx.rollout_event_log import build_rollout_event
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -2797,7 +2798,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
         thin=True,
     )
     guard_command = prompt["quota_guard_command"].replace(
-        "$HOME/.codex/loopx/registry.global.json",
+        shell_selected_global_registry().strip('"'),
         str(registry_path),
     )
 
@@ -2860,7 +2861,7 @@ def test_visible_goal_capability_reentry_preserves_turn_through_selection(
         thin=True,
     )
     guard_command = prompt["quota_guard_command"].replace(
-        "$HOME/.codex/loopx/registry.global.json",
+        shell_selected_global_registry().strip('"'),
         str(registry_path),
     )
 

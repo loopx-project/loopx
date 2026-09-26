@@ -63,7 +63,7 @@ SHARED_BOUNDARY_MARKERS = (
     "Python 3.11+",
     "Node.js 22.22.3+",
     ".loopx/",
-    ".codex/goals/",
+    ".loopx/goals/",
     ".local/",
     "Maintainer-owned",
     "DCO",

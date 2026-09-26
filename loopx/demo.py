@@ -7,7 +7,7 @@ from .bootstrap import (
     DEFAULT_DOMAIN,
     bootstrap_project,
 )
-from .paths import DEFAULT_RUNTIME_ROOT
+from .paths import select_default_runtime_root
 from .quota import build_quota_should_run
 from .state_refresh import refresh_state_run
 from .status import collect_status
@@ -41,7 +41,7 @@ def run_demo(
     agent_todo: str,
 ) -> dict[str, Any]:
     project = project.expanduser().resolve()
-    runtime_root = runtime_root.expanduser().resolve() if runtime_root else DEFAULT_RUNTIME_ROOT
+    runtime_root = runtime_root.expanduser().resolve() if runtime_root else select_default_runtime_root()
     registry_path = project / ".loopx" / "registry.json"
     goal_doc = project / "GOAL.md"
     project.mkdir(parents=True, exist_ok=True)

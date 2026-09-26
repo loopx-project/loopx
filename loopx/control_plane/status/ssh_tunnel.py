@@ -26,11 +26,10 @@ _DEFAULT_WAIT_SECONDS = 12.0
 # status server. Only the (already validated) SSH alias is interpolated as an
 # ssh argv; this script is never built from user text.
 _REMOTE_BOOTSTRAP = (
-    "mkdir -p \"$HOME/.codex/loopx\" && "
     "bin=\"$HOME/.local/bin/loopx\"; "
     "[ -x \"$bin\" ] || bin=\"$(command -v loopx || true)\"; "
     "[ -n \"$bin\" ] || { echo 'loopx not found on remote' >&2; exit 1; }; "
-    "nohup \"$bin\" --registry \"$HOME/.codex/loopx/registry.global.json\" "
+    "nohup \"$bin\" "
     "serve-status --global-registry --host 127.0.0.1 --port 8766 --limit 80 "
     ">/tmp/loopx-serve-status.log 2>&1 &"
 )

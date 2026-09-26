@@ -11,6 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def default_state_file(goal_id: str) -> str:
+    # Legacy route is intentional: existing characterization fixtures create
+    # state there and declare it explicitly in their synthetic registries.
     return f".codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md"
 
 

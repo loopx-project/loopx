@@ -19,10 +19,14 @@ import type {
   GoalBarReadFaultCode,
   GoalBarSnapshotV1,
 } from './protocol.ts'
+import {
+  decodeGoalBarProjectRegistry,
+  ProjectRegistryWireError,
+} from './project-registry-wire.ts'
 
 export const GOALBAR_HOST_SURFACE = 'deepseek-harness-native' as const
 export const GOALBAR_PROJECT_REGISTRY = '.loopx/registry.json' as const
-export const GOALBAR_ACTIVE_STATE_ROOT = '.codex/goals' as const
+export const GOALBAR_ACTIVE_STATE_ROOT = '.loopx/goals' as const
 export const GOALBAR_ACTIVE_STATE_FILE = 'ACTIVE_GOAL_STATE.md' as const
 
 const SOURCE_REVISION_FAILURE = `sha256:${createHash('sha256')
@@ -93,12 +97,6 @@ function validatedSourcePaths(options: GoalBarSourceRevisionOptions): string[] {
       || options.goalId.includes('\\')) {
       throw new GoalBarSourceRevisionError('goal id is not a safe path segment')
     }
-    paths.push(resolve(
-      options.cwd,
-      GOALBAR_ACTIVE_STATE_ROOT,
-      options.goalId,
-      GOALBAR_ACTIVE_STATE_FILE,
-    ))
   }
   if ((options.goalId === undefined) !== (options.loopxAgentId === undefined)
     || (options.loopxAgentId !== undefined
@@ -109,6 +107,38 @@ function validatedSourcePaths(options: GoalBarSourceRevisionOptions): string[] {
     throw new GoalBarSourceRevisionError('source path escaped project cwd')
   }
   return paths
+}
+
+function registeredActiveStatePath(cwd: string, goalId: string, registry: Buffer): string {
+  let payload: unknown
+  try {
+    payload = decodeGoalBarProjectRegistry(registry)
+  } catch (error: unknown) {
+    if (error instanceof ProjectRegistryWireError) {
+      throw new GoalBarSourceRevisionError(error.message)
+    }
+    throw new GoalBarSourceRevisionError('project registry is invalid')
+  }
+  if (typeof payload !== 'object' || payload === null
+    || !('goals' in payload) || !Array.isArray(payload.goals)) {
+    throw new GoalBarSourceRevisionError('project registry has no Goal list')
+  }
+  const selected = payload.goals.find((goal: unknown) =>
+    typeof goal === 'object' && goal !== null && 'id' in goal && goal.id === goalId)
+  let declared = join(GOALBAR_ACTIVE_STATE_ROOT, goalId, GOALBAR_ACTIVE_STATE_FILE)
+  if (selected !== undefined) {
+    if (!('state_file' in selected)
+      || typeof selected.state_file !== 'string'
+      || !selected.state_file.trim()) {
+      throw new GoalBarSourceRevisionError('registered Goal has no state_file')
+    }
+    declared = selected.state_file
+  }
+  const path = resolve(cwd, declared)
+  if (!isContained(cwd, path)) {
+    throw new GoalBarSourceRevisionError('registered Goal state path escaped project cwd')
+  }
+  return path
 }
 
 async function readRevisionSource(
@@ -132,22 +162,27 @@ async function readRevisionSource(
   }
 }
 
-/** Hash only the fixed authoritative paths; contents and local paths never cross the wire. */
+/** Hash the registry-declared active state; contents and local paths never cross the wire. */
 export async function computeGoalBarSourceRevision(
   options: GoalBarSourceRevisionOptions,
 ): Promise<string> {
   const paths = validatedSourcePaths(options)
   const hash = createHash('sha256')
-  frame(hash, 'contract', Buffer.from('loopx-goalbar-source-revision-v1'))
+  frame(hash, 'contract', Buffer.from('loopx-goalbar-source-revision-v2'))
   if (options.goalId !== undefined && options.loopxAgentId !== undefined) {
     frame(hash, 'binding.goal-id', Buffer.from(options.goalId, 'utf8'))
     frame(hash, 'binding.agent-id', Buffer.from(options.loopxAgentId, 'utf8'))
   }
-  for (let index = 0; index < paths.length; index += 1) {
-    const source = await readRevisionSource(options.cwd, paths[index] as string)
-    frame(hash, index === 0 ? 'registry.exists' : 'active-state.exists',
-      Buffer.from(source.exists ? '1' : '0'))
-    frame(hash, index === 0 ? 'registry.content' : 'active-state.content', source.content)
+  const registry = await readRevisionSource(options.cwd, paths[0] as string)
+  frame(hash, 'registry.exists', Buffer.from(registry.exists ? '1' : '0'))
+  frame(hash, 'registry.content', registry.content)
+  if (options.goalId !== undefined) {
+    const statePath = registry.exists
+      ? registeredActiveStatePath(options.cwd, options.goalId, registry.content)
+      : resolve(options.cwd, GOALBAR_ACTIVE_STATE_ROOT, options.goalId, GOALBAR_ACTIVE_STATE_FILE)
+    const source = await readRevisionSource(options.cwd, statePath)
+    frame(hash, 'active-state.exists', Buffer.from(source.exists ? '1' : '0'))
+    frame(hash, 'active-state.content', source.content)
   }
   return `sha256:${hash.digest('hex')}`
 }
@@ -681,4 +716,4 @@ export async function readGoalBarModel(
 }
 import { createHash } from 'node:crypto'
 import { readFile, realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'

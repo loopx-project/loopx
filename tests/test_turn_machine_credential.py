@@ -9,6 +9,7 @@ import pytest
 
 from loopx.cli import main
 from loopx.control_plane import operator_provider as provider
+from loopx import paths
 from loopx.control_plane.collaboration.delegation_context import project_delegation_context
 from loopx.control_plane.turn_driver import host_binding
 from loopx.dsh_goal_mode import turn_host_adapter
@@ -22,7 +23,8 @@ GOAL_KEY = "goal-must-not-select-this-credential"
 @pytest.fixture
 def machine(tmp_path, monkeypatch):
     root = tmp_path / "machine-owner"
-    monkeypatch.setattr(provider, "DEFAULT_RUNTIME_ROOT", root)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", root)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", tmp_path / "absent-legacy-runtime")
     for name in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "LOOPX_TURN_HOST"):
         monkeypatch.delenv(name, raising=False)
     # SDK availability is independent of credential ownership; no model is called.

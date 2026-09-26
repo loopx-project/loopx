@@ -332,7 +332,7 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 
 不要从这些内容创建公开任务：
 
-- `.loopx/`、`.codex/goals/` 或 live active state；
+- `.loopx/`、`.loopx/goals/` 或 live active state；
 - private benchmark trace、raw agent session 或 verifier output；
 - 内部文档、生产凭据、本机路径；
 - `Maintainer-owned` live run 的推测性复刻。

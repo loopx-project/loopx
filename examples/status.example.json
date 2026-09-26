@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "registry": "$HOME/.codex/loopx/registry.global.json",
-  "runtime_root": "$HOME/.codex/loopx",
+  "registry": "$HOME/.loopx/registry.global.json",
+  "runtime_root": "$HOME/.loopx",
   "goal_count": 1,
   "run_count": 8440,
   "status_contract": {
@@ -119,8 +119,8 @@
   },
   "promotion_gate": {
     "ok": true,
-    "registry": "$HOME/.codex/loopx/registry.global.json",
-    "runtime_root": "$HOME/.codex/loopx",
+    "registry": "$HOME/.loopx/registry.global.json",
+    "runtime_root": "$HOME/.loopx",
     "gate": "promotion_readiness",
     "gate_state": "ready",
     "can_promote": true,
@@ -137,7 +137,7 @@
       "recommended_action": "Canary promotion-readiness smoke passed; promotion may proceed after doctor/status reports fresh evidence.",
       "json_exists": true,
       "markdown_exists": true,
-      "runtime_root": "$HOME/.codex/loopx",
+      "runtime_root": "$HOME/.loopx",
       "freshness_window_hours": 24,
       "freshness_status": "fresh",
       "is_fresh": true,
@@ -547,7 +547,7 @@
       "registry goals checked: 12",
       "registry boundary: shared_local_registry push_allowed=False tracked=False ignored=False",
       "user-gate scopes checked: 6 open multi-agent gates",
-      "runtime root resolved: $HOME/.codex/loopx",
+      "runtime root resolved: $HOME/.loopx",
       "run-history goals=28 runs=10210",
       "public boundary scan clean: 1218 files"
     ]
@@ -555,8 +555,8 @@
   "global_registry": {
     "available": true,
     "ok": true,
-    "registry": "$HOME/.codex/loopx/registry.global.json",
-    "current_registry": "$HOME/.codex/loopx/registry.global.json",
+    "registry": "$HOME/.loopx/registry.global.json",
+    "current_registry": "$HOME/.loopx/registry.global.json",
     "current_registry_is_global": true,
     "global_goal_count": 12,
     "current_goal_count": 12,

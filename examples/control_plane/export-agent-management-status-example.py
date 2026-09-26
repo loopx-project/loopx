@@ -31,8 +31,8 @@ DEFAULT_AGENT_IDS = (
     "codex-product-capability",
     "codex-value-explorer",
 )
-PUBLIC_REGISTRY = "$HOME/.codex/loopx/registry.global.json"
-PUBLIC_RUNTIME_ROOT = "$HOME/.codex/loopx"
+PUBLIC_REGISTRY = "$HOME/.loopx/registry.global.json"
+PUBLIC_RUNTIME_ROOT = "$HOME/.loopx"
 REDACTED_TEXT = "Public-safe redacted live LoopX text; inspect local status for the full row."
 HOME_TEXT = str(Path.home())
 HOME_NAME = Path.home().name
