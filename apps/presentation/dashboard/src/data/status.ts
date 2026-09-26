@@ -341,6 +341,19 @@ export const projectAssetTodoProjectionGapSchema = z.object({
   recommended_action: z.string().optional().nullable(),
 });
 
+export const nativeChildActivitySchema = z.object({
+  schema_version: z.literal("native_subagent_activity_v0"),
+  observation: z.enum(["unknown", "coordinator_reported"]),
+  host_attested: z.literal(false),
+  configured_limit: z.number().int().nonnegative(),
+  launched_count: z.number().int().nonnegative(),
+  skipped_count: z.number().int().nonnegative(),
+  capacity_rejected_count: z.number().int().nonnegative(),
+  host_failed_count: z.number().int().nonnegative(),
+  parent_accepted_count: z.number().int().nonnegative(),
+  turn_instance_id: z.string(),
+});
+
 export const projectAssetSchema = z.object({
   owner: z.string(),
   gate: z.string(),
@@ -351,6 +364,7 @@ export const projectAssetSchema = z.object({
   quota: quotaSchema.optional().nullable(),
   control_plane: controlPlaneSchema.optional().nullable(),
   orchestration: orchestrationPolicySchema.optional().nullable(),
+  native_child_activity: nativeChildActivitySchema.optional().nullable(),
   latest_validation: projectAssetLatestValidationSchema.optional().nullable(),
   stale_latest_run_warning: staleLatestRunWarningSchema.optional().nullable(),
   todo_projection_gap: projectAssetTodoProjectionGapSchema.optional().nullable(),

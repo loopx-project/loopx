@@ -192,7 +192,7 @@ test("coordinator participation guidance survives all bounded lifecycle projecti
     } })!;
     assert.deepEqual(packet.failures, []);
     const [contribution] = packet.contributions as Record<string, any>[];
-    assert.equal(contribution.revision, "v5");
+    assert.equal(contribution.revision, "v6");
     assert.equal(packet.authority, "guidance_only");
     assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
     assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 3072);
@@ -248,4 +248,31 @@ test("configured child limit stays distinct from typed native host capacity", ()
   const succeededFacts = (succeeded.contributions as Record<string, any>[])[0].facts;
   assert.equal(succeededFacts.capacity_contract.live_availability, "attempt_observed");
   assert.equal(succeededFacts.native_host_capacity.retry_same_turn, undefined);
+});
+
+test("durable native child report is bounded and does not claim host attestation", () => {
+  const packet = evaluateSubagentContext({ phase: "after_delegate_result", scope,
+    orchestration: { ...policy, max_children: 6 }, observations: {
+      native_child_activity: {
+        schema_version: "native_subagent_activity_v0",
+        entrypoint_scope: "host_native_child_tools",
+        observation: "coordinator_reported",
+        host_attested: true,
+        configured_limit: 6,
+        attempted_count: 2,
+        launched_count: 1,
+        skipped_count: 0,
+        capacity_rejected_count: 1,
+        host_failed_count: 0,
+        parent_accepted_count: 0,
+        retry_same_turn: false,
+        raw_host_result: "private result",
+      },
+    } })!;
+  const facts = (packet.contributions as Record<string, any>[])[0].facts;
+  assert.equal(facts.native_child_activity.host_attested, false);
+  assert.equal(facts.native_child_activity.launched_count, 1);
+  assert.equal(facts.native_child_activity.retry_same_turn, false);
+  assert.equal(facts.native_receipt_observation, "coordinator_reported");
+  assert.ok(!JSON.stringify(packet).includes("private result"));
 });

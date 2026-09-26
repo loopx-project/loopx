@@ -201,6 +201,18 @@ const goalSpecs = [
       max_children: 2,
       allowed_domains: ["docs", "validation"],
     },
+    nativeChildActivity: {
+      schema_version: "native_subagent_activity_v0",
+      turn_instance_id: "fixture-turn-1",
+      observation: "coordinator_reported",
+      host_attested: false,
+      configured_limit: 2,
+      launched_count: 1,
+      skipped_count: 0,
+      capacity_rejected_count: 1,
+      host_failed_count: 0,
+      parent_accepted_count: 0,
+    },
     latest: {
       generated_at: "2026-01-01T00:03:00+00:00",
       classification: "dashboard_home_chinese_operator_copy_contract",
@@ -224,6 +236,7 @@ function projectAssetFor(spec) {
     quota: spec.quota,
     control_plane: spec.controlPlane,
     orchestration: spec.orchestration,
+    native_child_activity: spec.nativeChildActivity,
     latest_validation: {
       generated_at: spec.latest.generated_at,
       classification: spec.latest.classification,
@@ -1293,6 +1306,42 @@ async function main() {
       throw new Error(`Failed waiting for personal-goal-home: ${error.message}; body=${diagnostic.slice(0, 1000)}; pageErrors=${pageErrors.join(" | ")}`);
     }
 
+    if (process.env.LOOPX_NATIVE_CHILD_SMOKE_ONLY === "1") {
+      for (const [label, target] of [["desktop", page],
+        ["mobile", await browser.newPage({ isMobile: true, viewport: { width: 390, height: 900 } })]]) {
+        try {
+          await target.goto(`${baseUrl}/?goalId=loopx-meta&statusUrl=/${fixtureName}`, { waitUntil: "networkidle" });
+          await target.waitForSelector('[data-testid="personal-goal-home"]', { timeout: 10_000 });
+          await target.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
+          await target.locator(".goal-overview-heading button").click();
+          const drawerText = await target.locator(".personal-context-drawer").innerText();
+          if (!drawerText.includes("主 Agent 回报：启动 1 次、跳过 0 次、容量拒绝 1 次")
+            || !drawerText.includes("目前没有宿主核验")) {
+            throw new Error(`${label} native child report lost provenance: ${drawerText}`);
+          }
+          await target.screenshot({
+            path: resolve(visualOutputDir, `${label}-native-child-activity.png`),
+            animations: "disabled",
+          });
+          await target.locator(".personal-native-child-activity").screenshot({
+            path: resolve(visualOutputDir, `${label}-native-child-card.png`),
+            animations: "disabled",
+          });
+        } finally {
+          if (target !== page) await target.close();
+        }
+      }
+      await page.goto(`${baseUrl}/?goalId=showcase-user-gate-safe-side-path&statusUrl=/${fixtureName}`, { waitUntil: "networkidle" });
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
+      await page.locator(".goal-overview-heading button").click();
+      const unconfiguredDrawer = await page.locator(".personal-context-drawer").innerText();
+      if (unconfiguredDrawer.includes("主 Agent 回报")) {
+        throw new Error("Unconfigured Goal displayed unrelated native child activity.");
+      }
+      console.log("dashboard-native-child-activity-smoke ok");
+      return;
+    }
+
     await page.locator(".personal-composer-tools > summary").click();
     const body = await page.locator("body").innerText();
     const required = [
@@ -1409,6 +1458,9 @@ async function main() {
       const drawerText = await page.locator(".personal-context-drawer").innerText();
       if (!drawerText.includes("Goal 详情") && !drawerText.includes("Repository")) {
         throw new Error(`Context drawer did not render expected details: ${drawerText}`);
+      }
+      if (!drawerText.includes("主 Agent 回报：启动 1 次、跳过 0 次、容量拒绝 1 次")) {
+        throw new Error(`Native child report was not shown with its provenance: ${drawerText}`);
       }
     }
 

@@ -459,6 +459,16 @@ type PersonalGoalItem = {
   needsYouTodoId?: string | null;
   nextSentence: string;
   hasRunObservation: boolean;
+  nativeChildActivity?: {
+    turn_instance_id: string;
+    observation: "unknown" | "coordinator_reported";
+    host_attested: false;
+    launched_count: number;
+    skipped_count: number;
+    capacity_rejected_count: number;
+    host_failed_count: number;
+    parent_accepted_count: number;
+  } | null;
   state: PersonalGoalState;
   subagentExecution?: {
     allowedDomains: string[];
@@ -1208,6 +1218,7 @@ function buildPersonalHomeModel(
       hasRunObservation: Boolean(row.queueItem?.project_asset?.latest_validation
         || row.latestRun
         || payload.event_ledger_summary?.goals.some((item) => item.goal_id === goal.id)),
+      nativeChildActivity: row.queueItem?.project_asset?.native_child_activity,
       state,
       ...(goalSubagentConfigurationEnabled ? {
         subagentExecution: {
