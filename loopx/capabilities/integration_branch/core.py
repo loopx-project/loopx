@@ -524,7 +524,10 @@ def _worktree_for_branch(repo: Path, branch: str) -> Path | None:
     result = _git(repo, "worktree", "list", "--porcelain")
     current_path: Path | None = None
     target_ref = f"refs/heads/{branch}"
-    for line in result.stdout.splitlines():
+    # `--porcelain` frames records on LF and prints paths verbatim, so a path
+    # containing U+0085/U+2028/U+2029 would be split by `str.splitlines()` and
+    # the prefix returned as the worktree path. Frame on the writer's separator.
+    for line in result.stdout.split("\n"):
         if line.startswith("worktree "):
             current_path = Path(line.removeprefix("worktree ")).resolve()
         elif line == f"branch {target_ref}":

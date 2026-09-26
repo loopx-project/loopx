@@ -625,6 +625,11 @@ def _apply_reviewer_sources_for_path(
 
 def _derive_changed_files(repo_path: Path, base_ref: str) -> list[str]:
     output = _run_git(repo_path, ["diff", "--name-only", f"{base_ref}...HEAD"])
+    # Deliberately left on `splitlines()`: `git diff --name-only` quotes
+    # non-ASCII pathnames as octal escapes (`core.quotePath` defaults to true),
+    # so this stream cannot carry a raw U+0085/U+2028 that would tear a record.
+    # Streams that emit substituted values verbatim are framed on LF instead;
+    # see `_collect_history`.
     return _normalise_changed_files(output.splitlines())
 
 
@@ -647,7 +652,12 @@ def _collect_history(
         ],
     )
     rows: list[tuple[str, str]] = []
-    for line in output.splitlines():
+    # `git log --format=` writes one record per LF and substitutes `%aN`/`%aE`
+    # verbatim, so a name may contain U+0085, U+2028, U+2029 or the ASCII
+    # separators U+000B/U+000C/U+001C-U+001E. `str.splitlines()` treats every
+    # one of those as a line break and would tear one record into fragments,
+    # which the `if not separator: continue` guard below would then swallow.
+    for line in output.split("\n"):
         name, separator, email = line.partition("\x1f")
         if not separator:
             continue

@@ -11,7 +11,10 @@ from loopx.capabilities.integration_branch import (
     integration_branch_status,
     sync_integration_branch,
 )
-from loopx.capabilities.integration_branch.core import IntegrationBranchError
+from loopx.capabilities.integration_branch.core import (
+    IntegrationBranchError,
+    _worktree_for_branch,
+)
 from loopx.cli import main
 
 
@@ -639,3 +642,18 @@ def test_cli_rejects_plan_file_outside_loopx_state_root(
     assert payload["status"] == "invalid_state"
     assert "must remain under" in payload["error"]
     assert not outside_plan.exists()
+
+
+def test_worktree_for_branch_frames_porcelain_records_on_lf(tmp_path: Path) -> None:
+    """A worktree path containing U+0085 must resolve to the full path.
+
+    `git worktree list --porcelain` frames records on LF and prints the path
+    verbatim, so `str.splitlines()` used to return the `.../odd` prefix as the
+    worktree path. The caller cleans and resets that path, so a torn prefix
+    could send `reset --hard` at the wrong checkout.
+    """
+    repo = _repository(tmp_path)
+    odd = tmp_path / "odd\u0085worktree"
+    _git(repo, "worktree", "add", str(odd), "feature-a")
+
+    assert _worktree_for_branch(repo, "feature-a") == odd.resolve()
