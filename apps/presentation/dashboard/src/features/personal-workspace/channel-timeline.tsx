@@ -12,6 +12,7 @@ import { ScheduleRow } from "./cards/schedule-row";
 import { useWorkspaceI18n } from "./i18n";
 import { ReturnDeliveryStatus } from "./return-delivery-status";
 import {ManagerTeamResult} from "./manager-team-result";
+import { compareProposalRecency } from "./proposal-recency";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceMessage, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string) {
@@ -162,8 +163,13 @@ export function ChannelTimeline({
   const activeProposalItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
     item.kind === "proposal" && item.proposal.status !== "gated");
   // Only drafts awaiting the owner fold behind the newest one; applying, applied and failed results stay visible.
+  // "Newest" is read from the stored proposal, not from the position in this
+  // list: a restore arrives newest first and a draft created in this session is
+  // appended last, so a positional rule keeps the wrong draft on the first screen.
   const readyProposalItems = activeProposalItems.filter(item => item.proposal.status === "ready");
-  const foldedProposalIds = new Set(readyProposalItems.slice(0, -1).map(item => item.id));
+  const readyByRecency = [...readyProposalItems].sort((a, b) => compareProposalRecency(a.proposal, b.proposal));
+  const foldedProposalItems = readyByRecency.slice(1);
+  const foldedProposalIds = new Set(foldedProposalItems.map(item => item.id));
   const visibleProposalItems = activeProposalItems.filter(item => !foldedProposalIds.has(item.id));
 
   function renderItem(item: WorkspaceTimelineItem) {
@@ -231,7 +237,7 @@ export function ChannelTimeline({
         {foldedProposalIds.size ? (
           <details className="personal-proposal-backlog">
             <summary><Sparkles size={16} aria-hidden="true" /><strong>{t("timeline.olderDrafts", { count: foldedProposalIds.size })}</strong></summary>
-            <div>{readyProposalItems.filter(item => foldedProposalIds.has(item.id)).map(renderItem)}</div>
+            <div>{foldedProposalItems.map(renderItem)}</div>
           </details>
         ) : null}
         {visibleProposalItems.map(renderItem)}
