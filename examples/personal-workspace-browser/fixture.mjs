@@ -1677,10 +1677,20 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
-    const proposals = Array.from(actionProposals.values()).filter((proposal) => {
+    const matching = Array.from(actionProposals.values()).filter((proposal) => {
       if (proposal.status === "cancelled") return false;
       if (goalId && (proposal.context?.goal_id ?? proposal.normalized_parameters?.goal_id) !== goalId) return false;
       return !contextKind || proposal.context?.kind === contextKind;
+    });
+    // `ChatActionStore.list` sorts by (`updated_at`, `proposal_id`) newest first.
+    // Serving insertion order instead let a positional reader pass here and keep
+    // the wrong draft on the first screen of the real workspace.
+    const proposals = matching.sort((a, b) => {
+      const [aTime, aId] = [a.updated_at ?? "", a.proposal_id ?? ""];
+      const [bTime, bId] = [b.updated_at ?? "", b.proposal_id ?? ""];
+      if (aTime !== bTime) return aTime < bTime ? 1 : -1;
+      if (aId === bId) return 0;
+      return aId < bId ? 1 : -1;
     });
     await route.fulfill({ contentType: "application/json", json: { ok: true, schema_version: "loopx_chat_action_list_v1", proposals }, status: 200 });
   });
