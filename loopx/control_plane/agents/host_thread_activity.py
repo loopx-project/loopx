@@ -28,6 +28,11 @@ class HostThreadState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class HostThreadObservationCompleteness(str, Enum):
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+
+
 class HostThreadUnknownReason(str, Enum):
     UNSUPPORTED_HOST = "unsupported_host"
     STORE_UNAVAILABLE = "store_unavailable"
@@ -79,7 +84,7 @@ def _goal_bindings(goal: Mapping[str, Any]) -> list[tuple[str, str, str]]:
         )
         if agent_id and host_surface and thread_id:
             bindings.append((agent_id, host_surface, thread_id))
-    return bindings[:MAX_OBSERVED_THREADS_PER_GOAL]
+    return bindings
 
 
 def attach_host_thread_activity(
@@ -103,7 +108,7 @@ def attach_host_thread_activity(
     ]
     requested: dict[str, set[str]] = {}
     for _goal, bindings in bindings_by_goal:
-        for _agent_id, host_surface, thread_id in bindings:
+        for _agent_id, host_surface, thread_id in bindings[:MAX_OBSERVED_THREADS_PER_GOAL]:
             if host_surface in observers:
                 requested.setdefault(host_surface, set()).add(thread_id)
     observed = {
@@ -115,7 +120,7 @@ def attach_host_thread_activity(
         if not bindings:
             continue
         threads = []
-        for agent_id, host_surface, thread_id in bindings:
+        for agent_id, host_surface, thread_id in bindings[:MAX_OBSERVED_THREADS_PER_GOAL]:
             if host_surface not in observers:
                 activity = HostThreadActivity.unknown(HostThreadUnknownReason.UNSUPPORTED_HOST)
             else:
@@ -126,5 +131,10 @@ def attach_host_thread_activity(
         goal["host_thread_activity"] = {
             "schema_version": HOST_THREAD_ACTIVITY_SCHEMA_VERSION,
             "observed_at": observed_at,
+            "completeness": (
+                HostThreadObservationCompleteness.COMPLETE
+                if len(bindings) <= MAX_OBSERVED_THREADS_PER_GOAL
+                else HostThreadObservationCompleteness.INCOMPLETE
+            ).value,
             "threads": threads,
         }

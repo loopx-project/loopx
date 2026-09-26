@@ -3,8 +3,8 @@
 Codex records each thread in ``<CODEX_HOME>/state_<n>.sqlite`` (``threads``
 table) and appends every turn event to the thread's rollout JSONL. Neither is a
 public Codex contract, so this adapter checks each shape it depends on and
-reports ``unknown`` for anything else. It opens the store read-only and reads
-only record types and timestamps, never message content.
+reports ``unknown`` for anything else. It opens the store read-only and uses
+only record types and timestamps; message content is never projected.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ _STATE_DB_RE = re.compile(r"^state_(\d+)\.sqlite$")
 _REQUIRED_THREAD_COLUMNS = frozenset({"id", "rollout_path", "archived"})
 _TURN_START = "task_started"
 _TURN_ENDS = frozenset({"task_complete", "turn_aborted"})
-_TURN_MARKERS = tuple(f'"{marker}"'.encode() for marker in (_TURN_START, *_TURN_ENDS))
+_EVENT_MSG_RECORD = b'"event_msg"'
 _TAIL_CHUNK_BYTES = 256 * 1024
 _TAIL_LIMIT_BYTES = 8 * 1024 * 1024
 _ROLLOUT_CACHE_LIMIT = 256
@@ -114,12 +114,18 @@ def _record(line: bytes) -> dict[str, Any] | None:
     return record if isinstance(record.get("timestamp"), str) else None
 
 
-def _turn_marker(record: dict[str, Any]) -> str | None:
+def _turn_marker(record: dict[str, Any]) -> HostThreadState | None:
     payload = record.get("payload")
-    if record["type"] != "event_msg" or not isinstance(payload, dict):
+    if record["type"] != "event_msg":
         return None
+    if not isinstance(payload, dict):
+        return HostThreadState.UNKNOWN
     kind = payload.get("type")
-    return kind if kind == _TURN_START or kind in _TURN_ENDS else None
+    if not isinstance(kind, str):
+        return HostThreadState.UNKNOWN
+    if kind == _TURN_START:
+        return HostThreadState.TURN_OPEN
+    return HostThreadState.IDLE if kind in _TURN_ENDS else None
 
 
 def _tail_lines(path: Path) -> Iterable[bytes]:
@@ -182,18 +188,22 @@ def _scan_rollout(path: Path) -> HostThreadActivity:
             if record is None:
                 return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
             last_event_at = record["timestamp"]
-        elif not any(marker in line for marker in _TURN_MARKERS):
+        elif _EVENT_MSG_RECORD not in line:
             continue
         else:
             record = _record(line)
-        marker = _turn_marker(record) if record else None
-        if marker == _TURN_START:
+            if record is None:
+                return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+        marker = _turn_marker(record)
+        if marker is HostThreadState.UNKNOWN:
+            return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+        if marker is HostThreadState.TURN_OPEN:
             return HostThreadActivity(
                 state=HostThreadState.TURN_OPEN,
                 turn_started_at=record["timestamp"],
                 last_event_at=last_event_at,
             )
-        if marker is not None:
+        if marker is HostThreadState.IDLE:
             return HostThreadActivity(
                 state=HostThreadState.IDLE,
                 last_turn_ended_at=record["timestamp"],

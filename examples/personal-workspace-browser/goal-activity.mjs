@@ -88,9 +88,9 @@ export const goalActivityScenario = {
       collectCoverage,
       beforeGoto: (api) => {
         api.hostThreadActivity = {
-          "product-release": { threads: [thread("turn_open", minutesAgo(1)), thread("idle", minutesAgo(90))] },
-          "multi-agent-projection": { threads: [thread("idle", minutesAgo(40)), thread("archived", null)] },
-          "research-monitor": { threads: [thread("turn_open", minutesAgo(8 * 60))] },
+          "product-release": { completeness: "complete", threads: [thread("turn_open", minutesAgo(1)), thread("idle", minutesAgo(90))] },
+          "multi-agent-projection": { completeness: "complete", threads: [thread("idle", minutesAgo(40)), thread("archived", null)] },
+          "research-monitor": { completeness: "complete", threads: [thread("turn_open", minutesAgo(8 * 60))] },
         };
       },
     });
@@ -112,6 +112,42 @@ export const goalActivityScenario = {
       await observed.page.screenshot({ path: resolve(outputDir, "goal-activity-host-observed-failed.png") });
       await observed.close();
       throw error;
+    }
+
+    for (const completeness of ["incomplete", undefined, "unrecognized"]) {
+      const partial = await openWorkspacePage(browser, url, {
+        collectCoverage,
+        beforeGoto: (api) => {
+          api.hostThreadActivity = {
+            "product-release": { completeness: "incomplete", threads: [thread("turn_open", minutesAgo(1))] },
+            "multi-agent-projection": { completeness, threads: Array.from({ length: 32 }, () => thread("idle", minutesAgo(40))) },
+            "research-monitor": { completeness: "complete", threads: [{ ...thread("unknown", null), reason: "record_unrecognized" }] },
+          };
+        },
+      });
+      try {
+        const { api, page } = partial;
+        const queued = await goalRow(page, "Multi Agent Projection");
+        await queued.locator("small", { hasText: "执行情况以宿主为准" }).waitFor({ timeout: 15_000 });
+        assert.doesNotMatch(await queued.locator("small").innerText(), /线程空闲|执行中/, "A partial or legacy sample cannot prove every bound thread idle");
+        assert.match(await (await goalRow(page, "Product Release")).locator("small").innerText(), /^执行中/, "A positive open-turn observation remains usable with partial coverage");
+        assert.doesNotMatch(await (await goalRow(page, "Research Monitor")).locator("small").innerText(), /线程空闲|执行中/, "An unrecognized record never becomes idle or running");
+        assert.equal(await page.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 1);
+        if (completeness === "incomplete") {
+          await page.screenshot({ path: resolve(outputDir, "goal-activity-partial.png"), animations: "disabled" });
+          await page.setViewportSize({ width: 390, height: 844 });
+          await page.screenshot({ path: resolve(outputDir, "goal-activity-partial-mobile.png"), animations: "disabled" });
+        }
+        api.hostThreadActivity["multi-agent-projection"] = { completeness: "complete", threads: [thread("idle", minutesAgo(1))] };
+        await page.setViewportSize({ width: 1512, height: 982 });
+        await page.reload({ waitUntil: "networkidle" });
+        await (await goalRow(page, "Multi Agent Projection")).locator("small", { hasText: "线程空闲" }).waitFor({ timeout: 15_000 });
+        coverageEntries.push(...await partial.close());
+      } catch (error) {
+        await partial.page.screenshot({ path: resolve(outputDir, "goal-activity-partial-failed.png") });
+        await partial.close();
+        throw error;
+      }
     }
 
     const offline = await openWorkspacePage(browser, url, {

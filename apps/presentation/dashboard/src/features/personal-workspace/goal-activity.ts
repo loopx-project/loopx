@@ -25,6 +25,12 @@ export type GoalHostThread = {
   lastEventAt: string | null;
 };
 
+/** Coverage stays with the rows so a bounded sample cannot prove all hosts idle. */
+export type GoalHostThreadActivity = {
+  completeness: "complete" | "incomplete";
+  threads: GoalHostThread[];
+};
+
 /** A turn with no recorded event for this long may be silent or lost; it is never shown as live. */
 export const quietTurnMinutes = 15;
 /** A host can exit mid-turn without recording an end; after this long an open turn is not execution. */
@@ -63,10 +69,10 @@ function openHostTurns(threads: readonly GoalHostThread[], now: number) {
 export function goalExecution(
   sessions: readonly GoalSessionFact[] | null | undefined,
   goalId: string,
-  hostThreads: readonly GoalHostThread[] = [],
+  hostThreadActivity?: GoalHostThreadActivity,
   now = Date.now(),
 ): WorkspaceGoalExecution | undefined {
-  const hostTurns = openHostTurns(hostThreads, now);
+  const hostTurns = openHostTurns(hostThreadActivity?.threads ?? [], now);
   const open = (sessions ?? []).filter((session) => session.goal_id === goalId && session.status !== "closed");
   const active = open.filter((session) => Boolean(session.active_turn_id));
   if (active.length === 0 && hostTurns.length === 0) {
@@ -131,7 +137,7 @@ type GoalActivityInput = {
   /** `host_surface` of each thread bound to this Goal in the status projection. */
   boundHostSurfaces?: string[];
   execution?: WorkspaceGoalExecution;
-  hostThreads?: GoalHostThread[];
+  hostThreadActivity?: GoalHostThreadActivity;
   needsYou?: string | null;
   state: string;
 };
@@ -147,8 +153,9 @@ export function presentGoalActivity(goal: GoalActivityInput): GoalActivity {
   if (running) return { labelKey: "activity.running", tone: live ? "running" : "attention", live, alsoKey: null };
   if (goal.state === "等待条件") return { labelKey: "state.waiting", tone: "waiting", live: false, alsoKey: null };
   if (goal.state === "已安排") {
-    const hostThreads = goal.hostThreads ?? [];
-    const hostsIdle = hostThreads.length > 0 && hostThreads.every((thread) => thread.state === "idle" || thread.state === "archived");
+    const hostThreads = goal.hostThreadActivity?.threads ?? [];
+    const hostsIdle = goal.hostThreadActivity?.completeness === "complete"
+      && hostThreads.length > 0 && hostThreads.every((thread) => thread.state === "idle" || thread.state === "archived");
     const alsoKey = goal.execution?.kind === "unknown" ? "activity.executionUnknown"
       : hostsIdle ? "activity.hostIdle"
         : goalHostSurfaces(goal).length > 0 ? "activity.inHost" : null;

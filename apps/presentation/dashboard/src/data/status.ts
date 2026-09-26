@@ -529,6 +529,8 @@ export const runGoalSchema = z.object({
   }).optional().nullable(),
   host_thread_activity: z.object({
     observed_at: z.string().optional().nullable(),
+    // Older or malformed observations cannot prove that every binding was read.
+    completeness: z.enum(["complete", "incomplete"]).catch("incomplete").default("incomplete"),
     threads: z.array(z.object({
       agent_id: z.string().optional().nullable(),
       host_surface: z.string(),

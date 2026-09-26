@@ -78,10 +78,18 @@ and lifecycle state.
 The broker only sees turns a host claims. A host thread registered with
 `bind-agent-thread` but never attached is observed separately, read-only, from
 the host's own local store. The App status route (`/status.json`) adds
-`run_history.goals[].host_thread_activity` with one row per bound thread:
+`run_history.goals[].host_thread_activity` with up to 32 bound-thread rows:
 `agent_id`, `host_surface`, `state`, and the `turn_started_at`,
 `last_turn_ended_at` and `last_event_at` timestamps when known. Thread ids,
 paths and message content are not included.
+
+The observation's `completeness` is `complete` only when every valid binding
+fits within that read budget; otherwise it is `incomplete`. The App can show
+an observed recent open turn from either, but reports all hosts idle only from
+a complete observation containing only idle or archived threads. Missing or
+unrecognized completeness is treated as incomplete. Malformed event payloads
+make that thread `unknown` without failing the status route; a later recognized
+turn marker restores its observed state.
 
 | `state` | Meaning |
 | --- | --- |

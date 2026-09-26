@@ -4,7 +4,7 @@ import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/pre
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError } from "../../data/workspace-progressive-status";
-import type { GoalHostThread, WorkspaceGoalExecution } from "./goal-activity";
+import type { GoalHostThreadActivity, WorkspaceGoalExecution } from "./goal-activity";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
@@ -108,7 +108,7 @@ export type WorkspaceGoal = {
   execution?: WorkspaceGoalExecution;
   goalId: string;
   /** Bound host threads as observed from the host's own records. */
-  hostThreads?: GoalHostThread[];
+  hostThreadActivity?: GoalHostThreadActivity;
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;

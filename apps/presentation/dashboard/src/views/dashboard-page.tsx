@@ -1112,11 +1112,14 @@ function buildPersonalHomeModel(
       boundHostSurfaces: Array.from(new Set((goal.coordination?.thread_agent_bindings ?? [])
         .flatMap((binding) => binding.host_surface ? [binding.host_surface] : []))),
       doneTodoCount: agentTodoFacts.doneTodoCount,
-      hostThreads: (goal.host_thread_activity?.threads ?? []).map((thread) => ({
-        hostSurface: thread.host_surface,
-        lastEventAt: thread.last_event_at ?? null,
-        state: thread.state,
-      })),
+      hostThreadActivity: goal.host_thread_activity ? {
+        completeness: goal.host_thread_activity.completeness,
+        threads: goal.host_thread_activity.threads.map((thread) => ({
+          hostSurface: thread.host_surface,
+          lastEventAt: thread.last_event_at ?? null,
+          state: thread.state,
+        })),
+      } : undefined,
       acceptanceObservation: goal.acceptance_observation,
       goalId: goal.id,
       latestActivity: row.latestRun?.generated_at ?? "",
@@ -2634,7 +2637,7 @@ function PersonalGoalHome({
     ...normalizedModel,
     goals: normalizedModel.goals.map((goal) => ({
       ...goal,
-      execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreads),
+      execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreadActivity),
     })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),

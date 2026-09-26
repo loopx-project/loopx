@@ -24,7 +24,7 @@ T2 = "2026-09-25T10:06:00.000Z"
 T3 = "2026-09-25T10:07:00.000Z"
 
 
-def _event(timestamp: str, kind: str, **payload: Any) -> dict[str, Any]:
+def _event(timestamp: str, kind: Any, **payload: Any) -> dict[str, Any]:
     return {"timestamp": timestamp, "type": "event_msg", "payload": {"type": kind, **payload}}
 
 
@@ -107,6 +107,34 @@ def test_new_records_invalidate_the_cached_scan(home: CodexHome) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_event(T1, "task_complete")) + "\n")
     assert _observe(home, "t")["t"].state is HostThreadState.IDLE
+
+
+@pytest.mark.parametrize("kind", [[], {}, None, 42])
+@pytest.mark.parametrize("following_item", [False, True], ids=["latest-event", "before-response"])
+def test_malformed_event_is_unknown_and_recovers_without_poisoning_other_threads(
+    home: CodexHome, kind: Any, following_item: bool,
+) -> None:
+    records = [_event(T0, "task_started"), _event(T1, kind)]
+    if following_item:
+        records.append(_item(T2))
+    path = home.thread("malformed", records)
+    home.thread("healthy", [_event(T0, "task_started"), _item(T1)])
+    observed = _observe(home, "malformed", "healthy")
+    assert observed["malformed"] == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
+    assert observed["healthy"].state is HostThreadState.TURN_OPEN
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_event(T3, "task_complete")) + "\n")
+    assert _observe(home, "malformed")["malformed"].state is HostThreadState.IDLE
+
+
+@pytest.mark.parametrize("payload", [None, [], "task_complete", {}])
+def test_malformed_event_payload_cannot_imply_an_open_turn(home: CodexHome, payload: Any) -> None:
+    home.thread("t", [
+        _event(T0, "task_started"),
+        {"timestamp": T1, "type": "event_msg", "payload": payload},
+        _item(T2),
+    ])
+    assert _observe(home, "t")["t"] == HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
 
 
 @pytest.mark.parametrize(
@@ -197,6 +225,7 @@ def test_attach_reports_each_binding_without_thread_ids() -> None:
     attach_host_thread_activity(payload, observers={"codex-app": observe})
     bound, unbound = payload["run_history"]["goals"]
     assert calls == [["t-gone", "t-open"]]
+    assert bound["host_thread_activity"]["completeness"] == "complete"
     assert bound["host_thread_activity"]["threads"] == [
         {"agent_id": "a", "host_surface": "codex-app", "state": "turn_open", "turn_started_at": T0, "last_event_at": T1},
         {"agent_id": "b", "host_surface": "codex-app", "state": "unknown", "reason": "thread_not_found"},
@@ -204,6 +233,37 @@ def test_attach_reports_each_binding_without_thread_ids() -> None:
     ]
     assert "t-open" not in json.dumps(bound["host_thread_activity"])
     assert "host_thread_activity" not in unbound
+
+
+def test_capped_observation_discloses_incomplete_coverage_in_either_binding_order(home: CodexHome) -> None:
+    bindings = []
+    for i in range(33):
+        thread_id = f"t-{i}"
+        home.thread(thread_id, [_event(T0, "task_started" if i == 32 else "task_complete")])
+        bindings.append({"agent_id": f"a-{i}", "host_surface": "codex-app", "thread_id": thread_id})
+    for ordered in (bindings, [bindings[-1], *bindings[:-1]]):
+        payload = _status(*ordered)
+        attach_host_thread_activity(payload, observers=codex_thread_observers([home.root]))
+        observation = payload["run_history"]["goals"][0]["host_thread_activity"]
+        assert observation["completeness"] == "incomplete"
+        assert len(observation["threads"]) == 32
+    # Removing the unread binding makes a negative inference valid again.
+    payload = _status(*bindings[:-1])
+    attach_host_thread_activity(payload, observers=codex_thread_observers([home.root]))
+    observation = payload["run_history"]["goals"][0]["host_thread_activity"]
+    assert observation["completeness"] == "complete"
+    assert all(thread["state"] == "idle" for thread in observation["threads"])
+
+
+def test_unbound_status_is_unchanged_and_does_not_read_any_host() -> None:
+    payload = _status()
+    expected = json.loads(json.dumps(payload))
+
+    def unexpected_read(_thread_ids: Any) -> dict[str, HostThreadActivity]:
+        raise AssertionError("unbound Goals must not access a host store")
+
+    attach_host_thread_activity(payload, observers={"codex-app": unexpected_read})
+    assert payload == expected
 
 
 def test_app_status_route_attaches_codex_thread_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
