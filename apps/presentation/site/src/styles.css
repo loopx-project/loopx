@@ -160,7 +160,7 @@ button {
   font-size: 13px;
 }
 
-.github-button {
+.header-download {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -174,9 +174,13 @@ button {
   transition: background 160ms ease, transform 160ms ease;
 }
 
-.github-button:hover {
+.header-download:hover {
   background: #333;
   transform: translateY(-1px);
+}
+
+.header-download-compact {
+  display: none;
 }
 
 .menu-button {
@@ -307,6 +311,15 @@ body[data-language="zh"] .hero h1 {
   line-height: 1.7;
 }
 
+.hero-footnote a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .hero-system {
   position: relative;
   z-index: 3;
@@ -369,6 +382,32 @@ body[data-language="zh"] .hero h1 {
   align-items: center;
   gap: 12px;
   margin-top: 32px;
+}
+
+.hero-demo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 8px;
+  color: var(--body);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.hero-demo:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.header-download:focus-visible,
+.hero-actions a:focus-visible,
+.hero-actions button:focus-visible,
+.hero-footnote a:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
 }
 
 .button {
@@ -1768,8 +1807,16 @@ body.dialog-open {
     height: 64px;
   }
 
-  .github-button {
+  .header-download {
+    padding: 0 12px;
+  }
+
+  .header-download-full {
     display: none;
+  }
+
+  .header-download-compact {
+    display: inline;
   }
 
   .hero {
@@ -1792,6 +1839,10 @@ body.dialog-open {
   .hero-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .hero-demo {
+    align-self: flex-start;
   }
 
   .button {
@@ -2015,6 +2066,12 @@ body.dialog-open {
   }
 
   .evidence-dialog-footer p {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .header-download {
     display: none;
   }
 }

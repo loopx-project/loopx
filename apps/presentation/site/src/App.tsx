@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clipboard,
   Code2,
+  Download,
   ExternalLink,
   FileCheck2,
   GitBranch,
@@ -60,6 +61,9 @@ cd /path/to/your-project
 loopx connect
 loopx status`;
 
+const macAppDownloadUrl = "https://github.com/loopx-project/loopx/releases/latest/download/LoopX.app.zip";
+const macAppGuideUrl = "https://github.com/loopx-project/loopx/blob/main/apps/desktop/loopx-control-plane/README.md";
+
 const content = {
   en: {
     nav: ["Product", "Workflow", "Learn"],
@@ -71,6 +75,12 @@ const content = {
     },
     body: "Turn complex work into durable goals, coordinated tasks, and reviewable results. LoopX keeps your agents moving across sessions. You keep the judgment.",
     copy: "Get started",
+    mac: {
+      download: "Download for Mac",
+      compact: "Mac App",
+      note: "Apple Silicon preview (.app.zip) · Python 3.11+ required.",
+      guide: "Install and first launch",
+    },
     setup: {
       eyebrow: "Set up LoopX",
       title: "Choose how you want to start.",
@@ -184,6 +194,12 @@ const content = {
     },
     body: "把复杂工作变成持久的目标、协同的任务和可审查的成果。跨越会话，Agent 接着做；关键判断，始终由你掌握。",
     copy: "开始使用",
+    mac: {
+      download: "下载 Mac App",
+      compact: "Mac App",
+      note: "Apple Silicon 预览版（.app.zip）· 需要 Python 3.11+。",
+      guide: "安装与首次启动",
+    },
     setup: {
       eyebrow: "设置 LoopX",
       title: "选择你的开始方式。",
@@ -300,14 +316,6 @@ function ProductMark() {
       <span />
       <span />
     </span>
-  );
-}
-
-function GitHubIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-      <path d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.2c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.78 2.71 1.27 3.37.97.1-.75.4-1.27.74-1.56-2.57-.29-5.27-1.29-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.17 1.18A11 11 0 0 1 12 6.13c.98 0 1.95.13 2.87.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.24c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
-    </svg>
   );
 }
 
@@ -795,6 +803,7 @@ export function App() {
           <a href="#explore">{language === "zh" ? "探索" : "Explore"}</a>
           <a href={`${basePath}blog/${language === "zh" ? "zh/" : ""}`}>Blog</a>
           <a href={`${basePath}docs/`}>Docs</a>
+          <a href="https://github.com/loopx-project/loopx">GitHub</a>
         </nav>
         <div className="header-actions">
           <button
@@ -804,9 +813,10 @@ export function App() {
           >
             {language === "en" ? "中文" : "EN"}
           </button>
-          <a className="github-button" href="https://github.com/loopx-project/loopx">
-            <GitHubIcon />
-            GitHub
+          <a className="header-download" data-analytics-event="desktop_download" href={macAppDownloadUrl} aria-label={copy.mac.download} referrerPolicy="strict-origin-when-cross-origin">
+            <Download size={16} aria-hidden="true" />
+            <span className="header-download-full">{copy.mac.download}</span>
+            <span className="header-download-compact">{copy.mac.compact}</span>
           </a>
           <button
             className="menu-button"
@@ -859,16 +869,23 @@ export function App() {
             </h1>
             <p className="hero-body">{copy.body}</p>
             <div className="hero-actions">
-              <button className="button button-primary" data-analytics-event="setup_open" type="button" onClick={() => setSetupOpen(true)}>
+              <a className="button button-primary hero-download" data-analytics-event="desktop_download" href={macAppDownloadUrl} referrerPolicy="strict-origin-when-cross-origin">
+                <Download size={16} aria-hidden="true" />
+                {copy.mac.download}
+              </a>
+              <button className="button button-secondary" data-analytics-event="setup_open" type="button" onClick={() => setSetupOpen(true)}>
                 <span>{copy.copy}</span>
                 <ArrowRight className="button-trailing-icon" size={15} />
               </button>
-              <a className="button button-secondary" data-analytics-event="showcase_open" href="#showcases" onClick={showTerminalReplay}>
+              <a className="hero-demo" data-analytics-event="showcase_open" href="#showcases" onClick={showTerminalReplay}>
                 <Play size={15} fill="currentColor" />
                 {copy.demo}
               </a>
             </div>
-            <p className="hero-footnote">{language === "en" ? "Open source. Runs locally. Works with your agents." : "开源 · 本地运行 · 接入你正在使用的 Agent"}</p>
+            <p className="hero-footnote">
+              {copy.mac.note}{" "}
+              <a href={macAppGuideUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{copy.mac.guide} <ExternalLink size={12} aria-hidden="true" /></a>
+            </p>
           </div>
           <div className="hero-system">
             <div className="runtime-rail" aria-label={language === "en" ? "Explore agent integrations" : "查看 Agent 集成"}>
