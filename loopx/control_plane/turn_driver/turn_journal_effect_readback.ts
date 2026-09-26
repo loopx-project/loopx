@@ -16,23 +16,27 @@ function object(value: unknown): JsonObject {
 export function recordedTurnEffects(
   journal: JsonObject,
   completedPhases: readonly string[],
-  journalConsistent: boolean,
+  lineageConsistent: boolean,
+  attemptsValid: boolean,
 ): RecordedTurnEffects {
   const unknown: RecordedTurnEffects = {
     host_invoked: null, state_written: null,
     quota_spent: null, scheduler_acknowledged: null,
   };
   // Foreign, corrupt or contradictory lineage cannot supply effect facts.
-  if (!journalConsistent) return unknown;
+  if (!lineageConsistent) return unknown;
   const completed = new Set(completedPhases);
-  const attempts = object(journal.effect_attempts);
-  const attemptsMalformed = journal.effect_attempts !== undefined
-    && (journal.effect_attempts === null || Array.isArray(journal.effect_attempts)
-      || typeof journal.effect_attempts !== "object");
-  // A malformed attempt is not evidence of absence either. Validation and
-  // recovery admission still belong to their original owners.
-  const pending = (step: string) => attemptsMalformed || Object.hasOwn(attempts, step);
   const scheduler = object(journal.scheduler);
+  // Unknown or contradictory intents cannot prove non-execution. Keep only
+  // facts proved by the valid lineage's already completed checkpoints.
+  if (!attemptsValid) return {
+    host_invoked: completed.has("host_execute") ? true : null,
+    state_written: completed.has("durable_writeback") ? true : null,
+    quota_spent: completed.has("quota_spend") ? true : null,
+    scheduler_acknowledged: scheduler.acknowledged === true ? true : null,
+  };
+  const attempts = object(journal.effect_attempts);
+  const pending = (step: string) => Object.hasOwn(attempts, step);
   // An attempt is persisted BEFORE confirmation/host launch. It proves neither
   // launch nor non-launch until the host checkpoint is durable.
   const hostCount = journal.host_attempt_count;

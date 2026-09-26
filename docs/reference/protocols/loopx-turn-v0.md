@@ -387,8 +387,16 @@ list.
 Turn**, not effects performed by this inspection or a recovery invocation.
 Boolean values mean checkpointed execution or no recorded attempt; `null` means
 unknown. A saved Host attempt precedes launch confirmation; a `prepared` writeback
-or spend is not a commit receipt. Inconsistent/foreign lineage supplies only
-unknown effect facts. A scheduler phase does not imply host acknowledgement.
+or spend is not a commit receipt. Inconsistent/foreign identity or phase lineage
+supplies only unknown effect facts. A scheduler phase does not imply host acknowledgement.
+
+The inspector and journal writer share the original TS prepared-intent contract:
+one supported step, object shape, `prepared` status, exact settlement effect ref,
+the next phase and a nonterminal status. Unknown or malformed intents block the
+existing recovery decision, including Host reinvocation. Valid lineage's already
+completed effects remain proved; other effects are unknown, not `false`. The
+writer's empty-map rejection is retained: no pending intent uses an absent field;
+committed history is carried by completed checkpoints, not retained intents.
 
 If executing `run-once` raises unexpectedly, its error response retains the
 original error and resume key, marks uncertain current-invocation `effects` as
@@ -406,6 +414,10 @@ execution. Normal successful/replayed `effects` remain invocation-scoped.
 已提交。异常返回保留原错误/恢复身份，以同一 TS owner 的只读 `journal_observation`
 区分本次调用与原 Turn；读回失败不猜测“没有执行”。按原恢复判定和 provider 回执
 继续，不能因 CLI 报错新建任务重跑模型，也不放松验收、租约或扣额门禁。
+检查与写入共用原 TS prepared-intent 合同，校验步骤、形状、状态、effect 身份和
+阶段绑定。未知或畸形 intent 阻断原恢复判定，不能建议重调 Host；保留合法身份与
+阶段已经证明的执行事实，其余返回未知而非 `false`。不放松原 writer 的空 map
+拒绝语义：无待决 intent 应省略该字段，已提交历史由完成 checkpoint 表达。
 
 Exit zero means that inspection completed, including when `decision` is
 `replay_blocked`. A non-zero exit means the command could not inspect the
