@@ -96,3 +96,36 @@ PostgreSQL 16 server passed, with no skipped checks in these suites. A detached
 129-commit real-source snapshot passed File and SQLite restore and independent
 audit. Recovery of the earlier timed-out SQLite destination passed without
 reissuing its committed operations. These checks do not claim active cutover.
+
+## Shared-runtime latency reconciliation (`96a3b90f4`)
+
+The recovery delivery above is now merged as #5140. #5144 is the open managed
+Host process supervision slice; attached hosts still need their declared
+cancellation boundary. Whole-Goal activation/rollback and default entrypoint
+cutover remain the two planned subsequent implementation PRs. Existing #5054
+(retirement) and #4931 (SQLite proof encoding) remain open and are not new work.
+Thus the inventory is two planned implementation PRs plus those three existing
+PRs, **before this newly reproduced latency repair**. This is an inventory, not
+an unconditional completion count: #4224 D2 capacity/soak and D1/D3 evidence
+remain gates, and failures may require additional scoped fixes.
+
+The latency repair does not retire another Python owner or close D2. Isolated
+fixed File snapshots reproduce 9.9–10.5 second cold history verification,
+including a ping timeout at the original 10 second budget. Warm reads hide the
+problem; alternating Goals evict the single verified read cache. An isolated
+CPU profile attributes about 56% of samples to allocating code-point arrays in
+the shared key comparator. An allocation-free comparator preserves ordering;
+File verification yields between complete transactions and coalesces identical
+in-flight proofs keyed by path, store identity and exact byte digest. A late
+corrupt row still rejects an early receipt; failed proofs never become cache
+entries. No schema, revision formula, timeout or selector changes.
+
+On the same snapshots, cold reads take about 2.9 seconds and concurrent light
+requests 18–52 ms. These are local observations, not formal capacity/p95 or
+cross-platform qualification. One very large transaction, JSON parse, other
+synchronous handlers and SQLite replay can still occupy the event loop; this
+is not general worker isolation. The common comparator benefits every provider;
+the yielding and in-flight proof lifecycle belong to File. #4931's digest
+window remains a separate optimization. The regression uses a private real
+server and the existing mixed Todo/lease/decision fixture; production locators,
+active Goals and raw evidence are never modified or published.

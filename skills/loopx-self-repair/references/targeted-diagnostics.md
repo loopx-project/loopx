@@ -57,6 +57,16 @@ and synthetic fixture or authorized read-only snapshot. Preserve integrity,
 receipt recovery and lease/CAS semantics; do not benchmark by mutating an active
 Goal. Check existing PRs before starting an overlapping store refactor.
 
+When unrelated lightweight rules and `runtime.ping` slow down together, test
+shared event-loop starvation before attributing the timeout to the named rule.
+Compare cold, warm and alternating-Goal reads in a separate runtime using fixed
+snapshot bytes; capture a CPU profile there, not by restarting a shared live
+service. A hot cache can hide full-history CPU work. Keep the original response
+budget, preserve uncertain-write recovery, and distinguish lower CPU cost from
+cooperative scheduling. Yielding between verified transactions must not publish
+an incomplete proof; concurrent identical reads may share only an exact-input
+in-flight proof, with failures removed so a later read can revalidate.
+
 Searchable reference lookup has no Goal authority and can stay in the skill.
 Runtime admission, recovery decisions and provider integrity remain in their
 existing typed owners. This is the S10 diagnostic-efficiency boundary alongside
