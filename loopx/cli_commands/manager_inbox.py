@@ -3,12 +3,12 @@
 import json
 from pathlib import Path
 from ..agent_registry import registered_agent_ids_for_goal
-from ..history import load_registry
 from ..capabilities.manager_context import (
     acknowledge,
     configure_delivery_target,
     configure_evidence_scope,
 )
+from ..control_plane.projects.registry_codec import load_project_registry
 
 
 def register_manager_inbox(subparsers, add_format):
@@ -90,7 +90,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             )
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
-        registry = load_registry(registry_path)
+        registry = load_project_registry(registry_path)
         goal = next(
             (g for g in registry.get("goals", []) if g.get("id") == args.goal_id), None
         )
@@ -108,7 +108,13 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                              args.peer_agent_id, args.operation_id, json.loads(raw), args.parent_request_id)
         elif args.manager_inbox_action == "acknowledge-return":
             from ..control_plane.collaboration.peers import consume_return
-            result = consume_return(runtime_root, args.goal_id, args.agent_id, args.request_id)
+            result = consume_return(
+                runtime_root,
+                args.goal_id,
+                args.agent_id,
+                args.request_id,
+                registry=registry_path,
+            )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
@@ -126,6 +132,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id or "",
                 args.phase,
                 args.reply_text or "",
+                registry=registry_path,
             )
         elif args.manager_inbox_action == "link":
             from ..capabilities.manager_context.tracking import link
@@ -163,6 +170,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id or "",
                 args.decision or "",
                 args.reason or "",
+                registry=registry_path,
             )
     except (OSError, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}

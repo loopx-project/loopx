@@ -10,18 +10,31 @@ import logging
 import re
 import threading
 from datetime import datetime, timezone, timedelta
+from uuid import uuid4
 
 from . import _root, _read, _write, _hash, authority
 from .tracking import _entry, _now
 from ...file_lock import exclusive_file_lock
 from ...control_plane.collaboration import conversation_scope
+from ...control_plane.collaboration.goal_instance_scope import (
+    collaboration_goal_scope,
+    decide_collaboration_lifecycle,
+)
+from ...control_plane.projects.registry_codec import (
+    SOURCE_SESSION_PROFILE_ID,
+    load_project_registry,
+)
 from ...presentation.public_safety import scan_public_boundary_text
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
-from ...control_plane.collaboration.inbox import needs_conclusion as needs_conclusion
+from ...control_plane.collaboration.inbox import (
+    _request_lock,
+    needs_conclusion as needs_conclusion,
+)
 
 PHASES = ("decision", "conclusion")
 DELIVERY_STATUSES = {
+    "admitted",
     "queued",
     "retry_pending",
     "verification_required",
@@ -29,6 +42,7 @@ DELIVERY_STATUSES = {
     "superseded",
     "explicit_unverified",
 }
+EXACT_DELIVERY_ADMISSION_SECONDS = 60
 DELIVERY_ERRORS = {
     "provider_delivery_unverified",
     "provider_locator_unavailable",
@@ -124,27 +138,43 @@ def _verification_exception_error(exc):
     return None
 
 
-def register(root, row, session, turn):
-    """Called by trusted Chat delivery, never with model-authored routing."""
-    value = {k: row[k] for k in ("request_id", "goal_id", "agent_id", "source_id")}
+def _register_unlocked(root, row, session, turn):
+    value = {
+        key: row[key]
+        for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")
+        if key in row
+    }
     value.update(
         session_id=session["session_id"],
         client_turn_id=turn["client_turn_id"],
         channel_id=session["channel_id"],
     )
     path = _root(root) / "roundtrips" / (row["request_id"] + ".json")
-    with exclusive_file_lock(path.with_suffix(".lock")):
-        if path.exists():
-            old = _read(path)
-            if any(old.get(k) != v for k, v in value.items()):
-                raise ValueError("context return route conflict")
-        else:
-            _write(path, value | {"registered_at": _now()})
+    if path.exists():
+        old = _read(path)
+        if any(old.get(key) != value for key, value in value.items()):
+            raise ValueError("context return route conflict")
+    else:
+        _write(path, value | {"registered_at": _now()})
 
 
-def _route(root, row):
+def register(root, row, session, turn, *, scope=None):
+    """Called by trusted Chat delivery, never with model-authored routing."""
+    path = _root(root) / "roundtrips" / (row["request_id"] + ".json")
+    with _request_lock(
+        root,
+        row["request_id"],
+        scope,
+        path.with_suffix(".lock"),
+    ):
+        _register_unlocked(root, row, session, turn)
+
+
+def _route(root, row, *, scope=None):
     path = _root(root) / "roundtrips" / (row["request_id"] + ".json")
     if not path.exists():
+        if scope is not None and scope.exact:
+            raise ValueError("exact context return route unavailable")
         # Legacy opt-in only when the receiver actually publishes a reply. Recover
         # exact trusted Chat receipts, never infer a destination from Goal alone.
         from ...chat_store import ChatSessionStore
@@ -174,23 +204,69 @@ def _route(root, row):
         raise ValueError("peer return route identity mismatch")
     if any(
         value.get(k) != row.get(k)
-        for k in ("request_id", "goal_id", "agent_id", "source_id")
+        for k in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")
+        if k in row
     ):
         raise ValueError("context return route identity mismatch")
     return value
 
 
-def report(root, goal_id, agent_id, request_id, phase, text):
+def report(
+    root,
+    goal_id,
+    agent_id,
+    request_id,
+    phase,
+    text,
+    *,
+    registry=None,
+    caller_goal_ref=None,
+    scope=None,
+):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
-    row = _entry(root, goal_id, agent_id, request_id)
-    route = _route(root, row)
+    if scope is None and registry is not None:
+        from ...control_plane.collaboration.goal_instance_scope import (
+            collaboration_goal_scope,
+        )
+
+        with collaboration_goal_scope(
+            registry,
+            goal_id=goal_id,
+            agents=(),
+            caller_goal_ref=caller_goal_ref,
+        ) as goal_scope:
+            return report(
+                root,
+                goal_id,
+                agent_id,
+                request_id,
+                phase,
+                text,
+                scope=goal_scope,
+            )
+    row = _entry(root, goal_id, agent_id, request_id, scope=scope)
+    route = _route(root, row, scope=scope)
     if route.get("kind") == "peer" and phase != "conclusion":
         raise ValueError("peer replies require a conclusion; report a concrete result or blocker")
     if (route["channel_id"] != "peer" and not conversation_scope(route)["private_conversation"]
             and not scan_public_boundary_text(text)["ok"]):
         raise ValueError("reply contains private boundary material; write an audience-safe conclusion")
     from ...control_plane.collaboration.inbox import record_result
-    return {**record_result(root, row, phase, text), "status": "queued_for_requester" if route.get("kind") == "peer" else "queued_for_original_conversation"}
+    return {
+        **record_result(
+            root,
+            row,
+            phase,
+            text,
+            scope=scope,
+            route=route,
+        ),
+        "status": (
+            "queued_for_requester"
+            if route.get("kind") == "peer"
+            else "queued_for_original_conversation"
+        ),
+    }
 
 
 def reply_status(root, row):
@@ -289,9 +365,493 @@ def project_chat_session_snapshot(root, store, session_id):
     return snapshot
 
 
+def _initial_delivery_proved(row, route, turn):
+    receipt = (turn.get("response") or {}).get("context_handoff_receipt") or {}
+    return (
+        turn.get("status") == "completed"
+        and receipt.get("request_id") == row["request_id"]
+        and receipt.get("goal_id") == row["goal_id"]
+        and receipt.get("agent_id") == row["agent_id"]
+        and receipt.get("goal_ref") == row["goal_ref"]
+        and route.get("goal_ref") == row["goal_ref"]
+    )
+
+
+def _exact_return_scope(registry, reply):
+    return collaboration_goal_scope(
+        registry,
+        goal_id=reply["goal_id"],
+        agents=(),
+        caller_goal_ref=reply["goal_ref"],
+    )
+
+
+def _exact_return_context(root, registry, store, path, state_path, now):
+    reply = _read(path)
+    if not isinstance(reply.get("goal_ref"), dict):
+        raise ValueError("exact return reply is missing goal_ref")
+    with _exact_return_scope(registry, reply) as scope:
+        row = _entry(
+            root,
+            reply["goal_id"],
+            reply["agent_id"],
+            reply["request_id"],
+            scope=scope,
+        )
+        if (
+            path.parent.name != row["request_id"]
+            or reply.get("phase") != path.stem
+            or any(
+                reply.get(key) != row.get(key)
+                for key in ("source_id", "goal_ref")
+            )
+        ):
+            raise ValueError("return_reply_identity_mismatch")
+        route = _route(root, row, scope=scope)
+        if route.get("kind") == "peer":
+            return None
+        session = store.load_session(route["session_id"])
+        turn = store.turn_for_client(route["session_id"], route["client_turn_id"])
+        if (
+            not session
+            or session.get("status") == "closed"
+            or session.get("channel_id") != route["channel_id"]
+            or not turn
+        ):
+            raise ValueError("original_conversation_unavailable")
+        grant = authority(root, registry, session, turn)
+        target = {key: row[key] for key in ("goal_id", "agent_id")}
+        if (
+            target not in grant["targets"]
+            or grant.get("source_id") != row["source_id"]
+        ):
+            raise ValueError("return_authorization_unavailable")
+        initial_delivery_proved = _initial_delivery_proved(row, route, turn)
+        decide_collaboration_lifecycle(
+            scope,
+            operation="original_return_admit",
+            record=row,
+            route=route,
+            initial_delivery_proved=initial_delivery_proved,
+        )
+        with _request_lock(
+            root,
+            row["request_id"],
+            scope,
+            path.with_suffix(".lock"),
+        ):
+            state = _read(state_path) if state_path.exists() else {}
+            if state.get("status") in {
+                "delivered",
+                "superseded",
+                "explicit_unverified",
+            }:
+                return None
+            admission = state.get("admission")
+            if (
+                isinstance(admission, dict)
+                and isinstance(admission.get("expires_at"), str)
+                and now.isoformat() < admission["expires_at"]
+            ):
+                return None
+            if (
+                state.get("retry_at")
+                and state.get("status") != "admitted"
+                and now.isoformat() < state["retry_at"]
+            ):
+                return None
+            if path.stem == "decision" and (
+                path.parent / "conclusion.json"
+            ).exists():
+                _write(
+                    state_path,
+                    {
+                        "status": "superseded",
+                        "reason": "conclusion_ready",
+                        "goal_ref": row["goal_ref"],
+                    },
+                )
+                return None
+            token = uuid4().hex
+            prior_status = (
+                admission.get("prior_status")
+                if isinstance(admission, dict)
+                else state.get("status", "queued")
+            )
+            admitted = {
+                **state,
+                "status": "admitted",
+                "goal_ref": row["goal_ref"],
+                "admission": {
+                    "token": token,
+                    "prior_status": prior_status,
+                    "admitted_at": now.isoformat(),
+                    "expires_at": (
+                        now + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS)
+                    ).isoformat(),
+                },
+            }
+            admitted.pop("retry_at", None)
+            _write(state_path, admitted)
+        return {
+            "reply": reply,
+            "row": row,
+            "route": route,
+            "session": session,
+            "turn": turn,
+            "store": store,
+            "state_path": state_path,
+            "state": admitted,
+            "token": token,
+        }
+
+
+def _write_exact_return_state(
+    root,
+    registry,
+    context,
+    value,
+    *,
+    preserve_admission=False,
+):
+    reply = context["reply"]
+    with _exact_return_scope(registry, reply) as scope:
+        row = _entry(
+            root,
+            reply["goal_id"],
+            reply["agent_id"],
+            reply["request_id"],
+            scope=scope,
+        )
+        route = _route(root, row, scope=scope)
+        turn = context["store"].turn_for_client(
+            route["session_id"],
+            route["client_turn_id"],
+        )
+        decide_collaboration_lifecycle(
+            scope,
+            operation="original_return_settle",
+            record=row,
+            route=route,
+            initial_delivery_proved=(
+                isinstance(turn, dict)
+                and _initial_delivery_proved(row, route, turn)
+            ),
+        )
+        with _request_lock(
+            root,
+            row["request_id"],
+            scope,
+            context["state_path"].with_suffix(".lock"),
+        ):
+            current = _read(context["state_path"])
+            admission = current.get("admission")
+            if (
+                not isinstance(admission, dict)
+                or admission.get("token") != context["token"]
+            ):
+                raise ValueError("exact return delivery admission changed")
+            result = {**value, "goal_ref": row["goal_ref"]}
+            if preserve_admission:
+                result["admission"] = admission
+            else:
+                result.pop("admission", None)
+            _write(context["state_path"], result)
+
+
+def _retry_state(state, now, *, error):
+    attempts = int(state.get("attempts", 0)) + 1
+    result = {
+        key: value
+        for key, value in state.items()
+        if key not in {"admission", "delivered_at", "message_id", "verification"}
+    }
+    result.update(
+        status="retry_pending",
+        attempts=attempts,
+        error=error,
+        retry_at=(
+            now + timedelta(seconds=min(300, 5 * 2 ** min(attempts, 6)))
+        ).isoformat(),
+    )
+    return result
+
+
+def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
+    processed = 0
+    for path in sorted((_root(root) / "replies").glob("*/*.json")):
+        if cancelled():
+            break
+        if path.stem not in PHASES:
+            continue
+        state_path = path.with_name(path.stem + ".delivery.json")
+        try:
+            context = _exact_return_context(
+                root,
+                registry,
+                store,
+                path,
+                state_path,
+                now,
+            )
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            logging.getLogger(__name__).warning(
+                "Exact manager return admission unavailable"
+            )
+            continue
+        if context is None:
+            continue
+        row = context["row"]
+        route = context["route"]
+        session = context["session"]
+        turn = context["turn"]
+        reply = context["reply"]
+        state = context["state"]
+        prefix = "处理结论" if path.stem == "conclusion" else "处理进展"
+        text = (
+            f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}"
+            f"\n\n{reply['text']}"
+        )
+        mid = "handoff." + _hash([row["request_id"], path.stem])
+        try:
+            if cancelled():
+                return processed
+            store.append_message(
+                route["session_id"],
+                role="agent",
+                text=text,
+                turn_id=turn["turn_id"],
+                origin="manager_followup",
+                message_id=mid,
+            )
+            if cancelled():
+                return processed
+            if conversation_scope(session)["private_conversation"]:
+                _write_exact_return_state(
+                    root,
+                    registry,
+                    context,
+                    {
+                        "status": "delivered",
+                        "delivered_at": now.isoformat(),
+                        "message_id": mid,
+                    },
+                )
+                processed += 1
+                continue
+
+            prior_status = state["admission"]["prior_status"]
+            if prior_status == "verification_required" or state.get("attempt") is not None:
+                attempt = state.get("attempt")
+                if attempt is None or _attempt_locator(attempt) is None:
+                    _write_exact_return_state(
+                        root,
+                        registry,
+                        context,
+                        {
+                            **({"attempt": attempt} if attempt is not None else {}),
+                            "status": "explicit_unverified",
+                            "error": "provider_locator_unavailable",
+                        },
+                    )
+                    processed += 1
+                    continue
+                normalized_attempt = _delivery_attempt(attempt)
+                verifier = getattr(external_sender, "verify", None)
+                if not callable(verifier):
+                    _write_exact_return_state(
+                        root,
+                        registry,
+                        context,
+                        {
+                            "status": "explicit_unverified",
+                            "error": "provider_verifier_unavailable",
+                        },
+                    )
+                    processed += 1
+                    continue
+                try:
+                    decision = _verification_decision(
+                        verifier(
+                            route,
+                            session,
+                            turn,
+                            text,
+                            normalized_attempt,
+                        )
+                    )
+                except (
+                    OSError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    RuntimeError,
+                ) as exc:
+                    error = _verification_exception_error(exc)
+                    next_state = (
+                        {
+                            "status": "explicit_unverified",
+                            "error": error,
+                        }
+                        if error
+                        else _retry_state(
+                            {"attempt": normalized_attempt, **state},
+                            now,
+                            error="provider_verification_unavailable",
+                        )
+                    )
+                    _write_exact_return_state(
+                        root,
+                        registry,
+                        context,
+                        next_state,
+                    )
+                    processed += 1
+                    continue
+                if decision["status"] == "delivered":
+                    next_state = {
+                        "status": "delivered",
+                        "delivered_at": now.isoformat(),
+                        "message_id": mid,
+                        "provider_receipt": normalized_attempt["provider_receipt"],
+                        "reply_verified": True,
+                        "verification": decision["verification"],
+                    }
+                elif decision["status"] == "explicit_unverified":
+                    next_state = {
+                        "status": "explicit_unverified",
+                        "error": decision["error"],
+                    }
+                else:
+                    next_state = _retry_state(
+                        {"attempt": normalized_attempt, **state},
+                        now,
+                        error=decision["error"],
+                    )
+                _write_exact_return_state(
+                    root,
+                    registry,
+                    context,
+                    next_state,
+                )
+                processed += 1
+                continue
+
+            def record_attempt(value):
+                nonlocal state
+                attempt = _delivery_attempt(value)
+                existing = state.get("attempt")
+                if existing is not None and _delivery_attempt(existing) != attempt:
+                    raise ValueError("manager return delivery attempt conflict")
+                state = {**state, "attempt": attempt}
+                _write_exact_return_state(
+                    root,
+                    registry,
+                    context,
+                    state,
+                    preserve_admission=True,
+                )
+
+            sender = getattr(external_sender, "send_with_attempt", None)
+            sent = (
+                sender(route, session, turn, text, record_attempt)
+                if callable(sender)
+                else external_sender(route, session, turn, text)
+            )
+            if sent.get("reply_verified") is not True:
+                if sent.get("external_write_performed") is True:
+                    attempt = state.get("attempt")
+                    next_state = (
+                        {
+                            "status": "verification_required",
+                            "error": "provider_delivery_unverified",
+                            "attempt": attempt,
+                        }
+                        if attempt is not None and _attempt_locator(attempt) is not None
+                        else {
+                            **({"attempt": attempt} if attempt is not None else {}),
+                            "status": "explicit_unverified",
+                            "error": "provider_locator_unavailable",
+                        }
+                    )
+                    _write_exact_return_state(
+                        root,
+                        registry,
+                        context,
+                        next_state,
+                    )
+                    processed += 1
+                    continue
+                raise ValueError("return_transport_unavailable")
+            _write_exact_return_state(
+                root,
+                registry,
+                context,
+                {
+                    "status": "delivered",
+                    "delivered_at": now.isoformat(),
+                    "message_id": mid,
+                    "provider_receipt": sent.get("idempotency_key"),
+                    "reply_verified": True,
+                },
+            )
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            attempt = state.get("attempt")
+            error = (
+                _verification_exception_error(exc)
+                if attempt is not None
+                else None
+            )
+            if error:
+                next_state = {
+                    "status": "explicit_unverified",
+                    "error": error,
+                }
+            elif attempt is not None and _attempt_locator(attempt) is None:
+                next_state = {
+                    "status": "explicit_unverified",
+                    "error": "provider_locator_unavailable",
+                    "attempt": attempt,
+                }
+            else:
+                next_state = _retry_state(
+                    state,
+                    now,
+                    error="original_route_or_return_delivery_unavailable",
+                )
+            try:
+                _write_exact_return_state(
+                    root,
+                    registry,
+                    context,
+                    next_state,
+                )
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                logging.getLogger(__name__).warning(
+                    "Exact manager return settlement unavailable"
+                )
+        processed += 1
+        if processed >= 20:
+            break
+    return processed
+
+
 def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False):
     """Restart-safe return delivery; transport retries never rerun the worker/model."""
     now = now or datetime.now(timezone.utc)
+    try:
+        profile_id = load_project_registry(registry).get("profile_id")
+    except (OSError, ValueError, TypeError):
+        profile_id = None
+    if profile_id == SOURCE_SESSION_PROFILE_ID:
+        return _drain_exact(
+            root,
+            registry,
+            store,
+            external_sender,
+            now=now,
+            cancelled=cancelled,
+        )
     processed = 0
     for path in sorted((_root(root) / "replies").glob("*/*.json")):
         if cancelled():

@@ -8,15 +8,27 @@ import shlex
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_file_lock
-from ...history import load_registry
 from ...control_plane.collaboration import conversation_scope
+from ...control_plane.collaboration.goal_instance_scope import (
+    collaboration_goal_scope,
+    decide_collaboration_lifecycle,
+)
 from ...control_plane.goals.activation import goal_is_stopped
+from ...control_plane.projects.registry_codec import load_project_registry
 
 # Retained imports are the shipped manager-context API; the shared owner is neutral.
 from ...control_plane.collaboration.inbox import (
-    ENTRY_SCHEMA as ENTRY_SCHEMA, _hash as _hash, _read as _read,
-    _root as _root, _write as _write, normalize_request as normalize_request,
-    pending as pending, acknowledge as acknowledge,
+    ENTRY_SCHEMA as ENTRY_SCHEMA,
+    EXACT_ENTRY_SCHEMA,
+    _hash as _hash,
+    _read as _read,
+    _request_lock,
+    _root as _root,
+    _target,
+    _write as _write,
+    acknowledge as acknowledge,
+    normalize_request as normalize_request,
+    pending as pending,
 )
 
 POLICY_SCHEMA = "loopx_manager_context_policy_v1"
@@ -71,7 +83,7 @@ def authority(
     if registry_path is None:
         return {"mode": "unavailable", "targets": []}
     try:
-        registry = load_registry(registry_path)
+        registry = load_project_registry(registry_path)
         if not isinstance(registry, dict):
             raise ValueError("invalid registry")
     except (OSError, ValueError, TypeError):
@@ -132,51 +144,118 @@ def deliver(
     runtime_root: Path, registry_path: Path, *, session: dict, turn: dict, request: dict
 ) -> dict:
     request = normalize_request(request)
-    grant = authority(runtime_root, registry_path, session, turn)
     target = {key: request[key] for key in ("goal_id", "agent_id")}
-    if target not in grant["targets"]:
-        raise ValueError("context recipient is not authorized or registered")
-    content = str(turn.get("message") or "")
-    if session.get("channel_id", "").startswith("manager.external."):
-        ingress = _read(
-            _root(runtime_root)
-            / "ingress"
-            / (_hash([session["session_id"], turn["client_turn_id"]]) + ".json")
+    with collaboration_goal_scope(
+        registry_path,
+        goal_id=request["goal_id"],
+        agents=(request["agent_id"],),
+        require_active=True,
+    ) as goal_scope:
+        decide_collaboration_lifecycle(
+            goal_scope,
+            operation="request_create",
         )
-        content = str(ingress["source_message"])
-    if not content.strip() or len(content) > 20_000:
-        raise ValueError("invalid context content")
-    request_id = _hash([grant["source_id"], target])
-    value = {
-        "schema_version": ENTRY_SCHEMA,
-        "request_id": request_id,
-        **request,
-        "source_id": grant["source_id"],
-        "message": content,
-        "instruction": INSTRUCTION,
-    }
-    path = _root(runtime_root) / "entries" / _hash(target) / (request_id + ".json")
-    with exclusive_file_lock(path.with_suffix(".lock")):
-        exists = path.exists()
-        if exists and {k: v for k, v in _read(path).items() if k not in {"delivered_at", "source_channel"}} != value:
-            raise ValueError("context request identity conflict")
-        if not exists:
-            from .tracking import _now
-            _write(path, value | {"delivered_at": _now(), "source_channel": session.get("channel_id")})
-        if {k: v for k, v in _read(path).items() if k not in {"delivered_at", "source_channel"}} != value:
-            raise ValueError("context delivery readback failed")
-    from .roundtrip import register
-    register(runtime_root, value, session, turn)
-    return {
-        "request_id": request_id,
-        "status": "delivered",
-        "replayed": exists,
-        "goal_id": request["goal_id"],
-        "agent_id": request["agent_id"],
-        "priority_changed": False,
-        "todo_created": False,
-        "execution_interrupted": False,
-    }
+        grant = authority(runtime_root, registry_path, session, turn)
+        if target not in grant["targets"]:
+            raise ValueError("context recipient is not authorized or registered")
+        content = str(turn.get("message") or "")
+        if session.get("channel_id", "").startswith("manager.external."):
+            ingress = _read(
+                _root(runtime_root)
+                / "ingress"
+                / (_hash([session["session_id"], turn["client_turn_id"]]) + ".json")
+            )
+            content = str(ingress["source_message"])
+        if not content.strip() or len(content) > 20_000:
+            raise ValueError("invalid context content")
+        exact_target = _target(
+            request["goal_id"],
+            request["agent_id"],
+            goal_scope,
+        )
+        request_id = _hash([grant["source_id"], exact_target])
+        value = {
+            "schema_version": (
+                EXACT_ENTRY_SCHEMA if goal_scope.exact else ENTRY_SCHEMA
+            ),
+            "request_id": request_id,
+            **request,
+            **goal_scope.record_identity(),
+            "source_id": grant["source_id"],
+            "message": content,
+            "instruction": INSTRUCTION,
+        }
+        path = (
+            _root(runtime_root)
+            / "entries"
+            / _hash(exact_target)
+            / (request_id + ".json")
+        )
+
+        def persist_entry() -> bool:
+            exists = path.exists()
+            if (
+                exists
+                and {
+                    key: item
+                    for key, item in _read(path).items()
+                    if key not in {"delivered_at", "source_channel"}
+                }
+                != value
+            ):
+                raise ValueError("context request identity conflict")
+            if not exists:
+                from .tracking import _now
+
+                _write(
+                    path,
+                    value
+                    | {
+                        "delivered_at": _now(),
+                        "source_channel": session.get("channel_id"),
+                    },
+                )
+            if (
+                {
+                    key: item
+                    for key, item in _read(path).items()
+                    if key not in {"delivered_at", "source_channel"}
+                }
+                != value
+            ):
+                raise ValueError("context delivery readback failed")
+            return exists
+
+        from .roundtrip import _register_unlocked, register
+
+        if goal_scope.exact:
+            with _request_lock(
+                runtime_root,
+                request_id,
+                goal_scope,
+                path.with_suffix(".lock"),
+            ):
+                exists = persist_entry()
+                _register_unlocked(runtime_root, value, session, turn)
+        else:
+            with exclusive_file_lock(path.with_suffix(".lock")):
+                exists = persist_entry()
+            register(runtime_root, value, session, turn)
+        return {
+            "request_id": request_id,
+            "status": "delivered",
+            "replayed": exists,
+            "goal_id": request["goal_id"],
+            "agent_id": request["agent_id"],
+            **(
+                {"goal_ref": dict(goal_scope.caller_goal_ref or {})}
+                if goal_scope.exact
+                else {}
+            ),
+            "priority_changed": False,
+            "todo_created": False,
+            "execution_interrupted": False,
+        }
 
 
 def turn_start_hook(
@@ -189,7 +268,17 @@ def turn_start_hook(
 
     def produce():
         try:
-            inbox = pending(runtime_root, goal_id, agent_id)
+            with collaboration_goal_scope(
+                registry_path,
+                goal_id=goal_id,
+                agents=(agent_id,),
+            ) as goal_scope:
+                inbox = pending(
+                    runtime_root,
+                    goal_id,
+                    agent_id,
+                    scope=goal_scope,
+                )
             count = len(inbox["items"]) + len(inbox.get("peer_returns", {}).get("items", []))
             status, error = ("observed" if count else "empty"), None
         except (OSError, ValueError):
@@ -272,7 +361,7 @@ def configure_evidence_scope(runtime_root: Path, registry_path: Path, *, channel
     """Local operator grants only selected Goal summaries to an exact audience."""
     if not re.fullmatch(r"manager\.external\.[a-f0-9]{24}", channel):
         raise ValueError("an exact external manager channel is required")
-    registry = load_registry(registry_path)
+    registry = load_project_registry(registry_path)
     available = {g.get("id") for g in registry.get("goals", []) if isinstance(g, dict)}
     if any(g not in available for g in goal_ids):
         raise ValueError("every read Goal must be registered")
@@ -314,7 +403,7 @@ def configure_delivery_target(
         return item.get("goal_id") == goal_id and item.get("agent_id") == agent_id
 
     if grant:
-        registry = load_registry(registry_path)
+        registry = load_project_registry(registry_path)
         goal = next(
             (g for g in registry.get("goals", []) if isinstance(g, dict) and g.get("id") == goal_id),
             None,

@@ -817,7 +817,18 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "manager-inbox":
-        return handle_manager_inbox(args, registry_path, effective_runtime_root(registry_path, args.runtime_root))
+        from .control_plane.projects.registry_codec import load_project_registry
+        from .paths import resolve_runtime_root
+
+        return handle_manager_inbox(
+            args,
+            registry_path,
+            resolve_runtime_root(
+                load_project_registry(registry_path),
+                args.runtime_root,
+                registry_path=registry_path,
+            ),
+        )
     if args.command == "delegation":
         return handle_delegation(args, registry_path, effective_runtime_root(registry_path, args.runtime_root))
 
