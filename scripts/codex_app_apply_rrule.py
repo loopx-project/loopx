@@ -32,7 +32,6 @@ from typing import Any
 
 from loopx.turn_identity import normalize_turn_instance_id
 
-
 _FAILURE_OUTPUT_LIMIT = 2_000
 
 
@@ -128,7 +127,9 @@ def _heartbeat_task_body(
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"loopx heartbeat-prompt returned invalid JSON: {exc}") from exc
+        raise SystemExit(
+            f"loopx heartbeat-prompt returned invalid JSON: {exc}"
+        ) from exc
     body = payload.get("task_body") if isinstance(payload, dict) else None
     if not isinstance(body, str) or not body.strip():
         raise SystemExit("loopx heartbeat-prompt returned no task_body")
@@ -425,8 +426,7 @@ def _update_sqlite(
         connection.commit()
         if cursor.rowcount != 1:
             raise SystemExit(
-                f"automation row not found or not updated in {db_path}: "
-                f"{automation_id}"
+                f"automation row not found or not updated in {db_path}: {automation_id}"
             )
     finally:
         connection.close()
@@ -490,11 +490,69 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--check-delivery",
+        action="store_true",
+        help="Read-only host delivery canary; never query quota, apply an RRULE or ACK.",
+    )
+    parser.add_argument("--delivery-observation", type=Path)
+    parser.add_argument(
+        "--observe-host",
+        action="store_true",
+        help="Read the selected stored turn through Codex App Server.",
+    )
+    parser.add_argument("--codex-bin", default="codex")
+    parser.add_argument("--scheduled-thread-id")
+    parser.add_argument("--scheduled-turn-id")
+    parser.add_argument("--delivery-max-age-seconds", type=int, default=900)
+    args = parser.parse_args(argv)
+    if args.check_delivery:
+        if args.observe_host and args.delivery_observation is not None:
+            parser.error(
+                "--observe-host and --delivery-observation are mutually exclusive"
+            )
+        if not args.scheduled_thread_id or not args.scheduled_turn_id:
+            parser.error(
+                "--check-delivery requires --scheduled-thread-id and --scheduled-turn-id"
+            )
+        if args.dry_run:
+            parser.error("--check-delivery is already read-only; omit --dry-run")
+    elif (
+        args.delivery_observation is not None
+        or args.scheduled_thread_id is not None
+        or args.scheduled_turn_id is not None
+        or args.delivery_max_age_seconds != 900
+        or args.observe_host
+        or args.codex_bin != "codex"
+    ):
+        parser.error("delivery observation options require --check-delivery")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if args.check_delivery:
+        from loopx.control_plane.runtime.codex_app_delivery import (
+            check_codex_app_delivery,
+        )
+
+        result = check_codex_app_delivery(
+            manifest_path=args.automations_root
+            / args.automation_id
+            / "automation.toml",
+            observation_path=args.delivery_observation,
+            automation_id=args.automation_id,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            thread_id=args.scheduled_thread_id,
+            turn_id=args.scheduled_turn_id,
+            now_ms=_now_ms(),
+            max_age_seconds=args.delivery_max_age_seconds,
+            observe_host=args.observe_host,
+            codex_bin=args.codex_bin,
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["ok"] else 1
     codex_app, stateful = _load_scheduler_hint(
         loopx=args.loopx,
         registry=args.registry,
