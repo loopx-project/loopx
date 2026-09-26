@@ -4,7 +4,7 @@
 - **交付成熟度：** Proposal；现有目录、hook 与外部证据切片只是部分前置
 - **作者 / Owner：** LoopX capability 与 control-plane 维护者
 - **创建时间：** 2026-09-21
-- **最近一次规范修订：** 2026-09-21
+- **最近一次规范修订：** 2026-09-26
 - **实现基线：** `65afc4872db67d36f74625a9e53ae63da2bc619c`
 - **相关契约：** [总路线图](loopx-overall-roadmap-v0.zh-CN.md)、
   [研究探索](research-exploration-control-plane-v0.zh-CN.md)、
@@ -369,6 +369,74 @@ delegation 或 governed Turn。既有 turn-start/post-writeback hook 和 pending
 条件。直接工作不增加 Portfolio prompt 段落；完整 catalog/history 与 owner join 留给
 按需 inspect。有界声明按既有 revision 缓存，配置/provider/receipt drift 仅失效相关项。
 
+### 长程职责、渐进披露与记忆演化
+
+**决策：** 统一何时披露上下文、如何验证更新，而不是把所有存储统一成万能记忆库。
+长程 Agent 是 Goal 内具有职责和可恢复工作的持久身份，不是无限增长的宿主会话。
+Managed Codex worker 与短生命周期原生 subagent 仍是不同执行模式；两者都不能
+从记忆内容或功能角色获得权限。
+
+以下是拟议的集成关系；已有 owner 不等于整条用户路径已经贯通：
+
+| 层次 | 既有 owner 与披露时机 | 更新与失效 |
+| --- | --- | --- |
+| 职责与约束 | Goal vision/direction、注册 Agent profile、真实授权；规划/恢复时披露少量引用 | 按 owner 授权修改配置并保留版本；profile 只提供建议，不授予权限 |
+| 当前工作的接力信息 | Todo、checkpoint、协作请求/结果、显式 continuation；恢复时读选中工作与未解决纠正 | 重读任务/验收/来源状态；显式采用交接，不从“已投递”推断“已接受” |
+| 事实与事件证据 | material/source registry、Explore、Decision Context、Turn Recall；具体问题出现证据缺口后检索 | 保留来源、原始可得时间、主体、范围、版本与纠正/替代引用；未知时间不伪造 |
+| 可复用经验与方法 | Reward Memory candidate/review/recall/application；程序性方法归 skill/capability owner | 评审有范围的经验，验证写入与目标端召回；验证过的方法变化才成为版本化 PR/配置提案 |
+
+渐进式披露是读策略，不是存储格式。规划阶段提供有界职责与工作引用；具体任务
+检索相关证据和经验；需要时才取完整来源。不要每次 `before_plan` 都注入完整
+能力目录、历史对话或全部金融/研究记忆。负面检索结论只覆盖该查询和来源，
+不证明某个标的或能力不存在。缺失、过期、不可读必须显式；除非当前工作自身
+缺少必需证据或权限，否则不阻塞独立工作。
+
+记忆更新沿现有 owner 路径完成：
+
+1. 实质纠正或结果引用确切来源及受影响工作/能力版本；对话中的意图不是已写入。
+2. 区分事实更正与可复用经验。通过原 owner 改当前事实，只把改变决策的学习提交
+   到既有 candidate/review 接口；不能用摘要覆盖历史。
+3. 保留冲突、范围、来源、替代/到期与删除规则。Provider 异步接受不等于完成：
+   验证写入、逐项读回，再在新上下文边界验证目标端召回。
+4. 显式把召回经验用于一个决策；使用、任务结果和 utility 分别记录。调用次数或
+   模型自评分不是效果证据。
+5. 重复、可迁移的证据可以提出 skill/配置/capability 修改，用留出失败案例与
+   相同工作负载基线验证，经过原有评审、版本与回滚机制。不自授权限、不静默安装，
+   不从一次成功推出普遍规则。
+
+能力**组合**消费上述有范围上下文，填补验收缺口：优先直接调用，只引入必要依赖。
+能力**演化**消费经评审的结果证据，改变版本或采用策略。事实、临时工作状态、经验、
+可执行方法不能混成一句“记忆已更新”。Portfolio 引用原 owner 回执，不复制学习库
+或结果状态机。
+
+OpenViking 是既有 Reward Memory 或 Decision Context binding 后的可选上下文
+provider，不是 Goal/Todo 存储，也不是安装前置。没有它时，本地带来源的召回和
+既有 continuation 仍须可用。Hermes、LingTai 是设计参考，不增加必装运行时。
+只有实测检索/更新缺口才引入新 adapter，不以集成数量作为价值。
+
+### 产品路径与首步交付边界
+
+入口是用户的 Goal 和注册 Agent 的工作，而不是“请选择记忆框架”。复用既有
+Goal 设置/capability editor、请求时间线、产物详情抽屉和 Lark 回传。普通对话
+呈现变化、结果及必需决定；按需详情解释用过哪个来源/版本、为什么适用、修改
+了什么、如何纠正或退役。后台状态不变时不打扰。记忆服务异常不能被解释成
+忘记 Goal 或丢失执行授权。
+
+首步实现是 M0 的**只读检查切片**：
+`capability inspect --goal-id ... [--agent-id ... --phase ...]`。复用 Dashboard
+配置投影与既有 TS coordinator-context owner，不增加状态、生命周期 reducer、
+启用开关、provider 或自动 hook。读数标明覆盖范围和独立读取的一致性限制；
+配置、投影指导、原生可用性、执行、采纳、效果仍然分开。它**不代表**完整 M0
+自动参与或 M1–M5 已交付。本切片无须新增前端控件：现有设置编辑器已经拥有这些
+配置和读回。实时记忆/使用/纠正控件及 Lark 证据回传仍是后续交付项，不能用 CLI
+测试冒充验收。
+
+随后先验收一次**纠正 → 新会话决策**，再加组合 planner：持久化已获授权的纠正，
+展示受影响来源和被替代判断，换会话恢复，召回正确版本，实际用于决策，并向原
+请求回传证据。工程与研究问题各验一次，不复制宿主 session 文件。当前 continuation
+与 Decision Context 契约拥有这条链；缺失来源/更新字段归原 owner，不另建 continuity
+存储。
+
 ## 6. 替代方案与选择
 
 ### 由垂域 skill 组织能力
@@ -484,7 +552,27 @@ M0 本身就是有用结果，不等待 connector qualification、新 authority 
 M2–M5。各里程碑必须包含自己改变的入口；不能用 M5 推迟 M0/M2/M3 必需的设置
 配套。#4813 是已合并的 evidence 基础，不证明 Portfolio 或真实 connector qualification。
 Overall-roadmap owner 维护 S8 顺序，canonical Todo 维护执行状态。本 PR 只交付
-修订后的 RFC 契约。
+修订后的 RFC 契约与上述 M0 只读检查切片，不宣称完整 Portfolio 已实现。
+
+### 检查切片之后的集成顺序
+
+1. **M0 剩余部分 / continuity pilot：** 按来源版本恢复并读回纠正；贯通一条
+   CLI/managed Turn、打包前端、Lark 用户路径。证明旧判断不会冒充当前事实、
+   provider 关闭路径等价、上下文有界、无越权跨 Goal 泄漏。
+2. **M1 + M3：** 同一问题确实需要时才组合 external evidence 与一个 connector，
+   选择引用既有职责、上下文和回执。验收 direct→composed→direct、部分失败、
+   证据冲突、worker 不可用及原请求回传；不强依赖 M2。
+3. **自主演化之前先做 M4：** 冻结案例、基线、反例，测量纠正保持率、重复/陈旧
+   使用错误、有效召回精度、成本/延迟及真实决策变化，然后提出一次可回滚方法
+   修改。没有提升也是合法结果，保留分母和失败案例。
+4. **确有必要才做 M2，再整合 M5：** 只有真实 caller 无法用已有配置和回执表达
+   时才持久化额外采用策略。两个领域验收后才发布开箱即用 preset；安装/配置预览、
+   来源权限、关闭/卸载、降级回退与恢复都必须经过已有产品入口。
+
+本顺序衔接总 roadmap 的 S1/S3 长程协作、S6 记忆、S8 组合、S11 评估，不另建
+调度器或路线图。实施前对齐进行中的 continuity、checkpoint、Decision Context
+freshness 与 utility-attribution PR；复用其 owner，不复制 writer。本次检查切片
+不依赖未合并 PR。
 
 ## 12. 未决问题
 
@@ -534,6 +622,25 @@ Overall-roadmap owner 维护 S8 顺序，canonical Todo 维护执行状态。本
 | E3 | external-evidence typed lifecycle 是已合并前置 | 当前实现基线 | `external_research/README.md`、typed external-evidence owner 与 CLI | #4813 已合并，已检查源码 | 不证明 connector qualification 或 live provider |
 | E4 | 持久 Goal binding 已拥有 exact provider operation/revision/profile 选择 | 实现基线 | extension reference 与 capability-admission 源码 | 已检查 | 只读 binding 契约，不证明 provider 执行 |
 | E5 | 自动参与和设置应复用既有 owner | 当前实现基线 | `agent_context.ts`、`capability_hooks.ts`、periodic-report/reward-memory hook、configuration editor 与 Goal settings | 已检查源码 | 通用 Portfolio 激活和开销测量尚未实现 |
+
+### 2026-09-26 — 比较证据（源码/文档检查，非真实运行资格）
+
+- [LingTai 换代实现](https://github.com/Lingtai-AI/lingtai-kernel/blob/5c65c3f9860de0addc0d2bb10d91b7d80a55930c/src/lingtai/tools/context/_molt.py)：
+  上下文替换后提供恢复通知及显式确认。借鉴恢复纪律，不把 character 文本当执行授权。
+- [Hermes 记忆文档](https://github.com/NousResearch/hermes-agent/blob/v2026.9.24/website/docs/user-guide/features/memory.md)
+  与 [skill ledger](https://github.com/NousResearch/hermes-agent/blob/v2026.9.24/tools/skill_ledger.py)：
+  有界 session-start 记忆、按需历史检索和版本化修改证据。冻结快照也解释了长会话
+  为什么可能看不到更新；LoopX 应验证新规划/恢复边界，而非只验证持久化。
+- [OpenViking session 生命周期](https://github.com/volcengine/OpenViking/blob/v0.4.21/docs/en/concepts/08-session.md)：
+  同步归档、异步抽取及变化来源。复用 provider task/readback 证据；抽取被接受不等于
+  记忆已可用。
+- [Muse 产品设计](https://introducing.muse.ai/) 与
+  [Grok Bot 产品设计](https://x.ai/news/designing-grok-bot)：厂商描述了持久工作、相关
+  通知及主会话中的渐进详情。这些支持产品假设，不证明内部实现、可靠性或效果提升；
+  没有测试真实账户。
+
+上述 LoopX 方案是基于原始来源检查及现有 owner 边界的推断，不是复现 benchmark
+结论。公开案例不得包含私有对话、账户信息或原始语料。
 
 ## 附录 D：拒绝或替代方案
 

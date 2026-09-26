@@ -4,7 +4,7 @@
 - **Delivery maturity:** Proposal; existing catalog, hooks and external-evidence slices are partial prerequisites
 - **Authors / owners:** LoopX capability and control-plane maintainers
 - **Created:** 2026-09-21
-- **Last normative revision:** 2026-09-21
+- **Last normative revision:** 2026-09-26
 - **Implementation baseline:** `65afc4872db67d36f74625a9e53ae63da2bc619c`
 - **Related contracts:** [overall roadmap](loopx-overall-roadmap-v0.md),
   [research exploration](research-exploration-control-plane-v0.md),
@@ -444,6 +444,95 @@ Portfolio prompt section. Full catalog/history and owner joins stay behind
 on-demand inspect. Cache bounded declarations by their existing revision;
 configuration/provider/receipt drift invalidates only affected entries.
 
+### Long-running responsibility, disclosure and memory evolution
+
+**Decision:** unify when context is disclosed and how an update is verified,
+not all storage behind a universal memory database. A durable Agent is a
+Goal-scoped identity with responsibilities and recoverable work, not an
+infinitely growing host transcript. Managed Codex workers and short-lived
+native subagents remain different execution modes; neither gains authority
+from a memory entry or functional role.
+
+The following integration is planned; existing owners are not a claim that the
+whole journey already works:
+
+| Layer | Existing owner and disclosure boundary | Update and invalidation |
+| --- | --- | --- |
+| Responsibility and constraints | Goal vision/direction, registered Agent profile and actual grants; small references at planning/resume | Owner-authorized configuration retains its revision; profile is advisory and does not grant permissions |
+| Working continuity | Todo, checkpoint, collaboration request/result, explicit continuation; load selected work and unresolved corrections at resume | Re-read task/acceptance/source state; consume a handoff explicitly, never infer acceptance from delivery |
+| Facts and episodic evidence | Material/source registry, Explore, Decision Context and Turn Recall; retrieve for the concrete question and evidence gap | Preserve source, known-at time, subject, scope, revision and correction/supersession references; uncertain time remains unknown |
+| Reusable lessons and methods | Reward Memory candidate/review/recall/application; skill or capability owner for procedures | Review a scoped lesson, verify write and destination recall; only validated procedure changes become a versioned PR/configuration proposal |
+
+Progressive disclosure is a read policy, not the storage format. Planning gets
+bounded responsibility/working references; task-specific retrieval gets only
+relevant evidence/lessons; full source is fetched on demand. Do not inject the
+entire capability catalog, transcript or all financial/research memories at
+every `before_plan`. A negative search result is scoped to the query and source,
+not proof that an asset or capability does not exist. Missing/expired/unreadable
+context is explicit; ordinary independent work can continue unless its own
+required evidence or authority is missing.
+
+Memory updates follow the existing owner's path:
+
+1. A material correction or outcome references the exact source and affected
+   work/capability revision; conversational intent is not a completed write.
+2. Separate a current fact correction from a reusable lesson. Correct the
+   original state through its owner; submit only decision-relevant learning to
+   the existing candidate/review seam. Do not overwrite history with a summary.
+3. Preserve conflict, scope, provenance, replacement/expiry and deletion policy.
+   A provider's asynchronous acceptance is not completion: verify the write,
+   read back the exact item, then test destination recall at a fresh boundary.
+4. Apply a recalled lesson explicitly to a decision. Record use separately from
+   task outcome and utility. Usage count or a model's self-rating is not effect.
+5. Repeated, transferable evidence may propose a skill/configuration/capability
+   change. Validate against held-out failures and a same-workload baseline;
+   route through existing review, version and rollback owners. No self-issued
+   authority, silent installation, or universal rule from one successful task.
+
+Capability **composition** uses these scoped inputs to fill an acceptance gap:
+prefer a direct call; add only necessary dependencies. Capability **evolution**
+uses reviewed outcome evidence to change a version or adoption policy. Facts,
+temporary work state, lessons and executable procedures must not be collapsed
+into one “memory updated” claim. The proposed Portfolio references owner
+receipts; it does not reproduce the learning database or outcome state machine.
+
+OpenViking is an optional context provider behind existing Reward Memory or
+Decision Context bindings. Do not make it the Goal/Todo store or an install-time
+dependency. Local source-backed recall and existing continuation must remain
+usable without it. Hermes and LingTai are design references, not additional
+required runtimes. New adapters are justified by a measured retrieval/update
+gap, not by the number of integrations offered.
+
+### Product path and first delivery boundary
+
+Start with the user's Goal and the registered Agent's job, not a choice among
+memory frameworks. Reuse the existing Goal settings/capability editor, request
+timeline, artifact/detail drawer and Lark return path. Normal conversation shows
+what changed, the result, and any necessary decision. On-demand details show
+which source/version was used, why it applies, what changed and how to correct
+or retire it. Silence unchanged background state. A memory service outage must
+not be represented as forgetting the Goal or losing execution authority.
+
+The first implementation is the read-only M0 **inspection slice**:
+`capability inspect --goal-id ... [--agent-id ... --phase ...]`. It reuses the
+Dashboard configuration projection and the existing TS coordinator-context
+owner. No new state, lifecycle reducer, enablement switch, provider or automatic
+hook is introduced. Reads report coverage and independent-read consistency;
+configuration, projected guidance, native readiness, execution, adoption and
+utility remain distinct. It does **not** ship all M0 automatic participation or
+M1–M5. No additional frontend control is needed for this slice: the existing
+settings editor already owns these configurations and their readback. Live
+memory/usage/correction controls and Lark evidence returns remain delivery work,
+not acceptance supplied by CLI tests.
+
+Next, qualify one **correction → fresh-session decision** journey before adding
+a composition planner: persist an authorized correction, show the affected
+source and superseded assertion, resume a different session, retrieve the
+correct version, apply it and return evidence to the original request. Test both
+an engineering and a research question; no host-session-file copying. The
+current continuation and Decision Context contracts own the work; missing
+provenance/update fields belong to their owners, not a new continuity store.
+
 ## 6. Alternatives and design choices
 
 ### Domain skills organize capabilities
@@ -582,7 +671,34 @@ a new authority store or the complete M2–M5 design. Each milestone includes th
 entry points it changes; M5 cannot defer a required M0/M2/M3 settings companion.
 #4813 is merged evidence infrastructure, not proof of the Portfolio or live
 connector qualification. The overall-roadmap owner tracks S8 ordering; canonical
-Todos track implementation. This PR delivers only the revised RFC contract.
+Todos track implementation. This change delivers the revised RFC and the M0
+inspection slice above, not a completed Portfolio runtime.
+
+### Integration sequence after the inspection slice
+
+1. **M0 remainder / continuity pilot:** source-revision-aware resume and
+   correction readback; one CLI/managed Turn, packaged frontend and Lark journey.
+   Prove no stale assertion is treated as current, provider-off parity, bounded
+   context and no unauthorized cross-Goal disclosure.
+2. **M1 + M3:** use external evidence plus one connector only when the same
+   question needs both. Bind selection to existing responsibilities/context and
+   receipt references. Test direct→composed→direct, partial failure, conflicting
+   evidence, unavailable worker and return-to-requester. Do not require M2.
+3. **M4 before autonomous evolution:** frozen cases, baseline, negative examples,
+   correction retention, duplicate/stale-use errors, useful retrieval precision,
+   cost/latency and actual decision changes. Then propose one reversible method
+   change. “No uplift” is a valid result; keep denominators and failures.
+4. **M2 only if necessary, then M5 consolidation:** persist irreducible adoption
+   policy only after the caller cannot express it using existing configuration
+   and receipts. Publish ready-to-use presets only for journeys proven in two
+   domains; installation/configuration preview, source permission, off/uninstall,
+   degraded fallback and recovery must work from the existing surfaces.
+
+This order integrates S1/S3 continuity, S6 memory, S8 composition and S11
+evaluation in the overall roadmap; it is not a second scheduler or roadmap.
+Before implementation, reconcile active continuity, checkpoint, Decision Context
+freshness and utility-attribution PRs. Reuse their owners and do not duplicate
+their writers. The inspection slice has no dependency on an unmerged PR.
 
 ## 12. Open decisions
 
@@ -636,6 +752,29 @@ Todos track implementation. This PR delivers only the revised RFC contract.
 | E3 | External-evidence typed lifecycle is a merged prerequisite | current implementation baseline | `external_research/README.md`, typed external-evidence owner and CLI | merged via #4813; source inspected | not connector qualification or live-provider evidence |
 | E4 | Durable Goal binding already owns exact provider operation/revision/profile selection | implementation baseline | extension reference and capability-admission source | inspected | read-only binding contract; does not prove provider execution |
 | E5 | Automatic participation and settings should reuse existing owners | current implementation baseline | `agent_context.ts`, `capability_hooks.ts`, periodic-report/reward-memory hooks, configuration editor and Goal settings | source inspected | general Portfolio activation and measured overhead remain unimplemented |
+
+### 2026-09-26 — comparative evidence (source inspection, not live qualification)
+
+- [LingTai kernel molting implementation](https://github.com/Lingtai-AI/lingtai-kernel/blob/5c65c3f9860de0addc0d2bb10d91b7d80a55930c/src/lingtai/tools/context/_molt.py):
+  resume notification and explicit acknowledgement around context replacement.
+  Transfer the recovery discipline, not character prose as execution authority.
+- [Hermes memory documentation](https://github.com/NousResearch/hermes-agent/blob/v2026.9.24/website/docs/user-guide/features/memory.md)
+  and [skill ledger](https://github.com/NousResearch/hermes-agent/blob/v2026.9.24/tools/skill_ledger.py):
+  bounded session-start memory, on-demand history, versioned mutation evidence.
+  A frozen snapshot also explains why a long-lived session may miss updates;
+  LoopX should validate a new planning/resume boundary, not merely persistence.
+- [OpenViking session lifecycle](https://github.com/volcengine/OpenViking/blob/v0.4.21/docs/en/concepts/08-session.md):
+  synchronous archive and asynchronous extraction with change lineage. Reuse
+  provider task/readback evidence; an accepted extraction is not usable memory.
+- [Muse's product design](https://introducing.muse.ai/) and
+  [Grok Bot's product design](https://x.ai/news/designing-grok-bot): vendor-stated
+  persistent work, relevant notifications, and progressive detail in a primary
+  conversation. These support a product hypothesis, not claims about internal
+  implementation, reliability, or outcome uplift. No live accounts were tested.
+
+The proposed LoopX decisions above are inferences from source inspection and
+existing local owner boundaries, not reproduced benchmark results. Public
+examples must not contain private conversations, account data or raw corpora.
 
 ## Appendix D: Rejected or superseded alternatives
 
