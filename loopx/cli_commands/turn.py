@@ -9,30 +9,20 @@ from pathlib import Path
 from typing import Any
 
 from ..cli_rollout import append_cli_rollout_event
-from ..capabilities.explore.composition_frontier import (
-    project_live_explore_composition_frontier,
-)
-from ..capabilities.agent_turn_recall import (
-    run_configured_agent_turn_recall_fail_open,
-)
-from ..capabilities.reward_memory import (
-    run_configured_turn_outcome_ingest_fail_open,
-)
+from ..capabilities.explore.composition_frontier import project_live_explore_composition_frontier
+from ..capabilities.agent_turn_recall import run_configured_agent_turn_recall_fail_open
+from ..capabilities.reward_memory import run_configured_turn_outcome_ingest_fail_open
 from ..capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
-from ..control_plane.quota.heartbeat_receipt import (
-    ensure_turn_heartbeat_settlement_receipt,
-)
+from ..control_plane.quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
 from ..control_plane.quota.settlement import (
     SettlementIdentity,
     SettlementStepKind,
     read_heartbeat_settlement,
 )
 from ..control_plane.quota.turn_envelope import build_turn_envelope
-from ..control_plane.work_items.autonomous_replan_obligation import (
-    replan_obligation_id_from_packet,
-)
+from ..control_plane.work_items.autonomous_replan_obligation import replan_obligation_id_from_packet
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
 )
