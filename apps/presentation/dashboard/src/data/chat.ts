@@ -555,7 +555,18 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
       { error_code: "chat_api_unavailable" },
     );
   }
-  const responseText = await response.text();
+  let responseText: string;
+  try {
+    responseText = await response.text();
+  } catch {
+    throw new ChatApiError(
+      "LoopX Chat 服务响应中断。请重试当前操作。",
+      {
+        error_code: "chat_api_unavailable",
+        http_status: response.status,
+      },
+    );
+  }
   let parsedPayload: unknown = null;
   if (responseText.trim()) {
     try {
@@ -577,9 +588,15 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     const serviceMessage = response.status >= 500
       ? `LoopX Chat 服务暂时不可用（HTTP ${response.status}）。请确认 Dashboard 与 Chat 服务已启动且来自同一版本。`
       : `LoopX Chat 请求失败（HTTP ${response.status}）。`;
-    throw new ChatApiError(staleMessage ?? String(payload.error || serviceMessage), Object.keys(payload).length
-      ? payload
-      : { error_code: "chat_api_unavailable", http_status: response.status });
+    throw new ChatApiError(
+      staleMessage ?? String(payload.error || serviceMessage),
+      Object.keys(payload).length
+        ? { ...payload, http_status: response.status }
+        : {
+            error_code: "chat_api_unavailable",
+            http_status: response.status,
+          },
+    );
   }
   if (parsedPayload === null) {
     throw new ChatApiError(
@@ -777,28 +794,49 @@ export async function acceptChatTurn(
   message: string,
   clientTurnId: string,
   attachments: ChatImageAttachmentInput[] = [],
+  signal?: AbortSignal,
 ) {
-  return requestJson<{
-    ok: true;
-    session_id: string;
-    turn_id: string;
-    created: boolean;
-    status: string;
-    events_url: string;
-  }>(`/api/chat/sessions/${sessionId}/turns`, {
-    method: "POST",
-    body: JSON.stringify({
-      message,
-      client_turn_id: clientTurnId,
-      ...(attachments.length ? { attachments: attachments.map((attachment) => ({
-        data_url: attachment.dataUrl,
-        id: attachment.id,
-        mime_type: attachment.mimeType,
-        name: attachment.name,
-        size: attachment.size,
-      })) } : {}),
-    }),
+  const body = JSON.stringify({
+    message,
+    client_turn_id: clientTurnId,
+    ...(attachments.length ? { attachments: attachments.map((attachment) => ({
+      data_url: attachment.dataUrl,
+      id: attachment.id,
+      mime_type: attachment.mimeType,
+      name: attachment.name,
+      size: attachment.size,
+    })) } : {}),
   });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await requestJson<{
+        ok: true;
+        session_id: string;
+        turn_id: string;
+        created: boolean;
+        status: string;
+        events_url: string;
+      }>(`/api/chat/sessions/${sessionId}/turns`, {
+        method: "POST",
+        body,
+        signal,
+      });
+    } catch (error) {
+      const status = error instanceof ChatApiError
+        ? Number(error.payload.http_status ?? 0)
+        : 0;
+      const retryable = error instanceof ChatApiError && (
+        error.payload.error_code === "chat_api_unavailable"
+        || status >= 500
+        || (
+          status === 424
+          && error.payload.error_code === "resume_failed"
+        )
+      );
+      if (attempt > 0 || signal?.aborted || !retryable) throw error;
+    }
+  }
+  throw new Error("unreachable Chat turn acceptance retry state");
 }
 
 function parseSseBlock(block: string): ChatStreamEvent | null {
@@ -1007,11 +1045,13 @@ export async function sendChatTurnStreaming(
     signal?: AbortSignal;
   } = {},
 ) {
+  const clientTurnId = options.clientTurnId ?? crypto.randomUUID();
   const accepted = await acceptChatTurn(
     sessionId,
     message,
-    options.clientTurnId ?? crypto.randomUUID(),
+    clientTurnId,
     options.attachments,
+    options.signal,
   );
   options.onPhase?.("turn.accepted", accepted.turn_id);
   return receiveChatTurnStreaming(
