@@ -277,7 +277,7 @@ def collect_status(
             source_fact("registry", last_read_at=registry_read_at, item_count=len(registry_goals(registry))),
             source_fact(
                 "global_registry",
-                read_status="read" if global_registry.get("available") else "missing",
+                read_status="read" if global_registry.get("available") else global_registry.get("read_status", "missing"),
                 last_read_at=global_registry_read_at if global_registry.get("available") else None,
                 required=False,
                 item_count=global_registry.get("global_goal_count"),

@@ -29,6 +29,7 @@ def _registry(tmp_path: Path, goal_ids: tuple[str, ...] = ("goal-a", "goal-b")) 
                     {
                         "id": goal_id,
                         "objective": "Project envelope fixture.",
+                        "domain": "software-development",
                         "repo": str(tmp_path),
                         "state_file": str(tmp_path / "ACTIVE_GOAL_STATE.md"),
                         "adapter": {"kind": "read_only_project_map_v0"},
@@ -165,7 +166,15 @@ def test_cache_entry_with_a_tampered_envelope_is_a_miss(tmp_path: Path) -> None:
 
 
 def _global_status_payload(tmp_path: Path, *, excluded: int) -> dict:
-    payload = _status(_registry(tmp_path, ("goal-a",)))
+    registry = _registry(tmp_path, ("goal-a",))
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    global_members = json.loads(registry.read_text())
+    global_members["goals"].extend(
+        {**global_members["goals"][0], "id": f"other-{index}"} for index in range(excluded)
+    )
+    (runtime / "registry.global.json").write_text(json.dumps(global_members))
+    payload = _status(registry)
     payload["ok"] = True
     payload["global_registry"] = {
         "available": True,
@@ -257,3 +266,51 @@ def test_global_gates_counts_unavailable_quota_and_missing_status_envelope(tmp_p
     assert sources["status"]["status"] == "not_read"
     assert envelope["alert_reasons"] == ["missing_required_sources", "unreadable_sources"]
     assert "🔴" in summary_all.render_global_gates_markdown(payload)
+
+
+def test_real_cli_global_membership_failure_and_recovery(tmp_path):
+    """Global scope must never use local membership as its denominator."""
+    import subprocess
+    import sys
+
+    registry = _registry(tmp_path, ("goal-a",))
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    global_path = runtime / "registry.global.json"
+    global_registry = json.loads(registry.read_text())
+    second_state = tmp_path / "SECOND_GOAL_STATE.md"
+    second_state.write_text("# Second Goal\n")
+    global_registry["goals"].append({**global_registry["goals"][0], "id": "goal-b",
+                                     "state_file": str(second_state)})
+
+    def cli(command, registry_path=registry):
+        result = subprocess.run(
+            [sys.executable, "-c", "from loopx.cli_runtime import main; raise SystemExit(main())",
+             "--registry", str(registry_path), "--format", "json", command, "--limit", "1"],
+            text=True, capture_output=True, timeout=30,
+        )
+        assert result.returncode in (0, 1), result.stderr
+        return json.loads(result.stdout)
+
+
+    for content, reason in ((None, "missing_required_sources"), ("{broken", "unreadable_sources")):
+        if content is None:
+            global_path.unlink(missing_ok=True)
+        else:
+            global_path.write_text(content)
+        for command in ("global-summary", "global-gates"):
+            envelope = cli(command)["projection_envelope"]
+            assert envelope["coverage"]["expected_count"] is None
+            assert envelope["complete"] is False and envelope["alert"] is True
+            assert reason in envelope["alert_reasons"]
+            assert "incomplete_coverage" in envelope["alert_reasons"]
+        if content is None:
+            local = cli("status")["projection_envelope"]
+            assert local["complete"] is True and local["alert"] is False
+        global_path.write_text(json.dumps(global_registry))
+        for command in ("global-summary", "global-gates"):
+            local = cli(command)["projection_envelope"]
+            assert (local["coverage"]["included_count"], local["coverage"]["expected_count"]) == (1, 2)
+            assert local["complete"] is False
+            whole = cli(command, global_path)["projection_envelope"]
+            assert whole["complete"] is True and whole["alert"] is False

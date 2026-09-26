@@ -180,3 +180,16 @@ test("the decoder rejects values that cannot establish freshness", () => {
     schema_version: PROJECTION_ENVELOPE_SERVE_REQUEST, envelope: { schema_version: "other" }, served_at: OBSERVED,
   }), /schema mismatch/);
 });
+
+test("unknown coverage stays incomplete through replay and upstream composition", () => {
+  const unknown = sealProjectionEnvelope(sealRequest({
+    coverage: { scope: "global", expected_count: null, included_count: 1 },
+  }));
+  assert.equal(unknown.complete, false);
+  assert.deepEqual(unknown.alert_reasons, ["incomplete_coverage"]);
+  const replay = sealProjectionEnvelope({ schema_version: PROJECTION_ENVELOPE_SERVE_REQUEST,
+    envelope: unknown, served_at: at(1) });
+  assert.equal(replay.complete, false);
+  const derived = sealProjectionEnvelope(sealRequest({ projection: "global_gates", upstream: [unknown] }));
+  assert.equal(derived.complete, false);
+});

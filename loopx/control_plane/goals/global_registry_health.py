@@ -47,6 +47,7 @@ def collect_global_registry_health(
     if not global_path.exists():
         return {
             "available": False,
+            "read_status": "missing",
             "ok": True,
             "registry": str(global_path),
             "current_registry": str(registry_path),
@@ -56,7 +57,24 @@ def collect_global_registry_health(
             "checks": [],
         }
 
-    global_registry = load_registry(global_path)
+    try:
+        global_registry = load_registry(global_path)
+    except (OSError, ValueError):
+        return {
+            "available": False,
+            "read_status": "unreadable",
+            "ok": False,
+            "registry": str(global_path),
+            "current_registry": str(registry_path),
+            "current_registry_is_global": False,
+            "summary": {"high": 1, "action": 0, "info": 0, "checks": 1, "findings": 1},
+            "findings": [global_registry_finding(
+                kind="global_registry_unreadable", severity="high",
+                message="global membership could not be read",
+                recommended_action="repair the global registry source and retry the projection",
+            )],
+            "checks": ["global registry readability"],
+        }
     global_goals = registry_goals(global_registry)
     current_goals = registry_goals(current_registry)
     current_ids = {str(goal.get("id")) for goal in current_goals if goal.get("id")}

@@ -141,7 +141,7 @@ def _global_projection_envelope(
     projection: str,
     status_payload: dict[str, Any],
     *,
-    quota_read_at: str,
+    quota_read_at: str | None,
     quota_evaluated: int,
     quota_unavailable: int,
     shown_count: int,
@@ -158,13 +158,29 @@ def _global_projection_envelope(
         excluded = int(global_registry.get("current_registry_excluded_goal_count") or 0)
         refs = [str(ref) for ref in _as_list(global_registry.get("current_registry_excluded_goal_ids"))]
     else:
-        expected = int(status_coverage.get("expected_count") or 0)
+        expected = None  # Local membership cannot prove global membership.
+    global_source = next(
+        (row for row in _as_list(status_envelope.get("sources"))
+         if isinstance(row, dict) and row.get("source_id") == "global_registry"),
+        {},
+    )
     return seal_projection_envelope(
         projection=projection,
         observed_at=_now_iso(),
         sources=[
             source_fact(
+                "global_registry",
+                read_status=str(global_source.get("read_status") or (
+                    "read" if global_registry.get("available") else "not_read"
+                )),
+                last_read_at=global_source.get("last_read_at") or (
+                    quota_read_at if global_registry.get("available") else None
+                ),
+                item_count=expected,
+            ),
+            source_fact(
                 "goal_quota",
+                read_status="read" if quota_read_at else "not_read",
                 last_read_at=quota_read_at,
                 item_count=quota_evaluated,
                 unreadable_count=quota_unavailable,
@@ -174,7 +190,8 @@ def _global_projection_envelope(
         coverage={
             "scope": "global",
             "expected_count": expected,
-            "included_count": max(0, expected - excluded),
+            "included_count": (max(0, expected - excluded) if expected is not None
+                               else int(status_coverage.get("included_count") or 0)),
             "omitted": (
                 [{"reason": "outside_current_registry", "count": excluded, "refs": refs[:8]}]
                 if excluded
@@ -455,7 +472,12 @@ def build_global_gates(
         limit=normalized_limit,
     )
     if status_payload.get("ok") is not True:
-        return build_global_gates_error("Global status source unavailable.")
+        payload = build_global_gates_error("Global status source unavailable.")
+        payload["projection_envelope"] = _global_projection_envelope(
+            "global_gates", status_payload, quota_read_at=None,
+            quota_evaluated=0, quota_unavailable=0, shown_count=0, available_count=0,
+        )
+        return payload
     quota_read_at = _now_iso()
     state = _collect_global_gate_state(
         status_payload,
@@ -545,9 +567,11 @@ def build_global_gates_error(error: object) -> dict[str, Any]:
 
 def render_global_gates_markdown(payload: dict[str, Any]) -> str:
     if not payload.get("ok"):
-        return "# LoopX Global Gates\n\n- ok: `False`\n- error: " + _redact_text(
-            payload.get("error")
-        )
+        lines = ["# LoopX Global Gates", "", "- ok: `False`",
+                 "- error: " + _redact_text(payload.get("error"))]
+        if payload.get("projection_envelope"):
+            lines.extend(render_projection_envelope_markdown(payload["projection_envelope"]))
+        return "\n".join(lines)
 
     summary = _as_dict(payload.get("summary"))
     lines = [

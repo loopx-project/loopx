@@ -11,7 +11,7 @@ and size/count budgets.
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
 | `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 14500` | `nested_keys <= 360` | `top_level_keys <= 52` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 19500` | `nested_keys <= 260` | `top_level_keys <= 25` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 22500` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -241,3 +241,24 @@ RRULE, unchanged-state clear flag, and short identity/profile signatures needed
 to detect reset transitions. Full identity/profile snapshots stay off the hot
 path; use status, history, active state, or a focused regression fixture when
 debugging why a reset token changed.
+
+### Status projection envelope budget decision
+
+The unchanged dashboard fixture measured 19,455 compact JSON characters, 244
+nested keys and 25 top-level keys before the projection envelope; the initial
+envelope measured 21,518 / 332 / 26. The old 19,500 / 260 / 25 ceilings were
+regression budgets, not transport limits. The operator needs source read times,
+read failures and scope coverage to distinguish a cached or partial observation
+from a current, complete view. Per-source rows support diagnosis and replay;
+removing them would lose that contract. The bounded five-source envelope is
+retained rather than shortening names or shrinking the fixture. Ceilings become
+22,500 / 350 / 27, leaving 982 characters, 18 nested keys and one top-level key
+above the measured head for variation. Other hot surfaces retain their budgets.
+This adds a read contract to default status; it grants no execution authority.
+
+同一 dashboard 负载在新增 envelope 前为 19,455 字符／244 个嵌套键／25 个顶层键，
+初始 head 为 21,518／332／26。旧上限属于回归预算而非传输硬限制。操作员需要
+来源读取时间、错误与范围覆盖来识别缓存和部分观察；逐来源数据还支撑诊断和重放，
+不能为过线删除。保留五个有界来源，不缩小负载或改短字段名，将上限同步调整为
+22,500／350／27，较实测 head 保留 982 字符、18 个嵌套键和一个顶层键的余量。
+其他热表面预算保持原值。默认 status 新增读合同，不授予执行权限。

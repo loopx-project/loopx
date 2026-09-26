@@ -200,6 +200,13 @@ function sealSource(fact: SourceFact, servedMillis: number): JsonObject {
   };
 }
 
+function coverageComplete(coverage: CoverageFact, upstream: UpstreamSummary[]): boolean {
+  // An unknown denominator can never certify the requested scope.
+  return coverage.expected_count !== null && coverage.omitted.length === 0
+    && coverage.included_count >= coverage.expected_count
+    && upstream.every((row) => row.complete);
+}
+
 function sealFacts(
   projection: string,
   observed: { text: string; millis: number },
@@ -218,9 +225,7 @@ function sealFacts(
   const sources = facts.map((fact) => sealSource(fact, served.millis));
   const truncated = coverage.shown_count !== null && coverage.available_count !== null
     && coverage.available_count > coverage.shown_count;
-  const complete = coverage.omitted.length === 0
-    && (coverage.expected_count === null || coverage.included_count >= coverage.expected_count)
-    && upstream.every((row) => row.complete);
+  const complete = coverageComplete(coverage, upstream);
   const reasons = new Set<string>();
   const alertSourceIds: string[] = [];
   for (const row of sources) {
@@ -281,9 +286,7 @@ function decodeSealedEnvelope(value: unknown, label: string): {
     .map(decodeUpstreamSummary);
   const projection = identifier(envelope.projection, `${label}.projection`);
   const observed = timestamp(envelope.observed_at, `${label}.observed_at`);
-  const complete = coverage.omitted.length === 0
-    && (coverage.expected_count === null || coverage.included_count >= coverage.expected_count)
-    && upstream.every((row) => row.complete);
+  const complete = coverageComplete(coverage, upstream);
   return { projection, observed, sources, coverage, upstream, complete };
 }
 

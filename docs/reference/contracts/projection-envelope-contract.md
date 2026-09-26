@@ -123,3 +123,8 @@ kernel on every hit, which restamps `served_at` and recomputes staleness. A
 cache record without an envelope, or with one the kernel decoder rejects, is a
 cache miss (`missing_projection_envelope` / `invalid_projection_envelope`),
 never an unlabeled hit.
+
+An unknown `expected_count` is never complete. Global views require global
+membership even when project-local status treats that source as optional;
+missing or unreadable membership alerts and preserves a null denominator.
+After the source is repaired, a fresh collection can certify coverage again.
