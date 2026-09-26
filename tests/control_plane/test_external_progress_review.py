@@ -272,14 +272,14 @@ def test_assist_without_a_pinned_contract_never_triggers() -> None:
     assert trigger(runs, receipts, contract_revision="") is None
 
 
-def test_turn_match_still_requires_matching_agent_and_todo() -> None:
+def test_turn_match_requires_exact_agent_and_todo_including_absence() -> None:
     runs = [run(2, turn="t2"), run(1, turn="t1")]
     assert trigger(runs, [receipt(2, turn="t2", agent="someone-else"), receipt(1, turn="t1")]) is None
     runs_with_todo = [dict(run(2, turn="t2"), todo_id="todo-a"), run(1, turn="t1")]
     assert trigger(runs_with_todo, [receipt(2, turn="t2", todo="todo-b"), receipt(1, turn="t1")]) is None
     assert trigger(runs_with_todo, [receipt(2, turn="t2", todo="todo-a"), receipt(1, turn="t1")]) is not None
-    # A receipt that names no todo does not conflict with a run that does.
-    assert trigger(runs_with_todo, [receipt(2, turn="t2"), receipt(1, turn="t1")]) is not None
+    # Missing attribution cannot stand in for a specific bound Todo.
+    assert trigger(runs_with_todo, [receipt(2, turn="t2"), receipt(1, turn="t1")]) is None
 
 
 def test_ambiguous_fallback_identity_is_never_attributed() -> None:

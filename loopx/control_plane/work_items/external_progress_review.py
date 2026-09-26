@@ -10,6 +10,7 @@ be bound to.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
@@ -38,7 +39,7 @@ EXTERNAL_PROGRESS_REVIEW_UNEVALUATED_REASONS: tuple[str, ...] = (
     "other_revision",  # receipt bound to a revision that is not pinned
 )
 
-RunKey = tuple[str, str]
+RunKey = tuple[str, str, str]
 AckRecorded = Callable[[dict[str, Any]], bool]
 Verdict = tuple[str, str | None]
 
@@ -62,19 +63,30 @@ def _run_key(run: Mapping[str, Any]) -> RunKey:
     return (
         str(run.get("generated_at") or "").strip(),
         str(run.get("agent_id") or "").strip(),
+        str(run.get("todo_id") or "").strip(),
     )
+
+
+def _review_turn(run: Mapping[str, Any]) -> tuple[str | None, bool]:
+    """Distinguish legacy absence from malformed or contradictory Turn claims."""
+    settlement = run.get("settlement_identity")
+    settled = settlement.get("turn_instance_id") if isinstance(settlement, Mapping) else None
+    claims = [value for value in (run.get("turn_instance_id"), settled) if value is not None]
+    valid = [_progress_turn_instance_id({"turn_instance_id": value}) for value in claims]
+    invalid = any(value is None for value in valid) or len(set(valid)) > 1
+    return (None if invalid else next(iter(valid), None)), invalid
 
 
 def index_progress_review_receipts(
     receipts: Iterable[Mapping[str, Any]],
-) -> tuple[dict[str, Mapping[str, Any]], dict[RunKey, Mapping[str, Any] | None]]:
-    """Index receipts by turn identity and by (generated_at, agent_id) fallback.
+) -> tuple[dict[str, Mapping[str, Any] | None], dict[RunKey, Mapping[str, Any] | None]]:
+    """Index receipts by Turn or exact (generated_at, agent_id, todo_id) fallback.
 
-    Two receipts sharing one fallback key make that key ambiguous; it maps to
-    None so the caller treats the transition as unattributable.
+    Conflicting Turn attribution or different evidence under one fallback key
+    maps to None. Later evaluations of the same identity remain comparable.
     """
 
-    by_turn: dict[str, Mapping[str, Any]] = {}
+    by_turn: dict[str, Mapping[str, Any] | None] = {}
     by_key: dict[RunKey, Mapping[str, Any] | None] = {}
     for receipt in receipts:
         if not isinstance(receipt, Mapping):
@@ -85,10 +97,18 @@ def index_progress_review_receipts(
         sequence = receipt.get("sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int):
             continue
-        turn = str(run.get("turn_instance_id") or "").strip()
+        turn, invalid = _review_turn(run)
+        if invalid:
+            continue
         if turn:
-            previous = by_turn.get(turn)
-            if previous is None or _receipt_recency(previous) < _receipt_recency(receipt):
+            if turn not in by_turn:
+                by_turn[turn] = receipt
+                continue
+            previous = by_turn[turn]
+            if previous is None or _identity_conflict(run, previous):
+                # Recency only orders judgments about the *same* work identity.
+                by_turn[turn] = None
+            elif _receipt_recency(previous) < _receipt_recency(receipt):
                 by_turn[turn] = receipt
             continue
         key = _run_key(run)
@@ -108,15 +128,15 @@ def index_progress_review_receipts(
 
 
 def _identity_conflict(run: Mapping[str, Any], receipt: Mapping[str, Any]) -> bool:
-    """A receipt found by turn must also name the same Agent and Todo when both do."""
+    """Agent must be attributable; Todo absence matches only another absence."""
 
     receipt_run = receipt.get("run")
-    if not isinstance(receipt_run, Mapping):
+    if not isinstance(receipt_run, Mapping) or not str(run.get("agent_id") or "").strip():
         return True
     for field in ("agent_id", "todo_id"):
         mine = str(run.get(field) or "").strip()
         theirs = str(receipt_run.get(field) or "").strip()
-        if mine and theirs and mine != theirs:
+        if mine != theirs:
             return True
     return False
 
@@ -207,36 +227,58 @@ def external_progress_review_trigger(
     if not pinned:
         return None
     required = max(2, int(threshold))
-    normalized_agent_id = str(agent_id or "").strip()
+    runs = [run for run in newest_first_runs if isinstance(run, dict)]
+    normalized_agent_id = str(agent_id or "").strip() or _single_agent_id(runs)
+    if not normalized_agent_id:
+        return None
+    # Select the lane before interpreting ACKs. Anonymous rows remain unknown
+    # gaps, but can neither acknowledge nor supply that Agent's progress claims.
+    lane: list[dict[str, Any]] = []
+    for run in runs:
+        owner = str(run.get("agent_id") or "").strip()
+        if owner and owner != normalized_agent_id:
+            continue
+        _, invalid = _review_turn(run)
+        if owner == normalized_agent_id and not invalid and ack_recorded(run):
+            break
+        if str(run.get("classification") or "").strip() in neutral:
+            continue
+        lane.append(run)
+    fallback_counts = Counter(_run_key(run) for run in lane if _review_turn(run) == (None, False))
+    run_turn_owners: dict[str, set[tuple[str, str]]] = {}
+    for run in lane:
+        turn, _ = _review_turn(run)
+        if turn:
+            run_turn_owners.setdefault(turn, set()).add(_run_key(run)[1:])
     by_turn, by_key = index_progress_review_receipts(receipts)
     segment: list[tuple[str, dict[str, Any], Mapping[str, Any] | None, str | None]] = []
     window_runs: list[dict[str, Any]] = []
     seen_turns: set[str] = set()
     seen_evidence: set[str] = set()
     consecutive = longest = 0
-    for run in newest_first_runs:
-        if not isinstance(run, dict):
-            continue
-        if ack_recorded(run):
-            break
-        if str(run.get("classification") or "").strip() in neutral:
-            continue
-        run_agent_id = str(run.get("agent_id") or "").strip()
-        if normalized_agent_id and run_agent_id not in {"", normalized_agent_id}:
-            continue
-        turn = _progress_turn_instance_id(run)
-        if turn:
+    for run in lane:
+        attributable = str(run.get("agent_id") or "").strip() == normalized_agent_id
+        turn, invalid = _review_turn(run)
+        if invalid:
+            receipt, ambiguous = None, True
+        elif turn:
             if turn in seen_turns:
                 # A retry is not another transition, but its typed claim is
                 # still part of this Turn's history until the ACK boundary.
-                window_runs.append(run)
+                if attributable:
+                    window_runs.append(run)
                 continue
             seen_turns.add(turn)
-            receipt, ambiguous = by_turn.get(turn), False
+            receipt = by_turn.get(turn)
+            ambiguous = (turn in by_turn and receipt is None) or len(run_turn_owners[turn]) > 1
+            if ambiguous:
+                receipt = None
         else:
             key = _run_key(run)
             receipt = by_key.get(key)
-            ambiguous = key in by_key and receipt is None
+            ambiguous = (key in by_key and receipt is None) or fallback_counts[key] > 1
+            if ambiguous:
+                receipt = None
         verdict, reason = _verdict(
             run, receipt, ambiguous=ambiguous, signal=signal, pinned=pinned
         )
@@ -258,7 +300,8 @@ def external_progress_review_trigger(
         else:
             consecutive = 0
         segment.append((verdict, run, receipt, reason))
-        window_runs.append(run)
+        if attributable:
+            window_runs.append(run)
     if longest < required:
         return None
     drift_rows = [(run, receipt) for verdict, run, receipt, _ in segment if verdict == "drift"]
