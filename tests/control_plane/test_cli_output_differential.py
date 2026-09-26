@@ -1076,3 +1076,36 @@ def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None
             semantic_json_keys=("required",),
             markdown_anchor=None,
         )
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_projection_envelope_migration_is_status_only_bounded_and_one_time(output_format):
+    from loopx.control_plane.testing.cli_output_semantics import projection_envelope_schema_versions
+
+    assert projection_envelope_schema_versions({"projection_envelope": {
+        "schema_version": "loopx_projection_envelope_v0"}}) == ["loopx_projection_envelope_v0"]
+    assert projection_envelope_schema_versions("- projection: envelope=`loopx_projection_envelope_v0` observed_at=`today`") == ["loopx_projection_envelope_v0"]
+    limits = ({"chars": 3000, "utf8_bytes": 3000, "lines": 110, "compact_payload_chars": 2048}
+              if output_format == "json" else {"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0})
+    base = _row(format=output_format, row_id=f"surface/status/small/{output_format}")
+    candidate = {**base, "projection_envelope_schema_versions": ["loopx_projection_envelope_v0"],
+                 **{metric: base[metric] + limit for metric, limit in limits.items()}}
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+    assert result["ok"] and result["review_required"]
+    # JSON fixtures are large enough for ordinary ratio allowances; use their
+    # smaller real scale when checking bounded Markdown growth.
+    if output_format == "markdown":
+        base.update(chars=1000, utf8_bytes=1000, lines=30)
+        candidate.update(**{metric: base[metric] + limit for metric, limit in limits.items()})
+    for metric in ("chars", "utf8_bytes", "lines"):
+        too_large = {**candidate, metric: candidate[metric] + 1}
+        assert not compare_cli_output_receipts(_receipt(base), _receipt(too_large))["ok"]
+    grown = {**candidate, "chars": candidate["chars"] + limits["chars"]}
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
+    for versions in ([], ["loopx_projection_envelope_v1"]):
+        unknown = {**candidate, "projection_envelope_schema_versions": versions}
+        assert not compare_cli_output_receipts(_receipt(candidate), _receipt(unknown))["ok"]
+    for surface in ("quota_should_run", "todo_list", "status_unrelated"):
+        outside_base = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
+        outside = {**candidate, "row_id": outside_base["row_id"]}
+        assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]

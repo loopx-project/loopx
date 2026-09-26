@@ -89,7 +89,7 @@ def render_projection_envelope_markdown(envelope: Any) -> list[str]:
     fresh_count = sum(1 for row in sources if row.get("status") == "fresh")
     marker = f"{ALERT_MARKER} " if envelope.get("alert") else ""
     line = (
-        f"- projection: {marker}observed_at=`{envelope.get('observed_at')}` "
+        f"- projection: {marker}envelope=`{PROJECTION_ENVELOPE_SCHEMA_VERSION}` observed_at=`{envelope.get('observed_at')}` "
         f"age=`{envelope.get('age_seconds')}s`"
         + (" (cached)" if envelope.get("served_from_cache") else "")
         + f" sources_fresh=`{fresh_count}/{len(sources) - absent_optional}`"

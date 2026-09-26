@@ -119,6 +119,9 @@ def _receipt_row(
             if isinstance(payload, dict)
             else []
         ),
+        "projection_envelope_schema_versions": (
+            semantics.projection_envelope_schema_versions(payload if isinstance(payload, dict) else text)
+        ),
         "todo_work_counts_schema_versions": (
             semantics.todo_work_counts_schema_versions(payload)
             if isinstance(payload, dict)

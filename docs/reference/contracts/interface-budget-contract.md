@@ -262,3 +262,19 @@ This adds a read contract to default status; it grants no execution authority.
 不能为过线删除。保留五个有界来源，不缩小负载或改短字段名，将上限同步调整为
 22,500／350／27，较实测 head 保留 982 字符、18 个嵌套键和一个顶层键的余量。
 其他热表面预算保持原值。默认 status 新增读合同，不授予执行权限。
+
+The emitted CLI matrix separately measured +2,801 pretty JSON characters,
++102 lines and +1,910 compact characters on small, crowded and multi-agent
+status fixtures. Markdown added 127 characters before the explicit schema
+marker. The existing schema-transition mechanism grants **only status and its
+explicit task-graph variant**, and only `none -> loopx_projection_envelope_v0`,
+3,000 JSON chars/bytes, 110 lines and 2,048 compact chars; Markdown receives
+192 chars/224 bytes and three lines. The marker makes this transition visible
+and review-required. Unknown schemas, reverse transitions, unrelated surfaces
+and subsequent v0 growth retain ordinary budgets. Absolute ceilings stay intact.
+
+CLI 同负载差分另测得 JSON 增加 2,801 字符、102 行、1,910 个紧凑字符；Markdown
+在显式 schema 标识前增加 127 字符。沿用既有 schema 迁移预算机制，仅 status 及
+其 task-graph 显式变体的 none → v0 获得一次 3,000 JSON 字符／字节、110 行、
+2,048 紧凑字符余量；Markdown 余量为 192 字符／224 字节和三行。该迁移必须评审。
+未知 schema、反向迁移、其他表面和后续 v0 增长使用普通预算，绝对上限保持不变。
