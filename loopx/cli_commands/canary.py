@@ -69,7 +69,11 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
 
 
 def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, object]:
-    command = ["git", "-C", str(repo_root), *args]
+    # `-z` frames each pathname on NUL. LF framing is only unambiguous while
+    # `core.quotePath` escapes non-ASCII pathnames, and a repository may turn
+    # that off, at which point a path can carry U+0085/U+2028/U+2029 raw and
+    # `str.splitlines()` splits one path into two.
+    command = ["git", "-C", str(repo_root), *args, "-z"]
     completed = subprocess.run(
         command,
         check=False,
@@ -77,11 +81,7 @@ def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, object]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    files = [
-        line.strip()
-        for line in completed.stdout.splitlines()
-        if line.strip()
-    ]
+    files = [name for name in completed.stdout.split("\0") if name]
     return {
         "ok": completed.returncode == 0,
         "returncode": completed.returncode,
