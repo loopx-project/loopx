@@ -13,6 +13,8 @@ Current groups:
   project-local skill discovery and managed-copy lifecycle.
 - [PostgreSQL authority service admission v0](postgresql-authority-service-v0.md): opt-in
   authentication, tenant authorization, and restore-incarnation rotation.
+- [Usage ping](usage-ping.md): the off-by-default anonymous daily ping, its exact
+  payload, opt-out switches, and the published active-installation counts.
 
 High-traffic read paths:
 

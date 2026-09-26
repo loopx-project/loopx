@@ -1,0 +1,18 @@
+# Copy to wrangler.toml, fill in database_id from `wrangler d1 create`, then
+# `wrangler deploy`. Kept as an example so no one deploys by accident.
+name = "loopx-usage-collector"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "loopx-usage"
+database_id = "<fill in>"
+
+# Daily retention purge (rows older than RETENTION_DAYS in src/collector.js).
+[triggers]
+crons = ["17 3 * * *"]
+
+[observability]
+enabled = false

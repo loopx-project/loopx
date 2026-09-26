@@ -117,6 +117,7 @@ from .cli_commands import (
     handle_task_lease_command,
     handle_authority_shadow_command,
     handle_version_command,
+    handle_usage_ping_command,
     handle_host_mode_plan_command,
     handle_worker_bridge_command,
     handle_workflow_skills_command,
@@ -160,6 +161,7 @@ from .cli_commands import (
     register_authority_shadow_command,
     register_todo_command,
     register_version_command,
+    register_usage_ping_command,
     register_host_mode_plan_command,
     register_worker_bridge_commands,
     register_workflow_skills_command,
@@ -271,6 +273,8 @@ def build_parser() -> LoopXArgumentParser:
     register_doctor_command(sub, add_subcommand_format)
 
     register_first_run_report_command(sub)
+
+    register_usage_ping_command(sub, add_subcommand_format)
 
     register_opencode2_goal_worker_command(sub)
 
@@ -441,6 +445,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "first-run-report":
         return handle_first_run_report_command(args, print_payload)
+
+    if args.command == "usage-ping":
+        return handle_usage_ping_command(args, print_payload)
 
     if args.command == "opencode2-goal-worker":
         return handle_opencode2_goal_worker_command(args, print_payload)

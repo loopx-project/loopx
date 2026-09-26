@@ -151,9 +151,6 @@ strict = true
 files = [
   "loopx/control_plane/__init__.py",
   "loopx/control_plane/coordination/canonical_snapshot.py",
-  "loopx/control_plane/coordination/executor.py",
-  "loopx/control_plane/coordination/file_provider.py",
-  "loopx/control_plane/coordination/head.py",
   "loopx/control_plane/coordination/local_authority_shadow_outbox.py",
   "loopx/control_plane/coordination/local_authority_shadow_projection.py",
   "loopx/control_plane/quota/effect_program.py",

@@ -368,6 +368,10 @@ loopx quota spend-slot      # 为完成并验证的 slice 记账
 
 `loopx first-run-report` 会在本地打印同样的预填链接，不会发送任何数据。
 
+另外，`loopx usage-ping enable` 可让本机每天发送一次匿名心跳（随机 id、LoopX
+版本、OS 类型、Python 版本、安装方式），用于统计活跃安装数。不主动开启就不会发送；
+详见[用量心跳](docs/reference/usage-ping.zh-CN.md)。
+
 成功连接后应该满足：
 
 - `loopx doctor` 通过；

@@ -311,16 +311,16 @@ def main() -> None:
             f"checked={consistency['checked_agent_todo_count']} todos"
         )
 
-        # authority boundary (proposal vs Stage-2 shipped truth)
+        # authority boundary (implementation availability, not per-Goal promotion)
         boundary = gov_slice["authority_boundary"]
         assert isinstance(boundary, list)
         assert len(boundary) >= 5, f"expected >= 5 RFC entries, got {len(boundary)}"
         expected_shipped = {
-            "3 -- State Classification": False,
+            "3 -- State Classification": True,
             "4 -- Coordination Ledger Shape": False,
             "5.1 -- claim_work command": False,
             "7 -- Receipt Retention": True,
-            "8 -- Local vs Shared Mode": False,
+            "8 -- Local vs Shared Mode": True,
             "Appendix B -- handoff_mode": True,
             "9 -- Offline/Local Boundaries": False,
         }
@@ -333,26 +333,22 @@ def main() -> None:
             assert "gap" in entry
             assert entry["shipped"] is expect_shipped, (
                 f"{section}: shipped={entry['shipped']!r}, "
-                f"expected {expect_shipped} after the Stage-3 boundary refresh"
+                f"expected {expect_shipped} after native prototype retirement"
             )
         claim_work = by_section["5.1 -- claim_work command"]
         claim_text = (
             f"{claim_work['shipped_equivalent']} {claim_work['gap']}".lower()
         )
-        assert "coverage-only" in claim_text, (
-            "claim_work must stay explicit as a reference path, not production"
-        )
-        assert "rather than write authority" in claim_work["gap"].lower() or (
-            "not write authority" in claim_work["shipped_equivalent"].lower()
-        ), "claim_work gap must keep leases out of write authority"
+        assert "retired" in claim_text and "todo_claim.ts" in claim_text
+        assert "not current execution authority" in claim_text
         shipped_count = sum(1 for e in boundary if e["shipped"])
         assert shipped_count == sum(
             1 for value in expected_shipped.values() if value
         ), f"unexpected shipped count: {shipped_count}"
         print(
             f"  [OK] Authority boundary: {len(boundary)} RFC sections, "
-            f"{shipped_count} retained/handoff shipped, "
-            f"{len(boundary) - shipped_count} still proposal-only"
+            f"{shipped_count} implemented, "
+            f"{len(boundary) - shipped_count} original proposals not shipped"
         )
 
         # ── Negative: active lease is never write authority ──

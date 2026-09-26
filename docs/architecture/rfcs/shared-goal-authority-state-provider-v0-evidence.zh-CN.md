@@ -1,5 +1,10 @@
 # 验证说明：NoKV canonical coordination provider（v0）
 
+> 历史证据存档。此处 `nokv-shadow-provider` 和 Python head/executor 原型已于
+> 2026-09-26 退役；命令和路径仅描述当时基线，不再是当前运行指南。当前 File/SQLite
+> 资格及 NoKV Stage 2A 入口见 [E2E ladder](../../../examples/shared-goal-authority-e2e/README.md)。
+
+
 - 配套 RFC：[LoopX 共享控制面权威与可插拔状态 Provider (v0)](./shared-goal-authority-state-provider-v0.zh-CN.md)
 - 参考实现与探针：`examples/nokv-shadow-provider/`
 - 证据范围：canonical coordination aggregate、target-scoped conflict、内部 CAS

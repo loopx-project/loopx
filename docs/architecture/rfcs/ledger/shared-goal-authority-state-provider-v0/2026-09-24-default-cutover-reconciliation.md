@@ -53,6 +53,26 @@ D1–D3 and an exact total PR count remain unqualified. This storage repair reti
 no Python business owner; bounded Python deletion belongs to actual caller
 migration in the packages below.
 
+## 2026-09-26: early prototype retirement
+
+Reconciled against main `8cfc0dd4c`: #5102 is merged; File history encoding and
+automatic upgrade are delivered, not remaining work. This slice removes the
+Python executor, head, File provider and bootstrap bridge after the production
+caller audit. Native TS commands remain the owners; `authority_core.py` still
+has real adapter callers. Stage 0 now qualifies actual File/SQLite conformance
+instead of the obsolete Python provider. Historical row ids are not reused.
+[Coverage and format boundary](../../../../../examples/shared-goal-authority-e2e/README.md#native-qualification-and-prototype-retirement).
+
+This independently deliverable deletion advances package 3 below; it does not
+close any whole default-cutover package. **After this PR, plan the same three
+named implementation PRs below**, with prototype retirement removed from their
+scope. Counting this early deletion slice makes four named deliveries starting
+with this PR, not a guaranteed total. #5054/#4931 remain existing dependencies;
+#4224 and D1–D3 are evidence gates. The Chinese package-2 row is corrected to the
+accepted retirement direction rather than requesting a new writer for retired
+Todo events. Future accounting must distinguish a completed sub-slice from a
+closed package and record the concrete residual gap.
+
 ## Three concrete next code boundaries
 
 This delivery repairs integrated migration admission: stale registry snapshots

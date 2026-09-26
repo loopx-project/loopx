@@ -40,6 +40,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"demo",
 		"doctor",
 		"first-run-report",
+		"usage-ping",
 		"new-project-prompt",
 		"resolve-agent-thread",
 		"start-goal",
@@ -373,6 +374,9 @@ def main(argv: list[str] | None = None) -> int:
 		print(render_concise_help(sys.argv[0] if argv is None else "loopx"), end="")
 		return 0
 	command = _top_level_command(raw_argv)
+	from .usage_ping import maybe_schedule
+
+	maybe_schedule([command] if command else [])
 	if command in _SELECTED_COMMANDS:
 		try:
 			args = _build_selected_parser(command).parse_args(raw_argv)

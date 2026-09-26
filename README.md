@@ -411,6 +411,11 @@ include logs, paths, credentials, internal project names, or goal contents:
 `loopx first-run-report` prints the same prefilled link locally without
 sending anything.
 
+Separately, `loopx usage-ping enable` opts this machine into one anonymous
+ping per day (a random id, LoopX version, OS family, Python version, and
+install channel) so we can count active installations. It is off unless you
+enable it; see [Usage ping](docs/reference/usage-ping.md).
+
 A successful connection has:
 
 - `loopx doctor` passing;

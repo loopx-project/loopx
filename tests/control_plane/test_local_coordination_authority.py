@@ -199,7 +199,8 @@ def test_promoted_claim_adapter_invokes_typescript_without_markdown_fallback(
     _engage_fence(tmp_path)
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def _claim(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _claim(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         return {
             "status": "applied",
@@ -266,7 +267,8 @@ def test_promoted_add_invokes_native_create_without_markdown_state(
         lambda **_kwargs: {"todos": []},
     )
 
-    def _create(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _create(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         todo = params["todo"]
         assert isinstance(todo, dict)
@@ -332,7 +334,8 @@ def test_promoted_add_delegates_semantic_duplicate_to_typescript(
     )
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def _create(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _create(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         return {
             "status": "no_change",
@@ -997,7 +1000,7 @@ def test_promoted_claim_protocol_failure_stays_infrastructure_outage(
     _engage_fence(tmp_path)
     monkeypatch.setattr(
         "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda method, params: {
+        lambda method, params, **_kwargs: {
             "status": "failed",
             "reason_code": "invalid_local_coordination_todo_claim_request",
             "reason": "registered_agents must be a JSON array",

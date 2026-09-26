@@ -151,6 +151,7 @@ def _load_exports() -> None:
     from .todo import handle_todo_command
     from .todo_registration import register_todo_command
     from .version import handle_version_command, register_version_command
+    from .usage_ping import handle_usage_ping_command, register_usage_ping_command
     from .worker_bridge import handle_worker_bridge_command, register_worker_bridge_commands
     from .workflow_skills import (
         handle_workflow_skills_command,
@@ -232,6 +233,7 @@ __all__ = [
     "handle_task_lease_command",
     "handle_todo_command",
     "handle_version_command",
+    "handle_usage_ping_command",
     "handle_worker_bridge_command",
     "handle_workflow_skills_command",
     "register_turn_commands",
@@ -281,6 +283,7 @@ __all__ = [
     "register_task_lease_command",
     "register_todo_command",
     "register_version_command",
+    "register_usage_ping_command",
     "register_worker_bridge_commands",
     "register_workflow_skills_command",
 ]

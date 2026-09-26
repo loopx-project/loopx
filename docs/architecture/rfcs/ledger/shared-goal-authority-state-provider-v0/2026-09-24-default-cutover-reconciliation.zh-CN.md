@@ -18,7 +18,7 @@ SQLite 已有 TS checkpoint/delta 编码，保留原始版本、回执和完整�
 当前增量前是四个具名开发包：本次有实际证据的 File 成本／升级修复，加下文三个
 业务边界；完成本次后仍剩三个规划包，不是继续复述“5–8 PR”。#5063、#5054、
 #4931 是已有 PR，不能重复计为新任务。D1–D3 的未通过证据另列，不能保证总 PR 数。
-本次没有删除 Python 业务 owner，只有升级命令的薄适配。
+该 File 格式升级本身没有删除 Python 业务 owner，只有升级命令的薄适配。
 
 整 Goal 来源闭环须按 #5054 当前方向核对：它退役旧 Todo event 路径并分离 supervisor
 日志，不应为已经退役的来源重建捕获 writer。剩余支持来源、consumer、回退与 cohort
@@ -46,6 +46,22 @@ SQLite 已有 TS checkpoint/delta 编码，保留原始版本、回执和完整�
 scan 100 p95 801.81 ms / 250 ms），#4931 尚未提供精确 head 的正式复测。
 十日 soak 到了计划结束日期，不等于已有通过结果。
 
+## 2026-09-26：提前完成的原型退役切片
+
+核对 main `8cfc0dd4c`：#5102 已合入，不能继续把 File 历史编码／升级列为缺口。
+当前切片删除没有正式 caller 的 Python executor、head、File provider 和 bootstrap
+桥接；正式命令继续使用既有 TS owner，`authority_core.py` 仍有真实适配调用者。
+Stage 0 原来测试旧 Python provider，如今接到实际 File/SQLite 完整 conformance；
+旧原型的历史行不被重新解释为当前资格。
+[测试覆盖与格式边界](../../../../../examples/shared-goal-authority-e2e/README.md#native-qualification-and-prototype-retirement)。
+
+这是下表第 3 包中可以独立提前交付的 Python 退役部分。**本次 PR 之后仍计划下表
+三个实现 PR**：执行区间防护、迁移回退集成、默认入口；第 3 个不再包含已经删除
+的原型。不因为删除量大就把默认切换标成完成，也不再把“包”冒充保证的 PR 总数。
+把这次独立退役也计入，从本次开始是四个具名交付切片；其中只有本次已实施，其余
+是有明确退出条件的计划。#5054、#4931 是已有依赖，#4224/D1–D3 的缺证据另算。
+修正本页中文第 2 行与英文已接受方向的矛盾，避免重新建设已决定退役的 writer。
+
 ## 三个明确的后续代码边界
 
 本次补的是整合后的真实晋升准入缺口：旧 registry 快照可初始化 shadow，以及保存
@@ -55,7 +71,7 @@ scan 100 p95 801.81 ms / 250 ms），#4931 尚未提供精确 head 的正式复�
 | 拟议 PR | 可观察结果与 owner | 退出条件 |
 | --- | --- | --- |
 | 1. 外部动作执行区间保护 | lease/effect owner 将执行身份验证覆盖到实际外部动作、接管、超时、退出及不确定完成。复用已合入 #4994/#4995。 | 过期 executor 不能继续执行/结算；真实执行器及 receipt 恢复矩阵通过。执行前查一次 proof 不够。 |
-| 2. 事件 writer 绑定与整 Goal 迁移/回退闭环 | 将 event writer 锁和原子发布接入现有 outbox；组合 Markdown/event/lease writer、drain、saved cutover、消费者和 fenced export/rollback，删除被 TS 替代的 Python 决策。 | 复用 #5003，绑定通过前保留 `event_log_writer_not_bound`；闭合 D1、命令清单与 D3 cohort。单个无 event overlay 的 Goal 晋升不证明本项。 |
+| 2. 整 Goal 迁移/回退与保留来源闭环 | 结合在途 #5054 的旧 Todo event 路径退役及 supervisor 日志拆分，组合仍受支持的来源、drain、saved cutover、消费者及 fenced export/rollback；删除被 TS 替代的 Python 决策。 | 按 #5054 合入后的清单证明 D1 与 D3 cohort；显式拒绝退役来源，不再为其重建捕获 writer。单个无 event overlay 的 Goal 晋升不证明本项。 |
 | 3. 默认入口与有界 Python 退役 | 新 Goal、settings、安装及 packaged frontend/Lark/CLI 一致选择合格 profile；存量有显式迁移与停用流程。 | 1/2 及适用 D1–D3 通过，验证用户入口，删除最后 caller 已转走的业务 writer；保留 renderer、host IO、合法导入导出。 |
 
 **计划是三个可命名的后续实现 PR，加已有 #4931 和未闭合证据；不是保证总计四个
