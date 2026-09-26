@@ -27,6 +27,30 @@ bounded. File still reads/hashes and rewrites one retained file: this reduces
 repeated data, not asymptotic growth. Cold verification can be slower. Measure
 upgrade, cold verification, warm reads and steady writes separately.
 
+## Format recognition
+
+```bash
+loopx --format json authority-archive inspect --source /absolute/store-or-backup
+```
+
+Recognition uses JSON schema tags or the SQLite file header plus database
+metadata and `user_version`, not filename extensions. It reports artifact kind,
+provider, physical format, Goal/store identity and migration route. Unknown
+versions and inconsistent SQLite version pairs are rejected by automatic
+upgrade. A recognized provider selector is only a routing record; PostgreSQL
+and NoKV still require their configured provider service for export.
+
+`metadata_only` recognition is not full history verification. Logical archives
+are verified through their complete digest/seal contract; backup packages check
+source bytes and lineage. Upgrade subsequently validates the complete store
+under its publication boundary. Multiple local stores are reported/upgraded
+independently, never silently chosen as a new live authority.
+
+Legacy Markdown/sidecar capture, project registry envelopes and shadow/outbox
+control records have different owners. They are not alternate File database
+encodings and are not rewritten by this command. Whole-Goal migration must use
+its source capture and writer-fence workflow.
+
 ## Automatic upgrade and backups
 
 Normal readers and writers **do not accept the old File format**. Old parsing

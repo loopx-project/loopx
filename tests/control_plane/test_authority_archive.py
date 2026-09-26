@@ -98,6 +98,13 @@ def test_upgrade_cli_requires_migration_and_keeps_verified_backup(tmp_path, monk
     document["schema_version"] = "loopx_file_authority_store_v0"
     store.write_text(json.dumps(document))
     before = store.read_bytes()
+    identified = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json",
+        "authority-archive", "inspect", "--source", str(store)], capture_output=True, text=True,
+        check=True, timeout=60)
+    inspection = json.loads(identified.stdout)["inspection"]
+    assert inspection["artifact_kind"] == "authority_store"
+    assert inspection["upgrade_required"] is True
+    assert inspection["verification"] == "metadata_only"
     command = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
                "--runtime-root", str(runtime), "--format", "json", "authority-archive", "upgrade"]
     checked = subprocess.run([*command, "--require-current"], capture_output=True, text=True, timeout=60)

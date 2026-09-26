@@ -372,8 +372,8 @@ def install_windows(
                     _restore_paths(snapshots)
                 except Exception as restore_exc:  # pragma: no cover - filesystem failure
                     rollback_error = restore_exc
-                finally:
-                    shutil.rmtree(release_root, ignore_errors=True)
+                # Keep the candidate: physical data may already have upgraded.
+                # Launcher rollback alone cannot restore storage compatibility.
                 if rollback_error is not None:
                     raise RuntimeError(
                         "Windows installation failed and rollback was incomplete: "

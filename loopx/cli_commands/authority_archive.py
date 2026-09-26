@@ -20,10 +20,13 @@ def register_authority_archive_command(
     )
     add_subcommand_format(parser)
     actions = parser.add_subparsers(dest="authority_archive_action", required=True)
+    inspect = actions.add_parser("inspect", help="Identify store, archive or backup format from its content.")
+    inspect.add_argument("--source", type=Path, required=True)
     upgrade = actions.add_parser("upgrade", help="Back up, verify and migrate local authority formats.")
-    upgrade.add_argument("--execute", action="store_true")
+    mode = upgrade.add_mutually_exclusive_group()
+    mode.add_argument("--execute", action="store_true")
     upgrade.add_argument("--all-known", action="store_true", help="Include runtime roots of registered projects.")
-    upgrade.add_argument("--require-current", action="store_true", help="Fail if a format upgrade is needed; never write.")
+    mode.add_argument("--require-current", action="store_true", help="Fail if a format upgrade is needed; never write.")
     for name in ("export", "verify", "restore"):
         action = actions.add_parser(name)
         action.add_argument("--archive", type=Path, required=True)
@@ -44,28 +47,28 @@ def handle_authority_archive_command(
 ) -> int | None:
     if args.command != "authority-archive":
         return None
-    request: dict[str, object] = {
-        "schema_version": "loopx_authority_archive_admin_request_v0",
-        "action": args.authority_archive_action,
-    }
-    if args.authority_archive_action == "upgrade":
-        if args.execute and args.require_current:
-            raise ValueError("--require-current cannot be combined with --execute")
-        request.update(runtime_roots=authority_upgrade_roots(
-            registry_path, runtime_root_arg, all_known=args.all_known), execute=args.execute)
-    else:
-        request["archive"] = str(args.archive.expanduser().resolve())
-    if args.authority_archive_action == "export":
-        request.update(goal_id=args.goal_id, runtime_root=str(resolve_runtime_root(
-            load_registry(registry_path), runtime_root_arg, registry_path=registry_path)))
-    elif args.authority_archive_action == "restore":
-        request.update(goal_id=args.goal_id, destination=str(args.destination.expanduser().resolve()),
-                       provider=args.provider, archive_sha256=args.archive_sha256, execute=args.execute)
     try:
+        request: dict[str, object] = {
+            "schema_version": "loopx_authority_archive_admin_request_v0",
+            "action": args.authority_archive_action,
+        }
+        if args.authority_archive_action == "inspect":
+            request["source"] = str(args.source.expanduser().resolve())
+        elif args.authority_archive_action == "upgrade":
+            request.update(runtime_roots=authority_upgrade_roots(
+                registry_path, runtime_root_arg, all_known=args.all_known), execute=args.execute)
+        else:
+            request["archive"] = str(args.archive.expanduser().resolve())
+        if args.authority_archive_action == "export":
+            request.update(goal_id=args.goal_id, runtime_root=str(resolve_runtime_root(
+                load_registry(registry_path), runtime_root_arg, registry_path=registry_path)))
+        elif args.authority_archive_action == "restore":
+            request.update(goal_id=args.goal_id, destination=str(args.destination.expanduser().resolve()),
+                           provider=args.provider, archive_sha256=args.archive_sha256, execute=args.execute)
         result = effect_runtime_result(
             "coordination.authority_archive.manage", request, timeout=300.0, retry_safe=False
         )
-    except (RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError) as error:
         result = {"status": "failed", "reason": str(error), "authority_changed": False}
     if (args.authority_archive_action == "upgrade" and args.require_current
             and any(row.get("status") == "planned" for row in result.get("results", []))):

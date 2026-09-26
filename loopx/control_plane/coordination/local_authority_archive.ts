@@ -1,5 +1,6 @@
 /** Administrative archive transport. Large private state stays in local files;
  * the managed effect runtime returns only compact integrity/readback facts. */
+import {inspectAuthorityFormat} from "./authority_format_inspection.ts";
 import {upgradeAuthorityFormats} from "./authority_format_upgrade.ts";
 import {mkdir, readFile} from "node:fs/promises";
 import {isAbsolute, join} from "node:path";
@@ -25,6 +26,8 @@ export async function manageLocalAuthorityArchive(value: unknown,
   try {
     const request = requireJsonObject(value, "authority archive request");
     if (request.schema_version !== "loopx_authority_archive_admin_request_v0") throw new Error("archive request schema mismatch");
+    if (request.action === "inspect") return {...base, status: "inspected",
+      inspection: await inspectAuthorityFormat(path(request.source, "source path"))};
     if (request.action === "upgrade") {
       if (!Array.isArray(request.runtime_roots) || request.runtime_roots.some(root => typeof root !== "string")) {
         throw new Error("Upgrade requires explicit runtime roots");

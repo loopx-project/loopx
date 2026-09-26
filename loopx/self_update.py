@@ -1026,26 +1026,18 @@ def _execute_python_distribution_update(
             "reason": updated["recommended_action"],
         }
     else:
-        backup = (
-            payload.get("plan", {}).get("backup")
-            if isinstance(payload.get("plan"), dict)
-            else {}
-        )
-        rollback_command = (
-            backup.get("rollback_command") if isinstance(backup, dict) else None
-        )
         updated["recommended_action"] = (
-            "inspect the failed update step, then use the recorded package rollback command"
-            if rollback_command
-            else "inspect the failed package-manager or host-material update step"
+            "inspect the failed update step and retry the verified authority upgrade; "
+            "do not roll back the package without checking current data-format compatibility"
         )
         updated["next_action"] = {
-            "kind": "review_or_rollback",
-            "command": rollback_command,
-            "mutating": bool(rollback_command),
-            "requires_explicit_approval": bool(rollback_command),
+            "kind": "review_update_failure",
+            "command": "loopx --format json authority-archive upgrade --all-known",
+            "mutating": False,
+            "requires_explicit_approval": False,
             "reason": updated["recommended_action"],
         }
+
     return updated
 
 

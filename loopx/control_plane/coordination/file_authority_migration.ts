@@ -11,7 +11,7 @@ import {FileAuthorityStore, fileAuthorityRevision, replaceFileAuthorityDurably, 
 import {createHash} from "node:crypto";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-const LEGACY_SCHEMA = "loopx_file_authority_store_v0";
+export const FILE_AUTHORITY_LEGACY_SCHEMA = "loopx_file_authority_store_v0";
 
 /** Test-only crash seam around the real durable publication boundary. */
 export interface FileAuthorityMigrationEffects {
@@ -43,7 +43,7 @@ export async function migrateFileAuthorityStore(directory: string, goal: string,
       return {status: "already_current", provider: "file", cursor: current.cursor,
         provider_revision: current.provider_revision};
     }
-    if (value.schema_version !== LEGACY_SCHEMA || value.goal_id !== goal || value.store_identity !== identity ||
+    if (value.schema_version !== FILE_AUTHORITY_LEGACY_SCHEMA || value.goal_id !== goal || value.store_identity !== identity ||
       !hasExactAuthorityKeys(value, ["schema_version", "goal_id", "store_identity", "provider_revision", "cursor", "head", "committed"])) {
       throw new Error("Unsupported file authority format or mismatched lineage; source was not changed");
     }
@@ -57,7 +57,7 @@ export async function migrateFileAuthorityStore(directory: string, goal: string,
     const target = canonicalAuthorityBytes(compact.toDocument());
     const sourceDigest = sha256(source), targetDigest = sha256(target);
     const backup = join(directory, "format-backups", sourceDigest);
-    const facts = {provider: "file", from_schema: LEGACY_SCHEMA, to_schema: FILE_AUTHORITY_JOURNAL_SCHEMA,
+    const facts = {provider: "file", from_schema: FILE_AUTHORITY_LEGACY_SCHEMA, to_schema: FILE_AUTHORITY_JOURNAL_SCHEMA,
       source_sha256: sourceDigest, target_sha256: targetDigest, logical_sha256: logicalDigest,
       store_identity: identity, goal_id: goal, cursor: compact.cursor, provider_revision: compact.provider_revision,
       bytes_before: source.length, bytes_after: target.length, backup_directory: backup};

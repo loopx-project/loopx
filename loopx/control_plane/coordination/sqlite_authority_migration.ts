@@ -119,6 +119,10 @@ function inspectSqliteAuthorityStore(
           metadata.schema_version !== SQLITE_AUTHORITY_STORE_V1_SCHEMA)) {
       throw new AuthorityStoreProtocolError("SQLite authority metadata or goal identity is invalid");
     }
+    if ((version === 1 && metadata.schema_version !== SQLITE_AUTHORITY_STORE_V1_SCHEMA) ||
+      (version === 2 && metadata.schema_version !== SQLITE_AUTHORITY_STORE_SCHEMA)) {
+      throw new AuthorityStoreProtocolError("SQLite schema metadata and user_version disagree");
+    }
     if (version === 1 || version === 2) {
       const bounds = db.prepare(`SELECT
         (SELECT CAST(MIN(cursor) AS TEXT) FROM commits) AS first,

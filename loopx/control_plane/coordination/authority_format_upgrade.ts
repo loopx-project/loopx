@@ -5,6 +5,7 @@ import {join} from "node:path";
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {withFileMutationLock} from "../effect_runtime_io.ts";
+import {inspectAuthorityFormat} from "./authority_format_inspection.ts";
 import {canonicalAuthorityBytes} from "./authority_store_codec.ts";
 import {migrateFileAuthorityStore} from "./file_authority_migration.ts";
 import {FileAuthorityStore, replaceFileAuthorityDurably, syncAuthorityDirectory} from "./file_authority_store.ts";
@@ -76,21 +77,17 @@ export async function upgradeAuthorityFormats(roots: readonly string[], execute:
         const path = join(directory, name);
         let goal: string | null = null;
         try {
-        if (provider === "file") {
-          const value: unknown = JSON.parse(await readFile(path, "utf8"));
-          goal = (value as {goal_id: string}).goal_id;
-          if (!name.startsWith("rollback") && new FileAuthorityStore(directory, goal, {existingOnly: true}).path !== path) {
-            throw new Error("File authority filename does not match its goal");
+          const detected = await inspectAuthorityFormat(path);
+          if (detected.artifact_kind !== "authority_store" || detected.provider !== provider) {
+            throw new Error("Detected format does not match this provider directory; no migration selected");
           }
-        } else {
-          const db = new (sqliteAuthorityRuntime().driver.DatabaseSync)(path, {readOnly: true});
-          try { goal = String(db.prepare("SELECT goal_id FROM metadata WHERE singleton=1").get()?.goal_id ?? ""); }
-          finally { db.close(); }
-          if (sqliteAuthorityPath(directory, goal) !== path) throw new Error("SQLite filename does not match its goal");
-        }
+          goal = detected.goal_id;
+          const expected = provider === "file" ? new FileAuthorityStore(directory, goal, {existingOnly: true}).path
+            : sqliteAuthorityPath(directory, goal);
+          if (!name.startsWith("rollback") && expected !== path) throw new Error("Authority filename does not match its goal");
           const result = provider === "file" ? await migrateFileAuthorityStore(directory, goal, execute, {}, name.startsWith("rollback") ? path : undefined)
             : await upgradeSqlite(directory, goal, execute);
-          results.push({goal_id: goal, ...result});
+          results.push({goal_id: goal, detected_format: detected.format, ...result});
         } catch (error) {
           // Earlier stores may already have migrated. Never report global rollback
           // or overwrite their later commits. Retry resumes per-store publication.
