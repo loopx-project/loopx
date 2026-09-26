@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
+from ..agents.profile import AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS
 from ..agents.runtime_model import PEER_AGENT_PROFILE_SCHEMA_VERSION
 
 
@@ -12,7 +13,12 @@ def normalize_agent_scope(value: Any) -> str | None:
     candidate = " ".join(str(value or "").strip().split())
     if not candidate:
         return None
-    if len(candidate) > 180 or any(char in candidate for char in "<>"):
+    if len(candidate) > AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS:
+        raise ValueError(
+            "agent scope must be at most "
+            f"{AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS} characters"
+        )
+    if any(char in candidate for char in "<>"):
         raise ValueError("agent scope must be compact text without angle brackets")
     return candidate
 

@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.agents.profile import (
+    AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS,
+    normalize_agent_profile,
+)
 from loopx.control_plane.heartbeat.agent import (
     agent_prompt_command_args,
     agent_profile_scopes,
@@ -110,6 +114,61 @@ def test_agent_scope_normalization_dedupes_and_rejects_angle_brackets() -> None:
 def test_agent_profile_scopes_reads_common_profile_keys() -> None:
     profile = {"scope_summary": "one", "default_scopes": ["two three"]}
     assert agent_profile_scopes(profile) == ["one", "two three"]
+
+
+def test_heartbeat_accepts_the_full_authored_profile_scope() -> None:
+    agent_id = "codex-product-capability"
+    scope = "x" * AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS
+    profile = normalize_agent_profile(
+        {"agent_id": agent_id, "scope_summary": scope},
+        registered_agents=[agent_id],
+    )
+    payload = build_heartbeat_prompt(
+        goal_id="profile-scope-limit",
+        thin=True,
+        agent_id=agent_id,
+        registered_agents=[agent_id],
+        agent_profile=profile,
+    )
+    assert payload["ok"] is True
+    assert payload["agent_scopes"] == [scope]
+    assert payload["agent_scope_source"] == "agent_profile_v1"
+    assert scope in payload["task_body"]
+
+    explicit = build_heartbeat_prompt(
+        goal_id="profile-scope-limit",
+        thin=True,
+        agent_id=agent_id,
+        agent_scopes=["explicit bounded task"],
+        registered_agents=[agent_id],
+        agent_profile=profile,
+    )
+    assert explicit["agent_scopes"] == ["explicit bounded task"]
+    assert explicit["agent_scope_source"] == "argument"
+    assert "explicit bounded task" in explicit["task_body"]
+
+    # Explicit scope must not validate an unused profile fallback first.
+    legacy_profile = {"scope_summary": "x" * (AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS + 1)}
+    explicit_with_legacy_profile = build_heartbeat_prompt(
+        goal_id="profile-scope-limit",
+        thin=True,
+        agent_id=agent_id,
+        agent_scopes=["explicit bounded task"],
+        registered_agents=[agent_id],
+        agent_profile=legacy_profile,
+    )
+    assert explicit_with_legacy_profile["agent_scopes"] == ["explicit bounded task"]
+
+
+def test_heartbeat_scope_over_profile_limit_is_rejected() -> None:
+    over_limit = "x" * (AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS + 1)
+    with pytest.raises(ValueError, match="at most 320 characters"):
+        normalize_agent_scopes([over_limit])
+    with pytest.raises(ValueError, match="at most 320 characters"):
+        normalize_agent_profile(
+            {"agent_id": "peer-a", "scope_summary": over_limit},
+            registered_agents=["peer-a"],
+        )
 
 
 def test_agent_prompt_command_args_quotes_scopes() -> None:
