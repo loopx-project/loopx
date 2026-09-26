@@ -38,7 +38,9 @@ def _event_identity(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def read_index_rows(index_path: Path) -> tuple[list[str], list[tuple[int, dict[str, Any]]]]:
-    raw_lines = index_path.read_text(encoding="utf-8").splitlines()
+    # One JSON document per LF: the writer keeps non-ASCII verbatim, so a value
+    # carrying U+0085 must not be treated as a line break here.
+    raw_lines = index_path.read_text(encoding="utf-8").split("\n")
     rows: list[tuple[int, dict[str, Any]]] = []
     for line_number, line in enumerate(raw_lines, start=1):
         if not line.strip():
