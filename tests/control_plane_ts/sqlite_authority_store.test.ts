@@ -361,3 +361,60 @@ test("SQLite real processes serialize CAS and preserve a lost-response receipt",
   assert.equal(reopened.status, "loaded");
   if (reopened.status === "loaded") assert.equal(reopened.cursor, "2");
 });
+
+
+test("SQLite receipt batches preserve scalar proofs and order across checkpoints without repeated replay", async t => {
+  const {store} = await fixture(t);
+  let revision: string | null = null;
+  for (let i = 1; i <= 130; i++) {
+    const result = await store.commitAuthority(authorityStoreCommitFixture(revision, `batch-${i}`, i, i));
+    assert.equal(result.status, "applied"); if (result.status !== "applied") return;
+    revision = result.provider_revision;
+  }
+  const ids = ["batch-63", "batch-2", "missing", "batch-65", "batch-64", "batch-2", "batch-129"];
+  const expected = await Promise.all(ids.map(id => store.readReceipt(id)));
+  assert.deepEqual(await store.readReceipts(ids), {status: "receipts", results: expected});
+  const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+  const prepare = DatabaseSync.prototype.prepare;
+  let rowsRead = 0;
+  DatabaseSync.prototype.prepare = function(this: import("node:sqlite").DatabaseSync, sql: string) {
+    const statement = prepare.call(this, sql);
+    if (!/FROM commits\b/i.test(sql)) return statement;
+    return new Proxy(statement, {get(target, property) {
+      const value = Reflect.get(target, property);
+      if (typeof value !== "function") return value;
+      if (property !== "all" && property !== "get") return value.bind(target);
+      return (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        rowsRead += Array.isArray(result) ? result.length : result === undefined ? 0 : 1;
+        return result;
+      };
+    }});
+  };
+  try {
+    const grouped = await store.readReceipts(Array.from({length: 16}, (_, i) => `batch-${i + 48}`));
+    assert.equal(grouped.status, "receipts");
+    // Sixteen indexed lookups, one <=64-row checkpoint proof, and bounded head proof.
+    // Replaying the same window for every receipt would exceed this by an order of magnitude.
+    assert.ok(rowsRead <= 90, `batch materialized ${rowsRead} retained rows`);
+  } finally { DatabaseSync.prototype.prepare = prepare; }
+  // A successful earlier batch must not cache a proof over a later disk mutation.
+  const db = new DatabaseSync(store.path);
+  db.prepare("UPDATE commits SET receipts=? WHERE cursor=2").run(JSON.stringify([{forged: true}]));
+  db.close();
+  assert.equal((await store.loadAuthority()).status, "loaded");
+  const failed = await store.readReceipts(["batch-129", "missing", "batch-2"]);
+  assert.equal(failed.status, "failed");
+  if (failed.status === "failed") assert.equal(failed.reason_code, "provider_protocol_violation");
+});
+
+test("SQLite receipt batch bounds are checked before opening storage", async t => {
+  const {store} = await fixture(t);
+  for (const ids of [[], Array(65).fill("operation"), [""]]) {
+    assert.equal((await store.readReceipts(ids)).status, "failed");
+  }
+  assert.deepEqual(await store.readReceipts(["missing", "missing"]),
+    {status: "receipts", results: [{status: "missing"}, {status: "missing"}]});
+  const {existsSync} = await import("node:fs");
+  assert.equal(existsSync(store.path), false);
+});

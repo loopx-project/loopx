@@ -15,16 +15,17 @@
 
 ---
 
-## Current delivery frontier (2026-09-25)
+## Current delivery frontier (2026-09-27)
 
-Audit `37bbaec79` and current PR states: complete-source transport, transaction
-capture, source assembly and the five previously open caller/event fixes are
-merged, not future implementation. After the current promotion-admission repair,
-three named code boundaries remain planned: external-effect execution fencing;
-event-writer binding plus whole-Goal migration/rollback; default onboarding plus
-bounded Python retirement. #4931 and outstanding D2 evidence are tracked
-separately. Three is a delivery plan, not a guaranteed total PR count.
-[Current inventory and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md).
+Audit `157ab7b11` and current PR states: source capture, pagination, File format
+upgrade and Python prototype retirement are delivered. This delivery repairs
+reviewed-input recovery and adds independent retained-history audit. Plan four
+scoped PRs starting here: this recovery slice, external execution interval
+protection, whole-Goal activation/rollback integration, and default entrypoints
+with final bounded Python retirement. Three planned scopes follow this PR;
+existing #5054/#4931 and D2/D3 evidence remain separate. This is not a guaranteed
+count of future defect repairs.
+[Current inventory, rationale and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-27-recovery-audit.md).
 
 ## Native authority qualification and prototype retirement (2026-09-26)
 

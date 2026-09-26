@@ -59,7 +59,7 @@ RFC 状态和交付成熟度是两件事；后者见 [README 索引](README.md)�
 | [RFC：研究型探索控制面 v0](research-exploration-control-plane-v0.zh-CN.md) | 草案 | 无 | — |
 | [RFC：语义词表收敛与提交期漂移检查（v0）](semantic-vocabulary-convergence-v0.zh-CN.md) | 草案 | 无 | [5 条](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC：共享 Goal 对齐与受治理 Amendment 协议（v0）](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | 草案 | 无 | [2 条](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
-| [RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）](shared-goal-authority-state-provider-v0.zh-CN.md) | 草案 | 无 | [19 条](ledger/shared-goal-authority-state-provider-v0/) |
+| [RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）](shared-goal-authority-state-provider-v0.zh-CN.md) | 草案 | 无 | [20 条](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | 草案 | none | — |
 
 ## 已被替代 (0)

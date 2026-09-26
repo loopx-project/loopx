@@ -9,6 +9,7 @@ import {durableWriteJson, withFileMutationLock} from "../effect_runtime_io.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {exportAuthorityArchive, restoreAuthorityArchive, verifyAuthorityArchive} from "./authority_archive.ts";
+import {auditAuthorityArchive} from "./authority_archive_audit.ts";
 import {FileAuthorityStore} from "./file_authority_store.ts";
 import {SqliteAuthorityStore} from "./sqlite_authority_store.ts";
 import {openRuntimeAuthorityStore, requireLocalAuthorityRuntimeRoot,
@@ -38,8 +39,34 @@ export async function manageLocalAuthorityArchive(value: unknown,
     if (request.action === "verify") return {...base, status: "verified", archive: await verifyAuthorityArchive(archive)};
     const goalId = requireAuthorityStoreId(request.goal_id, "goal id");
     if (request.action === "export") {
-      const store = await openRuntimeAuthorityStore(requireLocalAuthorityRuntimeRoot(request.runtime_root), goalId, dependencies);
+      const store = await openRuntimeAuthorityStore(requireLocalAuthorityRuntimeRoot(request.runtime_root), goalId, dependencies, {existingOnly: true});
       return {...base, status: "exported", archive: await exportAuthorityArchive(store, goalId, archive)};
+    }
+    if (request.action === "audit") {
+      if (typeof request.archive_sha256 !== "string" ||
+          (request.allow_newer_head !== undefined && typeof request.allow_newer_head !== "boolean")) {
+        throw new Error("audit requires the reviewed archive digest and a boolean prefix policy");
+      }
+      const inspected = await verifyAuthorityArchive(archive);
+      if (inspected.goal_id !== goalId) throw new Error("audit archive goal mismatch");
+      let store;
+      if (request.destination !== undefined) {
+        if (request.runtime_root !== undefined) throw new Error("audit selects a runtime or an isolated destination, not both");
+        const destination = path(request.destination, "audit destination");
+        const binding = requireJsonObject(JSON.parse(await readFile(join(destination, "restore-binding.json"), "utf8")), "restore binding");
+        if (binding.schema_version !== "loopx_authority_restore_destination_v0" ||
+            binding.goal_id !== goalId || binding.archive_sha256 !== request.archive_sha256 ||
+            (binding.provider !== "file" && binding.provider !== "sqlite")) {
+          throw new Error("audit destination belongs to a different archive or provider");
+        }
+        store = binding.provider === "file" ? new FileAuthorityStore(join(destination, "store"), goalId, {existingOnly: true})
+          : new SqliteAuthorityStore(join(destination, "store"), goalId, {existingOnly: true});
+      } else {
+        store = await openRuntimeAuthorityStore(requireLocalAuthorityRuntimeRoot(request.runtime_root), goalId, dependencies, {existingOnly: true});
+      }
+      const audit = await auditAuthorityArchive(archive, store, request.archive_sha256,
+        request.allow_newer_head === true ? "retained_prefix" : "exact");
+      return {...base, status: audit.status === "matched" ? "audited" : "failed", audit};
     }
     if (request.action !== "restore") throw new Error("unknown authority archive action");
     const inspected = await verifyAuthorityArchive(archive);
