@@ -88,7 +88,7 @@ Map P0/P1 catalog rows to canary archetypes before picking commands:
 | --- | --- | --- | --- | --- | --- |
 | Work Routing | IP-001, IP-002, IP-003, IP-007, IP-008, IP-021, IP-029 | Hot-path route canary; Planning governance canary when cadence or repair is involved | `quota should-run`, `interaction_contract`, `work_lane_contract`, scheduler hint, handoff todo state | one eligible delivery fixture, one blocked/fallback fixture, one quiet or monitor fixture | agent turn routing is unsafe: it may spend, wait, notify, or choose fallback incorrectly |
 | Human Decision | IP-004, IP-014, IP-017, IP-027, IP-030, IP-033 | Scoped decision canary; Product/readiness canary when first-screen human copy changes | user todos, decision scope, operator-gate/reward preview, deferred resume candidates | one concrete user ask, one scoped non-blocking gate, one preview-or-append dry run | humans may be asked the wrong question, or an agent may continue without the needed decision |
-| State And Boundary | IP-005, IP-006, IP-011, IP-016, IP-019, IP-020, IP-022, IP-023, IP-025, IP-026, IP-028, IP-031, IP-032, IP-035, IP-036, IP-037, IP-038 | Projection and boundary canary; Hot-path route canary when the projection feeds quota/status | active state, todo metadata, task graph, authority source, claim lease, completed-work archive, install ownership, connector runtime policy, operation receipt, retired setting projection, public/private scan | fixture state plus structured projection check; boundary scan for touched public files | compact state and executable truth diverge, so dashboards and agents may trust stale or unsafe authority |
+| State And Boundary | IP-005, IP-006, IP-011, IP-016, IP-019, IP-020, IP-022, IP-023, IP-025, IP-026, IP-028, IP-031, IP-032, IP-035, IP-036, IP-037, IP-038, IP-039 | Projection and boundary canary; Hot-path route canary when the projection feeds quota/status | active state, todo metadata, task graph, authority source, claim lease, completed-work archive, install ownership, connector runtime policy, operation receipt, retired setting projection, public/private scan | fixture state plus structured projection check; boundary scan for touched public files | compact state and executable truth diverge, so dashboards and agents may trust stale or unsafe authority |
 | Evidence Lifecycle | IP-012, IP-015 | Evidence lifecycle canary; Product/readiness canary when evidence is rendered | external handle observation, benchmark lifecycle reducer, compact result projection | compact public-safe evidence fixture with raw-material exclusion assertions | progress evidence may be missing, double-counted, or represented with unsafe raw material |
 | Planning Governance | IP-010, IP-013, IP-018, IP-024, IP-034 | Planning governance canary; Hot-path route canary when cadence changes affect execution | stalled run history, autonomous replan obligation, repair delta, cadence hint, plan-to-todo writeback | two-turn stalled fixture plus repair/writeback delta assertion | the agent may keep planning in prose while the machine-visible frontier stays unchanged |
 
@@ -347,6 +347,91 @@ Projection, authority, write scope, and lease integrity.
 | P1 | IP-036 | A Lost Response Is Not An Absent Commit | Effect dispatcher plus caller | no interruption unless recovery needs a user decision; report the receipt read back | name the write with a stable operation id, recover by readback instead of blind retry, and never leave a committed record pointing at material nobody published |
 | P1 | IP-037 | A Retired Setting Is Not An Absent Setting | Configuration reader plus migration owner | no interruption; keep the retired entry visible and read-only where it was once configurable | reject the retired activation before any write, carry its retired status and replacement in the projection, and treat clearing it as neither enable nor bootstrap of the replacement |
 | P1 | IP-038 | A Generic Fallback Is Not A Typed Diagnosis | Diagnostic publisher plus its reader | no interruption; the failure names the value or check that was refused | ask the typed channel before any fallback, frame the reason channel by the separator the publisher writes, and report an unrecovered reason as missing evidence rather than as the cause |
+| P1 | IP-039 | An Executed List Must Resolve Against The Tree | CI workflow plus task board owners | no interruption; the check reports the stale entry instead of asking | inventory every path list the change touches and prove the remaining entries resolve |
+
+#### IP-039 An Executed List Must Resolve Against The Tree
+
+**Trigger**
+
+- a change retires, renames, or moves files, and the same change does not
+  inventory the places that name those files by path;
+- one of those places is executed literally instead of read as prose: a CI step
+  handing paths to a test runner, or a task row whose validation column a
+  contributor is told to run verbatim;
+- nothing reports the stale entry where it is read, so it surfaces only when
+  someone runs the list — and is then attributed to their change rather than to
+  the retirement that orphaned it.
+
+**Expected behavior**
+
+A list of paths that drives execution is a typed claim about the tree, and it
+has to be checked like one. Four rules keep a retirement from also retiring the
+work the list was there to run.
+
+1. **Check the list against the tree, do not maintain it by hand.**
+   `tests/test_python_ci_workflow.py:339` globs `tests/control_plane_ts/*.test.ts`
+   and asserts the shard selector returns exactly that set for one, three and
+   four shards, and that an out-of-range shard exits non-zero. The selector may
+   not silently drop a file or select one twice, so a new or removed test file
+   cannot leave the shard contract quietly wrong.
+2. **A retirement is not complete while a manifest still names the retired
+   path.** `#5105` retired the Stage 0 Python prototype and removed its tests,
+   and three manifests kept naming what it removed: the Windows lifecycle step
+   still passed `tests/control_plane/test_coordination_file_provider.py` to
+   pytest, the GH-C100 row still told contributors to run three removed test
+   modules, and both `core-state-machines` chapters still anchored the
+   guarded-commit path at `loopx/control_plane/coordination/executor.py`.
+3. **A list that is executed fails as a whole, so one stale entry costs every
+   other entry.** pytest resolves its arguments before it collects anything, so
+   a single missing path aborts the run with
+   `ERROR: file or directory not found` and `no tests ran in 0.00s`. The
+   lifecycle step's other ten files never executed, and `windows-powershell`
+   reported failure on every pull request while running none of the tests it
+   names — a green-looking retirement that silently removed a whole lane's
+   coverage.
+4. **A column a human runs verbatim carries the same contract.** The task
+   board's validation column is an executed list too: a contributor copies it
+   into a shell. A row that names removed files is not stale prose, it is a
+   command that cannot start, and the reader has no way to tell that from their
+   own mistake.
+
+The pattern is about the boundary between a change and the artifacts that claim
+to describe the resulting tree. IP-024 covers a repair that must change the
+machine-visible frontier, and IP-038 keeps a published reason from being
+replaced by a caller's own explanation; here the claim itself is wrong and
+nothing in the reading path notices.
+
+**Visual Model**
+
+```mermaid
+flowchart TD
+  A["a change retires, renames or moves files"] --> B{"does the same change inventory the manifests that name them?"}
+  B -->|"yes"| C["repoint or delete each entry, and prove the rest resolve"]
+  B -->|"no"| D{"is the entry read as prose or executed?"}
+  D -->|"prose"| E["a reader finds nothing and loses the pointer"]
+  D -->|"executed"| F["the runner aborts before collecting, so the whole list stops running"]
+  F --> G["the lane reports failure on every later change"]
+  C --> H["the list keeps proving what it names"]
+```
+
+**Bad smell**
+
+The retirement pull request is green, the removed code is gone, and the
+capability is gone twice: the module no longer exists and the list that used to
+exercise it no longer runs. Nothing fails in the change that should have
+noticed, and the resulting red check looks like the fault of whoever pushed
+next.
+
+**Validation**
+
+- `tests/test_python_ci_workflow.py::test_typescript_shards_select_every_test_file_exactly_once`
+  is the good case: an executed list is asserted equal to the tree across three
+  shard counts, and an invalid shard is rejected rather than ignored.
+- `tests/test_python_ci_workflow.py::test_four_shards_execute_each_test_once_and_merge_portable_coverage`
+  proves the other half of the contract — every selected test actually executes
+  once — so a list can neither over- nor under-select.
+- `examples/interaction-pattern-catalog-smoke.py` protects this entry's
+  structure and its family placement.
 
 ### Evidence Lifecycle
 
