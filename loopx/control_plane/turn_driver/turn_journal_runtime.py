@@ -26,6 +26,7 @@ _PROJECTION_KEYS = {
     "journal_consistent",
     "recovery_decision",
     "last_recovery",
+    "recorded_effects",
     "effects",
 }
 _BOOLEAN_PROJECTION_KEYS = {
@@ -145,6 +146,12 @@ def interpret_turn_journal_projection(
         or not all(isinstance(violation, str) for violation in payload["violations"])
         or not _validate_recovery_decision(payload.get("recovery_decision"))
         or not _validate_recovery_audit(payload.get("last_recovery"))
+        or not isinstance(payload.get("recorded_effects"), dict)
+        or set(payload["recorded_effects"]) != {
+            "host_invoked", "state_written", "quota_spent", "scheduler_acknowledged",
+        }
+        or any(value is not None and not isinstance(value, bool)
+               for value in payload["recorded_effects"].values())
     ):
         raise RuntimeError(
             "TypeScript Turn-journal inspection projection type mismatch"

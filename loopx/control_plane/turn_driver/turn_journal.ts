@@ -11,6 +11,7 @@ import {
   type EffectTurn,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { recordedTurnEffects, type RecordedTurnEffects } from "./turn_journal_effect_readback.ts";
 
 export const TURN_JOURNAL_INSPECTION_SCHEMA_VERSION =
   "loopx_turn_journal_inspection_v1";
@@ -76,6 +77,7 @@ export interface TurnJournalInspection {
   journal_consistent: boolean;
   recovery_decision: TurnRecoveryDecision;
   last_recovery: TurnRecoveryAudit | null;
+  recorded_effects: RecordedTurnEffects;
   effects: [];
 }
 
@@ -92,6 +94,7 @@ export interface TurnJournalEffectContext {
   journal_consistent: boolean;
   recovery_decision: TurnRecoveryDecision;
   last_recovery: TurnRecoveryAudit | null;
+  recorded_effects: RecordedTurnEffects;
 }
 
 // Replay has its own verdict. It is not a quota decision and must not manufacture
@@ -657,6 +660,7 @@ export function interpretTurnJournalEffect(
         journal_consistent: journalConsistent,
         recovery_decision: turnRecoveryDecision,
         last_recovery: projectRecoveryAudit(journal.recovery_audit),
+        recorded_effects: recordedTurnEffects(journal, completedPhases, journalConsistent),
       },
     },
     interpretation: {
@@ -709,6 +713,7 @@ export function projectTurnJournalInspection(
     journal_consistent: context.journal_consistent,
     recovery_decision: context.recovery_decision,
     last_recovery: context.last_recovery,
+    recorded_effects: context.recorded_effects,
     effects: [],
   };
 }

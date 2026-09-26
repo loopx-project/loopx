@@ -15,6 +15,8 @@ from ..presentation.renderers.turn_envelope_markdown import (
 
 def build_turn_error_payload(
     planned: dict[str, Any], exc: Exception, *, turn_command: str,
+    execution_started: bool = False,
+    journal_readback: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Preserve the failed Turn's identity and effect readback at the CLI edge."""
 
@@ -24,6 +26,15 @@ def build_turn_error_payload(
     run_once = turn_command == "run-once"
     error_code = getattr(exc, "code", None)
     error_payload = getattr(exc, "payload", None)
+    planned_effects = planned.get("effects")
+    planned_effects = planned_effects if isinstance(planned_effects, Mapping) else {}
+    # Once the executor was entered an exception can follow a protected effect.
+    # A missing reply is not proof of non-execution. The original journal is
+    # projected separately so a replay never looks like a second host launch.
+    effects = {
+        key: True if planned_effects.get(key) is True else None if execution_started else False
+        for key in ("host_invoked", "state_written", "scheduler_acknowledged", "quota_spent")
+    }
     return {
         **({"error_code": error_code, **(error_payload if isinstance(error_payload, Mapping) else {})}
            if isinstance(error_code, str) else {}),
@@ -33,12 +44,16 @@ def build_turn_error_payload(
         ),
         "mode": "run_once" if run_once else "plan",
         "error": str(exc),
-        "effects": {
-            "host_invoked": False,
-            "state_written": False,
-            "scheduler_acknowledged": False,
-            "quota_spent": False,
-        },
+        "effects": effects,
+        "effects_scope": "current_invocation",
+        **({"journal_observation": {
+            "scope": "original_turn",
+            "status": "observed" if journal_readback is not None else "unavailable",
+            **({key: journal_readback[key] for key in (
+                "journal_consistent", "journal_status", "completed_phases",
+                "recorded_effects", "recovery_decision",
+            )} if journal_readback is not None else {}),
+        }} if execution_started else {}),
         **({
             "resume_turn_key": turn_key,
             "journal_ref": f"turn:{turn_key.removeprefix('sha256:')[:16]}",
@@ -114,6 +129,10 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
         if isinstance(payload.get("host_failure"), dict)
         else {}
     )
+    journal_observation = (
+        payload.get("journal_observation")
+        if isinstance(payload.get("journal_observation"), dict) else {}
+    )
     return "\n".join(
         [
             "# LoopX Turn Run Once",
@@ -145,6 +164,12 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             f"- host_invoked: {effects.get('host_invoked')}",
             f"- state_written: {effects.get('state_written')}",
             f"- quota_spent: {effects.get('quota_spent')}",
+            *([f"- error: {payload['error']}"] if payload.get("error") else []),
+            *([f"- journal_readback: {journal_observation.get('status')}",
+               f"- recorded_effects: {journal_observation.get('recorded_effects')}",
+               f"- recovery_from: {(journal_observation.get('recovery_decision') or {}).get('resume_from')}",
+               f"- recovery_reinvoke_host: {(journal_observation.get('recovery_decision') or {}).get('reinvoke_host')}"]
+              if journal_observation else []),
             *(
                 [
                     f"- recovery_plan: {planned.get('action')}",
@@ -209,6 +234,7 @@ def render_loopx_turn_journal_inspection_markdown(
             f"- recovery_reason: {recovery.get('reason')}",
             f"- recovery_checks: {rendered_checks or 'none'}",
             f"- journal_consistent: {payload.get('journal_consistent')}",
+            f"- original_turn_recorded_effects: {payload.get('recorded_effects')}",
             *(
                 [
                     f"- last_recovery_plan: {last_planned.get('action')}",

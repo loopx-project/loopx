@@ -50,6 +50,7 @@ from ..control_plane.turn_driver import (
     load_loopx_turn_plan_from_journal,
     run_codex_cli_host,
     run_loopx_turn_once,
+    inspect_loopx_turn_journal,
     selected_turn_todo,
 )
 from ..control_plane.turn_driver.host_binding import managed_executor_binding
@@ -114,6 +115,7 @@ def handle_turn_command(
             output_format=output_format, print_payload=print_payload,
         )
     payload: dict[str, Any] = {}
+    execution_started = False
     try:
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
@@ -1056,6 +1058,7 @@ def handle_turn_command(
                 on_admitted=on_managed_start_admitted,
             )
 
+            execution_started = bool(args.execute)
             payload = run_loopx_turn_once(
                 payload,
                 host_argv=raw_argv,
@@ -1090,7 +1093,20 @@ def handle_turn_command(
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")
     except Exception as exc:  # noqa: BLE001 - CLI boundary renders typed JSON failure
-        payload = build_turn_error_payload(payload, exc, turn_command=args.turn_command)
+        journal_readback = None
+        if execution_started:
+            transaction = payload.get("transaction") or {}
+            try:
+                journal_readback = inspect_loopx_turn_journal(
+                    runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+                    turn_key=str(transaction.get("turn_key") or ""),
+                )
+            except Exception:  # noqa: BLE001 - retain original error and unknown effects
+                pass
+        payload = build_turn_error_payload(
+            payload, exc, turn_command=args.turn_command,
+            execution_started=execution_started, journal_readback=journal_readback,
+        )
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"
