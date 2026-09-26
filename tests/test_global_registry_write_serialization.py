@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import subprocess
 import sys
@@ -126,6 +127,58 @@ def test_sync_reads_and_writes_inside_the_global_registry_lock(
     locked_reads = [event for event in events if event == "read:locked"]
     assert locked_reads, f"authoritative merge read outside the lock: {events}"
     assert events.index("read:locked") < events.index("write:locked"), events
+
+
+@pytest.mark.parametrize("denied_errno", [errno.EACCES, errno.EPERM, errno.EROFS])
+def test_sync_lock_write_denial_is_terminal_even_when_probe_is_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denied_errno: int
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    original = registry_path.read_bytes()
+    failure = OSError(denied_errno, "lock write denied")
+
+    @contextmanager
+    def denied_lock(path: Path, **kwargs: Any) -> Iterator[Path]:
+        raise failure
+        yield path
+
+    monkeypatch.setattr(global_registry, "exclusive_cross_runtime_file_lock", denied_lock)
+    result = sync_project_registry_to_global(
+        registry_path=registry_path, runtime_root_override=str(runtime_root)
+    )
+
+    assert result["ok"] is False
+    assert result["error_kind"] == "global_registry_write_denied"
+    assert result["errno"] == denied_errno
+    assert result["wrote"] is False
+    assert result["synced_goal_ids"] == []
+    assert result["requires_global_registry_repair"] is True
+    assert result["requires_host_permission"] is True
+    assert result["global_registry_writability"]["ok"] is True
+    assert registry_path.read_bytes() == original
+    assert not global_registry_path(runtime_root).exists()
+
+
+def test_sync_lock_other_io_error_is_not_permission_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    failure = OSError(errno.ENOSPC, "device full")
+
+    @contextmanager
+    def failed_lock(path: Path, **kwargs: Any) -> Iterator[Path]:
+        raise failure
+        yield path
+
+    monkeypatch.setattr(global_registry, "exclusive_cross_runtime_file_lock", failed_lock)
+    with pytest.raises(OSError) as caught:
+        sync_project_registry_to_global(
+            registry_path=registry_path, runtime_root_override=str(runtime_root)
+        )
+    assert caught.value is failure
+    assert not global_registry_path(runtime_root).exists()
 
 
 def test_dry_run_sync_does_not_take_the_write_lock(
