@@ -3,7 +3,7 @@
 - Baseline: `41ba6f4d9` on `main`, 2026-09-25; open PR states are a snapshot, not merge promises.
 - Owners: overall roadmap #4574 R5/G2; shared authority L2–L9/D1–D3; TS migration T1–T4.
 - Delivered #5040: current registration admission, complete saved migration intent and truthful fence recovery.
-- Current increment: long-history closeout reuse and TS-owned monitor evidence; the migration packages below remain open.
+- Current increment: File retained-state compaction stacked on #5063; the migration packages below remain open. #5063 has now merged; rebased onto main `eaa0c0fd0`.
 - This checkpoint supersedes numerical remaining-PR estimates in earlier delivery entries.
 
 ## Correct the accounting
@@ -32,6 +32,27 @@ transaction, complete-source and source-witness owners. The latest formal #4224
 (801.81 ms versus 250 ms). #4931 has not supplied a formal exact-head rerun.
 Reaching the planned ten-day soak end date is not a passing report.
 
+## File history cost: delivered slice, separate acceptance
+
+A detached long-history snapshot exposed File's repeated full-projection write
+cost. #5063 bounds RPC waits and retains verified read views; it does not remove
+that physical duplication. This stack reuses the SQLite-owned shared TS state-log
+codec for File checkpoints/deltas, preserving logical revisions, receipts and
+full scan results. See [format, upgrade and limits](../../../../reference/file-authority-state-log.md).
+Normal reads/writes accept only v1. Explicit upgrade automatically backs up and
+verifies File/SQLite before physical migration, and installation invokes it before
+activation. Cross-provider movement reuses logical archive recovery. Older binaries
+cannot read v1. Conversion, cold verification,
+steady writes and warm reads require separate evidence; cache limits are unchanged.
+
+Before this slice, the audited implementation plan therefore contains **four
+named packages**: this evidenced File cost repair plus the three below. After
+this slice it contains those **three planned packages**, not a new unchanged
+“5–8 PRs” estimate. #5063, #5054 and #4931 are existing PRs, not three new tasks.
+D1–D3 and an exact total PR count remain unqualified. This storage repair retires
+no Python business owner; bounded Python deletion belongs to actual caller
+migration in the packages below.
+
 ## Three concrete next code boundaries
 
 This delivery repairs integrated migration admission: stale registry snapshots
@@ -41,7 +62,7 @@ not implement another store or close the whole migration package or D2 gate.
 | Proposed PR | Observable result and owner | Exit |
 | --- | --- | --- |
 | 1. External-effect execution fencing | Lease/effect owners protect the actual execution interval, takeover, timeout, exit and uncertain completion. Reuse merged #4994/#4995. | Stale executors cannot continue or settle; real executor and receipt recovery matrix passes. A point-in-time proof check is insufficient. |
-| 2. Event-writer binding and whole-Goal migration/rollback | Bind event writer locks/atomic publication to existing outbox; integrate Markdown/event/lease capture, drain, saved cutover, consumers and fenced export/rollback; delete Python decisions replaced by TS. | Reuse #5003. Retain `event_log_writer_not_bound` until binding passes; close D1, command inventory and D3 cohort. One Goal without an event overlay does not prove this package. |
+| 2. Whole-Goal migration/rollback and retained source closure | Reconcile open #5054, which retires the legacy Todo event path and isolates supervisor logging; do not build another capture writer for a retired source. Integrate remaining supported sources, drain, saved cutover, consumers and fenced export/rollback; delete Python decisions replaced by TS. | Prove the supported command/source inventory after #5054, D1 and the D3 cohort; reject retired input explicitly. One Goal without a legacy event overlay does not prove every retained caller or rollback path. |
 | 3. Default entrypoints and bounded Python retirement | New Goals, settings, installation and packaged frontend/Lark/CLI select a qualified profile consistently; existing Goals have explicit migration/disable flows. | 1/2 and applicable D1–D3 pass; user entrypoints work; delete business writers only after their last callers migrate. Retain rendering, host IO and lawful import/export. |
 
 **Plan three named future implementation PRs, plus existing #4931 and outstanding

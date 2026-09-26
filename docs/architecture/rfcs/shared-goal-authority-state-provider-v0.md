@@ -34,6 +34,16 @@ bounded Python retirement. #4931 and outstanding D2 evidence are tracked
 separately. Three is a delivery plan, not a guaranteed total PR count.
 [Current inventory and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md).
 
+File retained-state storage now reuses the existing TS checkpoint/delta codec,
+stacked on #5063's verified read cache and RPC budgets. Original revisions,
+receipts and full historical projections survive the physical format upgrade.
+Normal reads/writes require v1. Installation runs explicit, verified backup and
+format migration; legacy decoding exists only in the migration owner. File and
+SQLite reuse logical archives for cross-provider isolated recovery.
+This adds no provider/default promotion and retires no Python business owner.
+[Automatic backup/migration, cold costs and qualification limits](../../reference/file-authority-state-log.md).
+
+
 ## Persistence route for steward scale (2026-09-16)
 
 [Roadmap](loopx-overall-roadmap-v0.md) R5 reuses D1 projection, D2 real-backend/capacity/applicable ten-day soak and D3 fenced cutover. R6 connects the selected shared profile to authenticated local/cloud execution. R1–R3 can advance on supported profiles without waiting for PostgreSQL or whole-Goal default promotion.

@@ -28,6 +28,13 @@
 默认启用与最后一批有界 Python 退役。#4931 与 D2 的剩余资格证据单列；三个是
 可命名的开发批次，不是保证总 PR 数。[唯一当前清单与退出条件](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md)。
 
+File 历史存储在 #5063 的读取缓存和 RPC 预算之上，复用现有 TS checkpoint/delta
+编码；物理格式升级保留原版本、回执和每条完整历史投影。正常读写只接受 v1，
+安装入口调用显式升级流程，先自动备份、验证再迁移；旧解析器仅用于迁移。File／
+SQLite 跨 provider 恢复复用逻辑归档。这不晋升 provider／默认值，也不算删除 Python
+业务 owner。[自动备份迁移、冷读成本与验收边界](../../reference/file-authority-state-log.md)。
+
+
 ## 旧观测退役检查点（2026-09-24）
 
 [当前交付清单](ledger/shared-goal-authority-state-provider-v0/2026-09-24-observation-retirement.zh-CN.md)

@@ -103,7 +103,7 @@ test("corrupt, cross-goal, or revision-divergent documents fail closed", async (
   assert.equal((await store.loadAuthority()).status, "failed");
 
   const changed = structuredClone(original);
-  changed.committed[0].projection.authority_revision = 99;
+  changed.committed[0].state.projection.authority_revision = 99;
   changed.head.authority_revision = 99;
   await writeFile(store.path, JSON.stringify(changed), "utf8");
   const divergent = await store.loadAuthority();
@@ -168,7 +168,7 @@ test("large file read view reuses verified head and receipts without retaining h
   assert.equal(CompactStore.validations, 2, "history scans still verify the complete journal");
 
   const changed = JSON.parse(original);
-  changed.committed[0].projection.authority_revision = 99;
+  changed.committed[0].state.projection.authority_revision = 99;
   changed.head.authority_revision = 99;
   await writeFile(store.path, JSON.stringify(changed), "utf8");
   assert.equal((await second.loadAuthority()).status, "failed");

@@ -460,7 +460,7 @@ def test_python_distribution_apply_uses_the_owning_interpreter_pip() -> None:
     with (
         mock.patch(
             "loopx.self_update.subprocess.run",
-            side_effect=[passed, passed, passed, passed, passed],
+            side_effect=[passed, passed, passed, passed, passed, passed],
         ) as run,
         mock.patch(
             "loopx.runtime_activation.restart_managed_loopx_services",
@@ -481,8 +481,9 @@ def test_python_distribution_apply_uses_the_owning_interpreter_pip() -> None:
         "--upgrade",
         "loopx",
     ]
-    assert run.call_args_list[1].args[0][3:5] == ["workflow-skills", "--install"]
-    assert run.call_args_list[2].args[0][3:5] == ["slash-commands", "--install"]
+    assert run.call_args_list[1].args[0][-4:] == ["authority-archive", "upgrade", "--all-known", "--execute"]
+    assert run.call_args_list[2].args[0][3:5] == ["workflow-skills", "--install"]
+    assert run.call_args_list[3].args[0][3:5] == ["slash-commands", "--install"]
 
 
 def test_pipx_distribution_apply_preserves_the_pipx_environment() -> None:
@@ -508,7 +509,7 @@ def test_pipx_distribution_apply_preserves_the_pipx_environment() -> None:
     with (
         mock.patch(
             "loopx.self_update.subprocess.run",
-            side_effect=[passed, passed, passed, passed, passed],
+            side_effect=[passed, passed, passed, passed, passed, passed],
         ) as run,
         mock.patch(
             "loopx.runtime_activation.restart_managed_loopx_services",
@@ -779,3 +780,21 @@ def test_windows_execute_update_fails_closed_without_launching_bash() -> None:
     assert updated["ok"] is False
     assert updated["execution"]["status"] == "unsupported_platform"
     assert "install-windows.ps1" in updated["recommended_action"]
+
+
+def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_updates():
+    doctor = doctor_payload()
+    doctor["package"] = {"install_kind": "python_distribution", "release_root": None}
+    doctor["install_freshness"].update(install_kind="python_distribution", python_distribution_installer="pip")
+    payload = build_update_plan(action="apply", doctor_payload=doctor)
+    with mock.patch("loopx.self_update.subprocess.run", side_effect=[
+        subprocess.CompletedProcess([], 0, "installed", ""),
+        subprocess.CompletedProcess([], 1, '{"status":"failed","reason":"backup failed"}', ""),
+    ]) as run, mock.patch("loopx.runtime_activation.restart_managed_loopx_services") as restart:
+        result = execute_update_plan(payload)
+    assert not result["ok"]
+    assert result["changes_applied"]  # Package installed; data migration failure is not a rollback.
+    assert result["execution"]["authority_upgrade_returncode"] == 1
+    assert result["execution"]["doctor_status"] == "skipped_prior_step_failed"
+    assert run.call_count == 2
+    restart.assert_not_called()

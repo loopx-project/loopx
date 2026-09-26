@@ -81,3 +81,35 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],
                        cwd=REPO, capture_output=True, text=True, timeout=30, check=True)
+
+
+def test_upgrade_cli_requires_migration_and_keeps_verified_backup(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    state.write_text("# Synthetic state\n")
+    goal = "upgrade-cli-goal"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": []}))
+    initialize_canonical_authority(runtime, goal, {"goal_id": goal, "value": 1}, state_path=state, provider="file")
+    store = next((runtime / "authority" / "file-v0").glob("authority-store-*.json"))
+    document = json.loads(store.read_text())
+    # Single-commit legacy envelope, independently expressed on disk.
+    row = document["committed"][0]
+    row["projection"] = row.pop("state")["projection"]
+    document["schema_version"] = "loopx_file_authority_store_v0"
+    store.write_text(json.dumps(document))
+    before = store.read_bytes()
+    command = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+               "--runtime-root", str(runtime), "--format", "json", "authority-archive", "upgrade"]
+    checked = subprocess.run([*command, "--require-current"], capture_output=True, text=True, timeout=60)
+    assert checked.returncode == 1
+    assert store.read_bytes() == before
+    preview = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
+    assert json.loads(preview.stdout)["results"][0]["status"] == "planned"
+    executed = subprocess.run([*command, "--execute"], capture_output=True, text=True, check=True, timeout=60)
+    result = json.loads(executed.stdout)
+    assert result["status"] == "upgraded"
+    backup = Path(result["results"][0]["backup_directory"])
+    assert (backup / "source.json").read_bytes() == before
+    assert json.loads((backup / "manifest.json").read_text())["cursor"] == document["cursor"]
+    assert json.loads(store.read_text())["provider_revision"] == document["provider_revision"]
+    subprocess.run([*command, "--require-current"], capture_output=True, text=True, check=True, timeout=60)

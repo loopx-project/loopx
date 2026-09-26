@@ -176,10 +176,22 @@ async function createFileProvider(): Promise<FixtureProvider> {
     name: "file",
     store,
     async readDocument() {
-      return JSON.parse(await readFile(store.path, "utf8")) as MutableRecord;
+      const document = JSON.parse(await readFile(store.path, "utf8")) as MutableRecord;
+      // These metadata mutants deliberately repeat the same projection. Map
+      // physical rows to the shared logical fixture without invoking validation
+      // so the malformed bytes remain observable after a failed read.
+      return {...document, committed: (document.committed as MutableRecord[]).map(row => {
+        const {state, ...metadata} = row;
+        return {...metadata, projection: (state as MutableRecord).projection ?? seedCommit.next_projection};
+      })};
     },
     async writeDocument(document) {
-      await writeFile(store.path, JSON.stringify(document));
+      const rows = (document.committed as MutableRecord[]).map(row => {
+        const {projection, ...metadata} = row;
+        return {...metadata, state: row.cursor === "1" ? {kind: "checkpoint", projection}
+          : {kind: "delta", delta: {schema_version: "loopx_authority_state_delta_v0", operations: []}}};
+      });
+      await writeFile(store.path, JSON.stringify({...document, committed: rows}));
     },
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
