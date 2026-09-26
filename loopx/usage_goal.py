@@ -5,6 +5,7 @@ there is no open interval that a later process can extrapolate indefinitely.
 """
 from __future__ import annotations
 
+import argparse
 from contextlib import closing, contextmanager
 import hashlib
 import json
@@ -12,7 +13,7 @@ import os
 from pathlib import Path
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 from . import usage_ping
 
@@ -74,6 +75,25 @@ def observe_goal_execution(runtime_root: Path, goal_id: str, *, host: str = "unk
         # harmless: the TS interval union deduplicates it.
         if publish is not None:
             publish()
+
+
+def observe_quota_result(args: argparse.Namespace, payload: Mapping[str, object], *,
+                         registry_path: Path, runtime_root: Path,
+                         turn_id: str | None, started_at: int) -> None:
+    """Translate already-decided CLI facts; never decide admission or settlement."""
+    if not payload.get("ok"):
+        return
+    if args.quota_command == "should-run" and payload.get("should_run") is True:
+        phase, at = "start", started_at
+    elif args.quota_command == "spend-slot" and args.execute and payload.get("appended"):
+        phase, at = "spend", time.time_ns() // 1_000_000
+    else:
+        return  # Preview, failure and replay are not fresh execution evidence.
+    host = str(getattr(args, "host_surface", None) or getattr(args, "runtime_profile", None)
+               or ("codex_app" if getattr(args, "codex_app", False) else "unknown"))
+    observe_quota_cycle(registry_path=registry_path, runtime_root=runtime_root,
+                        goal_id=args.goal_id, agent_id=args.agent_id, turn_id=turn_id,
+                        phase=phase, at=at, host=host)
 
 
 def observe_quota_cycle(*, registry_path: Path, runtime_root: Path, goal_id: str,
