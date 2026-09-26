@@ -145,54 +145,76 @@ collector, and LoopX continues to work without telemetry.
 
 ## Observed Goal duration
 
-The Goal channel adds two duration histograms to basic statistics. It helps
-answer whether observed work continues for hours or days, and how much Host
-execution those spans contain. It does not identify a person or a Goal.
+Goal timing answers whether observed work continues across hours or days. It
+reports three **independent populations**; never add their durations or counts:
 
-- **Span:** first to most recent observed Host execution, including intervening
-  pauses. It stops growing while no execution is observed.
-- **Execution:** union of observed Host-call intervals for one Goal on one
-  machine. Concurrent or nested calls overlap only once; retry execution counts,
-  settlement-only replay does not. Network/tool/approval waits inside a Host call
-  are included; this is neither CPU time nor billing time.
-- **Sampling:** one cumulative snapshot per locally observed Goal-day, flushed
-  after that UTC day closes when another observation or normal usage occurs.
-  Unfinished Goals are included. A continuously executing Host checkpoints every
-  minute and can flush without another CLI command. Quiet Goals are not counted
-  again every day. These counts are **Goal-day observations, not unique Goals**;
-  the collector cannot join a Goal across days or machines.
+| Measurement | Boundary and coverage | Interpretation |
+| --- | --- | --- |
+| `quota_cycle` | Every Host using the shared quota CLI: first allowed `should-run` to successful executed `spend-slot`, including Codex App | Coarse progression time, including intervening pauses and waits |
+| `codex_turn` | Exact accepted Codex task binding, timing events in that selected local Codex home | Finer execution intervals, including tool and approval waits |
+| `host_call` | Managed `turn run-once` and regular owner Goal chat around actual Host invocation | Directly instrumented call intervals, including network/tool waits |
 
-Coverage is managed `turn run-once` Host execution and regular owner Goal chat.
-Native `/goal`, externally attached agent sessions, manager and external-audience
-conversations are excluded because they do not share these timing boundaries.
-File, SQLite and PostgreSQL use the same observer; no provider state is queried
-or changed. Measurement starts when first observed after notice acknowledgment,
-not at historical Goal creation. Disabling, changing recipient, or clearing local
-state restarts measurement. There is no historical backfill or completion claim.
+Repeated allowed quota reads preserve the first start. Denial, spend preview,
+failed settlement and receipt repair do not finish a cycle. Successful settlement
+replays emit no new timing marker and cannot extend its end. Exact Turn identity separates concurrent cycles;
+without one, only a single inferred cycle per Goal/agent lane is measured. This
+fallback cannot distinguish concurrent unbound cycles. Missing spend produces no
+finished interval. These are diagnostic observations, never quota authority.
 
-All durations are lower bounds on observed work: confirmed prefixes survive a
-crash; missing final checkpoints, lock contention, network failure, suspended
-hosts and collection limits can lose observations. Never extrapolate a crashed
-Host as still executing. Local storage holds at most 64 Goals and 512 disjoint
-recent intervals per Goal; old intervals compact into totals, and 90-day inactive
-Goals expire. Delayed observations older than one day are discarded; pending
-snapshots older than seven days are discarded. Do not use this channel for
-liveness detection, quotas, acceptance, or accounting.
+Codex discovery uses accepted Goal/agent/task bindings and the selected
+`CODEX_HOME` read-only metadata database. It does not search other homes or infer
+ownership from cwd. Timing extraction runs in detached processes triggered by
+quota observations. It reads at most 1 MiB of new JSONL per observation (the tail
+on first discovery), retains only timing cursors and open Turn identity locally,
+and never uploads transcript content. A terminal written after spend is picked
+up on a later observation; this is not a global session watcher. Missing or
+ambiguous bindings and unavailable files leave the common quota cycle working.
+No historical backfill or extrapolation of crashed sessions occurs.
 
-The only outgoing Goal payload is:
+Within each Goal/measurement/Host series, **span** is first to most recent
+observed activity, including pauses; **duration** is the union of observed
+intervals. Parallel or nested overlap counts once within that series. Both stop
+growing without new evidence. They are not Goal age, CPU time, completion or
+billing evidence. Fixed Host labels are `codex_app`, `codex_cli`, `claude_code`,
+`dsh`, `opencode`, `trae`, `other`, `unknown`; custom names never go on the wire.
+
+One cumulative snapshot per observed series/UTC day is claimed after that day
+closes, when another observation or normal usage occurs. Unfinished Goals count;
+quiet Goals are not counted daily. Managed Host calls checkpoint every minute.
+Counts are **Goal/measurement/Host-day observations**, not unique Goals or users.
+The collector cannot join a Goal across days or machines.
+
+The observer is independent of File/SQLite/PostgreSQL state ownership and never
+changes authority state. Collection starts after notice acknowledgment. Disable,
+recipient changes or clearing local state restart measurement. Crashes, missing
+checkpoints, contention, offline collectors and limits can lose observations;
+these are partial measurements, not a complete execution accounting system.
+Local limits are 64 series, 512 recent disjoint intervals per series, 128 cycles,
+64 Codex cursors. Closed cycles and least-recently-read cursors yield capacity to
+new work; inactive cursors expire after seven days. Intervals older than 14 days compact into totals; series expire
+after 90 inactive days. Observations may arrive seven days late; coarse/fine
+intervals longer than seven days are discarded. Direct Host checkpoints longer
+than two minutes are discarded as unproven scheduling suspension. Unsent daily
+snapshots expire after seven days. No retries require an outgoing identity.
+
+The outgoing Goal payload is strictly allowlisted:
 
 ```json
-{"schema":"loopx_goal_usage_aggregate_v1","counters":[{"span":"lt_7d","execution":"lt_6h","count":1}]}
+{"schema":"loopx_goal_usage_aggregate_v1","counters":[{"measurement":"quota_cycle","host":"codex_app","span":"lt_7d","duration":"lt_6h","count":1}]}
 ```
 
 Both durations use `lt_1m`, `lt_10m`, `lt_1h`, `lt_6h`, `lt_1d`, `lt_7d`,
-`lt_30d`, `gte_30d`. No Goal ID, installation ID, source path, name, event time
-or free text is sent. `/v1/goals` accepts the strict payload; `/v1/goal-stats`
-returns independent marginal histograms for the last 30 receipt days and omits
-cells below five. The existing usage settings switch, environment opt-outs and
-consent policy control all three channels. Settings and `loopx usage-ping status`
-show `goal_preview`; this is a current local snapshot, not a delivery receipt.
-The expanded scope requires notice version 2; previous explicit disable persists.
+`lt_30d`, `gte_30d`. No Goal ID, installation ID, path, name, event time or free
+text is sent. `/v1/goals` ingests counts; `/v1/goal-stats` returns separate
+measurement histograms over 30 receipt days, omitting cells below five.
 
-Deploy collector migration `0002-goal-usage.sql` and its Worker before shipping
-the client. This additive table leaves existing heartbeats and CLI counts intact.
+The existing settings switch, environment opt-outs and consent policy control
+all channels and local timing reads. Settings and `loopx usage-ping status`
+show `goal_preview`, a local snapshot rather than a delivery receipt. Expanded
+scope requires notice version 3; an existing explicit disable persists.
+
+Before shipping the client, back up D1, apply `0002-goal-usage.sql` and
+`0003-goal-duration-sources.sql`, then deploy the Worker. The latter migrates
+previous Goal counts into `host_call`/`unknown` without deleting the old table;
+existing heartbeat and CLI counts remain intact. The unreleased Goal v1 payload
+now requires measurement/Host labels and `duration` in place of `execution`.
