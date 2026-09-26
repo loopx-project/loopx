@@ -27,16 +27,17 @@ export function useExecutionDetail(execution: WorkspaceGoalExecution | undefined
   const parts: string[] = [];
   const hosts = hostNames(execution.hostSurfaces);
   if (hosts) parts.push(t("activity.viaHost", { host: hosts }));
-  if (execution.lastActivityAt) {
-    if (execution.hostClaimed) {
-      const time = relativeTime(execution.lastActivityAt, locale);
-      if (time) parts.push(t("activity.claimedAt", { time }));
-    } else if (execution.quiet) {
-      parts.push(t("activity.quiet", { minutes: Math.round((Date.now() - Date.parse(execution.lastActivityAt)) / 60_000) }));
-    } else {
-      const time = relativeTime(execution.lastActivityAt, locale);
-      if (time) parts.push(time);
-    }
+  // The claim and the execution are different facts and are reported as such:
+  // a Goal can hold a silent managed turn and a freshly claimed attached one.
+  if (execution.quiet && execution.lastActivityAt) {
+    parts.push(t("activity.quiet", { minutes: Math.round((Date.now() - Date.parse(execution.lastActivityAt)) / 60_000) }));
+  } else if (execution.lastActivityAt) {
+    const time = relativeTime(execution.lastActivityAt, locale);
+    if (time) parts.push(time);
+  }
+  if (execution.claimedAt) {
+    const time = relativeTime(execution.claimedAt, locale);
+    if (time) parts.push(t("activity.claimedAt", { time }));
   }
   return parts;
 }

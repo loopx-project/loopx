@@ -22,12 +22,19 @@ export const goalActivityScenario = {
   async run({ browser, collectCoverage, url }) {
     const recent = new Date(Date.now() - 2 * 60_000).toISOString();
     const silent = new Date(Date.now() - 30 * 60_000).toISOString();
+    const old = new Date(Date.now() - 45 * 60_000).toISOString();
     const live = await openWorkspacePage(browser, url, {
       collectCoverage,
       beforeGoto: (_api, page) => {
         page.__loopxRuntime.sessions.set("activity-live", taskSession("progress-projection", "activity-live", "turn-activity-live", recent));
         page.__loopxRuntime.sessions.set("activity-claimed", taskSession("product-release", "activity-claimed", "turn-activity-claimed", recent, "codex-app"));
         page.__loopxRuntime.sessions.set("activity-silent", taskSession("research-monitor", "activity-silent", "turn-activity-silent", silent));
+        // A managed turn and an attached claim in one Goal are two different
+        // facts: the fresh claim must not refresh the silent managed turn.
+        page.__loopxRuntime.sessions.set("activity-fresh-claim", taskSession("research-monitor", "activity-fresh-claim", "turn-activity-fresh-claim", recent, "codex-app"));
+        // The opposite mixture keeps its live ring from the managed turn and
+        // still reports the older claim as a claim.
+        page.__loopxRuntime.sessions.set("activity-old-claim", taskSession("progress-projection", "activity-old-claim", "turn-activity-old-claim", old, "codex-app"));
       },
     });
     const coverageEntries = [];
@@ -42,15 +49,16 @@ export const goalActivityScenario = {
       assert.match(await claimed.locator("small").innerText(), /^宿主已领取 · Codex App 宿主 · 领取于\d+\s*分钟前/, "An attached claim reports its claim time, not ongoing activity");
       assert.equal(await claimed.locator(".personal-goal-mark.is-live").count(), 0, "An attached claim is never shown as live");
       const silentRow = await goalRow(page, "Research Monitor");
-      assert.match(await silentRow.locator("small").innerText(), /^执行中 · 已 3\d 分钟无新动静/, "A silent turn discloses its silence");
       assert.equal(await silentRow.locator(".personal-goal-mark.is-live").count(), 0, "A silent turn is never shown as live");
       assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1, "Only the Goal with a recently active managed turn is live");
       assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
-      assert.match(await running.locator("small").innerText(), /^执行中 · \d+\s*分钟前/, "A managed turn shows its observed activity time");
+      assert.match(await running.locator("small").innerText(), /^执行中 · Codex App 宿主 · \d+\s*分钟前 · 领取于\d+\s*分钟前/, "A managed turn leads with its own activity time and the attached claim stays a claim");
+      assert.match(await silentRow.locator("small").innerText(), /^执行中 · Codex App 宿主 · 已 3\d 分钟无新动静 · 领取于\d+\s*分钟前/, "A silent turn discloses its own silence while a fresh claim stays a claim");
+      assert.equal(await silentRow.locator(".personal-goal-mark.is-live").count(), 0, "A recent attached claim never makes a silent managed turn live");
       const brief = page.locator(".personal-brief");
-      assert.equal(await brief.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 3, "The brief lists every Goal with an unfinished turn, including silent and host-claimed ones");
+      assert.equal(await brief.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 3, "The brief lists every Goal with an unfinished turn, including silent, mixed and host-claimed ones");
       assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Product Release\s+Codex App 宿主 · 领取于\d+\s*分钟前/);
-      assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Research Monitor\s+已 3\d 分钟无新动静/);
+      assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Research Monitor\s+Codex App 宿主 · 已 3\d 分钟无新动静 · 领取于\d+\s*分钟前/, "The brief separates a silent managed turn from a fresh claim");
       assert.match(await brief.getByTestId("personal-brief-running").innerText(), /Progress Projection[\s\S]*\d+\s*分钟前/);
       assert.equal(await brief.locator(".personal-brief-tile.is-live").count(), 1);
       assert.equal(

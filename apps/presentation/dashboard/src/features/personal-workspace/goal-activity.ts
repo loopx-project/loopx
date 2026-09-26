@@ -5,7 +5,21 @@
 // every turn of a bound host thread, is invisible here. Such Goals are
 // labelled as host-owned instead of running.
 export type WorkspaceGoalExecution =
-  | { kind: "running"; agentIds: string[]; hostClaimed: boolean; hostSurfaces: string[]; lastActivityAt: string | null; quiet: boolean; sessionCount: number }
+  | {
+    kind: "running";
+    agentIds: string[];
+    hostClaimed: boolean;
+    hostSurfaces: string[];
+    /**
+     * Newest activity of a managed turn. An attached claim never writes this:
+     * taking a turn is not evidence that anything executed.
+     */
+    lastActivityAt: string | null;
+    /** Newest claim time of an attached turn, reported as a claim rather than as activity. */
+    claimedAt: string | null;
+    quiet: boolean;
+    sessionCount: number;
+  }
   | { kind: "idle"; hostSurfaces: string[] }
   | { kind: "unknown" };
 
@@ -29,26 +43,42 @@ function hostSurfacesOf(sessions: readonly GoalSessionFact[]) {
     .map((session) => String(session.host_surface))));
 }
 
+function isAttachedTurn(session: GoalSessionFact) {
+  return session.session_mode === "attached_host";
+}
+
+/** Newest recorded time in one group; the group's own clock, never another mode's. */
+function newestRecordedTime(sessions: readonly GoalSessionFact[]) {
+  return sessions
+    .map((session) => session.last_activity_at || session.updated_at || "")
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? null;
+}
+
 /** `sessions === null` means the session owner could not be read. */
 export function goalExecutionFromSessions(sessions: readonly GoalSessionFact[] | null, goalId: string, now = Date.now()): WorkspaceGoalExecution {
   if (sessions === null) return { kind: "unknown" };
   const open = sessions.filter((session) => session.goal_id === goalId && session.status !== "closed");
   const active = open.filter((session) => Boolean(session.active_turn_id));
   if (active.length === 0) return { kind: "idle", hostSurfaces: hostSurfacesOf(open) };
-  const lastActivityAt = active
-    .map((session) => session.last_activity_at || session.updated_at || "")
-    .filter(Boolean)
-    .sort()
-    .at(-1) ?? null;
+  // Aggregate by session mode: a managed turn carries execution activity, an
+  // attached turn carries only its claim. Reading one maximum across both let a
+  // recent claim make a silent managed turn look live.
+  const managedTurns = active.filter((session) => !isAttachedTurn(session));
+  const attachedTurns = active.filter(isAttachedTurn);
+  const lastActivityAt = newestRecordedTime(managedTurns);
+  const claimedAt = newestRecordedTime(attachedTurns);
+  const hostClaimed = managedTurns.length === 0;
   const lastActivityMs = lastActivityAt ? Date.parse(lastActivityAt) : Number.NaN;
-  const hostClaimed = active.every((session) => session.session_mode === "attached_host");
   return {
     kind: "running",
     agentIds: Array.from(new Set(active.map((session) => session.agent_id))),
     hostClaimed,
     hostSurfaces: hostSurfacesOf(active),
     lastActivityAt,
-    quiet: !hostClaimed && !Number.isNaN(lastActivityMs) && now - lastActivityMs > quietTurnMinutes * 60_000,
+    claimedAt,
+    quiet: !Number.isNaN(lastActivityMs) && now - lastActivityMs > quietTurnMinutes * 60_000,
     sessionCount: active.length,
   };
 }
