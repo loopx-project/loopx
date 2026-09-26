@@ -9,9 +9,13 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from ...control_plane.runtime.public_safety import SECRET_LIKE_SURFACE_PATTERN
+
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _LOCAL_PATH_RE = re.compile(r"(^|[\s:=])(?:/Users/|/private/|/tmp/|~/)")
 _RAW_LOCATION_RE = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
+# Local threshold policy only: the credential *shapes* are decided once by
+# SECRET_LIKE_SURFACE_PATTERN, which this site consults in addition to this list.
 _CREDENTIAL_RE = re.compile(
     "(?i)("
     + "|".join(
@@ -51,7 +55,7 @@ def compact_text(value: Any, *, field: str, max_len: int = 320) -> str:
         raise ValueError(f"{field} must not contain a local path")
     if _RAW_LOCATION_RE.search(text):
         raise ValueError(f"{field} must use an opaque reference, not a raw URL")
-    if _CREDENTIAL_RE.search(text):
+    if SECRET_LIKE_SURFACE_PATTERN.search(text) or _CREDENTIAL_RE.search(text):
         raise ValueError(f"{field} contains a credential-like value")
     return text
 
