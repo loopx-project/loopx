@@ -349,7 +349,7 @@ def _build_runtime_shadow_source_snapshot(
 
     rollout_bytes = read_evidence(rollout_event_log_path(runtime_root, goal_id))
     rollout_events: list[dict[str, Any]] = []
-    for line in (rollout_bytes or b"").decode("utf-8").splitlines():
+    for line in (rollout_bytes or b"").decode("utf-8").split("\n"):
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
@@ -363,7 +363,7 @@ def _build_runtime_shadow_source_snapshot(
         data = read_evidence(path)
         if not data:
             continue
-        events = [normalize_state_event(json.loads(line)) for line in data.decode("utf-8").splitlines() if line.strip()]
+        events = [normalize_state_event(json.loads(line)) for line in data.decode("utf-8").split("\n") if line.strip()]
         rendered = render_active_state_sections(build_state_projection(events, goal_id=goal_id))
         fields = parse_active_state_todos(rendered, goal=dict(goal), state_path=state_path, item_limit=None, rollout_events=rollout_events)
         if any(fields.get(f"{role}_todos") for role in ("user", "agent")):

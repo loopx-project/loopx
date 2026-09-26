@@ -55,7 +55,7 @@ def read_run_index(runtime_root: Path, goal_id: str) -> list[dict[str, Any]]:
     if not index_path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in index_path.read_text(encoding="utf-8").splitlines():
+    for line in index_path.read_text(encoding="utf-8").split("\n"):
         if not line.strip():
             continue
         try:

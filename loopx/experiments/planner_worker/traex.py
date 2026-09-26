@@ -34,7 +34,7 @@ def _assistant_text_and_usage(jsonl: str) -> tuple[str, dict[str, int], bool]:
     parts: list[str] = []
     usage: dict[str, int] = {}
     completed = False
-    for line in jsonl.splitlines():
+    for line in jsonl.split("\n"):
         if not line.strip():
             continue
         try:

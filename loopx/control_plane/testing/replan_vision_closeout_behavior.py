@@ -121,7 +121,7 @@ def _rows(state: _QualificationState) -> list[dict[str, Any]]:
     index = state.fixture.runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
     if not index.is_file():
         return []
-    return [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines() if line]
+    return [json.loads(line) for line in index.read_text(encoding="utf-8").split("\n") if line]
 
 
 def dispatch_vision_closeout(
