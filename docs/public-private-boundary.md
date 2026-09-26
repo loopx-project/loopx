@@ -145,6 +145,8 @@ raw uploaded files, screenshots with private data, unredacted logs, hidden
 provider payloads, or a public artifact that points back to private storage
 ```
 
+Disposable Mergify conflict qualification fixture. Do not merge.
+
 ## Sub-Agent Data
 
 Sub-agent orchestration increases leakage risk because child prompts often
