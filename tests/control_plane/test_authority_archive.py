@@ -45,6 +45,13 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
         verified = cli("verify", "--archive", str(archive))
         assert verified["archive"] == exported["archive"]
         assert verified["archive"]["commits"] == "1"
+        audit_args = ("audit", "--goal-id", goal, "--archive", str(archive),
+                      "--archive-sha256", verified["archive"]["archive_sha256"])
+        audited = cli(*audit_args)
+        assert audited["status"] == "audited"
+        assert audited["audit"]["scope"] == "exact"
+        assert audited["audit"]["compared_commits"] == "1"
+        assert not audited["authority_changed"]
         occupied = cli("export", "--goal-id", goal, "--archive", str(archive), exit_code=1)
         assert occupied["status"] == "failed"
         for target_provider in ("file", "sqlite"):
@@ -62,6 +69,10 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
             proof = json.loads((destination / "verified-restore.json").read_text())
             assert proof["archive_sha256"] == verified["archive"]["archive_sha256"]
             assert proof["target_store_identity"] != proof["source_store_identity"]
+            audited = cli(*audit_args, "--destination", str(destination))
+            assert audited["audit"]["status"] == "matched"
+            assert audited["audit"]["target_store_identity"] == proof["target_store_identity"]
+            assert cli(*audit_args, "--allow-newer-head")["audit"]["scope"] == "retained_prefix"
             # Reopen the actual restored backend in a separate process.
             module = REPO / f"loopx/control_plane/coordination/{target_provider}_authority_store.ts"
             class_name = "FileAuthorityStore" if target_provider == "file" else "SqliteAuthorityStore"

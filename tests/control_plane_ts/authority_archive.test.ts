@@ -294,7 +294,7 @@ test("SQLite retained history crosses checkpoint windows and preserves an old sa
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
-test("a changed archive during the second pass cannot claim a verified recovery", {skip: sqliteSkip}, async () => {
+test("restore consumes reviewed snapshot even when the original path is replaced", {skip: sqliteSkip}, async () => {
   const root = await mkdtemp(join(tmpdir(), "authority-archive-change-"));
   try {
     const source = new FileAuthorityStore(join(root, "source"), "goal");
@@ -309,7 +309,10 @@ test("a changed archive during the second pass cannot claim a verified recovery"
       await writeFile(archive, resign(rows));
       return target.storeIdentity();
     }});
-    await assert.rejects(restoreAuthorityArchive(archive, wrapped, report.archive_sha256), /archive changed/);
+    assert.equal((await restoreAuthorityArchive(archive, wrapped, report.archive_sha256)).status, "restored");
+    const restoredReceipt = await target.readReceipt("op-1");
+    assert.equal(restoredReceipt.status, "found");
+    if (restoredReceipt.status === "found") assert.deepEqual(restoredReceipt.receipts, [{decision: 1}]);
     // It remains an isolated recovery store; no source transaction was rewritten.
     const receipt = await source.readReceipt("op-1");
     assert.equal(receipt.status, "found");

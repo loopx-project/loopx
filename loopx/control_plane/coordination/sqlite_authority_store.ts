@@ -8,7 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, AuthorityStoreCommittedTransaction,
   AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreReadFailure, AuthorityStoreHead,
-  AuthorityStoreReceiptResult, AuthorityStoreScanResult } from "./authority_store.ts";
+  AuthorityStoreReceiptResult, AuthorityStoreReceiptBatchResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
   canonicalAuthorityObjectList, canonicalAuthoritySha256, normalizeAuthorityStoreCommit,
   requireAuthorityStoreId } from "./authority_store_codec.ts";
@@ -333,10 +333,6 @@ export class SqliteAuthorityStore implements AuthorityStore {
     return {identity, checkpoint, transactions, state};
   }
 
-  private verifiedWindow(db: DatabaseSync, target: bigint): SqliteCommitWindow {
-    return this.verifiedRange(db, target, target);
-  }
-
   /** The live head, proven without materializing retained history. */
   private current(db: DatabaseSync):
   {state: SqliteStateCursor; provider_revision: string; identity: string} | null {
@@ -514,24 +510,60 @@ export class SqliteAuthorityStore implements AuthorityStore {
   }
 
   async readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult> {
+    const batch = await this.readReceipts([operationId]);
+    return batch.status === "receipts" ? batch.results[0]! : batch;
+  }
+
+  /** One snapshot and one proof per touched checkpoint window. The operation
+   * index still resolves each requested ID; scanned data never substitutes for
+   * lookup, and no verified state escapes this transaction as a cache. */
+  async readReceipts(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult> {
     let db: DatabaseSync | null = null;
     try {
-      requireAuthorityStoreId(operationId, "operation id");
+      if (!Array.isArray(operationIds) || operationIds.length < 1 || operationIds.length > 64) {
+        protocol("receipt batch requires 1..64 operations");
+      }
+      for (const id of operationIds) requireAuthorityStoreId(id, "operation id");
+      const missing = (): AuthorityStoreReceiptBatchResult => ({status: "receipts",
+        results: operationIds.map(() => ({status: "missing"}))});
       db = this.open(false);
-      if (!db) return {status: "missing"};
+      if (!db) return missing();
       db.exec("BEGIN");
       const head = this.current(db);
-      if (head === null) return {status: "missing"};
-      const row = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`)
-        .get(operationId) as unknown as Record<string, unknown> | undefined;
-      if (!row) return {status: "missing"};
-      // The selected row is revalidated with the bounded window that produced
-      // it, so a receipt cannot be read without its own proof.
-      const window = this.verifiedWindow(db, this.decodeCommitRow(row).cursor);
-      const transaction = window.transactions.find(item => item.operation_id === operationId);
-      if (!transaction) protocol("SQLite authority receipt is not part of its retained window");
-      return {status: "found", cursor: transaction.cursor,
-        provider_revision: transaction.provider_revision, receipts: transaction.receipts};
+      if (head === null) return missing();
+      const ranges = new Map<bigint, {from: bigint; to: bigint}>();
+      const selected = operationIds.map(id => {
+        const row = db!.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`)
+          .get(id) as unknown as Record<string, unknown> | undefined;
+        if (!row) return null;
+        const cursor = this.decodeCommitRow(row).cursor;
+        const checkpoint = authorityStateCheckpointCursor(cursor);
+        const range = ranges.get(checkpoint);
+        ranges.set(checkpoint, {from: range && range.from < cursor ? range.from : cursor,
+          to: range && range.to > cursor ? range.to : cursor});
+        return cursor;
+      });
+      // Retain only requested receipts, not all reconstructed projections from
+      // every window. Even sparse requests never scan the gap between windows.
+      const verified = new Map<string, AuthorityStoreReceiptResult>();
+      const wanted = new Set(operationIds);
+      for (const {from, to} of ranges.values()) {
+        const window = this.verifiedRange(db, from, to);
+        for (const row of window.transactions) if (wanted.has(row.operation_id)) {
+          verified.set(row.operation_id, {status: "found", cursor: row.cursor,
+            provider_revision: row.provider_revision, receipts: row.receipts});
+        }
+      }
+      const results = operationIds.map((id, index): AuthorityStoreReceiptResult => {
+        const cursor = selected[index];
+        if (cursor === null) return {status: "missing"};
+        const result = verified.get(id);
+        if (result?.status !== "found" || result.cursor !== cursor!.toString()) {
+          protocol("SQLite authority receipt is not part of its retained window");
+        }
+        return result;
+      });
+      return {status: "receipts", results};
     } catch (error) { return readFailure(error); }
     finally { db?.close(); }
   }
