@@ -13,6 +13,7 @@
  * never decides Todo, lease, quota or promotion semantics.
  */
 import type {JsonObject} from "../effect_program.ts";
+import type {CanonicalAuthorityDigest} from "./authority_store_codec.ts";
 import {
   AuthorityStoreProtocolError,
   authorityUnicodeCompare,
@@ -61,8 +62,10 @@ function canonicalBytesEqual(left: unknown, right: unknown): boolean {
 }
 
 /** Digest of one committed projection; the anchor every reconstruction checks. */
-export function authorityStateDigest(projection: JsonObject): string {
-  return canonicalAuthoritySha256(projection);
+export function authorityStateDigest(
+  projection: JsonObject, digest: CanonicalAuthorityDigest = canonicalAuthoritySha256,
+): string {
+  return digest(projection);
 }
 
 /** The one checkpoint cursor that covers a positive commit cursor. */

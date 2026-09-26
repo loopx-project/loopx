@@ -62,6 +62,52 @@ test("SQLite commits and reads back every JSON object key", {timeout: 30000}, as
   assert.equal(({} as Record<string, unknown>).marker, undefined);
 });
 
+test("SQLite large unchanged projections retain independent receipts and reject a forged digest chain", async t => {
+  const {store} = await fixture(t);
+  const projection = {capacity_padding: "p".repeat(1024 * 1024), marker: "constant"};
+  let revision: string | null = null;
+  for (let index = 1; index <= 3; index++) {
+    const result = await store.commitAuthority({expected_provider_revision: revision,
+      operation_id: `large-${index}`, next_projection: projection,
+      events: [{index}], receipts: [{operation_id: `large-${index}`, index}]});
+    assert.equal(result.status, "applied");
+    if (result.status !== "applied") return;
+    revision = result.provider_revision;
+  }
+  const found = await store.readReceipt("large-3");
+  assert.equal(found.status, "found");
+  if (found.status === "found") assert.equal(found.receipts[0]?.index, 3);
+  const page = await store.scanCommitted(null, 3);
+  assert.equal(page.status, "page");
+  if (page.status === "page") {
+    assert.deepEqual(page.transactions.map(row => row.operation_id), ["large-1", "large-2", "large-3"]);
+    (page.transactions[0]!.projection as {marker: string}).marker = "edited only in returned data";
+    assert.equal((page.transactions[1]!.projection as {marker: string}).marker, "constant");
+  }
+  const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+  const db = new DatabaseSync(store.path);
+  try {
+    const forged = "0".repeat(64);
+    db.prepare("UPDATE commits SET state_digest=? WHERE cursor=2").run(forged);
+    db.prepare("UPDATE commits SET parent_state_digest=? WHERE cursor=3").run(forged);
+  } finally { db.close(); }
+  // The current head can still load; a historical read must prove the empty
+  // delta's claimed state digest rather than trusting the forged chain.
+  assert.equal((await store.loadAuthority()).status, "loaded");
+  for (const result of [await store.readReceipt("large-3"), await store.scanCommitted(null, 3)]) {
+    assert.equal(result.status, "failed");
+    if (result.status === "failed") assert.equal(result.reason_code, "provider_protocol_violation");
+  }
+});
+
+test("SQLite first empty projection still derives its root digest", async t => {
+  const {store} = await fixture(t);
+  const committed = await store.commitAuthority({expected_provider_revision: null,
+    operation_id: "empty-root", next_projection: {}, events: [], receipts: [{operation_id: "empty-root"}]});
+  assert.equal(committed.status, "applied");
+  assert.equal((await store.readReceipt("empty-root")).status, "found");
+});
+
 test("SQLite head continuity is independent of retained history", {timeout: 30000}, async t => {
   const {store} = await fixture(t);
   assert.equal((await store.storeIdentity()).status, "available");

@@ -10,8 +10,9 @@ import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, 
   AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreReadFailure, AuthorityStoreHead,
   AuthorityStoreReceiptResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
-  canonicalAuthorityObjectList, canonicalAuthoritySha256, normalizeAuthorityStoreCommit,
-  requireAuthorityStoreId } from "./authority_store_codec.ts";
+  canonicalAuthorityObjectList, canonicalAuthoritySha256, createCanonicalAuthorityDigestWindow,
+  normalizeAuthorityStoreCommit, requireAuthorityStoreId,
+  type CanonicalAuthorityDigest } from "./authority_store_codec.ts";
 import {
   AUTHORITY_STATE_CHECKPOINT_INTERVAL,
   applyAuthorityStateDelta,
@@ -258,6 +259,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
     row: SqliteCommitRow,
     identity: string,
     base: {kind: "predecessor" | "sealed"; state: SqliteStateCursor},
+    digest: CanonicalAuthorityDigest,
   ): SqliteVerifiedCommit {
     let projection: JsonObject;
     if (base.kind === "sealed") {
@@ -273,11 +275,17 @@ export class SqliteAuthorityStore implements AuthorityStore {
         : row.parent_state_digest === base.state.digest;
       if (!parentMatches) protocol("SQLite authority state log parent lineage is invalid");
       projection = applyAuthorityStateDelta(base.state.projection, row.delta);
-      if (authorityStateDigest(projection) !== row.state_digest) {
+      // A later empty delta preserves the already-verified predecessor state.
+      // Keep the exact commit proof below, including its events and receipts,
+      // but avoid rehashing an unchanged large projection just to rediscover
+      // the same state digest. The root has no verified predecessor digest.
+      const stateDigest = row.cursor > 1n && row.delta.operations.length === 0
+        ? base.state.digest : authorityStateDigest(projection, digest);
+      if (stateDigest !== row.state_digest) {
         protocol("SQLite authority state log digest mismatch");
       }
     }
-    const expected = commitDigest(identity, row.cursor, row.operation_id, projection, row.events, row.receipts);
+    const expected = commitDigest(identity, row.cursor, row.operation_id, projection, row.events, row.receipts, digest);
     if (row.commit_digest !== expected) protocol("SQLite committed row digest mismatch");
     return {
       state: {cursor: row.cursor, projection, digest: row.state_digest},
@@ -321,12 +329,13 @@ export class SqliteAuthorityStore implements AuthorityStore {
     const identity = this.identity(db);
     const checkpoint = this.loadCheckpoint(db, from);
     const rows = this.windowRows(db, checkpoint.cursor, to);
+    const digest = createCanonicalAuthorityDigestWindow();
     let state: SqliteStateCursor = checkpoint;
     const transactions: AuthorityStoreCommittedTransaction[] = [];
     for (const raw of rows) {
       const row = this.decodeCommitRow(raw);
       const verified = this.verifyCommitRow(row, identity,
-        row.cursor === checkpoint.cursor ? {kind: "sealed", state} : {kind: "predecessor", state});
+        row.cursor === checkpoint.cursor ? {kind: "sealed", state} : {kind: "predecessor", state}, digest);
       state = verified.state;
       if (row.cursor >= from) transactions.push(verified.transaction);
     }
@@ -590,6 +599,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
         return {schema_version: "loopx_sqlite_authority_history_audit_v0", status: "verified", commits: 0, checkpoints: 0};
       }
       const counted = db.prepare("SELECT COUNT(*) AS count FROM checkpoints").get();
+      const digest = createCanonicalAuthorityDigestWindow();
       let state: SqliteStateCursor | null = null;
       let cursor = 0n;
       let commits = 0;
@@ -603,10 +613,10 @@ export class SqliteAuthorityStore implements AuthorityStore {
           // delta can never diverge from the history it claims to extend.
           const predecessor: SqliteStateCursor = state ?? {cursor: 0n, projection: {}, digest: ""};
           const replayed: SqliteStateCursor = this.verifyCommitRow(row, identity,
-            {kind: "predecessor", state: predecessor}).state;
+            {kind: "predecessor", state: predecessor}, digest).state;
           if (isAuthorityStateCheckpoint(row.cursor)) {
             const checkpoint = this.loadCheckpoint(db, row.cursor);
-            const sealed = this.verifyCommitRow(row, identity, {kind: "sealed", state: checkpoint}).state;
+            const sealed = this.verifyCommitRow(row, identity, {kind: "sealed", state: checkpoint}, digest).state;
             if (sealed.digest !== replayed.digest ||
                 !canonicalAuthorityBytes(sealed.projection).equals(canonicalAuthorityBytes(replayed.projection))) {
               protocol("SQLite authority checkpoint does not match retained history");
@@ -675,8 +685,9 @@ export function commitDigest(
   projection: JsonObject,
   events: readonly JsonObject[],
   receipts: readonly JsonObject[],
+  digest: CanonicalAuthorityDigest = canonicalAuthoritySha256,
 ): string {
-  return canonicalAuthoritySha256({
+  return digest({
     expected_provider_revision: cursor === 1n ? null : `${identity}:${cursor - 1n}`,
     operation_id: operationId, next_projection: projection, events, receipts,
   });
