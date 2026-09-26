@@ -775,6 +775,12 @@ if ! preflight_workflow_skills "$release_dir/skills" "$release_dir" "$bin_dir/lo
   rm -rf "$release_dir"
   exit 1
 fi
+# Data upgrade is a separate, resumable operation. Never delete its backups or
+# roll migrated stores back merely because a later launcher/skill step fails.
+if ! "$release_dir/scripts/loopx" --format json authority-archive upgrade --all-known --execute; then
+  echo "loopx installer error: authority format upgrade failed; backups are retained. Retry with this candidate before activation." >&2
+  exit 1
+fi
 install_symlink "$release_dir/scripts/loopx" "$bin_dir/loopx"
 install_symlink "$release_dir/scripts/loopx-apply-rrule" "$bin_dir/loopx-apply-rrule"
 verify_default_promotion

@@ -328,6 +328,15 @@ def install_windows(
             shutil.rmtree(temporary, ignore_errors=True)
             raise
 
+        upgrade = subprocess.run(
+            _entry_command(release_root, python, ["--format", "json", "authority-archive", "upgrade",
+                                                 "--all-known", "--execute"]),
+            capture_output=True, text=True, timeout=600,
+        )
+        if upgrade.returncode != 0:
+            raise RuntimeError("Authority format upgrade failed before launcher activation; "
+                               "backups and candidate retained. " + upgrade.stdout[-2000:])
+
         launcher = bin_dir / "loopx.ps1"
         pointer = install_root / "current-release.json"
         launcher_pointer = bin_dir / LAUNCHER_POINTER_FILENAME
