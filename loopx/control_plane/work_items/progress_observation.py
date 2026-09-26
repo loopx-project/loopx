@@ -563,7 +563,8 @@ def build_replan_action_packet(
             "explore_result_node_refs"
         ),
     )
-    writeback_contract = replan_writeback_requirements(obligation)["writeback_contract"]
+    requirements = replan_writeback_requirements(obligation)
+    writeback_contract = requirements["writeback_contract"]
     successor_summary = str(
         selected_gap_values.get("successor_summary") or ""
     ).strip()[:240]
@@ -612,6 +613,7 @@ def build_replan_action_packet(
         "obligation_id": obligation.get("obligation_id"),
         "uncovered_frontier": context.get("uncovered_frontier"),
         "required_outcome": "semantic_delta",
+        "planning_guidance": requirements["planning_guidance"],
         "writeback_contract": writeback_contract,
         "allowed_terminal": [
             ProgressResultClass.EXPLORATION_EXHAUSTED.value,

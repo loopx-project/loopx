@@ -27,6 +27,14 @@ const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
 const VISION_CLI_ARGS = "--agent-vision-json '<path-to-evidence-linked-goal-vision-replan-contract-v0.json>'";
 
+// Agent guidance only: the typed outcome/authority gates below remain the owner.
+const REPLAN_PLANNING_GUIDANCE = [
+  "Never shrink requested goals for easier tests. Retain unmet requirements; " +
+    "honor user scope, authority, budget and stops.",
+  "Claim achieved only with current authoritative evidence for every requirement. " +
+    "Empty Todos/replan closure is not proof; unproven/blocked/exhausted/superseded is not achieved.",
+];
+
 function object(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
 }
@@ -104,7 +112,8 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
-    return {required_any_of: required, ...writebackProjection(required, externalReview)};
+    return {required_any_of: required, planning_guidance: [...REPLAN_PLANNING_GUIDANCE],
+      ...writebackProjection(required, externalReview)};
   }
   if (request.operation !== "qualify") {
     throw new EffectRuntimeRequestError("replan semantics operation must be requirements or qualify");

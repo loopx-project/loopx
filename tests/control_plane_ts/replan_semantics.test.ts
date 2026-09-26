@@ -181,3 +181,18 @@ test("acceptance holds use one typed recovery policy even without a projected ou
       observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
   }
 });
+
+
+test("planning advice cannot discharge a replan or widen source-specific exits", () => {
+  for (const kind of ["typed_progress_repeat", "vision_acceptance_gap", "long_todo_chain",
+    "external_progress_review_drift", "goal_acceptance_stale"]) {
+    const source = {triggers: [{kind}]};
+    const projection = projectReplanSemantics({operation: "requirements", obligation: source});
+    assert.equal((projection.planning_guidance as string[]).length, 2);
+    const refusal = projectReplanSemantics({operation: "qualify", obligation: source,
+      planning_guidance: projection.planning_guidance});
+    assert.equal(refusal.accepted, false);
+    assert.deepEqual(refusal.required_any_of, requiredSemanticOutcomes(source));
+    assert.equal(refusal.planning_guidance, undefined);
+  }
+});
