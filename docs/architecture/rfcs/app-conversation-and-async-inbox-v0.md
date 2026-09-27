@@ -74,6 +74,10 @@ Transfer the hierarchy, not the artwork or untested claims:
   routine activity; preserve missing authority, stale information and failures.
 - Use typography, spacing and restrained state accents from the existing design
   system. Motion explains verified transitions, never invents busy workers.
+- Recent-completion previews sort all loaded Goals by recorded completion time
+  before limiting rows. Sidebar order, subsequent edits and refresh times are
+  not completion evidence. Undated work stays in cumulative totals; deferred
+  work and monitor cycles do not masquerade as delivered results.
 - Keep creation/connect, direct owner chat and team work discoverable. A simpler
   screen must not conceal unresolved work or reduce permitted owner discovery.
 

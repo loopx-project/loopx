@@ -215,6 +215,7 @@ type TodoExplorerItem = {
 };
 
 type PersonalAgentTodoItem = {
+  completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
   resumeReceiptId?: string | null;
@@ -717,6 +718,7 @@ function personalTodoResumeReceiptId(todo: TodoItem) {
 function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): PersonalAgentTodoItem {
   const latestValidationRevision = todo.completion_validation_revision_history.at(-1);
   return {
+    completedAt: todo.completed_at ?? null,
     resumeWhen: todo.resume_when ?? null,
     resumeReady: todo.resume_ready ?? null,
     resumeReceiptId: personalTodoResumeReceiptId(todo),
@@ -833,7 +835,7 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
       .map((todo) => todo.todo_id?.trim())
       .filter((value): value is string => Boolean(value)),
   );
-  const recentCompleted = (assetTodos?.recent_completed_advancement_items ?? [])
+  const recentCompleted = (queueTodos?.recent_completed_advancement_items ?? assetTodos?.recent_completed_advancement_items ?? [])
     .filter((todo) => !todo.todo_id?.trim() || !seenTodoIds.has(todo.todo_id.trim()))
     .map((todo) => personalAgentTodoFromItem(todo, row));
   const firstOpen = items.find((todo) => !todo.done);

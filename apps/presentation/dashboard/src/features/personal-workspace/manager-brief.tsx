@@ -6,6 +6,8 @@ import { workspaceHomeLaneForGoal } from "./personal-workspace-model";
 import { goalWorkKind, presentGoalActivity } from "./goal-activity";
 import { GoalIdentityMark, useExecutionDetail } from "./goal-activity-view";
 
+import { recentCompletions } from "./recent-completions";
+
 const briefRowLimit = 3;
 
 type BriefRow = { goal: WorkspaceGoal; key: string; meta?: ReactNode; text: string };
@@ -50,10 +52,8 @@ export function ManagerBrief({ goals, onSelectGoal }: { goals: WorkspaceGoal[]; 
   const queued = active.filter((goal) => goal.state === "已安排" && goalWorkKind(goal) === "none").length;
   const executionRead = active.some((goal) => goal.execution && goal.execution.kind !== "unknown");
   const executionPending = active.some((goal) => !goal.execution);
-  const completed = active.flatMap((goal) => goal.agentTodos
-    .filter((todo) => todo.done && todo.status !== "deferred")
-    .map((todo) => ({ goal, key: `${goal.goalId}:${todo.todoId}`, text: todo.text })));
-  const completedTotal = active.reduce((sum, goal) => sum + Math.max(goal.doneTodoCount ?? 0, goal.agentTodos.filter((todo) => todo.done).length), 0);
+  const completed = recentCompletions(active);
+  const completedTotal = active.reduce((sum, goal) => sum + Math.max(goal.doneTodoCount ?? 0, goal.agentTodos.filter((todo) => todo.done && todo.status === "done" && todo.taskClass === "advancement_task").length), 0);
   const runningEmpty = executionRead
     ? queued ? t("brief.runningEmptyQueued", { count: queued }) : t("brief.runningEmpty")
     : executionPending ? t("brief.runningReading") : t("activity.executionUnknown");
