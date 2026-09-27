@@ -6,6 +6,8 @@
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
+**本地权威退役 checkpoint（2026-09-28）。** R5/T4 采用[重新核对的删除和验证节奏](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md)。Reviewed 本地切换和 native drain 已合入；整 Goal 执行／消费者闭环、profile 验证、默认入口接入仍分别验收。切走最后调用方时同步删旧 writer，保留必要迁移／回执 reader。已有 GoalRef／Turn PR 负责各自消费者；R6 PostgreSQL 服务验证另列，历史 PR 数量估算不再作为当前预测。
+
 ## 1. 总目标与产品路线
 
 LoopX 的目标是让人用本地前端或 Lark 提出、修订和验收复杂目标，由持久管家协调多个拥有独立工作承诺的长程 LoopX Agent，在本地 managed 与云端 runtime 上持续完成可验证的工作。单 Agent 的长程可靠性是基础，多个 Agent 的协作、handoff、恢复和共享目标收敛是核心能力，百 Agent 规模是需要独立证明的系统资格。

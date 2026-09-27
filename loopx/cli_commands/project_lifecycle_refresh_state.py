@@ -732,10 +732,11 @@ def handle_refresh_state_command(
                 agent_id=args.agent_id,
                 external_sink_delivery_authorized=payload["external_sink_delivery_authorized"] is True,
             )
-        except Exception:
+        except Exception as error:
             gate_sync = goal_channel_gate_sync_failure(
                 registry_path=registry_path,
                 goal_id=args.goal_id,
+                exception=error,
             )
         payload["goal_channel_gate_sync"] = gate_sync
         apply_external_sink_postcondition(
@@ -748,6 +749,10 @@ def handle_refresh_state_command(
             error=(
                 "enabled Goal Channel human-gate notification/readback failed "
                 "after the refresh; retry it before delivery"
+                + (
+                    "; " + gate_sync["failure_summary"]
+                    if gate_sync.get("failure_summary") else ""
+                )
             ),
         )
     print_payload(payload, fmt, render_state_refresh_markdown)

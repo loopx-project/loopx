@@ -228,7 +228,7 @@ separate; a browser fixture cannot qualify a real attached host.
 | Scope | Navigate A→B→A, late response, old subscription terminal event: update the original source/session/Turn only. Full snapshots and delta streams have different merge rules |
 | Stream | Duplicate/late events and hydrate overlap preserve one logical answer. A new event does not force scrolling while the user reads history |
 | Correction/stop | During tool execution and at completion: actual receiver adopts the latest scope or reports queued/unsupported. Stop targets the original Turn, never its successor or all peers implicitly |
-| Result | Missing file retries read only; v1 review cannot certify v2; opening a report is not adoption. Lost return ACK reconciles before another send |
+| Result | Replacing the active session must not hide a result owed by an older session in the same conversation. Readback updates only its own session, preserves streamed text and retires old reads after verified return. Missing file retries read only; v1 review cannot certify v2; opening a report is not adoption. Lost return ACK reconciles before another send |
 | Attached | Native host offline, stale binding, unsupported steering, next-Turn-only adapter and restart: request remains visible; no guessed success or competing driver |
 | Managed | Runtime start failure, quota denial, missing login and stop/restart: effective profile and actual condition readable; no silent model/account substitution |
 | Authority | Revoked access or source change rejects stale effects; unrelated permitted branches continue. No private history enters a shared audience |
@@ -241,12 +241,27 @@ comparison; no measured improvement is claimed by this proposal.
 
 ## Delivery boundary
 
-The delivered conversation-entry repair removes all browser free-text action classification in the App and checks
-its ordinary Chat path plus explicit scheduling controls. It changes no authority
-or stored message schema. Managed/attached conversation continuity, generic TS
-inbox extraction and live two-cycle small-team acceptance remain planned until
-their own evidence is recorded. The entry repair can roll back as an App routing
-change; later persisted-contract migrations need their own compatibility plan.
+The delivered conversation-entry repair removes browser free-text action
+classification. Shared queue preparation now settles accepted start failures
+instead of leaving requests indefinitely queued. Neither change proves a whole
+managed or attached journey.
+
+The next qualified frontend slice retains late worker returns after active-session
+replacement. The existing Chat snapshot supplies session/message lineage to a
+shared TypeScript read model; only sessions still owing a conclusion or delivery
+verification remain alongside the active session. No model replay, execution
+driver, persisted schema or new inbox owner is introduced. Browser acceptance
+covers a replacement session, one lost old-session read, automatic return and
+cross-session isolation. Real host execution and receiver adoption retain their
+separate acceptance requirements.
+
+Keep work in this order: qualify the installed App's existing-owner-to-original-
+conversation journey (GQ02–04, with entry/recovery companions); then G1's two real
+small-team cycles (GQ05/GQ11–13, with correction and interruption). Shared report
+polish, materials and attention summaries follow; promotional film and scale
+follow product evidence. Reuse pending acceptance-recovery and GoalRef work
+rather than implement a competing session or inbox lifecycle. Generic TS inbox
+extraction remains incremental within those journeys, not their prerequisite.
 
 ### Entry behavior compatibility
 

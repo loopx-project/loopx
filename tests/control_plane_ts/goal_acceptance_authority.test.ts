@@ -22,6 +22,8 @@ import {acceptanceCompletionRequirements, acceptanceWorkGuard, goalAcceptanceTod
   normalizeGoalAcceptanceDocument, projectGoalAcceptance, readGoalAcceptance, validateAcceptanceCompletion} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import {commitGoalAcceptanceVerification, commitLocalGoalAcceptance, commitLocalGoalAcceptanceVerification,
   configureGoalAcceptance, inspectGoalAcceptance, inspectLocalGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
+import {decodeCompletionValidationRevision, planCompletionValidationRevision}
+  from "../../loopx/control_plane/todos/completion_validation_revision.ts";
 
 const goal = "goal-acceptance-test";
 test("documented owner configuration satisfies the canonical acceptance contract", async () => {
@@ -90,6 +92,50 @@ test("validator revisions and successor links preserve an existing acceptance bi
     [{...original, resume_when: "monitor_changed:todo_followup"}, todo("todo_followup")], [], "native",
     {goal_acceptance: boundWithWait}), goal, "todo_first");
   assert.equal(changedWait?.state, "stale", "the matcher cannot reconstruct a replaced prior wait condition");
+});
+test("first validator binding preserves only the proven original work and owner association", () => {
+  for (const defaults of [{}, {completion_validation_required: false,
+    completion_validation_revision: 0, completion_validation_revision_history: []}]) {
+    const original = todo("todo_first", defaults);
+    const contract = normalizeGoalAcceptanceDocument({...document(),
+      bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]});
+    const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+      digest: canonicalAuthoritySha256(contract), document: contract, verification: null,
+      bindings: [{todo_id: "todo_first", todo_semantic_digest: goalAcceptanceTodoDigest(original),
+        revision: 1, criterion_ids: ["prerequisite"], confirmed_by: "owner"}]};
+    const guarded = (work: JsonObject) => acceptanceWorkGuard(authorityProjectionFixture(goal,
+      [work], [], "native", {goal_acceptance: state}), goal, "todo_first");
+    const declaration = {validation_command: null, validation_command_argv: [process.execPath, "-e", "process.exit(1)"],
+      validation_label: "Independent validation", validation_timeout_seconds: 5};
+    const bind = planCompletionValidationRevision({todo: original, actor_agent_id: "agent-a",
+      operation_id: "first-bind", revised_at: "2026-09-27T00:00:00Z",
+      revision: decodeCompletionValidationRevision({schema_version: "loopx_todo_completion_validation_revision_v1",
+        expected_declaration_sha256: null, declaration})});
+    const bound = {...original, ...bind.updates};
+    assert.equal(guarded(bound)?.state, "ready");
+    assert.notEqual(goalAcceptanceTodoDigest(bound), goalAcceptanceTodoDigest(original));
+    const replace = planCompletionValidationRevision({todo: bound, actor_agent_id: "agent-a",
+      operation_id: "replace", revised_at: "2026-09-27T00:01:00Z",
+      revision: decodeCompletionValidationRevision({schema_version: "loopx_todo_completion_validation_revision_v0",
+        expected_declaration_sha256: bound.completion_validation_sha256,
+        declaration: {...declaration, validation_command_argv: [process.execPath, "-e", "process.exit(0)"]}})});
+    const revised = {...bound, ...replace.updates};
+    assert.equal(guarded(revised)?.state, "ready");
+    for (const patch of [{text: "Changed work"}, {required_write_scopes: ["private/**"]},
+      {completion_validation_required: false},
+      {completion_validation_revision_history: [{...bind.receipt, previous_validation_authority: {completion_validation_required: true}}]},
+      {completion_validation_revision_history: [{...bind.receipt, previous_validation_authority: null}]},
+      {completion_validation_revision_history: [{...bind.receipt, declaration_sha256: "a".repeat(64)}]}]) {
+      assert.equal(guarded({...bound, ...patch})?.state, "stale");
+    }
+    assert.equal(guarded({...revised, completion_validation_revision_history: [bind.receipt,
+      {...replace.receipt, previous_declaration_sha256: "b".repeat(64)}]})?.state, "stale");
+    const unboundState = {...state, bindings: [], document: {...contract, bindings: []}};
+    unboundState.digest = canonicalAuthoritySha256(unboundState.document);
+    assert.equal(acceptanceWorkGuard(authorityProjectionFixture(goal, [bound], [], "native",
+      {goal_acceptance: unboundState}), goal, "todo_first")?.state, "unbound",
+    "a local validator cannot create an owner acceptance binding");
+  }
 });
 async function seed(store: AuthorityStore) {
   assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,

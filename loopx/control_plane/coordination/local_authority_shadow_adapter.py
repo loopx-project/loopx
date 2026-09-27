@@ -6,38 +6,29 @@ transaction-bound entries.
 
 from __future__ import annotations
 
-import time
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+import sys
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-from ...file_lock import (
-    LockAcquireTimeoutError,
-    exclusive_cross_runtime_file_lock,
-    try_exclusive_file_lock,
-)
-from ...history import load_registry
+from ..projects.registry_codec import load_registry
 from ...paths import resolve_runtime_root
 from ...registry import find_registry_goal
 from ..effect_runtime import effect_runtime_result
 from . import local_authority_shadow_outbox as outbox
 from .coordination_state_contract_generated import (
-    LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_RESULT_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_TRANSACTION_EVIDENCE_SCHEMA,
 )
 from .local_authority_shadow_projection import (
-    PARTITIONS,
-    TODO_PARTITION,
     head_digest,
     todo_partition_projection,
 )
 from .runtime_shadow import resolve_coordination_runtime_shadow_config, capture_todo_archive_dependencies
-from .shadow_management import read_shadow_capture_binding
+from .shadow_management import read_shadow_capture_binding, shadow_management_state_path
 
 
 from .runtime_shadow import local_authority_shadow_summary
@@ -79,17 +70,6 @@ INLINE_DRAIN_BUDGET_SECONDS = 2.0
 INLINE_DRAIN_LOCK_TIMEOUT_SECONDS = 0.25
 CLI_DRAIN_LOCK_TIMEOUT_SECONDS = 5.0
 RETENTION_PRESSURE_BYTES = 8 * 1024 * 1024
-_COMMIT_ENTRY_OUTCOMES = {
-    "delivered",
-    "replayed",
-    "ambiguous_reconciled",
-    "ambiguous_unproved",
-    "unavailable",
-    "failed",
-    "protocol_mismatch",
-    "conflict_retry_required",
-}
-_SETTLED_OUTCOMES = {"delivered", "replayed", "ambiguous_reconciled"}
 _SEED_WRITE_CLASSES = {"seed", "reseed_after_crash_gap"}
 _EVIDENCE_V1_OUTCOMES = {
     "delivered",
@@ -188,121 +168,6 @@ def todo_partition_projector(
     return project
 
 
-def primary_lock_is_free(target: Path) -> bool:
-    """Probe a partition's Python primary lock once without waiting."""
-
-    try:
-        with try_exclusive_file_lock(
-            target, operation="local_authority_shadow_drain_probe"
-        ) as held:
-            return held is not None
-    except OSError:
-        return False
-
-
-@dataclass(frozen=True)
-class _GoalSources:
-    goal: dict[str, Any] | None
-    state_path: Path
-    lease_dir: Path
-
-
-def _goal_sources(
-    registry: dict[str, Any],
-    *,
-    runtime_root: Path,
-    goal_id: str,
-) -> _GoalSources:
-    from ...state_refresh import resolve_goal_state
-
-    goal, _project, state_path = resolve_goal_state(
-        registry=registry,
-        goal_id=goal_id,
-        project_override=None,
-        state_file_override=None,
-    )
-    return _GoalSources(
-        goal=goal,
-        state_path=state_path,
-        lease_dir=outbox.lease_directory(runtime_root, goal_id),
-    )
-
-
-@contextmanager
-def _primary_lock_if_free(
-    partition: str,
-    *,
-    runtime_root: Path,
-    goal_id: str,
-    sources: _GoalSources,
-) -> Iterator[bool]:
-    """Hold the partition's primary lock only if it is free right now."""
-
-    if partition == TODO_PARTITION:
-        from .legacy_writer_fence import legacy_coordination_todo_lock_path
-
-        try:
-            with (
-                exclusive_cross_runtime_file_lock(
-                    legacy_coordination_todo_lock_path(
-                        runtime_root=runtime_root, goal_id=goal_id
-                    ),
-                    timeout_seconds=0.0,
-                    operation="local_authority_shadow_drain_resolve",
-                ),
-                exclusive_cross_runtime_file_lock(
-                    sources.state_path,
-                    timeout_seconds=0.0,
-                    operation="local_authority_shadow_drain_resolve",
-                ),
-            ):
-                yield True
-        except LockAcquireTimeoutError:
-            yield False
-        return
-    from ..work_items.task_lease import task_lease_lock_path
-
-    target = task_lease_lock_path(runtime_root=runtime_root, goal_id=goal_id)
-    try:
-        with exclusive_cross_runtime_file_lock(
-            target,
-            timeout_seconds=0.0,
-            operation="local_authority_shadow_drain_resolve",
-        ):
-            yield True
-    except LockAcquireTimeoutError:
-        yield False
-
-
-def _commit_entry_request(
-    *, runtime_root: Path, goal_id: str, entry: outbox.OutboxEntry,
-) -> dict[str, Any]:
-    """Select witnessed disk evidence; TS owns projection and source resolution."""
-    return {
-        "schema_version": LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA,
-        "runtime_root": str(runtime_root), "goal_id": goal_id,
-        "entry_id": entry.entry_id, "partition": entry.partition, "seq": entry.seq,
-        "capture_lineage_id": entry.prepared.get("capture_lineage_id"),
-        "prepared_sha256": outbox.raw_bytes_digest(entry.prepared_path.read_bytes()),
-        "committed_sha256": outbox.raw_bytes_digest(entry.committed_path.read_bytes())
-        if entry.committed_path else None,
-    }
-
-
-def _valid_commit_entry_result(result: object, entry: outbox.OutboxEntry) -> bool:
-    if not isinstance(result, dict):
-        return False
-    return (
-        result.get("schema_version")
-        == LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_RESULT_SCHEMA
-        and result.get("outcome") in _COMMIT_ENTRY_OUTCOMES
-        and result.get("entry_id") == entry.entry_id
-        and result.get("partition") == entry.partition
-        and result.get("seq") == entry.seq
-        and isinstance(result.get("no_op"), bool)
-    )
-
-
 def read_local_authority_shadow(
     *,
     runtime_root: Path,
@@ -338,258 +203,6 @@ def read_local_authority_shadow(
     return dict(result)
 
 
-class _DrainBudget:
-    def __init__(self, *, max_entries: int, budget_seconds: float) -> None:
-        self._max_entries = max(1, max_entries)
-        self._deadline = time.monotonic() + max(0.0, budget_seconds)
-        self.consumed = 0
-
-    def exhausted(self) -> bool:
-        return self.consumed >= self._max_entries or time.monotonic() >= self._deadline
-
-    @property
-    def remaining_entries(self) -> int:
-        return max(0, self._max_entries - self.consumed)
-
-    def can_reclaim(self, count: int) -> bool:
-        return (
-            self.consumed + count <= self._max_entries
-            and time.monotonic() < self._deadline
-        )
-
-
-class _PartitionDrainer:
-    """Prove under M, release for the TS transaction, then reacquire before cleanup."""
-
-    def __init__(
-        self,
-        *,
-        registry_path: Path,
-        runtime_root: Path,
-        goal_id: str,
-        partition: str,
-        sources: _GoalSources,
-        result: DrainResult,
-        budget: _DrainBudget,
-        lock_timeout_seconds: float,
-        capture_lineage_id: str,
-    ) -> None:
-        self._runtime_root = runtime_root
-        self._goal_id = goal_id
-        self._partition = partition
-        self._sources = sources
-        self._result = result
-        self._budget = budget
-        self._lock_timeout = lock_timeout_seconds
-        self._directory = outbox.partition_directory(runtime_root, goal_id, partition)
-        self._lineage: str | None = capture_lineage_id
-        self.last_delivered_digest: str | None = None
-
-    def _lock(self) -> Any:
-        return exclusive_cross_runtime_file_lock(
-            outbox.drain_lock_target(self._runtime_root, self._goal_id),
-            timeout_seconds=self._lock_timeout,
-            operation="local_authority_shadow_drain",
-        )
-
-    def _binding(self) -> dict[str, Any]:
-        view = read_shadow_capture_binding(self._runtime_root, self._goal_id)
-        if view["status"] != "active":
-            raise outbox.OutboxError(
-                str(view.get("reason_code") or "bootstrap_required"),
-                "shadow capture has no active binding",
-            )
-        binding = dict(view["binding"])
-        lineage = str(binding["capture_lineage_id"])
-        if self._lineage is not None and self._lineage != lineage:
-            raise outbox.OutboxError(
-                "stale_generation", "drain belongs to an earlier lineage"
-            )
-        self._lineage = lineage
-        return binding
-
-    def _reconcile(
-        self, *, acknowledgement: dict[str, Any] | None = None,
-    ) -> tuple[list[outbox.OutboxEntry], int]:
-        binding = self._binding()
-        # Malformed cursor bytes remain evidence, even if the candidate is unavailable.
-        cursor = outbox.read_cursor(self._directory)
-        entries = outbox.list_entries(self._directory, allow_committed_only=True)
-        files: dict[str, list[tuple[Path, str]]] = {}
-        observations = []
-        for entry in entries:
-            observation: dict[str, Any] = {
-                "entry_id": entry.entry_id, "seq": entry.seq,
-                "prepared": bool(entry.prepared),
-                "capture_lineage_id": entry.prepared.get("capture_lineage_id"),
-            }
-            files[entry.entry_id] = []
-            for path, key in (
-                (entry.prepared_path, "prepared_sha256"),
-                (entry.committed_path, "committed_sha256"),
-            ):
-                digest = (
-                    outbox.raw_bytes_digest(path.read_bytes())
-                    if path is not None and path.exists() else None
-                )
-                observation[key] = digest
-                if digest is not None and path is not None:
-                    files[entry.entry_id].append((path, digest))
-            observations.append(observation)
-        plan = effect_runtime_result(
-            "coordination.runtime_shadow.plan_drain",
-            {
-                "schema_version": "loopx_shadow_drain_plan_request_v0",
-                "runtime_root": str(self._runtime_root), "goal_id": self._goal_id,
-                "partition": self._partition,
-                "capture_lineage_id": binding["capture_lineage_id"],
-                "store_identity": binding["store_identity"],
-                "source_root_digest": binding["source_root_digest"],
-                "cursor": cursor, "entries": observations,
-                "remaining_entries": self._budget.remaining_entries,
-                "budget_open": self._budget.can_reclaim(0),
-                "acknowledgement": acknowledgement,
-            },
-            timeout=15.0,
-        )
-        if not isinstance(plan, dict) or plan.get("schema_version") != "loopx_shadow_drain_plan_result_v0":
-            raise outbox.OutboxError("shadow_drain_result_invalid", "invalid drain plan")
-        view = plan.get("view")
-        if isinstance(view, dict):
-            if self._result.cursor_before is None:
-                self._result.cursor_before = view.get("cursor")
-            self._record_view(view)
-        if plan.get("status") != "planned":
-            raise outbox.OutboxError(
-                str(plan.get("reason_code") or "shadow_drain_result_invalid"),
-                "native drain plan rejected observations",
-            )
-        # Time can expire during the native read; the plan cannot extend the budget.
-        if not self._budget.can_reclaim(0):
-            self._result.budget_exhausted = True
-            return [], int(plan["next_seq"])
-        self._result.budget_exhausted |= plan["budget_exhausted"]
-        if plan["history_present"]:
-            with _primary_lock_if_free(
-                self._partition, runtime_root=self._runtime_root,
-                goal_id=self._goal_id, sources=self._sources,
-            ) as held:
-                if not held:
-                    raise outbox.OutboxError("primary_writer_busy", "primary writer is in flight")
-                self._binding()
-                if (
-                    outbox.read_cursor(self._directory) != cursor
-                    or outbox.list_entries(self._directory, allow_committed_only=True) != entries
-                ):
-                    raise outbox.OutboxError("outbox_file_changed", "outbox changed during proof")
-                outbox.verify_observed_files(item for batch in files.values() for item in batch)
-                if plan["cursor_update"] is not None:
-                    outbox.write_cursor(
-                        self._directory, partition=self._partition, **plan["cursor_update"],
-                    )
-                self._result.reclaimed_residue += outbox.reclaim_verified_files([
-                    item for entry_id in plan["reclaim_entry_ids"] for item in files[entry_id]
-                ])
-                for replay in plan["replay_entries"]:
-                    summary = dict(replay)
-                    self._result.no_op += int(summary.pop("no_op"))
-                    self._result.entries.append(summary)
-                    self._result.replayed += 1
-                    self._budget.consumed += 1
-        pending_ids = set(plan["pending_entry_ids"])
-        return [entry for entry in entries if entry.entry_id in pending_ids], int(plan["next_seq"])
-
-    def _record_view(self, view: dict[str, Any]) -> None:
-        self._result.candidate_readback_verified = True
-        self._result.store_identity = view.get("store_identity")
-        self._result.provider_revision = view.get("provider_revision")
-        self._result.last_cursor = view.get("cursor")
-        self._result.cursor_after = view.get("cursor")
-        self._result.head_digest = view.get("head_digest")
-
-    def run(self) -> None:
-        while not self._budget.exhausted():
-            with self._lock():
-                pending, next_seq = self._reconcile()
-                if not pending:
-                    return
-                if self._budget.exhausted():
-                    self._result.budget_exhausted = True
-                    return
-                entry = pending[0]
-                if not entry.is_committed:
-                    # Preserve the legacy flock busy signal. This host probe
-                    # makes no source decision; TS rechecks under shared locks.
-                    with _primary_lock_if_free(
-                        self._partition, runtime_root=self._runtime_root,
-                        goal_id=self._goal_id, sources=self._sources,
-                    ) as held:
-                        if not held:
-                            raise outbox.OutboxError("primary_writer_busy", "primary writer is in flight")
-                if entry.seq != next_seq:
-                    raise outbox.OutboxError(
-                        "outbox_sequence_gap", "pending sequence is not continuous"
-                    )
-                request = _commit_entry_request(
-                    runtime_root=self._runtime_root,
-                    goal_id=self._goal_id,
-                    entry=entry,
-                )
-            # TS owns M for every public commit, including retries. Never re-enter M across RPC.
-            raw = effect_runtime_result(
-                "coordination.runtime_shadow.commit_entry", request, timeout=15.0
-            )
-            self._budget.consumed += 1
-            if not _valid_commit_entry_result(raw, entry):
-                raise outbox.OutboxError(
-                    "shadow_commit_entry_result_invalid", "invalid commit result"
-                )
-            if raw["outcome"] not in _SETTLED_OUTCOMES:
-                self._result.stopped_at = {
-                    "partition": entry.partition,
-                    "seq": entry.seq,
-                    "entry_id": entry.entry_id,
-                    "outcome": raw["outcome"],
-                    "reason_code": "outbox_source_unproved" if raw.get("reason_code") == "source_transaction_unproved"
-                    else raw.get("reason_code"),
-                }
-                return
-            resolution = raw["resolution"]
-            digest = raw["partition_digest"]
-            with self._lock():
-                self._reconcile(acknowledgement={
-                    "entry_id": entry.entry_id, "seq": entry.seq,
-                    "cursor": raw.get("cursor"),
-                    "provider_revision": raw.get("provider_revision"),
-                    "store_identity": raw.get("store_identity"),
-                    "no_op": raw.get("no_op"), "partition_digest": digest,
-                })
-            summary = {
-                "entry_id": entry.entry_id,
-                "partition": entry.partition,
-                "seq": entry.seq,
-                "resolution": resolution,
-                "outcome": raw["outcome"],
-                "reason_code": raw.get("reason_code"),
-                "cursor": raw.get("cursor"),
-                "provider_revision": raw.get("provider_revision"),
-                "partition_digest": digest,
-            }
-            self._result.entries.append(summary)
-            if raw["outcome"] == "delivered":
-                self._result.delivered += 1
-            elif raw["outcome"] == "replayed":
-                self._result.replayed += 1
-            else:
-                self._result.reconciled += 1
-            if raw["no_op"]:
-                self._result.no_op += 1
-            elif digest is not None:
-                self.last_delivered_digest = digest
-        if outbox.list_entries(self._directory, allow_committed_only=True):
-            self._result.budget_exhausted = True
-
-
 def _drain_prelude(
     result: DrainResult,
     *,
@@ -622,69 +235,6 @@ def _drain_prelude(
     return registry, resolved
 
 
-def _drain_partitions(
-    result: DrainResult,
-    *,
-    registry: dict[str, Any],
-    registry_path: Path,
-    runtime_root: Path,
-    goal_id: str,
-    max_entries: int,
-    budget_seconds: float,
-    lock_timeout_seconds: float,
-) -> None:
-    """Drain partitions through the shared management lock and TS commit owner."""
-
-    sources = _goal_sources(registry, runtime_root=runtime_root, goal_id=goal_id)
-    binding_view = read_shadow_capture_binding(runtime_root, goal_id)
-    if binding_view["status"] != "active":
-        raise outbox.OutboxError(
-            str(binding_view.get("reason_code") or "bootstrap_required"),
-            "drain requires an active capture lineage",
-        )
-    capture_lineage_id = str(binding_view["binding"]["capture_lineage_id"])
-    budget = _DrainBudget(max_entries=max_entries, budget_seconds=budget_seconds)
-    for partition in PARTITIONS:
-        if result.stopped_at is not None:
-            break
-        drainer = _PartitionDrainer(
-            registry_path=registry_path,
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            partition=partition,
-            sources=sources,
-            result=result,
-            budget=budget,
-            lock_timeout_seconds=lock_timeout_seconds,
-            capture_lineage_id=capture_lineage_id,
-        )
-        drainer.run()
-
-
-def _settle_drain_outcome(result: DrainResult) -> None:
-    if result.stopped_at is not None:
-        result.outcome = "stopped"
-        result.reason_code = str(
-            result.stopped_at.get("reason_code") or result.stopped_at["outcome"]
-        )
-    else:
-        result.outcome = (
-            "drained"
-            if result.drained_count or result.budget_exhausted
-            else "nothing_pending"
-        )
-
-
-def _count_backlog(result: DrainResult, runtime_root: Path, goal_id: str) -> None:
-    summary_after = outbox.outbox_summary(runtime_root, goal_id)
-    result.pending_after = sum(
-        int(item["committed_pending"]) for item in summary_after.values()
-    )
-    result.prepared_only_after = sum(
-        int(item["prepared_only"]) for item in summary_after.values()
-    )
-
-
 def drain_local_authority_shadow_outbox(
     *,
     registry_path: Path,
@@ -694,59 +244,40 @@ def drain_local_authority_shadow_outbox(
     budget_seconds: float = INLINE_DRAIN_BUDGET_SECONDS,
     lock_timeout_seconds: float = INLINE_DRAIN_LOCK_TIMEOUT_SECONDS,
 ) -> DrainResult:
-    """Deliver pending outbox entries to the candidate store, one transaction each.
+    """Transport one native drain batch; never replay a timed-out invocation.
 
-    The drain lock is per goal. A held lock means another drainer is already
-    at work, so the caller's write stays ``pending`` instead of waiting on it.
+    A lost response leaves candidate commit/cleanup progress unknown. The next
+    explicit drain recovers it from durable receipts, not Python memory.
     """
-
     result = DrainResult(goal_id=goal_id)
     prelude = _drain_prelude(
         result, registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id
     )
     if prelude is None:
         return result
-    registry, resolved_root = prelude
-    binding = read_shadow_capture_binding(resolved_root, goal_id)
-    if binding["status"] != "active":
-        runtime_enabled = resolve_coordination_runtime_shadow_config(find_registry_goal(registry, goal_id)).enabled
-        requires_bootstrap = (runtime_enabled or binding["status"] in {"inactive", "hold"}
-                              or outbox.outbox_root(resolved_root, goal_id).exists())
-        result.outcome = "stopped" if requires_bootstrap else "nothing_pending"
-        result.reason_code = (
-            str(binding.get("reason_code") or "bootstrap_required")
-            if result.outcome == "stopped"
-            else None
-        )
+    _registry, resolved_root = prelude
+    # No activation or persisted capture state: avoid starting the TS runtime
+    # for ordinary feature-off writes. Existing state is interpreted only by TS.
+    if (not result.config_enabled
+            and not shadow_management_state_path(resolved_root, goal_id).exists()
+            and not outbox.outbox_root(resolved_root, goal_id).exists()):
         return result
     try:
-        _drain_partitions(
-            result,
-            registry=registry,
-            registry_path=registry_path,
-            runtime_root=resolved_root,
-            goal_id=goal_id,
-            max_entries=max_entries,
-            budget_seconds=budget_seconds,
-            lock_timeout_seconds=lock_timeout_seconds,
+        raw = effect_runtime_result(
+            "coordination.runtime_shadow.drain",
+            {"schema_version": "loopx_shadow_drain_v0", "runtime_root": str(resolved_root),
+             "goal_id": goal_id, "python_executable": sys.executable,
+             "config_enabled": result.config_enabled, "max_entries": max_entries,
+             "budget_seconds": budget_seconds, "lock_timeout_seconds": lock_timeout_seconds},
+            timeout=max(15.0, budget_seconds + 15.0), retry_safe=False,
         )
-    except LockAcquireTimeoutError:
-        result.outcome = "drain_deferred"
-        result.reason_code = "drain_lock_busy"
-    except outbox.OutboxError as error:
-        result.outcome = "stopped"
-        result.reason_code = error.reason_code
+        if not isinstance(raw, dict) or raw.get("schema_version") != "loopx_shadow_drain_v0" or raw.get("goal_id") != goal_id:
+            raise ValueError("invalid native drain result")
+        return DrainResult(**{item.name: raw[item.name] for item in fields(DrainResult)})
     except Exception:
         result.outcome = "stopped"
-        result.reason_code = "shadow_drain_failed"
-    else:
-        _settle_drain_outcome(result)
-    try:
-        _count_backlog(result, resolved_root, goal_id)
-    except Exception:
-        result.outcome = "stopped"
-        result.reason_code = result.reason_code or "outbox_status_unavailable"
-    return result
+        result.reason_code = "shadow_drain_outcome_unknown"
+        return result
 
 
 class _CandidateMissing(Exception):
@@ -986,7 +517,6 @@ __all__ = [
     "RETENTION_PRESSURE_BYTES",
     "DrainResult",
     "capture_evidence",
-    "primary_lock_is_free",
     "todo_partition_projector",
     "drain_local_authority_shadow_outbox",
     "local_authority_shadow_status",

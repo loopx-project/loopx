@@ -199,7 +199,7 @@ export function WorkspaceSettingsPage({
             onChanged={onChanged}
           />
         ) : null}
-        {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings goal={selectedGoal} /> : null}
+        {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}
 
         {tab === "appearance" ? (
           <section className="personal-detail-card personal-appearance-settings">

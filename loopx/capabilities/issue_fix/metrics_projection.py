@@ -3,9 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+# Refs #4447: one definition for this vocabulary. The supplement builds and
+# validates these fields and carries the schema name this projection compares
+# against, so it owns both; `repository_snapshot` already imports the schema
+# name from there rather than restating it. `PROJECTION_SCHEMA_VERSION` below is
+# a different document's version that happens to share a name prefix, so it stays.
+from .metrics_supplement import (
+    _SUPPLEMENT_FIELDS,
+    SUPPLEMENT_SCHEMA_VERSION,
+)
 
 SNAPSHOT_SCHEMA_VERSION = "issue_fix_repository_reporting_snapshot_v0"
-SUPPLEMENT_SCHEMA_VERSION = "issue_fix_metrics_supplement_v0"
 PROJECTION_SCHEMA_VERSION = "issue_fix_metrics_projection_v0"
 
 _FLOW_FIELDS = (
@@ -14,27 +22,6 @@ _FLOW_FIELDS = (
     "pull_requests_opened",
     "pull_requests_closed",
     "pull_requests_merged",
-)
-_SUPPLEMENT_FIELDS = (
-    "human_interventions",
-    "automatic_terminal_closeouts",
-    "duplicate_external_writes",
-    "loopx_capability_gaps_found",
-    "loopx_capability_gaps_fixed",
-    "loopx_capability_gaps_real_callsite_verified",
-    "memory_retrievals",
-    "memory_verified_decision_influence",
-    "memory_verified_patch_influence",
-    "memory_stale_results",
-    "useful_public_comments",
-    "triage_outcomes",
-    "issues_screened",
-    "issue_close_recommendations",
-    "issue_close_requests_published",
-    "issue_closes_observed",
-    "issue_reopens_observed",
-    "first_push_ci_passed",
-    "first_push_ci_total",
 )
 
 

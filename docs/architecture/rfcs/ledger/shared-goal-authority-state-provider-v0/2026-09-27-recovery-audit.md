@@ -1,6 +1,6 @@
 # Local default cutover: recovery audit and remaining delivery scopes
 
-- Audited baseline: `157ab7b11`, 2026-09-27, plus this delivery.
+- Historical recovery baseline: `157ab7b11`; current inventory: `70b3cca01`, 2026-09-27.
 - Owner: overall roadmap #4574 R5/G2; shared authority D2/D3; TS T3/T4.
 - Supersedes the **current count**, not historical evidence, in the
   [September 24 reconciliation](2026-09-24-default-cutover-reconciliation.md).
@@ -21,7 +21,7 @@ target before the final digest mismatch stopped recovery. There was also no
 independent read-only CLI proof of a restored store's complete retained history
 and receipt lookup. These are recovery gaps, not missing capture writers.
 
-## Four scoped deliveries starting with this PR
+## Historical recovery delivery allocation
 
 | Delivery | Observable result and remaining boundary |
 | --- | --- |
@@ -30,7 +30,7 @@ and receipt lookup. These are recovery gaps, not missing capture writers.
 | **3. Whole-Goal activation and rollback integration** | Reconcile #5054's retained-source inventory, then exercise source drain, saved reviewed cutover, all retained command consumers and fenced recovery/rollback together. Bind a recovered copy through an explicit transition; do not revive a source lease or overwrite later writes. Delete only Python decisions whose callers have actually moved. |
 | **4. Default entrypoints and final bounded retirement** | New Goal creation, settings, installation, packaged frontend/Lark/CLI consistently use the qualified local profile. Existing Goals have explicit migration and disable/recovery paths. Remove last legacy business writers after their caller inventory and rollback constraints pass; retain rendering and Host IO. |
 
-This is **four planned new delivery PRs including this one, three afterwards**,
+At that recovery checkpoint, this was **four planned new delivery PRs including the recovery PR, three afterwards**,
 not a guarantee that no acceptance defect will require another PR. The original
 three *architectural packages* are not a decrementing PR counter. This PR closes
 one named recovery slice inside package 2; it does not close all of package 2.
@@ -97,17 +97,73 @@ PostgreSQL 16 server passed, with no skipped checks in these suites. A detached
 audit. Recovery of the earlier timed-out SQLite destination passed without
 reissuing its committed operations. These checks do not claim active cutover.
 
+## Current delivery inventory and native drain (`70b3cca01`)
+
+The current plan contains **seven delivery slots including this change**: four
+already-open PRs and three scoped deliveries. It does not mean seven new PRs,
+nor guarantee that seven merges suffice. Earlier counts treated whole-Goal
+integration as a single PR before its recovery and execution gaps were bounded;
+that was an architectural grouping, not a reliable PR commitment.
+
+| Slot | Existing work / observable completion |
+| --- | --- |
+| 1 | **#5173**, open: reviewed File↔SQLite selector/fence cutover, durable backup, full-history audit, recovery and retry. Integrate it; do not rebuild it. |
+| 2 | **#5144**, open: managed Host execution lifetime/lease supervision. Attached Hosts still need an explicit cancellation boundary. |
+| 3 | **#5054**, open: retire legacy Todo event projection/backfill/completion and isolate the experimental supervisor log. |
+| 4 | **#4931**, open: SQLite retained-proof encoding/read cost; rerun the applicable formal D2 workload instead of equating an optimization with qualification. |
+| 5 | **This change**: move the complete bounded source-outbox drain to TS, remove the Python sequencing/proof/cleanup coordinator and the unused per-entry planning RPC. Keep existing durable formats, full receipt verification and the kernel-lock adapter. |
+| 6 | **Whole-Goal integration**: combine the accepted slices with retained consumer parity, interrupted cutover/rollback and post-cutover writes. This drain is one completed subitem, not completion of that scope. |
+| 7 | **Default entrypoints and bounded Python retirement**: qualify creation/settings/install/frontend/Lark/CLI, migrate existing Goals explicitly, and delete business writers only after their real callers have moved. |
+
+#5169's content-aware idempotency work is adjacent and must be integrated without
+rewriting it; it is not silently counted as another required default-cutover PR.
+D1 consumer coverage, D2 capacity/ten-day natural soak and D3 cohort/maintainer
+promotion remain **evidence gates**, outside the arithmetic. PostgreSQL service
+identity, deployment and operational qualification remain a medium-term scope.
+
+TS now inventories witnessed source files, invokes the existing receipt planner
+and transaction owner, checks the monotonic budget after proof, and performs
+cursor/cleanup effects under M → primary marker → kernel-lock exclusion. The
+Python facade sends one bounded request with no source projection/history and
+does not automatically retry a lost response. `shadow_drain_outcome_unknown`
+requires a later explicit receipt-based drain; it never asserts no commit.
+Unconfigured Goals with no capture state still make no drain RPC.
+
+Real process-death validation found a shared lock defect: a zero-wait acquire
+reclaimed a dead owner but returned timeout before trying the now-free path.
+It now allows one immediate retry after proven reclamation; live owners still
+reject immediately. This uses the shared lock owner rather than a drain-only
+sleep or increased timeout. The two crash harnesses now share one scheduling
+fixture and kill/reap the actual TS owner at the durable boundary.
+
+The runtime shadow remains a **File candidate**, not a promoted authority or a
+new SQLite shadow provider. SQLite remains a supported canonical promotion and
+archive-restore target. No provider selector, registry or active Goal is changed
+by this delivery. The existing CLI and inline writer drain entrypoints adopt the
+same owner; no frontend/Lark configuration contract changes.
+
+Validation for native drain: the new full-batch tests exercise the existing
+mixed production-scale Todo fixture; real CLI SIGKILL, filesystem permission,
+cursor tampering and File/SQLite reviewed-promotion tests cover the persistence
+boundaries. Shared-store regression passes against isolated PostgreSQL 16.
+A detached authorized snapshot supplies 1,101 complete Todo records; three
+explicitly synthetic source writes produce a fresh four-transaction candidate.
+Every original Todo JSON record survives drain and SQLite/File archive restore.
+This is not replay of that snapshot's old transaction history or a live migration.
+
+On three local three-entry trials, median drain time is 1.34 s on the audited
+base and 0.41 s here, with 11 facade RPCs reduced to one. The kernel-lock process
+is lazy and reused within a batch; it releases locks between sections. These
+small warm-runtime measurements are not D2 p95/capacity claims. The existing
+CLI output-budget suite fails on both base and head at 14,514 versus 14,500
+characters for the crowded Turn JSON packet. No ceiling is raised; merge
+qualification retains that failure rather than declaring all checks green.
+
 ## Shared-runtime latency reconciliation (`96a3b90f4`)
 
-The recovery delivery above is now merged as #5140. #5144 is the open managed
-Host process supervision slice; attached hosts still need their declared
-cancellation boundary. Whole-Goal activation/rollback and default entrypoint
-cutover remain the two planned subsequent implementation PRs. Existing #5054
-(retirement) and #4931 (SQLite proof encoding) remain open and are not new work.
-Thus the inventory is two planned implementation PRs plus those three existing
-PRs, **before this newly reproduced latency repair**. This is an inventory, not
-an unconditional completion count: #4224 D2 capacity/soak and D1/D3 evidence
-remain gates, and failures may require additional scoped fixes.
+The recovery delivery above merged as #5140. The subsequent latency repair is
+also on the current audited main. Its observations below remain historical
+validation, not another open delivery or a D2 qualification.
 
 The latency repair does not retire another Python owner or close D2. Isolated
 fixed File snapshots reproduce 9.9–10.5 second cold history verification,

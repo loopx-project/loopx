@@ -297,7 +297,7 @@ first-use cohorts and release acceptance retain their existing gates.
 
 | Batch | Useful exit | Reused owner / next dependency |
 | --- | --- | --- |
-| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
+| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result, including a late return after the active session changes | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
 | P0 use and continuity | GQ05/GQ11–GQ13 + GQ07–GQ09: dependency adoption, parallel join, peer review and resolved disagreement across two cycles; correct once, interrupt once, resume and return | R2 small-team and R3/M2/M3, artifact versions, existing driver/monitor and return recovery |
 | P1 material and attention | GQ06/GQ10/GQ14–GQ15: materials, attention, dependency replan, explicit mixed profiles and retained constraints | Existing material lifecycle, scoped context and presentation; no new memory installation prerequisite |
 | P2 breadth and launch | GQ16 then GQ17: real host and scale qualification; public-safe showcase/film only claims the separately proven cohort | Existing R6/R7 and release/first-use gates; visual motion explains actual transitions |

@@ -237,16 +237,16 @@ export async function releaseFileMutationLockClaim(
   await removeCreatedFile(claim.claimPath, claim.identity);
 }
 
-async function reclaimStaleMutationLock(path: string): Promise<void> {
+async function reclaimStaleMutationLock(path: string): Promise<boolean> {
   const identity = await readFileIdentity(path);
-  if (!identity) return;
+  if (!identity) return false;
   const owner = await readMutationLockOwner(path);
-  if (owner && processIsAlive(owner.pid)) return;
+  if (owner && processIsAlive(owner.pid)) return false;
   if (!owner) {
     try {
-      if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) return;
+      if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) return false;
     } catch {
-      return;
+      return false;
     }
   }
   const targetPath = path.slice(0, -".ts-effect.lock".length);
@@ -254,29 +254,29 @@ async function reclaimStaleMutationLock(path: string): Promise<void> {
     targetPath,
     owner?.token ?? INVALID_LOCK_CLAIM_TOKEN,
   );
-  if (!claim) return;
+  if (!claim) return false;
   const stalePath = `${path}.stale.${randomUUID()}`;
   try {
     const current = await readMutationLockOwner(path);
-    if (owner && (!current || current.token !== owner.token)) return;
-    if (current && processIsAlive(current.pid)) return;
+    if (owner && (!current || current.token !== owner.token)) return false;
+    if (current && processIsAlive(current.pid)) return false;
     if (!current) {
       try {
         if (Date.now() - (await stat(path)).mtimeMs < INVALID_LOCK_STALE_MS) {
-          return;
+          return false;
         }
       } catch {
-        return;
+        return false;
       }
     }
     // The lock pathname is not a compare-and-swap primitive.  Holding the
     // token claim serializes compliant writers; the identity check additionally
     // prevents a replacement inode from being retired after a stale read.
-    if (!sameFileIdentity(identity, await readFileIdentity(path))) return;
+    if (!sameFileIdentity(identity, await readFileIdentity(path))) return false;
     await rename(path, stalePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return;
+    return false;
   } finally {
     if (claim) {
       try {
@@ -287,6 +287,7 @@ async function reclaimStaleMutationLock(path: string): Promise<void> {
     }
   }
   await rm(stalePath, { force: true });
+  return true;
 }
 
 export interface FileMutationLock {
@@ -310,6 +311,7 @@ export async function acquireFileMutationLock(
   const lockPath = `${targetPath}.ts-effect.lock`;
   const token = randomUUID();
   const deadline = Date.now() + timeoutMs;
+  let retriedAfterReclaim = false;
   while (true) {
     try {
       const handle = await open(lockPath, "wx", 0o600);
@@ -354,7 +356,14 @@ export async function acquireFileMutationLock(
       return { targetPath, lockPath, token };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      await reclaimStaleMutationLock(lockPath);
+      const reclaimed = await reclaimStaleMutationLock(lockPath);
+      // Removing a dead owner is progress, not waiting for a live owner. Allow
+      // one immediate acquisition even for a zero-wait caller. Bound the retry
+      // so repeated replacement cannot extend that caller's lock budget.
+      if (reclaimed && !retriedAfterReclaim) {
+        retriedAfterReclaim = true;
+        continue;
+      }
       if (Date.now() >= deadline) {
         throw new EffectRuntimeLockTimeoutError();
       }
