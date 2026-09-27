@@ -337,10 +337,10 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
   return (
     <section className="personal-capability-settings" data-revision={inspection?.revision}>
       <div>
-        <details className="personal-capability-scope-note">
+        {section === "steward" ? <details className="personal-capability-scope-note">
           <summary><ShieldCheck aria-hidden size={17} />{t("machine.liveDefault")}</summary>
           <p>{t("machine.liveDefaultDescription")}</p>
-        </details>
+        </details> : null}
         {section === "other" ? <UsageStatisticsSettings /> : null}
       </div>
 
@@ -356,7 +356,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
         ) : null}
 
         <div className="personal-capability-layout">
-        <CapabilityCatalogNavigation capabilities={capabilities} locale={locale} onSelect={setSelectedCapabilityId} scope="machine" selectedCapabilityId={selected.capability_id} showScope={section !== "steward"} t={t} />
+        <CapabilityCatalogNavigation capabilities={capabilities} locale={locale} onSelect={setSelectedCapabilityId} scope="machine" selectedCapabilityId={selected.capability_id} showScope={false} t={t} />
 
         <article aria-label={selected.display_name} className="personal-capability-detail" tabIndex={0}>
           <CapabilityDetailHeader capability={selectedRaw} locale={locale}

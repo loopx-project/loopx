@@ -372,7 +372,7 @@ assert.doesNotMatch(workspaceSettings, /NotificationSettingsPanel/, "Settings do
 assert.match(workspaceSettings, /key: "lark"/, "Settings expose a Lark tab");
 assert.match(workspaceSettings, /key: "appearance"/, "Settings expose an appearance tab");
 assert.match(workspaceSettings, /key: "language"/, "Settings expose a language tab");
-assert.match(workspaceSettings, /key: "machine"/, "Settings expose generic machine configuration");
+assert.match(workspaceSettings, /key: "capabilities"/, "Settings expose a unified capability destination");
 assert.match(workspaceSettings, /<MachineConfigurationSettings/, "Settings mount the machine configuration registry");
 assert.match(workspaceSettings, /<LarkSettingsPage[\s\S]*embedded/, "Settings embed the Lark management page");
 assert.match(larkSettings, /state: "ready" \| "unverified" \| "not_ready"/, "Lark readiness keeps unverified routes separate from actual failures");
@@ -411,7 +411,7 @@ assert.match(machineSettings, /<CapabilityCatalogNavigation/, "Machine settings 
 assert.match(goalCapabilitySettings, /<CapabilityCatalogNavigation/, "Goal settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /capability_id === "lark_event_inbox"[\s\S]*<GoalAutoNotifyToggle/, "Lark inbox capability exposes the independent human-gate notification control");
 assert.match(notificationSettings, /disabled=\{busy \|\| notification\?\.configured !== true/, "Gate notification control stays disabled until a Goal Channel is configured");
-assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === initialGoalId\)/, "Goal capability settings receive the live Goal Channel notification state");
+assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === capabilityGoalId\)/, "Goal capability settings receive the selected Goal Channel notification state");
 assert.match(machineSettings, /<CapabilityDetailHeader/, "Machine settings use the shared capability detail header");
 assert.match(goalCapabilitySettings, /<CapabilityDetailHeader/, "Goal settings use the shared capability detail header");
 assert.match(capabilityWorkbench, /localizeCapability\(rawCapability, locale\)/, "Shared navigation localizes capability metadata without changing capability ids");

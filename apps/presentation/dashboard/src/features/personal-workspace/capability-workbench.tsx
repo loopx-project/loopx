@@ -121,6 +121,7 @@ export function CapabilityDetailHeader({ capability, locale, source }: Readonly<
 }>) {
   const { t } = useWorkspaceI18n();
   const localized = localizeCapability(capability, locale);
+  const editableScopes = (["machine", "goal"] as const).filter((scope) => canEditCapability(capability, scope));
   return (
     <header>
       <span className="personal-settings-icon"><SlidersHorizontal aria-hidden size={18} /></span>
@@ -129,6 +130,9 @@ export function CapabilityDetailHeader({ capability, locale, source }: Readonly<
           <h2>{localized.display_name}</h2>
           <CapabilityEffectiveSource source={source} t={t} />
         </div>
+        <p className="personal-capability-supported-scopes">{t("capabilities.configurableAt")}{editableScopes.length
+          ? editableScopes.map((scope) => t(`settings.capabilityScope.${scope}`)).join(" · ")
+          : t("capabilities.readOnly")}</p>
         {capability.context_contribution && (
           <details className="personal-capability-help" data-testid="capability-context-phases">
             <summary>{locale === "zh-CN" ? "主 Agent 协作指导" : "Coordinator workflow guidance"}</summary>

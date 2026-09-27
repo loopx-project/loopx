@@ -13,7 +13,7 @@ loopx usage-ping disable     # stop all channels; delete local ID and pending co
 loopx usage-ping enable      # explicitly allow all channels after reading the disclosure
 ```
 
-Settings → Capability Center exposes the same machine-wide switch and previews.
+Settings → Capability Center → Device defaults exposes the same machine-wide switch and previews.
 Opening settings or running these commands never sends a measurement. Settings
 are owned by the TypeScript usage-statistics module, independently of a Goal's
 File/SQLite/PostgreSQL provider; Python and the browser adapt that same owner.
