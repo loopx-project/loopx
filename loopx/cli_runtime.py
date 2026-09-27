@@ -43,6 +43,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"usage-ping",
 		"new-project-prompt",
 		"resolve-agent-thread",
+		"resolve-peer-route",
 		"start-goal",
 		"slash-commands",
 		"workflow-skills",
