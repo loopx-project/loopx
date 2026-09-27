@@ -27,6 +27,7 @@ import test from "node:test";
 import {registerCoordinationReceiptConformance} from "./coordination_receipt_conformance.ts";
 import {registerAuthoritySourceConformance} from "./authority_source_conformance.ts";
 import {registerNativePlanningUpdateConformance} from "./native_planning_update_conformance.ts";
+import {registerCompletionValidationBindingConformance} from "./completion_validation_binding_conformance.ts";
 
 import type {
   AuthorityStore,
@@ -292,6 +293,7 @@ export function registerAuthorityStoreConformance(
   registerSuccessionReadConformance(providerName, factory);
   registerTodoConsumerScopeConformance(providerName, factory);
   registerNativePlanningUpdateConformance(providerName, factory);
+  registerCompletionValidationBindingConformance(providerName, factory);
   registerUserCompletionUpdateConformance(providerName, factory);
   registerTerminalSourceConformance(providerName, factory);
   registerUserCompletionFollowthroughConformance(providerName, factory);
