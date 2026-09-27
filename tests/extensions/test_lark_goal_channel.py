@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import argparse
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -12,6 +13,8 @@ import pytest
 from loopx.cli_commands import goal_channel as goal_channel_cli
 from loopx.cli_commands import goal_channel_operation as goal_channel_operation_cli
 from loopx.extensions.lark import goal_channel_contracts
+from loopx.extensions.lark import goal_channel_lifecycle
+from loopx.extensions.lark import goal_channel_runtime
 from loopx.extensions.lark.goal_channel import (
     GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
     configure_lark_goal_channel_automation,
@@ -813,6 +816,197 @@ def test_auto_notify_gate_sends_only_for_quota_selected_gate(
     assert gate["external_write_performed"] is True
     assert gate["readback_verified"] is True
     assert sum("+messages-send" in args for args in calls) == 1
+
+
+def _refresh_gate_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    binding_path = _gate_test_binding(tmp_path)
+    registry_path = binding_path.parent / "registry.json"
+    registry_path.write_text(json.dumps(_registry(tmp_path)), encoding="utf-8")
+    configure_lark_goal_channel_automation(
+        registry=_registry(tmp_path), goal_id=GOAL_ID, binding_path=binding_path,
+        human_gate_auto_notify=True, execute=True,
+    )
+    monkeypatch.setattr(goal_channel_lifecycle, "resolve_extension_activation",
+                        lambda *args, **kwargs: {"status": "active"})
+    monkeypatch.setattr(goal_channel_lifecycle, "collect_status", lambda **kwargs: {})
+    monkeypatch.setattr(goal_channel_lifecycle, "build_quota_should_run",
+                        lambda *args, **kwargs: {
+                            "state": "operator_gate", "notify_user_on_gate": True,
+                            "gate_prompt": "Approve the bounded external write.",
+                        })
+
+    def run(runner, *, authorized=True):
+        return goal_channel_lifecycle.sync_human_gate_after_refresh(
+            registry_path=registry_path, runtime_root_override=None,
+            goal_id=GOAL_ID, agent_id="agent-public-fixture",
+            external_sink_delivery_authorized=authorized, runner=runner,
+        )
+
+    return binding_path, run
+
+
+@pytest.mark.parametrize(
+    ("command", "failure", "stage", "reason", "write_status"),
+    [
+        ("+messages-send", "timeout", "provider_send", "timeout", "unknown"),
+        ("+messages-send", "spawn", "provider_send", "runtime_unavailable", "not_performed"),
+        ("+messages-send", "reject", "provider_send", "provider_send_rejected", "not_performed"),
+        ("+messages-send", "empty", "provider_send", "delivery_outcome_unknown", "unknown"),
+        ("+messages-send", "unexpected", "provider_send", "unexpected_failure", "unknown"),
+        ("+messages-mget", "timeout", "provider_readback", "timeout", "performed"),
+        ("+messages-mget", "spawn", "provider_readback", "runtime_unavailable", "performed"),
+        ("+messages-mget", "reject", "provider_readback", "provider_api_failed", "performed"),
+        ("+messages-mget", "empty", "provider_readback", "readback_mismatch", "performed"),
+    ],
+)
+def test_refresh_gate_preserves_safe_transport_failure_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    command: str, failure: str, stage: str, reason: str, write_status: str,
+) -> None:
+    _, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    base = _fake_runner(calls)
+
+    def runner(args, cwd, timeout):
+        if command not in args:
+            return base(args, cwd, timeout)
+        calls.append(args)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, timeout, output="private provider details")
+        if failure == "spawn":
+            raise FileNotFoundError("private CLI path")
+        if failure == "unexpected":
+            raise RuntimeError("private channel and provider details")
+        return {
+            "returncode": 1 if failure == "reject" else 0,
+            "stdout": "private provider details" if failure == "reject" else "",
+            "stderr": "", "timed_out": False,
+        }
+
+    result = run(runner)
+    assert result["ok"] is False
+    assert result["delivery_postcondition"]["blocks_delivery"] is True
+    assert result["failure"] == {
+        "schema_version": "loopx_goal_channel_gate_failure_v0",
+        "stage": stage, "reason_code": reason,
+        "external_write_status": write_status,
+    }
+    assert result["external_write_performed"] is (write_status == "performed")
+    assert sum("+messages-send" in args for args in calls) == 1
+    for private_detail in (
+        "private provider details", "private CLI path", "private channel and provider details",
+    ):
+        assert private_detail not in json.dumps(result)
+    _assert_public_packet(result)
+
+
+def test_refresh_gate_receipt_failure_keeps_send_identity_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding_path, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+    before = binding_path.read_bytes()
+    calls: list[list[str]] = []
+    runner = _fake_runner(calls)
+    save = goal_channel_runtime.save_goal_binding
+
+    def fail(**kwargs):
+        raise PermissionError("private receipt path")
+
+    monkeypatch.setattr(goal_channel_runtime, "save_goal_binding", fail)
+    result = run(runner)
+    assert result["failure"]["stage"] == "receipt_write"
+    assert result["failure"]["reason_code"] == "permission_denied"
+    assert result["failure"]["external_write_status"] == "performed"
+    assert result["external_write_performed"] is True
+    assert binding_path.read_bytes() == before
+    monkeypatch.setattr(goal_channel_runtime, "save_goal_binding", save)
+    assert run(runner)["status"] == "sent_verified"
+    sends = [args for args in calls if "+messages-send" in args]
+    keys = [args[args.index("--idempotency-key") + 1] for args in sends]
+    assert len(keys) == 2 and keys[0] == keys[1]
+    assert run(runner)["status"] == "already_sent"
+    assert sum("+messages-send" in args for args in calls) == 2
+    _assert_public_packet(result)
+
+
+def test_refresh_gate_selection_failure_is_local_and_redacted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+
+    def fail(**kwargs):
+        raise TimeoutError("private coordination address")
+
+    monkeypatch.setattr(goal_channel_lifecycle, "collect_status", fail)
+    calls: list[list[str]] = []
+    result = run(_fake_runner(calls))
+    assert result["failure"]["stage"] == "gate_selection"
+    assert result["failure"]["reason_code"] == "timeout"
+    assert result["failure"]["external_write_status"] == "not_attempted"
+    assert calls == []
+    _assert_public_packet(result)
+
+
+@pytest.mark.parametrize("stage", ["extension_activation", "binding_resolution"])
+def test_refresh_gate_local_configuration_failure_is_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    _, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+
+    def fail(*args, **kwargs):
+        raise ValueError("private configuration details")
+
+    symbol = "resolve_extension_activation" if stage == "extension_activation" else "read_goal_channel_binding"
+    monkeypatch.setattr(goal_channel_lifecycle, symbol, fail)
+    calls: list[list[str]] = []
+    result = run(_fake_runner(calls))
+    assert result["failure"]["stage"] == stage
+    assert result["failure"]["reason_code"] == "invalid_input_or_config"
+    assert calls == []
+    _assert_public_packet(result)
+
+
+def test_refresh_gate_observer_uses_command_position_and_preserves_runner_inputs() -> None:
+    calls = []
+
+    def runner(args, cwd, timeout):
+        calls.append((args, cwd, timeout))
+        return _result({"message_id": GATE_MESSAGE_ID})
+
+    observation = goal_channel_lifecycle._DeliveryObservation(runner)
+    argv = ["custom-lark-cli", "auth", "status", "--text", "im", "+messages-send"]
+    observation(argv, Path("fixture"), 12)
+    assert observation.stage == "provider_preflight"
+    assert observation.write_status == "not_attempted"
+    profiled = ["custom-lark-cli", "--profile", "fixture", "im", "+messages-send"]
+    observation(profiled, None, 7)
+    assert observation.stage == "provider_send" and observation.write_status == "performed"
+    assert calls == [(argv, Path("fixture"), 12), (profiled, None, 7)]
+
+
+@pytest.mark.parametrize("mode", ["disabled", "suppressed", "not_selected", "cooldown"])
+def test_refresh_gate_noop_has_no_extra_provider_calls_or_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    binding_path, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+    if mode == "disabled":
+        configure_lark_goal_channel_automation(
+            registry=_registry(tmp_path), goal_id=GOAL_ID, binding_path=binding_path,
+            human_gate_auto_notify=False, execute=True,
+        )
+    elif mode in {"not_selected", "cooldown"}:
+        packet = {"state": "eligible"} if mode == "not_selected" else {
+            "state": "operator_gate", "notify_user_on_gate": True,
+            "user_gate_notification_cooldown": {"notification_suppressed": True},
+        }
+        monkeypatch.setattr(goal_channel_lifecycle, "build_quota_should_run",
+                            lambda *args, **kwargs: packet)
+    calls: list[list[str]] = []
+    result = run(_fake_runner(calls), authorized=mode != "suppressed")
+    assert result["ok"] is True
+    assert "failure" not in result and "failure_summary" not in result
+    assert result["status"] == ("external_sink_suppressed" if mode == "suppressed" else mode)
+    assert calls == []
 
 
 def test_setup_inherits_existing_bot_identity_when_flags_are_omitted(

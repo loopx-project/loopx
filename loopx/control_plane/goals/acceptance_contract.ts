@@ -4,6 +4,8 @@ import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, authorityUnicodeCompare, canonicalAuthorityBytes,
   canonicalAuthorityObject, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {indexCoordinationProjectionTodos, validateCoordinationTodoReadModel} from "../coordination/coordination_projection.ts";
+import {COMPLETION_VALIDATION_BINDING_RECEIPT_SCHEMA,
+  completionValidationRevisionHistory} from "../todos/completion_validation_revision.ts";
 
 export const GOAL_ACCEPTANCE_SCHEMA = "loopx_goal_acceptance_v0";
 export interface AcceptanceCriterion extends JsonObject {
@@ -213,21 +215,19 @@ function acceptanceBindingMatches(todo: JsonObject, boundDigest: string): boolea
   }
 
   const revision = todo.completion_validation_revision;
-  const history = todo.completion_validation_revision_history;
+  let history: JsonObject[] = [];
   let revisionPrefixes: number[] = [];
   if (Number.isSafeInteger(revision) && Number(revision) >= 1 && Number(revision) <= 32 &&
-      Array.isArray(history) && history.length === revision &&
-      history.every((entry, index) => entry !== null && typeof entry === "object" && !Array.isArray(entry) &&
-        (entry as JsonObject).schema_version === "loopx_todo_completion_validation_revision_receipt_v0" &&
-        (entry as JsonObject).revision === index + 1 &&
-        typeof (entry as JsonObject).previous_declaration_sha256 === "string" &&
-        /^[a-f0-9]{64}$/.test((entry as JsonObject).previous_declaration_sha256 as string) &&
-        typeof (entry as JsonObject).declaration_sha256 === "string" &&
-        /^[a-f0-9]{64}$/.test((entry as JsonObject).declaration_sha256 as string)) &&
-      history.every((entry, index) => index === 0 ||
-        (entry as JsonObject).previous_declaration_sha256 === (history[index - 1] as JsonObject).declaration_sha256) &&
-      (history.at(-1) as JsonObject).declaration_sha256 === todo.completion_validation_sha256) {
-    revisionPrefixes = Array.from({length: Number(revision)}, (_, index) => index);
+      todo.completion_validation_required === true &&
+      typeof todo.completion_validation_sha256 === "string") {
+    try {
+      history = completionValidationRevisionHistory(todo.completion_validation_revision_history,
+        Number(revision), todo.completion_validation_sha256);
+      revisionPrefixes = Array.from({length: Number(revision)}, (_, index) => index);
+    } catch (error) {
+      // Malformed history cannot prove any prior owner-confirmed declaration.
+      if (!(error instanceof AuthorityStoreProtocolError)) throw error;
+    }
   }
 
   for (const scheduleVariant of scheduleVariants) {
@@ -246,7 +246,15 @@ function acceptanceBindingMatches(todo: JsonObject, boundDigest: string): boolea
       if (successorVariant !== todo && goalAcceptanceTodoDigest(successorVariant) === boundDigest) return true;
       for (const priorRevision of revisionPrefixes) {
         const previous: JsonObject = {...successorVariant, completion_validation_revision: priorRevision,
-          completion_validation_revision_history: (history as JsonObject[]).slice(0, priorRevision)};
+          completion_validation_revision_history: history.slice(0, priorRevision)};
+        if (priorRevision === 0 && history[0]?.schema_version === COMPLETION_VALIDATION_BINDING_RECEIPT_SCHEMA) {
+          delete previous.completion_validation_required;
+          delete previous.completion_validation_revision;
+          delete previous.completion_validation_revision_history;
+          Object.assign(previous, history[0].previous_validation_authority);
+          if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+          continue;
+        }
         if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
         if (priorRevision === 0) {
           delete previous.completion_validation_revision;

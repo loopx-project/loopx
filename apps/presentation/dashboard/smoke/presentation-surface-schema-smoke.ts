@@ -46,6 +46,25 @@ assert(
     "agent-a",
   "Todo validator revision readback must survive status parsing",
 );
+const firstBoundTodo = todoItemSchema.parse({
+  ...revisedTodo,
+  completion_validation_revision_history: [{
+    schema_version: "loopx_todo_completion_validation_revision_receipt_v1",
+    revision: 1,
+    operation_id: "first-bind",
+    previous_declaration_sha256: null,
+    previous_validation_authority: {},
+    declaration_sha256: PAYLOAD_SHA256,
+    actor_agent_id: "agent-a",
+    revised_at: "2026-09-27T00:00:00Z",
+  }],
+});
+assert(
+  firstBoundTodo.completion_validation_revision_history[0]?.previous_declaration_sha256 === null &&
+    firstBoundTodo.completion_validation_revision_history[0]?.schema_version ===
+      "loopx_todo_completion_validation_revision_receipt_v1",
+  "First validator binding must preserve explicit absence and its versioned receipt in status readback",
+);
 
 function detailRef() {
   return {

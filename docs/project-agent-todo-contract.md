@@ -825,6 +825,56 @@ fails closed with a typed `validation_blocked_completion` receipt instead of
 committing `done`. Todos without a declared command keep the unchanged fast
 path.
 
+### Bind the first completion validator / 首次绑定完成验证
+
+An active, open canonical Todo imported without a completion validator can use
+the existing `todo update` entry point to bind its first command. Read the current
+provider revision first; include the registered actor and the current lease fence
+when the Goal requires a lease. Review the command before committing it:
+
+```bash
+loopx todo update \
+  --goal-id <goal-id> --todo-id <todo_id> --agent-id <registered-agent> \
+  --update-operation-id <stable-binding-operation-id> \
+  --update-expected-provider-revision <read-provider-revision> \
+  --task-lease-idempotency-key <current-lease-key> \
+  --task-lease-expected-version <current-lease-version> \
+  --validation-command-json '["node","--test","tests/independent-check.test.ts"]' \
+  --validation-label "Independent completion check" --dry-run
+```
+
+Remove `--dry-run` only after inspecting the preview. Binding does not run the
+command or complete the Todo. `todo complete` must execute the current declaration
+successfully; failure keeps the Todo open. The native TypeScript update transaction
+requires a genuinely absent digest (not a broken required validator), records a
+v1 revision receipt with `previous_declaration_sha256: null` and the exact previous
+validation markers, then appends ordinary v0 replacement receipts on later edits.
+The private command stays in the local declaration store; canonical readback carries
+the digest and receipt, not the command. Status/frontend readback accepts both
+receipt versions; Lark consumes the same Todo projection, with no second binding
+store or validator editor.
+
+After a lost response or private publication failure, retry the same operation,
+revision, lease and command. Do not mint another operation to evade a conflict.
+A historical replay cannot restore a validator that has since been replaced.
+Proven first binding preserves an existing owner acceptance association, but
+cannot create an absent association or excuse changed work/write scope. Owner
+Goal criteria, lease authority and completion validation remain separate gates.
+
+已晋级到 canonical provider、仍为 active/open 且从未声明完成验证的旧 Todo，
+可通过现有 `todo update` 首次绑定命令。先读当前 provider revision，带上注册
+Agent 身份及现有租约 fence（需要租约时），检查上述预览后再去掉 `--dry-run`。
+绑定不执行命令、不完成任务；真正完成仍必须运行当前命令，验证失败保持 open。
+TS 更新事务只接受真实缺失的 digest，不把“required=true 但 digest 缺失”的损坏
+状态当成首次绑定。首次 v1 回执记录旧 digest 为 null 及旧验证字段的准确状态；
+后续替换继续追加兼容的 v0 回执。命令保留在本地私有存储，canonical、前端状态
+及 Lark 共用 digest/历史回执投影，不新增另一套验证配置或编辑器。
+
+响应丢失或私有声明发布失败后，沿用原操作 ID、revision、租约和命令重试；不能
+换 ID 绕过冲突，也不能借历史重放恢复已被替换的命令。可证明的首次绑定仅保留
+已有 owner 验收关联，不能补造缺失的关联，不能豁免工作内容或写入范围变化。
+Goal 验收准则、执行租约和完成验证仍各自独立。
+
 Use `--resume-when` when deferring a successor that should wake up after a
 machine-readable condition instead of living only in prose:
 

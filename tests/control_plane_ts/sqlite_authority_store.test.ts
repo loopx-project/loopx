@@ -11,12 +11,15 @@ import { AUTHORITY_STATE_CHECKPOINT_INTERVAL } from "../../loopx/control_plane/c
 import { canonicalAuthorityBytes } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import { authorityStoreCommitFixture, registerAuthorityStoreConformance } from "./authority_store_conformance.ts";
 
+import {registerAuthorityOperationReplayConformance} from "./authority_operation_replay_conformance.ts";
+
 async function fixture(t: test.TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "sqlite-authority-"));
   t.after(() => rm(directory, {recursive: true, force: true}));
   return {store: new SqliteAuthorityStore(directory, "goal"), contender: new SqliteAuthorityStore(directory, "goal")};
 }
-registerAuthorityStoreConformance("SQLite", fixture);
+registerAuthorityStoreConformance("SQLite", fixture, "applied");
+registerAuthorityOperationReplayConformance("SQLite", fixture);
 
 test("SQLite commits and reads back every JSON object key", {timeout: 30000}, async t => {
   const {store} = await fixture(t);
@@ -418,3 +421,32 @@ test("SQLite receipt batch bounds are checked before opening storage", async t =
   const {existsSync} = await import("node:fs");
   assert.equal(existsSync(store.path), false);
 });
+
+for (const cursor of [1, 2]) for (const field of ["events", "receipts"] as const) {
+  test(`SQLite replay refuses corrupt retained ${field} at cursor ${cursor}`, async t => {
+    const {store} = await fixture(t);
+    let revision: string | null = null;
+    const inputs = [];
+    for (let index = 1; index <= 3; index++) {
+      const input = authorityStoreCommitFixture(revision, `replay-${index}`, index, index);
+      inputs.push(input);
+      const committed = await store.commitAuthority(input);
+      assert.equal(committed.status, "applied"); if (committed.status !== "applied") return;
+      revision = committed.provider_revision;
+    }
+    const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+    const db = new DatabaseSync(store.path);
+    try {
+      db.prepare(`UPDATE commits SET ${field}=? WHERE cursor=?`).run('[{"forged":true}]', cursor);
+      const before = db.prepare("SELECT * FROM commits ORDER BY cursor").all();
+      assert.equal((await store.loadAuthority()).status, "loaded", "current head remains valid");
+      assert.equal((await store.readReceipt(`replay-${cursor}`)).status, "failed");
+      const replay = await store.commitAuthority(inputs[cursor - 1]!);
+      assert.equal(replay.status, "failed", "stored digest alone cannot prove the retained transaction");
+      if (replay.status === "failed") assert.equal(replay.reason_code, "provider_protocol_violation");
+      assert.deepEqual(db.prepare("SELECT * FROM commits ORDER BY cursor").all(), before);
+      const head = await store.loadAuthority();
+      assert.equal(head.status, "loaded"); if (head.status === "loaded") assert.equal(head.cursor, "3");
+    } finally { db.close(); }
+  });
+}

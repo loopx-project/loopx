@@ -463,10 +463,26 @@ export class SqliteAuthorityStore implements AuthorityStore {
       const cursor = current?.state.cursor ?? null;
       const revision = current?.provider_revision ?? null;
       let conflict: "provider_revision_mismatch" | "operation_id_exists" | null = null;
-      if (revision !== normalized.expected_provider_revision) conflict = "provider_revision_mismatch";
-      else if (db.prepare("SELECT 1 FROM commits WHERE operation_id = ?").get(normalized.operation_id)) {
+      // Replay proves the retained transaction in this same write snapshot.
+      // A matching stored digest alone is not evidence that its row is intact.
+      const existingRow = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`)
+        .get(normalized.operation_id);
+      if (existingRow) {
+        const retained = this.decodeCommitRow(existingRow);
+        const window = this.verifiedRange(db, retained.cursor, retained.cursor);
+        const original = window.transactions[0];
+        if (!original || original.operation_id !== normalized.operation_id) {
+          protocol("SQLite replay is not part of its retained window");
+        }
+        const digest = commitDigest(window.identity, retained.cursor, normalized.operation_id,
+          normalized.next_projection, normalized.events, normalized.receipts);
+        if (digest === retained.commit_digest) {
+          db.exec("ROLLBACK"); transactionOpen = false;
+          return {status: "applied", provider_revision: original.provider_revision, cursor: original.cursor};
+        }
         conflict = "operation_id_exists";
       }
+      if (!conflict && revision !== normalized.expected_provider_revision) conflict = "provider_revision_mismatch";
       if (conflict) {
         db.exec("ROLLBACK"); transactionOpen = false;
         return {status: "conflict", conflict_kind: conflict, current_provider_revision: revision,

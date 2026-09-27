@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {spawnSync} from "node:child_process";
 import { mkdtemp, open, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,17 @@ async function workspace(t: TestContext): Promise<string> {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test("zero-wait acquisition retries a reclaimed dead owner but preserves a live owner", async t => {
+  const root = await workspace(t), target = join(root, "state");
+  const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+  assert.equal(dead.status, 0);
+  await writeFile(`${target}.ts-effect.lock`, JSON.stringify({pid: dead.pid, token: "dead"}));
+  const acquired = await acquireFileMutationLock(target, process.pid, 0);
+  await assert.rejects(acquireFileMutationLock(target, process.pid, 0), {code: "mutation_lock_timeout"});
+  assert.equal((await mutationLockOwner(target))?.token, acquired.token);
+  assert.equal(await releaseFileMutationLock(target, acquired.token), true);
+});
 
 test("token-safe release cannot remove a replacement lock", async (t) => {
   const root = await workspace(t);

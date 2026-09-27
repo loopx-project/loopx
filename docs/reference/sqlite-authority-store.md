@@ -63,6 +63,10 @@ rotation, corruption repair, or network-filesystem sharing is supported.
 
 ## Read integrity
 
+Direct retries follow the [authority operation replay contract](authority-operation-replay.md):
+matching full intent returns its verified original position without a new write.
+
+
 Authority reads share one SQLite snapshot, and writes run the same live proof
 inside their transaction before publishing a new commit row. The proof is
 layered so that each layer pays only for what it returns:
