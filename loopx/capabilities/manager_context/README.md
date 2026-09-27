@@ -351,6 +351,23 @@ loopx manager-inbox request --goal-id allocation --agent-id builder \
   --brief-file review.json --parent-request-id <received-request-id>
 ```
 
+When the intended recipient is an existing Codex host task, resolve that peer
+before substituting a temporary child. First inspect `agent-directory` for the
+named Agent and its candidate count. Use
+`loopx resolve-peer-route --goal-id allocation --agent-id reviewer` for an
+observed local route. If several historical bindings exist, supply the exact
+user-selected task link with `--thread-link codex://threads/<id>`; never choose
+the last binding by order or recency. Then record the request with
+`manager-inbox request ... --require-host-route --peer-thread-link
+codex://threads/<id>`. The result contains the same stable request id and a
+`host_delivery` notification targeted to that task. An authorized host tool
+must verify its own target/profile and submit that notification. The CLI has
+not sent it: `host_delivery.status=not_attempted` is deliberate. After a lost
+host response, inspect the target before resending; an Inbox replay only
+deduplicates the stored request. The receiver's read, adoption and report are
+separate readback steps, as below. If the route is unavailable or unauthorized,
+keep the intended peer and report the specific gap.
+
 An example `review.json`:
 
 ```json

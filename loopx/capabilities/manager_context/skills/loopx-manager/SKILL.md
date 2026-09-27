@@ -87,6 +87,18 @@ and a caller that is not a registered Agent of that Goal receives a scope gap
 instead of rows. Reading the directory grants no claim, lease or priority over
 the work it shows.
 
+When a user names an existing peer for review or other work, keep that Agent
+identity. The directory's `peer_route` is a candidate list, not a selected or
+verified host task. On a trusted host with CLI access, use `resolve-peer-route`
+for the exact Goal and Agent; when several historical bindings exist, use the
+user's exact task link or report the ambiguity. If a host message tool is
+authorized, verify the selected task through that host, record the stable
+`manager-inbox request --require-host-route`, then send its content-free
+`host_delivery.message` to the selected task. Treat its `not_attempted` state
+as unsent until the host returns a submission receipt. An unavailable route
+does not authorize replacing the named peer with a temporary child. Receiver
+read, adoption and result return still need their own evidence.
+
 For an all-Goal report, inspect relevant Goals and dates, then synthesize their
 concrete results. For "what needs me", read current owner tasks and explain
 the decision, consequence and work that can continue. Group related findings;

@@ -158,6 +158,19 @@ Rules:
   replaces registry registration, and a failure of that proof means the reader
   reports `unknown`, not `absent`.
 
+For a named existing peer, `resolve-peer-route --goal-id ... --agent-id ...`
+reads the binding owner and the local host observer before any request is
+recorded. `ambiguous` preserves all accepted candidate identities and asks for
+an exact task link; it never selects the last or newest binding. An explicit
+`--thread-link` must resolve to that same Goal and Agent across the project
+registry. `unavailable` includes archived, unknown, unsupported and missing
+host observations. `not_authorized` means the named peer is outside the Goal or
+the supplied link belongs to another identity. A `resolved` result proves only
+an exact project binding plus a readable local host record. The host must still
+verify its own profile and submission permission. Every preview says
+`host_delivery: not_attempted`, and no route preview grants a claim, lease,
+session resume or message-send permission.
+
 ## Presence Vocabulary
 
 Presence answers "is this Agent runnable right now", not "is its work done".
@@ -212,6 +225,17 @@ facts that are easy to conflate:
 4. **No blind resend.** A timeout or a stall does not prove the request was never
    delivered, so the sender inspects state before repeating; `context_handoff`
    delivery receipts remain the durable record that a delivery happened.
+
+`manager-inbox request --require-host-route` applies that route check before
+the existing peer operation and Inbox write. An ambiguous, unavailable or
+wrong-identity route writes no request. The returned `host_delivery` block is
+an exact target and a content-free notification for an authorized host sender;
+its status remains `not_attempted` until the host actually submits it. Repeating
+the same operation id recovers one Inbox request; using it with another selected
+host task is an identity conflict. A sender must inspect the
+host after a lost submission response before repeating the host message. The
+receiver's `manager-inbox read`, decision and `report` receipts remain distinct
+from host submission and from each other.
 
 ## Target Identity Pinning
 
