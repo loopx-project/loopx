@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ..coordination import local_authority_shadow_outbox as shadow_outbox
 from .authority_e2e_fixtures import (
     REPO_ROOT,
@@ -406,9 +406,14 @@ def todo_count(workspace: GoalWorkspace) -> int:
 
 @contextmanager
 def hold_drain_lock(workspace: GoalWorkspace) -> Iterator[None]:
-    """Hold the stable maintenance lock so writers defer their post-commit drain."""
+    """Hold the maintenance lock so writers defer their post-commit drain.
 
-    with exclusive_file_lock(
+    The native batch takes the TypeScript mutation marker, so the window must
+    hold the same cross-runtime lock the production readers take; a kernel-only
+    flock would no longer exclude it.
+    """
+
+    with exclusive_cross_runtime_file_lock(
         shadow_outbox.drain_lock_target(workspace.runtime_root, workspace.goal_id),
         operation="e2e_window",
     ):
