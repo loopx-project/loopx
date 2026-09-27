@@ -21,6 +21,10 @@ export const capabilityScopeScenario = {
       const goalScope = page.getByRole("radio", { name: "单个 Goal", exact: true });
       if (!await defaults.isChecked()) throw new Error("Global settings must start at device defaults");
       await page.getByRole("navigation", { name: "机器能力目录" }).waitFor();
+      await tabs.getByRole("button", { name: "管家", exact: true }).click();
+      await page.locator(".personal-capability-supported-scopes").filter({ hasText: "设备全局配置 · 不支持 Goal 覆盖" }).waitFor();
+      await tabs.getByRole("button", { name: "能力中心", exact: true }).click();
+      await page.getByRole("navigation", { name: "机器能力目录" }).waitFor();
       await page.screenshot({ path: resolve(outputDir, "capability-scope-defaults.png"), animations: "disabled" });
       await goalScope.check();
       const target = page.getByRole("combobox", { name: "目标 Goal", exact: true });
@@ -28,8 +32,13 @@ export const capabilityScopeScenario = {
       if (await page.locator(".personal-capability-detail").count()) throw new Error("An unselected Goal exposed an editor");
       await target.selectOption("product-release");
       await page.getByRole("heading", { level: 2, name: "周期报告", exact: true }).waitFor();
-      await page.locator(".personal-capability-supported-scopes").filter({ hasText: "支持配置：此设备默认 · 单个 Goal" }).waitFor();
+      await page.locator(".personal-capability-supported-scopes").filter({ hasText: "设备默认配置 · 支持 Goal 单独覆盖" }).waitFor();
       if (await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /管家/ }).count()) throw new Error("Machine-only steward leaked into Goal catalog");
+      const catalog = page.getByRole("navigation", { name: "Goal 能力目录" });
+      await catalog.getByRole("button", { name: /飞书事件收件箱/ }).click();
+      await page.locator(".personal-capability-supported-scopes").filter({ hasText: "仅单个 Goal 配置 · 无设备默认值" }).waitFor();
+      await page.locator(".personal-capability-editor-status.is-read-only").waitFor();
+      await catalog.getByRole("button", { name: /周期报告/ }).click();
       await page.getByLabel(/^报告 Profile/u).fill("unsaved-scope-test");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await page.getByText("锁定 revision 的变更预览", { exact: true }).waitFor();
