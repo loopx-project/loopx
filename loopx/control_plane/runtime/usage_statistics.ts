@@ -39,6 +39,13 @@ function notice(ctx: Context): Notice {
 function sameNotice(state: State, ctx: Context): boolean {
   return JSON.stringify(state.notice) === JSON.stringify(notice(ctx));
 }
+function automaticNoticeRequired(state: State, ctx: Context): boolean {
+  // New installations and expanded disclosures may use notice-before-default-on.
+  // A changed recipient or policy still needs the owner's explicit choice.
+  return blockedBy(state, ctx) === "notice_required"
+    && (!state.notice || (state.notice.version !== NOTICE_VERSION
+      && state.notice.endpoint === endpoint(ctx.env) && state.notice.policy === notice(ctx).policy));
+}
 export function blockedBy(state: State, ctx: Context): string | null {
   const env = ctx.env;
   if (["0", "false", "no", "off"].includes((env.LOOPX_USAGE_PING ?? "").trim().toLowerCase())) return "LOOPX_USAGE_PING";
@@ -89,7 +96,8 @@ export async function inspect(path: string, ctx: Context) {
   const blocked = blockedBy(state, ctx);
   return { schema: "loopx_usage_ping_status_v1", consent: state.consent, sending: blocked === null,
     blocked_by: blocked, endpoint: endpoint(ctx.env) || null, policy: notice(ctx).policy,
-    notice: notice(ctx), notice_required: !sameNotice(state, ctx), last_sent_day: state.last_sent_day ?? null,
+    notice: notice(ctx), notice_required: !sameNotice(state, ctx),
+    automatic_notice_required: automaticNoticeRequired(state, ctx), last_sent_day: state.last_sent_day ?? null,
     next_payload: state.consent === "disabled" ? null : ping(state, ctx),
     aggregate_preview: state.consent === "disabled" || !state.counters?.length ? null : { schema: AGGREGATE_SCHEMA, counters: state.counters },
     goal_preview: state.consent === "disabled" ? null : await goalPreview(path + ".goals", state.generation).catch(() => null),
@@ -107,7 +115,7 @@ export async function configure(path: string, ctx: Context, action: "enable" | "
       return;
     }
     if (action === "acknowledge" && JSON.stringify(expectedNotice) !== JSON.stringify(notice(ctx))) throw new Error("usage_notice_changed");
-    if (action === "acknowledge" && state.consent === "disabled") return;
+    if (action === "acknowledge" && !automaticNoticeRequired(state, ctx)) return;
     if (action === "enable") state.consent = "enabled";
     if (state.notice && !sameNotice(state, ctx)) {
       state.counters = [];

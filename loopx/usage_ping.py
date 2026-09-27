@@ -72,12 +72,17 @@ def begin(command: str) -> tuple[str, float] | None:
         if state.get("consent") == "disabled":
             return None
         if (state.get("notice") or {}).get("version") != 3:
-            # Unattended machines remain silent until the owner sees the notice
-            # or explicitly enables from CLI/settings. JSON stdout stays clean.
-            if not sys.stderr.isatty():
+            # App services defer disclosure to the visible frontend. Ordinary
+            # script/Agent calls disclose on stderr too; JSON stdout stays clean.
+            if command in {"chat", "serve-status"} and not sys.stderr.isatty():
                 return None
+            try:
+                if os.path.samestat(os.fstat(sys.stderr.fileno()), os.stat(os.devnull)):
+                    return None  # Discarded output cannot carry a disclosure.
+            except (AttributeError, OSError, ValueError):
+                pass  # In-memory host streams can still display the notice.
             projection = control("status", path)
-            if projection["blocked_by"] != "notice_required":
+            if not projection["automatic_notice_required"]:
                 return None
             print(projection["disclosure"], file=sys.stderr, flush=True)
             control("acknowledge", path, notice=projection["notice"])

@@ -1869,6 +1869,17 @@
 .personal-usage-statistics > p { padding-left: 0; overflow-wrap: anywhere; }
 .personal-usage-statistics button { margin-block: 8px; }
 .personal-usage-statistics pre { max-height: 180px; overflow: auto; font-size: 12px; }
+.personal-usage-notice { display: flex; align-items: flex-start; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--pw-line); background: var(--pw-card); font-size: 12px; line-height: 1.5; }
+.personal-usage-notice > div:first-child { min-width: 0; flex: 1; }
+.personal-usage-notice strong { color: var(--pw-text); font-size: 14px; font-weight: 600; }
+.personal-usage-notice p { margin: 4px 0 0; color: var(--pw-muted); }
+.personal-usage-notice .personal-usage-recipient { overflow-wrap: anywhere; }
+.personal-usage-notice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.personal-usage-notice-actions button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; color: var(--pw-text); background: var(--pw-card); white-space: nowrap; cursor: pointer; }
+.personal-usage-notice-actions button:disabled { opacity: .6; cursor: wait; }
+@media (max-width: 640px) {
+  .personal-usage-notice { flex-direction: column; gap: 8px; padding: 12px 20px; }
+}
 .personal-action-form { margin: auto; width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid var(--pw-line-strong); border-radius: 16px; color: var(--pw-text); background: var(--pw-card); }
 .personal-action-form::backdrop { background: rgb(0 0 0 / 35%); }
 .personal-action-form form, .personal-action-form fieldset, .personal-action-form label { display: grid; gap: 12px; }

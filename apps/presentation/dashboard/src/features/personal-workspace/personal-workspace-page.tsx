@@ -65,6 +65,7 @@ import { WorkspaceActionForm, type WorkspaceActionDraft } from "./workspace-acti
 import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
 import { ManagerBrief } from "./manager-brief";
 import { WorkspaceSettingsPage } from "./workspace-settings-page";
+import { UsageStatisticsNotice } from "./usage-statistics-notice";
 import { readWorkspaceTheme, writeWorkspaceTheme, type WorkspaceTheme } from "./workspace-theme";
 import { compareProposalRecency } from "./proposal-recency";
 import { WorkspaceShell } from "./workspace-shell";
@@ -1679,6 +1680,7 @@ export function PersonalWorkspacePage({
       theme={theme}
       main={(
         <div className="personal-channel">
+          <div>
           <ChannelHeader
             agents={agents}
             managerChatOpen={managerChatOpen}
@@ -1708,6 +1710,8 @@ export function PersonalWorkspacePage({
             selectedGoal={selectedGoal}
             selectedGoalTab={selectedGoalTab}
           />
+          {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
+          </div>
             {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
               onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
