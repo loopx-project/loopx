@@ -7,6 +7,7 @@ import os
 import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -54,7 +55,17 @@ def log_rotation_prelude(plist: Path) -> str:
     return prelude
 
 
-def check_log_rotation(home: Path, plist: Path, basename: str, limit: int) -> None:
+def run_rotation_prelude(fake_bin: Path, prelude: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["zsh", "-c", prelude],
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def check_log_rotation(fake_bin: Path, home: Path, plist: Path, basename: str, limit: int) -> None:
     logs_dir = home / "Library" / "Logs" / "loopx"
     prelude = log_rotation_prelude(plist)
     for stream in ("out", "err"):
@@ -69,7 +80,7 @@ def check_log_rotation(home: Path, plist: Path, basename: str, limit: int) -> No
     live.write_bytes(b"O" * (limit + 1))
     descriptor = os.open(live, os.O_WRONLY | os.O_APPEND)
     try:
-        subprocess.run(["zsh", "-c", prelude], check=True)
+        run_rotation_prelude(fake_bin, prelude)
         os.write(descriptor, b"after-rotation\n")
     finally:
         os.close(descriptor)
@@ -85,12 +96,12 @@ def check_log_rotation(home: Path, plist: Path, basename: str, limit: int) -> No
     # reset on every service start.
     small = logs_dir / f"{basename}.err.log"
     small.write_bytes(b"kept")
-    subprocess.run(["zsh", "-c", prelude], check=True)
+    run_rotation_prelude(fake_bin, prelude)
     assert not small.with_suffix(".log.1").exists()
     assert small.read_bytes() == b"kept"
 
 
-def check_retention_keeps_the_log_when_the_backup_fails(home: Path, plist: Path, basename: str, limit: int) -> None:
+def check_retention_keeps_the_log_when_the_backup_fails(fake_bin: Path, home: Path, plist: Path, basename: str, limit: int) -> None:
     """A failed backup must leave the live log alone.
 
     Truncating on a failed copy would destroy the only record of the failure
@@ -105,7 +116,7 @@ def check_retention_keeps_the_log_when_the_backup_fails(home: Path, plist: Path,
     backup = live.with_suffix(".log.1")
 
     def run_prelude() -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(["zsh", "-c", prelude], capture_output=True, text=True)
+        result = run_rotation_prelude(fake_bin, prelude)
         assert result.returncode == 0, (result.stdout, result.stderr)
         assert live.read_bytes() == original, "a failed backup must not truncate the live log"
         assert not backup.is_file(), "a failed backup must not leave a partial generation"
@@ -170,6 +181,18 @@ def main() -> int:
         home = tmp / "home"
         fake_bin.mkdir()
         home.mkdir()
+
+        # This fixture models macOS commands on Linux CI. Keep the real BSD
+        # stat on macOS; emulate only its byte-count operation elsewhere.
+        if sys.platform != "darwin":
+            write_executable(
+                fake_bin / "stat",
+                f"#!{sys.executable}\n"
+                "import os, sys\n"
+                "if len(sys.argv) != 3 or sys.argv[1] != '-f%z':\n"
+                "    raise SystemExit(2)\n"
+                "print(os.stat(sys.argv[2]).st_size)\n",
+            )
 
         write_executable(
             fake_bin / "uname",
@@ -256,8 +279,8 @@ def main() -> int:
         run_script(fake_bin, home, ["install"], schema_version=2,
                    extra_env={"LOOPX_LOG_MAX_BYTES": str(rotation_limit)})
         for plist, basename in ((status_plist, "status"), (chat_plist, "chat")):
-            check_log_rotation(home, plist, basename, rotation_limit)
-            check_retention_keeps_the_log_when_the_backup_fails(home, plist, basename, rotation_limit)
+            check_log_rotation(fake_bin, home, plist, basename, rotation_limit)
+            check_retention_keeps_the_log_when_the_backup_fails(fake_bin, home, plist, basename, rotation_limit)
             check_installed_retention_readback(fake_bin, home, plist, basename, rotation_limit)
         check_invalid_retention_is_rejected(fake_bin, home, status_plist, rotation_limit)
         assert f"- retention: rotated to .1 at each agent start once a log exceeds {rotation_limit} bytes" in run_script(
