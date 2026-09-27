@@ -61,6 +61,7 @@ from .runtime_hooks import (
     run_reward_memory_automatic_ingest_hook,
     run_reward_memory_automatic_recall_hook,
 )
+from .read_authority import build_reward_memory_surface_read_authority_checkpoints
 from .outcome_lifecycle import (
     reconcile_pending_turn_outcome_ingests,
     reconcile_pending_turn_outcome_ingests_fail_open,
@@ -73,6 +74,7 @@ __all__ = [
     "RewardMemoryDecisionResult",
     "assess_reward_memory_decision",
     "run_reward_memory_decision",
+    "build_reward_memory_surface_read_authority_checkpoints",
     "RewardMemoryFilteredRecallItem",
     "RewardMemoryRecallItem",
     "RewardMemoryRecallSession",

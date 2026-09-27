@@ -4,21 +4,21 @@ import type { JsonObject } from "./effect_program.ts";
 import { jsonObject, requireJsonObject } from "./runtime_decode.ts";
 
 export const subagentContextProvider: AgentContextProvider = {
-  hookId: "multi_subagent.coordinator", capabilityId: "multi_subagent", revision: "v5",
+  hookId: "multi_subagent.coordinator", capabilityId: "multi_subagent", revision: "v6",
   phases: AGENT_CONTEXT_PHASES,
   produce(input, config) {
     const guidance = {
       before_plan: [
         "Prefer bounded independent delegation; max_children is a configured ceiling, not live availability. Admit native children incrementally, avoid duplicate reads, and keep one parent question.",
-        "Native child tools can read loopx agent-context at before_delegate and after_delegate_result; these calls do not start Turns or spend quota.",
+        "Host-native child work uses loopx native-child record/read for bounded Turn receipts; these calls do not start Turns or spend quota.",
         "Choose independent work from current routes and user preferences. Runtime availability is not entrypoint admission; inspect bound delegation. Peer-activation blocks do not assess native children or delegation. Do not relaunch every route on every heartbeat.",
       ],
       before_delegate: [
         "Give each child a bounded question, sources, read/write limits, expected evidence and stopping condition; identify dependencies and the coordinator's concurrent question.",
-        "For an authorized route, use its binding entrypoint and recheck the chosen runtime, execution profile and budget. Never silently substitute a runtime/model; record the selection reason and stable operation id. Preferences and readiness observations are not execution receipts.",
+        "For an authorized route, use its binding entrypoint and recheck the chosen runtime, execution profile and budget. Never silently substitute a runtime/model; record the selection reason and stable operation id. Report each native decision or bounded skip; missing reports stay unknown.",
       ],
       after_delegate_result: [
-        "Check returned sources, omissions and contradictions against the question. Reconcile native child receipts and any freshly read bound delegation operation receipts; missing, unavailable or rejected receipts do not establish completed work.",
+        "Check returned sources, omissions and contradictions against the question. Record native child result and parent review separately, then reconcile fresh Turn receipts and bound delegation receipts; missing or rejected receipts do not establish completed work.",
         "On typed agent_thread_limit_reached, stop same-Turn spawn/followup retries, mark unlaunched work incomplete, and continue useful parent work.",
         "Verify decisive sources and record accept/defer/reject with reasons. Link accepted evidence to the deliverable and run parent validation before writeback; opinions are not independent evidence.",
       ],
@@ -48,6 +48,11 @@ export const subagentContextProvider: AgentContextProvider = {
         contract.live_availability = nativeCapacity.outcome === "agent_thread_limit_reached"
           ? "capacity_exhausted" : "attempt_observed";
       }
+      const nativeActivity = boundedNativeChildActivity(input.observations.native_child_activity);
+      if (nativeActivity) {
+        facts.native_child_activity = nativeActivity;
+        facts.native_receipt_observation = nativeActivity.observation;
+      }
       const counts = jsonObject(input.observations.reconciliation_counts);
       facts.receipt_observation = counts ? "host_reconciled" : "not_supplied";
       if (counts) facts.reconciliation_counts = Object.fromEntries(
@@ -61,7 +66,7 @@ export const subagentContextProvider: AgentContextProvider = {
       };
     }
     return { guidance, facts, source_refs: [
-      "goal_boundary.orchestration", "docs/integrations/codex-subagent-orchestration.md",
+      "goal_boundary.orchestration", "docs/integrations/host-native-child-receipts.md",
     ] };
   },
 };
@@ -95,6 +100,32 @@ function boundedNativeCapacityObservation(value: unknown): JsonObject | null {
       "retry_after_capacity_change",
     ];
   }
+  return result;
+}
+
+function boundedNativeChildActivity(value: unknown): JsonObject | null {
+  const source = jsonObject(value);
+  if (!source || source.schema_version !== "native_subagent_activity_v0"
+    || source.entrypoint_scope !== "host_native_child_tools") return null;
+  const observation = String(source.observation ?? "");
+  if (!["unknown", "coordinator_reported"].includes(observation)) return null;
+  const count = (key: string) => Number.isInteger(source[key]) && Number(source[key]) >= 0
+    ? Math.min(Number(source[key]), 10_000) : 0;
+  const result: JsonObject = {
+    schema_version: "native_subagent_activity_v0",
+    entrypoint_scope: "host_native_child_tools",
+    observation,
+    host_attested: false,
+    configured_limit_kind: "upper_bound",
+    configured_limit: count("configured_limit"),
+    attempted_count: count("attempted_count"),
+    launched_count: count("launched_count"),
+    skipped_count: count("skipped_count"),
+    capacity_rejected_count: count("capacity_rejected_count"),
+    host_failed_count: count("host_failed_count"),
+    parent_accepted_count: count("parent_accepted_count"),
+  };
+  if (source.retry_same_turn === false) result.retry_same_turn = false;
   return result;
 }
 

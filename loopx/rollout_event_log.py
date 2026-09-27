@@ -5,7 +5,7 @@ import json
 from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .file_lock import exclusive_file_lock
 
@@ -21,6 +21,9 @@ ROLLOUT_EVENT_KINDS = {
     "compact_case_result",
     "evidence_log_read",
     "failure_attribution",
+    "native_child_decision",
+    "native_child_result",
+    "native_child_review",
     "pr_merge",
     "pr_review_ack",
     "quota_monitor_poll",
@@ -441,8 +444,9 @@ def append_rollout_event_once(
     event: Mapping[str, Any],
     *,
     identity_fields: Sequence[str],
+    precondition: Callable[[], None] | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Append once by a stable public identity, returning whether it was new."""
+    """Append once by a stable identity; check a transition under the same lock."""
 
     payload = dict(event)
     if payload.get("schema_version") != ROLLOUT_EVENT_SCHEMA_VERSION:
@@ -473,6 +477,8 @@ def append_rollout_event_once(
                 if _idempotency_body(existing) == _idempotency_body(payload):
                     return existing, False
                 raise ValueError(f"conflicting rollout event_id: {event_id}")
+        if precondition is not None:
+            precondition()
         _append_rollout_event_line(log_path, payload)
     return payload, True
 

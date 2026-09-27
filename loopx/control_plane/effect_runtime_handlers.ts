@@ -232,6 +232,7 @@ import {
   recordExternalEvidenceReceiptObservation,
 } from "./capabilities/external_evidence.ts";
 import {
+  buildRewardMemorySurfaceReadCheckpoints,
   planRewardMemoryDecision,
   projectRewardMemoryDecision,
 } from "./capabilities/reward_memory_decision.ts";
@@ -732,6 +733,7 @@ export function createEffectRuntimeHandlers(
     ["external_evidence.retire", projectExternalEvidenceRetirement],
     ["reward_memory.decision.plan", planRewardMemoryDecision],
     ["reward_memory.decision.project", projectRewardMemoryDecision],
+    ["reward_memory.read_authority.surface_checkpoints", buildRewardMemorySurfaceReadCheckpoints],
     [
       "manager.return_delivery.normalize_attempt",
       (params) => normalizeManagerReturnDeliveryAttempt(params.attempt),

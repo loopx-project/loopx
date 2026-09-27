@@ -160,8 +160,132 @@ def test_invalid_original_request_retains_safe_boundary_reason(tmp_path):
                                        apply_memory=delivery, provider=provider, **arguments)
     assert result.public_packet["reason_code"] == "recall_boundary_rejected"
     assert result.public_packet["boundary_reason_code"] == "exact_corpus_request_invalid"
+    assert result.public_packet["boundary_detail_code"] == "freshness_age_invalid"
     assert result.public_packet["provider_call_count"] == provider.calls == 0
     assert "freshness_context" not in json.dumps(result.public_packet)
+
+
+@pytest.mark.parametrize("checkpoint,detail", [
+    ({}, "read_authority_checkpoint_missing"),
+    ({"verified": "private invalid proof"}, "read_authority_checkpoint_invalid"),
+])
+def test_checkpoint_input_diagnostics_do_not_call_provider(tmp_path, checkpoint, detail):
+    config, arguments, records = context(tmp_path)
+    arguments["read_authority_checkpoints"] = {"primary": checkpoint}
+    provider = Provider(records)
+    result = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+                                       apply_memory=delivery, provider=provider, **arguments)
+    assert result.public_packet["boundary_reason_code"] == "exact_corpus_request_invalid"
+    assert result.public_packet["boundary_detail_code"] == detail
+    assert result.public_packet["provider_call_count"] == provider.calls == 0
+    assert result.output == arguments["base_output"]
+    assert "private invalid proof" not in json.dumps(result.public_packet)
+
+
+@pytest.mark.parametrize("verified", [True, False])
+def test_shared_surface_checkpoint_builder_preserves_explicit_read_proof(tmp_path, verified):
+    from loopx.capabilities.reward_memory import build_reward_memory_surface_read_authority_checkpoints
+
+    config, arguments, records = context(tmp_path, two_corpora=True)
+    # An unrelated configured corpus must not be included in this surface's proof.
+    config["surfaces"][SURFACE]["corpus_ids"] = ["primary"]
+    before = copy.deepcopy(config)
+    arguments["read_authority_checkpoints"] = build_reward_memory_surface_read_authority_checkpoints(
+        config, SURFACE, verified=verified, source_ref="policy:original:review",
+    )
+    assert config == before
+    assert list(arguments["read_authority_checkpoints"]) == ["primary"]
+    checkpoint = arguments["read_authority_checkpoints"]["primary"]
+    assert checkpoint["surface_id"] == SURFACE
+    assert checkpoint["verified"] is verified
+    assert checkpoint["source_ref"] == "policy:original:review"
+    provider = Provider(records)
+    result = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+                                       apply_memory=delivery, provider=provider, **arguments)
+    assert result.public_packet["context_delivery_verified"] is verified
+    assert provider.calls == (1 if verified else 0)
+    assert not result.public_packet["grants_new_action_authority"]
+
+
+def test_turn_checkpoint_wrapper_retains_original_scope_and_source(tmp_path):
+    from loopx.capabilities.agent_turn_recall.runtime import reward_memory_turn_read_authority_checkpoints
+    from loopx.capabilities.reward_memory import build_reward_memory_surface_read_authority_checkpoints
+
+    config, _, _ = context(tmp_path)
+    turn = "agent_workflow.turn_admission"
+    config["surfaces"][turn] = {**config["surfaces"][SURFACE], "surface_id": turn}
+    scope = config["corpora"]["primary"]["corpus"]["scope"]
+    scope["surface_ids"].append(turn)
+    scope.update(user_ref="user:example", peer_ref="peer:reviewer", session_ref="session:one")
+    expected = {"primary": {"verified": True, "corpus_id": "primary",
+        **{key: scope[key] for key in ("workspace_ref", "project_ref", "user_ref", "peer_ref", "session_ref")},
+        "surface_id": turn, "read_authority": "module_scoped",
+        "source_ref": "registry:goal:example:reward-memory"}}
+    assert reward_memory_turn_read_authority_checkpoints(config, "goal:example") == expected
+    assert build_reward_memory_surface_read_authority_checkpoints(
+        config, turn, verified=True, source_ref="registry:goal:example:reward-memory",
+    ) == expected
+
+
+def test_new_corpus_does_not_expand_an_existing_surface_without_owner_binding(tmp_path):
+    from loopx.capabilities.reward_memory import build_reward_memory_surface_read_authority_checkpoints
+
+    config, _, _ = context(tmp_path, two_corpora=True)
+    overlay = config["corpora"].pop("overlay")
+    config["surfaces"][SURFACE]["corpus_ids"] = ["primary"]
+    before = build_reward_memory_surface_read_authority_checkpoints(
+        config, SURFACE, verified=True, source_ref="policy:original:review")
+    config["corpora"]["overlay"] = overlay
+    assert build_reward_memory_surface_read_authority_checkpoints(
+        config, SURFACE, verified=True, source_ref="policy:original:review") == before
+    config["surfaces"][SURFACE]["corpus_ids"].append("overlay")
+    after = build_reward_memory_surface_read_authority_checkpoints(
+        config, SURFACE, verified=False, source_ref="policy:original:review")
+    assert list(after) == ["primary", "overlay"]
+    assert all(checkpoint["verified"] is False for checkpoint in after.values())
+
+
+@pytest.mark.parametrize("age", [True, -1, 0.5, "1"])
+def test_invalid_age_is_not_coerced_even_with_a_missing_checkpoint(tmp_path, age):
+    config, arguments, records = context(tmp_path)
+    arguments["freshness_context"]["age_seconds"] = age
+    arguments["read_authority_checkpoints"] = {}
+    provider = Provider(records)
+    result = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+                                       apply_memory=delivery, provider=provider, **arguments)
+    assert result.public_packet["boundary_detail_code"] == "freshness_age_invalid"
+    assert result.output == arguments["base_output"]
+    assert provider.calls == 0
+
+
+@pytest.mark.parametrize("freshness", [{}, {"source_truth_current": "true"},
+    {"source_truth_current": True, "source_revision": "private invalid revision text"}])
+def test_other_freshness_input_errors_are_safe_and_zero_call(tmp_path, freshness):
+    config, arguments, records = context(tmp_path)
+    arguments["freshness_context"] = freshness
+    provider = Provider(records)
+    result = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+                                       apply_memory=delivery, provider=provider, **arguments)
+    assert result.public_packet["boundary_detail_code"] == "freshness_context_invalid"
+    assert provider.calls == 0
+    assert "private invalid revision text" not in json.dumps(result.public_packet)
+
+
+def test_shared_builder_does_not_substitute_an_unconfigured_surface(tmp_path):
+    from loopx.capabilities.reward_memory import build_reward_memory_surface_read_authority_checkpoints
+
+    config, _, _ = context(tmp_path)
+    with pytest.raises(ValueError, match="surface is not configured"):
+        build_reward_memory_surface_read_authority_checkpoints(
+            config, "review.unconfigured", verified=True, source_ref="policy:original:review",
+        )
+
+
+def test_typed_input_error_cannot_carry_an_arbitrary_public_code():
+    from loopx.capabilities.reward_memory.application import RewardMemoryRecallInputError
+
+    with pytest.raises(ValueError, match="unsupported recall input error code"):
+        RewardMemoryRecallInputError("private exception text", "private content")
 
 
 @pytest.mark.parametrize("disposition", ["applied", "applied_unchanged", "ignored", "refuted"])

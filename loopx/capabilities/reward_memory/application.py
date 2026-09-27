@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, get_args
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ..context_providers import build_context_provider
@@ -96,6 +96,22 @@ class _ActiveItemDecision:
 RewardMemoryApplier = Callable[
     [Any, tuple[RewardMemoryRecallItem, ...]], Mapping[str, Any]
 ]
+
+
+RecallInputErrorCode = Literal[
+    "freshness_age_invalid", "freshness_context_invalid",
+    "read_authority_checkpoint_missing", "read_authority_checkpoint_invalid",
+]
+
+
+class RewardMemoryRecallInputError(ValueError):
+    """An existing SDK input rejection with an allowlisted, non-content code."""
+
+    def __init__(self, reason_code: RecallInputErrorCode, message: str) -> None:
+        if reason_code not in get_args(RecallInputErrorCode):
+            raise ValueError("unsupported recall input error code")
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 def _token(value: object, label: str) -> str:
@@ -243,22 +259,17 @@ def _authority_checkpoint(
     raw: object, *, corpus: Mapping[str, Any], request: Mapping[str, Any]
 ) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(raw, Mapping):
-        raise ValueError("read_authority_checkpoint must be an object")
-    checkpoint = {
-        "verified": _boolean(raw, "verified"),
-        "corpus_id": _token(raw.get("corpus_id"), "checkpoint.corpus_id"),
-        "workspace_ref": _token(raw.get("workspace_ref"), "checkpoint.workspace_ref"),
-        "project_ref": _token(raw.get("project_ref"), "checkpoint.project_ref"),
-        "surface_id": _token(raw.get("surface_id"), "checkpoint.surface_id"),
-        "read_authority": _token(
-            raw.get("read_authority"), "checkpoint.read_authority"
-        ),
-        "source_ref": _optional_token(raw.get("source_ref"), "checkpoint.source_ref"),
-    }
-    for field in IDENTITY_SCOPE_FIELDS:
-        expected_scope = corpus["scope"].get(field)
-        if expected_scope:
-            checkpoint[field] = _optional_token(raw.get(field), f"checkpoint.{field}")
+        raise RewardMemoryRecallInputError(
+            "read_authority_checkpoint_missing" if raw is None else "read_authority_checkpoint_invalid",
+            "read_authority_checkpoint must be an object",
+        )
+    try:
+        checkpoint = _normalize_authority_checkpoint(raw, corpus=corpus)
+    except ValueError as exc:
+        raise RewardMemoryRecallInputError(
+            "read_authority_checkpoint_missing" if not raw else "read_authority_checkpoint_invalid",
+            str(exc),
+        ) from exc
     reasons: list[str] = []
     expected = {
         "corpus_id": corpus["corpus_id"],
@@ -283,22 +294,48 @@ def _authority_checkpoint(
     return checkpoint, reasons
 
 
+def _normalize_authority_checkpoint(
+    raw: Mapping[str, Any], *, corpus: Mapping[str, Any],
+) -> dict[str, Any]:
+    checkpoint = {
+        "verified": _boolean(raw, "verified"),
+        "corpus_id": _token(raw.get("corpus_id"), "checkpoint.corpus_id"),
+        "workspace_ref": _token(raw.get("workspace_ref"), "checkpoint.workspace_ref"),
+        "project_ref": _token(raw.get("project_ref"), "checkpoint.project_ref"),
+        "surface_id": _token(raw.get("surface_id"), "checkpoint.surface_id"),
+        "read_authority": _token(
+            raw.get("read_authority"), "checkpoint.read_authority"
+        ),
+        "source_ref": _optional_token(raw.get("source_ref"), "checkpoint.source_ref"),
+    }
+    for field in IDENTITY_SCOPE_FIELDS:
+        expected_scope = corpus["scope"].get(field)
+        if expected_scope:
+            checkpoint[field] = _optional_token(raw.get(field), f"checkpoint.{field}")
+    return checkpoint
+
+
 def _freshness_reasons(
     corpus: Mapping[str, Any], freshness: Mapping[str, Any]
 ) -> list[str]:
     reasons: list[str] = []
     mode = corpus["freshness"]["mode"]
-    source_truth_current = _boolean(freshness, "source_truth_current")
-    source_revision = _optional_token(
-        freshness.get("source_revision"), "freshness_context.source_revision"
-    )
+    try:
+        source_truth_current = _boolean(freshness, "source_truth_current")
+        source_revision = _optional_token(
+            freshness.get("source_revision"), "freshness_context.source_revision"
+        )
+    except ValueError as exc:
+        raise RewardMemoryRecallInputError("freshness_context_invalid", str(exc)) from exc
     age_seconds = freshness.get("age_seconds")
     if age_seconds is not None and (
         isinstance(age_seconds, bool)
         or not isinstance(age_seconds, int)
         or age_seconds < 0
     ):
-        raise ValueError("freshness_context.age_seconds must be a non-negative integer")
+        raise RewardMemoryRecallInputError(
+            "freshness_age_invalid", "freshness_context.age_seconds must be a non-negative integer",
+        )
     if mode in {"source_truth_bound", "execution_bound"} and not source_truth_current:
         reasons.append("source_truth_not_current")
     if mode in {"revision_bound", "session_archive_bound"} and (
@@ -391,7 +428,7 @@ def build_reward_memory_recall_request(
     ):
         raise ValueError(f"limit must be between 1 and {MAX_RESULTS}")
     if not isinstance(request.get("freshness_context"), Mapping):
-        raise ValueError("freshness_context must be an object")
+        raise RewardMemoryRecallInputError("freshness_context_invalid", "freshness_context must be an object")
     if _boolean(request, "raw_content_captured"):
         raise ValueError("recall requests must not capture raw content")
 

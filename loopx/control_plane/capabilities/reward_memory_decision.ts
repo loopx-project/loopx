@@ -5,6 +5,8 @@ import { requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
 const MODES = ["execute", "preview", "recall_only"] as const;
 const KINDS = ["context_delivery", "semantic_application"] as const;
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$/;
+const BOUNDARY_DETAILS = ["freshness_age_invalid", "freshness_context_invalid",
+  "read_authority_checkpoint_missing", "read_authority_checkpoint_invalid"] as const;
 
 function token(value: unknown, name: string, optional = false): string | null {
   if (optional && (value === null || value === undefined)) return null;
@@ -37,6 +39,31 @@ function boundReceiptDigests(receipt: JsonObject, plan: JsonObject, outcome: unk
     receipt.surface_id === plan.surface_id && receipt.outcome === outcome &&
     receipt.current_artifact_verified === true && receipt.result_readback_verified === true
     ? digests : null;
+}
+
+/** Assemble an exact surface's original-owner proof, never verify or grant it. */
+export function buildRewardMemorySurfaceReadCheckpoints(params: JsonObject): JsonObject {
+  const surface = token(params.surface_id, "surface_id");
+  const verified = boolean(params.verified, "verified");
+  const source = token(params.source_ref, "source_ref");
+  if (!Array.isArray(params.corpora)) throw new EffectRuntimeRequestError("corpora must be an array");
+  const entries = params.corpora.map((item) => {
+    const corpus = requireJsonObject(item, "corpus");
+    const scope = requireJsonObject(corpus.scope, "scope");
+    const id = token(corpus.corpus_id, "corpus_id") as string;
+    const checkpoint: JsonObject = {verified, corpus_id: id, surface_id: surface,
+      source_ref: source, workspace_ref: token(scope.workspace_ref, "workspace_ref"),
+      project_ref: token(scope.project_ref, "project_ref"),
+      read_authority: token(corpus.read_authority, "read_authority")};
+    for (const field of ["user_ref", "peer_ref", "session_ref"] as const) {
+      if (scope[field] != null && scope[field] !== "") checkpoint[field] = token(scope[field], field);
+    }
+    return [id, checkpoint] as const;
+  });
+  if (new Set(entries.map(([id]) => id)).size !== entries.length) {
+    throw new EffectRuntimeRequestError("corpus ids must be unique");
+  }
+  return {checkpoints: Object.fromEntries(entries)};
 }
 
 /** Query-ready consumption policy; no config, provider content or model calls. */
@@ -93,6 +120,14 @@ export function projectRewardMemoryDecision(params: JsonObject): JsonObject {
     result_readback_verified: readback,
     recall_status: recallStatus,
   };
+  // Add detail only for a typed input rejection; never publish exception text.
+  if (observation.boundary_detail_code != null) {
+    const detail = requireStringLiteral(observation.boundary_detail_code, BOUNDARY_DETAILS, "boundary_detail_code");
+    if (hookStatus !== "guard_rejected" || packet.boundary_reason_code !== "exact_corpus_request_invalid") {
+      throw new EffectRuntimeRequestError("boundary detail requires an exact-corpus input rejection");
+    }
+    packet.boundary_detail_code = detail;
+  }
   if (hookStatus === "provider_unavailable") {
     return {...packet, status: "provider_unavailable", reason_code: "provider_unavailable"};
   }

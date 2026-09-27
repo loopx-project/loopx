@@ -26,7 +26,11 @@ Read-authority checkpoints must match the exact consumer surface and corpus;
 a turn-admission checkpoint cannot authorize a different review surface.
 `freshness_context.age_seconds`, when supplied, is a nonnegative integer.
 Rejected requests expose only the original hook's allowlisted
-`boundary_reason_code`, never exception text or private input values.
+`boundary_reason_code` and, for typed input errors, `boundary_detail_code`,
+never exception text or private input values. The details distinguish
+`freshness_age_invalid`, `freshness_context_invalid`,
+`read_authority_checkpoint_missing` and `read_authority_checkpoint_invalid`.
+Existing reason codes, ValueError compatibility, validation order and gates remain unchanged.
 
 使用上述导出入口和 `resolve_reward_memory_experiment` 的原配置读回；不可用时
 不能拿未经验证的配置替代。原 hook 的范围、revision、问题、时点、时效/冲突、
@@ -36,7 +40,44 @@ Rejected requests expose only the original hook's allowlisted
 
 读授权 checkpoint 必须匹配本次 surface/corpus，不能拿 Turn 准入的 checkpoint
 授权另一评审入口；age_seconds 如提供，须为非负整数。拒绝回执仅投影原 hook
-白名单内的 boundary_reason_code，不暴露异常正文或私有参数。
+白名单内的 boundary_reason_code，以及输入错误的 boundary_detail_code；细分年龄非法、
+时效上下文非法、读授权缺失和读授权格式非法，不暴露异常正文或私有参数。
+保留原错误码、ValueError 兼容、校验顺序与门禁。
+
+Use `build_reward_memory_surface_read_authority_checkpoints(config, surface_id,
+verified=original_proof_verified, source_ref=original_read_authority_source)`
+from the same package. It selects only that surface's configured corpora through
+the existing configuration owner, then TS assembles the exact workspace/project,
+optional user/peer/session, read-authority and surface references. The caller must
+actually verify its original read authority: an enabled config or ingest policy
+alone is not read proof. `verified=False` stays false and blocks recall. It does
+not infer a proof source, enable the capability or contact a provider. The Turn
+wrapper uses this same projection and retains its verified registry source.
+
+通用 helper 按实际 surface 和原配置选择 corpus，由 TS 组装精确范围；调用方仍须
+真实核验原读权限并显式传入 verified/source_ref，不能把开关或写入 policy 当作读授权。
+False 不会升级为 True；不推断授权来源、不启用能力、不调用 provider。原 Turn wrapper
+复用该投影并保留 registry 来源。不要以生成了 checkpoint 为由宣称授权核验已完成。
+
+Checkpoint transport failure remains optional-enrichment failure: managed Turn
+admission returns its existing fail-open `runtime_unavailable` packet. The explicit
+`agent-turn-recall --execute` CLI returns a safe `runtime_unavailable` packet and
+exit code 2. Neither path calls the provider or writes a successful same-Turn
+receipt when checkpoint construction fails; a later healthy retry uses the same
+Turn identity. These zero-call guarantees apply before provider invocation only.
+
+checkpoint 传输失败不成为普通 Turn 的新门禁：managed 准入沿用原 fail-open
+`runtime_unavailable`；显式 CLI 返回安全的同类 packet 和退出码 2。构建失败时
+均不调用 provider、不写成功的同 Turn 回执；恢复后沿用原 Turn 身份重试。
+零调用保证仅适用于 provider 调用前的构建失败，不覆盖调用后的异常。
+
+If computing age from timestamps, first reject an observation in the future;
+then round elapsed seconds upward to an integer. Never clamp a negative age,
+refresh the original observation time, or change policy to make recall pass.
+This helper intentionally does not calculate or correct age for the caller.
+
+由时间戳计算年龄时，先拒绝未来观察，再将经过秒数向上取整；不能截断负值、
+刷新原观察时间或改 policy 来过门。helper 不替调用方计算或纠正年龄。
 
 TypeScript owns admission and completion (`reward_memory.decision.plan/project`);
 Python adapts the existing provider/applier and retains transient private values.
@@ -47,6 +88,14 @@ No new store, SDK, key, enablement switch or action authority is introduced.
 TS 负责准入和完成语义；Python 只适配现有 provider/applier 并保留瞬时私有值。
 TS 只收到引用、状态、计数与摘要，不收到问题、经验正文、原产物或模型判断内容；
 不新增存储、SDK、密钥、开关或行动授权。
+
+This slice does not migrate the existing Python SDK's scope/freshness validation;
+it adds no second TS admission rule for those checks. Python remains the original
+configuration/provider adapter and input-error source; TS owns the shared
+checkpoint projection and allowlisted decision diagnostics.
+
+此切片不迁移原 Python SDK 的范围/时效校验，也不在 TS 复制准入规则。Python 保留
+原配置/provider 适配与输入错误来源，TS 持有共享 checkpoint 投影及白名单诊断。
 
 | Mode / 模式 | Provider / 调用 | Meaning / 意义 |
 | --- | --- | --- |
@@ -111,6 +160,12 @@ returns `replay_request_mismatch`. Reassessment uses retained qualified items an
 the original **cumulative** multi-corpus counters, not a second query. This is
 caller-retained replay, not automatic cross-process persistence or a new cache.
 
+Retain the complete private result, not just context/public_packet/application
+receipt. `assess_reward_memory_decision` needs the exact recall session and
+attribution. A lost session after EOF/restart is incomplete, even if context was
+delivered; do not re-query or fabricate semantic completion. There is currently
+no supported cross-process restore API. Caller-owned persistence and a future
+validated restore contract remain separate from this in-process replay API.
 The private result retains the **original context-delivery receipt** separately
 from the later semantic receipt. TypeScript revalidates its application, artifact,
 surface and lesson attribution, so assessment (including an incomplete assessment)
@@ -124,6 +179,9 @@ cannot recreate that private lineage or upgrade historical receipts.
 `previous_result` 仅复用配置和输入均匹配的请求，变化则拒绝复用。后续判断使用
 原条目和累计多 corpus 遥测，不重复查询。这不是自动跨进程存储或新的缓存。
 
+需保留完整私有 result，不能只存 context/public_packet/application receipt。
+EOF/重启丢失 recall_session 时，交付过上下文也不能完成 assessment；不重查、不补造
+语义完成。当前没有受支持的跨进程恢复 API，持久化与后续验证恢复合同是独立缺口。
 私有结果分别保留原上下文交付回执和后续语义回执，TS 对应用、产物、surface 与
 经验归因重新核验；评估成功或不完整均不抹掉此前已验证的交付。直接语义 callback
 没有该回执时仍为 `context_delivery_verified=false`，语义判断与效果另行记录。

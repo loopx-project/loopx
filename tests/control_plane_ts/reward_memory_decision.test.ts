@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {planRewardMemoryDecision, projectRewardMemoryDecision} from "../../loopx/control_plane/capabilities/reward_memory_decision.ts";
+import {buildRewardMemorySurfaceReadCheckpoints, planRewardMemoryDecision, projectRewardMemoryDecision} from "../../loopx/control_plane/capabilities/reward_memory_decision.ts";
 
 const request = {mode: "execute", query_ready: true, application_kind: "semantic_application",
   has_applier: true, application_id: "application:one", artifact_ref: "artifact:current", surface_id: "review.summary"};
@@ -63,6 +63,39 @@ test("project only the original hook's safe typed boundary reason", () => {
   assert.equal(rejected.reason_code, "recall_boundary_rejected");
   assert.equal(rejected.boundary_reason_code, "exact_corpus_request_invalid");
   assert.equal(rejected.provider_call_count, 0);
+});
+
+test("surface checkpoint assembly preserves caller proof and exact identity without verifying it", () => {
+  const input = {surface_id: "review.summary", verified: false, source_ref: "policy:original",
+    corpora: [{corpus_id: "one", read_authority: "actor_scoped",
+      scope: {workspace_ref: "workspace:one", project_ref: "project:one",
+        user_ref: "user:one", peer_ref: "peer:one", session_ref: "session:one"}}]};
+  assert.deepEqual(buildRewardMemorySurfaceReadCheckpoints(input), {checkpoints: {one: {
+    verified: false, source_ref: "policy:original", surface_id: "review.summary", corpus_id: "one",
+    read_authority: "actor_scoped", ...input.corpora[0].scope,
+  }}});
+  for (const patch of [{verified: "true"}, {source_ref: ""}, {source_ref: "private prose is not proof"},
+    {corpora: [...input.corpora, ...input.corpora]}, {corpora: [{}]}]) {
+    assert.throws(() => buildRewardMemorySurfaceReadCheckpoints({...input, ...patch}));
+  }
+});
+
+test("safe diagnostic details never become unbound success or private exception text", () => {
+  const rejected = {...observation, status: "guard_rejected", recall_status: null,
+    provider_call_count: 0, result_readback_verified: false, boundary_reason_code: "exact_corpus_request_invalid"};
+  for (const detail of ["freshness_age_invalid", "freshness_context_invalid",
+    "read_authority_checkpoint_missing", "read_authority_checkpoint_invalid"]) {
+    const result = projectRewardMemoryDecision({request, observation: {...rejected, boundary_detail_code: detail}});
+    assert.equal(result.boundary_detail_code, detail);
+    assert.equal(result.reason_code, "recall_boundary_rejected");
+    assert.equal(result.provider_call_count, 0);
+    assert.equal(result.decision_consumption_complete, false);
+  }
+  for (const patch of [{boundary_detail_code: "private exception body"},
+    {boundary_detail_code: "freshness_age_invalid", status: "applied"},
+    {boundary_detail_code: "freshness_age_invalid", boundary_reason_code: "automation_config_invalid"}]) {
+    assert.throws(() => projectRewardMemoryDecision({request, observation: {...rejected, ...patch}}));
+  }
 });
 
 test("semantic assessment preserves a separately bound context delivery, not utility", () => {

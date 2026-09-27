@@ -17,6 +17,7 @@ from ..reward_memory.experiment import (
     resolve_reward_memory_experiment,
     resolve_reward_memory_surface_config,
 )
+from ..reward_memory.read_authority import build_reward_memory_surface_read_authority_checkpoints
 from .core import (
     AGENT_TURN_RECALL_SCHEMA_VERSION,
     AGENT_TURN_RECALL_SURFACE_ID,
@@ -149,28 +150,10 @@ def resolve_reward_memory_turn_session_ref(
 def reward_memory_turn_read_authority_checkpoints(
     config: Mapping[str, Any], goal_id: str
 ) -> dict[str, dict[str, Any]]:
-    route = resolve_reward_memory_surface_config(
-        config,
-        AGENT_TURN_RECALL_SURFACE_ID,
+    return build_reward_memory_surface_read_authority_checkpoints(
+        config, AGENT_TURN_RECALL_SURFACE_ID,
+        verified=True, source_ref=f"registry:{goal_id}:reward-memory",
     )
-    checkpoints: dict[str, dict[str, Any]] = {}
-    for item in route["recall_corpora"]:
-        corpus = item["corpus"]
-        scope = corpus["scope"]
-        checkpoint = {
-            "verified": True,
-            "corpus_id": corpus["corpus_id"],
-            "workspace_ref": scope["workspace_ref"],
-            "project_ref": scope["project_ref"],
-            "surface_id": AGENT_TURN_RECALL_SURFACE_ID,
-            "read_authority": corpus["read_authority"],
-            "source_ref": f"registry:{goal_id}:reward-memory",
-        }
-        for field in ("user_ref", "peer_ref", "session_ref"):
-            if scope.get(field):
-                checkpoint[field] = scope[field]
-        checkpoints[corpus["corpus_id"]] = checkpoint
-    return checkpoints
 
 
 def deduplicated_agent_turn_recall_payload(
