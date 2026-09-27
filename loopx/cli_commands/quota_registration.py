@@ -69,7 +69,8 @@ def register_quota_command(
         action="append",
         choices=[*QUOTA_DETAIL_SECTIONS, "all"],
         help=(
-            "Include one command-specific cold-path detail section. For `quota "
+            "Include one command-specific cold-path detail section. Status/plan default "
+            "to bounded Todo summaries; use agent-todos or user-todos for full lists. For `quota "
             "should-run`: scheduler, agent-todos, user-todos, goal-boundary, or "
             "vision. For `quota monitor-poll`: decisions. Repeat for multiple "
             "sections or use `all`."
