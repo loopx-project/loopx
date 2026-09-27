@@ -9,6 +9,30 @@ This replaces the current ad hoc pattern where priority is encoded only by
 changing automation periods. A timer can wake the executor, but the product
 policy should live in LoopX.
 
+## Read-only observation scope
+
+`loopx quota status --goal-id example` and `loopx quota plan --goal-id example`
+collect only the selected Goal's status and history. Previously these commands
+silently ignored `--goal-id` and collected the whole registry. The selector now
+also partitions the optional status projection cache; it is not an output-only
+filter. Omitting it retains the global view and ordering.
+
+Scoped JSON includes `goal_filter`. Its counts, groups and `next_automatic_turn`
+describe that selected Goal only, not its rank among all Goals. An unknown or
+unregistered Goal returns `status=goal_not_found` and a nonzero exit code.
+Goal selection reuses the existing status health contract: unrelated Goal-local
+errors are outside the query, while applicable global errors remain visible.
+Observation neither opens a Turn nor grants execution/spend authority; use
+`quota should-run` with the current lane's identity for execution admission.
+`status_projection_envelope` retains the TS-owned source freshness and coverage
+of that observation, including explicit cache use; the Markdown view shows it.
+
+`quota status/plan --goal-id` 现在按指定 Goal 收集状态与历史，缓存也按同一范围隔离；
+之前会静默忽略选择器并读取全部 Goal。不传仍是全局视图。定向结果中的计数、分组和
+`next_automatic_turn` 只针对该 Goal，不代表全局排名；不存在或未注册的 Goal 明确
+报错。沿用既有 status 健康合同，保留相关全局错误。这是只读观测，不创建 Turn、
+不授予执行／spend 权限，不能代替带当前身份的 `quota should-run`。
+
 ## Product Scope
 
 In v0.1, quota means **compute quota only**.

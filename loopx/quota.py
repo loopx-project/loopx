@@ -817,7 +817,7 @@ def build_quota_plan(
     if groups.get("unknown"):
         summary["states"]["unknown"] = len(groups["unknown"])
 
-    return {
+    result = {
         "ok": status_payload.get("ok"),
         "mode": mode,
         "registry": status_payload.get("registry"),
@@ -829,6 +829,34 @@ def build_quota_plan(
         "groups": groups,
         "health_items": health_items,
     }
+    return _describe_quota_observation(result, status_payload, mode=mode)
+
+
+def _describe_quota_observation(
+    result: dict[str, Any], status_payload: dict[str, Any], *, mode: str
+) -> dict[str, Any]:
+    """Carry read-only selection and source proof without changing execution plans."""
+    if mode not in {"status", "plan"}:
+        return result
+    goal_filter = status_payload.get("goal_filter")
+    if goal_filter:
+        result["goal_filter"] = goal_filter
+        if not any(
+            item["goal_id"] == goal_filter
+            for group in result["groups"].values()
+            for item in group
+        ):
+            result.update(
+                ok=False,
+                status="goal_not_found",
+                reason="goal is not present in the registered quota plan",
+                recommended_action="run `loopx registry` and connect or sync the selected goal",
+            )
+    if isinstance(status_payload.get("projection_envelope"), dict):
+        # Freshness and coverage remain owned by the typed status envelope,
+        # including when this observation was served from an explicit cache.
+        result["status_projection_envelope"] = status_payload["projection_envelope"]
+    return result
 
 
 def _build_quota_plan_for_goal(
