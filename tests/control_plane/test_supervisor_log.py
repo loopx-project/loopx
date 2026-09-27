@@ -71,3 +71,15 @@ def test_invalid_or_retired_schema_is_not_empty_history(tmp_path, row):
     with pytest.raises(log.SupervisorEventError):
         _proposal(path)
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+def test_unicode_separators_inside_json_are_not_record_boundaries(tmp_path, separator):
+    path = tmp_path / "supervisor-events.jsonl"
+    event = log.make_supervisor_event(event_id="proposal-fixture", goal_id=GOAL,
+        event_type=log.SUPERVISOR_PROPOSED, refs={}, payload={"message": "before" + separator + "after"})
+    event["append_sequence"] = 1
+    path.write_text(json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+    assert log.SupervisorEventStore(path).load() == [event]
+    assert path.read_bytes() == before
