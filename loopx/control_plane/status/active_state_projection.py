@@ -22,17 +22,12 @@ from ..work_items.issue_meta_surface import (
 )
 
 
-STATE_EVENT_LOG_BASENAME = "events.jsonl"
 SECTION_HEADING_PATTERN = re.compile(r"^##+\s+(.+?)\s*$")
 BACKLOG_HYGIENE_SECTION_HEADINGS = ("Next Action", "Operating Lessons")
 BACKLOG_HYGIENE_BULLET_PATTERN = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$")
 BACKLOG_HYGIENE_HINT_PATTERN = re.compile(
     r"(?i)(?:\[p[0-4]\]|todo|backlog|follow[- ]?up|queue|audit|regression|smoke|cadence|mirror|monitor|sub-?agent|待办|回归|审计|修复|检查|推进)"
 )
-
-
-
-
 
 
 def active_state_sections(state_text: str, headings: tuple[str, ...]) -> dict[str, list[str]]:

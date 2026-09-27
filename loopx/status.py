@@ -24,9 +24,6 @@ from .control_plane.status.collection import (
     StatusCollectionContext,
     collect_status as _collect_status_read_model,
 )
-from .control_plane.status.active_state_projection import (
-    STATE_EVENT_LOG_BASENAME as STATE_EVENT_LOG_BASENAME,
-)
 from .control_plane.status.contract_projection import (
     STATUS_CONTRACT_RELOAD_HINT as STATUS_CONTRACT_RELOAD_HINT,
 )
@@ -261,7 +258,6 @@ _PUBLIC_COMPAT_REEXPORTS = {
     "MONITOR_DISPLAY_STOP_CONDITION": "loopx.control_plane.status.monitor_display_projection",
     "MONITOR_DISPLAY_FALLBACK_ACTION": "loopx.control_plane.status.monitor_display_projection",
     "STATUS_CONTRACT_RELOAD_HINT": "loopx.control_plane.status.contract_projection",
-    "STATE_EVENT_LOG_BASENAME": "loopx.control_plane.status.active_state_projection",
     "PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION": "loopx.control_plane.status.goal_attention_projection",
     # Refs #4447: the connected-adapter sets were defined here and in both status
     # projections that pass them to the same injected read-model parameters. The
