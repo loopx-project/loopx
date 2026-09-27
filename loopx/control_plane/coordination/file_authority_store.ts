@@ -28,13 +28,15 @@ import {AuthorityJournalScan} from "./authority_journal_scan.ts";
 
 const STORE_IDENTITY_PATTERN = /^file:[0-9a-f]{32}$/;
 // File retains a checkpoint/delta journal in one durable envelope. A managed Effect server
-// opens a new store handle for each request. Keep one verified read view across
-// handles, keyed by exact bytes and store identity. Large journals retain only
+// opens a new store handle for each request. Retain a bounded working set across
+// handles so alternating Goals do not evict each other on every observation.
+// Every lookup still reads and hashes the full file and checks store identity. Large journals retain only
 // the head and receipt index in memory; commits and scans still load and verify
 // the complete history. This is a bounded read optimization, not a new source
 // of authority or a substitute for the SQLite long-goal profile.
 const MAX_CACHED_DOCUMENT_BYTES = 128 * 1024 * 1024;
 const MAX_CACHED_READ_VIEW_BYTES = 16 * 1024 * 1024;
+const MAX_CACHED_STORES = 4;
 interface VerifiedDocument {
   path: string;
   identity: string;
@@ -49,7 +51,7 @@ interface VerifiedDocument {
   }>;
   document?: FileAuthorityJournal;
 }
-let verifiedDocument: VerifiedDocument | null = null;
+const verifiedDocuments = new Map<string, {view: VerifiedDocument; bytes: number}>();
 // Only identical immutable input bytes share in-flight verification. Failed
 // proofs are removed too; neither a path nor a pending promise grants authority.
 const pendingVerification = new Map<string, Promise<FileAuthorityJournal>>();
@@ -76,10 +78,22 @@ function rememberVerifiedDocument(path: string, identity: string, raw: Uint8Arra
   const view: VerifiedDocument = {path, identity, digest, head: document.head,
     providerRevision: document.provider_revision, cursor: document.cursor,
     receipts, document};
-  verifiedDocument = raw.byteLength <= maxDocumentBytes ? view
-    : viewBytes <= MAX_CACHED_READ_VIEW_BYTES
-      ? {...view, document: undefined}
-      : null;
+  // Account for serialized history and the separate head/receipt index. This
+  // is a retained-byte bound, not a claim about the JS heap or process RSS.
+  const fullBytes = raw.byteLength + viewBytes;
+  const retainHistory = raw.byteLength <= maxDocumentBytes && fullBytes <= MAX_CACHED_DOCUMENT_BYTES;
+  const retained = retainHistory ? view : {...view, document: undefined};
+  const bytes = retainHistory ? fullBytes : viewBytes;
+  verifiedDocuments.delete(path);
+  if (retainHistory || viewBytes <= MAX_CACHED_READ_VIEW_BYTES) {
+    verifiedDocuments.set(path, {view: retained, bytes});
+    let total = [...verifiedDocuments.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+    while (verifiedDocuments.size > MAX_CACHED_STORES || total > MAX_CACHED_DOCUMENT_BYTES) {
+      const oldest = verifiedDocuments.keys().next().value!;
+      total -= verifiedDocuments.get(oldest)!.bytes;
+      verifiedDocuments.delete(oldest);
+    }
+  }
   return view;
 }
 
@@ -274,10 +288,12 @@ export class FileAuthorityStore implements AuthorityStore {
     const identity = knownIdentity ?? await this.readStoreIdentity();
     try {
       const digest = documentDigest(raw);
-      if (verifiedDocument?.path === this.path &&
-          verifiedDocument.identity === identity && verifiedDocument.digest === digest &&
-          (!requireHistory || verifiedDocument.document !== undefined)) {
-        return verifiedDocument;
+      const cached = verifiedDocuments.get(this.path);
+      if (cached?.view.identity === identity && cached.view.digest === digest &&
+          (!requireHistory || cached.view.document !== undefined)) {
+        verifiedDocuments.delete(this.path);
+        verifiedDocuments.set(this.path, cached);
+        return cached.view;
       }
       const key = JSON.stringify([this.path, identity, digest]);
       let proof = pendingVerification.get(key);
@@ -420,7 +436,7 @@ export class FileAuthorityStore implements AuthorityStore {
           // A failure after rename may already have published the new bytes.
           // The next read must prove the actual file rather than reuse either
           // the previous or attempted document.
-          verifiedDocument = null;
+          verifiedDocuments.delete(this.path);
           return {
             status: "ambiguous",
             reason_code: "commit_outcome_unknown",

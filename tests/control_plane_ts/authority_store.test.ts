@@ -284,3 +284,63 @@ test("concurrent cold reads share only the same exact-byte proof and recover aft
   assert.equal((await readers[0]!.loadAuthority()).status, "loaded");
   assert.equal(CountingStore.validations, 4);
 });
+
+test("alternating File stores reuse their own exact-byte proofs across handles", async t => {
+  const fixtures = await Promise.all([fixture(t), fixture(t)]);
+  for (const {store} of fixtures) {
+    assert.equal((await store.commitAuthority(commit(null, "alternating", 1, 1))).status, "applied");
+    await writeFile(store.path, (await readFile(store.path, "utf8")) + "\n");
+  }
+  class CountingStore extends FileAuthorityStore {
+    static validations = 0;
+    protected override decodeStoredDocument(value: unknown, identity: string) {
+      CountingStore.validations++;
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  for (let round = 0; round < 3; round++) {
+    for (const {root} of fixtures) {
+      const result = await new CountingStore(root, "goal-a").loadAuthority();
+      assert.equal(result.status, "loaded");
+      if (result.status === "loaded") {
+        assert.equal(result.head.authority_revision, 1);
+        result.head.authority_revision = "caller mutation";
+      }
+    }
+  }
+  assert.equal(CountingStore.validations, 2, "each unchanged store proves its history once");
+  const first = fixtures[0]!;
+  const document = JSON.parse(await readFile(first.store.path, "utf8"));
+  document.committed[0].provider_revision = "tampered";
+  await writeFile(first.store.path, JSON.stringify(document));
+  assert.equal((await new CountingStore(first.root, "goal-a").loadAuthority()).status, "failed");
+  assert.equal((await new CountingStore(fixtures[1]!.root, "goal-a").loadAuthority()).status, "loaded");
+  assert.equal(CountingStore.validations, 3, "a bad store cannot invalidate an unrelated valid proof");
+});
+
+test("File proof working set evicts least-recently used stores rather than growing with Goal count", async t => {
+  class CountingStore extends FileAuthorityStore {
+    static validations = 0;
+    protected override decodeStoredDocument(value: unknown, identity: string) {
+      CountingStore.validations++;
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  const roots: string[] = [];
+  for (let index = 0; index < 5; index++) {
+    const {root, store} = await fixture(t);
+    roots.push(root);
+    assert.equal((await store.commitAuthority(commit(null, "working-set", 1, 1))).status, "applied");
+    await writeFile(store.path, (await readFile(store.path, "utf8")) + "\n");
+    assert.equal((await new CountingStore(root, "goal-a").loadAuthority()).status, "loaded");
+  }
+  assert.equal(CountingStore.validations, 5);
+  for (const index of [4, 2, 3, 1]) {
+    assert.equal((await new CountingStore(roots[index]!, "goal-a").loadAuthority()).status, "loaded");
+  }
+  assert.equal(CountingStore.validations, 5, "four recent stores remain reusable");
+  assert.equal((await new CountingStore(roots[0]!, "goal-a").loadAuthority()).status, "loaded");
+  assert.equal(CountingStore.validations, 6, "the evicted store must prove history again");
+  assert.equal((await new CountingStore(roots[4]!, "goal-a").loadAuthority()).status, "loaded");
+  assert.equal(CountingStore.validations, 7, "access order, not insertion identity, determines eviction");
+});
