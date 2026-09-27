@@ -74,17 +74,24 @@ def begin(command: str) -> tuple[str, float] | None:
         if (state.get("notice") or {}).get("version") != 3:
             # App services defer disclosure to the visible frontend. Ordinary
             # script/Agent calls disclose on stderr too; JSON stdout stays clean.
-            if command in {"chat", "serve-status"} and not sys.stderr.isatty():
+            stream = sys.stderr
+            if stream is None:
+                # No disclosure channel exists, so nothing was shown: never fall
+                # back to stdout and never acknowledge an unseen notice.
+                return None
+            if command in {"chat", "serve-status"} and not stream.isatty():
                 return None
             try:
-                if os.path.samestat(os.fstat(sys.stderr.fileno()), os.stat(os.devnull)):
+                if os.path.samestat(os.fstat(stream.fileno()), os.stat(os.devnull)):
                     return None  # Discarded output cannot carry a disclosure.
             except (AttributeError, OSError, ValueError):
-                pass  # In-memory host streams can still display the notice.
+                # In-memory host streams have no descriptor but can still display
+                # the notice, so they keep disclosing instead of being skipped.
+                pass
             projection = control("status", path)
             if not projection["automatic_notice_required"]:
                 return None
-            print(projection["disclosure"], file=sys.stderr, flush=True)
+            print(projection["disclosure"], file=stream, flush=True)
             control("acknowledge", path, notice=projection["notice"])
             return None  # First invocation only discloses; no measurement/send.
         generation = state.get("generation")

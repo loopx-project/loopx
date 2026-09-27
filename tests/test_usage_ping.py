@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import select
 import socket
@@ -113,6 +114,34 @@ def test_discarded_or_broken_stderr_cannot_acknowledge(isolated, monkeypatch):
     monkeypatch.setattr(sys, 'stderr', BrokenStream())
     assert usage_ping.begin('status') is None
     assert not usage_ping.state_path().exists()
+
+
+def test_absent_stderr_cannot_acknowledge_or_reach_stdout(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(usage_ping, '_detach', lambda *_: pytest.fail('an undisclosed command must not measure'))
+    monkeypatch.setattr(sys, 'stderr', None)
+    assert usage_ping.begin('status') is None
+    captured = capsys.readouterr()
+    assert captured.out == '' and captured.err == ''
+    assert not usage_ping.state_path().exists()
+
+
+def test_absent_stderr_keeps_real_cli_json_pure_until_a_stream_discloses(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(usage_ping, '_detach', lambda *_: pytest.fail('a command without disclosure must not measure'))
+    monkeypatch.setattr(sys, 'stderr', None)
+    assert main(['version', '--format', 'json']) == 0
+    captured = capsys.readouterr()
+    assert captured.out.lstrip().startswith('{')
+    assert json.loads(captured.out)['ok'] is True
+    assert captured.err == ''
+    assert not usage_ping.state_path().exists()
+    assert usage_ping.control('status')['sending'] is False
+    # Only the missing stream is rejected: an in-memory host stream still discloses and ACKs.
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', stderr)
+    assert main(['version', '--format', 'json']) == 0
+    assert 'random installation ID' in stderr.getvalue()
+    assert json.loads(capsys.readouterr().out)['ok'] is True
+    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 3
 
 
 @pytest.mark.parametrize('setting,value', [
