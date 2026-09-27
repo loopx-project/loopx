@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ...runtime import validate_goal_id_path_segment
+from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
 )
@@ -238,13 +239,61 @@ def load_codex_cli_session(
     return {**value, "session_id": session_id}
 
 
+def _codex_session_goal_ref(
+    value: Mapping[str, Any],
+    *,
+    lineage: Mapping[str, str],
+) -> object:
+    if (
+        value.get("schema_version") != CODEX_CLI_SESSION_SCHEMA_VERSION
+        or any(value.get(field) != lineage[field] for field in lineage)
+        or _valid_session_id(value.get("session_id")) is None
+    ):
+        return {"malformed": True}
+    goal_ref = value.get("goal_ref")
+    if goal_ref is not None:
+        return goal_ref
+    return {"goal_id": value.get("goal_id")}
+
+
+def _read_codex_cli_session_document(
+    runtime_root: Path,
+    *,
+    lineage: Mapping[str, str],
+) -> dict[str, Any] | None:
+    path = _session_path(runtime_root, lineage)
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"malformed": True}
+    return value if isinstance(value, dict) else {"malformed": True}
+
+
 def codex_cli_session_binding(
     runtime_root: Path,
     turn_envelope: Mapping[str, Any],
+    *,
+    goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, str] | None:
     request = {"turn_envelope": dict(turn_envelope)}
     lineage = _lineage(request)
-    if load_codex_cli_session(runtime_root, lineage=lineage) is None:
+    if goal_admission is None:
+        session = load_codex_cli_session(runtime_root, lineage=lineage)
+    else:
+        selected = goal_admission.select_state(
+            read_state=lambda: _read_codex_cli_session_document(
+                runtime_root,
+                lineage=lineage,
+            ),
+            goal_ref_of=lambda value: _codex_session_goal_ref(
+                value,
+                lineage=lineage,
+            ),
+        )
+        session = dict(selected) if selected is not None else None
+    if session is None:
         return None
     return {
         "schema_version": "loopx_turn_session_binding_v0",
@@ -257,6 +306,7 @@ def _store_codex_cli_session(
     *,
     lineage: Mapping[str, str],
     session_id: str,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> None:
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
@@ -273,13 +323,16 @@ def _store_codex_cli_session(
         handle = os.fdopen(descriptor, "w", encoding="utf-8")
         descriptor = -1
         with handle:
+            payload = {
+                "schema_version": CODEX_CLI_SESSION_SCHEMA_VERSION,
+                **lineage,
+                "host": "codex-cli",
+                "session_id": normalized_session_id,
+            }
+            if goal_ref is not None:
+                payload["goal_ref"] = dict(goal_ref)
             json.dump(
-                {
-                    "schema_version": CODEX_CLI_SESSION_SCHEMA_VERSION,
-                    **lineage,
-                    "host": "codex-cli",
-                    "session_id": normalized_session_id,
-                },
+                payload,
                 handle,
                 ensure_ascii=False,
                 indent=2,
@@ -787,6 +840,7 @@ def run_codex_cli_host(
     reasoning_effort: str | None = None,
     mcp_server: Mapping[str, Any] | None = None,
     timeout_seconds: float = 115.0,
+    goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
@@ -803,11 +857,24 @@ def run_codex_cli_host(
     planned_action = str(planned_session.get("action") or "")
     context_policy = _mapping(planned_session.get("context_policy"))
     fresh_iteration = context_policy.get("mode") == "fresh"
-    binding = (
-        None
-        if fresh_iteration
-        else load_codex_cli_session(runtime_root, lineage=lineage)
-    )
+    if goal_admission is None:
+        binding = (
+            None
+            if fresh_iteration
+            else load_codex_cli_session(runtime_root, lineage=lineage)
+        )
+    else:
+        selected = goal_admission.select_state(
+            read_state=lambda: _read_codex_cli_session_document(
+                runtime_root,
+                lineage=lineage,
+            ),
+            goal_ref_of=lambda value: _codex_session_goal_ref(
+                value,
+                lineage=lineage,
+            ),
+        )
+        binding = None if fresh_iteration else selected
     if planned_action == "resume" and binding is None:
         raise RuntimeError("Codex CLI resume binding disappeared after planning")
     if planned_action == "start_new" and binding is not None:
@@ -815,6 +882,34 @@ def run_codex_cli_host(
     if planned_action not in {"resume", "start_new"}:
         raise ValueError("Codex CLI host request has no executable session action")
     session_id = str(binding.get("session_id")) if binding else None
+    goal_ref = request.get("goal_ref")
+    exact_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
+
+    def store_session(observed_session_id: str) -> None:
+        def commit() -> None:
+            _store_codex_cli_session(
+                runtime_root,
+                lineage=lineage,
+                session_id=observed_session_id,
+                goal_ref=exact_goal_ref,
+            )
+
+        if goal_admission is None:
+            commit()
+        else:
+            goal_admission.accept_result(commit)
+
+    def discard_session() -> None:
+        def commit() -> None:
+            _discard_codex_cli_session(
+                runtime_root,
+                lineage=lineage,
+            )
+
+        if goal_admission is None:
+            commit()
+        else:
+            goal_admission.accept_result(commit)
 
     with tempfile.TemporaryDirectory(prefix="loopx-turn-codex-") as directory:
         temporary = Path(directory)
@@ -902,11 +997,7 @@ def run_codex_cli_host(
         output_observation_incomplete = reader.is_alive() or stderr_reader.is_alive()
         if timed_out:
             if observed_session:
-                _store_codex_cli_session(
-                    runtime_root,
-                    lineage=lineage,
-                    session_id=observed_session[0],
-                )
+                store_session(observed_session[0])
             raise BuiltInHostError(
                 "codex_cli_timeout",
                 failure_kind="executor_timeout",
@@ -922,15 +1013,11 @@ def run_codex_cli_host(
             )
         )
         if returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
-            _discard_codex_cli_session(runtime_root, lineage=lineage)
+            discard_session()
         if observed_session and (
             returncode == 0 or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES
         ):
-            _store_codex_cli_session(
-                runtime_root,
-                lineage=lineage,
-                session_id=observed_session[0],
-            )
+            store_session(observed_session[0])
         if returncode != 0:
             raise BuiltInHostError(
                 f"codex_cli_{category}",

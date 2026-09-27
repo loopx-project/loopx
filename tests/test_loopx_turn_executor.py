@@ -10,6 +10,14 @@ import pytest
 from loopx.cli_commands import turn_cadence
 from loopx.cli_commands.turn_cadence import ManagedCadenceStart, managed_cadence_start
 from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
+    FirstPartyHostRuntimeRejected,
+)
+from loopx.control_plane.goals.source_session_registry_state import guard_path
+from loopx.control_plane.projects.registry_codec import (
+    source_session_registry_transaction,
+)
 from loopx.control_plane.turn_driver import executor as turn_executor
 from loopx.control_plane.turn_driver import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
@@ -35,6 +43,50 @@ from loopx.control_plane.turn_driver.executor import (
 from loopx.control_plane.turn_driver.host_binding import managed_executor_binding
 from loopx.control_plane.turn_driver.settlement import execute_turn_driver_settlement
 from loopx.control_plane.turn_driver.transaction import TRANSACTION_PHASES
+from loopx.file_lock import exclusive_cross_runtime_file_lock
+
+
+INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+
+def _write_source_registry(path: Path, instance_id: str) -> None:
+    payload = {
+        "schema_version": "0.2",
+        "registry_role": "project-local",
+        "profile_id": "source_session_v1",
+        "common_runtime_root": str(path.parent),
+        "projects": [],
+        "goals": [
+            {
+                "id": "fixture-goal",
+                "goal_instance_id": instance_id,
+                "status": "active",
+                "execution_authority": False,
+            }
+        ],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+        "retired_goal_instances": [],
+    }
+    create = None if path.exists() else lambda: payload
+    with source_session_registry_transaction(
+        path,
+        operation="turn_host_goal_instance_test",
+        create=create,
+    ) as transaction:
+        current = transaction.payload_copy()
+        current["goals"] = payload["goals"]
+        transaction.commit(current)
+
+
+def _replace_source_goal(path: Path, instance_id: str) -> None:
+    with exclusive_cross_runtime_file_lock(
+        guard_path(path, "fixture-goal"),
+        operation="turn_host_goal_instance_test_recreate",
+    ):
+        _write_source_registry(path, instance_id)
 
 
 def _plan() -> dict[str, object]:
@@ -71,6 +123,21 @@ def _plan() -> dict[str, object]:
         },
         host="generic-cli",
         execution_mode="isolated-headless",
+    )
+
+
+def _source_plan() -> dict[str, object]:
+    plan = _plan()
+    envelope = plan["turn_envelope"]
+    assert isinstance(envelope, dict)
+    return build_loopx_turn_plan(
+        envelope,
+        host="generic-cli",
+        execution_mode="isolated-headless",
+        goal_ref={
+            "goal_id": "fixture-goal",
+            "goal_instance_id": INSTANCE_A,
+        },
     )
 
 
@@ -461,6 +528,159 @@ def _passing_validator(
         "validator_kind": "fixture",
         "summary": "independent fixture postconditions passed",
     }
+
+
+def test_late_host_result_cannot_enter_a_recreated_goal(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    plan = _source_plan()
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="fixture-goal",
+        planned_goal_ref=plan["goal_ref"],
+    )
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    runtime_root = tmp_path / "runtime"
+
+    def stale_host_result(_request: Mapping[str, object]) -> dict[str, object]:
+        _replace_source_goal(registry, INSTANCE_B)
+        return _host_result(plan)
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_loopx_turn_once(
+            plan,
+            host_runner=stale_host_result,
+            project=tmp_path,
+            runtime_root=runtime_root,
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            goal_admission=admission,
+        )
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
+    journal = _journal(runtime_root)
+    assert "host_result" not in journal
+    assert journal["completed_phases"] == []
+
+
+def test_stale_source_plan_is_rejected_before_host_start(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    plan = _source_plan()
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="fixture-goal",
+        planned_goal_ref=plan["goal_ref"],
+    )
+    _replace_source_goal(registry, INSTANCE_B)
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+    runtime_root = tmp_path / "runtime"
+
+    def forbidden_host(_request: Mapping[str, object]) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_loopx_turn_once(
+            plan,
+            host_runner=forbidden_host,
+            project=tmp_path,
+            runtime_root=runtime_root,
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            goal_admission=admission,
+        )
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    transaction = plan["transaction"]
+    assert isinstance(transaction, dict)
+    assert (
+        turn_journal_path(
+            runtime_root,
+            goal_id="fixture-goal",
+            turn_key=str(transaction["turn_key"]),
+        ).exists()
+        is False
+    )
+
+
+def test_cached_host_result_cannot_resume_after_goal_recreation(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    _write_source_registry(registry, INSTANCE_A)
+    plan = _source_plan()
+    transaction = plan["transaction"]
+    assert isinstance(transaction, dict)
+    runtime_root = tmp_path / "runtime"
+    path = turn_journal_path(
+        runtime_root,
+        goal_id="fixture-goal",
+        turn_key=str(transaction["turn_key"]),
+    )
+    journal = {
+        "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
+        "turn_key": transaction["turn_key"],
+        "goal_id": "fixture-goal",
+        "status": "in_progress",
+        "host": {"kind": "generic-cli"},
+        "completed_phases": [],
+        "plan": plan,
+    }
+    turn_executor._write_journal(path, journal)
+    journal.update(
+        completed_phases=list(TRANSACTION_PHASES[:2]),
+        host_result=_host_result(plan),
+        result_kind="validated_progress",
+    )
+    turn_executor._write_journal(path, journal)
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="fixture-goal",
+        planned_goal_ref=plan["goal_ref"],
+    )
+    _replace_source_goal(registry, INSTANCE_B)
+    calls = {"writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_loopx_turn_once(
+            plan,
+            host_runner=lambda _request: pytest.fail(
+                "cached host result must not relaunch the Host"
+            ),
+            project=tmp_path,
+            runtime_root=runtime_root,
+            goal_id="fixture-goal",
+            timeout_seconds=5,
+            execute=True,
+            task_validator=_passing_validator,
+            writeback=writeback,
+            spend=spend,
+            scheduler=scheduler,
+            goal_admission=admission,
+        )
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert calls == {"writeback": 0, "spend": 0, "scheduler": 0}
 
 
 def test_host_result_requires_bounded_public_material_fields() -> None:

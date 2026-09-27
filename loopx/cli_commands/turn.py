@@ -15,6 +15,10 @@ from ..capabilities.reward_memory import run_configured_turn_outcome_ingest_fail
 from ..capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
+from ..control_plane.goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
+    capture_first_party_host_goal_ref,
+)
 from ..control_plane.quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
 from ..control_plane.quota.settlement import (
     SettlementIdentity,
@@ -116,6 +120,18 @@ def handle_turn_command(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
+        goal_ref = capture_first_party_host_goal_ref(
+            registry_path=registry_path,
+            goal_id=args.goal_id,
+        )
+        goal_admission = FirstPartyHostGoalAdmission.for_plan(
+            registry_path=registry_path,
+            goal_id=args.goal_id,
+            planned_goal_ref=goal_ref,
+        )
+        strict_goal_admission = (
+            goal_admission if goal_admission.enabled else None
+        )
         # Planning and dry-run execution inspect existing admitted intents.
         # Only an executing wake may sync inboxes or reserve a calendar window.
         turn_start_hook_dispatch = {}
@@ -167,7 +183,15 @@ def handle_turn_command(
             and not args.resume_turn_key
             and turn_envelope.get("effective_action") != EffectiveAction.GOVERNED_CAPABILITY_INTENT.value
         ):
-            session_binding = codex_cli_session_binding(runtime_root, turn_envelope)
+            session_binding = (
+                codex_cli_session_binding(
+                    runtime_root,
+                    turn_envelope,
+                    goal_admission=strict_goal_admission,
+                )
+                if strict_goal_admission is not None
+                else codex_cli_session_binding(runtime_root, turn_envelope)
+            )
         payload = build_loopx_turn_plan(
             turn_envelope,
             host=args.host,
@@ -176,6 +200,7 @@ def handle_turn_command(
             session_binding=session_binding,
             turn_instance_id=args.turn_instance_id,
             iteration_context_policy=args.iteration_context.replace("-", "_"),
+            goal_ref=goal_ref,
         )
         # The executor readback names where this Turn's model work runs and
         # whether that host can launch here, so a caller never has to infer it
@@ -296,6 +321,16 @@ def handle_turn_command(
                     raise ValueError(
                         "LoopX Turn resume journal belongs to another agent"
                     )
+                goal_admission = FirstPartyHostGoalAdmission.for_plan(
+                    registry_path=registry_path,
+                    goal_id=args.goal_id,
+                    planned_goal_ref=payload.get("goal_ref"),
+                )
+                strict_goal_admission = (
+                    goal_admission if goal_admission.enabled else None
+                )
+                if strict_goal_admission is not None:
+                    strict_goal_admission.require_current()
             if payload.get("route", {}).get("kind") == "capability_action_required":
                 # The normal host transaction forbids Core mutations. A
                 # capability may prepare artifacts and require authored input;
@@ -986,24 +1021,37 @@ def handle_turn_command(
                 def run_built_in_host(
                     request: Mapping[str, Any],
                 ) -> dict[str, Any]:
-                    return run_codex_cli_host(
-                        request,
-                        runtime_root=runtime_root,
-                        project=project,
-                        codex_bin=args.codex_bin,
-                        sandbox=args.codex_sandbox,
-                        model=args.codex_model,
-                        reasoning_effort=args.codex_reasoning_effort,
-                        mcp_server=args.codex_mcp_server_json,
-                        timeout_seconds=max(1.0, args.timeout_seconds - 5.0),
-                    )
+                    options = {
+                        "runtime_root": runtime_root,
+                        "project": project,
+                        "codex_bin": args.codex_bin,
+                        "sandbox": args.codex_sandbox,
+                        "model": args.codex_model,
+                        "reasoning_effort": args.codex_reasoning_effort,
+                        "mcp_server": args.codex_mcp_server_json,
+                        "timeout_seconds": max(1.0, args.timeout_seconds - 5.0),
+                    }
+                    if strict_goal_admission is not None:
+                        options["goal_admission"] = strict_goal_admission
+                    return run_codex_cli_host(request, **options)
 
                 host_runner = run_built_in_host
 
                 def resolve_built_in_session_binding(
                     turn_envelope: Mapping[str, Any],
                 ) -> dict[str, str] | None:
-                    return codex_cli_session_binding(runtime_root, turn_envelope)
+                    return (
+                        codex_cli_session_binding(
+                            runtime_root,
+                            turn_envelope,
+                            goal_admission=strict_goal_admission,
+                        )
+                        if strict_goal_admission is not None
+                        else codex_cli_session_binding(
+                            runtime_root,
+                            turn_envelope,
+                        )
+                    )
 
                 session_binding_resolver = resolve_built_in_session_binding
             elif args.host == "dsh":
@@ -1079,6 +1127,7 @@ def handle_turn_command(
                 ),
                 admit_start=managed_cadence.admit if args.execute else None,
                 confirm_start=managed_cadence.confirm if args.execute else None,
+                goal_admission=strict_goal_admission,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")

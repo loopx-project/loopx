@@ -135,6 +135,31 @@ def test_dsh_session_id_uses_a_versioned_lineage_digest() -> None:
     assert first_id == turn_host_adapter._derive_session_id(first, TURN_KEY)
 
 
+def test_dsh_source_session_id_is_scoped_to_the_exact_goal_instance() -> None:
+    instance_a = _lineage_request(
+        goal_id="goal",
+        agent_id="agent",
+        todo_id="todo",
+    )
+    instance_a["goal_ref"] = {
+        "goal_id": "goal",
+        "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
+    instance_b = {
+        **instance_a,
+        "goal_ref": {
+            "goal_id": "goal",
+            "goal_instance_id": "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+    }
+
+    first_id = turn_host_adapter._derive_session_id(instance_a, TURN_KEY)
+    second_id = turn_host_adapter._derive_session_id(instance_b, TURN_KEY)
+
+    assert first_id.startswith("dsh-lineage-v2-")
+    assert first_id != second_id
+
+
 def test_dsh_session_id_preserves_missing_lineage_component_positions() -> None:
     missing_agent = _lineage_request(goal_id="goal", todo_id="todo")
     missing_todo = _lineage_request(goal_id="goal", agent_id="todo")

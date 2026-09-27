@@ -10,6 +10,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/bootstrap.py",
     "loopx/claude_goal_mode/scripts/connect.py",
     "loopx/configure_goal.py",
+    "loopx/control_plane/goals/first_party_host_admission.py",
     "loopx/control_plane/projects/registry.py",
     "loopx/kunluncode_goal_mode/cli.py",
     "loopx/state_migration.py",
@@ -31,7 +32,11 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
             callers.add(path.relative_to(REPO_ROOT).as_posix())
 
     assert callers == DIRECT_LOADER_ALLOWLIST
-    for relative in callers - {"loopx/control_plane/projects/registry.py"}:
+    source_session_owners = {
+        "loopx/control_plane/goals/first_party_host_admission.py",
+        "loopx/control_plane/projects/registry.py",
+    }
+    for relative in callers - source_session_owners:
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert "require_runtime_compatible_project_registry(" in source, relative
 

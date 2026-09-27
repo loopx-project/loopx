@@ -949,6 +949,44 @@ def test_turn_plan_transaction_key_is_stable_and_todo_scoped() -> None:
     )
 
 
+def test_source_goal_ref_scopes_turn_identity_without_changing_legacy_plan() -> None:
+    legacy = build_loopx_turn_plan(
+        _envelope(),
+        host="generic-cli",
+        execution_mode="isolated-headless",
+    )
+    instance_a = build_loopx_turn_plan(
+        _envelope(),
+        host="generic-cli",
+        execution_mode="isolated-headless",
+        goal_ref={
+            "goal_id": "fixture-goal",
+            "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+    )
+    instance_b = build_loopx_turn_plan(
+        _envelope(),
+        host="generic-cli",
+        execution_mode="isolated-headless",
+        goal_ref={
+            "goal_id": "fixture-goal",
+            "goal_instance_id": "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+    )
+
+    assert "goal_ref" not in legacy
+    assert "goal_ref" not in legacy["transaction"]
+    assert instance_a["goal_ref"] == instance_a["transaction"]["goal_ref"]
+    assert (
+        instance_a["transaction"]["turn_key"]
+        != instance_b["transaction"]["turn_key"]
+    )
+    assert (
+        instance_a["transaction"]["turn_key"]
+        != legacy["transaction"]["turn_key"]
+    )
+
+
 def test_turn_plan_instance_id_distinguishes_new_turns_from_retries() -> None:
     first = build_loopx_turn_plan(
         _envelope(),

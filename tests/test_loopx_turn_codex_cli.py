@@ -8,6 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
+)
+from loopx.control_plane.projects.registry_codec import (
+    source_session_registry_transaction,
+)
 from loopx.control_plane.turn_driver.codex_cli import (
     CODEX_CLI_SESSION_SCHEMA_VERSION,
     CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION,
@@ -30,6 +36,44 @@ from loopx.control_plane.turn_driver.subagent_execution_topology import (
 FAILURE_ENVELOPE_FIXTURES = (
     Path(__file__).parent / "fixtures" / "codex_failure_envelopes.json"
 )
+SOURCE_GOAL_REF = {
+    "goal_id": "fixture-goal",
+    "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+}
+
+
+def _source_admission(tmp_path: Path) -> FirstPartyHostGoalAdmission:
+    registry = tmp_path / "source" / ".loopx" / "registry.json"
+    payload = {
+        "schema_version": "0.2",
+        "registry_role": "project-local",
+        "profile_id": "source_session_v1",
+        "common_runtime_root": str(tmp_path / "runtime"),
+        "projects": [],
+        "goals": [
+            {
+                "id": "fixture-goal",
+                "goal_instance_id": SOURCE_GOAL_REF["goal_instance_id"],
+                "status": "active",
+                "execution_authority": False,
+            }
+        ],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+        "retired_goal_instances": [],
+    }
+    with source_session_registry_transaction(
+        registry,
+        operation="codex_host_goal_instance_test",
+        create=lambda: payload,
+    ) as transaction:
+        transaction.commit(payload)
+    return FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry,
+        goal_id="fixture-goal",
+        planned_goal_ref=SOURCE_GOAL_REF,
+    )
 
 
 def _request(
@@ -446,6 +490,84 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
     persisted = session_paths[0].read_text(encoding="utf-8")
     assert "raw_trajectory" not in persisted
     assert "private_material" not in persisted
+
+
+def test_codex_source_session_descriptor_persists_exact_goal_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    admission = _source_admission(tmp_path)
+    request = _request()
+    request["goal_ref"] = SOURCE_GOAL_REF
+
+    run_codex_cli_host(
+        request,
+        runtime_root=runtime_root,
+        project=project,
+        codex_bin=str(executable),
+        timeout_seconds=5,
+        goal_admission=admission,
+    )
+
+    envelope = request["turn_envelope"]
+    assert isinstance(envelope, dict)
+    binding = codex_cli_session_binding(
+        runtime_root,
+        envelope,
+        goal_admission=admission,
+    )
+    assert binding is not None
+    stored = load_codex_cli_session(
+        runtime_root,
+        lineage={
+            "goal_id": "fixture-goal",
+            "agent_id": "codex-fixture",
+            "todo_id": "todo_fixture0001",
+        },
+    )
+    assert stored is not None
+    assert stored["goal_ref"] == SOURCE_GOAL_REF
+
+
+def test_codex_source_session_rejects_alias_only_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    request = _request()
+    run_codex_cli_host(
+        request,
+        runtime_root=runtime_root,
+        project=project,
+        codex_bin=str(executable),
+        timeout_seconds=5,
+    )
+    descriptor_path = next(
+        (runtime_root / "goals" / "fixture-goal" / "turn-sessions").glob("*.json")
+    )
+    descriptor_before = descriptor_path.read_bytes()
+    admission = _source_admission(tmp_path)
+
+    with pytest.raises(
+        RuntimeError,
+        match="first-party Host runtime rejected: legacy_host_state",
+    ):
+        codex_cli_session_binding(
+            runtime_root,
+            request["turn_envelope"],
+            goal_admission=admission,
+        )
+
+    assert descriptor_path.read_bytes() == descriptor_before
 
 
 def test_codex_cli_host_materializes_bound_mcp_tools_for_fresh_and_resume(
