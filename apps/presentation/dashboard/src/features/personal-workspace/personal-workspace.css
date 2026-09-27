@@ -554,7 +554,7 @@
 .personal-cadence-scopes input { accent-color: var(--pw-blue); }
 .personal-cadence-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .personal-cadence-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; font-size: 12px; font-weight: 700; }
-.personal-cadence-fields input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: #fff; color: var(--pw-text); font: inherit; font-size: 13px; }
+.personal-cadence-fields input, .personal-cadence-fields select { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: #fff; color: var(--pw-text); font: inherit; font-size: 13px; }
 .personal-cadence-fields small { color: var(--pw-muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
 .personal-cadence-readback { display: grid; gap: 5px; padding: 18px; border: 1px solid var(--pw-line); border-radius: 8px; }
 .personal-cadence-readback small { color: var(--pw-muted); font-size: 11px; }

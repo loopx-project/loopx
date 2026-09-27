@@ -166,3 +166,30 @@ lost acknowledgement after commit. These are synthetic fault injections, not a
 claim of arbitrary process-death or elapsed-soak coverage. Real local rehearsals
 must use read-only captured sources and disposable copies; never promote an
 active Goal merely to validate this refactor.
+
+## Drain before promotion
+
+`authority-shadow drain` and post-write inline drains use one bounded TS batch.
+It verifies the complete retained lineage and exact source byte witnesses before
+advancing a cursor or reclaiming outbox files. A cursor is a checkpoint, not
+permission to delete; Todo metadata and original transaction receipts remain
+part of the existing complete record contract.
+
+```bash
+loopx --format json authority-shadow drain --goal-id example-goal \
+  --max-entries 64 --budget-seconds 30
+```
+
+`budget_exhausted=true` with pending entries means another bounded invocation is
+needed. The budget controls admission of further effects; it does not cancel an
+in-flight durable commit or replace the transport timeout. A live primary writer returns `primary_writer_busy` without waiting for
+it. `shadow_drain_outcome_unknown` means the transport lost a trustworthy batch
+result: inspect status and invoke drain again explicitly. The next invocation
+uses persisted receipts; it must not recreate the business write, delete the
+outbox, or assume that no candidate commit happened. Other proof failures require
+repairing their reported cause before continuing.
+
+The runtime shadow is still a File candidate. Draining it does not select a
+canonical provider, promote a Goal, bypass qualification, or create a SQLite
+shadow. File/SQLite promotion uses the reviewed journey above. Feature-off
+writers with no prior capture state do not start the drain runtime.

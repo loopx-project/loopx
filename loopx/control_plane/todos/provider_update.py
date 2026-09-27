@@ -72,14 +72,18 @@ def _completion_validation_revision_request(
         if (
             isinstance(receipt, dict)
             and receipt.get("operation_id") == operation_id
-            and isinstance(receipt.get("previous_declaration_sha256"), str)
+            and "previous_declaration_sha256" in receipt
         ):
             expected_digest = receipt["previous_declaration_sha256"]
             break
-    if not isinstance(expected_digest, str) or len(expected_digest) != 64:
-        raise ValueError("Todo has no current completion validation digest to revise")
+    # Serialize canonical absence; the typed transaction alone decides whether
+    # this is a legal first binding or an inconsistent/missing declaration.
     return {
-        "schema_version": "loopx_todo_completion_validation_revision_v0",
+        "schema_version": (
+            "loopx_todo_completion_validation_revision_v1"
+            if expected_digest is None
+            else "loopx_todo_completion_validation_revision_v0"
+        ),
         "expected_declaration_sha256": expected_digest,
         "declaration": declaration,
     }

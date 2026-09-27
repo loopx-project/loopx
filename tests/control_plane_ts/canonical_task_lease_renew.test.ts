@@ -383,7 +383,7 @@ for (const provider of ["file", "sqlite"] as const) {
         child.on("error", reject);
         child.on("close", code => {clearTimeout(timeout); if (code !== 0) reject(new Error(error)); else resolve(JSON.parse(output));});
       })));
-      assert.deepEqual(results.map(r => r.status).sort(), differentIntent ? ["applied", "failed"] : ["applied", "recovered"]);
+      assert.deepEqual(results.map(r => r.status).sort(), differentIntent ? ["applied", "failed"] : ["applied", "applied"]);
       if (differentIntent) assert.equal(results.find(r => r.status === "failed")!.reason_code, "coordination_operation_identity_mismatch");
       const head = await store.loadAuthority(); if (head.status !== "loaded") throw new Error("missing head");
       assert.equal(head.cursor, "2"); assert.equal((head.head.leases as Record<string, unknown>[])[0]!.version, 2);

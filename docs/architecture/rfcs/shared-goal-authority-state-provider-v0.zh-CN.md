@@ -21,19 +21,17 @@
 - 语言说明：[英文版](./shared-goal-authority-state-provider-v0.md)与本中文版互为
   语义镜像；两者不一致属于缺陷
 
-## 当前交付边界（2026-09-27）
+## 当前交付边界（2026-09-28）
 
-按 `157ab7b11` 与当前 PR 核对，来源捕获、分页、File 格式升级及 Python 原型
-退役已交付。本次修复审核输入恢复并增加独立历史审计；从本次开始规划四个交付
-PR：本次恢复切片、外部执行区间保护、整 Goal 激活/回退集成、默认入口及最后
-一批有界 Python 退役。本次之后剩后三个规划范围；#5054/#4931 已有 PR，D2/D3
-缺失证据另列，不能保证最终缺陷修复数量。
-[当前清单、依据及退出条件](ledger/shared-goal-authority-state-provider-v0/2026-09-27-recovery-audit.zh-CN.md)。
+按 `ce3862e33` 核对，#5054、#5140、#5144、#5156、#5173、#5175、#5169
+均已合并。事件退役、archive 恢复、managed 进程监督、reviewed 本地切换和 native
+drain 不再计作新待办 PR。#4931 仍是开放的 SQLite 优化，不是已完成 D2 验收。
 
-同一窗口另有已交付的进程监督切片：通用命令与 Codex CLI 的进程生命周期改由
-一个 TS supervisor 承担，因此执行中租约约束仍开放，不由本次关闭；旧“三个
-架构包”仍是指针，不是递减 PR 计数器。该切片的逐项计划、估算变化与边界单列。
-[核对的逐项计划、估算变化与边界](ledger/shared-goal-authority-state-provider-v0/2026-09-27-host-supervision.zh-CN.md)。
+接下来并行验证整 Goal 执行／消费者集成和本地 profile，再统一新 Goal／安装／设置
+及受支持升级入口，切走最后调用方时同步删除对应旧 writer。保留必要 Host IO、
+原回执与迁移 reader。本轮未认证额外某个 Python 模块已死，也不承诺固定剩余 PR 数。
+[删除清单、工程窗口、本机证据及剩余工作](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md)
+替代旧记录的当前数量估算，旧执行证据仍按历史保留。
 
 ## Todo 事件路径退役（2026-09-25）
 
@@ -944,12 +942,17 @@ provider 已通过；经评审切换前，已交付规则仍是 `retain_all_v0`�
 一个模型 Turn 可能产生多次 commit。验证历史增长时固定 live state，之后单独增加
 live state。不能把所有已完成 Todo 或 receipt 的无界列表藏在所谓固定的 live projection。
 
-当前 `FileAuthorityStore` 每笔保留 P 字节 projection，N 笔约产生 P*N 最终历史字节，
-累计文档发布量约 P*N*(N+1)/2，尚未计 head、event、receipt 和 envelope。普通读取还会
-解码、验证完整链。P=15 KiB 时，仅 renew 的例子在第 10 天累计发布约 **534 GiB**，
-第 30 天约 **4.69 TiB**。旧文中的 380 MiB 只算了第 30 天的 N*P，并非保留历次
-projection 后的累计重写。这是 payload 解析估算，不是 SSD 物理写入或实测延迟；
-若每个 projection 自身还包含不断增长的 receipt index，成本可能更高。
+原先全量 projection 的 File journal 约保留 P*N 字节，并在 N 笔提交中累计发布
+P*N*(N+1)/2 字节。这个历史模型不能用于当前 checkpoint/delta 格式：#5102
+已从普通读写路径退役旧布局。
+
+当前 File 每 64 笔保存 checkpoint，其余保存 delta、event 和原始 receipt，仍放在一个
+完整 envelope 中。保留量近似为 `H(N) = ceil(N/64)*P + sum(delta/event/receipt/metadata 字节)`，
+另加 live head 和 envelope 开销；每次提交仍完整替换该 envelope，因此累计应用发布量为
+`sum(H(n))`。热读会读取／散列 envelope 并可能复用已验证视图，冷读需要重建和验证历史。
+SQLite 则更新事务化索引行并验证有界 checkpoint 窗口。这些机制是对照实验的依据，
+不是短期默认选择的结论。必须在当前代码、相同状态／历史／持久性及冷热负载下实测，
+并区分应用发布字节与物理磁盘写入。
 
 #### 本地优先方向与兼容边界
 
@@ -2475,8 +2478,13 @@ provider 确认；权威空集合不回退到陈旧 Markdown。Legacy 与预览�
 
 长程默认应选定**一个**合格本地 profile。SQLite 是当前 D2 候选；File 保留为真实
 对照、显式可选 profile 和迁移演练后端。不能发布两个含混的默认项，不能把现有 File
-历史布局直接称为长程合格，也不能从选定 SQLite 静默回退。最终选择必须引用 D2
-证据。PostgreSQL 复用 TS 语义合同，但 service、tenant、restore 和 capacity 单独
+历史布局直接称为长程合格，也不能从选定 SQLite 静默回退。发布启用必须引用 D2
+证据。9 月 27 日同负载短历史实验也选择 SQLite 作为**短期默认实现目标**：写入、
+重启成本优于现有 checkpoint/delta File；热读取取舍取决于数据形状。#4931 现让
+SQLite 证明与 provider-neutral 归档恢复共用持有私有状态的 TS 重放组件，保留完整
+摘要字节，隔离返回记录与内部状态。同机 Linux 对照中，多字段 receipt/scan p95
+降低 88%/68%，但大状态预算与持续内存资格仍未闭合，不能立即启用默认。
+[实测、复现命令及 D2/D3/L9 依赖](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment)。PostgreSQL 复用 TS 语义合同，但 service、tenant、restore 和 capacity 单独
 资格化；其部署不阻塞本地路线。
 
 核对基线：#4286（命令回执／归档）、#4289（typed 工作／归属 intent）、#4292

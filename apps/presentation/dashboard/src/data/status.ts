@@ -92,7 +92,7 @@ export const todoItemSchema = z.object({
   completion_validation_revision: z.number().int().nonnegative().optional().nullable(),
   completion_validation_revision_history: z.array(z.object({
     revision: z.number().int().positive(),
-    previous_declaration_sha256: z.string(),
+    previous_declaration_sha256: z.string().nullable(),
     declaration_sha256: z.string(),
     actor_agent_id: z.string(),
     revised_at: z.string(),

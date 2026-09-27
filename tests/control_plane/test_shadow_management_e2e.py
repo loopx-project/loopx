@@ -102,23 +102,45 @@ def test_public_rollback_preserves_other_goal_and_replays_after_primary_changes(
     assert (runtime / "authority-shadow" / "file-v0" / "store-identity").read_bytes() == identity
 
 
+_DRAIN_PHASE = {"before": "before_commit", "after": "after_commit"}
+
+# The public write keeps its own inline drain, but the pause now happens inside
+# the real native batch: the private fault driver runs the same
+# ``drainShadowOutbox`` the production RPC handler runs and stops at the actual
+# commit boundary. Releasing it lets that same batch continue, so a commit or a
+# cursor update attempted after the generation changed is still real.
 _DELAYED_WRITER = """
-import json, pathlib, sys, time
+import json, pathlib, subprocess, sys, time
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
 from loopx.cli import main
-barrier, release, timing = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+barrier, release, phase = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 actual = adapter.effect_runtime_result
 def delayed(method, request, **kwargs):
-    if method != 'coordination.runtime_shadow.commit_entry':
+    if method != 'coordination.runtime_shadow.drain':
         return actual(method, request, **kwargs)
-    result = actual(method, request, **kwargs) if timing == 'after' else None
-    barrier.write_text(json.dumps({'request':request, 'result':result}))
+    child = subprocess.Popen(
+        ['node', '--no-warnings', '--experimental-strip-types',
+         'loopx/control_plane/testing/shadow_drain_fault_process.ts', phase, str(release)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    child.stdin.write(json.dumps(request))
+    child.stdin.close()
+    for line in child.stdout:
+        if line.startswith('BARRIER '):
+            barrier.write_text(line.removeprefix('BARRIER '))
+            break
+    else:
+        raise RuntimeError('native barrier missing: ' + child.stderr.read())
     deadline = time.monotonic() + 60
     while not release.exists():
         if time.monotonic() > deadline:
+            child.kill(); child.wait()
             raise RuntimeError('test scheduling barrier timed out')
         time.sleep(.01)
-    return result if timing == 'after' else actual(method, request, **kwargs)
+    remaining, errors = child.stdout.read(), child.stderr.read()
+    if child.wait() != 0:
+        raise RuntimeError(errors or remaining)
+    return json.loads(remaining.strip().splitlines()[-1])
 adapter.effect_runtime_result = delayed
 raise SystemExit(main(sys.argv[4:]))
 """
@@ -130,7 +152,7 @@ def _paused_writer(tmp_path: Path, registry: Path, runtime: Path, timing: str) -
     args = _arguments(registry, runtime, "todo", "add", "--goal-id", "goal-a", "--role", "agent",
                       "--text", "Transaction across a management boundary", "--claimed-by", "agent-a")
     child = subprocess.Popen(
-        [sys.executable, "-c", _DELAYED_WRITER, str(barrier), str(release), timing, *args],
+        [sys.executable, "-c", _DELAYED_WRITER, str(barrier), str(release), _DRAIN_PHASE[timing], *args],
         cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     deadline = time.monotonic() + 20
@@ -174,8 +196,19 @@ def test_late_real_commit_cannot_cross_rollback_and_rebootstrap(tmp_path: Path, 
     child, release, barrier = _paused_writer(tmp_path, registry, runtime, timing)
     try:
         request = barrier["request"]
-        assert request["capture_lineage_id"] == first["capture_lineage_id"]
-        revision = first["provider_revision"] if timing == "before" else barrier["result"]["provider_revision"]
+        assert request["schema_version"] == "loopx_shadow_drain_v0"
+        assert request["goal_id"] == "goal-a"
+        assert request["runtime_root"] == str(runtime.resolve())
+        # The paused batch still runs under the generation that is about to be
+        # superseded, and the revision it targets is durable readback.
+        management = read_shadow_management_state(runtime, "goal-a")
+        assert management is not None and management["status"] == "active"
+        assert management["binding"]["capture_lineage_id"] == first["capture_lineage_id"]
+        revision = json.loads(_candidate(runtime, "goal-a").read_text())["provider_revision"]
+        if timing == "before":
+            assert revision == first["provider_revision"]
+        else:
+            assert revision != first["provider_revision"]
         rollback = _cli(registry, runtime, "coordination-shadow", "rollback", "--goal-id", "goal-a",
                         "--provider-revision", revision, "--execute")["rollback"]
         archived = Path(rollback["outbox_archive_path"])
@@ -184,15 +217,21 @@ def test_late_real_commit_cannot_cross_rollback_and_rebootstrap(tmp_path: Path, 
         second = _bootstrap(registry, runtime)
         assert second["capture_lineage_id"] != first["capture_lineage_id"]
         candidate = _candidate(runtime, "goal-a").read_bytes()
-        _release(child, release)
+        payload = _release(child, release)
+        # The resumed batch reports this write from its own drain evidence; it
+        # must never claim a delivery into the generation that replaced it.
+        assert payload["coordination_runtime_shadow"]["outcome"] != "delivered"
         assert _candidate(runtime, "goal-a").read_bytes() == candidate
         assert _candidate(runtime, "goal-b").read_bytes() == other
         assert {str(path.relative_to(archived)): path.read_bytes() for path in archived.rglob("*") if path.is_file()} == retained
         active_outbox = runtime / "authority-shadow" / "outbox" / "goal-a"
         assert not list(active_outbox.rglob("drain-cursor.json"))
         assert not list(active_outbox.rglob("*.prepared.json"))
-        late = effect_runtime_result("coordination.runtime_shadow.commit_entry", request)
+        # An explicit retry of the superseded batch reads durable receipts and
+        # still cannot deliver into the generation that replaced it.
+        late = effect_runtime_result("coordination.runtime_shadow.drain", request)
         assert late["outcome"] not in {"delivered", "replayed", "reconciled"}
+        assert late["delivered"] == 0 and late["replayed"] == 0
         assert _candidate(runtime, "goal-a").read_bytes() == candidate
     finally:
         if child.poll() is None:
@@ -202,14 +241,16 @@ def test_late_real_commit_cannot_cross_rollback_and_rebootstrap(tmp_path: Path, 
 
 def test_corrupt_history_after_real_commit_cannot_authorize_cursor_cleanup(tmp_path: Path) -> None:
     registry, runtime = _workspace(tmp_path)
-    _bootstrap(registry, runtime)
+    first = _bootstrap(registry, runtime)
     child, release, barrier = _paused_writer(tmp_path, registry, runtime, "after")
     try:
-        assert barrier["result"]["outcome"] in {"delivered", "replayed", "reconciled"}
+        # The commit already happened: the durable candidate moved past bootstrap.
+        assert barrier["request"]["goal_id"] == "goal-a"
+        candidate = _candidate(runtime, "goal-a")
+        assert json.loads(candidate.read_text())["provider_revision"] != first["provider_revision"]
         directory = runtime / "authority-shadow" / "outbox" / "goal-a" / "todos"
         entries = {path.name: path.read_bytes() for path in directory.glob("*.json")}
         assert any(name.endswith(".prepared.json") for name in entries)
-        candidate = _candidate(runtime, "goal-a")
         record = json.loads(candidate.read_text())
         record["committed"][0]["provider_revision"] = "file:1:" + "0" * 24
         candidate.write_text(json.dumps(record))

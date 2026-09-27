@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ..coordination import local_authority_shadow_outbox as shadow_outbox
 from .authority_e2e_fixtures import (
     REPO_ROOT,
@@ -110,48 +110,47 @@ from loopx.cli import main
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
 from loopx.control_plane.coordination import local_authority_shadow_outbox as outbox
 from loopx.control_plane.todos import active_state_editing
-window, state = sys.argv[1], pathlib.Path(sys.argv[2]).resolve()
-def pause():
-    print('BARRIER ' + json.dumps({'window': window}), flush=True)
+window, state = sys.argv[1], pathlib.Path(sys.argv[2])
+def pause(payload=None):
+    print('BARRIER ' + json.dumps(payload or {}), flush=True)
     time.sleep(40)
     raise RuntimeError('parent failed to terminate at persistence barrier')
 actual_rpc = adapter.effect_runtime_result
 def rpc(method, request, **kwargs):
-    if method == 'coordination.runtime_shadow.commit_entry' and window == 'before_commit':
-        pause()
-    result = actual_rpc(method, request, **kwargs)
-    if method == 'coordination.runtime_shadow.commit_entry' and window == 'after_commit':
-        pause()
-    return result
+    if method == 'coordination.runtime_shadow.drain' and window in {'before_commit', 'after_commit', 'after_cursor', 'between_unlinks'}:
+        import subprocess
+        child = subprocess.Popen(['node', '--no-warnings', '--experimental-strip-types',
+            'loopx/control_plane/testing/shadow_drain_fault_process.ts', window],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        child.stdin.write(json.dumps(request)); child.stdin.close()
+        for line in child.stdout:
+            if line.startswith('BARRIER '):
+                print(line, end='', flush=True)
+                sys.stdin.readline()  # Parent requests death at the observed barrier.
+                child.kill(); child.wait(timeout=10)
+                print('REAPED', flush=True)
+                time.sleep(40)
+                raise RuntimeError('parent failed to terminate crash worker')
+        raise RuntimeError('native barrier missing: ' + child.stderr.read())
+    return actual_rpc(method, request, **kwargs)
 adapter.effect_runtime_result = rpc
-actual_cursor = outbox.write_cursor
-def cursor(*args, **kwargs):
-    result = actual_cursor(*args, **kwargs)
-    if window == 'after_cursor':
-        pause()
-    return result
-outbox.write_cursor = cursor
 actual_json = outbox.durable_write_json
 def write_json(path, value):
-    if window == 'before_marker' and path.name.endswith('.committed.json'):
-        pause()
+    if window == 'before_marker' and path.name.endswith('.committed.json'): pause()
     return actual_json(path, value)
 outbox.durable_write_json = write_json
 actual_replace = active_state_editing.os.replace
 def replace(source, target):
-    is_primary = pathlib.Path(target).resolve() == state
-    if is_primary and window == 'before_replace':
-        pause()
+    is_primary = pathlib.Path(target) == state
+    if is_primary and window == 'before_replace': pause()
     result = actual_replace(source, target)
-    if is_primary and window == 'after_replace':
-        pause()
+    if is_primary and window == 'after_replace': pause()
     return result
 active_state_editing.os.replace = replace
 actual_unlink = pathlib.Path.unlink
 def unlink(path, *args, **kwargs):
     result = actual_unlink(path, *args, **kwargs)
-    if window == 'between_unlinks' and path.name.endswith('.prepared.json'):
-        pause()
+    if window == 'between_unlinks' and path.name.endswith('.prepared.json'): pause()
     return result
 pathlib.Path.unlink = unlink
 raise SystemExit(main(sys.argv[3:]))
@@ -407,9 +406,14 @@ def todo_count(workspace: GoalWorkspace) -> int:
 
 @contextmanager
 def hold_drain_lock(workspace: GoalWorkspace) -> Iterator[None]:
-    """Hold the stable maintenance lock so writers defer their post-commit drain."""
+    """Hold the maintenance lock so writers defer their post-commit drain.
 
-    with exclusive_file_lock(
+    The native batch takes the TypeScript mutation marker, so the window must
+    hold the same cross-runtime lock the production readers take; a kernel-only
+    flock would no longer exclude it.
+    """
+
+    with exclusive_cross_runtime_file_lock(
         shadow_outbox.drain_lock_target(workspace.runtime_root, workspace.goal_id),
         operation="e2e_window",
     ):
@@ -424,6 +428,7 @@ def crash_cli(workspace: GoalWorkspace, window: str, *args: str) -> None:
         command,
         cwd=REPO_ROOT,
         env=cli_env(workspace),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
@@ -435,6 +440,14 @@ def crash_cli(workspace: GoalWorkspace, window: str, *args: str) -> None:
         if readable:
             line = process.stdout.readline()
     finally:
+        if line.startswith("BARRIER "):
+            barrier = json.loads(line.removeprefix("BARRIER "))
+            if barrier.get("native_pid"):
+                assert process.stdin is not None and process.stdout is not None
+                process.stdin.write("terminate_native\n")
+                process.stdin.flush()
+                readable, _, _ = select.select([process.stdout], [], [], 10)
+                expect(bool(readable) and process.stdout.readline().strip() == "REAPED", "native owner must be reaped")
         process.kill()
         _, stderr = process.communicate(timeout=10)
     expect(line.startswith("BARRIER "), f"{window}: the CLI did not reach its persistence window: {stderr[-200:]}")

@@ -1326,7 +1326,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         const existing = runtime.larkConnections.find((item) => item.connection_id === body.connection_id && item.goal_id === body.goal_id);
         if (!existing || body.app_ref || body.chat_id || body.agent_bindings) throw new Error("Editing must select the stored connection without replacing its identity");
         if (body.execute) {
-          Object.assign(existing, { agent_id: body.agent_id, ingress_mode: body.ingress_mode, capture_scope: body.capture_scope });
+          Object.assign(existing, { turn_trigger: body.turn_trigger ?? existing.turn_trigger, agent_id: body.agent_id, ingress_mode: body.ingress_mode, capture_scope: body.capture_scope });
           state.larkWrites.push({ ...body });
         }
         await route.fulfill({ contentType: "application/json", json: { ok: true, status: body.execute ? "connected" : "preview_ready" }, status: 200 });
@@ -1344,6 +1344,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           runtime.larkConnections.push({
             agent_id: body.conversation_kind === "manager" ? "loopx-manager" : binding.agent_id ?? null,
             conversation_kind: body.conversation_kind ?? "goal",
+            turn_trigger: body.turn_trigger ?? "addressed",
             connection_id: connectionId,
             app_label: binding.app_ref === "mew-research" ? "LoopX Research" : "LoopX Mew", app_ref: binding.app_ref, chat_name: body.chat_name, enabled: true,
             capture_scope: body.capture_scope,

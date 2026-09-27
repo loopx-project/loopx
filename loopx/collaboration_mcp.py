@@ -356,7 +356,7 @@ class Delegations:
                 or selected_scan_root.resolve() != workspace):
             raise ValueError("delegation inspection cannot execute or retarget bound work")
         preview = self._cli(binding, *arguments)
-        if preview.get("status") != "preview":
+        if preview.get("status") != "preview" and "selection_rejection" not in preview:
             raise ValueError(f"delegation Turn preflight unavailable: {preview.get('error') or preview.get('status')}")
         current = delegation_validation.capture(self, binding)
         if acceptance != current or self.binding(binding_id, require_active=True) != binding:

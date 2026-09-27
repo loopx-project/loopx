@@ -1,7 +1,7 @@
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
-import {readShadowDrainPlan} from "./coordination/shadow_drain_plan.ts";
+import {drainShadowOutbox} from "./coordination/shadow_drain.ts";
 import {readCanonicalSnapshotPage} from "./coordination/canonical_snapshot_page.ts";
 import {manageLocalAuthorityArchive} from "./coordination/local_authority_archive.ts";
 import {selectPeriodicReportProgress, selectPeriodicReportApprovalRetry} from "./capabilities/periodic_report_progress.ts";
@@ -14,6 +14,7 @@ import {projectTodoSuccession} from "./todos/succession.ts";
 import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {resolveConversationTrigger} from "./collaboration/conversation_trigger.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -88,6 +89,7 @@ import {
   type TurnJournalInspectionRequest,
 } from "./turn_driver/turn_journal.ts";
 import { commitTurnJournal } from "./turn_driver/turn_journal_effects.ts";
+import { projectTurnSelectionRejection } from "./turn_driver/selection_rejection.ts";
 import {
   evaluateTodoCompletionFence,
 } from "./todos/completion_fence.ts";
@@ -615,7 +617,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority_shadow.record", recordLocalAuthorityShadow],
     ["coordination.runtime_shadow.commit_entry", deliverShadowEntry],
     ["coordination.runtime_shadow.outbox_read", readLocalAuthorityShadow],
-    ["coordination.runtime_shadow.plan_drain", readShadowDrainPlan],
+    ["coordination.runtime_shadow.drain", drainShadowOutbox],
     [
       "effect.program_from_ordered_steps",
       (params) => effectProgramFromOrderedSteps(
@@ -713,12 +715,14 @@ export function createEffectRuntimeHandlers(
       evaluatePostWritebackHookTransaction,
     ],
     ["collaboration.delegation.binding", selectDelegationBinding],
+    ["turn.selection.rejection", projectTurnSelectionRejection],
     ["collaboration.delegation.preflight", delegationPreflight],
     ["collaboration.delegation.validation_plan", delegationValidationPlan],
     ["collaboration.delegation.turn_plan", delegationTurnPlanDecision],
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],
+    ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
     ["collaboration.delegation.observe", transitionDelegationObservation],
     ["collaboration.delegation.recover_validated_settlement", recoverValidatedDelegationSettlement],
