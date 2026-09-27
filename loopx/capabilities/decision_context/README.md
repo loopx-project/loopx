@@ -104,6 +104,7 @@ change touches.
 | `sources.py` | Provider-neutral source contracts: specs, items, scans, exact reads, source manifest |
 | `runtime.py` | Thin orchestration from profile to providers to evidence assembly and advisory recall |
 | `assembler.py` | Deterministic authority rebase, advisory recall assembly, `decision_source_coverage_v0` |
+| `freshness.py` | Per-source freshness reports and capture host health projection |
 | `packets.py` | Public-safe evidence, proposal, review and outcome packets |
 | `review_settlement.py` | Owner-gated or quiet settlement of one assembly |
 | `cursor_commit.py` | Validated private cursor commit after settlement |

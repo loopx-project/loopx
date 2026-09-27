@@ -18,7 +18,11 @@ from loopx.control_plane.coordination.local_authority import (
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
-from loopx.control_plane.effect_runtime import MAX_RESPONSE_BYTES, effect_runtime_result
+from loopx.control_plane.effect_runtime import (
+    MAX_RESPONSE_BYTES,
+    EffectRuntimeResponseAmbiguous,
+    effect_runtime_result,
+)
 from loopx.control_plane.todos import provider_projection
 
 REPO = Path(__file__).resolve().parents[2]
@@ -109,7 +113,7 @@ def test_real_rpc_keeps_budget_and_cli_recovers_complete_display(
     runtime, state, registry, projection = wide_goal
     runtime_pid = effect_runtime_result("runtime.ping", {})["pid"]
     # Same stored workload: old one-shot endpoint really crosses the fixed budget.
-    with pytest.raises(RuntimeError) as oversized:
+    with pytest.raises(EffectRuntimeResponseAmbiguous) as oversized:
         effect_runtime_result(
             "coordination.local_authority.todo_list",
             {
@@ -120,7 +124,9 @@ def test_real_rpc_keeps_budget_and_cli_recovers_complete_display(
             },
             timeout=15,
         )
-    assert "response is oversized" in str(oversized.value.__cause__)
+    # The server caps a post-dispatch response by closing the connection. The
+    # caller cannot classify that lost response as a safe rejection or retry.
+    assert oversized.value.diagnostic_code == "runtime_response_ambiguous"
     measured = []
 
     def capture(method, payload, **kwargs):

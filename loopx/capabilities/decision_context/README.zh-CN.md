@@ -95,6 +95,7 @@ exact-read 完整度和未覆盖的 P0 source 投影为公开安全的回执。`
 | `review_settlement.py` | 对单次 assembly 做 owner 把关或 quiet settlement |
 | `cursor_commit.py` | settlement 校验通过后提交私有 cursor |
 | `private_state.py` | 私有 cursor 与 pending settlement 的文件读写 |
+| `freshness.py` | 逐来源 freshness 报告与 capture host 健康投影 |
 | `outcome_feedback.py` | 从 outcome 回流到 Reward Memory 的审计反馈 |
 | `capture.py` | opt-in 的 source-reference capture 与 `capture-status` |
 | `capture_recovery.py` | 保留引用的 capture 诊断与恢复 |
