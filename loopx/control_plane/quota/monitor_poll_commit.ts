@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { monitorSuccessorIntent, monitorSuccessorRoute } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
+import { readQuotaSettlement, QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA } from "./settlement_readback.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -89,6 +90,7 @@ interface MonitorDecision extends JsonObject {
   vision_wait_state: JsonObject;
   due_monitor_candidates: JsonObject[];
   registry_due_monitor: JsonObject;
+  auxiliary_settlement_todo: JsonObject | null;
 }
 
 interface MonitorObservation extends JsonObject {
@@ -311,6 +313,8 @@ function decisionObject(value: unknown): MonitorDecision {
       decision.registry_due_monitor,
       "decision.registry_due_monitor",
     ),
+    auxiliary_settlement_todo: decision.auxiliary_settlement_todo == null ? null :
+      requiredObject(decision.auxiliary_settlement_todo, "decision.auxiliary_settlement_todo"),
   };
 }
 
@@ -537,10 +541,60 @@ interface Admission {
   external: boolean;
 }
 
-function admission(request: MonitorRequest): Admission {
+async function auxiliaryMonitorAllowed(
+  request: MonitorRequest, historicalAdmission: boolean,
+): Promise<boolean | null> {
+  const { decision, observation } = request;
+  const settlementTodo = observation.settlement_todo_id;
+  if (!settlementTodo || settlementTodo === observation.todo_id) return null;
+  const conflict = () => new EffectRuntimeRequestError(
+    "turn-scoped monitor-poll conflicts with the committed advancement settlement identity: " +
+      `settlement Todo ${settlementTodo}, observation Todo ${observation.todo_id}`,
+    "heartbeat_receipt_identity_conflict",
+  );
+  const todo = decision.auxiliary_settlement_todo;
+  // A verified pending v1 receipt already admitted this exact observation.
+  // Earlier receipts predate the lifecycle-fact field; preserve their recovery
+  // basis, never reuse it for a new effect or a changed settlement binding.
+  if (historicalAdmission && todo === null) return null;
+  if (!request.runtime_root || !request.turn_instance_id || !decision.agent_id ||
+      observation.actor_agent_id !== decision.agent_id ||
+      todo === null || todo.todo_id !== settlementTodo || todo.task_class !== "advancement_task" ||
+      !["open", "done"].includes(String(todo.status)) ||
+      (todo.claimed_by != null && todo.claimed_by !== decision.agent_id) ||
+      (todo.excluded_agents != null && (!Array.isArray(todo.excluded_agents) ||
+        todo.excluded_agents.some(value => typeof value !== "string") ||
+        todo.excluded_agents.includes(decision.agent_id)))) throw conflict();
+  if (!historicalAdmission) {
+    const settlement = await readQuotaSettlement({
+      schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+      runtime_root: request.runtime_root, goal_id: request.goal_id,
+      agent_id: decision.agent_id, todo_id: settlementTodo,
+      turn_instance_id: request.turn_instance_id, replan_obligation_id: null,
+      infer_turn_instance_id: false, allow_unbound_binding: false,
+    });
+    const progress = jsonObject(settlement.progress);
+    if (settlement.found !== true || jsonObject(jsonObject(settlement.identity)?.result)?.failure !== null ||
+        progress?.schema_version !== "quota_settlement_progress_v0" ||
+        progress.state === "identity_required" || progress.state === "settled") throw conflict();
+  }
+  const monitor = decision.registry_due_monitor;
+  // Retain ordinary quota/due-work admission and capability/gate projections;
+  // lifecycle lookup must not become a second should-run bypass.
+  return !decision.requires_user_action && dueMonitorAllowed(decision, observation) &&
+    monitor.due === true && candidateMatches(monitor, observation) &&
+    (monitor.claimed_by == null || monitor.claimed_by === decision.agent_id);
+}
+
+async function admission(request: MonitorRequest, historicalAdmission = false): Promise<Admission> {
   const blocked = blockedSuccessorAllowed(request.decision);
   const external = externalMonitorAllowed(request.decision);
-  const due = dueMonitorAllowed(request.decision, request.observation);
+  const auxiliary = await auxiliaryMonitorAllowed(request, historicalAdmission);
+  const due = auxiliary ?? dueMonitorAllowed(request.decision, request.observation);
+  if (auxiliary === false) {
+    throw new EffectRuntimeRequestError("auxiliary monitor-poll requires its own due Monitor target",
+      "monitor_poll_admission_rejected");
+  }
   if (
     request.decision.effective_action !== EffectiveAction.MONITOR_QUIET_SKIP &&
     !external && !due && !blocked
@@ -1925,7 +1979,7 @@ export async function evaluateQuotaMonitorPollCommit(
     throw new EffectRuntimeRequestError("provider rejection recovery requires execute");
   }
   if (request.phase === "event") {
-    const record = buildRecord(request, admission(request));
+    const record = buildRecord(request, await admission(request));
     return result(
       request,
       fingerprint,
@@ -1946,7 +2000,7 @@ export async function evaluateQuotaMonitorPollCommit(
   if (!request.execute) {
     // A provider may mutate the Todo registry, so previews must pass admission
     // before returning a provider plan.
-    const allowed = admission(request);
+    const allowed = await admission(request);
     if (request.phase === "preflight") {
       const providerPlan = providerPlanFor(request);
       return result(
@@ -2076,7 +2130,7 @@ export async function evaluateQuotaMonitorPollCommit(
     }
     let allowed: Admission;
     try {
-      allowed = admission(admittedRequest);
+      allowed = await admission(admittedRequest, existing?.schema_version === MONITOR_PENDING_ADMISSION_SCHEMA);
     } catch (error) {
       if (existing?.schema_version === QUOTA_MONITOR_POLL_COMMIT_RECEIPT_SCHEMA &&
           error instanceof EffectRuntimeRequestError && error.code === "monitor_poll_admission_rejected") {

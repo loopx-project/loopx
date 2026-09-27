@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shlex
 from typing import Any
 
 from .control_plane import compact_control_plane_policy
@@ -23,7 +24,6 @@ from .control_plane.effect_program import (
     ReceiptBoundReplayPhase,
     ReceiptBoundTerminalPhase,
 )
-from .control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
 from .control_plane.quota.goal_boundary import (
     registry_goal_by_id as _registry_goal_by_id,
 )
@@ -34,7 +34,6 @@ from .control_plane.quota.policy_constants import (
 from .control_plane.quota.monitor_poll import (
     QUOTA_MONITOR_POLL_CLASSIFICATION as QUOTA_MONITOR_POLL_CLASSIFICATION,
     build_quota_monitor_poll_event as build_quota_monitor_poll_event,
-    find_quota_monitor_poll_turn,
     record_quota_monitor_poll_for_decision,
     resolve_due_monitor_candidate,
 )
@@ -98,8 +97,6 @@ from .control_plane.scheduler.state import (
     CODEX_APP_SURFACE,
 )
 from .control_plane.todos.contract import (
-    TODO_TASK_CLASS_ADVANCEMENT,
-    TODO_TASK_CLASS_MONITOR,
     normalize_todo_claimed_by,
     normalize_todo_id,
 )
@@ -1138,87 +1135,31 @@ def record_quota_monitor_poll(
         )
 
     before = should_run(status_payload)
+    auxiliary_settlement_todo = None
     if (
         normalized_receipt_todo_id
         and normalized_observation_todo_id
         and normalized_observation_todo_id != normalized_receipt_todo_id
     ):
-        selected = (
-            before.get("selected_todo")
-            if isinstance(before.get("selected_todo"), Mapping)
-            else {}
-        )
-        lane = (
-            before.get("work_lane_contract")
-            if isinstance(before.get("work_lane_contract"), Mapping)
-            else {}
-        )
-        summary = (
-            before.get("agent_todo_summary")
-            if isinstance(before.get("agent_todo_summary"), Mapping)
-            else {}
-        )
-        candidate_values = [
-            *(lane.get("monitor_due_items") or []),
-            *(summary.get("monitor_due_items") or []),
-        ]
-        normalized_agent_id = normalize_todo_claimed_by(agent_id)
-        auxiliary_due_monitor = any(
-            isinstance(candidate, Mapping)
-            and normalize_todo_id(candidate.get("todo_id"))
-            == normalized_observation_todo_id
-            and candidate.get("task_class") == TODO_TASK_CLASS_MONITOR
-            and normalize_todo_claimed_by(candidate.get("claimed_by"))
-            in {None, normalized_agent_id}
-            for candidate in candidate_values
-        )
-        auxiliary_registry_due = bool(
-            resolved_monitor
-            and normalize_todo_claimed_by(resolved_monitor.get("claimed_by"))
-            in {None, normalized_agent_id}
-        )
-        existing_observation = (
-            find_quota_monitor_poll_turn(
-                Path(str(raw_runtime_root)).expanduser(),
+        # Discovery/selection is an open-work projection, not the committed
+        # Turn's lifecycle authority. Read the exact bound record, including
+        # completed history; TS monitor admission owns its interpretation.
+        from .todos import list_goal_todos
+
+        if registry_path is not None:
+            bound_records = list_goal_todos(
+                registry_path=registry_path,
+                runtime_root_arg=str(runtime_root) if runtime_root else None,
                 goal_id=safe_goal_id,
-                agent_id=normalized_agent_id or "",
-                turn_instance_id=str(turn_instance_id or ""),
-                todo_id=normalized_observation_todo_id,
+                todo_id=normalized_receipt_todo_id,
+                role="agent",
             )
-            if raw_runtime_root and agent_id and turn_instance_id
-            else None
-        )
-        auxiliary_replay = bool(
-            isinstance(existing_observation, Mapping)
-            and normalize_todo_id(existing_observation.get("todo_id"))
-            == normalized_observation_todo_id
-            and normalize_todo_id(
-                existing_observation.get("settlement_todo_id")
-            )
-            == normalized_receipt_todo_id
-        )
-        auxiliary_observation_allowed = bool(
-            normalize_todo_id(selected.get("todo_id"))
-            == normalized_receipt_todo_id
-            and selected.get("task_class") == TODO_TASK_CLASS_ADVANCEMENT
-            and selected.get("selection_binding") == "heartbeat_receipt"
-            and (
-                auxiliary_due_monitor
-                or auxiliary_registry_due
-                or auxiliary_replay
-            )
-        )
-        if not auxiliary_observation_allowed:
-            raise HeartbeatReceiptIdentityConflictError(
-                "turn-scoped monitor-poll Todo conflicts with the committed "
-                "heartbeat receipt: expected settlement Todo "
-                f"{normalized_receipt_todo_id}, requested observation Todo "
-                f"{normalized_observation_todo_id}"
-            )
+            items = bound_records.get("todos") or []
+            auxiliary_settlement_todo = items[0] if len(items) == 1 else None
     effective_todo_id = normalized_observation_todo_id or (
         normalized_receipt_todo_id if not target_key else None
     )
-    return record_quota_monitor_poll_for_decision(
+    result = record_quota_monitor_poll_for_decision(
         before,
         status_payload,
         goal_id=safe_goal_id,
@@ -1230,6 +1171,7 @@ def record_quota_monitor_poll(
         reason_summary=reason_summary,
         agent_id=agent_id,
         settlement_todo_id=normalized_receipt_todo_id,
+        auxiliary_settlement_todo=auxiliary_settlement_todo,
         todo_id=effective_todo_id,
         target_key=target_key,
         result_hash=result_hash,
@@ -1251,6 +1193,86 @@ def record_quota_monitor_poll(
         turn_instance_id=turn_instance_id,
         status_reloader=status_reloader,
     )
+    continuation = result.get("turn_continuation") or {}
+    if (
+        result.get("ok") is True
+        and continuation.get("settlement_binding_matches_observation") is False
+    ):
+        # The open-work readback may now select another Todo. Render the
+        # original receipt's closeout separately; never borrow that selection
+        # to construct this Turn's refresh/spend commands.
+        from .control_plane.agents.capability_gate import (
+            runtime_capabilities_for_cli_projection,
+        )
+        from .control_plane.quota.settlement import (
+            attach_settlement_progress,
+            build_turn_scoped_cli_settlement_plan,
+        )
+
+        readback = read_heartbeat_settlement(
+            runtime_root,
+            goal_id=safe_goal_id,
+            agent_id=agent_id,
+            todo_id=normalized_receipt_todo_id,
+            turn_instance_id=turn_instance_id,
+        )
+        if readback is None or readback.identity.value is None:
+            raise RuntimeError(
+                "auxiliary monitor receipt lost its original settlement readback"
+            )
+        attach_settlement_progress(
+            result, readback, registry_path=registry_path, runtime_root=runtime_root,
+        )
+        identity = readback.identity.value
+        prefix = "loopx"
+        if registry_path is not None:
+            prefix += f" --registry {shlex.quote(str(registry_path))}"
+        prefix += f" --runtime-root {shlex.quote(str(runtime_root))}"
+        scoped_args = "".join(
+            f" --available-capability {shlex.quote(capability)}"
+            for capability in runtime_capabilities_for_cli_projection(
+                available_capabilities
+            )
+        )
+        plan = build_turn_scoped_cli_settlement_plan(
+            goal_id=identity.goal_id,
+            agent_id=identity.agent_id,
+            todo_id=identity.todo_id,
+            turn_instance_id=identity.turn_instance_id,
+            replan_obligation_id=identity.replan_obligation_id,
+            command_prefix=prefix,
+            scoped_cli_args=scoped_args,
+            lifecycle_actor_args="",
+            quota_spend_source=readback.progress["quota_spend_source"],
+        )
+        result["settlement_resume"] = {
+            "schema_version": "auxiliary_monitor_settlement_resume_v0",
+            "identity": identity.as_dict(),
+            "progress_ref": "$.settlement_progress",
+            "next_step": next(
+                (
+                    step for step in plan.as_dict()["ordered_steps"]
+                    if step["kind"] == readback.progress["next_step"]
+                ),
+                None,
+            ),
+            "grants_new_delivery": False,
+        }
+        # A later discovery projection is not a second settlement plan. The
+        # top-level resume/readback above owns this original Turn's closeout.
+        after = result.get("after") or {}
+        cli = (after.get("interaction_contract") or {}).get("cli_channel")
+        if (
+            isinstance(cli, dict)
+            and (after.get("selected_todo") or {}).get("todo_id") != identity.todo_id
+        ):
+            cli.pop("settlement_plan", None)
+            cli.pop("next_cli_actions", None)
+            cli.update(
+                spend_allowed_now=False, spend_after_validation=False,
+                settlement_resume_ref="$.settlement_resume",
+            )
+    return result
 
 
 def build_quota_slot_void_preview(

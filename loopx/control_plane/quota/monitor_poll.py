@@ -698,6 +698,7 @@ def record_quota_monitor_poll_for_decision(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     use_current_task_lease: bool = False,
+    auxiliary_settlement_todo: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     _index_lock_held: bool = False,
     status_reloader: Callable[[], dict[str, Any]] | None = None,
@@ -750,6 +751,17 @@ def record_quota_monitor_poll_for_decision(
         registry_path=registry_path,
         runtime_root=runtime_root,
     )
+    if auxiliary_settlement_todo is not None:
+        decision["auxiliary_settlement_todo"] = {
+            key: auxiliary_settlement_todo.get(key)
+            for key in (
+                "todo_id",
+                "task_class",
+                "status",
+                "claimed_by",
+                "excluded_agents",
+            )
+        }
     observation = _observation_packet(
         before=before,
         agent_id=agent_id,

@@ -134,6 +134,7 @@ _RETAINED_MONITOR_POLL_INTERACTION_FIELDS = {
         "spend_after_validation",
         "spend_policy",
         "delivery_workspace_causality",
+        "settlement_resume_ref",
     ),
 }
 _RETAINED_MONITOR_POLL_RESPONSE_PLAN_FIELDS = (
