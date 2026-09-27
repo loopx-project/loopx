@@ -10,6 +10,7 @@ import {FILE_AUTHORITY_JOURNAL_SCHEMA} from "./file_authority_journal.ts";
 import {sqliteAuthorityRuntime} from "./sqlite_runtime.ts";
 import {SQLITE_AUTHORITY_STORE_SCHEMA, sqliteAuthorityPath} from "./sqlite_authority_store.ts";
 import {SQLITE_AUTHORITY_STORE_V1_SCHEMA} from "./sqlite_authority_migration.ts";
+import {decodeLocalAuthoritySelection} from "./local_authority_provider.ts";
 import {verifyAuthorityArchive} from "./authority_archive.ts";
 
 type StoreInspection = {
@@ -87,9 +88,7 @@ export async function inspectAuthorityFormat(path: string): Promise<AuthorityFor
         value.schema_version !== FILE_AUTHORITY_JOURNAL_SCHEMA);
     }
     if (value.schema_version === "loopx_local_authority_provider_v0") {
-      if (value.provider !== "sqlite" && value.provider !== "postgresql") throw new Error("Unknown selector provider");
-      requireAuthorityStoreId(value.store_identity, "selector store identity");
-      if (value.provider === "postgresql") requireAuthorityStoreId(value.tenant_id, "selector tenant id");
+      decodeLocalAuthoritySelection(value, requireAuthorityStoreId(value.goal_id, "goal id"));
       return {artifact_kind: "provider_selector", status: "recognized", format: value.schema_version,
         goal_id: requireAuthorityStoreId(value.goal_id, "goal id"), provider: value.provider ?? null,
         verification: "metadata_only", migration_route: "resolve_selected_provider_before_migration"};

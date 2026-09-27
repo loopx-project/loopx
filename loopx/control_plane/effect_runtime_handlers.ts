@@ -1,4 +1,3 @@
-import {planStateEventReplay} from "./goals/state_event_replay.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -14,7 +13,7 @@ import {evaluateUserCompletion} from "./todos/user_completion.ts";
 import {projectTodoSuccession} from "./todos/succession.ts";
 import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
-import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -199,7 +198,7 @@ import {evaluateCapabilityGate} from "./agents/capability_gate.ts";
 import {projectCoordinationSource} from "./coordination/source_projection.ts";
 import {withCoordinationSourceTransfer} from "./coordination/source_transfer.ts";
 import {captureArchivedTodoDependencies} from "./todos/archive_capture.ts";
-import {planStateEventAppend} from "./goals/state_event_append.ts";
+import {planSupervisorEventAppend} from "./agents/supervisor_event_append.ts";
 import {projectAdvancementFrontier, evaluateLongTodoChain} from "./todos/frontier_revision.ts";
 import { evaluateCoordinationTodoSuccessorDerivation } from "./coordination/todo_successor_derivation.ts";
 import {
@@ -446,7 +445,6 @@ export function createEffectRuntimeHandlers(
       (params) => interpretTurnJournal(turnJournalInspectionRequest(params)),
     ],
     ["turn_journal.write", commitTurnJournal],
-    ["goal.state_event.plan_replay", planStateEventReplay],
     ["todo.completion_fence.evaluate", evaluateTodoCompletionFence],
     ["todo.completion_state.normalize", normalizeTodoCompletionValue],
     ["todo.completion_state.require_metadata", requireTodoCompletionMetadataValue],
@@ -466,7 +464,7 @@ export function createEffectRuntimeHandlers(
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],
     ["agent.capability_memory", agentCapabilityMemory],
     ["todo.archive.capture_dependencies", withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies)],
-    ["goal.state_event.plan_append", planStateEventAppend],
+    ["agent.supervisor.plan_append", planSupervisorEventAppend],
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
     ["todo.monitor_metadata.plan", planMonitorMetadata],
     ["todo.authoring_scope.plan", planTodoAuthoringScope],
@@ -716,6 +714,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["collaboration.delegation.binding", selectDelegationBinding],
     ["collaboration.delegation.preflight", delegationPreflight],
+    ["collaboration.delegation.validation_plan", delegationValidationPlan],
     ["collaboration.delegation.turn_plan", delegationTurnPlanDecision],
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],

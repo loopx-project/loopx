@@ -169,7 +169,8 @@ export async function inspectGoalAcceptance(store: AuthorityStore, goalId: strin
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
     contract: state?.enabled ? state.document : null, tasks,
-    ...(todoId === undefined ? {} : {completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
+    ...(todoId === undefined ? {} : {todo: todos.get(todoId) ?? null,
+      completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
     goal_acceptance_contract: projectGoalAcceptance(head.head, goalId)});
 }
 
@@ -188,7 +189,13 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify"): 
     };
     return kind === "inspect" ? await run() : await withCanonicalWriter(root, goalId, request.dry_run === true, run);
   } catch (error) {
-    const result = {...failure(error instanceof AuthorityStoreProtocolError ? "goal_acceptance_invalid_request" : "goal_acceptance_effect_failed",
+    // Preserve the canonical task guard's diagnosis on exact private reads.
+    // An unbound/stale task must never look like an absent contract eligible
+    // for independent validation, or an authority that needs re-promotion.
+    const taskReason = kind === "inspect" && error instanceof AuthorityStoreProtocolError
+      && ["goal_acceptance_unbound", "goal_acceptance_stale"].includes(error.message)
+      ? error.message : null;
+    const result = {...failure(taskReason ?? (error instanceof AuthorityStoreProtocolError ? "goal_acceptance_invalid_request" : "goal_acceptance_effect_failed"),
       error instanceof Error ? error.message : "acceptance effect failed"),
       decision_read_from_provider: false, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
     return store ? {...result, source_authority: authorityStoreSourceAuthority(store)} : result;

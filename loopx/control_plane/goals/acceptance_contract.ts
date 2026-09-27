@@ -70,6 +70,16 @@ export interface AcceptanceCompletionRequirements extends JsonObject {
   criteria: AcceptanceCriterion[];
 }
 
+/** Shared by terminal completion and read-only delegation validation. */
+export function acceptanceValidationEffects(requirements: AcceptanceCompletionRequirements, todo: JsonObject): JsonObject[] {
+  return requirements.criteria.map(criterion => ({criterion_id: criterion.id, effect: {
+    kind: "caller_validation", validation_command: null, validation_argv: criterion.validation_argv,
+    validation_label: criterion.id, validation_timeout_seconds: criterion.validation_timeout_seconds,
+    ...(criterion.validation_files == null ? {} : {validation_files: criterion.validation_files}),
+    task_repository: todo.task_repository ?? null,
+  }}));
+}
+
 export function acceptanceRequire(condition: unknown, message: string): asserts condition {
   if (!condition) throw new AuthorityStoreProtocolError(message);
 }

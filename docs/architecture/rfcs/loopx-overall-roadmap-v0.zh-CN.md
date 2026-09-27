@@ -39,7 +39,11 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 
 [App 对话与通用异步 inbox 设计](app-conversation-and-async-inbox-v0.md)
 细化既有 R1–R3：先修普通输入与持久受理，再验证连接／继续、可信状态、
-停止／恢复和可读结果，随后完成 G1 两轮真实协作。它们优先于各渠道外观一致或
+停止／恢复和可读结果。最近的可感知交付是一句 App 请求，经合格的已有负责人，
+带着实际采用的纠偏与恢复能力，把可审阅草稿返回原对话；用户不用找人、催办或搬结果。
+延期回复送达仍是延期。随后完成 G1 两轮真实协作，按
+[具体试点与退出条件](app-conversation-and-async-inbox-v0.zh-CN.md) 验收。
+它们优先于各渠道外观一致或
 扩大规模。Lark 中可复用的 inbox 生命周期逐步收敛到现有 TS coordination owner，
 认证、寻址、反应和消息限制保留在扩展。产品 TS 重构按完整用户路径推进，
 不能变成逐字段 RPC 增长或全量重写前置条件。
@@ -390,6 +394,12 @@ P0 首批是负责人路由和真实 2–3-worker 协调：两轮并行汇合、
 组合已有 peer 请求、采用、返回、显式执行绑定及已合并 TS 验收 owner，替换示例专用
 委派逻辑。主协调员与普通成员使用同一授权合同；未启用执行配置的 stdio 服务保持
 原有五个非执行工具。文件形式的 provider 配置缩短启动参数，不改变默认执行器。
+
+owner 所选验收范围外的独立工作，现可通过同一 TS 校验计划使用规范 Todo 显式声明的
+完成校验。范围内仍须具备当前 owner 关联，且所有适用校验都须通过。成员完成保留
+Goal active，再仅恢复原 Turn 的结算，不声明 terminal no-follow-up。File/SQLite CLI
+及本地 host 回归只验收该边界，不代表真实模型投研、请求方综合或 Lark 等价；不激活
+任何 binding grant 或 provider。
 
 [合成投研示例](../../../examples/managed-research-team/README.md)由本地主 Agent
 组织两个 DSH 和两个 Ark 成员：云端核验员采用本地分析，另一 Ark 成员继续委派

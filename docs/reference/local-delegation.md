@@ -7,8 +7,15 @@ existing Turn entrypoint; there is no steward-specific scheduler or task store.
 
 ## Activate
 
-First register the participating Agents and bind the intended canonical Todos
-to [owner-configured acceptance](goal-acceptance-observations.md). Prepare an
+First register the participating Agents and give each intended canonical Todo
+an explicit validation basis. Work covered by
+[owner-configured acceptance](goal-acceptance-observations.md) must retain its
+current owner binding. Independent work outside that scope (or with Goal
+acceptance disabled) instead requires its own canonical Todo completion
+validator, declared through the existing `todo add --validation-command-json`
+entrypoint. A missing or stale owner association never falls back to that
+validator; a Todo validator supplements owner criteria when both apply.
+Prepare an
 operator-owned JSON file **outside every delegated member workspace**. A
 coordinator may keep it as an ignored file under its Goal project at
 `.loopx/config/delegations.json`:
@@ -35,6 +42,35 @@ operator configuration and use the existing `turn run-once` options. For Ark,
 select `generic-cli`, `fresh`, and the optional adapter's `--config` invocation.
 Profiles, executables, workspace isolation and credential custody remain the
 operator's responsibility. No model tool accepts those values.
+
+Inspection, pre-launch admission, Turn validation and returned-artifact readback
+consume this same basis. Private commands must match the canonical Todo's
+declaration digest; verifier files declared by Goal acceptance are checked
+before and after execution. The ordinary Todo digest pins the command, not
+undeclared script dependencies. A successful validator still needs canonical
+completion, unchanged artifacts and receiver adoption. Inspection never starts
+work or configures owner acceptance. Disable by removing the exact binding
+from the operator configuration; existing operations retain their history and
+cannot re-execute or return accepted evidence under a revoked grant.
+
+Member completion uses the ordinary active-Goal continuation, including legacy
+non-hard-lease routes. It does not declare terminal `no_followup` for a
+requester-owned synthesis. This lets controller validation finish the Todo
+before resuming only the original Turn's settlement; the host is not rerun.
+Explicit terminal closeout still requires matching writeback/spend receipts.
+
+中文：受 Goal 验收范围覆盖的 Todo 保留当前 owner 关联；范围外的独立任务，或未启用
+Goal 验收的任务，必须通过既有 `todo add --validation-command-json` 声明规范 Todo
+完成校验。范围内关联缺失或过期不能退回普通校验；两者同时存在时须全部通过。
+预检、启动前准入、Turn 校验和结果读回复用同一依据，私有命令必须匹配规范声明
+摘要。普通 Todo 摘要固定命令，不固定未声明的脚本依赖；Goal 声明的校验文件在
+执行前后核对。校验通过仍不等于规范完成、产物未变或接收方采纳。预检不启动工作、
+不配置 owner 验收；移除原配置中的精确 binding 即撤销 grant，保留历史但拒绝重新
+执行或返回已撤权任务的有效结果。
+
+成员完成沿用普通 active-Goal 继续状态，旧的非 hard-lease 路径也如此；不会为仍由
+请求方负责的汇总声明 terminal `no_followup`。因此可以先通过 controller 校验完成
+Todo，再仅恢复原 Turn 的结算，不重跑 host。显式终结仍须具备匹配的写回和扣额回执。
 
 A Codex binding launches an independent, resumable Codex Agent Session through
 the same governed Turn path. Pin both fields when the worker must use an exact
@@ -261,6 +297,9 @@ filter used by `delegate list` considers at most six public-safe planning routes
 and byte-bounds the projected subset; `authorized_count` and `routes_truncated`
 make omissions explicit. Managed-host availability comes from the existing Turn host/profile owner;
 unprobed generic adapters are `unknown`, not optimistically ready.
+Routes disclose that owner's `probe_scope` for a supplied non-null probe. Read full
+`runtime_probe` and `unavailable_remediation` observations through
+`delegation inspect` on the same binding; planning keeps its existing byte budget.
 
 This planning projection is read-only. It does not start, resume, accept,
 enumerate operations or periodically poll work. A ready observation is not an
@@ -286,6 +325,9 @@ no legacy Session setting is copied back into the registry automatically.
 启动、恢复、验收或周期轮询工作；需要时可显式读取 `after_delegate_result` 阶段的有界
 operation 状态摘要。ready 和状态计数都不是执行或父级验收回执。清除指针不会撤销
 授权；真正撤销仍须修改 operator binding 文件。
+路由对非空 probe 渐进式披露同一 host owner 的 `probe_scope`。按原绑定读取下述
+`delegation inspect`，可获得完整 `runtime_probe` 和 `unavailable_remediation`；
+规划保持原有字节预算，不内联全部诊断。
 
 ### Recover work without remembered operation ids
 
@@ -353,6 +395,28 @@ were observed; it grants no execution permission and does not reserve capacity.
 Normal start still reads current admission and independently validates output.
 If the existing Turn rejects preflight, inspection reports that error rather than
 manufacturing a launchable result; no request is created.
+
+`executor.runtime_probe` preserves the host's bounded probe scope: a DSH
+`probing_interpreter` result concerns module availability in the interpreter
+running this inspection, not every installation or remote host. A
+`configured_runner` result concerns the explicit runner. A `null` probe means
+this executor was not probed; older previews may omit the optional field.
+`executor.unavailable_remediation` contains bounded operator-action codes from
+the same host owner, not commands or permission to switch providers. For
+`configure_dsh_runtime`, check the original launcher's interpreter and its
+`deepseek-harness` optional dependency or original runner configuration before
+requalification. A successful module probe alone does not prove credentials,
+profile, task acceptance or remote capacity. Inspection exposes no interpreter
+paths, credential/endpoint configuration, or provider payloads.
+
+中文：`executor.runtime_probe` 保留 host 的有界探测范围。DSH 的
+`probing_interpreter` 只说明执行本次检查的解释器是否能找到模块，不代表整机或远端
+所有安装；`configured_runner` 针对已显式配置的 runner。`null` 表示未探测，旧预览
+可以缺省此兼容字段。`executor.unavailable_remediation` 是同一 host owner 提供的
+有界操作代码，不是命令，也不授予切换 provider 的权限。遇到
+`configure_dsh_runtime`，先核对原启动器绑定的解释器及其 `deepseek-harness` 可选依赖
+或原 runner 配置，再重新核验。模块可用不证明凭据、profile、任务验收或远端容量；
+此检查不暴露解释器路径、凭据/endpoint 配置或 provider 原始数据。
 
 Enabled MCP exposes `inspect_execution_binding`; newly enrolled Goal Chat tools
 accept `action=inspect` with `binding_id`. Existing native thread schemas remain

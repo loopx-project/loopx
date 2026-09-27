@@ -9,6 +9,8 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd)
 
+<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx 在 Trendshift 的趋势排名" width="220" height="48"></a>
+
 [开始使用](#试用-loopx) · [个人工作区](#认识个人-agent-工作区) · [LHTB 结果](#lhtb-results) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
 **[LHTB](https://zli12321.github.io/LHTB/index.html) · 46 个任务 · GPT-5.6 Sol：**LoopX 1.0.3 Heartbeat 平均 Reward 达到 **0.4948**，较 **Plain Codex 提升 17.3%**，较**原生 Codex Goal 提升 10.6%**。<br>
@@ -735,8 +737,6 @@ benchmark 证据、operator surface 与 IM integration、shared-goal 跨 host �
 明确分阶段的架构与研究孵化器。
 
 ## Star 趋势
-
-<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx 在 Trendshift 的趋势排名" width="220" height="48"></a>
 
 <p align="center">
   <a href="https://github.com/loopx-project/loopx/stargazers"><img src="https://loopx-project.github.io/loopx/site-assets/star-history.svg" alt="LoopX GitHub Star 历史趋势，来自已校验快照" width="800"></a><br>

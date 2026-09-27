@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from loopx.control_plane.agent_context import project_goal_agent_context
 from loopx.control_plane.collaboration import delegation_context
 from loopx.control_plane.quota.live_decision import build_live_quota_should_run_decision
@@ -146,6 +148,52 @@ def test_operation_receipts_require_explicit_result_phase_read(
         "recovery_required": 1,
         "has_more": True,
     }
+
+
+@pytest.mark.parametrize("runner_configured", [False, True])
+def test_planning_retains_original_probe_scope_and_remediation_without_admission(
+    tmp_path: Path, monkeypatch, runner_configured: bool
+) -> None:
+    from loopx.control_plane.turn_driver.host_binding import managed_executor_binding
+
+    project, registry, runtime = _fixture(tmp_path)
+    calls = []
+    executor = managed_executor_binding(
+        "dsh", environ={}, module_probe=lambda _: False,
+        dsh_runner_configured=runner_configured,
+    )
+
+    def binding(*args, **_kwargs):
+        calls.append(args)
+        return {**executor, "credential_env": "PRIVATE_CREDENTIAL",
+                "endpoint_env": "PRIVATE_ENDPOINT"}
+
+    monkeypatch.setattr(delegation_context, "managed_executor_binding_from_host_args", binding)
+    packet = delegation_context.project_delegation_context(
+        runtime_root=runtime, registry_path=registry, goal_id="goal-a",
+        agent_id="coordinator", project=project, execution_config=".loopx/config/delegations.json",
+    )
+    route = packet["routes"][0]
+    assert len(calls) == 1
+    assert route["runtime_probe"] == executor["runtime_probe"]
+    assert route["unavailable_remediation"] == executor["unavailable_remediation"]
+    assert route["runtime_readiness"] == ("ready" if runner_configured else "blocked")
+    assert route["readiness"] == ("unknown" if runner_configured else "blocked")
+    assert packet["preflight"] == "required"
+    assert "operation_receipts" not in packet
+    assert "PRIVATE_" not in json.dumps(packet)
+
+
+def test_unprobed_generic_route_keeps_explicit_null_probe(tmp_path: Path) -> None:
+    project, registry, runtime = _fixture(tmp_path)
+    packet = delegation_context.project_delegation_context(
+        runtime_root=runtime, registry_path=registry, goal_id="goal-a",
+        agent_id="coordinator", project=project, execution_config=".loopx/config/delegations.json",
+    )
+    route = packet["routes"][0]
+    assert route["runtime_probe"] is None
+    assert route["unavailable_remediation"] == []
+    assert route["runtime_readiness"] == route["readiness"] == "unknown"
 
 
 def test_repeated_live_quota_planning_never_reads_operation_inventory(

@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .core import _normalize_trigger_receipt, _reject_raw_keys
+from .core import (
+    _normalize_trigger_receipt,
+    _reject_raw_keys,
+    _SINK_ROLES,
+    _SINK_STATUSES,
+    _SOURCE_STATUSES,
+)
 
 
 SOURCE_RESULT_SCHEMA = "periodic_report_source_result_v0"
@@ -19,9 +25,6 @@ ARTIFACT_SCHEMA = "periodic_report_artifact_v0"
 SINK_RESULT_SCHEMA = "periodic_report_sink_result_v0"
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
-_SOURCE_STATUSES = {"complete", "partial", "failed", "unknown"}
-_SINK_STATUSES = {"pending", "sent", "failed", "skipped", "unknown"}
-_SINK_ROLES = {"archive", "delivery"}
 _ITEM_CONTENT_KINDS = {
     "capability_change",
     "coverage",

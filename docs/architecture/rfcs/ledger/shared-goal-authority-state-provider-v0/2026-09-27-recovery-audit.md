@@ -185,3 +185,26 @@ the yielding and in-flight proof lifecycle belong to File. #4931's digest
 window remains a separate optimization. The regression uses a private real
 server and the existing mixed Todo/lease/decision fixture; production locators,
 active Goals and raw evidence are never modified or published.
+
+## Local provider cutover (`76ff7c73c`)
+
+Recovery/audit #5140 and runtime fairness #5156 are merged. This delivery adds
+reviewed File ↔ SQLite cutover for an already-promoted canonical Goal: verified
+backup, exact source/fence binding, identity-bound target, history/receipt audit,
+serialized selector publication, crash resume and reverse migration carrying
+new writes. Persisted active leases hold migration even after expiry. It does
+not stop Hosts or migrate independently-owned Turn/spend state.
+
+The current inventory is three existing open PRs (#5054 retirement, #4931 SQLite
+proof encoding, #5144 managed Host supervision), this cutover PR, and remaining
+whole-Goal integration/default-entry scopes. Whole-Goal acceptance still needs
+source drain and all retained consumers/external execution boundaries; defaults
+still need new-Goal/settings/install adoption and bounded Python writer removal.
+Do not subtract one from a broad work package merely because its cutover subitem
+shipped. An exact remaining PR count cannot be promised until that integration
+inventory and D2 results determine whether additional bounded fixes are needed.
+Capacity, platform coverage and natural-time soak remain evidence gates rather
+than PR quotas. PostgreSQL keeps the shared logical archive/audit contract;
+service authentication, tenancy and failover are not qualified by this command.
+
+See [the reviewed cutover journey](../../../../reference/file-authority-state-log.md#reviewed-filesqlite-cutover).

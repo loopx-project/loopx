@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 from collections.abc import Mapping
 from typing import Any
 
 from ..control_plane.turn_driver import LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION
+from ..control_plane.turn_driver.host_binding import managed_executor_binding
 
 
 def resolve_turn_resume_session_binding(
@@ -79,3 +81,48 @@ def turn_controller_advisory_primary(
     ):
         raise ValueError("Turn advisory action portfolio has no bindable primary")
     return todo_id, dict(portfolio)
+
+
+def managed_executor_cli_binding(
+    args: argparse.Namespace, *, environ: Mapping[str, str],
+) -> dict[str, Any]:
+    """Adapt parsed CLI host options to the existing executor read-model owner.
+
+    The readback names where model work runs and whether the host can launch.
+    An explicit runner is a launchability fact owned by this CLI adapter.
+    Machine authentication is resolved by the caller independently of any
+    Goal runtime override and shared with the eventual host launch.
+    """
+    return managed_executor_binding(
+        args.host,
+        # The credential a managed Turn authenticates with is this
+        # machine's resolved pair, not whatever the invoking shell happens
+        # to export: the readback above the launch and the launch itself
+        # have to name the same credential.
+        environ=environ,
+        dsh_runner_configured=bool(getattr(args, "dsh_runner", None)),
+        provider=(
+            getattr(args, "dsh_provider", None)
+            if args.host == "dsh"
+            else None
+        ),
+        model=(
+            getattr(args, "dsh_model", None)
+            if args.host == "dsh"
+            else getattr(args, "codex_model", None)
+            if args.host == "codex-cli"
+            else None
+        ),
+        reasoning_effort=(
+            getattr(args, "dsh_reasoning_effort", None)
+            if args.host == "dsh"
+            else getattr(args, "codex_reasoning_effort", None)
+            if args.host == "codex-cli"
+            else None
+        ),
+        max_tokens=(
+            getattr(args, "dsh_max_tokens", None)
+            if args.host == "dsh"
+            else None
+        ),
+    )

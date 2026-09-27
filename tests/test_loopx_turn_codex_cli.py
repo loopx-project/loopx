@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
+import time
 import stat
 import subprocess
 import sys
@@ -163,6 +166,15 @@ if os.environ.get("FAKE_CODEX_FAIL") == "1":
             "private_material": "must-not-persist"
         }), flush=True)
     raise SystemExit(9)
+if os.environ.get("FAKE_CODEX_CHILD_MARKER"):
+    marker = os.environ["FAKE_CODEX_CHILD_MARKER"]
+    child = subprocess.Popen([sys.executable, "-c",
+        "import pathlib,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+        "p=pathlib.Path(" + repr(marker) + ");n=0\\n"
+        "while True:\\n p.write_text(str(n));n+=1;time.sleep(.01)"])
+    pathlib.Path(marker + ".pid").write_text(str(child.pid))
+    while not pathlib.Path(marker).exists():
+        time.sleep(.01)
 if os.environ.get("FAKE_CODEX_SLEEP"):
     time.sleep(float(os.environ["FAKE_CODEX_SLEEP"]))
 output_path = pathlib.Path(args[args.index("--output-last-message") + 1])
@@ -1089,3 +1101,36 @@ def test_checkpointed_write_approval_is_scoped_and_absent_by_default():
     prompt = _prompt(request)
     assert "only within its active_write_scope" in prompt
     assert "publish, and production actions retain their gates" in prompt
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group cleanup contract")
+@pytest.mark.parametrize("timeout", [False, True])
+def test_codex_cli_reaps_descendants_after_result_or_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout: bool,
+) -> None:
+    executable, log_path = _fake_codex(tmp_path)
+    marker = tmp_path / "child-work"
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    monkeypatch.setenv("FAKE_CODEX_CHILD_MARKER", str(marker))
+    monkeypatch.setattr("loopx.control_plane.turn_driver.codex_cli.OUTPUT_DRAIN_TIMEOUT_SECONDS", .05)
+    if timeout:
+        monkeypatch.setenv("FAKE_CODEX_SLEEP", "30")
+    try:
+        kwargs = dict(runtime_root=tmp_path / "runtime", project=tmp_path,
+                      codex_bin=str(executable), timeout_seconds=1 if timeout else 5)
+        if timeout:
+            with pytest.raises(BuiltInHostError, match="codex_cli_timeout"):
+                run_codex_cli_host(_request(), **kwargs)
+        else:
+            result = run_codex_cli_host(_request(), **kwargs)
+            assert result["result_kind"] == "validated_progress"
+        before = marker.read_text()
+        time.sleep(.15)
+        assert marker.read_text() == before, "Codex child kept working after adapter returned"
+    finally:
+        pid_path = Path(str(marker) + ".pid")
+        if pid_path.exists():
+            try:
+                os.kill(int(pid_path.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass

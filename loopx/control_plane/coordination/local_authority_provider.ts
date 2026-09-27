@@ -82,7 +82,7 @@ export function localAuthorityOpenFailure(error: unknown): Record<string, unknow
     ...(error.causeReasonCode ? {provider_reason_code: error.causeReasonCode} : {}),
     decision_read_from_provider: false, legacy_fallback_used: false};
 }
-function paths(root: string, goalId: string) {
+export function localAuthorityProviderPaths(root: string, goalId: string) {
   if (!isAbsolute(root)) throw new Error("runtime root must be absolute");
   requireAuthorityStoreId(goalId, "goal id");
   return {marker: join(root, "authority", `provider-${createHash("sha256").update(goalId).digest("hex")}.json`),
@@ -114,32 +114,56 @@ function decodePostgreSqlSelection(value: Record<string, unknown>, goalId: strin
   };
 }
 
-async function openSelectedSqlite(root: string, goalId: string, storeIdentity: string): Promise<AuthorityStore> {
-  const p = paths(root, goalId);
+export function decodeLocalAuthoritySelection(config: unknown, goalId: string):
+  LocalPostgreSqlAuthoritySelection | {schema_version: typeof SCHEMA; provider: "file" | "sqlite"; goal_id: string; store_identity: string} {
+  if (!isAuthorityJsonObject(config) || config.schema_version !== SCHEMA || config.goal_id !== goalId ||
+      (config.provider !== "file" && config.provider !== "sqlite" && config.provider !== "postgresql")) {
+    throw selectorError("Invalid local authority provider selector");
+  }
+  if (config.provider === "postgresql") return decodePostgreSqlSelection(config, goalId);
+  if (!hasExactAuthorityKeys(config, ["schema_version", "provider", "goal_id", "store_identity"]) ||
+      typeof config.store_identity !== "string" || !new RegExp(`^${config.provider}:[0-9a-f]{32}$`).test(config.store_identity)) {
+    throw selectorError("Invalid local authority provider selector");
+  }
+  return {schema_version: SCHEMA, provider: config.provider, goal_id: goalId, store_identity: config.store_identity};
+}
+
+/** Both local providers reject a missing or replaced selected lineage. */
+async function openSelectedLocal(root: string, goalId: string, provider: "file" | "sqlite", storeIdentity: string): Promise<AuthorityStore> {
+  const source = sourceFor(provider);
+  const directory = localAuthorityProviderPaths(root, goalId)[provider];
+  const Store = provider === "file" ? FileAuthorityStore : SqliteAuthorityStore;
   try {
-    // Validate metadata before comparing selector lineage so drift has its own recovery signal.
-    const store = new SqliteAuthorityStore(p.sqlite, goalId, {existingOnly: true});
-    // Do not recreate a lost database and thereby silently reset its lineage.
+    const store = new Store(directory, goalId, {existingOnly: true});
     try { await stat(store.path); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new LocalAuthorityProviderOpenError("sqlite_v0", "local_authority_provider_missing", "Selected SQLite authority database is missing");
-      }
-      throw new LocalAuthorityProviderOpenError("sqlite_v0", "local_authority_provider_open_failed", "Selected SQLite authority database could not be opened");
+      const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+      throw new LocalAuthorityProviderOpenError(source,
+        missing ? "local_authority_provider_missing" : "local_authority_provider_open_failed",
+        missing ? `Selected ${provider === "sqlite" ? "SQLite authority database" : "File authority document"} is missing` : `Selected ${provider} authority could not be opened`);
     }
     const identity = await store.storeIdentity();
     if (identity.status !== "available") {
-      throw new LocalAuthorityProviderOpenError("sqlite_v0", "local_authority_provider_open_failed", identity.reason, identity.reason_code);
+      throw new LocalAuthorityProviderOpenError(source, "local_authority_provider_open_failed", identity.reason, identity.reason_code);
     }
     if (identity.store_identity !== storeIdentity) {
-      throw new LocalAuthorityProviderOpenError("sqlite_v0", "local_authority_provider_identity_mismatch", "Selected SQLite authority identity changed");
+      throw new LocalAuthorityProviderOpenError(source, "local_authority_provider_identity_mismatch", `Selected ${provider} authority identity changed`);
     }
-    // Keep every subsequent operation fenced to the selected lineage.
-    return new SqliteAuthorityStore(p.sqlite, goalId, {existingOnly: true, expectedIdentity: storeIdentity});
+    // The binding is checked again on every operation, including cached reads.
+    return new Store(directory, goalId, {existingOnly: true, expectedIdentity: storeIdentity});
   } catch (error) {
     if (error instanceof LocalAuthorityProviderOpenError) throw error;
-    throw new LocalAuthorityProviderOpenError("sqlite_v0", "local_authority_provider_open_failed", "Selected SQLite authority could not be opened");
+    throw new LocalAuthorityProviderOpenError(source, "local_authority_provider_open_failed", `Selected ${provider} authority could not be opened`);
   }
+}
+
+/** Called under the Goal's canonical writer guard, only after the target's
+ * complete history/receipts were independently verified. No implicit fallback. */
+export async function publishLocalAuthoritySelection(root: string, goalId: string,
+  provider: "file" | "sqlite", storeIdentity: string): Promise<void> {
+  if (!new RegExp(`^${provider}:[0-9a-f]{32}$`).test(storeIdentity)) throw selectorError("Invalid local store identity");
+  await durableWriteJson(localAuthorityProviderPaths(root, goalId).marker,
+    {schema_version: SCHEMA, provider, goal_id: goalId, store_identity: storeIdentity});
 }
 
 async function openSelectedPostgreSql(
@@ -197,7 +221,7 @@ export async function openLocalAuthorityStoreHandle(
   dependencies: LocalAuthorityProviderDependencies = {},
   options: {existingOnly?: boolean} = {},
 ): Promise<LocalAuthorityStoreHandle> {
-  const p = paths(root, goalId);
+  const p = localAuthorityProviderPaths(root, goalId);
   let raw: string;
   try { raw = await readFile(p.marker, "utf8"); }
   catch (error) {
@@ -218,21 +242,13 @@ export async function openLocalAuthorityStoreHandle(
   let config: unknown;
   try { config = JSON.parse(raw); }
   catch { throw new LocalAuthorityProviderOpenError(null, "local_authority_selector_invalid", "Invalid local authority provider selector JSON"); }
-  if (!isAuthorityJsonObject(config) || config.schema_version !== SCHEMA || config.goal_id !== goalId ||
-      (config.provider !== "sqlite" && config.provider !== "postgresql")) {
-    throw selectorError("Invalid local authority provider selector");
+  const selection = decodeLocalAuthoritySelection(config, goalId);
+  if (selection.provider === "postgresql") {
+    const store = await openSelectedPostgreSql(selection, dependencies);
+    return {store, provider: "postgresql", sourceAuthority: sourceFor("postgresql")};
   }
-  if (config.provider === "sqlite") {
-    if (!hasExactAuthorityKeys(config, ["schema_version", "provider", "goal_id", "store_identity"]) ||
-        typeof config.store_identity !== "string" || !/^sqlite:[0-9a-f]{32}$/.test(config.store_identity)) {
-      throw selectorError("Invalid SQLite authority provider selector");
-    }
-    const store = await openSelectedSqlite(root, goalId, config.store_identity);
-    return {store, provider: "sqlite", sourceAuthority: sourceFor("sqlite")};
-  }
-  const selection = decodePostgreSqlSelection(config, goalId);
-  const store = await openSelectedPostgreSql(selection, dependencies);
-  return {store, provider: "postgresql", sourceAuthority: sourceFor("postgresql")};
+  const store = await openSelectedLocal(root, goalId, selection.provider, selection.store_identity);
+  return {store, provider: selection.provider, sourceAuthority: sourceFor(selection.provider)};
 }
 
 export async function openLocalAuthorityStore(
@@ -246,10 +262,11 @@ export async function openLocalAuthorityStore(
 
 /** Administrative opt-in for an empty, unpromoted goal; no implicit migration. */
 export async function selectLocalSqliteAuthority(root: string, goalId: string, execute: boolean) {
-  const p = paths(root, goalId);
+  const p = localAuthorityProviderPaths(root, goalId);
   return withFileMutationLock(shadowMaintenanceLockPath(root, goalId), async () => {
     if (existsSync(p.marker)) {
-      await openLocalAuthorityStore(root, goalId);
+      const selected = await openLocalAuthorityStoreHandle(root, goalId);
+      if (selected.provider !== "sqlite") throw new Error("Provider selection cannot replace an existing authority; use a reviewed migration");
       return {ok: true, provider: "sqlite", changed: false, executed: execute};
     }
     const fence = await loadLegacyCoordinationWriterFence(root, goalId);

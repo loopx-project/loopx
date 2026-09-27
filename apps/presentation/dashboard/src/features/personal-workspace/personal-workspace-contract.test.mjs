@@ -28,6 +28,7 @@ const statusSourceSwitcher = source("./status-source-switcher.tsx");
 const workspaceSettings = source("./workspace-settings-page.tsx");
 const styles = source("./personal-workspace.css");
 const dashboard = source("../../views/dashboard-page.tsx");
+const conversationReturns = source("../../data/conversation-returns.ts");
 const tasks = source("./goal-tasks-view.tsx");
 const status = source("../../data/status.ts");
 const chatData = source("../../data/chat.ts");
@@ -100,7 +101,8 @@ assert.doesNotMatch(page.match(/function operationProposalFields[\s\S]*?\n\}/)?.
 assert.match(page, /t\("proposal\.primary\.operationGroup"\)/, "Operation confirmation routes users to the bound group");
 assert.match(chatData, /result_delivery:/, "Dashboard retains operation result-delivery readback");
 assert.match(chatData, /return_delivery\??:/, "Chat messages retain manager return-delivery readback");
-assert.match(dashboard, /deliveryByMessage/, "Manager return polling refreshes delivery state after the message arrives");
+assert.match(dashboard, /reconcileConversationReturns\(/, "Manager return polling uses the shared conversation-return read model");
+assert.match(conversationReturns, /source\.return_delivery \?\? row\.returnDelivery/, "Manager return polling refreshes delivery state after the message arrives");
 assert.match(timeline + page, /ReturnDeliveryStatus/, "Both manager conversation surfaces render return delivery state");
 for (const state of ["delivered", "verification_required", "explicit_unverified"]) {
   assert.match(returnDelivery, new RegExp(state), `Return delivery renders ${state}`);

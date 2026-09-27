@@ -26,7 +26,7 @@ def observe_goal_execution(runtime_root: Path, goal_id: str, *, host: str = "unk
         # This is only a scheduling hint. TS rechecks consent, environment,
         # notice and generation under the same lock used by disable.
         path = usage_ping.state_path()
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding="utf-8"))
         generation = state.get("generation")
         if (goal_id and generation and state.get("consent") != "disabled"
                 and os.environ.get("LOOPX_USAGE_PING") != "0"
@@ -102,7 +102,7 @@ def observe_quota_cycle(*, registry_path: Path, runtime_root: Path, goal_id: str
     """Detach binding discovery and session metadata lookup from quota latency."""
     try:
         import sys
-        state = json.loads(usage_ping.state_path().read_text())
+        state = json.loads(usage_ping.state_path().read_text(encoding="utf-8"))
         if state.get("consent") == "disabled" or not state.get("generation"):
             return
         if os.environ.get("LOOPX_USAGE_PING") == "0" or os.environ.get("DO_NOT_TRACK") == "1" or os.environ.get("CI") == "true":
@@ -153,7 +153,7 @@ def _bound_codex_session(registry_path: Path, goal_id: str, agent_id: str | None
 
 def _dispatch_cycle(request) -> None:
     path = Path(request["path"])
-    state = json.loads(path.read_text())
+    state = json.loads(path.read_text(encoding="utf-8"))
     if state.get("consent") == "disabled" or state.get("generation") != request["generation"]:
         return
     generation = request["generation"]

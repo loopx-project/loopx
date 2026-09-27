@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .assembler import DecisionEvidenceRecords
 from .architecture import build_decision_context_architecture_packet
+from .freshness import render_source_freshness_markdown
 from .profile import resolve_decision_context_activation
 from .private_state import (
     load_private_pending_decision_settlement,
@@ -52,6 +53,10 @@ def _render(payload: dict[str, object]) -> str:
         if isinstance(capability, dict)
         else "decision_context"
     )
+    assembly = payload.get("assembly")
+    freshness = payload.get("source_freshness") or (
+        assembly.get("source_freshness") if isinstance(assembly, dict) else None
+    )
     return "\n".join(
         [
             "# Decision Context",
@@ -62,6 +67,11 @@ def _render(payload: dict[str, object]) -> str:
             f"- source_schemas: `{_collection_size(payload.get('source_schemas'))}`",
             f"- source_count: `{payload.get('source_count', 0)}`",
             "",
+            *(
+                render_source_freshness_markdown(freshness)
+                if isinstance(freshness, dict)
+                else []
+            ),
         ]
     )
 
@@ -324,7 +334,9 @@ def handle_decision_context_command(
             }
         else:
             payload = capture_profile_sources(
-                **capture_args, execute=bool(getattr(args, "execute", False))
+                **capture_args,
+                execute=bool(getattr(args, "execute", False)),
+                health_runtime_root=runtime_root,
             )
     elif args.decision_context_command == "architecture":
         payload = build_decision_context_architecture_packet()

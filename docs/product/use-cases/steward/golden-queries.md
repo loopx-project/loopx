@@ -122,6 +122,15 @@ cause remains unknown. GQ04 permits a reasoned “do not change”; the desired
 answer is not predetermined. GQ06 does not authorize public posting. GQ08 is two
 separate variants: correcting scope and stopping work must not be conflated.
 
+The nearest App pilot composes GQ02/GQ04/GQ08/GQ09: **“给 LoopX 做份社区问卷，先给我草稿。”**
+/ **“Prepare a community survey for LoopX; bring me a draft.”** Follow with
+**“先做中文，别发布。”** / **“Chinese first; do not publish.”** Freeze public reference
+materials, one qualified existing owner and its prior context. Evaluate a real
+readable draft and adopted correction in the original conversation; no posting,
+manual Agent-id lookup, copied context, result relay or reminder. In the deferral
+variant, explain the actual delay and retain that status after reply delivery.
+This composes existing cases; it is not a fixed phrase to recognize or a pass.
+
 ## Freeze a reproducible setup before running
 
 Use disposable Goals, isolated workspaces and a test conversation. Do not modify
@@ -288,7 +297,7 @@ first-use cohorts and release acceptance retain their existing gates.
 
 | Batch | Useful exit | Reused owner / next dependency |
 | --- | --- | --- |
-| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
+| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result, including a late return after the active session changes | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
 | P0 use and continuity | GQ05/GQ11–GQ13 + GQ07–GQ09: dependency adoption, parallel join, peer review and resolved disagreement across two cycles; correct once, interrupt once, resume and return | R2 small-team and R3/M2/M3, artifact versions, existing driver/monitor and return recovery |
 | P1 material and attention | GQ06/GQ10/GQ14–GQ15: materials, attention, dependency replan, explicit mixed profiles and retained constraints | Existing material lifecycle, scoped context and presentation; no new memory installation prerequisite |
 | P2 breadth and launch | GQ16 then GQ17: real host and scale qualification; public-safe showcase/film only claims the separately proven cohort | Existing R6/R7 and release/first-use gates; visual motion explains actual transitions |

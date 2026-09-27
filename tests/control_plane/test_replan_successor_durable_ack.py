@@ -83,7 +83,7 @@ def test_cli_successor_refresh_resets_periodic_window(tmp_path: Path, capsys) ->
         [*reversed(new_runs), compact, *runs], agent_todos={}, agent_id=AGENT) is not None
 
 
-@pytest.mark.parametrize("guard", [None, "replan-different"])
+@pytest.mark.parametrize("guard", [None, "replan-0000000000000000"])
 def test_transition_cannot_settle_a_different_turn_guard(guard) -> None:
     runs = history()
     obligation = autonomous_replan_obligation_from_runs(runs, agent_todos={}, agent_id=AGENT)
@@ -104,6 +104,145 @@ def test_transition_settles_only_exact_guard_and_owner() -> None:
     with pytest.raises(ReplanWritebackRejected):
         enforce_open_replan_writeback(
             state_text=successor_state(obligation["obligation_id"], owner="another-agent"), **kwargs)
+
+
+@pytest.mark.parametrize("invalid", ["done", "deferred", "missing_target"])
+def test_non_runnable_successor_cannot_settle_original_guard(invalid: str) -> None:
+    runs = history()
+    obligation = autonomous_replan_obligation_from_runs(runs, agent_todos={}, agent_id=AGENT)
+    state = successor_state(obligation["obligation_id"])
+    state = (state.replace("target_key=source-audit ", "") if invalid == "missing_target"
+        else state.replace("status=open", f"status={invalid}"))
+    with pytest.raises(ReplanWritebackRejected):
+        enforce_open_replan_writeback(newest_first_runs=runs, state_text=state,
+            agent_id=AGENT, goal_id=GOAL, guard_scoped=True,
+            guard_semantic_replan_obligation_id=obligation["obligation_id"])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_canonical_periodic_successor_settles_original_open_validation_todo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    """A new task changes the path, not the original task's completion."""
+    import subprocess
+    import sys
+
+    from canonical_authority_fixture import (
+        initialize_canonical_authority, isolate_sqlite_runtime,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.goals.goal_vision import compact_goal_vision_packet, normalize_goal_vision_packet
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    project.mkdir()
+    state = project / "ACTIVE_GOAL_STATE.md"
+    original_todo = "todo_original_validation"
+    state.write_text(
+        "---\nstatus: active\n---\n\n# Goal\n\n## Agent Todo\n\n"
+        "- [ ] [P1] Validate the original artifact.\n"
+        f"  <!-- loopx:todo todo_id={original_todo} status=open "
+        f"task_class=advancement_task claimed_by={AGENT} action_kind=validate "
+        "validation_command=pytest -->\n"
+    )
+    runtime = tmp_path / "runtime"
+    index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
+    index.parent.mkdir(parents=True)
+    runs = history()
+    baseline_json = index.parent / "synthetic-baseline.json"
+    baseline_markdown = index.parent / "synthetic-baseline.md"
+    baseline_json.write_text(json.dumps({"ok": True, "fixture": "synthetic-replan"}))
+    baseline_markdown.write_text("# Synthetic prior delivery\n")
+    for row in runs:
+        row.update(json_path=str(baseline_json), markdown_path=str(baseline_markdown))
+    runs[0]["agent_vision"] = compact_goal_vision_packet(normalize_goal_vision_packet({
+        "goal_id": GOAL, "agent_id": AGENT, "state": "vision_drift_detected",
+        "todo_delta": [f"retain:{original_todo}"],
+        "vision_patch": {
+            "acceptance_summary": "Independently validate the source artifact.",
+            "replan_trigger_summary": "The source acceptance remains open.",
+            "advancement_policy": "repeat_until_closed",
+        },
+    }, goal_id=GOAL, agent_id=AGENT))
+    runs[0]["vision_checkpoint"] = {
+        "agent_id": AGENT, "required": True, "satisfied": False,
+        "triggers": [{"kind": "material_delivery_outcome", "delivery_outcome": "outcome_progress"}],
+    }
+    index.write_text("".join(json.dumps(row) + "\n" for row in reversed(runs)))
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": GOAL, "status": "active", "repo": str(project), "state_file": state.name,
+        "domain": "synthetic-replan",
+        "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
+        "quota": {"compute": 1.0, "window_hours": 24},
+        "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
+    }]}))
+    todos = parse_active_state_todos(state.read_text(), item_limit=None)["agent_todos"]["items"]
+    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
+        goal_id=GOAL, todos=todos, handoff_mode="soft_claim", leases=[],
+    ), state_path=state, provider=provider)
+
+    def call(*args: str, expected_error: str | None = None) -> dict:
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--runtime-root", str(runtime), "--format", "json", *args], cwd=project,
+            capture_output=True, text=True, timeout=60)
+        payload = json.loads(result.stdout)
+        if expected_error is not None:
+            assert result.returncode == 1, payload
+            assert expected_error in payload["error"], payload
+        else:
+            assert result.returncode == 0, (payload.get("error"), payload.get("reason"), payload.get("status"))
+        return payload
+
+    binding = ["--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", original_todo,
+               "--turn-instance-id", "turn-original-periodic-review"]
+    guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", "turn-original-periodic-review")
+    assert guard["selected_todo"]["todo_id"] == original_todo
+    obligation = guard["autonomous_replan_obligation"]
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Verify an independent source artifact",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "independent-source-artifact", "--operation-id", "periodic-successor",
+        "--replan-obligation-id", obligation["obligation_id"])
+    assert added["replan_transition"]["recorded"] is True
+    refresh_args = ("refresh-state", *binding, "--classification", "bounded_replan_progress",
+        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
+        "--vision-unchanged-reason", "The original validation remains open; the independent successor changes the path.",
+        "--no-global-sync", "--suppress-external-sinks")
+    refreshed = call(*refresh_args)
+    persisted = json.loads(Path(refreshed["json_path"]).read_text())
+    delta = persisted["autonomous_replan_ack"]["semantic_delta"]
+    assert delta["obligation_id"] == obligation["obligation_id"]
+    assert delta["successor_todo_id"] == added["todo_id"]
+    spend_args = ("quota", "spend-slot", *binding, "--slots", "1",
+                  "--source", "heartbeat", "--execute")
+    spent = call(*spend_args)
+    assert spent["appended"] is True
+    assert spent["settlement_progress"]["state"] == "settled"
+    assert call(*refresh_args)["appended"] is False
+    assert call(*spend_args)["appended"] is False
+    settlement_runs = [json.loads(line) for line in index.read_text().splitlines()
+        if json.loads(line).get("turn_instance_id") == "turn-original-periodic-review"]
+    assert len(settlement_runs) == 2
+    assert sum(row.get("classification") == "quota_slot_spent" for row in settlement_runs) == 1
+    original = call("todo", "list", "--goal-id", GOAL, "--todo-id", original_todo)["todo"]
+    assert original["status"] == "open"
+    # Review settlement does not establish Vision acceptance or Todo completion.
+    next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", "turn-next-vision-review")
+    frontier = next_guard["goal_frontier_projection"]
+    assert "vision_outcome_checkpoint_required" in [gap["kind"] for gap in frontier["acceptance_gaps"]]
+    assert frontier["vision_continuation_audit"]["decision"] == "acceptance_gap_open"
+    call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--todo-id", original_todo,
+        "--turn-instance-id", "turn-next-vision-review")
+    call("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", original_todo,
+        "--turn-instance-id", "turn-next-vision-review", "--classification", "evidence_validated",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks",
+        expected_error="controller-declared completion validation")
 
 
 @pytest.mark.parametrize("route", ["writeback", "successor", "canonical-successor"])

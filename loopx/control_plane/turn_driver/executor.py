@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -33,6 +32,7 @@ from .command_validation import (
 )
 from .driver import selected_turn_todo
 from .execution_readback import execution_payload
+from .host_process_transport import run_host_process
 from .host_binding import (
     managed_executor_unavailable_payload,
 )
@@ -657,34 +657,31 @@ def _run_host(
     project: Path,
     timeout_seconds: float,
 ) -> dict[str, Any]:
+    stdout: list[str] = []
+    stderr_chars = 0
+
+    def count_stderr(text: str) -> None:
+        nonlocal stderr_chars
+        stderr_chars += len(text)
+
     try:
-        completed = subprocess.run(
-            list(argv),
-            cwd=project,
-            input=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
-            text=True, encoding="utf-8", errors="replace",
-            capture_output=True,
-            timeout=max(1.0, timeout_seconds),
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        observed = run_host_process(argv, project=project,
+            input_text=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+            timeout_seconds=timeout_seconds, stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
+            on_stdout=stdout.append, on_stderr=count_stderr)
+    except (OSError, RuntimeError, ValueError) as exc:
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
-    if completed.returncode != 0:
-        return {
-            "ok": False,
-            "reason": "host command returned non-zero",
-            "returncode": completed.returncode,
-            "stderr_chars": len(completed.stderr),
-        }
-    encoded = completed.stdout.encode("utf-8")
-    if len(encoded) > HOST_RESULT_MAX_BYTES:
-        return {
-            "ok": False,
-            "reason": "host stdout exceeded the result budget",
-            "returncode": 0,
-        }
+    if observed["outcome"] == "output_limit":
+        return {"ok": False, "reason": "host stdout exceeded the result budget", "returncode": observed["returncode"]}
+    if observed["outcome"] != "exited":
+        return {"ok": False, "reason": "host process " + observed["outcome"], "returncode": observed["returncode"]}
+    if not observed["output_complete"]:
+        return {"ok": False, "reason": "host output observation incomplete", "returncode": observed["returncode"]}
+    if observed["returncode"] != 0:
+        return {"ok": False, "reason": "host command returned non-zero",
+                "returncode": observed["returncode"], "stderr_chars": stderr_chars}
     try:
-        value = json.loads(completed.stdout)
+        value = json.loads("".join(stdout))
     except json.JSONDecodeError:
         return {
             "ok": False,

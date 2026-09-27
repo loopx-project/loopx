@@ -37,8 +37,13 @@ advancement work remains active.
 - An executed turn-scoped poll returns `turn_continuation`. An exact match
   between `settlement_todo_id` and the observed `todo_id` closes the no-spend
   monitor Turn and requires a fresh `--turn-instance-id`. A different admitted
-  monitor Todo is auxiliary: it records the observation but leaves the original
-  advancement Turn open for its durable writeback and single spend. Without an
+  monitor Todo is auxiliary: it records the observation independently of the
+  original advancement's closeout. If closeout is pending, the Turn remains open
+  for its durable writeback and single spend. If it is already settled, even a
+  **first** due observation is allowed, and continuation reports
+  `current_turn_settled=true`, `next_turn_required=true`; independent advancement
+  still needs a fresh Turn. Replays read current verified closeout rather than
+  reopening it from the receipt's historical continuation. Without an
   exact or typed auxiliary binding the response fails closed from claiming the
   Turn settled.
 
@@ -48,6 +53,13 @@ The CLI path must prove that multiple due monitors can each update their cadence
 and replay idempotently in one settlement Turn without spending quota, while a
 guard replay continues to select the original advancement Todo. Existing
 wrong-Todo tests for receipt-bound monitor Turns must remain passing.
+
+This corrects the previous default rejection of first auxiliary observations
+after advancement settlement. Both call orders must retain one primary debit,
+one receipt per observation identity and current due/actor/lease admission. It
+does not add a configuration switch, relax Monitor authority or retry external
+observations. Existing CLI/managed-Turn receipts provide the readback; no new
+frontend or Lark command/settings owner is introduced.
 
 ### Canonical leased observations and recovery
 
@@ -207,8 +219,11 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
 - 执行成功的 turn-scoped poll 会返回 `turn_continuation`。仅当
   `settlement_todo_id` 与被观察的 `todo_id` 精确一致时，才完成该 monitor Turn 的
   不计费结算，并要求后续使用新的 `--turn-instance-id`。不同但已准入的 monitor
-  Todo 属于辅助观察：只写观察回执，原 advancement Turn 仍需完成 durable
-  writeback 与唯一一次 spend。既非精确匹配、也无 typed auxiliary binding 时，响应
+  Todo 属于辅助观察：观察回执与原 advancement 的结算独立。若尚未结算，仍需完成
+  durable writeback 与唯一一次 spend；若已经结算，**首次**到期观察同样可以登记，
+  continuation 返回 `current_turn_settled=true`、`next_turn_required=true`，新的独立
+  推进仍须新 Turn。重放按当前已核验结算读回，不用历史 continuation 重开旧 Turn。
+  既非精确匹配、也无 typed auxiliary binding 时，响应
   必须失败关闭，不能宣称 Turn 已结算。
 
 ### 验收
@@ -216,6 +231,11 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
 CLI 端到端测试必须证明：多个到期 monitor 能在同一结算 Turn 中分别更新周期并
 幂等重放、全程不消耗配额；随后重放 guard 仍选择原 advancement Todo。同时，
 receipt-bound monitor Turn 的错误 Todo 替换测试必须继续通过。
+
+这是对原默认行为的修正：不再拒绝 advancement 结算后的首次辅助观察。两种调用
+顺序均须保留一次主任务扣额、每个观察身份一个回执，以及当前到期／actor／租约
+准入。不新增配置开关、不放宽 Monitor 权限、不重新执行外部观察。CLI／managed
+Turn 复用现有回执读回；不另建前端或 Lark 命令／配置权威。
 
 ### Canonical 带租约观察与恢复
 

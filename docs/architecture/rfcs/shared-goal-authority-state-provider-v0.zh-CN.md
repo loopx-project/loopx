@@ -30,6 +30,24 @@ PR：本次恢复切片、外部执行区间保护、整 Goal 激活/回退集�
 缺失证据另列，不能保证最终缺陷修复数量。
 [当前清单、依据及退出条件](ledger/shared-goal-authority-state-provider-v0/2026-09-27-recovery-audit.zh-CN.md)。
 
+同一窗口另有已交付的进程监督切片：通用命令与 Codex CLI 的进程生命周期改由
+一个 TS supervisor 承担，因此执行中租约约束仍开放，不由本次关闭；旧“三个
+架构包”仍是指针，不是递减 PR 计数器。该切片的逐项计划、估算变化与边界单列。
+[核对的逐项计划、估算变化与边界](ledger/shared-goal-authority-state-provider-v0/2026-09-27-host-supervision.zh-CN.md)。
+
+## Todo 事件路径退役（2026-09-25）
+
+PR #5054 将原先的事件 writer 捕获方案改为删除这条实验性 Todo 来源。
+`events.jsonl` 不再参与投影、叠加、回填或 completion；默认路径及显式别名指向的
+非空文件会被明确拒绝使用，原字节保留。空文件或缺失文件允许 Markdown 路径继续。
+已晋升 Goal 仍以选定 provider 为准，不受遗留文件影响。Supervisor 改用自己拥有的
+本地私有实验日志。
+
+这是通过删除关闭旧来源分支，不是宣称事件 writer 已通过捕获资格验证。
+整 Goal 迁移／回退、默认启用仍须满足现有验收；不能据此宣称所有 Python writer
+已经退役或 PostgreSQL 已可部署。剩余工作不再新增“补事件捕获”PR。
+[决策与退出条件](ledger/shared-goal-authority-state-provider-v0/2026-09-25-todo-event-retirement.zh-CN.md)。
+
 File 历史存储在 #5063 的读取缓存和 RPC 预算之上，复用现有 TS checkpoint/delta
 编码；物理格式升级保留原版本、回执和每条完整历史投影。正常读写只接受 v1，
 安装入口调用显式升级流程，先自动备份、验证再迁移；旧解析器仅用于迁移。File／
@@ -937,7 +955,7 @@ projection 后的累计重写。这是 payload 解析估算，不是 SSD 物理�
 
 在既有 TypeScript `AuthorityStore` owner 后资格化**嵌入式事务存储，首选候选为
 SQLite**。本地 goal 不应依赖 PostgreSQL 服务。file-v0 保留作 conformance/import
-基线，通用十天 goal 晋升不能依靠其全历史重写。[PR #4121](https://github.com/huangruiteng/loopx/pull/4121)
+基线，通用十天 goal 晋升不能依靠其全历史重写。[PR #4121](https://github.com/loopx-project/loopx/pull/4121)
 在该 owner 后提供显式 opt-in 的 SQLite conformance 候选；它本身不证明长程耐久性，
 也不切换默认值。依赖／打包、Windows/macOS/Linux 与受支持 Node profile 的证据仍是
 显式门禁。分段文件日志作为比较候选；PostgreSQL 继续走独立的共享服务路线。

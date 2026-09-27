@@ -4,7 +4,7 @@ import {normalizeTodoUpdateInput, prepareUpdatedTodo, type CoordinationTodoUpdat
 import {todoUpdateAdmissionRejection} from "./todo_update_admission.ts";
 import { createHash } from "node:crypto";
 import {acceptanceWorkGuard, acceptanceCompletionRequirements, validateAcceptanceCompletion,
-  acceptanceRequire, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
+  acceptanceRequire, acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -633,15 +633,6 @@ function acceptanceSourceBinding(input: ResolvedCoordinationTodoTerminalLifecycl
   return {goal_id: input.goal_id, todo_id: input.todo_id, operation_id: input.operation_id,
     provider_revision: providerRevision, contract_revision: requirements.contract_revision,
     contract_digest: requirements.contract_digest, todo_semantic_digest: requirements.todo_semantic_digest};
-}
-
-function acceptanceValidationEffects(requirements: AcceptanceCompletionRequirements, todo: JsonObject): JsonObject[] {
-  return requirements.criteria.map(criterion => ({criterion_id: criterion.id, effect: {
-    kind: "caller_validation", validation_command: null, validation_argv: criterion.validation_argv,
-    validation_label: criterion.id, validation_timeout_seconds: criterion.validation_timeout_seconds,
-    ...(criterion.validation_files == null ? {} : {validation_files: criterion.validation_files}),
-    task_repository: todo.task_repository ?? null,
-  }}));
 }
 
 /** Only the trusted execution adapter supplies these fresh, structured runner

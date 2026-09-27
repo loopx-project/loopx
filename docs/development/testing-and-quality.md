@@ -683,6 +683,20 @@ override or merge bypass.
 断言，但必须保留解析、必需字段、锚点和语义差异检查；candidate 始终执行当前绝对
 预算。measurement-only 不能用于 candidate，也不是合并旁路。
 
+The real-CLI differential runner and pytest use the same fixed-width fixture
+alias **per default scenario**. Alias the scenario root, not just its parent:
+otherwise scenario-name suffixes change repeated absolute command paths and
+can create a size failure unrelated to output growth. Measure unmodified
+stdout, keep fixture populations and budgets unchanged, and retain the separate
+real-long-path command-integrity check. This aligns measurement layouts; it does
+not shorten production commands or qualify long-path output under short-path caps.
+
+独立 real-CLI 对照和 pytest 对每个默认场景使用相同的固定宽度 fixture 别名。
+别名应指向场景根目录，而非仅指向父目录；否则场景名会改变多处绝对命令路径，
+产生与输出增长无关的尺寸失败。仍测量未经改写的 stdout，保留原负载、预算及
+独立的真实长路径命令完整性检查。这仅统一测量布局，不缩短生产命令，也不将
+长路径输出冒充短路径预算已通过。
+
 The PR-review packet's `semantic_alignment` rule consumes this evidence through
 the existing `validation_matrix` and `observable_semantics` rows. It does not
 add a separate budget receipt or approval gate. The result checker verifies

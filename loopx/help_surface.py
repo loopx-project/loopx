@@ -370,6 +370,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "import-doc-registry-authority",
         "lark-inbox",
         "migrate-state",
+        "native-child",
         "ml-experiment",
         "opencode2-goal-worker",
         "operator-gate",

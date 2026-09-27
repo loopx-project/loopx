@@ -1,11 +1,58 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 
 const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: "/fixture",
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
 const params = {agent_id: "coordinator", binding_id: "review",
   config: {schema_version: "loopx_local_delegation_v0", bindings: [binding]}};
+
+const declaration = {validation_command: null, validation_command_argv: ["node", "validate.ts"],
+  validation_label: "Independent verification", validation_timeout_seconds: 5};
+const validationTodo = {todo_id: binding.todo_id, done: false, status: "open",
+  completion_validation_required: true, completion_validation_sha256: canonicalAuthoritySha256(declaration)};
+const validationBasis = {status: "loaded", provider_revision: "fixture:1", todo: validationTodo,
+  completion_requirements: null};
+
+test("independent delegation requires the current canonical declaration, not a Goal-wide contract", () => {
+  const plan = delegationValidationPlan({binding, basis: validationBasis, declaration});
+  assert.equal(plan.state, "ready");
+  assert.equal(plan.source, "todo_validation");
+  assert.equal(plan.canonical_done, false);
+  assert.deepEqual((plan.effects as Record<string, unknown>[])[0].validation_argv, ["node", "validate.ts"]);
+  const completed = delegationValidationPlan({binding, declaration, basis: {...validationBasis,
+    todo: {...validationTodo, status: "done", done: true}}});
+  assert.equal(completed.state, "ready");
+  assert.equal(completed.canonical_done, true);
+  for (const value of [null, {...declaration, validation_command_argv: ["node", "other.ts"]},
+    {...declaration, validation_command_argv: []}]) {
+    assert.equal(delegationValidationPlan({binding, basis: validationBasis, declaration: value}).state, "unbound");
+  }
+  const undeclared = {...validationBasis, todo: {todo_id: binding.todo_id, status: "open", done: false}};
+  assert.equal(delegationValidationPlan({binding, basis: undeclared, declaration: null}).state, "unbound");
+  assert.throws(() => delegationValidationPlan({binding, basis: undeclared, declaration}), /without canonical/);
+  assert.throws(() => delegationValidationPlan({binding, basis: {...validationBasis,
+    todo: {...validationTodo, todo_id: "other"}}, declaration}), /matching canonical/);
+  assert.throws(() => delegationValidationPlan({binding, basis: {...validationBasis,
+    completion_requirements: undefined}, declaration}));
+});
+
+test("owner acceptance and ordinary Todo validation remain cumulative", () => {
+  const criteria = [{id: "review", description: "Check the result", validation_argv: ["node", "owner.ts"],
+    validation_timeout_seconds: 5, validation_files: [{path: "owner.ts", sha256: "a".repeat(64)}]}];
+  const basis = {...validationBasis, completion_requirements: {todo_id: binding.todo_id, criteria}};
+  const plan = delegationValidationPlan({binding, basis, declaration});
+  assert.equal(plan.source, "goal_acceptance");
+  assert.equal((plan.effects as unknown[]).length, 2);
+  assert.equal(delegationValidationPlan({binding, basis, declaration: null}).state, "unbound");
+  const onlyOwner = {...basis, todo: {todo_id: binding.todo_id, status: "open", done: false}};
+  assert.equal(delegationValidationPlan({binding, basis: onlyOwner, declaration: null}).state, "ready");
+  for (const requirements of [{todo_id: "other", criteria}, {todo_id: binding.todo_id, criteria: []}]) {
+    assert.throws(() => delegationValidationPlan({binding, declaration,
+      basis: {...basis, completion_requirements: requirements}}), /matching owner/);
+  }
+});
 
 test("same explicit grant contract applies to a coordinator and an ordinary member", () => {
   assert.deepEqual(selectDelegationBinding(params), binding);
@@ -94,6 +141,70 @@ test("preflight separates task admission, acceptance binding and runtime availab
   assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
     would_invoke_host: false}}}).state, "turn_blocked");
   assert.throws(() => delegationPreflight({...params, preview: {...preview, effects: {...effects, host_invoked: true}}}));
+});
+
+const runtimePreflight = (executor: Record<string, unknown>) => delegationPreflight({
+  binding, validation_files_current: true, acceptance: {todo_id: binding.todo_id, state: "ready"},
+  preview: {dry_run: true, status: "preview",
+    effects: {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: binding.todo_id},
+    managed_executor: executor},
+});
+
+test("preflight retains scoped runtime facts without leaking host configuration", () => {
+  const probe = {schema_version: "managed_runtime_probe_v0", scope: "probing_interpreter",
+    module: "deepseek_harness", available: false};
+  const remedies = ["configure_dsh_runtime", "select_individual_host"];
+  const result = runtimePreflight({executor: "dsh", available: false,
+    unavailable_reason: "dsh_runtime_unavailable", execution_profile: "explicit-profile",
+    runtime_probe: {...probe, private_path: "/private/interpreter"}, unavailable_remediation: remedies,
+    credential_env: "PRIVATE_CREDENTIAL", endpoint_env: "PRIVATE_ENDPOINT"});
+  assert.equal(result.state, "runtime_unavailable");
+  assert.deepEqual(result.executor, {host: "dsh", available: false,
+    reason: "dsh_runtime_unavailable", profile: "explicit-profile",
+    runtime_probe: probe, unavailable_remediation: remedies});
+  assert.equal(JSON.stringify(result).includes("PRIVATE_"), false);
+  assert.equal(JSON.stringify(result).includes("/private/interpreter"), false);
+  assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
+});
+
+test("runtime probes cannot override credential failure or unprobed generic readiness", () => {
+  const result = runtimePreflight({executor: "dsh", available: false,
+    unavailable_reason: "operator_credential_unconfigured", execution_profile: "explicit-profile",
+    runtime_probe: {schema_version: "managed_runtime_probe_v0", scope: "configured_runner",
+      module: null, available: true},
+    unavailable_remediation: ["configure_operator_credential", "select_individual_host"]});
+  assert.equal(result.state, "runtime_unavailable");
+  assert.equal((result.executor as Record<string, unknown>).available, false);
+  assert.deepEqual((result.executor as Record<string, unknown>).runtime_probe,
+    {schema_version: "managed_runtime_probe_v0", scope: "configured_runner", module: null, available: true});
+  const generic = runtimePreflight({executor: "generic-cli", available: null,
+    unavailable_reason: null, execution_profile: null, runtime_probe: null, unavailable_remediation: []});
+  assert.equal(generic.state, "runtime_unverified");
+  assert.deepEqual(generic.executor, {host: "generic-cli", available: null, reason: null,
+    profile: null, runtime_probe: null, unavailable_remediation: []});
+});
+
+test("malformed scoped runtime facts fail closed; legacy omissions remain compatible", () => {
+  const probe = {schema_version: "managed_runtime_probe_v0", scope: "probing_interpreter",
+    module: "deepseek_harness", available: false};
+  const executor = {executor: "dsh", available: false, unavailable_reason: "dsh_runtime_unavailable",
+    execution_profile: "explicit-profile", runtime_probe: probe, unavailable_remediation: ["configure_dsh_runtime"]};
+  for (const runtime_probe of [false, {}, {...probe, schema_version: "other"},
+    {...probe, scope: "whole_machine"}, {...probe, scope: ["probing_interpreter"]},
+    {...probe, module: "/private/path"},
+    {...probe, available: "false"}]) {
+    assert.throws(() => runtimePreflight({...executor, runtime_probe}), /runtime probe/);
+  }
+  for (const unavailable_remediation of [null, "configure_dsh_runtime", ["/private/path"],
+    ["x".repeat(81)], Array(9).fill("configure_dsh_runtime")]) {
+    assert.throws(() => runtimePreflight({...executor, unavailable_remediation}), /runtime remediation/);
+  }
+  const legacy = runtimePreflight({executor: "dsh", available: true, unavailable_reason: null,
+    execution_profile: "explicit-profile"});
+  assert.equal(legacy.state, "launchable");
+  assert.deepEqual(legacy.executor,
+    {host: "dsh", available: true, reason: null, profile: "explicit-profile"});
 });
 
 test("requester adoption needs accepted downstream use, not reading, revision or prose", () => {

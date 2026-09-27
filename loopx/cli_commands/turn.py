@@ -47,7 +47,6 @@ from ..control_plane.turn_driver import (
     inspect_loopx_turn_journal,
     selected_turn_todo,
 )
-from ..control_plane.turn_driver.host_binding import managed_executor_binding
 from ..control_plane.operator_provider import operator_provider_environ
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
@@ -67,7 +66,7 @@ from .turn_rendering import (
     render_loopx_turn_execution_markdown as _render_loopx_turn_execution_markdown,
     render_loopx_turn_plan_markdown as _render_loopx_turn_plan_markdown,
 )
-from .turn_selection import resolve_turn_resume_session_binding
+from .turn_selection import managed_executor_cli_binding, resolve_turn_resume_session_binding
 from .turn_todo_writeback import (
     write_turn_repair_update,
     write_turn_validated_completion,
@@ -129,9 +128,7 @@ def handle_turn_command(
             goal_id=args.goal_id,
             planned_goal_ref=goal_ref,
         )
-        strict_goal_admission = (
-            goal_admission if goal_admission.enabled else None
-        )
+        strict_goal_admission = goal_admission if goal_admission.enabled else None
         # Planning and dry-run execution inspect existing admitted intents.
         # Only an executing wake may sync inboxes or reserve a calendar window.
         turn_start_hook_dispatch = {}
@@ -202,46 +199,9 @@ def handle_turn_command(
             iteration_context_policy=args.iteration_context.replace("-", "_"),
             goal_ref=goal_ref,
         )
-        # The executor readback names where this Turn's model work runs and
-        # whether that host can launch here, so a caller never has to infer it
-        # from the host id. The explicit runner hook is the one launchability
-        # fact only this command layer knows.
-        # Goal state and machine authentication have different owners. A Goal
-        # runtime override must not select a different credential store.
+        # Resolve machine authentication once for the readback and host launch.
         operator_environ = operator_provider_environ()
-        payload["managed_executor"] = managed_executor_binding(
-            args.host,
-            # The credential a managed Turn authenticates with is this
-            # machine's resolved pair, not whatever the invoking shell happens
-            # to export: the readback above the launch and the launch itself
-            # have to name the same credential.
-            environ=operator_environ,
-            dsh_runner_configured=bool(getattr(args, "dsh_runner", None)),
-            provider=(
-                getattr(args, "dsh_provider", None)
-                if args.host == "dsh"
-                else None
-            ),
-            model=(
-                getattr(args, "dsh_model", None)
-                if args.host == "dsh"
-                else getattr(args, "codex_model", None)
-                if args.host == "codex-cli"
-                else None
-            ),
-            reasoning_effort=(
-                getattr(args, "dsh_reasoning_effort", None)
-                if args.host == "dsh"
-                else getattr(args, "codex_reasoning_effort", None)
-                if args.host == "codex-cli"
-                else None
-            ),
-            max_tokens=(
-                getattr(args, "dsh_max_tokens", None)
-                if args.host == "dsh"
-                else None
-            ),
-        )
+        payload["managed_executor"] = managed_executor_cli_binding(args, environ=operator_environ)
         if (
             args.turn_command == "run-once"
             and args.execute
@@ -326,9 +286,7 @@ def handle_turn_command(
                     goal_id=args.goal_id,
                     planned_goal_ref=payload.get("goal_ref"),
                 )
-                strict_goal_admission = (
-                    goal_admission if goal_admission.enabled else None
-                )
+                strict_goal_admission = goal_admission if goal_admission.enabled else None
                 if strict_goal_admission is not None:
                     strict_goal_admission.require_current()
             if payload.get("route", {}).get("kind") == "capability_action_required":

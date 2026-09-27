@@ -232,12 +232,12 @@ RETURN_PATH_ANCHOR = {
 TWIN_ROOT_ANCHOR = "loopx/control_plane"
 TWIN_BUDGET_ANCHOR = 43
 BUDGET_ANCHOR = {
-    "same_runtime_forks": 17,
-    "same_runtime_fork_definitions": 39,
+    "same_runtime_forks": 15,
+    "same_runtime_fork_definitions": 35,
     "conflicting_values": 16,
     "conflicting_definitions": 55,
-    "schema_version_same_runtime_forks": 7,
-    "multi_value_twins": 13,
+    "schema_version_same_runtime_forks": 5,
+    "multi_value_twins": 11,
     "multi_value_forks": 2,
     "multi_value_forks_semantic": 1,
     "multi_value_fork_definitions": 6,

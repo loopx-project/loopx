@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..control_plane.effect_runtime import effect_runtime_result
 from ..paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
-from ..history import load_registry
+from ..control_plane.projects.registry_codec import load_registry
 
 
 def register_authority_archive_command(
@@ -16,7 +16,7 @@ def register_authority_archive_command(
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     parser = subparsers.add_parser(
-        "authority-archive", help="Export, verify, audit or restore a canonical authority copy."
+        "authority-archive", help="Back up, audit, restore or migrate canonical local authority."
     )
     add_subcommand_format(parser)
     actions = parser.add_subparsers(dest="authority_archive_action", required=True)
@@ -27,6 +27,15 @@ def register_authority_archive_command(
     mode.add_argument("--execute", action="store_true")
     upgrade.add_argument("--all-known", action="store_true", help="Include runtime roots of registered projects.")
     mode.add_argument("--require-current", action="store_true", help="Fail if a format upgrade is needed; never write.")
+    for name in ("plan-migration", "migrate"):
+        action = actions.add_parser(name, help="Review or execute a quiescent File/SQLite provider migration.")
+        action.add_argument("--goal-id", required=True)
+        action.add_argument("--plan", type=Path, required=True)
+        if name == "plan-migration":
+            action.add_argument("--provider", choices=("file", "sqlite"), required=True)
+        else:
+            action.add_argument("--plan-sha256", required=True)
+            action.add_argument("--execute", action="store_true", help="Publish the verified provider; otherwise preview.")
     for name in ("export", "verify", "restore", "audit"):
         action = actions.add_parser(name)
         action.add_argument("--archive", type=Path, required=True)
@@ -63,6 +72,14 @@ def handle_authority_archive_command(
         elif args.authority_archive_action == "upgrade":
             request.update(runtime_roots=authority_upgrade_roots(
                 registry_path, runtime_root_arg, all_known=args.all_known), execute=args.execute)
+        elif args.authority_archive_action in {"plan-migration", "migrate"}:
+            request.update(goal_id=args.goal_id, plan=str(args.plan.expanduser().resolve()),
+                           runtime_root=str(resolve_runtime_root(load_registry(registry_path), runtime_root_arg,
+                                                                 registry_path=registry_path)))
+            if args.authority_archive_action == "plan-migration":
+                request["provider"] = args.provider
+            else:
+                request.update(plan_sha256=args.plan_sha256, execute=args.execute)
         else:
             request["archive"] = str(args.archive.expanduser().resolve())
         if args.authority_archive_action == "export":
@@ -83,13 +100,18 @@ def handle_authority_archive_command(
             "coordination.authority_archive.manage", request, timeout=300.0, retry_safe=False
         )
     except (OSError, RuntimeError, ValueError) as error:
-        result = {"status": "failed", "reason": str(error), "authority_changed": False}
+        uncertain = args.authority_archive_action == "migrate" and args.execute
+        result = {"status": "failed", "reason": str(error),
+                  "authority_changed": None if uncertain else False}
+        if uncertain:
+            result.update(reason_code="migration_outcome_unknown", requires_same_plan_retry=True)
     if (args.authority_archive_action == "upgrade" and args.require_current
             and any(row.get("status") == "planned" for row in result.get("results", []))):
         result.update(status="failed", reason="Authority format upgrade required before activating this runtime.")
     print_payload(result, output_format(args), lambda value: (
         f"Authority archive: {value.get('status')}\n"
-        f"{value.get('reason', 'Active authority selection is unchanged.')}\n"
+        f"{value.get('reason', 'Authority changed: ' + str(value.get('authority_changed')))}\n"
+        f"Plan digest: {value.get('plan_sha256', 'not applicable')}\n"
         f"{value.get('audit', '')}"
     ))
     return 1 if result.get("status") == "failed" else 0

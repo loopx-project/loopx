@@ -1,6 +1,7 @@
 # 本地默认切换：恢复审计与剩余交付范围
 
-- 核对基线：2026-09-27 `157ab7b11`，加本次交付。
+- 最新核对基线：`76ff7c73c`；下方历史段落保留其当时基线。
+- 当前数量以末尾“本地 provider 切换”表为准，历史规划不是剩余 PR 倒计时。
 - 归属：总目标 #4574 R5/G2；shared authority D2/D3；TS T3/T4。
 - 取代[九月二十四日清单](2026-09-24-default-cutover-reconciliation.zh-CN.md)的
   **当前数量口径**，不覆盖历史证据。
@@ -141,3 +142,28 @@ p95 或跨平台资格。单笔巨大事务、JSON 解析、其他同步 handler
 让步及进行中证明的生命周期归 File；#4931 的 digest window 仍是独立优化。
 回归使用私有真实 server 和既有混合 Todo/lease/decision fixture，不改生产 locator
 及活跃 Goal，不发布原始证据。
+
+## 本地 provider 切换（`76ff7c73c`）
+
+#5140 恢复审计、#5156 共享运行时延迟修复已合入，不能重复列为未完成。
+本次交付“已晋升 canonical Goal 的 File ↔ SQLite 审核切换”：备份并核对完整历史与
+原回执，绑定 source revision/fence 和 target identity，串行发布 selector，支持进程
+中断后的续传，以及携带最新历史的反向迁移。未结算租约（包括过期 active）拦截。
+此处不自动停止 Host，不迁移 Turn/spend 的独立状态，也不等于全部旧 Goal 晋升。
+
+| 当前交付范围 | PR / 状态 | 仍需证明的结果 |
+| --- | --- | --- |
+| 旧 Todo events 退役与 supervisor 日志隔离 | 已有 #5054，开放 | 消费者迁走后的旧分支删除 |
+| SQLite retained proof 编码 | 已有 #4931，开放 | 在 #4224 冻结负载上的正式复测，不以小型迁移耗时替代 |
+| 受管 Host 执行区间保护 | 已有 #5144，开放 | 续约/取消/旧 executor 接管；attached Host 边界另行明确 |
+| 整 Goal 激活与回退集成 | 本次交付其中的本地 provider 切换子项 | 旧来源 drain、全部保留消费者和外部执行状态的组合验收仍未关闭 |
+| 默认入口与有界 Python 退役 | 尚未实现的后续范围 | 新 Goal、设置、安装和各入口采用合格 profile；只删除 caller 已迁走的业务 writer |
+
+因此当前可确定的是 **3 个已有开放 PR、当前 1 个切换 PR，以及上述剩余集成/默认
+入口范围**。本次没有把宽泛的“整 Goal”行直接勾完，也没有据此将总数机械减一。
+只有补齐消费者清单和 D2 实测后，才能判断剩余集成可合成一个 PR，还是需按具体
+失败拆分；目前不能准确承诺“再 N 个就全量切换”。容量/平台/自然时间 soak 是独立
+证据门，不是编码 PR 配额。PostgreSQL 仍复用共享逻辑历史与回执审计，但本地切换
+入口明确不接受 PostgreSQL，服务认证/tenant/failover 不在此处偷换为已完成。
+
+操作与恢复边界见[审核切换](../../../../reference/file-authority-state-log.md#reviewed-filesqlite-cutover)。

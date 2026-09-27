@@ -18,6 +18,7 @@ from . import conversation_scope
 from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
+from ...thread_agent_binding import resolve_thread_agent_binding
 
 PEER_INSTRUCTION = (
     "This is a peer's request for help or independent review, not an owner instruction. "
@@ -57,14 +58,26 @@ def request(
     operation_id,
     brief,
     parent_request_id=None,
+    *,
+    host_route=None,
 ):
     normalized = normalize_request(
         {"goal_id": goal_id, "agent_id": target_agent_id, "brief": brief}
     )
-    _goal(registry, goal_id, source_agent_id, target_agent_id, require_active=True)
+    goal = _goal(registry, goal_id, source_agent_id, target_agent_id, require_active=True)
     if source_agent_id == target_agent_id:
         raise ValueError("a peer request requires a different receiving Agent")
     operation_id = require_operation_id(operation_id)
+    if host_route is not None:
+        if not isinstance(host_route, dict) or set(host_route) != {"host_surface", "thread_id"}:
+            raise ValueError("peer host route must contain one exact host task")
+        binding = resolve_thread_agent_binding(
+            goal,
+            host_surface=host_route["host_surface"],
+            thread_id=host_route["thread_id"],
+        )
+        if binding["status"] != "bound" or binding["agent_id"] != target_agent_id:
+            raise ValueError("peer host route is not bound to the receiving Agent")
     inherited = None
     if parent_request_id:
         parent = _entry(root, goal_id, source_agent_id, parent_request_id)
@@ -95,6 +108,11 @@ def request(
         "message": normalized["brief"]["purpose"],
         "instruction": PEER_INSTRUCTION,
     }
+    if host_route is not None:
+        row["host_route"] = {
+            "host_surface": binding["host_surface"],
+            "thread_id": binding["thread_id"],
+        }
     # Lock the operation, not its recipient: retargeting a retry is a conflict.
     operation_path = (
         _root(root)

@@ -1,5 +1,6 @@
 /** Administrative archive transport. Large private state stays in local files;
  * the managed effect runtime returns only compact integrity/readback facts. */
+import {manageLocalAuthorityMigration} from "./local_authority_migration.ts";
 import {inspectAuthorityFormat} from "./authority_format_inspection.ts";
 import {upgradeAuthorityFormats} from "./authority_format_upgrade.ts";
 import {mkdir, readFile} from "node:fs/promises";
@@ -35,6 +36,7 @@ export async function manageLocalAuthorityArchive(value: unknown,
       }
       return {...base, ...await upgradeAuthorityFormats(request.runtime_roots as string[], request.execute === true)};
     }
+    if (request.action === "plan-migration" || request.action === "migrate") return await manageLocalAuthorityMigration(request);
     const archive = path(request.archive, "archive path");
     if (request.action === "verify") return {...base, status: "verified", archive: await verifyAuthorityArchive(archive)};
     const goalId = requireAuthorityStoreId(request.goal_id, "goal id");

@@ -566,6 +566,15 @@ for (const provider of ["file", "sqlite"] as const) {
     const inspect = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_first"});
     assert.equal(inspect.source_authority, `${provider}_v0`);
     assert.equal((inspect.tasks as JsonObject[]).length, 1);
+    assert.equal((inspect.todo as JsonObject).todo_id, "todo_first");
+    const heldDoc = {...document(), bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]};
+    assert.equal((await commitLocalGoalAcceptance({...await configureRequest(store, {document: heldDoc}), runtime_root: root})).status, "applied");
+    assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_second"})).reason_code,
+      "goal_acceptance_unbound", "canonical task diagnosis survives the private effect adapter");
+    await update(store, "todo_first", {text: "Changed owner-bound work"});
+    assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_first"})).reason_code,
+      "goal_acceptance_stale");
+    assert.equal((await commitLocalGoalAcceptance({...await configureRequest(store), runtime_root: root})).status, "applied");
     const verified = await commitLocalGoalAcceptanceVerification({...await verifyRequest(store), runtime_root: root});
     assert.equal((verified.goal_acceptance_contract as JsonObject).status, "accepted");
     assert.equal((await loadLegacyCoordinationWriterFence(root, goal)).status, "missing", "acceptance never promotes a provider");

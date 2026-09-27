@@ -7,10 +7,7 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import tempfile
-import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -29,6 +26,7 @@ from .executor import (
 )
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
+from .host_process_transport import HostOutputLines, run_host_process
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
 
@@ -754,22 +752,6 @@ def _select_failure_category(categories: list[str]) -> str | None:
     )
 
 
-def _terminate_process(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        proc.terminate()
-    try:
-        proc.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
-            proc.kill()
-
-
 def _codex_command(
     *,
     codex_bin: str,
@@ -934,67 +916,42 @@ def run_codex_cli_host(
             session_id=session_id,
             mcp_server=mcp_server,
         )
-        proc = subprocess.Popen(
-            command,
-            cwd=project,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            start_new_session=True,
-        )
         observed_session: list[str] = []
-        structured_failure_categories: list[str] = []
-        diagnostic_failure_categories: list[str] = []
+        structured_failure_categories: set[str] = set()
+        diagnostic_failure_categories: set[str] = set()
 
-        def discard_events() -> None:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict):
-                    candidate = codex_cli_event_session_id(event)
-                    if candidate and not observed_session:
-                        observed_session.append(candidate)
-                    structured, diagnostic = _event_failure_categories(event)
-                    if structured:
-                        structured_failure_categories.append(structured)
-                    if diagnostic:
-                        diagnostic_failure_categories.append(diagnostic)
+        def observe_event(line: str) -> None:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return
+            if isinstance(event, dict):
+                candidate = codex_cli_event_session_id(event)
+                if candidate and not observed_session:
+                    observed_session.append(candidate)
+                structured, diagnostic = _event_failure_categories(event)
+                if structured:
+                    structured_failure_categories.add(structured)
+                if diagnostic:
+                    diagnostic_failure_categories.add(diagnostic)
 
-        reader = threading.Thread(target=discard_events, daemon=True)
+        def observe_stderr(line: str) -> None:
+            category = _diagnostic_failure_category(line)
+            if category:
+                diagnostic_failure_categories.add(category)
 
-        def discard_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                category = _diagnostic_failure_category(line)
-                if category:
-                    diagnostic_failure_categories.append(category)
-
-        stderr_reader = threading.Thread(target=discard_stderr, daemon=True)
-        reader.start()
-        stderr_reader.start()
-        assert proc.stdin is not None
-        timed_out = False
-        try:
-            proc.stdin.write(_prompt(request))
-            proc.stdin.close()
-            returncode = proc.wait(timeout=max(1.0, timeout_seconds))
-        except subprocess.TimeoutExpired:
-            _terminate_process(proc)
-            timed_out = True
-            returncode = proc.returncode
-        except BaseException:
-            _terminate_process(proc)
-            raise
-        finally:
-            reader.join(timeout=OUTPUT_DRAIN_TIMEOUT_SECONDS)
-            stderr_reader.join(timeout=OUTPUT_DRAIN_TIMEOUT_SECONDS)
-        output_observation_incomplete = reader.is_alive() or stderr_reader.is_alive()
+        events = HostOutputLines(observe_event)
+        diagnostics = HostOutputLines(observe_stderr)
+        observed = run_host_process(command, project=project, input_text=_prompt(request),
+            timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
+            on_stdout=events.feed, on_stderr=diagnostics.feed)
+        events.finish()
+        diagnostics.finish()
+        returncode = observed["returncode"]
+        timed_out = observed["outcome"] == "timeout"
+        output_observation_incomplete = not (observed["output_complete"] and events.complete and diagnostics.complete)
+        if observed["outcome"] not in {"exited", "timeout"}:
+            raise BuiltInHostError("codex_cli_process_" + observed["outcome"])
         if timed_out:
             if observed_session:
                 store_session(observed_session[0])
@@ -1007,8 +964,8 @@ def run_codex_cli_host(
             "unknown"
             if output_observation_incomplete
             else (
-                _select_failure_category(structured_failure_categories)
-                or _select_failure_category(diagnostic_failure_categories)
+                _select_failure_category(list(structured_failure_categories))
+                or _select_failure_category(list(diagnostic_failure_categories))
                 or "exit_nonzero"
             )
         )

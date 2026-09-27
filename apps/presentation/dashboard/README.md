@@ -452,18 +452,6 @@ usable. It uses an installed Playwright package or the Codex bundled runtime
 when available, and starts Vite through the local `vite` package rather than
 depending on `npm` / `npx` being on `PATH`.
 
-The ops decision-freshness smoke protects the detailed `?view=ops` panel with
-two public fixtures: a live-like zero-item summary and a stale/rebase-required
-decision example. It verifies the rendered Chinese/English operator copy,
-counts, top affected goal, and exact-replay wording instead of relying only on
-source-string checks.
-
-The promotion-readiness smoke protects the detailed `?view=ops` panel with
-fresh, stale, and missing readiness fixtures. It verifies the status badges,
-readiness/rerun decision, artifact window, age, reason, and source-of-truth copy
-for canary promotion readiness. The canonical fixture/browser script is
-`examples/dashboard-promotion-readiness-browser-smoke.mjs`; use the npm script
-above instead of calling ad hoc duplicate filenames.
 The grouped demo-readiness path also runs `examples/promotion-gate-smoke.py`
 before browser checks, so the structured `gate_state`, `can_promote`, and
 `should_warn` contract is covered even when browser smokes are skipped.

@@ -24,13 +24,8 @@ from ...operator_gate import (
     DEFAULT_OPERATOR_GATE,
     normalize_operator_question,
 )
+from .adapter_status_vocabulary import CONNECTED_ADAPTER_STATUSES
 
-
-CONNECTED_ADAPTER_STATUSES = {
-    "connected",
-    "connected-read-only",
-    "pre-tick-runnable",
-}
 LIFECYCLE_PRIORITY = (
     "controller_ready",
     "reward_judged",

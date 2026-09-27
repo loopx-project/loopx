@@ -68,7 +68,7 @@ def begin(command: str) -> tuple[str, float] | None:
         return None
     try:
         path = state_path()
-        state = json.loads(path.read_text()) if path.exists() else {}
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if state.get("consent") == "disabled":
             return None
         if (state.get("notice") or {}).get("version") != 3:

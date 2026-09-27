@@ -234,3 +234,82 @@ platform CI evidence; POSIX validation does not substitute for it.
 升级失败时可能已有部分 store 完成，必须据实报告并重试，不能覆盖之后产生的写入。
 备份仍是旧格式，恢复时应先在隔离目录升级。只回退二进制并不等于安全回退数据。
 该方案减少重复存储和后续写入耗时，但冷校验仍验证全历史，可能更慢。
+
+## Reviewed File/SQLite cutover
+
+An already-promoted, quiescent canonical Goal can change between the built-in
+File and SQLite providers. Stop its writers and settle its task leases first.
+An expired but still `active` lease is a hold: expiry does not prove that the
+old Host stopped. This command does not stop Hosts, settle Turns, retire leases,
+change a registry, or remove the legacy writer fence. PostgreSQL service
+activation and migration from a legacy Markdown Goal are separate operations.
+
+```bash
+# Use the same explicit runtime root for planning, preview and execution.
+loopx --runtime-root /absolute/runtime --format json authority-archive plan-migration \
+  --goal-id example --provider sqlite --plan /absolute/migration-plan.json
+# Review the saved plan and take PLAN_SHA256 from the planning response.
+loopx --runtime-root /absolute/runtime --format json authority-archive migrate \
+  --goal-id example --plan /absolute/migration-plan.json --plan-sha256 PLAN_SHA256
+loopx --runtime-root /absolute/runtime --format json authority-archive migrate \
+  --goal-id example --plan /absolute/migration-plan.json --plan-sha256 PLAN_SHA256 --execute
+```
+
+The plan binds the canonical runtime path, Goal, source store identity, revision,
+cursor, projection digest, writer-fence digest and destination provider. A
+changed source requires a new reviewed plan. Plans are created exclusively;
+choose a new path instead of overwriting an already-reviewed artifact.
+
+Migration copies complete committed projections, events and original receipts;
+it does not rebuild Todos from display columns or reapply a metadata allowlist.
+Historical metadata values, absent keys, explicit nulls, false, zero and empty
+arrays remain distinct. Auditing excludes only the transaction's physical
+provider revision, which legitimately changes with the backend. It cannot prove
+that an earlier legacy-to-canonical capture included every external field, nor
+does it copy attachment files or independently-owned Host/Turn stores.
+
+Execution shares the maintenance guard used by canonical command writers. It
+saves a verified logical backup below the runtime's
+`authority-transition/local-provider/<plan digest>/`, binds the target identity,
+restores missing history, independently audits every retained transaction and
+receipt, then atomically publishes the selector. Selected local stores check
+their identity on every operation. A missing/replaced selected store fails
+closed; it is never recreated or silently replaced with another provider.
+
+An implicit File source becomes an explicit identity-bound File selection before
+SQLite preparation. This keeps the source readable while the target is being
+built. It does not change the source's domain history. Backup and target creation
+consume additional disk space; retain the backup and recovery record for retries
+and investigation. No automatic cleanup deletes these recovery artifacts.
+
+Retry **the same plan and digest** after interruption. A partial restore audits
+its prefix before appending. If publication already happened, recovery audits
+the retained prefix without discarding later target writes. A publication error
+can return `authority_changed: null`: the outcome is uncertain, so retry rather
+than assume the source is still selected. A completed plan superseded by another
+migration cannot reactivate its former target.
+
+To return to File, create a **new** plan with `--provider file`, then preview and
+execute it. This carries the current SQLite history back to File and retains
+new acknowledged writes. An old File history is reusable only if it is an exact
+prefix. Divergent/extra target history rejects migration; do not delete it or
+copy old bytes over live state to force acceptance.
+
+Provider rollback is distinct from binary downgrade. Earlier binaries that do
+not recognize explicit File selectors cannot operate this runtime. Keep a
+migration-capable binary; do not remove the selector to make an old binary start.
+The generic historical format check alone does not prove selector compatibility.
+This operation qualifies local storage continuity, not D2 capacity/soak, all
+Host lifecycles, all Goal consumers, or permission to enable a provider by default.
+
+### 已晋升 Goal 的本地 provider 切换
+
+先停止写入并结算租约，再通过 `plan-migration` 保存并审核计划，用输出的摘要调用
+`migrate` 预览和执行。未结算的租约即使过期也会阻止迁移。TS 在同一个 canonical
+写锁下完成备份、历史与回执核对、selector 发布及回读；Python 只传参数和结果。
+
+中断后用同一计划重试；切换后产生的新写入会被保留。回退是另做一个 `--provider
+file` 的新计划，把最新历史迁回 File，不能覆盖旧备份。此处不负责停 Host、结算
+Turn、旧 Markdown Goal 晋升或 PostgreSQL 服务部署，也不代表默认值资格通过。
+旧版本若不认识显式 File selector，会拒绝读取；保留支持迁移的运行时，不删除
+selector 绕过检查。

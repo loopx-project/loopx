@@ -32,6 +32,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isCommittedMonitorPollEffect,
+  isAcceptedInFlightWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
@@ -1006,6 +1007,8 @@ function readQuotaSettlementFromRequest(
   const todoBoundReplan = identity.binding_kind === "todo" &&
     semanticReplanGuard.scope === "turn_guard" &&
     semanticReplanGuard.selected_obligation_id !== null;
+  const inFlightWriteback = writeback.failure === null &&
+    isAcceptedInFlightWriteback(writebackRun, identity);
 
   const recovery = request.refresh_retry === null ? null : refreshRecovery(
     request.refresh_retry, writebackRun, writeback.failure === null,
@@ -1051,7 +1054,7 @@ function readQuotaSettlementFromRequest(
     }),
     replay_phase: receiptBoundReplayPhase({
       binding_kind: identity.binding_kind,
-      writeback_completes_binding: todoBoundReplan || blockedNoSpend,
+      writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback,
       completion_receipt_present: completionEvent !== null,
       durable_writeback_present: writeback.failure === null,
       quota_spend_present: spend.failure === null,

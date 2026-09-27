@@ -1,6 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { optionalNonEmptyString, requireJsonObject } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 
 const PROGRESS_OUTCOMES = [
@@ -47,6 +47,38 @@ function triggerKinds(obligation: JsonObject): string[] {
 }
 function isExternalReview(obligation: JsonObject): boolean {
   return triggerKinds(obligation).some(kind => EXTERNAL_REVIEW_TRIGGERS.has(kind));
+}
+
+/** Route only a revalidated canonical transition to its original Turn guard.
+ * A successor frontier duty stays with the next decision; this receipt cannot
+ * discharge an unrelated duty or certify completion of the settlement Todo.
+ */
+function projectTurnTransition(request: JsonObject): JsonObject {
+  if (typeof request.guard_scoped !== "boolean" || !Array.isArray(request.transition_acks)) {
+    throw new EffectRuntimeRequestError("turn transition requires a scoped guard and transition receipts");
+  }
+  const selected = optionalNonEmptyString(request.selected_obligation_id, "selected_obligation_id");
+  if (selected !== null && !/^replan-[a-f0-9]{16}$/.test(selected)) {
+    throw new EffectRuntimeRequestError("selected replan obligation id is malformed");
+  }
+  let delta: JsonObject | null = null;
+  if (request.guard_scoped && selected !== null) {
+    for (const value of request.transition_acks) {
+      const ack = object(value);
+      const candidate = object(ack.semantic_delta);
+      if (ack.schema_version === "autonomous_replan_ack_v0" &&
+          ack.recorded === true && ack.source === "todo_replan_successor_transition" &&
+          candidate.schema_version === "replan_semantic_delta_v0" &&
+          candidate.accepted === true && candidate.obligation_id === selected &&
+          strings(candidate.outcomes).includes("new_runnable_successor") &&
+          strings(candidate.satisfying_outcomes).includes("new_runnable_successor") &&
+          String(candidate.successor_todo_id ?? "").trim()) {
+        delta = candidate;
+        break;
+      }
+    }
+  }
+  return {semantic_delta: delta};
 }
 
 /** One outcome policy for host projection and write-time discharge. */
@@ -108,6 +140,7 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
 
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
+  if (request.operation === "turn_transition") return projectTurnTransition(request);
   const obligation = requireJsonObject(request.obligation, "obligation");
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);

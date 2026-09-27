@@ -7,6 +7,31 @@ const obligation = {triggers: [{kind: "required_agent_vision_missing"}]};
 const vision = {vision_patch: {acceptance_summary: "Observed permission boundary"},
   path_delta: {outcome: "continue", evidence_refs: ["evidence-permission"]}};
 
+test("a revalidated successor receipt settles only its exact original Turn guard", () => {
+  const id = "replan-1111111111111111";
+  const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
+    obligation_id: id, successor_todo_id: "todo_independent_successor",
+    outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
+  const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+    source: "todo_replan_successor_transition", semantic_delta: delta};
+  const request = {operation: "turn_transition", guard_scoped: true,
+    selected_obligation_id: id, transition_acks: [null, ack]};
+  assert.deepEqual(projectReplanSemantics(request).semantic_delta, delta);
+  for (const guard of [{guard_scoped: false}, {selected_obligation_id: null},
+    {selected_obligation_id: "replan-2222222222222222"}]) {
+    assert.equal(projectReplanSemantics({...request, ...guard}).semantic_delta, null);
+  }
+  for (const invalid of [{recorded: false}, {source: "prose_claim"},
+    {schema_version: "unknown"}, {semantic_delta: {...delta, accepted: false}},
+    {semantic_delta: {...delta, satisfying_outcomes: []}},
+    {semantic_delta: {...delta, successor_todo_id: null}}]) {
+    assert.equal(projectReplanSemantics({...request, transition_acks: [{...ack, ...invalid}]}).semantic_delta, null);
+  }
+  const next = {...ack, semantic_delta: {...delta, obligation_id: "replan-2222222222222222"}};
+  assert.deepEqual(projectReplanSemantics({...request, transition_acks: [next, ack]}).semantic_delta, delta);
+  assert.throws(() => projectReplanSemantics({...request, selected_obligation_id: "malformed"}), /malformed/);
+});
+
 test("obligation source governs both authoring projection and semantic discharge", () => {
   const projection = projectReplanSemantics({operation: "requirements", obligation});
   assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);

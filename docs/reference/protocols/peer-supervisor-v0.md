@@ -1,5 +1,19 @@
 # Peer Supervisor v0
 
+## Experimental log boundary
+
+Supervisor is default-off and may change without historical log compatibility.
+The log now uses `supervisor_log_event_v0`, with only local-private proposals and
+host receipts. It does not use the retired Todo event store or produce Todo
+projections. Archive any older experimental log before starting a fresh one;
+an unknown schema is refused without modifying the file.
+
+Proposal/receipt admission and publication hold one log lock. Preview does not
+write or sync the log. Retry of the same semantic identity returns the original
+record; conflicting content is rejected. Competing executed receipts for one
+decision are serialized. These guarantees cover the log, not exactly-once host
+execution across a crash before receipt publication.
+
 ## Status
 
 Experimental and default-off. This protocol adds an observation and proposal

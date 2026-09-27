@@ -72,11 +72,13 @@ def inspect_goal_acceptance(
     goal_id: str,
     runtime_root: str | None = None,
     agent_id: str | None = None,
+    todo_id: str | None = None,
 ) -> dict[str, Any]:
     """Read one canonical basis; command declarations stay inside the host."""
     return _result(
         _INSPECT_METHOD,
-        _routing(registry_path, goal_id, runtime_root, agent_id),
+        {**_routing(registry_path, goal_id, runtime_root, agent_id),
+         **({"todo_id": todo_id} if todo_id is not None else {})},
     )
 
 
@@ -102,8 +104,18 @@ def goal_task_validation_files_current(
     basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
     if not isinstance(basis, dict) or not basis.get("criteria"):
         return False
-    for effect in _criterion_effects(basis["criteria"]):
-        pins = effect["validation_files"]
+    return validation_effect_files_current(
+        effects=_criterion_effects(basis["criteria"]), registry_path=registry_path,
+        goal_id=goal_id,
+    )
+
+
+def validation_effect_files_current(
+    *, effects: list[dict[str, Any]], registry_path: Path, goal_id: str,
+) -> bool:
+    """Observe declared verifier assets for an existing typed validation plan."""
+    for effect in effects:
+        pins = effect.get("validation_files", [])
         workspace = None
         if pins:
             workspace, failure = _resolve_completion_validation_workspace(

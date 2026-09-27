@@ -11,7 +11,11 @@ from .adapters import (
     SINK_RESULT_SCHEMA,
     _normalize_artifact_result,
 )
-from .core import _reject_raw_keys
+from .core import (
+    _reject_raw_keys,
+    _SINK_ROLES,
+    _SINK_STATUSES,
+)
 
 GENERATION_BUNDLE_SCHEMA = "periodic_report_generation_bundle_v0"
 GENERATION_RECEIPT_SCHEMA = "periodic_report_generation_receipt_v0"
@@ -22,9 +26,7 @@ DELIVERY_RECEIPT_SCHEMA = "periodic_report_delivery_receipt_v0"
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _VERSION_RE = re.compile(r"^[0-9a-z][a-z0-9_.+-]{0,127}$")
 _DEPENDENCY_POLICIES = {"required", "optional", "disabled"}
-_SINK_ROLES = {"archive", "delivery"}
 _PROVIDER_STATUSES = {"ready", "unavailable", "unknown"}
-_SINK_STATUSES = {"pending", "sent", "failed", "skipped", "unknown"}
 _READINESS_ITEM_STATUSES = {
     "disabled",
     "incompatible",

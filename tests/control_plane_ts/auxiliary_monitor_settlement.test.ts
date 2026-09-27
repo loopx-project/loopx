@@ -67,7 +67,7 @@ async function settlePrimary(runtime: string): Promise<void> {
     turn_instance_id: turn, settlement_identity: identity })).join("\n") + "\n");
 }
 
-test("fresh auxiliary admission requires the exact unsettled advancement and ordinary due-work gates", async t => {
+test("fresh auxiliary admission requires exact advancement identity and ordinary due-work gates before and after settlement", async t => {
   const cases: Array<[string, (params: JsonObject) => JsonObject, string]> = [
     ["other Turn", p => ({ ...p, turn_instance_id: "other-turn" }), "heartbeat_receipt_identity_conflict"],
     ["other binding", p => ({ ...p, observation: { ...p.observation as JsonObject, settlement_todo_id: "todo_other" } }), "heartbeat_receipt_identity_conflict"],
@@ -86,9 +86,11 @@ test("fresh auxiliary admission requires the exact unsettled advancement and ord
       work_lane_contract: { must_attempt_work: false }, should_run: false } }), "monitor_poll_admission_rejected"],
     ["user action", p => ({ ...p, decision: { ...p.decision as JsonObject, requires_user_action: true } }), "monitor_poll_admission_rejected"],
   ];
-  for (const [name, change, code] of cases) {
-    await t.test(name, async st => {
+  for (const settled of [false, true]) for (const [name, change, code] of cases) {
+    await t.test(`${settled ? "settled" : "pending"}: ${name}`, async st => {
       const { runtime, params } = await fixture(st);
+      if (settled) await settlePrimary(runtime);
+      const initialIndex = await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8");
       const changed = change(params);
       await assert.rejects(evaluateQuotaMonitorPollCommit(changed), error => {
         assert.ok(error instanceof EffectRuntimeRequestError);
@@ -102,31 +104,54 @@ test("fresh auxiliary admission requires the exact unsettled advancement and ord
       });
       await assert.rejects(readFile(join(runtime, "goals", goal, "runs", ".transactions", "quota-monitor-poll")),
         { code: "ENOENT" });
-      assert.equal(await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8"), "");
+      assert.equal(await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8"), initialIndex);
     });
   }
 });
 
-test("completed primary preserves an admitted pending effect across settlement, but cannot admit a new one", async t => {
-  const { runtime, params } = await fixture(t);
-  const preflight = await evaluateQuotaMonitorPollCommit(params);
-  assert.equal(preflight.status, "provider_required", JSON.stringify(preflight));
-  await settlePrimary(runtime);
-  const receipt = { schema_version: "monitor_poll_todo_writeback_v0", monitor_effect_id: params.effect_id,
+function providerReceipt(params: JsonObject): JsonObject {
+  return { schema_version: "monitor_poll_todo_writeback_v0", monitor_effect_id: params.effect_id,
     goal_id: goal, todo_id: monitor, target_key: "public-watch", result_hash: "unchanged",
     dry_run: false, material_change: false, material_change_generation: 0, consecutive_no_change: 1,
     last_checked_at: params.generated_at, next_due_at: "2026-09-01T01:00:00Z", cadence: "1h",
     todo_update: { ok: true }, next_todos: [], successor_receipts: [] };
+}
+
+test("settled primary admits the first due auxiliary observation without another debit or delivery", async t => {
+  const { runtime, params } = await fixture(t);
+  await settlePrimary(runtime);
+  const index = await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"));
+  const request = { ...params, expected_index_digest: `sha256:${createHash("sha256").update(index).digest("hex")}` };
+  const preflight = await evaluateQuotaMonitorPollCommit(request);
+  assert.equal(preflight.status, "provider_required", JSON.stringify(preflight));
+  const commit = { ...request, phase: "commit", provider_receipt: providerReceipt(request) };
+  const written = await evaluateQuotaMonitorPollCommit(commit);
+  assert.equal(written.status, "written", JSON.stringify(written));
+  assert.equal((written.payload.turn_continuation as JsonObject).current_turn_settled, true);
+  assert.equal((written.payload.turn_continuation as JsonObject).next_turn_required, true);
+  assert.equal((written.payload.turn_continuation as JsonObject).same_turn_independent_settlement_allowed, false);
+  assert.equal((await evaluateQuotaMonitorPollCommit(commit)).status, "replayed");
+  const rows = (await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8"))
+    .trim().split("\n").map(line => JSON.parse(line));
+  assert.equal(rows.filter(row => row.classification === "quota_monitor_poll").length, 1);
+  assert.equal(rows.filter(row => row.classification === "state_refreshed").length, 1);
+  assert.equal(rows.filter(row => row.classification === "quota_slot_spent").length, 1);
+  assert.equal(rows.length, 3);
+});
+
+test("completed primary preserves an admitted pending effect across settlement and replay reads current closeout", async t => {
+  const { runtime, params } = await fixture(t);
+  const preflight = await evaluateQuotaMonitorPollCommit(params);
+  assert.equal(preflight.status, "provider_required", JSON.stringify(preflight));
+  await settlePrimary(runtime);
+  const receipt = providerReceipt(params);
   const postBusiness = { ...params, phase: "commit", provider_receipt: receipt,
     decision: { ...params.decision as JsonObject, registry_due_monitor: {}, auxiliary_settlement_todo: null,
       due_monitor_candidates: [], work_lane_contract: { must_attempt_work: false }, should_run: false } };
   assert.equal((await evaluateQuotaMonitorPollCommit(postBusiness)).status, "written");
-  assert.equal((await evaluateQuotaMonitorPollCommit(postBusiness)).status, "replayed");
-  await assert.rejects(evaluateQuotaMonitorPollCommit({ ...params, effect_id: "new-after-settlement" }), error => {
-    assert.ok(error instanceof EffectRuntimeRequestError);
-    assert.equal(error.code, "heartbeat_receipt_identity_conflict");
-    return true;
-  });
+  const replay = await evaluateQuotaMonitorPollCommit(postBusiness);
+  assert.equal(replay.status, "replayed");
+  assert.equal((replay.payload.turn_continuation as JsonObject).current_turn_settled, true);
   const rows = (await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8"))
     .trim().split("\n").map(line => JSON.parse(line));
   assert.equal(rows.filter(row => row.classification === "quota_monitor_poll").length, 1);
