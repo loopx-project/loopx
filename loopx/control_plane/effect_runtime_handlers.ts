@@ -2,7 +2,7 @@ import {planStateEventReplay} from "./goals/state_event_replay.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
-import {readShadowDrainPlan} from "./coordination/shadow_drain_plan.ts";
+import {drainShadowOutbox} from "./coordination/shadow_drain.ts";
 import {readCanonicalSnapshotPage} from "./coordination/canonical_snapshot_page.ts";
 import {manageLocalAuthorityArchive} from "./coordination/local_authority_archive.ts";
 import {selectPeriodicReportProgress, selectPeriodicReportApprovalRetry} from "./capabilities/periodic_report_progress.ts";
@@ -617,7 +617,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority_shadow.record", recordLocalAuthorityShadow],
     ["coordination.runtime_shadow.commit_entry", deliverShadowEntry],
     ["coordination.runtime_shadow.outbox_read", readLocalAuthorityShadow],
-    ["coordination.runtime_shadow.plan_drain", readShadowDrainPlan],
+    ["coordination.runtime_shadow.drain", drainShadowOutbox],
     [
       "effect.program_from_ordered_steps",
       (params) => effectProgramFromOrderedSteps(

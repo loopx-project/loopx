@@ -22,7 +22,6 @@ from loopx.control_plane.coordination.runtime_shadow import (
     build_runtime_shadow_source_snapshot,
 )
 from loopx.control_plane.coordination.shadow_management import require_shadow_primary_write_allowed
-from loopx.file_lock import exclusive_file_lock
 from loopx.history import load_registry
 from loopx.registry import find_registry_goal
 
@@ -336,15 +335,6 @@ def test_capture_failure_is_typed_and_preserves_the_primary_result(tmp_path: Pat
     assert capture.outcome.failure is not None
     assert capture.outcome.failure["reason_code"] == "outbox_prepare_failed"
     assert state.read_text() == new_text
-
-
-def test_primary_lock_probe_reports_held_locks(tmp_path: Path) -> None:
-    target = tmp_path / "ACTIVE_GOAL_STATE.md"
-    target.write_text("", encoding="utf-8")
-    assert adapter.primary_lock_is_free(target) is True
-    with exclusive_file_lock(target, timeout_seconds=1.0, operation="test_hold"):
-        assert adapter.primary_lock_is_free(target) is False
-    assert adapter.primary_lock_is_free(target) is True
 
 
 def test_prepared_records_must_bind_their_directory_identity_and_source(tmp_path: Path) -> None:

@@ -136,7 +136,11 @@ def test_native_markerless_resolution_requires_source_evidence(
     w.crash(window, "todo", "add", "--role", "agent", "--text", "Source proof is not a caller flag")
     directory = outbox.partition_directory(w.runtime, w.goal, "todos")
     [entry] = outbox.list_entries(directory)
-    request = adapter._commit_entry_request(runtime_root=w.runtime, goal_id=w.goal, entry=entry)
+    request = {"schema_version": "loopx_shadow_entry_delivery_request_v0", "runtime_root": str(w.runtime),
+               "goal_id": w.goal, "partition": entry.partition, "seq": entry.seq, "entry_id": entry.entry_id,
+               "capture_lineage_id": entry.prepared["capture_lineage_id"],
+               "prepared_sha256": outbox.raw_bytes_digest(entry.prepared_path.read_bytes()),
+               "committed_sha256": None}
     request["resolution"] = claimed_resolution
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
     with pytest.raises(EffectRuntimeRejected, match="shadow_entry_selection_invalid"):

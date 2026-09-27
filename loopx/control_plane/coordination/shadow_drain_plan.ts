@@ -180,8 +180,8 @@ export function planShadowDrain(value: unknown, rawView: unknown): JsonObject {
     })};
 }
 
-/** Same one read RPC as the old proof path, but history never crosses into Python.
- * The caller holds M; taking it again here would deadlock across runtimes. */
+/** Native proof read for the batch owner; complete history stays in TypeScript.
+ * The caller holds M; taking it again here would deadlock. */
 export async function readShadowDrainPlan(value: unknown,
   dependencies: LocalAuthorityShadowDependencies = {}): Promise<JsonObject> {
   let verifiedView: JsonObject | null = null;
