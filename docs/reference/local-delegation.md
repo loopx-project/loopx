@@ -261,6 +261,9 @@ filter used by `delegate list` considers at most six public-safe planning routes
 and byte-bounds the projected subset; `authorized_count` and `routes_truncated`
 make omissions explicit. Managed-host availability comes from the existing Turn host/profile owner;
 unprobed generic adapters are `unknown`, not optimistically ready.
+Routes disclose that owner's `probe_scope` for a supplied non-null probe. Read full
+`runtime_probe` and `unavailable_remediation` observations through
+`delegation inspect` on the same binding; planning keeps its existing byte budget.
 
 This planning projection is read-only. It does not start, resume, accept,
 enumerate operations or periodically poll work. A ready observation is not an
@@ -286,6 +289,9 @@ no legacy Session setting is copied back into the registry automatically.
 启动、恢复、验收或周期轮询工作；需要时可显式读取 `after_delegate_result` 阶段的有界
 operation 状态摘要。ready 和状态计数都不是执行或父级验收回执。清除指针不会撤销
 授权；真正撤销仍须修改 operator binding 文件。
+路由对非空 probe 渐进式披露同一 host owner 的 `probe_scope`。按原绑定读取下述
+`delegation inspect`，可获得完整 `runtime_probe` 和 `unavailable_remediation`；
+规划保持原有字节预算，不内联全部诊断。
 
 ### Recover work without remembered operation ids
 
@@ -353,6 +359,28 @@ were observed; it grants no execution permission and does not reserve capacity.
 Normal start still reads current admission and independently validates output.
 If the existing Turn rejects preflight, inspection reports that error rather than
 manufacturing a launchable result; no request is created.
+
+`executor.runtime_probe` preserves the host's bounded probe scope: a DSH
+`probing_interpreter` result concerns module availability in the interpreter
+running this inspection, not every installation or remote host. A
+`configured_runner` result concerns the explicit runner. A `null` probe means
+this executor was not probed; older previews may omit the optional field.
+`executor.unavailable_remediation` contains bounded operator-action codes from
+the same host owner, not commands or permission to switch providers. For
+`configure_dsh_runtime`, check the original launcher's interpreter and its
+`deepseek-harness` optional dependency or original runner configuration before
+requalification. A successful module probe alone does not prove credentials,
+profile, task acceptance or remote capacity. Inspection exposes no interpreter
+paths, credential/endpoint configuration, or provider payloads.
+
+中文：`executor.runtime_probe` 保留 host 的有界探测范围。DSH 的
+`probing_interpreter` 只说明执行本次检查的解释器是否能找到模块，不代表整机或远端
+所有安装；`configured_runner` 针对已显式配置的 runner。`null` 表示未探测，旧预览
+可以缺省此兼容字段。`executor.unavailable_remediation` 是同一 host owner 提供的
+有界操作代码，不是命令，也不授予切换 provider 的权限。遇到
+`configure_dsh_runtime`，先核对原启动器绑定的解释器及其 `deepseek-harness` 可选依赖
+或原 runner 配置，再重新核验。模块可用不证明凭据、profile、任务验收或远端容量；
+此检查不暴露解释器路径、凭据/endpoint 配置或 provider 原始数据。
 
 Enabled MCP exposes `inspect_execution_binding`; newly enrolled Goal Chat tools
 accept `action=inspect` with `binding_id`. Existing native thread schemas remain
