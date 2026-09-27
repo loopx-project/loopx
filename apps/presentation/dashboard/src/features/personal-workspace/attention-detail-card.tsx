@@ -10,6 +10,7 @@ export function AttentionDetailCard({ item, successor, onSelect }: {
   const detail = item.details;
   return <section className="personal-detail-card" aria-label={t("attentionDetail.title")}>
     <h3>{t("attentionDetail.title")}</h3>
+    {detail?.requestText && detail.requestText !== item.text ? <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{detail.requestText}</p> : null}
     <dl>
       <div><dt>{t("attentionDetail.request")}</dt><dd>{t(detail?.interaction === "decision" ? "attentionDetail.decision" : "attentionDetail.unknownRequest")}</dd></div>
       <div><dt>{t("common.status")}</dt><dd>{t(`attentionDetail.${detail?.lifecycle ?? "unknown"}`)}</dd></div>

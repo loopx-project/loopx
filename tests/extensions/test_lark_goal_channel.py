@@ -1635,7 +1635,7 @@ def test_notify_gate_resends_for_material_transition_or_one_reminder_window(
     assert sum("+messages-send" in args for args in calls) == 3
 
 
-def test_notify_gate_honors_interaction_contract_and_renders_one_clear_action_list(
+def test_notify_gate_honors_admission_and_does_not_present_labels_as_decisions(
     tmp_path: Path,
 ) -> None:
     binding_path = _gate_test_binding(tmp_path)
@@ -1686,8 +1686,10 @@ def test_notify_gate_honors_interaction_contract_and_renders_one_clear_action_li
     assert rejected["blocker"] == "state_transition_rejected"
     assert calls == []
     assert message.startswith("LoopX · Action required\n\nGoal:")
-    assert "\n1. Approve the bounded change." in message
-    assert "\n2. Revoke the test key." in message
+    assert "Request details are unavailable" in message
+    assert "Approve the bounded change" not in message
+    assert "Revoke the test key" not in message
+    assert "Reply with" not in message
     assert "Current recommendation" not in message
     assert "Next safe action" not in message
     assert "\n- " not in message
@@ -2645,3 +2647,54 @@ def test_cli_deliver_operation_treats_unknown_write_as_performed(
     assert printed["details"]["external_write_outcome"] == "unknown"
     assert "extension_activation" not in printed
     _assert_public_packet(printed)
+
+
+def test_gate_notice_delivers_request_body_instead_of_compact_label(tmp_path: Path) -> None:
+    """The same long request survives preview, send, readback and duplicate retry."""
+    binding_path = _gate_test_binding(tmp_path)
+    body = "Review the public release candidate and its validation evidence. " * 6
+    body += "The decision is whether to publish version 2.0 to the stable channel."
+    quota = {
+        "state": "operator_gate", "notify_user_on_gate": True,
+        "interaction_contract": {"user_channel": {
+            "action_required": True, "notify": "NOTIFY", "actions": ["[P0] Release review"],
+        }},
+        "user_todo_summary": {"gate_open_items": [{
+            "todo_id": "todo_release_review", "task_class": "user_gate", "status": "open",
+            "text": body, "note": "Only the stable-channel publication needs a decision.",
+            "evidence": "https://example.org/release/2.0",
+        }]},
+    }
+    message, _ = goal_channel_contracts.gate_message(
+        goal_id=GOAL_ID, objective="Public release", quota_packet=quota, kanban_url="",
+    )
+    assert body in message
+    assert "todo_release_review" in message
+    assert "Only the stable-channel publication needs a decision." in message
+    assert "https://example.org/release/2.0" in message
+    assert "bounded preview" in message
+    calls: list[list[str]] = []
+    runner = _fake_runner(calls)
+    first = _notify_test_gate(tmp_path=tmp_path, binding_path=binding_path, quota_packet=quota, runner=runner)
+    again = _notify_test_gate(tmp_path=tmp_path, binding_path=binding_path, quota_packet=quota, runner=runner)
+    assert first["status"] == "sent_verified"
+    assert first["readback_verified"] is True
+    assert again["status"] == "already_sent"
+    sends = [args for args in calls if "+messages-send" in args]
+    assert len(sends) == 1
+    assert body in sends[0][sends[0].index("--text") + 1]
+
+
+def test_gate_notice_redacts_and_bounds_additional_context() -> None:
+    message, _ = goal_channel_contracts.gate_message(
+        goal_id=GOAL_ID, objective="Public release", kanban_url="",
+        quota_packet={"user_todo_summary": {"gate_open_items": [{
+            "todo_id": "todo_release_review", "text": "Review " + "public facts " * 200,
+            "note": "See /tmp/private-review.txt and api_key=synthetic_fixture_secret_123456789",
+            "evidence": "https://example.org/release/2.0",
+        }]}},
+    )
+    assert "/tmp/private-review.txt" not in message
+    assert "synthetic_fixture_secret_123456789" not in message
+    assert len(message) < 2000
+    assert "Review the current request in LoopX" in message

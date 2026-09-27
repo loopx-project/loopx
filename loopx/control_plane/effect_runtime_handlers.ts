@@ -1,3 +1,4 @@
+import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -607,6 +608,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["task_lease.write_scopes.overlap", evaluateTaskLeaseWriteScopesOverlap],
     ["quota.monitor_poll.commit", evaluateQuotaMonitorPollCommit],
+    ["presentation.decision_notice.project", projectDecisionNotice],
     ["presentation.action_review_plan.compile", (params) =>
       compileActionReviewPlan(params.proposal)],
     ["scheduler.monitor_successor.plan", planMonitorSuccessor],
