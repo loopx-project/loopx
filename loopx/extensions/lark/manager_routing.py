@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 from pathlib import Path
 
+from ...control_plane.collaboration import conversation_trigger
 from ...chat_manager import (
     manager_channel,
     manager_connection_executor_endpoint,
@@ -166,7 +167,17 @@ def decide_manager_event(
     if not _valid_manager_binding(goal_id, binding, routing):
         return ignored("invalid_routing_state")
     profile = str(identity.get("sender_profile") or "default")
-    turn_authorized = is_event_addressed_to_bot(event, identity)
+    try:
+        trigger = conversation_trigger(
+            routing.get("turn_trigger"),
+            addressed=is_event_addressed_to_bot(event, identity),
+            bot_message=event.get("sender_type") == "app",
+            human=event.get("sender_type") == "user" and bool(event.get("sender_id")),
+            historical=event.get("historical_context_only") is True,
+        )
+    except ValueError:
+        return ignored("invalid_routing_state")
+    turn_authorized = trigger["authorized"]
     executor_endpoint_id, executor_endpoint_source = (
         manager_connection_executor_endpoint(runtime_root)
     )
@@ -189,10 +200,10 @@ def decide_manager_event(
             "message_id": message_id,
             "event_id": str(event.get("event_id") or message_id),
             "topic_root_message_id": topic_root,
-            # Capture and authority are intentionally separate.  The unique
-            # configured manager chat may retain non-self messages as bounded
-            # context, but only a provider-native mention or verified reply
-            # may enqueue a manager Turn.
+            # Provider evidence is adapted to the shared conversation rule.
+            # Capture is not admission; the explicit trigger selects live input.
+            "turn_trigger": trigger["mode"],
+            "trigger_reason": trigger["reason"],
             "capture_scope": "configured_chat_all",
             "authority_mode": (
                 ManagerAuthorityMode.TURN_AUTHORIZED.value

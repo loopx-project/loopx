@@ -623,6 +623,13 @@ callback; neither may appear as work completed or a second user-visible reply.
 This uses the R3 collaboration owner and current managed Turn wake instead of
 a separate steward scheduler.
 
+R3 entry qualification also covers ordinary human messages in an explicitly
+configured steward group without a mention. The shared TS admission rule owns
+trigger semantics; Lark supplies provider identity and the existing inbox owns
+deduplication and return. App settings select and read back the trigger per
+connection. External host-tool permission and sender-bound delegation remain
+separate gaps; receiving a request does not establish execution authority.
+
 ### R4: Shared Goal Alignment and Evolution
 
 - **Owner:** alignment RFC Stage 3–5 and TS Goal/work-graph owners.

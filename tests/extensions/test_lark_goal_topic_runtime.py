@@ -164,7 +164,7 @@ def _reply_runner(state: dict[str, Any]):
             }
         elif args[3:6] == ["im", "chats", "get"]:
             payload = {"data": {"chat_id": "oc_public_fixture"}}
-        elif "+messages-reply" in args:
+        elif "+messages-reply" in args or "+messages-send" in args:
             if "--content" in args:
                 state["reply_content"] = args[args.index("--content") + 1]
                 state["reply_type"] = "post"

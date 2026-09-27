@@ -14,6 +14,7 @@ import {projectTodoSuccession} from "./todos/succession.ts";
 import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {resolveConversationTrigger} from "./collaboration/conversation_trigger.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -721,6 +722,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],
+    ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
     ["collaboration.delegation.observe", transitionDelegationObservation],
     ["collaboration.delegation.recover_validated_settlement", recoverValidatedDelegationSettlement],
