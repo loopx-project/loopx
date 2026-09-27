@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 
-def conversation_trigger(mode=None, **evidence) -> dict[str, Any]:
+def conversation_trigger(mode: str | None = None, **evidence: bool) -> dict[str, Any]:
     try:
-        return effect_runtime_result("collaboration.conversation.trigger", {
+        return cast(dict[str, Any], effect_runtime_result("collaboration.conversation.trigger", {
             "mode": mode, **evidence,
-        })
+        }))
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from exc
 

@@ -1071,11 +1071,8 @@ def list_lark_connections(
                 if isinstance(binding.get("topic"), Mapping)
                 else {}
             )
-            routing = (
-                binding.get("routing")
-                if isinstance(binding.get("routing"), Mapping)
-                else {}
-            )
+            raw_routing = binding.get("routing")
+            routing = raw_routing if isinstance(raw_routing, Mapping) else {}
             connector_status: dict[str, Any] | None = None
             try:
                 capture_scope, ingress_mode, reply_mode = _connection_routing_modes(routing)
@@ -1232,11 +1229,8 @@ def decide_lark_topic_event(
                 or binding_channel.get("pinned_message_id")
                 or ""
             )
-            routing = (
-                binding.get("routing")
-                if isinstance(binding.get("routing"), Mapping)
-                else {}
-            )
+            raw_routing = binding.get("routing")
+            routing = raw_routing if isinstance(raw_routing, Mapping) else {}
             try:
                 capture_scope, ingress_mode, reply_mode = _connection_routing_modes(routing)
                 connector = binding.get("connector")
