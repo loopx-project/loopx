@@ -13,7 +13,7 @@ loopx usage-ping disable     # stop all channels; delete local ID and pending co
 loopx usage-ping enable      # explicitly allow all channels after reading the disclosure
 ```
 
-Settings → Capability Center exposes the same machine-wide switch and previews.
+Settings → Capability Center → Device defaults exposes the same machine-wide switch and previews.
 Opening settings or running these commands never sends a measurement. Settings
 are owned by the TypeScript usage-statistics module, independently of a Goal's
 File/SQLite/PostgreSQL provider; Python and the browser adapt that same owner.
@@ -73,11 +73,29 @@ Additional payload fields and invalid enum combinations are rejected.
 
 ## Disclosure and precedence
 
-The first interactive CLI command prints the recipient, fields, purpose and
+Interactive CLI, unattended scripts/agents and the App use the same
+**first disclosure → automatic activation → subsequent measurement** policy.
+The first ordinary CLI command prints the recipient, fields, purpose and
 both disable mechanisms to stderr, records the disclosure, and sends nothing.
-Later commands may measure/send. A fresh unattended installation does not
-silently opt itself in: use the visible App setting or explicit CLI enable.
-JSON stdout is unaffected. Previously enabled v0 clients keep their random ID
+This also applies to captured stderr in scripts and Agent tool calls; JSON
+stdout is unaffected. Discarded stderr (the null device) or a failed write
+cannot acknowledge a notice. Background `chat`/`serve-status` services defer
+first disclosure to the App instead of treating a service log as the App UI.
+
+On first opening the live App, a visible notice explains the collection and
+recipient, with **Turn off**, **Details** and **Dismiss** controls. After the
+notice paints in a visible tab, the App records the same acknowledgment as CLI;
+no enable click or visit to settings is needed. A hidden tab, read-only shared
+view, unavailable settings service or status read alone does not acknowledge it.
+Acknowledgment itself never sends a measurement. Later supported activity may
+measure/send; individual App clicks remain outside the collection scope.
+Settings → Capability Center keeps the shared switch and payload previews.
+
+This changes the previous unattended CLI and App defaults: unattended CLI no
+longer requires explicit enable, and the App no longer requires a first-use
+enable button under the default `opt_out` policy. Environment overrides and
+`consent_required` retain their precedence.
+Previously enabled v0 clients keep their random ID
 but must see the expanded-scope disclosure; previously disabled clients stay off.
 
 An explicit stored disable blocks all channels. The following environment

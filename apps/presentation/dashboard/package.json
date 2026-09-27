@@ -20,6 +20,7 @@
     "smoke:benchmark-study-browser": "node ../../../examples/dashboard-benchmark-study-browser-smoke.mjs",
     "smoke:capability-configuration": "rm -rf node_modules/.cache/loopx-capability-configuration-smoke && tsc --ignoreConfig --target ES2022 --module NodeNext --moduleResolution NodeNext --types node --skipLibCheck --strict --outDir node_modules/.cache/loopx-capability-configuration-smoke smoke/capability-configuration-smoke.ts src/data/capability-configuration.ts && node node_modules/.cache/loopx-capability-configuration-smoke/smoke/capability-configuration-smoke.js",
     "smoke:chat-route": "tsc --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --ignoreDeprecations 6.0 --skipLibCheck --strict --outDir node_modules/.cache/loopx-chat-route-smoke smoke/chat-route-smoke.ts src/data/chat-model.ts src/vite-env.d.ts && node node_modules/.cache/loopx-chat-route-smoke/smoke/chat-route-smoke.js",
+    "smoke:chat-turn-acceptance-retry": "vite build --ssr smoke/chat-turn-acceptance-retry-smoke.ts --outDir node_modules/.cache/loopx-chat-turn-acceptance-retry --emptyOutDir && node node_modules/.cache/loopx-chat-turn-acceptance-retry/chat-turn-acceptance-retry-smoke.js",
     "smoke:demo-readiness": "bash ../../../scripts/loopx-python.sh --exec ../../../examples/dashboard-demo-readiness-smoke.py",
     "smoke:frontstage-browser": "node ../../../examples/dashboard-frontstage-browser-smoke.mjs",
     "smoke:frontstage-design-baseline": "node ../../../examples/dashboard-frontstage-design-baseline-smoke.mjs",
@@ -57,7 +58,8 @@
     "smoke:team-report": "tsc --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --jsx react-jsx --skipLibCheck --strict --rootDir src --outDir node_modules/.cache/team-report src/features/personal-workspace/team-artifact-content.tsx src/vite-env.d.ts && node smoke/team-report-smoke.mjs",
     "build:chat:vite": "tsc --noEmit && vite build --config vite.chat.config.ts",
     "smoke:chat-upgrade": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node ../../../examples/chat-bundle-upgrade-browser-smoke.mjs",
-    "test:conversation-returns": "node --experimental-strip-types src/data/conversation-returns.test.mjs"
+    "test:conversation-returns": "node --experimental-strip-types src/data/conversation-returns.test.mjs",
+    "smoke:recent-completions": "tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --resolveJsonModule --esModuleInterop --jsx react-jsx --skipLibCheck --strict --types node --outDir /tmp/loopx-recent-completions-smoke smoke/recent-completions-smoke.ts && NODE_PATH=\"$PWD/node_modules\" node /tmp/loopx-recent-completions-smoke/apps/presentation/dashboard/smoke/recent-completions-smoke.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

@@ -1,8 +1,10 @@
 # 后续设计：重启与实例替换中的 Goal 连续性
 
-- **状态：** 延后设计记录；非规范性内容，不是新接受的运行时契约。
+- **RFC 状态：** Accepted（非规范性后续设计记录）。
+- **替代 / 关闭：** none
+- **交付成熟度：** 延后设计记录；不是新接受的运行时契约。
 - **来源：** 保留 [Duang777 在 #5169 中提出的问题](https://github.com/loopx-project/loopx/pull/5169)，评审时收窄其实现与证据宣称。
-- **语言镜像：** [English](goal-immutability-coherence-defense-v0.md)。
+- **语义镜像：** [English](goal-immutability-coherence-defense-v0.md)。
 - **所属契约：** [Goal 实例身份与孤儿恢复](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)、[Goal 方向基线](goal-direction-baseline-v0.zh-CN.md)、[受治理的修改](shared-goal-alignment-and-governed-amendment-v0.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[共享权威](shared-goal-authority-state-provider-v0.md)。
 
 这里保留原“Goal 不可变性作为一致性防御”草稿中的后续设计价值，不增加第二份

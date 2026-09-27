@@ -29,7 +29,12 @@ from .chat_goal_subagent_api import (
     add_goal_subagent_routes,
 )
 from .chat_status_api import ChatStatusRequestMixin
-from .chat_runtime import ChatRuntimeController, STEERING_NOT_DELIVERED_CODES, TERMINAL_TURN_STATES
+from .chat_runtime import (
+    STEERING_NOT_DELIVERED_CODES,
+    TERMINAL_TURN_STATES,
+    ChatRuntimeController,
+    ChatTurnAcceptanceUnavailableError,
+)
 from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE, is_manager_channel,
     manager_capabilities_projection, manager_workspace,
@@ -716,11 +721,20 @@ class ChatRequestHandler(
                 )
                 return
             response = completed.get("response")
+        except ChatTurnAcceptanceUnavailableError:
+            self._send_error(
+                "Chat turn acceptance is temporarily unavailable.",
+                status=503,
+                error_code="chat_turn_acceptance_unavailable",
+                turn_replay_safe=True,
+            )
+            return
         except CodexChatAgentError as exc:
             self._send_error(
                 str(exc),
                 status=424,
                 gate=exc.gate,
+                error_code=exc.error_code,
             )
             return
         except RuntimeError as exc:

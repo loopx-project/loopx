@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (39)
+## Accepted (40)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -36,6 +36,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Accepted | none | — |
 | [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Accepted | none | — |
 | [RFC: Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | Accepted | none | — |
+| [Design follow-up: Goal continuity across restart and replacement](goal-immutability-coherence-defense-v0.md) | Accepted | none | — |
 | [Goal Instance Identity and Orphan Recovery (v0)](goal-instance-identity-and-orphan-recovery-v0.md) | Accepted | none | — |
 | [RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)](goal-scoped-capability-portfolio-v0.md) | Accepted | none | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | Accepted | none | — |
@@ -58,7 +59,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Accepted | none | — |
 | [RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | Accepted | none | [5 entries](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Accepted | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
-| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [22 entries](ledger/shared-goal-authority-state-provider-v0/) |
+| [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [23 entries](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
 | [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [12 entries](ledger/typescript-control-plane-migration-v0/) |
 

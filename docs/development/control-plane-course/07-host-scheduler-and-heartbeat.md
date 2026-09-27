@@ -210,6 +210,30 @@ CLI acknowledged exact applied state
 
 Scheduler ACK 本身不构成 delivery，不 spend。
 
+### 兼容投影不能改变状态权威 / Compatibility preserves state authority
+
+`app_automation` 与 `codex_app` 是同一 proposal 的宿主投影，不是两个 scheduler
+writer。读取优先采用 common state；仅有旧 Codex state 时，保留它经 TS 验证的
+`state_key`。两份投影的 backoff、host facts 与 ACK/failure 命令都必须携带同一个键。
+否则 common state 的当前 identity/index 会被误写到旧键，触发真实的初始档位冲突；
+即使 CAS digest 相等也不代表 proposal 的状态归属正确。
+
+`app_automation` and `codex_app` project one proposal, not two scheduler writers.
+Reads prefer common state; a legacy-only Codex installation retains its
+TS-validated legacy key. Both projections must carry that same key through
+backoff, host facts and ACK/failure commands. Equal CAS digests do not prove that
+a proposal belongs to the chosen state scope.
+
+兼容 Python API 与手工 Codex CLI 未显式传 `state_key` 时，从当前 packet 取得实际键；
+显式键仍须匹配，不得静默改写。Trae 仍只接受 common key。这不是隐式迁移：不能把
+旧状态的非零档位当作空 common state 的首次 ACK，也不能放松 TS 的 reset/CAS 校验。
+
+When Python compatibility APIs or manual Codex CLI calls omit `state_key`, they
+use the current packet's key. Explicit keys must still match; Trae remains
+common-key-only. This is not an implicit migration: a nonzero legacy stage must
+not become a first ACK into missing common state, and TS reset/CAS checks remain
+unchanged.
+
 ### Proposal、Host Effect 与 Durable Receipt
 
 Scheduler 交互包含三个时间点，不能压成一个 `RRULE matches`：

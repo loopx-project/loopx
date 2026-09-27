@@ -130,6 +130,60 @@ def test_removed_manager_release_fails_before_starting_provider(tmp_path, monkey
     assert store.load_session(sid)["active_turn_id"] is None
 
 
+def test_wait_for_preparation_failure_observes_released_session(
+    tmp_path,
+    monkeypatch,
+):
+    store, sid, runtime = session_runtime(tmp_path)
+    queued, _ = store.create_queued_turn(
+        sid,
+        client_turn_id="settlement-publication",
+        message="Research cash flow",
+    )
+    claimed = store.claim_next_queued_turn(sid)
+    assert claimed is not None
+    assert claimed["turn_id"] == queued["turn_id"]
+
+    release_entered = threading.Event()
+    allow_release = threading.Event()
+    original_release = store.release_active_turn
+
+    def blocked_release(*args, **kwargs):
+        release_entered.set()
+        assert allow_release.wait(3)
+        return original_release(*args, **kwargs)
+
+    monkeypatch.setattr(store, "release_active_turn", blocked_release)
+    failure = threading.Thread(
+        target=runtime._fail_queue_preparation,
+        args=(sid, str(queued["turn_id"]), OSError("runtime removed")),
+    )
+    failure.start()
+    assert release_entered.wait(3)
+
+    observed = []
+    waiter = threading.Thread(
+        target=lambda: observed.append(
+            runtime.wait_for_turn(
+                session_id=sid,
+                turn_id=str(queued["turn_id"]),
+                timeout_sec=3,
+            )
+        )
+    )
+    waiter.start()
+    waiter.join(0.05)
+    assert waiter.is_alive()
+
+    allow_release.set()
+    failure.join(3)
+    waiter.join(3)
+    assert not failure.is_alive()
+    assert not waiter.is_alive()
+    assert observed[0]["status"] == "failed"
+    assert store.load_session(sid)["active_turn_id"] is None
+
+
 @pytest.mark.parametrize("error,code", [
     (OSError("private installation path"), "runtime_unavailable"),
     (CodexChatAgentError("Cannot restore", error_code="resume_failed", gate=None), "resume_failed"),

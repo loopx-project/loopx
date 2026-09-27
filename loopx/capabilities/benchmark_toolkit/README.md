@@ -261,7 +261,14 @@ release-snapshot CLI, requires the `codex_app_ssh_goal` profile and interface bu
 and proves that the returned body names that installed CLI. For an isolated case it
 also replaces the generic global-registry token with the explicit case registry.
 Keep app-server on `native_codex_profile_environment`; it supplies only the
-formal profile's `HOME`, `CODEX_HOME`, and `PATH`. The upstream provider value
+formal profile's `HOME`, `CODEX_HOME`, `PATH`, and home-scoped temporary directory
+(`TMPDIR`, `TMP`, `TEMP`). Installation and later profile calls use that same
+temporary scope, so equal-source profiles do not share runtime locators or
+shutdown ownership. Stop profile callers, then invoke
+`doctor --installation-only --restart-runtime` through its installed CLI with
+`native_codex_profile_environment(profile)` before removing the profile; require
+`stopped` or `not_running`, leaving incomplete shutdown visible.
+The upstream provider value
 must remain in `serve_runner_owned_provider_gateway`, while app-server receives
 only the loopback gateway URL and a fixed non-secret sentinel. On Linux, place
 app-server inside `native_codex_isolation` so its fresh PID namespace and

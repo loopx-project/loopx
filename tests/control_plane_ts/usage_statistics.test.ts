@@ -28,10 +28,12 @@ test("fresh default requires notice; status is read-only; acknowledgment enables
   const { path, state } = await fixture(t); const ctx = context();
   const initial = await inspect(path, ctx);
   assert.equal(initial.consent, "default"); assert.equal(initial.blocked_by, "notice_required");
+  assert.equal(initial.automatic_notice_required, true);
   await assert.rejects(readFile(path), /ENOENT/);
   await configure(path, ctx, "acknowledge", initial.notice);
   assert.equal((await inspect(path, ctx)).sending, true);
   assert.equal((await state()).consent, "default");
+  assert.equal((await inspect(path, ctx)).automatic_notice_required, false);
   assert.ok(validPing((await inspect(path, ctx)).next_payload));
 });
 
@@ -66,6 +68,28 @@ test("consent-required policy cannot be satisfied by acknowledgment; recipient c
   await configure(path, ctx, "enable"); assert.equal((await inspect(path, ctx)).sending, true);
   ctx.env.LOOPX_USAGE_PING_ENDPOINT = "https://another.example/v1/ping";
   assert.equal((await inspect(path, ctx)).blocked_by, "notice_required");
+});
+
+test("automatic acknowledgment cannot override a choice, changed policy or recipient, or stale disclosure", async t => {
+  const { path } = await fixture(t); const ctx = context();
+  const first = await inspect(path, ctx);
+  await assert.rejects(configure(path, ctx, "acknowledge", { ...first.notice, version: 0 }), /usage_notice_changed/);
+  await assert.rejects(readFile(path), /ENOENT/);
+  await configure(path, ctx, "acknowledge", first.notice);
+  const original = await readFile(path, "utf8");
+  for (const env of [{ LOOPX_USAGE_PING_ENDPOINT: "https://another.example/v1/ping" },
+    { LOOPX_USAGE_POLICY: "consent_required" }, { CI: "true" }, { DO_NOT_TRACK: "1" },
+    { LOOPX_USAGE_PING: "off" }, { LOOPX_USAGE_POLICY: "unknown" }]) {
+    const changed = { ...ctx, env: { ...ctx.env, ...env } };
+    const status = await inspect(path, changed);
+    assert.equal(status.automatic_notice_required, false);
+    await configure(path, changed, "acknowledge", status.notice);
+    assert.equal(await readFile(path, "utf8"), original);
+  }
+  await configure(path, ctx, "disable");
+  const disabled = await readFile(path, "utf8");
+  await configure(path, ctx, "acknowledge", first.notice);
+  assert.equal(await readFile(path, "utf8"), disabled);
 });
 
 test("one heartbeat per UTC day; closed-day aggregation is separate and identifier-free", async t => {

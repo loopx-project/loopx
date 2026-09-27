@@ -555,7 +555,18 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
       { error_code: "chat_api_unavailable" },
     );
   }
-  const responseText = await response.text();
+  let responseText: string;
+  try {
+    responseText = await response.text();
+  } catch {
+    throw new ChatApiError(
+      "LoopX Chat 服务响应中断。请重试当前操作。",
+      {
+        error_code: "chat_api_unavailable",
+        http_status: response.status,
+      },
+    );
+  }
   let parsedPayload: unknown = null;
   if (responseText.trim()) {
     try {
@@ -577,9 +588,15 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     const serviceMessage = response.status >= 500
       ? `LoopX Chat 服务暂时不可用（HTTP ${response.status}）。请确认 Dashboard 与 Chat 服务已启动且来自同一版本。`
       : `LoopX Chat 请求失败（HTTP ${response.status}）。`;
-    throw new ChatApiError(staleMessage ?? String(payload.error || serviceMessage), Object.keys(payload).length
-      ? payload
-      : { error_code: "chat_api_unavailable", http_status: response.status });
+    throw new ChatApiError(
+      staleMessage ?? String(payload.error || serviceMessage),
+      Object.keys(payload).length
+        ? { ...payload, http_status: response.status }
+        : {
+            error_code: "chat_api_unavailable",
+            http_status: response.status,
+          },
+    );
   }
   if (parsedPayload === null) {
     throw new ChatApiError(
@@ -779,28 +796,49 @@ export async function acceptChatTurn(
   message: string,
   clientTurnId: string,
   attachments: ChatImageAttachmentInput[] = [],
+  signal?: AbortSignal,
 ) {
-  return requestJson<{
-    ok: true;
-    session_id: string;
-    turn_id: string;
-    created: boolean;
-    status: string;
-    events_url: string;
-  }>(`/api/chat/sessions/${sessionId}/turns`, {
-    method: "POST",
-    body: JSON.stringify({
-      message,
-      client_turn_id: clientTurnId,
-      ...(attachments.length ? { attachments: attachments.map((attachment) => ({
-        data_url: attachment.dataUrl,
-        id: attachment.id,
-        mime_type: attachment.mimeType,
-        name: attachment.name,
-        size: attachment.size,
-      })) } : {}),
-    }),
+  const body = JSON.stringify({
+    message,
+    client_turn_id: clientTurnId,
+    ...(attachments.length ? { attachments: attachments.map((attachment) => ({
+      data_url: attachment.dataUrl,
+      id: attachment.id,
+      mime_type: attachment.mimeType,
+      name: attachment.name,
+      size: attachment.size,
+    })) } : {}),
   });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await requestJson<{
+        ok: true;
+        session_id: string;
+        turn_id: string;
+        created: boolean;
+        status: string;
+        events_url: string;
+      }>(`/api/chat/sessions/${sessionId}/turns`, {
+        method: "POST",
+        body,
+        signal,
+      });
+    } catch (error) {
+      const status = error instanceof ChatApiError
+        ? Number(error.payload.http_status ?? 0)
+        : 0;
+      const retryable = error instanceof ChatApiError && (
+        error.payload.error_code === "chat_api_unavailable"
+        || status >= 500
+        || (
+          status === 424
+          && error.payload.error_code === "resume_failed"
+        )
+      );
+      if (attempt > 0 || signal?.aborted || !retryable) throw error;
+    }
+  }
+  throw new Error("unreachable Chat turn acceptance retry state");
 }
 
 function parseSseBlock(block: string): ChatStreamEvent | null {
@@ -1009,11 +1047,13 @@ export async function sendChatTurnStreaming(
     signal?: AbortSignal;
   } = {},
 ) {
+  const clientTurnId = options.clientTurnId ?? crypto.randomUUID();
   const accepted = await acceptChatTurn(
     sessionId,
     message,
-    options.clientTurnId ?? crypto.randomUUID(),
+    clientTurnId,
     options.attachments,
+    options.signal,
   );
   options.onPhase?.("turn.accepted", accepted.turn_id);
   return receiveChatTurnStreaming(
@@ -1942,6 +1982,7 @@ export async function fetchLarkGroupChats(appRef: string, query?: string) {
 
 export type LarkGoalConnection = {
   conversation_kind?: "goal" | "manager";
+  turn_trigger?: "addressed" | "human_messages";
   agent_id: string | null;
   connection_id: string;
   app_label: string;
@@ -1973,6 +2014,7 @@ const larkConnectionsSchema = z.object({
   ok: z.literal(true),
   connections: z.array(z.object({
     conversation_kind: z.enum(["goal", "manager"]).default("goal"),
+    turn_trigger: z.enum(["addressed", "human_messages"]).default("addressed"),
     agent_id: z.string().nullable().default(null),
     connection_id: z.string(),
     app_label: z.string(),
@@ -2019,6 +2061,7 @@ export async function fetchLarkConnections() {
 
 export async function connectLarkGoalTopic(options: {
   conversationKind?: "goal" | "manager";
+  turnTrigger?: "addressed" | "human_messages";
   agentBindings?: Array<{ agentId: string; appRef: string }>;
   agentId?: string;
   appRef?: string;
@@ -2046,6 +2089,7 @@ export async function connectLarkGoalTopic(options: {
         ...(options.appRef ? { app_ref: options.appRef } : {}),
         ...(options.connectionId ? { connection_id: options.connectionId } : {}),
         conversation_kind: options.conversationKind ?? "goal",
+        ...(options.turnTrigger ? { turn_trigger: options.turnTrigger } : {}),
         capture_scope: options.captureScope,
         chat_id: options.chatId,
         chat_name: options.chatName,
@@ -2072,10 +2116,17 @@ const usageStatisticsSchema = z.object({
   consent: z.enum(["default", "enabled", "disabled"]),
   sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
   policy: z.string(), notice_required: z.boolean(),
+  notice: z.object({ version: z.number(), endpoint: z.string(), policy: z.string() }),
+  automatic_notice_required: z.boolean(),
   next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
 });
 export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
 export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {
   return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
     enabled === undefined ? undefined : { method: "POST", body: JSON.stringify({ enabled }) }));
+}
+
+export async function acknowledgeUsageNotice(notice: UsageStatistics["notice"]): Promise<UsageStatistics> {
+  return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
+    { method: "POST", body: JSON.stringify({ notice }) }));
 }

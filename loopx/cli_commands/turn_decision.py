@@ -35,11 +35,25 @@ from ..control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_turn,
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
+from ..control_plane.effect_runtime import effect_runtime_result
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .turn_selection import turn_controller_advisory_primary
 
 #: The route source every Turn owner attributes its decision to.
 TURN_DECISION_ROUTE_SOURCE = "loopx_turn_plan"
+
+
+class TurnTodoSelectionError(ValueError):
+    """Transport quota's existing refusal, without a new admission rule."""
+
+    def __init__(self, projection: dict[str, Any]) -> None:
+        self.code = projection["error_code"]
+        self.payload = {"selection_rejection": projection["selection_rejection"]}
+        reason = projection["selection_rejection"].get("reason_code")
+        super().__init__(
+            "Requested Turn Todo is not currently eligible; no alternate task was selected"
+            + (f"; reason={reason}" if reason else "")
+        )
 
 
 def collect_turn_status_payload(
@@ -164,7 +178,11 @@ class FreshTurnDecisionOwner:
         decision = self.build_turn_decision(requested_action_todo_id=self.requested_todo_id)
         selected = decision.get("selected_todo")
         if not isinstance(selected, dict) or selected.get("todo_id") != self.requested_todo_id:
-            raise ValueError("Requested Turn Todo is not currently eligible; no alternate task was selected")
+            summary = self.status_payload.get("contract_summary")
+            raise TurnTodoSelectionError(effect_runtime_result("turn.selection.rejection", {
+                "requested_todo_id": self.requested_todo_id, "decision": decision,
+                "contract_error_count": summary.get("errors") if isinstance(summary, Mapping) else None,
+            }))
         selected["selected_by"] = "turn_explicit_todo"
         return decision
 

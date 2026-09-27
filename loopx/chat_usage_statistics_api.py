@@ -23,16 +23,19 @@ class UsageStatisticsRequestMixin:
     def _usage_statistics_update(self) -> None:
         try:
             body = self._read_json()
+            if set(body) == {"notice"} and isinstance(body["notice"], dict):
+                self._usage_statistics_request("acknowledge", notice=body["notice"])
+                return
             if set(body) != {"enabled"} or not isinstance(body["enabled"], bool):
-                raise ValueError("enabled must be the only field and a boolean")
+                raise ValueError("provide either a boolean enabled or the displayed notice")
         except (TypeError, ValueError) as exc:
             self._send_error(str(exc), status=400, error_code="invalid_usage_settings")
             return
         self._usage_statistics_request("enable" if body["enabled"] else "disable")
 
-    def _usage_statistics_request(self, action: str) -> None:
+    def _usage_statistics_request(self, action: str, **fields: Any) -> None:
         try:
-            projection = control(action)
+            projection = control(action, **fields)
         except (OSError, ValueError, RuntimeError, TimeoutError, subprocess.TimeoutExpired):
             self._send_error("Usage settings unavailable; use loopx usage-ping status in the terminal.",
                              status=503, error_code="usage_settings_unavailable")

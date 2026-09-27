@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
 const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: "/fixture",
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
@@ -14,6 +15,29 @@ const validationTodo = {todo_id: binding.todo_id, done: false, status: "open",
   completion_validation_required: true, completion_validation_sha256: canonicalAuthoritySha256(declaration)};
 const validationBasis = {status: "loaded", provider_revision: "fixture:1", todo: validationTodo,
   completion_requirements: null};
+
+test("preflight preserves a quota refusal, but rejects effectful or retargeted errors", () => {
+  const projected = projectTurnSelectionRejection({requested_todo_id:binding.todo_id,contract_error_count:3,
+    decision:{status_health_ok:false,action_selection_qualification:{state:"deferred",
+      requested_todo_id:binding.todo_id,reason:"control_repair",recovery_action:"reenter_guard_without_selection"}}});
+  const preview = {ok:false,...projected,effects_scope:"current_invocation",
+    effects:{host_invoked:false,state_written:false,quota_spent:false,scheduler_acknowledged:false}};
+  const input = {binding,preview,acceptance:{todo_id:binding.todo_id,state:"ready"},validation_files_current:true};
+  const observed = delegationPreflight(input);
+  assert.equal(observed.state,"turn_blocked"); assert.equal(observed.turn_eligible,false);
+  assert.equal(observed.acceptance_ready,true); assert.equal(observed.executor,null);
+  assert.deepEqual(observed.turn_blocker,projected.selection_rejection);
+  assert.deepEqual(delegationPreflight({...input,preview:{...preview,selection_rejection:{
+    ...(projected.selection_rejection as Record<string,unknown>),private_context:"not exported"}}}).turn_blocker,projected.selection_rejection);
+  for (const effects of [{...preview.effects,host_invoked:true}, {...preview.effects,state_written:null}])
+    assert.throws(() => delegationPreflight({...input,preview:{...preview,effects}}),/effect-free/);
+  assert.throws(() => delegationPreflight({...input,preview:{...preview,
+    selection_rejection:{...(projected.selection_rejection as Record<string,unknown>),requested_todo_id:"other"}}}),/matching/);
+  for (const raw of [["deferred"],["rejected"],["unavailable"]])
+    assert.throws(() => delegationPreflight({...input,preview:{...preview,
+      selection_rejection:{...(projected.selection_rejection as Record<string,unknown>),state:raw},
+      error_code:`turn_todo_selection_${raw[0]}`}}),/matching/);
+});
 
 test("independent delegation requires the current canonical declaration, not a Goal-wide contract", () => {
   const plan = delegationValidationPlan({binding, basis: validationBasis, declaration});

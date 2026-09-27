@@ -67,6 +67,20 @@ requests with the same title remain distinguishable; a replay sends no second
 notice. Bound oversized content explicitly and preserve redaction. A notification
 is a preview, not proof of approval, execution or a fresh authorization grant.
 
+### Direct group conversation / 群里直接说话
+
+For the Lark variant of P0 reliable entry, configure the steward connection to
+respond without mentions. Send “帮我总结一下当前进展。” / “Summarize the current
+progress” as an ordinary new human message, then a concise correction. Require
+one retained request and one checked answer through the existing conversation;
+replay the same provider message and prove there is no second execution/reply.
+Disable the option and verify that another unaddressed message remains context
+while a mention or verified bot reply still works. Bots, missing sender evidence,
+historical backfill (even with an old mention), an unrelated group and a worker's
+own Topic are negative cases. This admission probe does not qualify autonomous
+execution: the external read-only profile and recipient grants must be evaluated
+separately. Passing transport fixtures is not evidence of a deployed group run.
+
 ### App-first execution profiles and ordinary questions
 
 Qualify the installed App first; Lark is independently scored, not required to

@@ -383,7 +383,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.ChatRequestHandler._goal_channel_extension_ready::codec_read:load_registry#1",
-      "line": 949,
+      "line": 963,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -391,7 +391,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.ChatRequestHandler._registry_and_goal::codec_read:load_registry#1",
-      "line": 506,
+      "line": 511,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -399,7 +399,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.serve_chat::codec_read:load_registry#1",
-      "line": 1471,
+      "line": 1485,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -927,7 +927,7 @@
     },
     {
       "site": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::<module>._drain_prelude::codec_read:load_registry#1",
-      "line": 607,
+      "line": 220,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -935,7 +935,7 @@
     },
     {
       "site": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::<module>.effective_runtime_root::codec_read:load_registry#1",
-      "line": 59,
+      "line": 50,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -943,7 +943,7 @@
     },
     {
       "site": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::<module>.local_authority_shadow_status::codec_read:load_registry#1",
-      "line": 775,
+      "line": 306,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1599,15 +1599,15 @@
     },
     {
       "site": "loopx/extensions/lark/goal_channel_lifecycle.py::<module>.goal_channel_gate_sync_failure::codec_read:load_registry#1",
-      "line": 80,
-      "column": 28,
+      "line": 209,
+      "column": 32,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"
     },
     {
       "site": "loopx/extensions/lark/goal_channel_lifecycle.py::<module>.sync_human_gate_after_refresh::codec_read:load_registry#1",
-      "line": 118,
+      "line": 257,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1615,7 +1615,7 @@
     },
     {
       "site": "loopx/extensions/lark/goal_channel_lifecycle.py::<module>.sync_human_gate_after_refresh::codec_read:load_registry#2",
-      "line": 129,
+      "line": 268,
       "column": 14,
       "kind": "codec_read",
       "api": "load_registry",

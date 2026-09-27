@@ -264,7 +264,7 @@ def test_missing_scheduler_context_fails_closed() -> None:
     assert hint["execution_phase"]["disposition"] == "contract_error"
 
 
-def test_codex_app_runtime_profile_preserves_host_backoff() -> None:
+def test_codex_app_runtime_profile_preserves_host_backoff_and_authority() -> None:
     context = scheduler_execution_context_for_runtime_profile(
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT
     )
@@ -300,7 +300,10 @@ def test_codex_app_runtime_profile_preserves_host_backoff() -> None:
         "codex_app_stateful_backoff_v0"
     )
     assert legacy["stateful_backoff"]["state_key"] == (
-        "scheduler_hint.codex_app.stateful_backoff"
+        "scheduler_hint.app_automation.stateful_backoff"
+    )
+    assert legacy["ack_hint"]["args"]["state_key"] == (
+        canonical["ack_hint"]["args"]["state_key"]
     )
     assert legacy["ack_hint"]["schema_version"] == (
         "codex_app_scheduler_ack_hint_v0"

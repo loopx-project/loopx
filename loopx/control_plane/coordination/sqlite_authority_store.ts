@@ -454,16 +454,22 @@ export class SqliteAuthorityStore implements AuthorityStore {
         .get(normalized.operation_id);
       if (existingRow) {
         const retained = this.decodeCommitRow(existingRow);
-        const window = this.verifiedRange(db, retained.cursor, retained.cursor);
-        const original = window.transactions[0];
-        if (!original || original.operation_id !== normalized.operation_id) {
-          protocol("SQLite replay is not part of its retained window");
-        }
-        const digest = commitDigest(window.identity, retained.cursor, normalized.operation_id,
-          normalized.next_projection, normalized.events, normalized.receipts);
-        if (digest === retained.commit_digest) {
+        let verified = false;
+        let replayResult: AuthorityStoreCommitResult | null = null;
+        this.verifiedRange(db, retained.cursor, retained.cursor, (row, _replay, identity) => {
+          if (row.operation_id !== normalized.operation_id) {
+            protocol("SQLite replay is not part of its retained window");
+          }
+          verified = true;
+          const digest = commitDigest(identity, row.cursor, normalized.operation_id,
+            normalized.next_projection, normalized.events, normalized.receipts);
+          if (digest === row.commit_digest) replayResult = {status: "applied",
+            provider_revision: `${identity}:${row.cursor}`, cursor: row.cursor.toString()};
+        });
+        if (!verified) protocol("SQLite replay is not part of its retained window");
+        if (replayResult) {
           db.exec("ROLLBACK"); transactionOpen = false;
-          return {status: "applied", provider_revision: original.provider_revision, cursor: original.cursor};
+          return replayResult;
         }
         conflict = "operation_id_exists";
       }

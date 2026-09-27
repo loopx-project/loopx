@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2 } from "lucide-react";
 
 import type { WorkspaceLocale } from "./i18n";
 import { useWorkspaceI18n } from "./i18n";
@@ -13,13 +13,14 @@ import type { WorkspaceTheme } from "./workspace-theme";
 
 type WorkspaceSettingsTab = "steward" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
 
-const tabIcons: Record<WorkspaceSettingsTab, typeof Settings2> = {
+type SettingsPage = Exclude<WorkspaceSettingsTab, "machine">;
+
+const tabIcons: Record<SettingsPage, typeof Settings2> = {
   appearance: Palette,
-  capabilities: SlidersHorizontal,
+  capabilities: ServerCog,
   cadence: Clock3,
   language: Languages,
   lark: Settings2,
-  machine: ServerCog,
   provider: KeyRound,
   steward: Bot,
 };
@@ -48,7 +49,10 @@ export function WorkspaceSettingsPage({
   theme: WorkspaceTheme;
 }) {
   const { locale, setLocale, t } = useWorkspaceI18n();
-  const [tab, setTab] = useState<WorkspaceSettingsTab>(initialTab);
+  // Preserve existing Goal-settings links while presenting one capability entry.
+  const [tab, setTab] = useState<SettingsPage>(initialTab === "machine" ? "capabilities" : initialTab);
+  const [capabilityScope, setCapabilityScope] = useState<"machine" | "goal">(initialTab === "capabilities" ? "goal" : "machine");
+  const [capabilityGoalId, setCapabilityGoalId] = useState(initialGoalId ?? "");
   const tabsRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const navigation = tabsRef.current;
@@ -68,7 +72,7 @@ export function WorkspaceSettingsPage({
     observer.observe(navigation);
     return () => observer.disconnect();
   }, [tab]);
-  const tabGroups: Array<{ label: string; tabs: Array<{ key: WorkspaceSettingsTab; label: string }> }> = [
+  const tabGroups: Array<{ label: string; tabs: Array<{ key: SettingsPage; label: string }> }> = [
     {
       label: t("settings.agentGroup"),
       tabs: [
@@ -78,8 +82,7 @@ export function WorkspaceSettingsPage({
         // machine defaults every Goal inherits). They answer different questions
         // and are edited on different surfaces, so they are separate categories.
         { key: "provider", label: t("settings.modelProvider") },
-        { key: "machine", label: t("settings.globalCapabilities") },
-        ...(initialGoalId ? [{ key: "capabilities" as const, label: t("capabilities.title") }] : []),
+        { key: "capabilities", label: t("settings.globalCapabilities") },
         ...(initialGoalId ? [{ key: "cadence" as const, label: t("cadence.title") }] : []),
       ],
     },
@@ -102,12 +105,12 @@ export function WorkspaceSettingsPage({
       value: "zh-CN",
     },
   ];
-  const headings: Record<WorkspaceSettingsTab, { title: string }> = {
+  const headings: Record<SettingsPage, { title: string }> = {
     appearance: {
       title: t("settings.appearance"),
     },
     capabilities: {
-      title: t("capabilities.title"),
+      title: t("settings.globalCapabilities"),
     },
     cadence: {
       title: t("cadence.title"),
@@ -118,9 +121,6 @@ export function WorkspaceSettingsPage({
     lark: {
       title: "Lark",
     },
-    machine: {
-      title: t("settings.globalCapabilities"),
-    },
     provider: {
       title: t("settings.modelProvider"),
     },
@@ -130,7 +130,7 @@ export function WorkspaceSettingsPage({
   };
   const heading = headings[tab];
   const selectedGoal = goals.find((item) => item.goalId === initialGoalId);
-  const goalSettingsTarget = (tab === "capabilities" || tab === "cadence") && initialGoalId
+  const goalSettingsTarget = tab === "cadence" && initialGoalId
     ? selectedGoal?.title || initialGoalId
     : null;
 
@@ -161,7 +161,7 @@ export function WorkspaceSettingsPage({
       </aside>
 
       <main className="personal-settings-body">
-        <header className="personal-settings-header">
+        <header className={`personal-settings-header${tab === "capabilities" ? " has-capability-target" : ""}`}>
           <div className="personal-settings-heading">
             <h1>{heading.title}</h1>
             {goalSettingsTarget ? (
@@ -171,6 +171,23 @@ export function WorkspaceSettingsPage({
               </span>
             ) : null}
           </div>
+          {tab === "capabilities" ? <div className="personal-capability-target">
+            <fieldset className="personal-capability-scope-options">
+              <legend>{t("settings.capabilityScope")}</legend>
+              {(["machine", "goal"] as const).map((scope) => <label key={scope}>
+                <input type="radio" name="capability-scope" checked={capabilityScope === scope} onChange={() => setCapabilityScope(scope)} />
+                {t(`settings.capabilityScope.${scope}`)}
+              </label>)}
+            </fieldset>
+            {capabilityScope === "goal" ? <label className="personal-capability-goal-choice">
+              <span>{t("settings.targetGoal")}</span>
+              <select aria-label={t("settings.targetGoal")} value={capabilityGoalId} onChange={(event) => setCapabilityGoalId(event.target.value)}>
+                <option value="">{t("capabilities.chooseGoal")}</option>
+                {goals.map((goal) => <option key={goal.goalId} value={goal.goalId}>{goal.title} · {goal.goalId}</option>)}
+              </select>
+            </label> : null}
+            <p>{t(`settings.capabilityScope.${capabilityScope}Description`)}</p>
+          </div> : null}
         </header>
         {tab === "lark" ? (
           <LarkSettingsPage
@@ -190,12 +207,13 @@ export function WorkspaceSettingsPage({
         ) : null}
 
         {tab === "steward" ? <MachineConfigurationSettings section="steward" /> : null}
-        {tab === "machine" ? <MachineConfigurationSettings section="other" /> : null}
-        {tab === "capabilities" ? (
+        {tab === "capabilities" && capabilityScope === "machine" ? <MachineConfigurationSettings section="other" /> : null}
+        {tab === "capabilities" && capabilityScope === "goal" ? (
           <GoalCapabilitySettings
+            key={capabilityGoalId}
             callbacks={callbacks}
-            goalId={initialGoalId}
-            notification={goalNotifications.find((row) => row.goalId === initialGoalId)}
+            goalId={capabilityGoalId}
+            notification={goalNotifications.find((row) => row.goalId === capabilityGoalId)}
             onChanged={onChanged}
           />
         ) : null}

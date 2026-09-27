@@ -193,6 +193,12 @@ failure leaves the generated files untouched.
     synthetic drift fixture plan are proposed. No direction declaration,
     reducer, runtime consumer, Vision writer, scheduler effect, or provider
     integration has shipped.
+- [Goal Continuity Across Restart and Replacement](goal-immutability-coherence-defense-v0.md)
+  ([中文版](goal-immutability-coherence-defense-v0.zh-CN.md))
+  - **Delivery on `main`:** Non-normative follow-up design record.
+  - **Current boundary:** Retains qualification scenarios under existing Goal
+    instance, direction, amendment and handoff owners; combined journeys remain
+    unqualified and no new runtime contract is introduced.
 - [Goal Artifact Lifecycle Projection v0](goal-artifact-lifecycle-projection-v0.md)
   ([中文版](goal-artifact-lifecycle-projection-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only.

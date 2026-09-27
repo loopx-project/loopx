@@ -25,7 +25,7 @@ def _scheduler_packet(
     before: dict[str, Any],
     *,
     surface: str,
-    state_key: str,
+    state_key: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     scheduler_hint = (
         before.get("scheduler_hint")
@@ -36,7 +36,10 @@ def _scheduler_packet(
         packet_key = "app_automation"
     elif (
         surface == CODEX_APP_SURFACE
-        and state_key == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+        and (
+            state_key == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+            or (state_key is None and isinstance(scheduler_hint.get("app_automation"), dict))
+        )
     ):
         packet_key = "app_automation"
     else:
@@ -52,6 +55,15 @@ def _scheduler_packet(
         else {}
     )
     return scheduler_hint, surface_packet, stateful_backoff
+
+
+def _followup_state_key(
+    before: dict[str, Any], *, surface: str, state_key: str | None,
+) -> str:
+    if state_key is not None:
+        return state_key
+    _, _, backoff = _scheduler_packet(before, surface=surface, state_key=None)
+    return str(backoff.get("state_key") or CODEX_APP_STATEFUL_BACKOFF_STATE_KEY)
 
 
 def _current_hint_identity(
@@ -277,7 +289,7 @@ def record_quota_scheduler_ack_for_decision(
     agent_id: str | None,
     execute: bool = False,
     surface: str = CODEX_APP_SURFACE,
-    state_key: str = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+    state_key: str | None = None,
     applied_rrule: str | None = None,
     reset_token: str | None = None,
     identity_signature: str | None = None,
@@ -286,6 +298,7 @@ def record_quota_scheduler_ack_for_decision(
     use_current_hint: bool = False,
     host_match_observed: bool = False,
 ) -> dict[str, Any]:
+    state_key = _followup_state_key(before, surface=surface, state_key=state_key)
     safe_agent_id = normalize_todo_claimed_by(agent_id)
     if host_match_observed and (
         not str(applied_rrule or "").strip()
@@ -374,12 +387,13 @@ def record_quota_scheduler_failure_for_decision(
     agent_id: str | None,
     execute: bool = False,
     surface: str = CODEX_APP_SURFACE,
-    state_key: str = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+    state_key: str | None = None,
     failed_rrule: str | None = None,
     observed_host_rrule: str | None = None,
     failure_kind: str = "host_tool_failure",
     generated_at: str | None = None,
 ) -> dict[str, Any]:
+    state_key = _followup_state_key(before, surface=surface, state_key=state_key)
     safe_agent_id = normalize_todo_claimed_by(agent_id)
     target_rrule = normalize_scheduler_rrule(failed_rrule)
     try:

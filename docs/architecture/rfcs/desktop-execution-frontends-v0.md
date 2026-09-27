@@ -86,6 +86,64 @@ Optional Lark must project the same choice and its own audience restrictions.
 Until these cases pass, this is the allocation design, not a runtime guarantee.
 See the [near-term launch route](loopx-overall-roadmap-v0.md#near-term-local-agent-product-and-launch).
 
+## Settings ownership and scope
+
+Navigation follows the user's task; scope follows configuration ownership.
+The steward remains a first-level **Steward** destination for its executor,
+model/reasoning preference and host runtime grant. It is not a Goal member's
+model setting and is not buried inside Capability Center merely because its
+configuration is machine-owned. Reuse the same configuration components and
+transaction owner behind these distinct destinations.
+
+Capability Center has one target selector: **Device defaults** or **One Goal**.
+“Global” currently means the current device's configuration authority, not an
+account-wide or cross-host synchronized setting. A remote host retains its own
+credentials and defaults. Decide scope by the behavior below, not by whichever
+editor or storage path happens to exist.
+
+| Configuration owner | Scope decision | Reason |
+| --- | --- | --- |
+| `manager_runtime` | Device only; Steward tab | The host grants tools to its steward. A Goal cannot widen that grant. |
+| `steward_executor` | Device only; Steward tab | One steward channel owns its executor/model/effort preference. Goal worker allocation stays with that worker's binding. |
+| `periodic_report` | Device default + Goal override | Reuse report style, timezone and schedule; allow project-specific cadence and a Goal-resolved route. A default route alias is not permission to deliver to another Goal's audience. |
+| `change_quality_qualification` | Device default + Goal override | Reuse validation preferences while allowing the explicit project contract. Configuration does not waive repository or merge requirements. |
+| `pull_request_review` | Device default + Goal override | Reuse CI-wait and queue-priority preferences; repositories may differ. Neither layer grants approval or merge authority. |
+| `todo_replan_cadence` | Device default + Goal override | Reuse review frequency while allowing a Goal's work rhythm. This is completed-work review cadence, not the automation timer. |
+| `multi_subagent` | Goal only | Child model, capacity, responsibility domains and delegation bindings apply to one Goal's team and resource boundary. |
+| `peer_task_coordination` | Goal only | Coordinator identity must refer to a member of this Goal, not an inherited unrelated Agent. |
+| `explore_harness`, `explore_graph` | Goal only | Exploration strategy and opt-in affect this Goal's planning and evidence graph. |
+| `progress_review` | Goal only | Drift mode and threshold belong with this Goal's pinned acceptance contract revision. |
+| `reward_memory` | Goal only | Private provider binding and enabled Agents are Goal-local; a global preference cannot spread that data binding. |
+| `lark_kanban_heartbeat_sync` | Goal only | The target board and synchronization follow this Goal's binding and audience. |
+| `lark_event_inbox` | Goal only; binding editor in Lark settings/CLI | Captured messages, session binding and cursor belong to this Goal. The capability card remains read-only; transport credentials remain host-owned. |
+| `coordination_runtime_shadow` | Goal only | Experimental observation is explicitly scoped to this Goal's execution. |
+| `local_authority_shadow` | Goal only; retired/read-only | Historical inspection does not become a new activation or device default. |
+
+These decisions retain the shipped scope contracts. Goal-only does not forbid a
+future reusable preset: applying a preset would create a deliberate Goal-local
+configuration, not live inheritance of identities, permissions, bindings or
+experimental activation. A future split of reusable preferences from local
+bindings must change their owning schema and actual consumers together before
+advertising another scope.
+
+For dual-scope capabilities the precedence remains **explicit Goal value →
+live device default → capability default**. A Goal override is a complete value,
+not a field merge. Restoring inheritance removes the override via the existing
+preview/apply/readback path. Read-only status is independent from scope: a
+Goal-bound capability must still say Goal-only even when the current surface
+cannot edit it. Catalog declarations, runtime resolution and the UI must agree;
+unsupported-scope writes fail at the existing owner.
+
+Model-provider credentials, usage telemetry and appearance remain device-level
+settings in their existing destinations. Agent assignment belongs to a Goal.
+Automatic execution intervals keep their own Goal/Agent/automation hierarchy
+and scheduler readback; the Capability Center does not create a second timer.
+
+Acceptance: the catalog covers the scope matrix above; unsupported writes are
+rejected; packaged UI distinguishes all three scope classes and read-only Goal
+bindings, preserves the independent Steward tab, and qualifies target switching,
+preview/apply/readback and inheritance restoration without cross-target writes.
+
 ## Problem
 
 LoopX already has the pieces of two different products:

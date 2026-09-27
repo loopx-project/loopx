@@ -1,8 +1,10 @@
 # Design follow-up: Goal continuity across restart and replacement
 
-- **Status:** Deferred design note; non-normative, not an accepted new runtime contract.
+- **RFC status:** Accepted (non-normative design follow-up).
+- **Supersedes / closes:** none
+- **Delivery maturity:** Deferred design note; not an accepted new runtime contract.
 - **Origin:** Retains useful questions from [Duang777's #5169](https://github.com/loopx-project/loopx/pull/5169), with its implementation and evidence claims narrowed during review.
-- **Language mirror:** [中文](goal-immutability-coherence-defense-v0.zh-CN.md).
+- **Semantic mirror:** [中文](goal-immutability-coherence-defense-v0.zh-CN.md).
 - **Owning contracts:** [Goal instance identity and orphan recovery](goal-instance-identity-and-orphan-recovery-v0.md), [Goal direction baseline](goal-direction-baseline-v0.md), [governed amendment](shared-goal-alignment-and-governed-amendment-v0.md), [semantic handoff](capable-manager-semantic-handoff-v0.md), and [shared authority](shared-goal-authority-state-provider-v0.md).
 
 This preserves follow-up design value from the original “Goal Immutability as

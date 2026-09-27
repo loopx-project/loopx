@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +77,26 @@ def _run_profile_cli(
     return payload
 
 
+def _stop_profile_runtime(profile: NativeCodexProfile) -> None:
+    # Stop only this disposable installed profile's runtime before removing
+    # files that its idle writer can still create.
+    payload = _run_profile_cli(
+        profile,
+        profile.root,
+        "--format",
+        "json",
+        "doctor",
+        "--installation-only",
+        "--restart-runtime",
+    )
+    restart = payload.get("effect_runtime_restart")
+    if not isinstance(restart, dict) or restart.get("status") not in {
+        "stopped",
+        "not_running",
+    }:
+        raise SystemExit("profile runtime shutdown did not complete")
+
+
 def _profile_authority_contains_value(profile: NativeCodexProfile, value: str) -> bool:
     marker = value.encode("utf-8")
     for root in (profile.home, profile.codex_home):
@@ -93,12 +114,16 @@ def _profile_authority_contains_value(profile: NativeCodexProfile, value: str) -
 
 def main() -> int:
     args = _parser().parse_args()
-    with tempfile.TemporaryDirectory(prefix="loopx-native-goal-profile-smoke-") as raw:
+    with (
+        tempfile.TemporaryDirectory(prefix="loopx-native-goal-profile-smoke-") as raw,
+        ExitStack() as cleanup,
+    ):
         profile = install_native_codex_profile(
             REPO_ROOT,
             Path(raw) / "profile",
             require_clean_source=not args.allow_dirty_source,
         )
+        cleanup.callback(_stop_profile_runtime, profile)
         profile_receipt = compact_native_codex_profile_receipt(profile)
         provider_key = "ARK_OPENAI_API_KEY"
         gateway_sentinel_key = "LOOPX_MODEL_PROVIDER_SENTINEL"

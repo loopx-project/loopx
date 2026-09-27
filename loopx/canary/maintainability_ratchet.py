@@ -56,9 +56,11 @@ REVIEWED_MAINTAINABILITY_EXCEPTIONS: dict[str, dict[str, Any]] = {
         metric_ceilings={"package_reexport_count": 101, "source_module_count": 37},
     ),
     "compatibility_facade:loopx.status": _exception(
-        "The public loopx.status import surface remains a supported compatibility contract.",
+        "The public loopx.status import surface remains a supported compatibility contract. "
+        "Fifteen existing carriers now import their single owners instead of restating "
+        "local values; the import count changes without adding public names.",
         "Keep internal consumers on canonical modules and shrink exports as callers migrate.",
-        metric_ceilings={"package_reexport_count": 117, "source_module_count": 50},
+        metric_ceilings={"package_reexport_count": 119, "source_module_count": 50},
     ),
 }
 

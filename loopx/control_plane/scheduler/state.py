@@ -319,8 +319,9 @@ def load_app_automation_scheduler_state(
     )
     if current is not None or surface != CODEX_APP_SURFACE:
         return current
-    # Codex alone reads its pre-app_automation key so the next successful ACK
-    # can rewrite the cadence state under the provider-neutral contract.
+    # Codex alone reads its pre-app_automation key. Follow-ups retain that
+    # validated scope; copying its nonzero progression into a missing common
+    # state would incorrectly turn an acknowledged continuation into a reset.
     return load_scheduler_state(
         runtime_root,
         goal_id=goal_id,

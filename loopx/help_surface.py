@@ -270,6 +270,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx agent-directory",
                 "purpose": "Produce the local, goal-scoped peer agent directory this host can hand work to.",
             },
+            {
+                "command": "loopx resolve-peer-route",
+                "purpose": "Resolve an existing peer to one exact host route before sending work.",
+            },
             {"command": "loopx lark-kanban", "purpose": "Project LoopX state into a Feishu/Lark Base board."},
             {
                 "command": "loopx presentation",

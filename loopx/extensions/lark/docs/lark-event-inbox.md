@@ -528,6 +528,26 @@ loopx lark-inbox material-review \
   --execute
 ```
 
+### Steward groups without mentions
+
+In App **Settings → Lark → edit the steward connection → When to respond**,
+select **Respond to group members without @** to admit new human messages in
+that one connected group. All group members can start a conversation in this
+mode. The Lark application must have permission to receive all group messages;
+a local switch cannot grant that provider permission. Save the connection and
+reopen it to verify the setting; select **Only when mentioned or replied to**
+to disable it. Existing connections default to that addressed-only mode.
+
+The persisted connection field is `routing.turn_trigger` (`addressed` or
+`human_messages`), exposed by the existing connection API. Capture scope remains
+independent. The shared TypeScript conversation admission rule consumes verified
+provider sender/addressing evidence; it does not inspect message keywords.
+Historical backfill and bot messages do not start turns in the no-mention mode;
+unknown senders without addressing stay context-only. Existing worker Topics
+keep route priority. The same durable inbox/effect/reply path prevents duplicate
+processing. Reception does not grant host tools, evidence access, delegation or
+protected operations; the external-audience runtime profile is unchanged.
+
 Urgency classification stays local. Under `configured_chat_all`, provider-native
 mention evidence is normalized into a compact `addressed_to_bot` flag before the
 event is persisted. Only that typed flag or a provider-verified direct reply can

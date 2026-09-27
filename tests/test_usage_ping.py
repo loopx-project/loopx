@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import select
 import socket
@@ -82,19 +83,97 @@ def test_settings_commands_and_corrupt_state_repair(isolated, capsys):
     assert json.loads(capsys.readouterr().out)['next_payload'] is None
 
 
-def test_unattended_fresh_install_never_creates_state(isolated, monkeypatch):
-    monkeypatch.setattr(sys.stderr, 'isatty', lambda: False)
-    assert usage_ping.begin('status') is None
-    assert not usage_ping.state_path().exists()
-
-
-def test_first_interactive_command_discloses_but_does_not_measure(isolated, monkeypatch, capsys):
-    monkeypatch.setattr(sys.stderr, 'isatty', lambda: True)
+@pytest.mark.parametrize('interactive', [False, True])
+def test_first_cli_command_discloses_before_automatic_enable(isolated, monkeypatch, capsys, interactive):
+    monkeypatch.setattr(sys.stderr, 'isatty', lambda: interactive)
+    monkeypatch.setattr(usage_ping, '_detach', lambda *_: pytest.fail('first command must not send'))
     assert usage_ping.begin('status') is None
     assert 'random installation ID' in capsys.readouterr().err
     state = json.loads(usage_ping.state_path().read_text())
     assert 'last_attempt_day' not in state and 'counters' not in state
-    assert usage_ping.begin('status') is not None
+    assert usage_ping.control('status')['sending'] is True
+
+
+@pytest.mark.parametrize('command', ['chat', 'serve-status'])
+def test_background_app_service_defers_first_disclosure_to_frontend(isolated, monkeypatch, command):
+    monkeypatch.setattr(sys.stderr, 'isatty', lambda: False)
+    assert usage_ping.begin(command) is None
+    assert not usage_ping.state_path().exists()
+
+
+def test_discarded_or_broken_stderr_cannot_acknowledge(isolated, monkeypatch):
+    with open(os.devnull, 'w') as discarded:
+        monkeypatch.setattr(sys, 'stderr', discarded)
+        assert usage_ping.begin('status') is None
+        assert not usage_ping.state_path().exists()
+    class BrokenStream:
+        def isatty(self):
+            return False
+        def write(self, _text):
+            raise BrokenPipeError()
+    monkeypatch.setattr(sys, 'stderr', BrokenStream())
+    assert usage_ping.begin('status') is None
+    assert not usage_ping.state_path().exists()
+
+
+def test_absent_stderr_cannot_acknowledge_or_reach_stdout(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(usage_ping, '_detach', lambda *_: pytest.fail('an undisclosed command must not measure'))
+    monkeypatch.setattr(sys, 'stderr', None)
+    assert usage_ping.begin('status') is None
+    captured = capsys.readouterr()
+    assert captured.out == '' and captured.err == ''
+    assert not usage_ping.state_path().exists()
+
+
+def test_absent_stderr_keeps_real_cli_json_pure_until_a_stream_discloses(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(usage_ping, '_detach', lambda *_: pytest.fail('a command without disclosure must not measure'))
+    monkeypatch.setattr(sys, 'stderr', None)
+    assert main(['version', '--format', 'json']) == 0
+    captured = capsys.readouterr()
+    assert captured.out.lstrip().startswith('{')
+    assert json.loads(captured.out)['ok'] is True
+    assert captured.err == ''
+    assert not usage_ping.state_path().exists()
+    assert usage_ping.control('status')['sending'] is False
+    # Only the missing stream is rejected: an in-memory host stream still discloses and ACKs.
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', stderr)
+    assert main(['version', '--format', 'json']) == 0
+    assert 'random installation ID' in stderr.getvalue()
+    assert json.loads(capsys.readouterr().out)['ok'] is True
+    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 3
+
+
+@pytest.mark.parametrize('setting,value', [
+    ('LOOPX_USAGE_PING', 'off'), ('DO_NOT_TRACK', '1'), ('CI', 'true'),
+    ('LOOPX_USAGE_POLICY', 'consent_required'), ('LOOPX_USAGE_POLICY', 'unknown'),
+])
+def test_first_disclosure_respects_policy_overrides(isolated, monkeypatch, capsys, setting, value):
+    monkeypatch.setenv(setting, value)
+    assert usage_ping.begin('status') is None
+    assert not usage_ping.state_path().exists()
+    assert capsys.readouterr().err == ''
+
+
+def test_real_agent_cli_keeps_json_clean_and_sends_only_after_disclosure(isolated, collector, monkeypatch):
+    endpoint, received, accepted, release = collector
+    monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
+    first = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert first.returncode == 0 and isinstance(json.loads(first.stdout), dict)
+    assert 'random installation ID' in first.stderr
+    assert received == []
+    assert 'counters' not in json.loads(usage_ping.state_path().read_text())
+    second = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert second.returncode == 0 and json.loads(second.stdout) == json.loads(first.stdout)
+    assert 'random installation ID' not in second.stderr
+    assert accepted.wait(4), 'subsequent Agent call should reach the isolated collector'
+    usage_ping.control('disable')
+    release.set()
+    third = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert third.returncode == 0 and 'random installation ID' not in third.stderr
+    assert usage_ping.control('status')['consent'] == 'disabled'
 
 
 def test_real_cli_returns_while_http_response_is_held_and_disable_survives(isolated, collector, monkeypatch):
@@ -165,7 +244,19 @@ def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated):
     try:
         connection.request('GET', path)
         response = connection.getresponse()
-        assert response.status == 200 and json.loads(response.read())['consent'] == 'default'
+        initial = json.loads(response.read())
+        assert response.status == 200 and initial['automatic_notice_required']
+        assert not usage_ping.state_path().exists()
+        connection.request('POST', path, json.dumps({'notice': initial['notice']}), {'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        acknowledged = json.loads(response.read())
+        assert response.status == 200 and acknowledged['sending']
+        assert acknowledged['consent'] == 'default'
+        assert 'last_attempt_day' not in json.loads(usage_ping.state_path().read_text())
+        connection.request('POST', path, json.dumps({'notice': {**initial['notice'], 'version': 0}}), {'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        assert response.status == 503
+        response.read()
         connection.request('POST', path, json.dumps({'enabled': True}), {'Content-Type': 'application/json'})
         response = connection.getresponse()
         assert response.status == 200 and json.loads(response.read())['consent'] == 'enabled'
@@ -180,6 +271,9 @@ def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated):
         assert response.status == 400
         response.read()
         usage_ping.control('disable')
+        connection.request('POST', path, json.dumps({'notice': initial['notice']}), {'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        assert response.status == 200 and not json.loads(response.read())['sending']
         connection.request('GET', path)
         response = connection.getresponse()
         assert json.loads(response.read())['consent'] == 'disabled'

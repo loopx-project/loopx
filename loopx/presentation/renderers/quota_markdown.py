@@ -4,6 +4,7 @@ from typing import Any
 
 from ...control_plane import control_plane_policy_summary
 from ...control_plane.quota.states import QUOTA_STATE_ORDER
+from ...control_plane.projection_envelope_facts import render_projection_envelope_markdown
 from ...control_plane.runtime.decision_freshness import (
     DECISION_FRESHNESS_WARNING_ITEM_LIMIT,
 )
@@ -192,6 +193,14 @@ def render_quota_markdown(payload: dict[str, Any]) -> str:
         f"- goals: `{payload.get('goal_count')}`",
         f"- runs: `{payload.get('run_count')}`",
     ]
+    if payload.get("goal_filter"):
+        lines.append(f"- goal_filter: `{markdown_scalar(payload['goal_filter'])}` (counts and ranking cover this Goal only)")
+    if payload.get("reason"):
+        lines.append(f"- reason: {markdown_scalar(payload['reason'])}")
+    if payload.get("recommended_action"):
+        lines.append(f"- action: {markdown_scalar(payload['recommended_action'])}")
+    if payload.get("status_projection_envelope"):
+        lines.extend(render_projection_envelope_markdown(payload["status_projection_envelope"]))
     summary = as_dict(payload.get("summary"))
     states = as_dict(summary.get("states"))
     state_text = ", ".join(f"{state}={states.get(state, 0)}" for state in QUOTA_STATE_ORDER)
@@ -204,7 +213,8 @@ def render_quota_markdown(payload: dict[str, Any]) -> str:
     lines.append(f"- states: {state_text}")
 
     next_turn = as_dict(payload.get("next_automatic_turn"))
-    lines.extend(["", "## Next Automatic Turn"])
+    next_title = "Next Automatic Turn Within Selected Goal" if payload.get("goal_filter") else "Next Automatic Turn"
+    lines.extend(["", f"## {next_title}"])
     if next_turn:
         quota = as_dict(next_turn.get("quota"))
         lines.append(

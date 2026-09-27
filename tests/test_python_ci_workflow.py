@@ -209,8 +209,13 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
     assert "name: chat-bundle-${{ github.sha }}" in job
     producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
     assert "npm run smoke:personal-workspace-packaged" in producer
+    assert "npm run smoke:chat-turn-acceptance-retry" in producer
     assert "npm run smoke:chat-upgrade" in producer
-    assert producer.index("npm run smoke:personal-workspace-packaged") < producer.index("actions/upload-artifact")
+    assert (
+        producer.index("npm run smoke:personal-workspace-packaged")
+        < producer.index("npm run smoke:chat-turn-acceptance-retry")
+        < producer.index("actions/upload-artifact")
+    )
     assert "scripts/chat_bundle.py verify --source" in job
     assert "status --short --untracked-files=all -- loopx/web/chat" not in job
     assert "continue-on-error" not in job

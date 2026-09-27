@@ -107,6 +107,7 @@ jobs:
         run: |
           ./node_modules/.bin/playwright install --with-deps chromium
           npm run smoke:personal-workspace-packaged
+          npm run smoke:chat-turn-acceptance-retry
           npm run smoke:chat-upgrade
       - uses: actions/upload-artifact@v7
         with:

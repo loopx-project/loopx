@@ -24,6 +24,7 @@ export type WorkspaceHomeLane =
   | "stopped";
 
 export type WorkspaceAgentTodo = {
+  completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
   resumeReceiptId?: string | null;

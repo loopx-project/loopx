@@ -15,8 +15,10 @@ import {projectTodoSuccession} from "./todos/succession.ts";
 import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {resolveConversationTrigger} from "./collaboration/conversation_trigger.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
+import {planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
 import {commitLocalTeamPlan} from "./work_items/team_plan_authority.ts";
 import {inspectLocalGoalAcceptance, commitLocalGoalAcceptance,
@@ -89,6 +91,7 @@ import {
   type TurnJournalInspectionRequest,
 } from "./turn_driver/turn_journal.ts";
 import { commitTurnJournal } from "./turn_driver/turn_journal_effects.ts";
+import { projectTurnSelectionRejection } from "./turn_driver/selection_rejection.ts";
 import {
   evaluateTodoCompletionFence,
 } from "./todos/completion_fence.ts";
@@ -715,13 +718,16 @@ export function createEffectRuntimeHandlers(
       evaluatePostWritebackHookTransaction,
     ],
     ["collaboration.delegation.binding", selectDelegationBinding],
+    ["turn.selection.rejection", projectTurnSelectionRejection],
     ["collaboration.delegation.preflight", delegationPreflight],
     ["collaboration.delegation.validation_plan", delegationValidationPlan],
     ["collaboration.delegation.turn_plan", delegationTurnPlanDecision],
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],
+    ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
+    ["chat.turn.accept", planChatTurnAcceptance],
     ["collaboration.delegation.observe", transitionDelegationObservation],
     ["collaboration.delegation.recover_validated_settlement", recoverValidatedDelegationSettlement],
     ["collaboration.delegation.adoption", recordDelegationAdoption],

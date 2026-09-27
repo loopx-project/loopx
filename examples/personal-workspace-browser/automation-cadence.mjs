@@ -66,8 +66,9 @@ export const automationCadenceScenario = {
       await page.locator(".personal-goal-link", { hasText: "Multi Agent Projection" }).click();
       await page.getByRole("button", { name: "Goal 设置", exact: true }).click();
       const target = page.locator(".personal-settings-goal-target");
-      await target.getByText("Multi Agent Projection", { exact: true }).waitFor();
+      await page.getByRole("combobox", { name: "目标 Goal", exact: true }).waitFor();
       await page.getByRole("button", { name: "能力中心" }).click();
+      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
       if (await target.count()) throw new Error("Machine settings retained a Goal-specific target");
       await page.getByRole("button", { name: "自动执行间隔" }).click();
       await target.getByText("Multi Agent Projection", { exact: true }).waitFor();

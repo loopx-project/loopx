@@ -37,9 +37,9 @@ runtime authority/readback checks.
 
 ### Optional daily or weekly calendar
 
-In Personal Workspace, open **Settings → Machine configuration → Periodic
-reports** for machine defaults, or **Settings → Goal capabilities → Periodic
-reports** for one Goal. Enable the subscription, choose its profile and Goal
+In Personal Workspace, open **Settings → Capability Center**. Choose **Device
+defaults** or **One Goal** and select the target Goal, then choose **Periodic
+reports**. Enable the subscription, choose its profile and Goal
 Channel route, then turn on **Calendar reports**. Choose daily or weekly,
 the weekday for weekly reports, and a local time. The existing subscription
 timezone also owns the calendar timezone. Preview and apply use the same

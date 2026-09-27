@@ -478,6 +478,17 @@
 .personal-settings-title strong { font-size: 18px; letter-spacing: -.02em; }
 .personal-settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
 .personal-settings-header small { color: var(--pw-blue); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.personal-settings-header.has-capability-target { flex-direction: column; gap: 16px; align-items: stretch; }
+.personal-capability-target { display: grid; gap: 12px; max-width: 1050px; min-width: 0; }
+.personal-capability-scope-options { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; }
+.personal-capability-scope-options legend { margin-bottom: 8px; font-size: 12px; font-weight: 600; }
+.personal-capability-scope-options label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--pw-line-strong); border-radius: 6px; font-size: 13px; cursor: pointer; }
+.personal-capability-scope-options label:has(input:checked) { background: var(--pw-blue-soft); border-color: var(--pw-blue); color: var(--pw-blue); }
+.personal-capability-scope-options input { accent-color: var(--pw-blue); }
+.personal-capability-goal-choice { display: grid; gap: 6px; max-width: 480px; min-width: 0; font-size: 12px; font-weight: 600; }
+.personal-capability-goal-choice select { width: 100%; min-width: 0; min-height: 44px; padding: 0 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; }
+.personal-capability-target p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--pw-muted); }
+.personal-capability-settings.is-goal-scoped { grid-template-rows: minmax(0, 1fr); }
 .personal-settings-header h1 { margin: 4px 0 2px; font-size: 28px; letter-spacing: -.035em; }
 .personal-settings-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-width: 0; }
 .personal-settings-goal-target { display: inline-flex; align-items: center; gap: 7px; max-width: min(100%, 360px); min-width: 0; padding: 6px 10px; border: 1px solid var(--pw-line-strong); border-radius: 7px; background: var(--pw-card); font-size: 12px; line-height: 1.35; }
@@ -1869,6 +1880,17 @@
 .personal-usage-statistics > p { padding-left: 0; overflow-wrap: anywhere; }
 .personal-usage-statistics button { margin-block: 8px; }
 .personal-usage-statistics pre { max-height: 180px; overflow: auto; font-size: 12px; }
+.personal-usage-notice { display: flex; align-items: flex-start; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--pw-line); background: var(--pw-card); font-size: 12px; line-height: 1.5; }
+.personal-usage-notice > div:first-child { min-width: 0; flex: 1; }
+.personal-usage-notice strong { color: var(--pw-text); font-size: 14px; font-weight: 600; }
+.personal-usage-notice p { margin: 4px 0 0; color: var(--pw-muted); }
+.personal-usage-notice .personal-usage-recipient { overflow-wrap: anywhere; }
+.personal-usage-notice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.personal-usage-notice-actions button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; color: var(--pw-text); background: var(--pw-card); white-space: nowrap; cursor: pointer; }
+.personal-usage-notice-actions button:disabled { opacity: .6; cursor: wait; }
+@media (max-width: 640px) {
+  .personal-usage-notice { flex-direction: column; gap: 8px; padding: 12px 20px; }
+}
 .personal-action-form { margin: auto; width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; padding: 24px; border: 1px solid var(--pw-line-strong); border-radius: 16px; color: var(--pw-text); background: var(--pw-card); }
 .personal-action-form::backdrop { background: rgb(0 0 0 / 35%); }
 .personal-action-form form, .personal-action-form fieldset, .personal-action-form label { display: grid; gap: 12px; }
@@ -1884,3 +1906,5 @@
 .personal-action-form button:disabled { opacity: .5; cursor: default; }
 .personal-action-form [role="alert"] { color: var(--pw-red); }
 .personal-action-form-limit { margin: 0; color: var(--pw-amber); font-size: 13px; }
+
+.personal-capability-supported-scopes { margin: 6px 0; color: var(--pw-muted); font-size: 12px; line-height: 1.5; }

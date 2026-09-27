@@ -201,6 +201,7 @@ export function LarkSettingsPage({
   const [chatId, setChatId] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatLoadError, setChatLoadError] = useState<string | null>(null);
+  const [turnTrigger, setTurnTrigger] = useState<"addressed" | "human_messages">("addressed");
   const [captureScope, setCaptureScope] = useState<LarkCaptureScope>("addressed_only");
   const [conversationKind, setConversationKind] = useState<"goal" | "manager">(focusGoalConnection && initialGoalId ? "goal" : "manager");
   const [ingressMode, setIngressMode] = useState<LarkIngressMode>("async_inbox");
@@ -375,6 +376,7 @@ export function LarkSettingsPage({
     setConnectAllAgents(false);
     setAgentAppRefs({});
     setCaptureScope("addressed_only");
+    setTurnTrigger("addressed");
     setIngressMode("async_inbox");
     setReplyMode("topic_reply");
     setChatQuery("");
@@ -394,6 +396,7 @@ export function LarkSettingsPage({
     setConnectAllAgents(false);
     setAgentAppRefs({});
     setCaptureScope(connection.capture_scope);
+    setTurnTrigger(connection.turn_trigger ?? "addressed");
     setIngressMode(connection.ingress_mode === "direct_session" ? "async_inbox" : connection.ingress_mode);
     setReplyMode(connection.reply_mode);
     setChatQuery(connection.chat_name);
@@ -457,6 +460,7 @@ export function LarkSettingsPage({
           chatName: selectedChat!.chat_name,
         }),
         conversationKind,
+        ...(conversationKind === "manager" ? { turnTrigger } : {}),
         captureScope: conversationKind === "manager" ? "addressed_only" as const : captureScope,
         goalId,
         incomingMode: captureScope === "configured_chat_all" ? "all" as const : "mentions" as const,
@@ -554,7 +558,7 @@ export function LarkSettingsPage({
                   ) : null}
                 </span>
                 <span><strong>{connection.goal_title}</strong><small># {connection.topic_name}</small></span>
-                <span>{connection.capture_scope === "addressed_only" ? t("lark.mentionsOnly") : t("lark.allTopicMessages")}</span>
+                <span>{connection.conversation_kind === "manager" ? t(connection.turn_trigger === "human_messages" ? "lark.triggerHuman" : "lark.triggerAddressed") : connection.capture_scope === "addressed_only" ? t("lark.mentionsOnly") : t("lark.allTopicMessages")}</span>
                 <span><strong>{connection.conversation_kind === "manager" ? t("lark.managerConversation") : ingressPresentation(connection.ingress_mode, t).label}</strong><small>{connection.conversation_kind === "manager" ? t("lark.managerConversationDescription") : connection.agent_id ?? ingressPresentation(connection.ingress_mode, t).detail}</small></span>
                 <span className="personal-lark-row-actions">
                   <button aria-label={t("lark.settingsConfigure", { goal: connection.goal_title })} onClick={() => openConnectionEditor(connection)} type="button"><Settings2 size={15} /></button>
@@ -593,6 +597,7 @@ export function LarkSettingsPage({
             </>}
             <label className="personal-lark-check"><input checked readOnly type="checkbox" /><span><strong>{t("lark.createAutomatically")}</strong><small>{t("lark.createAutomaticallyDescription")}</small></span></label>
             <label><span>{t("lark.topicPreview")}</span><div className="personal-lark-topic-preview"><MessageSquareText size={15} /># {selectedGoal?.title ?? selectedGoal?.goalId ?? "Goal"}</div></label>
+            {conversationKind === "manager" ? <label><span>{t("lark.turnTrigger")}</span><select aria-label={t("lark.turnTrigger")} value={turnTrigger} onChange={(event) => setTurnTrigger(event.target.value as "addressed" | "human_messages")}><option value="addressed">{t("lark.triggerAddressed")}</option><option value="human_messages">{t("lark.triggerHuman")}</option></select><small>{t("lark.triggerDescription")}</small></label> : null}
             {conversationKind === "goal" ? <>
             <label><span>{t("lark.captureScope")}</span><select aria-label={t("lark.captureScope")} disabled={editingConnection?.ingress_mode === "direct_session"} onChange={(event) => setCaptureScope(event.target.value as LarkCaptureScope)} value={captureScope}><option value="addressed_only">{t("lark.captureAddressed")}</option><option value="configured_chat_all">{t("lark.captureAll")}</option></select><small>{t("lark.captureScopeDescription")}</small></label>
             <fieldset aria-label={t("lark.agentIngress")} className="personal-lark-ingress"><legend>{t("lark.agentIngress")}</legend><div>{(["live_steering", "session_queue", "async_inbox"] as const).map((mode) => { const presentation = ingressPresentation(mode, t); return <label className={ingressMode === mode ? "is-active" : ""} key={mode}><input aria-label={presentation.label} checked={ingressMode === mode} name="lark-agent-ingress" onChange={() => setIngressMode(mode)} type="radio" value={mode} /><span><strong>{presentation.label}</strong><small>{presentation.detail}</small></span></label>; })}</div></fieldset>

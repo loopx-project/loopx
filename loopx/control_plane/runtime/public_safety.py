@@ -17,6 +17,10 @@ LOCAL_PATH_SURFACE_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
+# Refs #5136: one definition for "this string carries a raw remote location".
+# Three validators each restated the same scheme list, and the canonical
+# public-safety owner had no counterpart, so a fourth caller had to invent one.
+REMOTE_LOCATION_SURFACE_PATTERN = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
 SECRET_LIKE_SURFACE_PATTERN = re.compile(
     r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
     r"\b(?:access|api|secret)[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"

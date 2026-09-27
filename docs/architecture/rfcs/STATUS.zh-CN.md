@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (39)
+## 已接受 (40)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -33,6 +33,7 @@
 | [RFC：Goal Artifact 生命周期投影（milestone / guard / next-transition）v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Goal Channel 协作模型 v0](goal-channel-collaboration-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal Direction Baseline（目标方向基线）v0](goal-direction-baseline-v0.zh-CN.md) | 已接受 | 无 | — |
+| [后续设计：重启与实例替换中的 Goal 连续性](goal-immutability-coherence-defense-v0.zh-CN.md) | 已接受 | none | — |
 | [Goal 实例身份与孤儿状态恢复（v0）](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal 级能力组合与 Connector 生命周期（v0）](goal-scoped-capability-portfolio-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | 已接受 | none | — |
@@ -55,7 +56,7 @@
 | [RFC：研究型探索控制面 v0](research-exploration-control-plane-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：语义词表收敛与提交期漂移检查（v0）](semantic-vocabulary-convergence-v0.zh-CN.md) | 已接受 | 无 | [5 条](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC：共享 Goal 对齐与受治理 Amendment 协议（v0）](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | 已接受 | 无 | [2 条](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
-| [RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）](shared-goal-authority-state-provider-v0.zh-CN.md) | 已接受 | 无 | [22 条](ledger/shared-goal-authority-state-provider-v0/) |
+| [RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）](shared-goal-authority-state-provider-v0.zh-CN.md) | 已接受 | 无 | [23 条](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | 已接受 | none | — |
 | [RFC：LoopX 控制面 TypeScript 渐进迁移方向 v0](typescript-control-plane-migration-v0.zh-CN.md) | 已接受 | 无 | [12 条](ledger/typescript-control-plane-migration-v0/) |
 

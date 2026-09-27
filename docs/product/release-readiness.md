@@ -635,6 +635,11 @@ path, and canary route rather than as a user-facing release baseline.
   The release separates package acquisition, delivered host material, runtime
   activation, and enabled-extension readiness.
 
+- `v1.2.1` on 2026-09-27 16:22 +08:00: recoverable work, clearer Chat usage,
+  and lifecycle compatibility at commit `fce1a4bac`.
+  The published package, desktop artifacts, signed update feed, and website
+  were verified against the release source before `stable` fast-forwarded.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 
