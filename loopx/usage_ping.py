@@ -51,7 +51,7 @@ def _command() -> list[str]:
 
 def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, Any]:
     result = subprocess.run(_command(), input=json.dumps(_request(action, path or state_path(), **fields)),
-                            capture_output=True, text=True, timeout=4, check=False)
+                            capture_output=True, text=True, encoding="utf-8", timeout=4, check=False)
     payload = json.loads(result.stdout)
     if result.returncode or not isinstance(payload, dict) or "error" in payload:
         raise RuntimeError("Usage settings unavailable. Inspect the local usage-ping.json; disable can repair invalid state.")
