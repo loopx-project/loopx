@@ -506,7 +506,7 @@ def append_explore_result_events(
     with exclusive_file_lock(log_path):
         existing_by_id: dict[str, dict[str, Any]] = {}
         if log_path.exists():
-            for line in log_path.read_text(encoding="utf-8").splitlines():
+            for line in log_path.read_text(encoding="utf-8").split("\n"):
                 try:
                     current = json.loads(line)
                 except json.JSONDecodeError:
@@ -546,7 +546,7 @@ def load_explore_result_events(
     if not log_path.exists():
         return []
     events: list[dict[str, Any]] = []
-    for line in log_path.read_text(encoding="utf-8").splitlines():
+    for line in log_path.read_text(encoding="utf-8").split("\n"):
         stripped = line.strip()
         if not stripped:
             continue
@@ -579,7 +579,7 @@ def load_explore_result_events_strict(
     if not log_path.exists():
         return []
     events: list[dict[str, Any]] = []
-    for line_number, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(log_path.read_text(encoding="utf-8").split("\n"), start=1):
         stripped = line.strip()
         if not stripped:
             continue

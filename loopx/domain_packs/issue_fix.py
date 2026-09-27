@@ -170,7 +170,7 @@ def promote_issue_fix_feasibility_ledger_jsonl(
         canonical_existing: dict[str, Any] | None = None
         if path.exists():
             for index, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
+                path.read_text(encoding="utf-8").split("\n"), start=1
             ):
                 if not line.strip():
                     continue
@@ -530,7 +530,7 @@ def retain_issue_fix_repository_snapshot_jsonl(
     path = Path(ledger_path)
     existing_rows: list[dict[str, Any]] = []
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8").split("\n"):
             try:
                 value = json.loads(line)
             except (TypeError, ValueError):

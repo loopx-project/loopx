@@ -625,7 +625,7 @@ def latest_promotion_readiness_event(runtime_root: Path, goal_id: str | None = N
         )
     for index_path, current_goal_id, source in indexes:
         try:
-            lines = index_path.read_text(encoding="utf-8").splitlines()
+            lines = index_path.read_text(encoding="utf-8").split("\n")
         except OSError:
             continue
         for line in lines:
