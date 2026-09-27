@@ -541,6 +541,18 @@ interface Admission {
   external: boolean;
 }
 
+async function readAuxiliarySettlement(request: MonitorRequest): Promise<JsonObject | null> {
+  if (!request.runtime_root || !request.turn_instance_id ||
+      !request.observation.actor_agent_id || !request.observation.settlement_todo_id) return null;
+  return await readQuotaSettlement({
+    schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+    runtime_root: request.runtime_root, goal_id: request.goal_id,
+    agent_id: request.observation.actor_agent_id, todo_id: request.observation.settlement_todo_id,
+    turn_instance_id: request.turn_instance_id, replan_obligation_id: null,
+    infer_turn_instance_id: false, allow_unbound_binding: false,
+  });
+}
+
 async function auxiliaryMonitorAllowed(
   request: MonitorRequest, historicalAdmission: boolean,
 ): Promise<boolean | null> {
@@ -566,17 +578,13 @@ async function auxiliaryMonitorAllowed(
         todo.excluded_agents.some(value => typeof value !== "string") ||
         todo.excluded_agents.includes(decision.agent_id)))) throw conflict();
   if (!historicalAdmission) {
-    const settlement = await readQuotaSettlement({
-      schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
-      runtime_root: request.runtime_root, goal_id: request.goal_id,
-      agent_id: decision.agent_id, todo_id: settlementTodo,
-      turn_instance_id: request.turn_instance_id, replan_obligation_id: null,
-      infer_turn_instance_id: false, allow_unbound_binding: false,
-    });
-    const progress = jsonObject(settlement.progress);
-    if (settlement.found !== true || jsonObject(jsonObject(settlement.identity)?.result)?.failure !== null ||
+    const settlement = await readAuxiliarySettlement(request);
+    const progress = jsonObject(settlement?.progress);
+    // The advancement's single debit is not an observation-admission fence.
+    // A settled exact binding still permits independently admitted due Monitors.
+    if (settlement?.found !== true || jsonObject(jsonObject(settlement.identity)?.result)?.failure !== null ||
         progress?.schema_version !== "quota_settlement_progress_v0" ||
-        progress.state === "identity_required" || progress.state === "settled") throw conflict();
+        progress.state === "identity_required") throw conflict();
   }
   const monitor = decision.registry_due_monitor;
   // Retain ordinary quota/due-work admission and capability/gate projections;
@@ -1488,14 +1496,30 @@ function successorReceipts(providerReceipt: JsonObject | null): JsonObject[] {
     : [];
 }
 
-function payloadFor(
+async function projectAuxiliaryContinuation(request: MonitorRequest, payload: JsonObject): Promise<void> {
+  const continuation = jsonObject(payload.turn_continuation);
+  if (!request.execute || continuation?.settlement_binding_matches_observation !== false) return;
+  const settlement = await readAuxiliarySettlement(request);
+  if (jsonObject(settlement?.progress)?.state !== "settled") return;
+  // This is current readback, not a change to the historical Monitor receipt
+  // or permission for another advancement. Replays must not reopen a paid Turn.
+  payload.turn_continuation = {
+    ...continuation,
+    current_turn_settled: true,
+    next_turn_required: true,
+    next_action: "rerun quota should-run with a fresh --turn-instance-id before independent work",
+    reason: "the original advancement Turn is already settled; the auxiliary observation adds no spend or delivery identity",
+  };
+}
+
+async function payloadFor(
   request: MonitorRequest,
   record: JsonObject,
   jsonPath: string,
   markdownPath: string,
   indexPath: string,
   options: { appended: boolean; replayed: boolean; repaired: boolean },
-): JsonObject {
+): Promise<JsonObject> {
   const event = requiredObject(record.monitor_event, "record.monitor_event");
   const receipts = successorReceipts(request.provider_receipt);
   const payload: JsonObject = {
@@ -1577,6 +1601,7 @@ function payloadFor(
   if (request.status_reload_warning) {
     payload.status_reload_warning = request.status_reload_warning;
   }
+  await projectAuxiliaryContinuation(request, payload);
   return payload;
 }
 
@@ -1882,6 +1907,7 @@ async function replayDurableReceipt(
       ? "quota monitor-poll commit repaired its durable transaction artifacts"
       : "replayed existing monitor poll event for the same effect identity",
   };
+  await projectAuxiliaryContinuation(request, replayPayload);
   return result(
     request,
     fingerprint,
@@ -2045,7 +2071,7 @@ export async function evaluateQuotaMonitorPollCommit(
       fingerprint,
       "preview",
       record,
-      payloadFor(
+      await payloadFor(
         effectiveRequest,
         record,
         paths.jsonPath,
@@ -2295,7 +2321,7 @@ export async function evaluateQuotaMonitorPollCommit(
       effectiveRequest.generated_at,
       request.effect_id,
     );
-    const payload = payloadFor(
+    const payload = await payloadFor(
       effectiveRequest,
       record,
       jsonPath,

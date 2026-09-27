@@ -98,9 +98,7 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
         ),
     }
     assert (
-        poll["after"]["interaction_contract"]["cli_channel"][
-            "spend_after_validation"
-        ]
+        poll["after"]["interaction_contract"]["cli_channel"]["spend_after_validation"]
         is True
     )
     assert poll_replay_rc == 0, poll_replay
@@ -122,11 +120,23 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
 
 
 @pytest.mark.parametrize(
-    ("provider", "writeback"),
-    [("legacy", False), ("legacy", True), ("file", True), ("sqlite", True)],
+    ("provider", "writeback", "spend_first"),
+    [
+        ("legacy", False, False),
+        ("legacy", True, False),
+        ("file", True, False),
+        ("sqlite", True, False),
+        ("legacy", True, True),
+        ("file", True, True),
+        ("sqlite", True, True),
+    ],
 )
 def test_completed_advancement_retains_auxiliary_monitor_admission(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, writeback: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    writeback: bool,
+    spend_first: bool,
 ) -> None:
     from canonical_authority_fixture import (
         initialize_canonical_authority,
@@ -251,11 +261,21 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             "--suppress-external-sinks",
         )
         assert rc == 0, refresh
+    if spend_first:
+        spend_command = refresh["settlement_owed"]["command"]
+        rc, spent = _run_cli(
+            registry_path,
+            runtime,
+            *_projected_cli_args(spend_command, turn_instance_id=turn),
+        )
+        assert rc == 0, spent
+        assert _spend_run_count(runtime) == 1
     rc, poll = _run_cli(registry_path, runtime, *poll_args)
     assert rc == 0, (poll.get("error_code"), poll.get("reason"), poll.get("error"))
     assert poll["todo_id"] == DUE_MONITOR_TODO_ID
     assert poll["settlement_todo_id"] == TODO_ID
-    assert poll["turn_continuation"]["current_turn_settled"] is False
+    assert poll["turn_continuation"]["current_turn_settled"] is spend_first
+    assert poll["turn_continuation"]["next_turn_required"] is spend_first
     if provider != "legacy":
         canonical = read_canonical_todos_if_promoted(
             runtime_root=runtime, goal_id=GOAL_ID, include_leases=True
@@ -281,13 +301,17 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert after_cli["settlement_resume_ref"] == "$.settlement_resume"
     assert after_cli["spend_after_validation"] is False
     assert poll["settlement_progress"]["state"] == (
-        "spend_required" if writeback else "writeback_required"
+        "settled"
+        if spend_first
+        else "spend_required"
+        if writeback
+        else "writeback_required"
     )
     rc, replay = _run_cli(registry_path, runtime, *poll_args)
     assert rc == 0, replay
     assert replay["replayed"] is True
     assert _classification_count(runtime, "quota_monitor_poll") == 1
-    assert _spend_run_count(runtime) == 0
+    assert _spend_run_count(runtime) == int(spend_first)
     if provider != "legacy":
         rc, released = _run_cli(
             registry_path,
@@ -306,7 +330,10 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             "3",
         )
         assert rc == 0, released
-    if not writeback:
+    if spend_first:
+        assert resume["next_step"] is None
+        assert "settlement_owed" not in poll
+    elif not writeback:
         assert resume["next_step"]["kind"] == "durable_writeback"
         writeback_command = resume["next_step"]["command_template"]
         args = tuple(
@@ -341,5 +368,6 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert rc == 0, replay
     assert replay["replayed"] is True
     assert replay["settlement_progress"]["state"] == "settled"
+    assert replay["turn_continuation"]["current_turn_settled"] is True
     assert replay["settlement_resume"]["next_step"] is None
     assert _classification_count(runtime, "quota_monitor_poll") == 1
