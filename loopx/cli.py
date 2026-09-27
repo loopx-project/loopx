@@ -814,12 +814,11 @@ def main(argv: list[str] | None = None) -> int:
             output_format,
         )
 
-    native_child_result = handle_native_child_command(
-        args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
-        print_payload, output_format,
-    )
-    if native_child_result is not None:
-        return native_child_result
+    if args.command == "native-child":
+        return handle_native_child_command(
+            args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
+            print_payload, output_format,
+        )
 
     if args.command == "agent-directory":
         return handle_agent_directory(
