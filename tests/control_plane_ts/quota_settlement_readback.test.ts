@@ -79,6 +79,7 @@ async function fixture(options: {
   writebackOutcome?: string;
   progressObservation?: Record<string, unknown>;
   blockedRetry?: boolean;
+  visionCheckpoint?: Record<string, unknown>;
 } = {}) {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-settlement-readback-"));
   const goalRoot = join(runtimeRoot, "goals", goalId);
@@ -151,6 +152,7 @@ async function fixture(options: {
       todo_id: todoId,
       turn_instance_id: turnId,
       settlement_identity: identity,
+      ...(options.visionCheckpoint ? {vision_checkpoint: options.visionCheckpoint} : {}),
       ...(options.blockedRetry ? {blocked_retry: {
         schema_version: "quota_blocked_retry_v0",
         source: "todo",
@@ -280,6 +282,69 @@ test("settlement progress preserves typed source and rejects malformed sources",
       }
     }
   } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test("accepted in-flight writeback closes only the exact Turn, not its Todo", async t => {
+  const checkpoint = {
+    schema_version: "vision_checkpoint_v0", agent_id: agentId, satisfied: true,
+    delivery_boundary: "in_flight_continuation",
+    triggers: [{kind: "in_flight_continuation", todo_id: todoId}],
+  };
+  const cases = [
+    {name: "both effects", spend: true, expected: "settled"},
+    {name: "spend still required", spend: false, expected: "settlement_pending"},
+    {name: "writeback receipt missing", spend: true, remove: "refresh_state", expected: "open"},
+    {name: "spend receipt missing", spend: true, remove: "quota_spend", expected: "settlement_pending"},
+  ];
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const root = await fixture({writeback: true, spend: entry.spend, visionCheckpoint: checkpoint});
+    try {
+      if (entry.remove) {
+        const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+        const events = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        await writeFile(path, events.filter(event => event.event_kind !== entry.remove).map(event => JSON.stringify(event)).join("\n") + "\n");
+      }
+      const result = await readQuotaSettlement(request(root));
+      assert.equal(result.replay_phase, entry.expected);
+      assert.equal(result.completion_event, null);
+      assert.equal((result.terminal_closeout as any).payload.ok, false);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+});
+
+test("in-flight replay rejects unaccepted checkpoints and unrelated identities", async t => {
+  const checkpoint = {
+    schema_version: "vision_checkpoint_v0", agent_id: agentId, satisfied: true,
+    delivery_boundary: "in_flight_continuation",
+    triggers: [{kind: "in_flight_continuation", todo_id: todoId}],
+  };
+  const patches: [string, Record<string, unknown>][] = [
+    ["checkpoint absent", {vision_checkpoint: null}],
+    ["checkpoint malformed", {vision_checkpoint: []}],
+    ["not accepted", {vision_checkpoint: {...checkpoint, satisfied: false}}],
+    ["truthy is not acceptance", {vision_checkpoint: {...checkpoint, satisfied: "true"}}],
+    ["wrong schema", {vision_checkpoint: {...checkpoint, schema_version: "other"}}],
+    ["semantic closeout", {vision_checkpoint: {...checkpoint, delivery_boundary: "semantic_closeout"}}],
+    ["checkpoint other agent", {vision_checkpoint: {...checkpoint, agent_id: "peer"}}],
+    ["no trigger", {vision_checkpoint: {...checkpoint, triggers: []}}],
+    ["trigger other Todo", {vision_checkpoint: {...checkpoint, triggers: [{kind: "in_flight_continuation", todo_id: "todo_other"}]}}],
+    ["trigger wrong kind", {vision_checkpoint: {...checkpoint, triggers: [{kind: "vision_unchanged", todo_id: todoId}]}}],
+    ...["surface_only", "outcome_gap", "primary_goal_outcome"].map(outcome => [outcome, {delivery_outcome: outcome}] as [string, Record<string, unknown>]),
+    ...["goal_id", "agent_id", "todo_id", "turn_instance_id"].map(field => [field, {[field]: "other"}] as [string, Record<string, unknown>]),
+    ["effect mismatch", {settlement_identity: {...identity, effect_id: "other"}}],
+  ];
+  for (const [name, patch] of patches) await t.test(name, async () => {
+    const root = await fixture({writeback: true, spend: true, visionCheckpoint: checkpoint});
+    try {
+      const path = join(root, "goals", goalId, "runs", "index.jsonl");
+      const runs = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      runs[0] = {...runs[0], ...patch};
+      await writeFile(path, runs.map(run => JSON.stringify(run)).join("\n") + "\n");
+      const result = await readQuotaSettlement(request(root));
+      assert.equal(result.replay_phase, "open");
+      assert.equal(result.completion_event, null);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
 });
 
 test("monitor closeout requires the exact committed effect, not a matching observation row", async t => {

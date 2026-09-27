@@ -619,6 +619,35 @@ Every attempted tick returns one result kind:
 | `validation_failed` | Host output exists but task validation failed or is inconclusive. | Preserve failure evidence and route to repair/replan. |
 | `writeback_failed` | Validated work could not be durably recorded. | Do not spend; retry idempotent writeback before more delivery. |
 
+### In-flight Turn settlement / 在途 Turn 结算
+
+A Todo can stay open across several bounded Turns. An exact accountable
+`outcome_progress` writeback with an accepted `vision_checkpoint_v0`
+`in_flight_continuation` boundary discharges that Turn's progress obligation,
+not the Todo's terminal acceptance. With its matching durable writeback and
+quota-spend receipts, the original Turn replays as `heartbeat_settled_skip`:
+no more work and no second debit. Without the spend receipt it remains
+`settlement_pending`; a missing writeback receipt, unaccepted checkpoint or
+wrong Goal/Agent/Todo/Turn cannot prove settlement. A plain progress claim or
+`semantic_closeout` checkpoint is not this exception.
+
+Todo 可以跨多个有界 Turn 保持开放。与原始身份精确绑定的 `outcome_progress`
+写回，只有携带已获准的 `vision_checkpoint_v0`、`in_flight_continuation` 边界和
+当前 Todo 的 trigger，才履行该 Turn 的进展义务，而非 Todo 的最终验收。有匹配
+的写回和扣额回执后，同一 Turn 返回 `heartbeat_settled_skip`，不得再次执行或
+重复扣额；缺少扣额回执时仍是 `settlement_pending`。缺少写回回执、未获准
+checkpoint 或错配 Goal/Agent/Todo/Turn 均不能证明结算，普通进展声明或
+`semantic_closeout` 也不能替代这项凭证。
+
+Waiting conditions and frontier/successor changes do not reopen a settled Turn.
+A fresh Turn must recompute admission to continue the open Todo or select an
+independent successor. The Todo's completion validator, definition revision,
+leases and Goal acceptance remain authoritative and unchanged.
+
+等待条件和 frontier／后继变化不能重新打开已结算 Turn。继续开放 Todo 或选择
+独立后继必须用新 Turn 重新准入。Todo 完成验证器、定义版本、租约和 Goal 验收
+仍由原权威负责，不因在途结算而放宽或改写。
+
 `validated_completion` is admitted only when the Turn caller supplies an
 explicit Todo lifecycle adapter. After independent validation, the adapter must
 authorize and complete the selected Todo through the existing Todo lifecycle,

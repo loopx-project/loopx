@@ -1570,6 +1570,20 @@ def test_in_flight_progress_settles_while_completion_validation_todo_is_open(
     )
     assert current_todo["status"] == "open", current_todo
 
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn_id, "--scan-path", str(project),
+    )
+    assert replay_rc == 0, replay
+    assert replay["should_run"] is False, replay
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["kind"] == "heartbeat_settled_skip"
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert replay["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
+    assert _spend_run_count(runtime) == 1
+
 
 def test_open_completion_todo_accepts_only_matching_in_flight_writeback(
     tmp_path: Path,
