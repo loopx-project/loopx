@@ -32,6 +32,7 @@ class RewardMemoryDecisionResult:
     recall_session: RewardMemoryRecallSession | None = None
     application_receipt: Mapping[str, Any] | None = None
     recall_telemetry: Mapping[str, Any] | None = None
+    context_delivery_receipt: Mapping[str, Any] | None = None
 
 
 def _transport_failure(
@@ -64,21 +65,29 @@ def _recall_telemetry(hook: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_application_receipt(receipt: Mapping[str, Any] | None) -> dict[str, Any]:
+    # Transport only: the TS owner verifies both receipts with the same binding rule.
+    return {
+        key: value for key, value in (receipt or {}).items()
+        if key in {"schema_version", "application_id", "artifact_ref", "surface_id",
+                   "outcome", "memory_ref_digests", "current_artifact_verified",
+                   "result_readback_verified"}
+    }
+
+
 def _project(
     request: dict[str, Any], status: str, telemetry: Mapping[str, Any],
     receipt: Mapping[str, Any] | None,
+    context_delivery_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return effect_runtime_result("reward_memory.decision.project", {
         "request": request,
         "observation": {
             "status": status, **dict(telemetry),
             # No query, summary, lesson, model rationale or base artifact crosses into TS.
-            "application_receipt": {
-                key: value for key, value in (receipt or {}).items()
-                if key in {"schema_version", "application_id", "artifact_ref", "surface_id",
-                           "outcome", "memory_ref_digests", "current_artifact_verified",
-                           "result_readback_verified"}
-            },
+            "application_receipt": _compact_application_receipt(receipt),
+            "context_delivery_receipt": _compact_application_receipt(context_delivery_receipt)
+                if context_delivery_receipt is not None else None,
         },
     })
 
@@ -148,6 +157,7 @@ privately to replay the exact request or assess delivered context without recall
         return RewardMemoryDecisionResult(
             packet, base if packet["preserve_base_output"] else hook["output"],
             base, digest, request, session, receipt, telemetry,
+            deepcopy(receipt) if packet["context_delivery_verified"] else None,
         )
     except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return RewardMemoryDecisionResult(
@@ -183,7 +193,7 @@ def assess_reward_memory_decision(
         receipt = application["receipt"]
         # Reassessment is not recall: retain every corpus's original cumulative counters.
         packet = _project(request, application["status"], delivered.recall_telemetry or {},
-                          application["receipt"])
+                          application["receipt"], delivered.context_delivery_receipt)
         return replace(delivered, public_packet=packet, request=request,
                        output=delivered.base_output if packet["preserve_base_output"] else application["output"],
                        application_receipt=application["receipt"])

@@ -188,9 +188,12 @@ def test_delivery_then_actual_bound_assessment_and_exact_replay(tmp_path, dispos
 
     assessed = assess_reward_memory_decision(delivered, apply_memory=judge)
     assert assessed.public_packet["decision_consumption_complete"]
+    assert assessed.public_packet["context_delivery_verified"] is True
     assert assessed.public_packet["semantic_disposition"] == outcome
     assert assessed.public_packet["provider_call_count"] == provider.calls == 2
     assert assessed.public_packet["filtered_count"] == 1
+    assert assessed.context_delivery_receipt == delivered.application_receipt
+    assert assessed.context_delivery_receipt["outcome"] == "applied"
     assert len(assessments) == 1
     assert assess_reward_memory_decision(assessed, apply_memory=judge) is assessed
     assert run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
@@ -205,6 +208,43 @@ def test_delivery_then_actual_bound_assessment_and_exact_replay(tmp_path, dispos
         assert private not in packet
     for flag in ("utility_verified", "grants_new_action_authority", "external_writes_performed", "raw_content_captured"):
         assert assessed.public_packet[flag] is False
+
+
+@pytest.mark.parametrize("outcome", ["applied", "ignored", "refuted"])
+def test_direct_semantic_assessment_does_not_invent_context_delivery(tmp_path, outcome):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+    result = run_reward_memory_decision(
+        config, query_ready=True, application_kind="semantic_application", provider=provider,
+        apply_memory=lambda base, items: {"outcome": outcome, "output": base,
+            "memory_refs": [item.memory_ref for item in items], "current_artifact_verified": True,
+            "reasoning_summary": "Direct comparison with the current artifact."}, **arguments,
+    )
+    assert result.public_packet["decision_consumption_complete"] is True
+    assert result.public_packet["context_delivery_verified"] is False
+    assert result.context_delivery_receipt is None
+    assert provider.calls == 1
+
+
+def test_failed_assessment_retains_delivery_for_retry_without_recall(tmp_path):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+    delivered = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+                                          apply_memory=delivery, provider=provider, **arguments)
+    failed = assess_reward_memory_decision(delivered, apply_memory=lambda base, items: {
+        "outcome": "ignored", "output": base, "memory_refs": [],
+        "current_artifact_verified": False, "reasoning_summary": "Assessment not yet verified."})
+    assert failed.public_packet["context_delivery_verified"] is True
+    assert failed.public_packet["decision_consumption_complete"] is False
+    assert failed.output == arguments["base_output"]
+    assert failed.context_delivery_receipt == delivered.application_receipt
+    recovered = assess_reward_memory_decision(failed, apply_memory=lambda base, items: {
+        "outcome": "ignored", "output": base, "memory_refs": [item.memory_ref for item in items],
+        "current_artifact_verified": True, "reasoning_summary": "Current evidence already covers this lesson."})
+    assert recovered.public_packet["context_delivery_verified"] is True
+    assert recovered.public_packet["decision_consumption_complete"] is True
+    assert recovered.public_packet["utility_verified"] is False
+    assert provider.calls == recovered.public_packet["provider_call_count"] == 1
 
 
 @pytest.mark.parametrize("bad", ["foreign_ref", "unverified_artifact", "unattributed", "throws"])

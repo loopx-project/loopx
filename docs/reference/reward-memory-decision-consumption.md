@@ -111,9 +111,24 @@ returns `replay_request_mismatch`. Reassessment uses retained qualified items an
 the original **cumulative** multi-corpus counters, not a second query. This is
 caller-retained replay, not automatic cross-process persistence or a new cache.
 
+The private result retains the **original context-delivery receipt** separately
+from the later semantic receipt. TypeScript revalidates its application, artifact,
+surface and lesson attribution, so assessment (including an incomplete assessment)
+does not erase a previously verified delivery. A direct semantic callback without
+that receipt leaves `context_delivery_verified=false`; disposition and utility
+are separate facts. This flag attests the caller's verified SDK context callback,
+**not** frontend/Lark transport delivery or model utility. Public packets alone
+cannot recreate that private lineage or upgrade historical receipts.
+
 仅 `public_packet` 用于展示，其余结果私有。通过既有执行上下文保留结果；
 `previous_result` 仅复用配置和输入均匹配的请求，变化则拒绝复用。后续判断使用
 原条目和累计多 corpus 遥测，不重复查询。这不是自动跨进程存储或新的缓存。
+
+私有结果分别保留原上下文交付回执和后续语义回执，TS 对应用、产物、surface 与
+经验归因重新核验；评估成功或不完整均不抹掉此前已验证的交付。直接语义 callback
+没有该回执时仍为 `context_delivery_verified=false`，语义判断与效果另行记录。
+该标记证明调用方已验证的 SDK 上下文 callback，不证明前端/飞书传输或模型收益；
+仅凭公开 packet 不能重建这条私有链路，也不追溯升级历史回执。
 
 Empty/filtered/unavailable and invalid model/transport results preserve the base
 and allow ordinary research. Post-provider transport failure retains actual

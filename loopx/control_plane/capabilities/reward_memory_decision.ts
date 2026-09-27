@@ -26,6 +26,19 @@ function count(value: unknown, name: string): number {
   return value as number;
 }
 
+function boundReceiptDigests(receipt: JsonObject, plan: JsonObject, outcome: unknown): string[] | null {
+  const digests = receipt.memory_ref_digests;
+  if (!Array.isArray(digests) || digests.length === 0 || digests.length > 8 ||
+      !digests.every((item): item is string => typeof item === "string" && /^[0-9a-f]{16}$/.test(item))) {
+    return null;
+  }
+  return receipt.schema_version === "reward_memory_application_receipt_v0" &&
+    receipt.application_id === plan.application_id && receipt.artifact_ref === plan.artifact_ref &&
+    receipt.surface_id === plan.surface_id && receipt.outcome === outcome &&
+    receipt.current_artifact_verified === true && receipt.result_readback_verified === true
+    ? digests : null;
+}
+
 /** Query-ready consumption policy; no config, provider content or model calls. */
 export function planRewardMemoryDecision(params: JsonObject): JsonObject {
   const mode = requireStringLiteral(params.mode, MODES, "mode");
@@ -90,15 +103,17 @@ export function projectRewardMemoryDecision(params: JsonObject): JsonObject {
     ? "all_provider_items_filtered" : "provider_returned_no_items"};
   if (plan.mode === "recall_only") return {...packet, status: "recalled"};
   const receipt = requireJsonObject(observation.application_receipt, "application_receipt");
-  const digests = receipt.memory_ref_digests;
-  const attributed = Array.isArray(digests) && digests.length > 0 && digests.length <= 8 &&
-    digests.every((item) => typeof item === "string" && /^[0-9a-f]{16}$/.test(item));
-  const bound = receipt.schema_version === "reward_memory_application_receipt_v0" &&
-    receipt.application_id === plan.application_id && receipt.artifact_ref === plan.artifact_ref &&
-    receipt.surface_id === plan.surface_id && receipt.outcome === hookStatus &&
-    receipt.current_artifact_verified === true && receipt.result_readback_verified === true && attributed;
-  if (!bound || hookStatus === "failed" || hookStatus === "available_not_applied") {
-    return {...packet, status: "incomplete", reason_code: "application_evidence_incomplete"};
+  const digests = boundReceiptDigests(receipt, plan, hookStatus);
+  const priorDelivery = observation.context_delivery_receipt == null ? null
+    : boundReceiptDigests(requireJsonObject(observation.context_delivery_receipt,
+      "context_delivery_receipt"), plan, "applied");
+  // Delivery and disposition are independent facts, bound to the same artifact and items.
+  // A direct semantic callback does not retroactively establish context delivery.
+  const assessedPacket = {...packet, context_delivery_verified:
+    plan.application_kind === "semantic_application" && priorDelivery !== null &&
+    (digests === null || digests.every((digest) => priorDelivery.includes(digest)))};
+  if (!digests || hookStatus === "failed" || hookStatus === "available_not_applied") {
+    return {...assessedPacket, status: "incomplete", reason_code: "application_evidence_incomplete"};
   }
   // A delivered context is available for reasoning; it is not the reasoning disposition.
   if (plan.application_kind === "context_delivery") {
@@ -111,7 +126,7 @@ export function projectRewardMemoryDecision(params: JsonObject): JsonObject {
     return {...packet, status: "incomplete", reason_code: "semantic_disposition_required"};
   }
   return {
-    ...packet, status: hookStatus, semantic_disposition: hookStatus, memory_ref_digests: digests,
+    ...assessedPacket, status: hookStatus, semantic_disposition: hookStatus, memory_ref_digests: digests,
     decision_consumption_complete: true, preserve_base_output: hookStatus !== "applied",
   };
 }
