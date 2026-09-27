@@ -86,13 +86,14 @@ export const todoItemSchema = z.object({
   required_capabilities: z.array(z.string()).optional(),
   note: z.string().optional().nullable(),
   evidence: z.string().optional().nullable(),
+  completed_at: z.string().optional().nullable(),
   updated_at: z.string().optional().nullable(),
   completion_validation_required: z.boolean().optional().nullable(),
   completion_validation_sha256: z.string().optional().nullable(),
   completion_validation_revision: z.number().int().nonnegative().optional().nullable(),
   completion_validation_revision_history: z.array(z.object({
     revision: z.number().int().positive(),
-    previous_declaration_sha256: z.string(),
+    previous_declaration_sha256: z.string().nullable(),
     declaration_sha256: z.string(),
     actor_agent_id: z.string(),
     revised_at: z.string(),
@@ -111,6 +112,7 @@ export const todoGroupSchema = z.object({
   advancement_done_count: z.number().optional(),
   items: z.array(todoItemSchema).optional().default([]),
   deferred_items: z.array(todoItemSchema).optional(),
+  recent_completed_advancement_items: z.array(todoItemSchema).optional(),
 });
 
 export const todoIndexItemSchema = todoItemSchema.safeExtend({

@@ -1002,7 +1002,7 @@ export const typedActionsScenario = {
       await page.locator(".personal-object-list").first().waitFor({ state: "visible" });
       if (await page.locator(".personal-task-capability-callout").count()) throw new Error("Goal capability settings still consume a full-width Tasks row");
       await page.getByRole("button", { name: "Goal 设置", exact: true }).click();
-      await page.getByRole("heading", { level: 1, name: "Goal 能力", exact: true }).waitFor({ state: "visible" });
+      await page.getByRole("heading", { level: 1, name: "能力中心", exact: true }).waitFor({ state: "visible" });
       if (await page.locator(".personal-workspace-shell:visible").count()) throw new Error("Unified Goal capability action did not open the Settings surface");
       await page.getByRole("heading", { level: 2, name: /^周期报告/ }).waitFor({ state: "visible" });
       const goalCapabilityOrder = await page.locator(".personal-capability-list button strong").allTextContents();
@@ -1194,6 +1194,7 @@ export const typedActionsScenario = {
 
       api.failNextMachineInspection = true;
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
+      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
       await page.getByRole("heading", { level: 1, name: "能力中心", exact: true }).waitFor({ state: "visible" });
       const loadError = page.getByRole("alert").filter({ hasText: "无法读取机器配置" });
       await loadError.waitFor({ state: "visible" });
@@ -1210,7 +1211,7 @@ export const typedActionsScenario = {
       const capabilityOverlap = await stackedBlocks();
       if (capabilityOverlap) throw new Error(`Global capability category ${capabilityOverlap}`);
       const machineCatalog = page.getByRole("navigation", { name: "机器能力目录" });
-      const firstMachineCapability = machineCatalog.getByRole("button").filter({ hasText: "机器" }).first();
+      const firstMachineCapability = machineCatalog.getByRole("button").first();
       await firstMachineCapability.waitFor({ state: "visible" });
       const initialMachineTitle = await firstMachineCapability.locator("strong").innerText();
       await page.getByRole("heading", { level: 2, name: initialMachineTitle, exact: true }).waitFor({ state: "visible" });
@@ -1297,7 +1298,7 @@ export const typedActionsScenario = {
       }
       await page.getByText("Enabled means automatic delivery at validated stage boundaries", { exact: true }).waitFor({ state: "visible" });
       await page.screenshot({ path: resolve(outputDir, "machine-capability-en.png"), fullPage: false, animations: "disabled" });
-      await page.getByRole("button", { name: /Goal capabilities/ }).click();
+      await page.getByRole("radio", { name: "One Goal", exact: true }).check();
       await page.getByRole("button", { name: /Adaptive child capacity/ }).click();
       await page.getByRole("heading", { level: 2, name: "Adaptive child capacity", exact: true }).waitFor({ state: "visible" });
       for (const label of [/^Enabled$/u, /^Child model/u, /^Child reasoning effort/u, /^Maximum children/u, /^Allowed responsibility domains/u]) {
@@ -1307,6 +1308,7 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: /Language/ }).click();
       await page.getByRole("radio", { name: /Simplified Chinese/ }).click();
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
+      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
       await page.locator(".personal-settings-body").evaluate((element) => element.scrollTo({ top: 0 }));
       await page.screenshot({ path: resolve(outputDir, "machine-capability-zh-cn.png"), fullPage: false, animations: "disabled" });
       // Steward owns a first-level destination with just model/executor and
@@ -1386,6 +1388,7 @@ export const typedActionsScenario = {
       api.machineInspectionStatus = "invalid";
       api.invalidMachineNamespaces = ["periodic_report"];
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
+      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
       await invalidRepair.waitFor({ state: "visible" });
       await page.getByRole("heading", { level: 2, name: "周期报告", exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: "预览变更", exact: true }).click();

@@ -9,6 +9,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+from loopx.control_plane.testing.authority_e2e_rows_stage2c2 import CRASH_WORKER
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -67,6 +69,7 @@ class ShadowWorkspace:
                 *self.arguments(*args),
             ],
             cwd=REPO,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -81,6 +84,12 @@ class ShadowWorkspace:
                 stdout, stderr = child.communicate(timeout=10)
                 raise AssertionError(f"No process barrier: {line}{stdout}\n{stderr}")
             payload = json.loads(line.removeprefix("BARRIER "))
+            if payload.get("native_pid"):
+                assert child.stdin is not None
+                child.stdin.write("terminate_native\n")
+                child.stdin.flush()
+                readable, _, _ = select.select([child.stdout], [], [], 10)
+                assert readable and child.stdout.readline().strip() == "REAPED", "native owner must be reaped"
             child.kill()
             child.communicate(timeout=10)
             assert child.returncode == -9
@@ -130,52 +139,3 @@ def workspace(path: Path, *, bootstrap: bool = True) -> ShadowWorkspace:
         boot = result.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]
         assert boot["status"] == "applied", boot
     return result
-
-
-CRASH_WORKER = r"""
-import json, pathlib, sys, time
-from loopx.cli import main
-from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
-from loopx.control_plane.coordination import local_authority_shadow_outbox as outbox
-from loopx.control_plane.todos import active_state_editing
-window, state = sys.argv[1], pathlib.Path(sys.argv[2])
-def pause(payload=None):
-    print('BARRIER ' + json.dumps(payload or {}), flush=True)
-    time.sleep(40)
-    raise RuntimeError('parent failed to terminate at persistence barrier')
-actual_rpc = adapter.effect_runtime_result
-def rpc(method, request, **kwargs):
-    if method == 'coordination.runtime_shadow.commit_entry' and window == 'before_commit':
-        pause({'request': request})
-    result = actual_rpc(method, request, **kwargs)
-    if method == 'coordination.runtime_shadow.commit_entry' and window == 'after_commit':
-        pause({'request': request, 'result': result})
-    return result
-adapter.effect_runtime_result = rpc
-actual_cursor = outbox.write_cursor
-def cursor(*args, **kwargs):
-    result = actual_cursor(*args, **kwargs)
-    if window == 'after_cursor': pause()
-    return result
-outbox.write_cursor = cursor
-actual_json = outbox.durable_write_json
-def write_json(path, value):
-    if window == 'before_marker' and path.name.endswith('.committed.json'): pause()
-    return actual_json(path, value)
-outbox.durable_write_json = write_json
-actual_replace = active_state_editing.os.replace
-def replace(source, target):
-    is_primary = pathlib.Path(target) == state
-    if is_primary and window == 'before_replace': pause()
-    result = actual_replace(source, target)
-    if is_primary and window == 'after_replace': pause()
-    return result
-active_state_editing.os.replace = replace
-actual_unlink = pathlib.Path.unlink
-def unlink(path, *args, **kwargs):
-    result = actual_unlink(path, *args, **kwargs)
-    if window == 'between_unlinks' and path.name.endswith('.prepared.json'): pause()
-    return result
-pathlib.Path.unlink = unlink
-raise SystemExit(main(sys.argv[3:]))
-"""

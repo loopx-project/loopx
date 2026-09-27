@@ -11,7 +11,7 @@ loopx usage-ping disable     # 关闭所有通道，删除本机 ID 和待发送
 loopx usage-ping enable      # 阅读告知后明确开启
 ```
 
-设置 → 能力中心提供相同的整机开关与数据预览。打开设置和执行以上命令本身都不发送
+设置 → 能力中心 → 此设备默认提供相同的整机开关与数据预览。打开设置和执行以上命令本身都不发送
 统计。TypeScript 统一拥有策略、状态和字段校验；Python、浏览器只是适配入口。
 它不依赖 Goal 的 File/SQLite/PostgreSQL provider，Lark 没有另一套开关，也不能覆盖
 机器所有者的选择。

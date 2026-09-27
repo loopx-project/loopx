@@ -6,6 +6,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
+import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -170,6 +171,28 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   }
   const preview = requireJsonObject(params.preview, "Turn preview");
   const effects = requireJsonObject(preview.effects, "preview effects");
+  if (preview.ok === false && preview.selection_rejection !== undefined) {
+    const refusal = readTurnSelectionRejection(preview.selection_rejection, binding.todo_id);
+    const refusalState = turnSelectionRejectionState(refusal.state);
+    requireThat(preview.effects_scope === "current_invocation"
+      && ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"].every(k => effects[k] === false)
+      && refusal.schema_version === "loopx_turn_selection_rejection_v0"
+      && refusal.source === "quota.should-run" && refusal.requested_todo_id === binding.todo_id
+      && refusalState !== null
+      && preview.error_code === `turn_todo_selection_${refusalState}`,
+    "delegation inspection requires a matching effect-free selection refusal");
+    const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
+    return {
+      schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked",
+      turn_eligible: false, turn_route: null, turn_blocker: refusal,
+      acceptance_ready: acceptance?.todo_id === binding.todo_id && acceptance?.state === "ready"
+        && params.validation_files_current === true,
+      authority_ready: true, authority_reason: null, authority_state: "promoted",
+      authority_next_action: "none", promotion_from_surface_allowed: false,
+      executor: null, effects,
+      note: "Quota refused this exact Todo before host or executor inspection. Read status/check with the bound workspace scan root; do not retarget this inspection or bypass repair.",
+    };
+  }
   requireThat(preview.dry_run === true && preview.status === "preview"
     && ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"].every(k => effects[k] === false),
   "delegation inspection requires a read-only Turn preview");

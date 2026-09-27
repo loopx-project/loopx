@@ -159,6 +159,32 @@ delegate read --operation-id review-round-1
 delegate wait --operation-id review-round-1
 ```
 
+Inspection uses the bound worker workspace as its actual safety scan root. If
+quota defers the exact Todo for control repair, inspection returns
+`state: turn_blocked` with `turn_blocker.reason_code`, the original selection
+state and a contract-error count. Canonical acceptance can still be ready;
+`executor: null` means it was not inspected, not that the model runtime failed.
+Use `loopx check --scan-root /absolute/reviewer-worktree` with the same registry
+to diagnose the scan. Repair the source or configuration, then inspect again.
+Do not exempt tests, scan the installed package instead, retarget the Todo or
+start another operation to bypass the refusal. Other unstructured CLI failures
+remain errors, and a refusal whose bounded fields are malformed — including a
+`state` that is not one of the decoded string literals — fails closed instead of
+reporting `turn_blocked`. The observation starts no host, Turn journal or quota spend.
+Normal quota selection may still admit unrelated eligible work; this preflight
+never substitutes another Todo.
+
+中文：预检以 binding 固定的真实 worker 工作树作为安全扫描根。quota 因控制面
+修复延后该精确 Todo 时，返回 `state: turn_blocked`、原选路状态、
+`turn_blocker.reason_code` 和契约错误数；规范验收可能仍已就绪。
+`executor: null` 表示未检查执行器，不表示模型故障。使用相同 registry 和
+`loopx check --scan-root /absolute/reviewer-worktree` 定位，再修复原来源或配置
+并重做预检。不能豁免测试目录、改扫安装包、换 Todo 或创建新操作绕过拒绝。
+其他无结构 CLI 故障仍报错；拒绝投影字段畸形（含 `state` 不是已解码字符串
+字面量）时按失败关闭报错，不返回 `turn_blocked`；该观察不启动 host、Turn
+journal 或扣额。
+普通 quota 选路仍可安排其他独立且合格的工作；本预检不会替换 Todo。
+
 `request.json` contains the same `collaboration_brief_v0` used by MCP:
 
 ```json

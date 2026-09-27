@@ -57,6 +57,20 @@ must finish before work on the next layer can start. GQ17 repeats the ordinary
 parallel-work intent at larger fixture sizes; basic parallel work is already P0
 in GQ11, and the steward should not overstaff a small task.
 
+### Direct group conversation / 群里直接说话
+
+For the Lark variant of P0 reliable entry, configure the steward connection to
+respond without mentions. Send “帮我总结一下当前进展。” / “Summarize the current
+progress” as an ordinary new human message, then a concise correction. Require
+one retained request and one checked answer through the existing conversation;
+replay the same provider message and prove there is no second execution/reply.
+Disable the option and verify that another unaddressed message remains context
+while a mention or verified bot reply still works. Bots, missing sender evidence,
+historical backfill (even with an old mention), an unrelated group and a worker's
+own Topic are negative cases. This admission probe does not qualify autonomous
+execution: the external read-only profile and recipient grants must be evaluated
+separately. Passing transport fixtures is not evidence of a deployed group run.
+
 ### App-first execution profiles and ordinary questions
 
 Qualify the installed App first; Lark is independently scored, not required to
@@ -297,7 +311,7 @@ first-use cohorts and release acceptance retain their existing gates.
 
 | Batch | Useful exit | Reused owner / next dependency |
 | --- | --- | --- |
-| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
+| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result, including a late return after the active session changes | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
 | P0 use and continuity | GQ05/GQ11–GQ13 + GQ07–GQ09: dependency adoption, parallel join, peer review and resolved disagreement across two cycles; correct once, interrupt once, resume and return | R2 small-team and R3/M2/M3, artifact versions, existing driver/monitor and return recovery |
 | P1 material and attention | GQ06/GQ10/GQ14–GQ15: materials, attention, dependency replan, explicit mixed profiles and retained constraints | Existing material lifecycle, scoped context and presentation; no new memory installation prerequisite |
 | P2 breadth and launch | GQ16 then GQ17: real host and scale qualification; public-safe showcase/film only claims the separately proven cohort | Existing R6/R7 and release/first-use gates; visual motion explains actual transitions |

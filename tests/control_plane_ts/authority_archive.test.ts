@@ -1,4 +1,4 @@
-import type {AuthorityStore, AuthorityStoreCommit} from "../../loopx/control_plane/coordination/authority_store.ts";
+import type {AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
 import assert from "node:assert/strict";
@@ -9,6 +9,7 @@ import test from "node:test";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
+import {withVerifiedAuthorityArchive} from "../../loopx/control_plane/coordination/authority_archive_read.ts";
 import {exportAuthorityArchive, verifyAuthorityArchive, restoreAuthorityArchive} from
   "../../loopx/control_plane/coordination/authority_archive.ts";
 
@@ -29,7 +30,7 @@ for (const sourceKind of ["file", "sqlite"] as const) {
         : new SqliteAuthorityStore(join(root, "source"), "goal");
       let revision: string | null = null;
       for (let i = 1; i <= 7; i++) {
-        const result = await source.commitAuthority({expected_provider_revision: revision,
+        const result: AuthorityStoreCommitResult = await source.commitAuthority({expected_provider_revision: revision,
           operation_id: `op-${i}`, events: [{kind: "change", i}],
           next_projection: {goal_id: "goal", i, archived: ["todo_old"], unicode: "复杂目标"},
           receipts: [{request_sha256: `request-${i}`, changed: i % 2 === 0}]});
@@ -318,4 +319,25 @@ test("restore consumes reviewed snapshot even when the original path is replaced
     assert.equal(receipt.status, "found");
     if (receipt.status === "found") assert.deepEqual(receipt.receipts, [{decision: 1}]);
   } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+
+test("archive consumer mutations cannot change subsequent replay or the terminal seal", async t => {
+  const root = await mkdtemp(join(tmpdir(), "authority-archive-owned-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const source = new FileAuthorityStore(join(root, "source"), "goal");
+  await seed(source);
+  const path = join(root, "backup.ndjson");
+  const summary = await exportAuthorityArchive(source, "goal", path);
+  await withVerifiedAuthorityArchive(path, summary.archive_sha256, async archive => {
+    let count = 0;
+    for await (const row of archive.transactions()) {
+      count++;
+      assert.deepEqual(row.projection, {goal_id: "goal", value: count});
+      row.projection.goal_id = "consumer-local-edit";
+      row.projection.value = 999;
+    }
+    assert.equal(count, 3);
+  });
+  assert.deepEqual(await verifyAuthorityArchive(path), summary);
 });

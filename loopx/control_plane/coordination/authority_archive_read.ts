@@ -7,7 +7,7 @@ import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStoreCommittedTransaction} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorityObjectList,
   canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
-import {applyAuthorityStateDelta, decodeAuthorityStateDelta} from "./authority_state_log.ts";
+import {AuthorityStateReplay, decodeAuthorityStateDelta} from "./authority_state_log.ts";
 
 export const AUTHORITY_ARCHIVE_SCHEMA = "loopx_authority_archive_v0";
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
@@ -87,7 +87,7 @@ async function* archiveRecords(path: string): AsyncGenerator<ArchiveRecord> {
   let header: ArchiveHeader | null = null;
   let digest: string | null = null;
   let cursor = 0n;
-  let state: JsonObject = {};
+  const replay = new AuthorityStateReplay({});
   let revision: string | null = null;
   let sealed = false;
   const operations = new Set<string>();
@@ -116,9 +116,11 @@ async function* archiveRecords(path: string): AsyncGenerator<ArchiveRecord> {
       const operation = requireAuthorityStoreId(value.operation_id, "operation id");
       if (operations.has(operation)) invalid("archive operation id is duplicated");
       operations.add(operation);
-      state = applyAuthorityStateDelta(state, decodeAuthorityStateDelta(value.delta));
+      replay.apply(decodeAuthorityStateDelta(value.delta));
+      // Consumers own their returned row, never the decoder's replay state.
+      const state = JSON.parse(replay.canonicalJson()) as JsonObject;
       if (state.goal_id !== header.goal_id) invalid("archive transaction belongs to another goal");
-      if (canonicalAuthoritySha256(state) !== archiveHash(value.projection_sha256)) invalid("archive state reconstruction mismatch");
+      if (replay.stateDigest() !== archiveHash(value.projection_sha256)) invalid("archive state reconstruction mismatch");
       revision = requireAuthorityStoreId(value.provider_revision, "provider revision");
       cursor += 1n;
       yield {kind: "transaction", transaction: {cursor: cursor.toString(), provider_revision: revision,
@@ -128,7 +130,7 @@ async function* archiveRecords(path: string): AsyncGenerator<ArchiveRecord> {
       exact(value, ["kind", "cursor", "projection_sha256", "previous_sha256"]);
       if (value.previous_sha256 !== digest || value.cursor !== header.cursor || cursor.toString() !== header.cursor ||
           revision !== header.provider_revision || value.projection_sha256 !== header.projection_sha256 ||
-          canonicalAuthoritySha256(state) !== header.projection_sha256) invalid("archive seal does not cover its captured head");
+          replay.stateDigest() !== header.projection_sha256) invalid("archive seal does not cover its captured head");
       sealed = true;
       verified = summary(header, archiveHash(raw.sha256));
     } else invalid("unknown archive record kind");

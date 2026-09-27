@@ -251,6 +251,87 @@ async function seeded(overrides: Record<string, unknown> = {}) {
   return {store, request};
 }
 
+test("first validator binding requires explicit absence, current CAS and active lease", async () => {
+  const {store, request} = await seeded();
+  const loaded = await store.loadAuthority();
+  assert.equal(loaded.status, "loaded");
+  if (loaded.status !== "loaded") return;
+  await store.commitAuthority({operation_id: "lease-before-binding",
+    expected_provider_revision: loaded.provider_revision, events: [], receipts: [],
+    next_projection: {...loaded.head, handoff_mode: "hard_lease", leases: [{
+      todo_id: request.todo_id, owner: "agent-a", status: "active",
+      expires_at: "2026-09-06T00:00:00Z", idempotency_key: "binding-execution",
+      version: 1, lease_epoch: 1, write_scopes: [],
+    }]}});
+  const before = await store.loadAuthority();
+  assert.equal(before.status, "loaded");
+  if (before.status !== "loaded") return;
+  const declaration = {validation_command: null, validation_command_argv: ["false"],
+    validation_label: "independent check", validation_timeout_seconds: 20};
+  const edit = {...request, patch: {}, clear_fields: [], operation_id: "bind-first",
+    expected_provider_revision: before.provider_revision,
+    lease_idempotency_key: "binding-execution", lease_expected_version: 1,
+    completion_validation_revision: {schema_version: "loopx_todo_completion_validation_revision_v1",
+      expected_declaration_sha256: null, declaration}} as const;
+  for (const overrides of [{actor_agent_id: "agent-b"}, {lease_expected_version: 0},
+    {expected_provider_revision: loaded.provider_revision}]) {
+    assert.equal((await executeCoordinationTodoUpdate(store, {...edit, ...overrides})).status, "failed");
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(edit.operation_id)).status, "missing");
+  }
+  assert.equal((await executeCoordinationTodoUpdate(store, {...edit, dry_run: true})).status, "planned");
+  assert.deepEqual(await store.loadAuthority(), before);
+  assert.equal((await executeCoordinationTodoUpdate(store, edit)).status, "applied");
+  assert.equal((await executeCoordinationTodoUpdate(store, edit)).status, "replayed");
+  const after = await store.loadAuthority();
+  assert.equal(after.status, "loaded");
+  if (after.status !== "loaded") return;
+  const bound = (after.head.todos as Record<string, unknown>[])[0]!;
+  assert.equal(bound.completion_validation_required, true);
+  assert.equal(bound.completion_validation_sha256, canonicalAuthoritySha256(declaration));
+  assert.equal(bound.status, "open", "binding must not complete or execute work");
+  assert.deepEqual(after.head.leases, before.head.leases);
+  const receipt = (bound.completion_validation_revision_history as Record<string, unknown>[])[0]!;
+  assert.equal(receipt.previous_declaration_sha256, null);
+  assert.deepEqual(receipt.previous_validation_authority, {});
+  assert.equal((await executeCoordinationTodoUpdate(store, {...edit,
+    completion_validation_revision: {...edit.completion_validation_revision,
+      declaration: {...declaration, validation_command_argv: ["true"]}}})).reason_code,
+  "coordination_operation_identity_mismatch");
+  assert.equal((await executeCoordinationTodoUpdate(store, {...edit, operation_id: "second-first-bind",
+    expected_provider_revision: after.provider_revision})).status, "failed");
+});
+
+test("first binding rejects malformed absence and incompatible history without partial writes", async () => {
+  const declaration = {validation_command: null, validation_command_argv: ["true"],
+    validation_label: "independent check", validation_timeout_seconds: 5};
+  for (const metadata of [
+    {completion_validation_required: true}, {completion_validation_sha256: null},
+    {completion_validation_revision: 1}, {completion_validation_revision_history: [{}]},
+    {status: "done", done: true}, {archive_state: "archived"},
+  ]) {
+    const {store, request} = await seeded(metadata);
+    const before = await store.loadAuthority();
+    const result = await executeCoordinationTodoUpdate(store, {...request, patch: {}, clear_fields: [],
+      completion_validation_revision: {schema_version: "loopx_todo_completion_validation_revision_v1",
+        expected_declaration_sha256: null, declaration}});
+    assert.equal(result.status, "failed", JSON.stringify(result));
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+  }
+  for (const revision of [
+    {schema_version: "loopx_todo_completion_validation_revision_v0", expected_declaration_sha256: null, declaration},
+    {schema_version: "loopx_todo_completion_validation_revision_v1", expected_declaration_sha256: "a".repeat(64), declaration},
+    {schema_version: "loopx_todo_completion_validation_revision_v1", declaration},
+    {schema_version: ["loopx_todo_completion_validation_revision_v0"], expected_declaration_sha256: "a".repeat(64), declaration},
+  ]) {
+    const result = await updateLocalCoordinationTodo({schema_version: "loopx_local_coordination_todo_update_request_v5",
+      completion_validation_revision: revision},
+    {createStore: () => {throw new Error("invalid absence must not open a provider");}});
+    assert.equal(result.status, "failed");
+  }
+});
+
 test("open Todo revises its validator with CAS, audit history, and idempotent replay", async () => {
   const original = {
     validation_command: null,

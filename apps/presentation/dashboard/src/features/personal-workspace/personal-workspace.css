@@ -478,6 +478,17 @@
 .personal-settings-title strong { font-size: 18px; letter-spacing: -.02em; }
 .personal-settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
 .personal-settings-header small { color: var(--pw-blue); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.personal-settings-header.has-capability-target { flex-direction: column; gap: 16px; align-items: stretch; }
+.personal-capability-target { display: grid; gap: 12px; max-width: 1050px; min-width: 0; }
+.personal-capability-scope-options { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; }
+.personal-capability-scope-options legend { margin-bottom: 8px; font-size: 12px; font-weight: 600; }
+.personal-capability-scope-options label { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border: 1px solid var(--pw-line-strong); border-radius: 6px; font-size: 13px; cursor: pointer; }
+.personal-capability-scope-options label:has(input:checked) { background: var(--pw-blue-soft); border-color: var(--pw-blue); color: var(--pw-blue); }
+.personal-capability-scope-options input { accent-color: var(--pw-blue); }
+.personal-capability-goal-choice { display: grid; gap: 6px; max-width: 480px; min-width: 0; font-size: 12px; font-weight: 600; }
+.personal-capability-goal-choice select { width: 100%; min-width: 0; min-height: 44px; padding: 0 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; }
+.personal-capability-target p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--pw-muted); }
+.personal-capability-settings.is-goal-scoped { grid-template-rows: minmax(0, 1fr); }
 .personal-settings-header h1 { margin: 4px 0 2px; font-size: 28px; letter-spacing: -.035em; }
 .personal-settings-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-width: 0; }
 .personal-settings-goal-target { display: inline-flex; align-items: center; gap: 7px; max-width: min(100%, 360px); min-width: 0; padding: 6px 10px; border: 1px solid var(--pw-line-strong); border-radius: 7px; background: var(--pw-card); font-size: 12px; line-height: 1.35; }
@@ -543,7 +554,7 @@
 .personal-cadence-scopes input { accent-color: var(--pw-blue); }
 .personal-cadence-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .personal-cadence-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; font-size: 12px; font-weight: 700; }
-.personal-cadence-fields input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: #fff; color: var(--pw-text); font: inherit; font-size: 13px; }
+.personal-cadence-fields input, .personal-cadence-fields select { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: #fff; color: var(--pw-text); font: inherit; font-size: 13px; }
 .personal-cadence-fields small { color: var(--pw-muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
 .personal-cadence-readback { display: grid; gap: 5px; padding: 18px; border: 1px solid var(--pw-line); border-radius: 8px; }
 .personal-cadence-readback small { color: var(--pw-muted); font-size: 11px; }
@@ -1895,3 +1906,5 @@
 .personal-action-form button:disabled { opacity: .5; cursor: default; }
 .personal-action-form [role="alert"] { color: var(--pw-red); }
 .personal-action-form-limit { margin: 0; color: var(--pw-amber); font-size: 13px; }
+
+.personal-capability-supported-scopes { margin: 6px 0; color: var(--pw-muted); font-size: 12px; line-height: 1.5; }

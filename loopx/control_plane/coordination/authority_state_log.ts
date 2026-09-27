@@ -13,6 +13,8 @@
  * never decides Todo, lease, quota or promotion semantics.
  */
 import type {JsonObject} from "../effect_program.ts";
+import {createHash, type Hash} from "node:crypto";
+import type {AuthorityStoreCommit} from "./authority_store.ts";
 import {
   AuthorityStoreProtocolError,
   authorityUnicodeCompare,
@@ -157,10 +159,9 @@ export function applyAuthorityStateDelta(
   previous: JsonObject,
   delta: AuthorityStateDelta,
 ): JsonObject {
-  const decoded = decodeAuthorityStateDelta(delta);
-  const result = structuredClone(previous);
-  for (const operation of decoded.operations) applyAuthorityStateOperation(result, operation);
-  return canonicalAuthorityObject(result, "reconstructed authority state");
+  const replay = new AuthorityStateReplay(previous);
+  replay.apply(delta);
+  return replay.snapshot();
 }
 
 /**
@@ -186,53 +187,129 @@ export function authorityStateDeltaReconstructs(
   }
 }
 
-function applyAuthorityStateOperation(root: JsonObject, operation: AuthorityStateOperation): void {
-  const segments = operation.path;
-  if (segments.length === 0) protocol("authority state delta cannot target the root state");
-  let container: unknown = root;
-  for (const segment of segments.slice(0, -1)) container = descend(container, segment);
-  const last = segments[segments.length - 1]!;
-  if (!isAuthorityJsonObject(container)) protocol("authority state delta path leaves the previous state");
-  const present = Object.hasOwn(container, last);
-  if (operation.op === "splice") {
-    if (!present) protocol("authority state delta path leaves the previous state");
-    const target = container[last];
-    if (!Array.isArray(target)) protocol("authority state delta spliced a value that is not an array");
-    if (operation.index < 0 || operation.remove < 0 ||
-      operation.index + operation.remove > target.length) {
-      protocol("authority state delta splice is out of range");
-    }
-    target.splice(operation.index, operation.remove,
-      ...operation.insert.map(item => structuredClone(item)));
-    return;
-  }
-  if (operation.op === "remove") {
-    if (!present) protocol("authority state delta removed a value that was never stored");
-    delete container[last];
-  }
-  else setOwnJsonKey(container, last, structuredClone(operation.value));
-}
-
 /**
- * Write one decoded key as an own data property.
- *
- * `container[key] = value` would run the inherited `__proto__` accessor and
- * replace the reconstructed object's prototype with the stored value, so a
- * retained projection carrying that key would silently lose it. Decoded
- * deltas are data, so every key is created the same way the canonicalizer
- * creates keys, which keeps reconstruction exact for every JSON object key.
+ * One read/audit's privately owned canonical state. Changed paths are copied;
+ * unchanged subtrees keep their identity and exact JSON encoding. Inputs and
+ * returned snapshots never share objects with this owner. Weak keys retain no
+ * historical roots; the long-string cache is separately capped at 4 MiB.
+ * No cached proof crosses a provider read or bypasses a row's digest check.
  */
-function setOwnJsonKey(container: JsonObject, key: string, value: unknown): void {
-  Object.defineProperty(container, key, {
-    value, writable: true, enumerable: true, configurable: true,
-  });
+export class AuthorityStateReplay {
+  #state: JsonObject;
+  #byteObjects = new WeakMap<object, Buffer>();
+  #encoded = new WeakMap<object, string>();
+  #strings = new Map<string, Buffer>();
+  #stringBytes = 0;
+
+  constructor(projection: unknown) {
+    this.#state = canonicalAuthorityObject(projection, "authority replay state");
+  }
+
+  apply(delta: AuthorityStateDelta): void {
+    let next = this.#state;
+    // Decode before applying and publish only after the whole batch succeeds.
+    // A rejected suffix cannot leave a half-applied replay frontier.
+    for (const operation of decodeAuthorityStateDelta(delta).operations) {
+      next = applyAuthorityStateOperation(next, operation, 0);
+    }
+    this.#state = next;
+  }
+
+  snapshot(): JsonObject { return structuredClone(this.#state); }
+
+  /** Immutable canonical text; storage readers may parse it into independent rows. */
+  canonicalJson(): string { return this.#encode(this.#state); }
+
+  stateDigest(): string {
+    return this.#updateProjection(createHash("sha256")).digest("hex");
+  }
+
+  commitDigest(fields: Omit<AuthorityStoreCommit, "next_projection">): string {
+    // Canonicalize the ordinary envelope, inserting our owned projection's
+    // exact bytes at its key. This is the existing v0 digest, not a Merkle hash
+    // or a new persistent proof. Integer-like keys obey native JSON ordering.
+    const envelope = canonicalAuthorityObject({...fields, next_projection: null}, "commit proof");
+    const keys = Object.keys(envelope), split = keys.indexOf("next_projection");
+    const field = (key: string) => JSON.stringify(key) + ":" + JSON.stringify(envelope[key]);
+    const before = keys.slice(0, split).map(field), after = keys.slice(split + 1).map(field);
+    const hash = createHash("sha256").update("{" + (before.length ? before.join(",") + "," : "") + '"next_projection":');
+    return this.#updateProjection(hash).update((after.length ? "," + after.join(",") : "") + "}").digest("hex");
+  }
+
+  #updateProjection(hash: Hash): Hash {
+    hash.update("{");
+    let first = true;
+    for (const key of Object.keys(this.#state)) {
+      hash.update((first ? "" : ",") + JSON.stringify(key) + ":"); first = false;
+      const value = this.#state[key];
+      if (value !== null && typeof value === "object") {
+        let bytes = this.#byteObjects.get(value);
+        if (!bytes) { bytes = Buffer.from(this.#encode(value), "utf8"); this.#byteObjects.set(value, bytes); }
+        hash.update(bytes);
+      } else if (typeof value === "string" && value.length >= 1024) hash.update(this.#longString(value));
+      else hash.update(JSON.stringify(value));
+    }
+    return hash.update("}");
+  }
+
+  #longString(value: string): Buffer {
+    const known = this.#strings.get(value);
+    if (known) return known;
+    const bytes = Buffer.from(JSON.stringify(value), "utf8");
+    if (bytes.byteLength > 2 * 1024 ** 2) return bytes;
+    while (this.#stringBytes + bytes.byteLength > 4 * 1024 ** 2) {
+      const oldest = this.#strings.keys().next().value!;
+      this.#stringBytes -= this.#strings.get(oldest)!.byteLength;
+      this.#strings.delete(oldest);
+    }
+    this.#strings.set(value, bytes); this.#stringBytes += bytes.byteLength;
+    return bytes;
+  }
+
+  #encode(value: unknown): string {
+    if (value === null || typeof value !== "object") {
+      return typeof value === "string" && value.length >= 1024
+        ? this.#longString(value).toString("utf8") : JSON.stringify(value);
+    }
+    const known = this.#encoded.get(value);
+    if (known !== undefined) return known;
+    const encoded = Array.isArray(value)
+      ? "[" + Array.from({length: value.length}, (_, index) =>
+        Object.hasOwn(value, index) ? this.#encode(value[index]) : "null").join(",") + "]"
+      : "{" + Object.keys(value).map(key => JSON.stringify(key) + ":" +
+        this.#encode((value as JsonObject)[key])).join(",") + "}";
+    this.#encoded.set(value, encoded);
+    return encoded;
+  }
 }
 
-function descend(container: unknown, segment: string): unknown {
-  if (!isAuthorityJsonObject(container) || !Object.hasOwn(container, segment)) {
-    protocol("authority state delta path leaves the previous state");
-  }
-  return container[segment];
+/** Copy only the modified object path. Canonical children remain private and immutable. */
+function applyAuthorityStateOperation(
+  container: JsonObject, operation: AuthorityStateOperation, depth: number,
+): JsonObject {
+  if (!isAuthorityJsonObject(container)) protocol("authority state delta path leaves the previous state");
+  const key = operation.path[depth]!;
+  const next = {...container};
+  const set = (value: unknown): void => {
+    // Treat __proto__ as data, including keys newly introduced by a delta.
+    Object.defineProperty(next, key, {value, writable: true, enumerable: true, configurable: true});
+  };
+  const present = Object.hasOwn(container, key);
+  if (depth + 1 < operation.path.length) {
+    if (!present) protocol("authority state delta path leaves the previous state");
+    set(applyAuthorityStateOperation(container[key] as JsonObject, operation, depth + 1));
+  } else if (operation.op === "splice") {
+    if (!present) protocol("authority state delta path leaves the previous state");
+    const target = container[key];
+    if (!Array.isArray(target)) protocol("authority state delta spliced a value that is not an array");
+    if (operation.index + operation.remove > target.length) protocol("authority state delta splice is out of range");
+    set(target.slice(0, operation.index).concat(operation.insert, target.slice(operation.index + operation.remove)));
+  } else if (operation.op === "remove") {
+    if (!present) protocol("authority state delta removed a value that was never stored");
+    delete next[key];
+  } else set(operation.value);
+  // Only this changed container needs reordering, not every nested Todo.
+  return Object.fromEntries(Object.keys(next).sort(authorityUnicodeCompare).map(name => [name, next[name]]));
 }
 
 /** Boundary decoder: stored or transported deltas enter as `unknown`. */
@@ -244,7 +321,7 @@ export function decodeAuthorityStateDelta(value: unknown): AuthorityStateDelta {
   }
   requireExactKeys(value, ["schema_version", "operations"], "authority state delta");
   return {schema_version: AUTHORITY_STATE_DELTA_SCHEMA,
-    operations: value.operations.map((operation, index) =>
+    operations: Array.from(value.operations, (operation, index) =>
       decodeAuthorityStateOperation(operation, index))};
 }
 
@@ -267,14 +344,14 @@ function decodeAuthorityStateOperation(value: unknown, index: number): Authority
       protocol(`${label} splice bounds are invalid`);
     }
     return {op: "splice", path, index: value.index as number, remove: value.remove as number,
-      insert: value.insert.map(item => canonicalAuthorityJson(item))};
+      insert: Array.from(value.insert, item => canonicalAuthorityJson(item))};
   }
   return protocol(`${label} op is unsupported`);
 }
 
 function decodeAuthorityStatePath(value: unknown, label: string): AuthorityStatePath {
   if (!Array.isArray(value) || value.length === 0) protocol(`${label} path is invalid`);
-  return value.map(segment => {
+  return Array.from(value, segment => {
     // Any string is a legal JSON key, including the empty string.
     if (typeof segment === "string") return segment;
     return protocol(`${label} path segment is invalid`);

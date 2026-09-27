@@ -18,20 +18,20 @@ export const automationCadenceScenario = {
           const goalId = body?.goal_id ?? parsed.searchParams.get("goal_id");
           const agentId = body?.agent_id ?? parsed.searchParams.get("agent_id") ?? null;
           const automationId = body?.automation_id ?? parsed.searchParams.get("automation_id") ?? null;
-          const applicable = (rows) => rows.filter((rule) => rule.agent_id === null
-            || (rule.agent_id === agentId && (rule.automation_id === null || rule.automation_id === automationId)));
+          const applicable = (rows) => rows.filter((rule) => rule.goal_id === goalId && (rule.agent_id === null
+            || (rule.agent_id === agentId && (rule.automation_id === null || rule.automation_id === automationId))));
           if (body && body.expected_revision !== revision) {
             await route.fulfill({ status: 409, json: { error: "configuration revision conflict" } });
             return;
           }
-          const prior = rules.find((rule) => rule.agent_id === agentId && rule.automation_id === automationId);
+          const prior = rules.find((rule) => rule.goal_id === goalId && rule.agent_id === agentId && rule.automation_id === automationId);
           if (body && prior && body.min_interval_minutes < prior.min_interval_minutes && !body.approve_reduction) {
             await route.fulfill({ status: 400, json: { error: "reduction requires explicit owner approval" } });
             return;
           }
           if (body) {
             const changed = [...rules.filter((rule) => rule !== prior), {
-              agent_id: agentId, automation_id: automationId, min_interval_minutes: body.min_interval_minutes,
+              goal_id: goalId, agent_id: agentId, automation_id: automationId, min_interval_minutes: body.min_interval_minutes,
             }];
             if (parsed.pathname.endsWith("/apply")) {
               rules = changed;
@@ -63,15 +63,23 @@ export const automationCadenceScenario = {
     });
     const { page, close, checkpointCoverage, errors } = context;
     try {
-      await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
+      await page.locator(".personal-goal-link", { hasText: "Multi Agent Projection" }).click();
       await page.getByRole("button", { name: "Goal 设置", exact: true }).click();
       const target = page.locator(".personal-settings-goal-target");
-      await target.getByText("Product Release", { exact: true }).waitFor();
+      await page.getByRole("combobox", { name: "目标 Goal", exact: true }).waitFor();
       await page.getByRole("button", { name: "能力中心" }).click();
+      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
       if (await target.count()) throw new Error("Machine settings retained a Goal-specific target");
       await page.getByRole("button", { name: "自动执行间隔" }).click();
-      await target.getByText("Product Release", { exact: true }).waitFor();
+      await target.getByText("Multi Agent Projection", { exact: true }).waitFor();
       const panel = page.getByRole("region", { name: "自动执行间隔" });
+      const agent = panel.getByRole("combobox", { name: "Agent", exact: true });
+      if (await agent.inputValue() !== "") throw new Error("Cadence silently selected an Agent");
+      const candidates = await agent.locator("option").evaluateAll((options) => options.map((option) => option.value));
+      for (const id of ["codex-latest-lane", "codex-older-lane"]) {
+        if (!candidates.includes(id)) throw new Error(`Missing Agent candidate: ${id}`);
+      }
+      await panel.getByRole("radio", { name: "整个 Goal" }).check();
       await panel.getByText("0 分钟", { exact: true }).first().waitFor();
       if (!await panel.getByText("App 定时触发到启动前钩子的拦截尚未验证。", { exact: false }).count()) {
         throw new Error("Cadence settings overstated App enforcement");
@@ -101,15 +109,41 @@ export const automationCadenceScenario = {
         throw new Error("Explicit reduction remained unavailable");
       }
       await panel.getByRole("radio", { name: "单个 Agent" }).check();
+      await agent.selectOption("codex-latest-lane");
       await panel.getByText("继承上层 60 分钟；本层未设置。").waitFor();
       await panel.getByText("60 分钟", { exact: true }).first().waitFor();
+      await panel.getByLabel("最短间隔（分钟）").fill("120");
+      await panel.getByLabel("所有者指令或原因").fill("Owner requested two-hour minimum for this Agent");
+      await panel.getByRole("button", { name: "预览变更", exact: true }).click();
+      await panel.getByText("变更后生效下限：120 分钟").waitFor();
+      await agent.selectOption("codex-older-lane");
+      await panel.getByText("继承上层 60 分钟；本层未设置。").waitFor();
+      if (await panel.getByRole("button", { name: "应用已预览变更" }).isEnabled()) {
+        throw new Error("Changing Agent retained the previous Agent's preview");
+      }
+      await agent.selectOption("codex-latest-lane");
+      await panel.getByText("继承上层 60 分钟；本层未设置。").waitFor();
+      await panel.getByLabel("最短间隔（分钟）").fill("120");
+      await panel.getByLabel("所有者指令或原因").fill("Owner requested two-hour minimum for this Agent");
+      await panel.getByRole("button", { name: "预览变更", exact: true }).click();
+      await panel.getByText("变更后生效下限：120 分钟").waitFor();
+      await panel.getByRole("button", { name: "应用已预览变更" }).click();
+      await panel.getByText("本层设置 120 分钟；上层下限 60 分钟。").waitFor();
+      await page.screenshot({ path: resolve(outputDir, "desktop-automation-cadence-agent.png"), animations: "disabled" });
+      await agent.selectOption("codex-older-lane");
+      await panel.getByText("继承上层 60 分钟；本层未设置。").waitFor();
+      await agent.selectOption("codex-latest-lane");
+      await panel.getByText("本层设置 120 分钟；上层下限 60 分钟。").waitFor();
+      if (revision !== 2 || rules.filter((rule) => rule.agent_id !== null).length !== 1) {
+        throw new Error("Agent override changed another scope");
+      }
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: resolve(outputDir, "mobile-automation-cadence-inherited.png"), fullPage: false, animations: "disabled" });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
       if (overflow) throw new Error("Cadence settings overflowed the mobile viewport");
       if (errors.length) throw new Error(`Browser errors: ${errors.join(" | ")}`);
       await checkpointCoverage();
-      return { coverageEntries: await close(), note: "Goal policy preview, apply/readback, Agent inheritance, App boundary and desktop/mobile layouts verified." };
+      return { coverageEntries: await close(), note: "Explicit Agent selection, complete candidates, scope-isolated 120-minute override, stale preview invalidation, inheritance, App boundary and desktop/mobile layouts verified." };
     } catch (error) {
       await close();
       throw error;

@@ -1942,6 +1942,7 @@ export async function fetchLarkGroupChats(appRef: string, query?: string) {
 
 export type LarkGoalConnection = {
   conversation_kind?: "goal" | "manager";
+  turn_trigger?: "addressed" | "human_messages";
   agent_id: string | null;
   connection_id: string;
   app_label: string;
@@ -1973,6 +1974,7 @@ const larkConnectionsSchema = z.object({
   ok: z.literal(true),
   connections: z.array(z.object({
     conversation_kind: z.enum(["goal", "manager"]).default("goal"),
+    turn_trigger: z.enum(["addressed", "human_messages"]).default("addressed"),
     agent_id: z.string().nullable().default(null),
     connection_id: z.string(),
     app_label: z.string(),
@@ -2019,6 +2021,7 @@ export async function fetchLarkConnections() {
 
 export async function connectLarkGoalTopic(options: {
   conversationKind?: "goal" | "manager";
+  turnTrigger?: "addressed" | "human_messages";
   agentBindings?: Array<{ agentId: string; appRef: string }>;
   agentId?: string;
   appRef?: string;
@@ -2046,6 +2049,7 @@ export async function connectLarkGoalTopic(options: {
         ...(options.appRef ? { app_ref: options.appRef } : {}),
         ...(options.connectionId ? { connection_id: options.connectionId } : {}),
         conversation_kind: options.conversationKind ?? "goal",
+        ...(options.turnTrigger ? { turn_trigger: options.turnTrigger } : {}),
         capture_scope: options.captureScope,
         chat_id: options.chatId,
         chat_name: options.chatName,

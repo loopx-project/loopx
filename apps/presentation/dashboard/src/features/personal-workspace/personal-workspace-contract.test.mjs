@@ -28,6 +28,7 @@ const statusSourceSwitcher = source("./status-source-switcher.tsx");
 const workspaceSettings = source("./workspace-settings-page.tsx");
 const styles = source("./personal-workspace.css");
 const dashboard = source("../../views/dashboard-page.tsx");
+const conversationReturns = source("../../data/conversation-returns.ts");
 const tasks = source("./goal-tasks-view.tsx");
 const status = source("../../data/status.ts");
 const chatData = source("../../data/chat.ts");
@@ -100,7 +101,8 @@ assert.doesNotMatch(page.match(/function operationProposalFields[\s\S]*?\n\}/)?.
 assert.match(page, /t\("proposal\.primary\.operationGroup"\)/, "Operation confirmation routes users to the bound group");
 assert.match(chatData, /result_delivery:/, "Dashboard retains operation result-delivery readback");
 assert.match(chatData, /return_delivery\??:/, "Chat messages retain manager return-delivery readback");
-assert.match(dashboard, /deliveryByMessage/, "Manager return polling refreshes delivery state after the message arrives");
+assert.match(dashboard, /reconcileConversationReturns\(/, "Manager return polling uses the shared conversation-return read model");
+assert.match(conversationReturns, /source\.return_delivery \?\? row\.returnDelivery/, "Manager return polling refreshes delivery state after the message arrives");
 assert.match(timeline + page, /ReturnDeliveryStatus/, "Both manager conversation surfaces render return delivery state");
 for (const state of ["delivered", "verification_required", "explicit_unverified"]) {
   assert.match(returnDelivery, new RegExp(state), `Return delivery renders ${state}`);
@@ -372,7 +374,7 @@ assert.doesNotMatch(workspaceSettings, /NotificationSettingsPanel/, "Settings do
 assert.match(workspaceSettings, /key: "lark"/, "Settings expose a Lark tab");
 assert.match(workspaceSettings, /key: "appearance"/, "Settings expose an appearance tab");
 assert.match(workspaceSettings, /key: "language"/, "Settings expose a language tab");
-assert.match(workspaceSettings, /key: "machine"/, "Settings expose generic machine configuration");
+assert.match(workspaceSettings, /key: "capabilities"/, "Settings expose a unified capability destination");
 assert.match(workspaceSettings, /<MachineConfigurationSettings/, "Settings mount the machine configuration registry");
 assert.match(workspaceSettings, /<LarkSettingsPage[\s\S]*embedded/, "Settings embed the Lark management page");
 assert.match(larkSettings, /state: "ready" \| "unverified" \| "not_ready"/, "Lark readiness keeps unverified routes separate from actual failures");
@@ -411,7 +413,7 @@ assert.match(machineSettings, /<CapabilityCatalogNavigation/, "Machine settings 
 assert.match(goalCapabilitySettings, /<CapabilityCatalogNavigation/, "Goal settings use the shared capability catalog navigation");
 assert.match(goalCapabilitySettings, /capability_id === "lark_event_inbox"[\s\S]*<GoalAutoNotifyToggle/, "Lark inbox capability exposes the independent human-gate notification control");
 assert.match(notificationSettings, /disabled=\{busy \|\| notification\?\.configured !== true/, "Gate notification control stays disabled until a Goal Channel is configured");
-assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === initialGoalId\)/, "Goal capability settings receive the live Goal Channel notification state");
+assert.match(workspaceSettings, /goalNotifications\.find\(\(row\) => row\.goalId === capabilityGoalId\)/, "Goal capability settings receive the selected Goal Channel notification state");
 assert.match(machineSettings, /<CapabilityDetailHeader/, "Machine settings use the shared capability detail header");
 assert.match(goalCapabilitySettings, /<CapabilityDetailHeader/, "Goal settings use the shared capability detail header");
 assert.match(capabilityWorkbench, /localizeCapability\(rawCapability, locale\)/, "Shared navigation localizes capability metadata without changing capability ids");

@@ -1,3 +1,4 @@
+import { conversationReturnSessions, reconcileConversationReturns } from "../data/conversation-returns";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -214,6 +215,7 @@ type TodoExplorerItem = {
 };
 
 type PersonalAgentTodoItem = {
+  completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
   resumeReceiptId?: string | null;
@@ -716,6 +718,7 @@ function personalTodoResumeReceiptId(todo: TodoItem) {
 function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): PersonalAgentTodoItem {
   const latestValidationRevision = todo.completion_validation_revision_history.at(-1);
   return {
+    completedAt: todo.completed_at ?? null,
     resumeWhen: todo.resume_when ?? null,
     resumeReady: todo.resume_ready ?? null,
     resumeReceiptId: personalTodoResumeReceiptId(todo),
@@ -832,7 +835,7 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
       .map((todo) => todo.todo_id?.trim())
       .filter((value): value is string => Boolean(value)),
   );
-  const recentCompleted = (assetTodos?.recent_completed_advancement_items ?? [])
+  const recentCompleted = (queueTodos?.recent_completed_advancement_items ?? assetTodos?.recent_completed_advancement_items ?? [])
     .filter((todo) => !todo.todo_id?.trim() || !seenTodoIds.has(todo.todo_id.trim()))
     .map((todo) => personalAgentTodoFromItem(todo, row));
   const firstOpen = items.find((todo) => !todo.done);
@@ -1484,59 +1487,44 @@ function PersonalGoalHome({
     statusSourceControl.activeSource.statusUrl,
   ]);
 
-  // Worker returns are transcript messages, not new model turns. Keep an open
-  // conversation current without replacing in-flight user/agent text.
-  const conversationReturnSessionId = runtimeBindings[contextId]?.sessionId;
+  // Read the active session plus older sessions that still owe a result. The
+  // stable key changes only when that set changes, never on each stream delta.
+  const conversationReturnSessionKey = JSON.stringify(conversationReturnSessions(
+    runtimeBindings[contextId]?.sessionId, messagesByContext[contextId] ?? [],
+  ));
   useEffect(() => {
-    if (readOnly || !conversationReturnSessionId) return;
+    if (readOnly) return;
+    const sessionIds: string[] = JSON.parse(conversationReturnSessionKey);
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const receive = async () => {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const receive = async (sessionId: string) => {
       try {
-        const snapshot = await fetchChatSession(conversationReturnSessionId);
+        const snapshot = await fetchChatSession(sessionId);
         if (cancelled) return;
-        const replies = snapshot.messages.filter((row) => row.origin === "manager_followup");
         setMessagesByContext((current) => {
           const previous = current[contextId] ?? [];
-          const seen = new Set(previous.map((row) => row.sourceMessageId));
-          const fresh = replies.filter((row) => !seen.has(row.message_id));
-          const deliveryByMessage = new Map(
-            replies.map((row) => [row.message_id, row.return_delivery]),
-          );
-          const byTurn = new Map(snapshot.messages.filter((row) => row.role !== "user" && row.origin !== "manager_followup").map((row) => [row.turn_id, row]));
-          const collaborationByMessage = new Map(snapshot.messages.map((row) => [row.message_id, row.collaboration]));
-          let deliveryChanged = false;
-          const updated = previous.map((row) => {
-            const delivery = row.sourceMessageId
-              ? deliveryByMessage.get(row.sourceMessageId)
-              : undefined;
-            const source = row.sourceTurnId ? byTurn.get(row.sourceTurnId) : undefined;
-            const collaboration = row.sourceMessageId ? collaborationByMessage.get(row.sourceMessageId) : source?.collaboration;
-            if (JSON.stringify(delivery) === JSON.stringify(row.returnDelivery) && JSON.stringify(collaboration) === JSON.stringify(row.collaboration)) return row;
-            deliveryChanged = true;
-            return { ...row, sourceMessageId: row.sourceMessageId ?? source?.message_id,
-              sourceSessionId: row.sourceSessionId ?? (source?.message_id ? conversationReturnSessionId : undefined),
-              returnDelivery: delivery, collaboration };
-          });
-          if (!fresh.length && !deliveryChanged) return current;
-          return { ...current, [contextId]: [...updated, ...fresh.map((row) => ({
+          const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
             id: managerMessageId.current++, sourceMessageId: row.message_id,
-            sourceSessionId: conversationReturnSessionId,
+            sourceSessionId: sessionId,
             role: "assistant" as const,
             agentLabel: "协作回执",
             sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-            returnDelivery: row.return_delivery,
-          }))] };
+            returnDelivery: row.return_delivery, collaboration: row.collaboration,
+          }));
+          return updated === previous ? current : { ...current, [contextId]: updated };
         });
       } catch {
-        // The durable transcript is retried after reconnection; no model replay.
+        // Retry this transcript read independently; never replay the model.
       } finally {
-        if (!cancelled) timer = setTimeout(receive, 3000);
+        if (!cancelled) {
+          const timer = setTimeout(() => { timers.delete(timer); void receive(sessionId); }, 3000);
+          timers.add(timer);
+        }
       }
     };
-    void receive();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [readOnly, conversationReturnSessionId, contextId, selectedAgent.label]);
+    sessionIds.forEach((sessionId) => { void receive(sessionId); });
+    return () => { cancelled = true; timers.forEach(clearTimeout); };
+  }, [readOnly, conversationReturnSessionKey, contextId]);
 
   function recordRuntimeBinding(targetContextId: string, binding: PersonalRuntimeBinding | null) {
     setRuntimeBindings((current) => {
@@ -1703,6 +1691,7 @@ function PersonalGoalHome({
         const streamingMessageId = appendManagerAssistantMessage(targetContextId, {
           activity: ["正在恢复进行中的 Agent 回合"],
           sourceTurnId: activeTurnId,
+          sourceSessionId: created.session_id,
           agentLabel: answerIdentityLabel(targetContextId, selectedAgent.label),
           lines: [],
           pending: true,
@@ -2154,7 +2143,7 @@ function PersonalGoalHome({
         },
         onPhase: (_phase: string, turnId: string) => {
           submittedTurnId = turnId;
-          if (streamingMessageId !== null) updateManagerAssistantMessage(targetContextId, streamingMessageId, { sourceTurnId: turnId });
+          if (streamingMessageId !== null) updateManagerAssistantMessage(targetContextId, streamingMessageId, { sourceTurnId: turnId, sourceSessionId: sessionId });
           activeTurnIds.current.set(targetContextId, turnId);
           recordRuntimeBinding(targetContextId, {
             agentId: selectedRoute.agentId,
@@ -2191,6 +2180,7 @@ function PersonalGoalHome({
             item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
           if (answer) updateManagerAssistantMessage(targetContextId, completedMessageId, {
             sourceMessageId: answer.message_id, sourceSessionId: sessionId,
+            collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
           });
         }).catch(() => { /* The original conversation remains readable. */ });
       }
@@ -2705,6 +2695,7 @@ function PersonalGoalHome({
               const messageId = appendManagerAssistantMessage(run.goalId, {
                 activity: ["正在把纠偏送入原执行 Session"],
                 sourceTurnId: turnId,
+                sourceSessionId: run.sessionId,
                 agentLabel: run.agentLabel,
                 lines: [],
                 pending: true,

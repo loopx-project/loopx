@@ -367,20 +367,45 @@ export class FileAuthorityStore implements AuthorityStore {
         if (this.existingOnly && current === null) {
           return { status: "failed", reason_code: "existing_authority_missing", reason: "existing-only store cannot bootstrap a missing authority" };
         }
+        // Content-aware idempotency: same operation_id with matching full body
+        // ({events, receipts, projection}) returns the original receipt
+        // (retry-after-crash); the check must precede the revision gate so a
+        // stuck writer can't block the already-committed replay. A different
+        // body (including a projection-only drift) remains a conflict.
+        if (current !== null) {
+          const existing = current.receipt(normalized.operation_id);
+          if (existing) {
+            const cursorIndex = Number(existing.cursor) - 1;
+            const [historical] = current.scan(cursorIndex, 1);
+            if (!historical) {
+              return {status: "failed", reason_code: "provider_protocol_violation",
+                reason: `receipt entry cursor ${existing.cursor} missing from journal scan`};
+            }
+            const intendedBody = {events: normalized.events, receipts: normalized.receipts,
+              projection: normalized.next_projection};
+            const existingBody = {events: existing.events, receipts: existing.receipts,
+              projection: historical.projection};
+            if (canonicalAuthorityBytes(intendedBody).equals(canonicalAuthorityBytes(existingBody))) {
+              return {
+                status: "applied",
+                provider_revision: existing.provider_revision,
+                cursor: existing.cursor,
+              };
+            }
+            return {
+              status: "conflict",
+              conflict_kind: "operation_id_exists",
+              current_provider_revision: current.provider_revision,
+              current_cursor: current.cursor,
+            };
+          }
+        }
         if ((current?.provider_revision ?? null) !== normalized.expected_provider_revision) {
           return {
             status: "conflict",
             conflict_kind: "provider_revision_mismatch",
             current_provider_revision: current?.provider_revision ?? null,
             current_cursor: current?.cursor ?? null,
-          };
-        }
-        if (current?.receipt(normalized.operation_id)) {
-          return {
-            status: "conflict",
-            conflict_kind: "operation_id_exists",
-            current_provider_revision: current.provider_revision,
-            current_cursor: current.cursor,
           };
         }
         const document = FileAuthorityJournal.append(current, this.goalId, identity, normalized, (previous, transaction) =>

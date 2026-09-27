@@ -27,6 +27,7 @@ import test from "node:test";
 import {registerCoordinationReceiptConformance} from "./coordination_receipt_conformance.ts";
 import {registerAuthoritySourceConformance} from "./authority_source_conformance.ts";
 import {registerNativePlanningUpdateConformance} from "./native_planning_update_conformance.ts";
+import {registerCompletionValidationBindingConformance} from "./completion_validation_binding_conformance.ts";
 
 import type {
   AuthorityStore,
@@ -250,6 +251,7 @@ async function withConcurrentAuthorityReads<T>(backends: readonly AuthorityStore
 export function registerAuthorityStoreConformance(
   providerName: string,
   factory: AuthorityStoreConformanceFactory,
+  matchingReplayStatus: "applied" | "conflict" = "conflict",
 ): void {
   test(`${providerName} conformance: captured complete source survives provider reopen and readback`, async (t) => {
     const {store, contender} = await factory(t);
@@ -274,7 +276,7 @@ export function registerAuthorityStoreConformance(
     if (result.status !== "applied") return;
     const replay = await store.commitAuthority({expected_provider_revision: result.provider_revision,
       operation_id: "capture-source", events: [], next_projection: captured, receipts: []});
-    assert.equal(replay.status, "conflict");
+    assert.equal(replay.status, matchingReplayStatus);
     if (replay.status === "conflict") assert.equal(replay.conflict_kind, "operation_id_exists");
     const retained = await contender.readReceipt("capture-source");
     assert.equal(retained.status, "found");
@@ -292,6 +294,7 @@ export function registerAuthorityStoreConformance(
   registerSuccessionReadConformance(providerName, factory);
   registerTodoConsumerScopeConformance(providerName, factory);
   registerNativePlanningUpdateConformance(providerName, factory);
+  registerCompletionValidationBindingConformance(providerName, factory);
   registerUserCompletionUpdateConformance(providerName, factory);
   registerTerminalSourceConformance(providerName, factory);
   registerUserCompletionFollowthroughConformance(providerName, factory);

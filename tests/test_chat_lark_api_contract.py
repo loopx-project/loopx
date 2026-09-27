@@ -801,6 +801,7 @@ def test_manager_connection_opens_audience_session_only_on_execute(
                 "chat_id": "oc_public_fixture",
                 "chat_name": "Product",
                 "conversation_kind": "manager",
+                "turn_trigger": "human_messages",
                 "execute": execute,
             }
 
@@ -823,6 +824,7 @@ def test_manager_connection_opens_audience_session_only_on_execute(
 
     Handler()._lark_connect()
     assert calls[0]["conversation_kind"] == "manager"
+    assert calls[0]["turn_trigger"] == "human_messages"
     assert calls[0]["ingress_mode"] == "session_queue"
     assert calls[0]["session_id"] == ("manager-session" if execute else None)
     assert len(opened) == int(execute)

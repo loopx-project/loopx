@@ -181,9 +181,9 @@ CASES.extend([
         "const matched = localAuthorityShadowHeadDigest(request.projection) === localAuthorityShadowHeadDigest(lineage.head.head);",
         "const matched = true;")),),
         LADDER_ROW + "[s2c2.parity_divergent_detects_foreign_edit]"),
-    Case("replay_counted_as_delivery", ((COORDINATION + "local_authority_shadow_adapter.py", replacement(
-        "                    self._result.replayed += 1\n",
-        "                    self._result.delivered += 1\n")),),
+    Case("replay_counted_as_delivery", ((COORDINATION + "shadow_drain.ts", replacement(
+        "result.no_op += Number(noOp === true); result.entries.push(summary); result.replayed++; consumed++;",
+        "result.no_op += Number(noOp === true); result.entries.push(summary); result.delivered++; consumed++;")),),
         LADDER_ROW + "[s2c2.sigkill_mid_drain]"),
 ])
 
@@ -252,12 +252,9 @@ CASES.extend([
         "    resolved_source = state_file.resolve(strict=False)",
         "    return  # DELIBERATE MUTANT: allow another goal to bypass source authority.\n    resolved_source = state_file.resolve(strict=False)")),),
          "tests/control_plane/test_shadow_writer_variant_e2e.py::test_other_goal_cannot_write_a_protected_goal_source_via_state_override[active_capture]"),
-    Case("cleanup_hides_verified_commit", ((COORDINATION + "local_authority_shadow_adapter.py", replacement(
-        "            if self._result.cursor_before is None:\n"
-        "                self._result.cursor_before = view.get(\"cursor\")\n"
-        "            self._record_view(view)\n",
-        "            if self._result.cursor_before is None:\n"
-        "                self._result.cursor_before = view.get(\"cursor\")\n")),),
+    Case("cleanup_hides_verified_commit", ((COORDINATION + "shadow_drain.ts", replacement(
+        "      if (plan.view !== null && typeof plan.view === \"object\") observe(plan.view as JsonObject);\n",
+        "")),),
          "tests/control_plane/test_shadow_drain_adversarial.py::test_cleanup_permission_failure_reports_verified_commit_and_recovers[before_commit]"),
     Case("native_update_maintenance", ((COORDINATION + "local_authority_runtime.ts",
          remove_native_update_maintenance),),

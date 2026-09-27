@@ -10,12 +10,17 @@ import {normalizeTodoCompletionValidationDeclaration} from "./completion_validat
 
 export const COMPLETION_VALIDATION_REVISION_SCHEMA =
   "loopx_todo_completion_validation_revision_v0";
+export const COMPLETION_VALIDATION_BINDING_SCHEMA =
+  "loopx_todo_completion_validation_revision_v1";
 export const COMPLETION_VALIDATION_REVISION_RECEIPT_SCHEMA =
   "loopx_todo_completion_validation_revision_receipt_v0";
+export const COMPLETION_VALIDATION_BINDING_RECEIPT_SCHEMA =
+  "loopx_todo_completion_validation_revision_receipt_v1";
 
 export interface CompletionValidationRevision extends JsonObject {
-  readonly schema_version: typeof COMPLETION_VALIDATION_REVISION_SCHEMA;
-  readonly expected_declaration_sha256: string;
+  readonly schema_version: typeof COMPLETION_VALIDATION_REVISION_SCHEMA |
+    typeof COMPLETION_VALIDATION_BINDING_SCHEMA;
+  readonly expected_declaration_sha256: string | null;
   readonly declaration: JsonObject;
 }
 
@@ -26,10 +31,31 @@ const digest = (value: unknown, label: string): string => {
   return value;
 };
 
-const revisionHistory = (
+/** The exact absent/default markers are retained, not a fabricated old digest.
+ * A missing digest beside a required validator is corruption, not first binding. */
+function unboundValidationAuthority(todo: JsonObject): JsonObject {
+  if (Object.hasOwn(todo, "completion_validation_sha256") ||
+      (Object.hasOwn(todo, "completion_validation_required") &&
+        todo.completion_validation_required !== false) ||
+      (Object.hasOwn(todo, "completion_validation_revision") &&
+        todo.completion_validation_revision !== 0) ||
+      (Object.hasOwn(todo, "completion_validation_revision_history") &&
+        (!Array.isArray(todo.completion_validation_revision_history) ||
+          todo.completion_validation_revision_history.length !== 0))) {
+    throw new AuthorityStoreProtocolError(
+      "first binding requires absent completion validation authority",
+    );
+  }
+  return Object.fromEntries(Object.entries(todo).filter(([field]) => [
+    "completion_validation_required", "completion_validation_revision",
+    "completion_validation_revision_history",
+  ].includes(field)));
+}
+
+export const completionValidationRevisionHistory = (
   value: unknown,
   priorRevision: number,
-  currentDigest: string,
+  currentDigest: string | null,
 ): JsonObject[] => {
   if (value === undefined && priorRevision === 0) return [];
   if (!Array.isArray(value)) {
@@ -42,6 +68,8 @@ const revisionHistory = (
       entry,
       `completion validation revision history[${index}]`,
     );
+    const firstBinding = receipt.schema_version ===
+      COMPLETION_VALIDATION_BINDING_RECEIPT_SCHEMA;
     const fields = [
       "schema_version",
       "revision",
@@ -50,10 +78,12 @@ const revisionHistory = (
       "declaration_sha256",
       "actor_agent_id",
       "revised_at",
+      ...(firstBinding ? ["previous_validation_authority"] : []),
     ];
     if (Object.keys(receipt).some((field) => !fields.includes(field)) ||
-        receipt.schema_version !==
-          COMPLETION_VALIDATION_REVISION_RECEIPT_SCHEMA ||
+        (!firstBinding && receipt.schema_version !==
+          COMPLETION_VALIDATION_REVISION_RECEIPT_SCHEMA) ||
+        (firstBinding && (index !== 0 || receipt.previous_declaration_sha256 !== null)) ||
         !Number.isSafeInteger(receipt.revision) || Number(receipt.revision) < 1 ||
         receipt.revision !== index + 1 ||
         typeof receipt.revised_at !== "string" || receipt.revised_at.length === 0) {
@@ -61,14 +91,27 @@ const revisionHistory = (
         "Todo completion validation revision history is not canonical",
       );
     }
+    let previousAuthority: JsonObject | undefined;
+    if (firstBinding) {
+      previousAuthority = canonicalAuthorityObject(
+        receipt.previous_validation_authority, "previous validation authority",
+      );
+      if (Object.keys(previousAuthority).some(field => ![
+        "completion_validation_required", "completion_validation_revision",
+        "completion_validation_revision_history",
+      ].includes(field))) {
+        throw new AuthorityStoreProtocolError("previous validation authority has unsupported fields");
+      }
+      unboundValidationAuthority(previousAuthority);
+    }
     return {
-      schema_version: COMPLETION_VALIDATION_REVISION_RECEIPT_SCHEMA,
+      schema_version: receipt.schema_version,
       revision: Number(receipt.revision),
       operation_id: requireAuthorityStoreId(
         receipt.operation_id,
         "revision history operation id",
       ),
-      previous_declaration_sha256: digest(
+      previous_declaration_sha256: firstBinding ? null : digest(
         receipt.previous_declaration_sha256,
         "revision history previous declaration",
       ),
@@ -81,10 +124,13 @@ const revisionHistory = (
         "revision history actor_agent_id",
       ),
       revised_at: receipt.revised_at,
+      ...(previousAuthority === undefined ? {} : {previous_validation_authority: previousAuthority}),
     };
   });
   const last = history.at(-1);
   if (history.length !== priorRevision ||
+      history.some((entry, index) => index > 0 &&
+        entry.previous_declaration_sha256 !== history[index - 1]!.declaration_sha256) ||
       (last !== undefined && last.declaration_sha256 !== currentDigest)) {
     throw new AuthorityStoreProtocolError(
       "Todo completion validation revision history does not match current state",
@@ -108,7 +154,8 @@ export function decodeCompletionValidationRevision(
     ].includes(field),
   );
   if (unexpected.length > 0 ||
-      revision.schema_version !== COMPLETION_VALIDATION_REVISION_SCHEMA) {
+      (revision.schema_version !== COMPLETION_VALIDATION_REVISION_SCHEMA &&
+        revision.schema_version !== COMPLETION_VALIDATION_BINDING_SCHEMA)) {
     throw new AuthorityStoreProtocolError(
       "completion validation revision has unsupported fields or schema",
     );
@@ -127,9 +174,13 @@ export function decodeCompletionValidationRevision(
   if (!declaration.ok) {
     throw new AuthorityStoreProtocolError(declaration.summary);
   }
+  const firstBinding = revision.schema_version === COMPLETION_VALIDATION_BINDING_SCHEMA;
+  if (firstBinding && revision.expected_declaration_sha256 !== null) {
+    throw new AuthorityStoreProtocolError("first binding must explicitly expect an absent declaration");
+  }
   return {
-    schema_version: COMPLETION_VALIDATION_REVISION_SCHEMA,
-    expected_declaration_sha256: digest(
+    schema_version: firstBinding ? COMPLETION_VALIDATION_BINDING_SCHEMA : COMPLETION_VALIDATION_REVISION_SCHEMA,
+    expected_declaration_sha256: firstBinding ? null : digest(
       revision.expected_declaration_sha256,
       "expected_declaration_sha256",
     ),
@@ -150,12 +201,17 @@ export function planCompletionValidationRevision(args: {
       "completion validation can be revised only while the Todo is open and active",
     );
   }
-  if (args.todo.completion_validation_required !== true) {
+  const firstBinding = args.revision.schema_version === COMPLETION_VALIDATION_BINDING_SCHEMA;
+  if (firstBinding !== (args.revision.expected_declaration_sha256 === null)) {
+    throw new AuthorityStoreProtocolError("validator binding schema and absence witness must agree");
+  }
+  const previousAuthority = firstBinding ? unboundValidationAuthority(args.todo) : undefined;
+  if (!firstBinding && args.todo.completion_validation_required !== true) {
     throw new AuthorityStoreProtocolError(
       "Todo has no completion validation declaration to revise",
     );
   }
-  const previousDigest = digest(
+  const previousDigest = firstBinding ? null : digest(
     args.todo.completion_validation_sha256,
     "Todo completion_validation_sha256",
   );
@@ -186,23 +242,26 @@ export function planCompletionValidationRevision(args: {
     );
   }
   const currentRevision = Number(priorRevision ?? 0);
-  const history = revisionHistory(
+  const history = completionValidationRevisionHistory(
     args.todo.completion_validation_revision_history,
     currentRevision,
     previousDigest,
   );
   const revision = currentRevision + 1;
   const receipt = {
-    schema_version: COMPLETION_VALIDATION_REVISION_RECEIPT_SCHEMA,
+    schema_version: firstBinding ? COMPLETION_VALIDATION_BINDING_RECEIPT_SCHEMA :
+      COMPLETION_VALIDATION_REVISION_RECEIPT_SCHEMA,
     revision,
     operation_id: requireAuthorityStoreId(args.operation_id, "operation id"),
     previous_declaration_sha256: previousDigest,
     declaration_sha256: nextDigest,
     actor_agent_id: actor,
     revised_at: args.revised_at,
+    ...(previousAuthority === undefined ? {} : {previous_validation_authority: previousAuthority}),
   };
   return {
     updates: {
+      completion_validation_required: true,
       completion_validation_sha256: nextDigest,
       completion_validation_revision: revision,
       completion_validation_revision_history: [...history, receipt],

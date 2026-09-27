@@ -597,9 +597,9 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             { done: false, index: 5, role: "agent", status: "open", task_class: "advancement_task", text: idlessLongTitle, title: idlessLongTitle },
             { done: false, index: 7, role: "agent", status: "open", task_class: "advancement_task", text: "Full queue follow-up", title: "Full queue follow-up", todo_id: "todo-progress-full" },
             scheduledDeferredTodo,
-            { done: true, index: 1, role: "agent", status: "done", task_class: "advancement_task", text: "Completed A", title: "Completed A", todo_id: "todo-progress-a" },
-            { done: true, index: 2, role: "agent", status: "done", task_class: "advancement_task", text: "Completed B", title: "Completed B", todo_id: "todo-progress-b" },
-            { done: true, index: 3, role: "agent", status: "done", task_class: "advancement_task", text: "Completed C", title: "Completed C", todo_id: "todo-progress-c" },
+            { done: true, index: 1, role: "agent", status: "done", task_class: "advancement_task", completed_at: "2026-08-01T00:00:00Z", text: "Completed A", title: "Completed A", todo_id: "todo-progress-a" },
+            { done: true, index: 2, role: "agent", status: "done", task_class: "advancement_task", completed_at: "2026-08-03T00:00:00Z", text: "Completed B", title: "Completed B", todo_id: "todo-progress-b" },
+            { done: true, index: 3, role: "agent", status: "done", task_class: "advancement_task", completed_at: "2026-08-02T00:00:00Z", text: "Completed C", title: "Completed C", todo_id: "todo-progress-c" },
             { done: true, index: 6, role: "agent", status: "done", task_class: "continuous_monitor", text: "Completed Monitor", title: "Completed Monitor", todo_id: "todo-progress-monitor" },
           ],
           deferred_items: [
@@ -622,9 +622,9 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             ],
             open: 3,
             recent_completed_advancement_items: [
-              { done: true, index: 1, role: "agent", status: "done", task_class: "advancement_task", text: "Completed A", title: "Completed A", todo_id: "todo-progress-a" },
-              { done: true, index: 2, role: "agent", status: "done", task_class: "advancement_task", text: "Completed B", title: "Completed B", todo_id: "todo-progress-b" },
-              { done: true, index: 3, role: "agent", status: "done", task_class: "advancement_task", text: "Completed C", title: "Completed C", todo_id: "todo-progress-c" },
+              { done: true, index: 1, role: "agent", status: "done", task_class: "advancement_task", completed_at: "2026-08-01T00:00:00Z", text: "Completed A", title: "Completed A", todo_id: "todo-progress-a" },
+              { done: true, index: 2, role: "agent", status: "done", task_class: "advancement_task", completed_at: "2026-08-03T00:00:00Z", text: "Completed B", title: "Completed B", todo_id: "todo-progress-b" },
+              { done: true, index: 3, role: "agent", status: "done", task_class: "advancement_task", completed_at: "2026-08-02T00:00:00Z", text: "Completed C", title: "Completed C", todo_id: "todo-progress-c" },
             ],
             total: 9,
           },
@@ -667,7 +667,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         index_exists: false, raw_index_records: 0, unique_runs: 0, latest_runs: [],
       });
       fixture.attention_queue.items.push({
-        agent_todos: { items: [], open_count: 2, source_section: "Agent Todo", total_count: 2 },
+        agent_todos: {
+          items: [], open_count: 2, source_section: "Agent Todo", total_count: 3, advancement_done_count: 1,
+          recent_completed_advancement_items: [{
+            done: true, status: "done", task_class: "advancement_task", todo_id: "todo-other-goal-completed",
+            text: "Newest cross-goal result", completed_at: "2026-08-04T00:00:00Z",
+          }],
+        },
         goal_id: "multi-agent-projection",
         project_asset: {
           agent_todos: { items: [], open: 2, done: 0, total: 2 },
@@ -1326,7 +1332,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         const existing = runtime.larkConnections.find((item) => item.connection_id === body.connection_id && item.goal_id === body.goal_id);
         if (!existing || body.app_ref || body.chat_id || body.agent_bindings) throw new Error("Editing must select the stored connection without replacing its identity");
         if (body.execute) {
-          Object.assign(existing, { agent_id: body.agent_id, ingress_mode: body.ingress_mode, capture_scope: body.capture_scope });
+          Object.assign(existing, { turn_trigger: body.turn_trigger ?? existing.turn_trigger, agent_id: body.agent_id, ingress_mode: body.ingress_mode, capture_scope: body.capture_scope });
           state.larkWrites.push({ ...body });
         }
         await route.fulfill({ contentType: "application/json", json: { ok: true, status: body.execute ? "connected" : "preview_ready" }, status: 200 });
@@ -1344,6 +1350,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           runtime.larkConnections.push({
             agent_id: body.conversation_kind === "manager" ? "loopx-manager" : binding.agent_id ?? null,
             conversation_kind: body.conversation_kind ?? "goal",
+            turn_trigger: body.turn_trigger ?? "addressed",
             connection_id: connectionId,
             app_label: binding.app_ref === "mew-research" ? "LoopX Research" : "LoopX Mew", app_ref: binding.app_ref, chat_name: body.chat_name, enabled: true,
             capture_scope: body.capture_scope,

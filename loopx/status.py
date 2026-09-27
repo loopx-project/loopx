@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-import re
 from typing import Any
 
 from .control_plane.work_items.replan_history_codec import (
@@ -11,6 +10,17 @@ from .control_plane.work_items.replan_history_codec import (
 
 from .control_plane import compact_control_plane_policy
 from .control_plane.effect_runtime import effect_runtime_request_scope
+# Refs #4447: one definition for each carrier this facade used to restate. The
+# owner is the projection that feeds the value into a read model; `loopx/status.py`
+# keeps exporting the established public name as an identity alias instead of
+# writing the same literal a second time, so a change in the owner cannot quietly
+# diverge from a change here.
+from .control_plane.status.active_state_projection import (
+    BACKLOG_HYGIENE_BULLET_PATTERN as BACKLOG_HYGIENE_BULLET_PATTERN,
+    BACKLOG_HYGIENE_HINT_PATTERN as BACKLOG_HYGIENE_HINT_PATTERN,
+    BACKLOG_HYGIENE_SECTION_HEADINGS as BACKLOG_HYGIENE_SECTION_HEADINGS,
+    SECTION_HEADING_PATTERN as SECTION_HEADING_PATTERN,
+)
 from .control_plane.status.adapter_status_vocabulary import (
     CONNECTED_ADAPTER_STATUSES as CONNECTED_ADAPTER_STATUSES,
     CONNECTED_DELIVERY_ADAPTER_STATUSES as CONNECTED_DELIVERY_ADAPTER_STATUSES,
@@ -20,26 +30,43 @@ from .control_plane.status.adapter_status_vocabulary import (
 # read models, so the owner is the control-plane status package and this facade
 # keeps exporting the established names for existing callers as identity aliases
 # instead of restating the values.
+from .control_plane.status.autonomous_replan_projection import (
+    AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD as AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+    AUTONOMOUS_REPLAN_SCHEMA_VERSION as AUTONOMOUS_REPLAN_SCHEMA_VERSION,
+    DEAD_MONITOR_REPEAT_SCHEMA_VERSION as DEAD_MONITOR_REPEAT_SCHEMA_VERSION,
+    DEAD_MONITOR_REPEAT_THRESHOLD as DEAD_MONITOR_REPEAT_THRESHOLD,
+)
 from .control_plane.status.collection import (
     StatusCollectionContext,
     collect_status as _collect_status_read_model,
 )
 from .control_plane.status.contract_projection import (
+    MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION as MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION,
     STATUS_CONTRACT_RELOAD_HINT as STATUS_CONTRACT_RELOAD_HINT,
+    STATUS_CONTRACT_SCHEMA_VERSION as STATUS_CONTRACT_SCHEMA_VERSION,
+    STATUS_CONTRACT_SIGNAL_LIMIT as STATUS_CONTRACT_SIGNAL_LIMIT,
 )
 from .control_plane.status.goal_attention_projection import (
+    # Read, not only re-exported, by this facade, so this stays a plain import and
+    # the name is absent from the identity-alias allowlist below.
+    LEGACY_EXTERNAL_EVIDENCE_CLASSIFICATION_PREFIXES,
     PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION as PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION,
+    REGISTRY_WAITING_ON_OVERRIDES as REGISTRY_WAITING_ON_OVERRIDES,
 )
 # Refs #4447: one definition for this vocabulary. The control_plane projection
 # owns it because it feeds the monitor/attention read models; this module keeps
 # re-exporting each name for existing callers instead of restating its value.
 from .control_plane.status.monitor_display_projection import (
     MONITOR_DISPLAY_FALLBACK_ACTION as MONITOR_DISPLAY_FALLBACK_ACTION,
+    MONITOR_DISPLAY_SCHEMA_VERSION as MONITOR_DISPLAY_SCHEMA_VERSION,
     MONITOR_DISPLAY_STOP_CONDITION as MONITOR_DISPLAY_STOP_CONDITION,
     MONITOR_SIGNAL_WAITING_ON,
 )
 from .control_plane.status.registry_health_projection import (
     SOURCE_REGISTRY_SHADOW_FINDINGS,
+)
+from .control_plane.status.run_projection import (
+    AGENT_LANE_PROGRESS_SCOPE,
 )
 from .control_plane.status.runtime_summaries import (
     StatusRuntimeSummaryContext,
@@ -113,7 +140,6 @@ from .control_plane.work_items.attention_queue import (
     build_attention_queue as _build_attention_queue_read_model,
 )
 from .control_plane.work_items.autonomous_replan_ack import (
-    AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW,
     AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK as _AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
     compact_autonomous_replan_ack,
 )
@@ -259,6 +285,24 @@ _PUBLIC_COMPAT_REEXPORTS = {
     "MONITOR_DISPLAY_FALLBACK_ACTION": "loopx.control_plane.status.monitor_display_projection",
     "STATUS_CONTRACT_RELOAD_HINT": "loopx.control_plane.status.contract_projection",
     "PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION": "loopx.control_plane.status.goal_attention_projection",
+    # Refs #4447: the facade restated thirteen carriers its own projections
+    # already own - the status contract schema numbers, the monitor display schema
+    # version, the goal-attention override set, and the active-state, autonomous-
+    # replan, dead-monitor and backlog-hygiene carriers. Each is now defined once
+    # by the projection that feeds it to a read model.
+    "AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD": "loopx.control_plane.status.autonomous_replan_projection",
+    "AUTONOMOUS_REPLAN_SCHEMA_VERSION": "loopx.control_plane.status.autonomous_replan_projection",
+    "BACKLOG_HYGIENE_BULLET_PATTERN": "loopx.control_plane.status.active_state_projection",
+    "BACKLOG_HYGIENE_HINT_PATTERN": "loopx.control_plane.status.active_state_projection",
+    "BACKLOG_HYGIENE_SECTION_HEADINGS": "loopx.control_plane.status.active_state_projection",
+    "DEAD_MONITOR_REPEAT_SCHEMA_VERSION": "loopx.control_plane.status.autonomous_replan_projection",
+    "DEAD_MONITOR_REPEAT_THRESHOLD": "loopx.control_plane.status.autonomous_replan_projection",
+    "MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION": "loopx.control_plane.status.contract_projection",
+    "MONITOR_DISPLAY_SCHEMA_VERSION": "loopx.control_plane.status.monitor_display_projection",
+    "REGISTRY_WAITING_ON_OVERRIDES": "loopx.control_plane.status.goal_attention_projection",
+    "SECTION_HEADING_PATTERN": "loopx.control_plane.status.active_state_projection",
+    "STATUS_CONTRACT_SCHEMA_VERSION": "loopx.control_plane.status.contract_projection",
+    "STATUS_CONTRACT_SIGNAL_LIMIT": "loopx.control_plane.status.contract_projection",
     # Refs #4447: the connected-adapter sets were defined here and in both status
     # projections that pass them to the same injected read-model parameters. The
     # status package now owns each set once; the facade keeps exporting the
@@ -270,21 +314,6 @@ _PUBLIC_COMPAT_REEXPORTS = {
 
 STATUS_NEUTRAL_CLASSIFICATIONS = HISTORY_STATUS_NEUTRAL_CLASSIFICATIONS
 STATUS_CONTROL_PLANE_CONTEXT_LIMIT = 20
-AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
-REGISTRY_WAITING_ON_OVERRIDES = {
-    "user_or_controller",
-    "controller",
-    "codex",
-    "external_evidence",
-}
-LEGACY_EXTERNAL_EVIDENCE_CLASSIFICATION_PREFIXES = (
-    "await_",
-    "external_evidence_observation_",
-)
-MONITOR_DISPLAY_SCHEMA_VERSION = "monitor_quiet_display_v0"
-STATUS_CONTRACT_SCHEMA_VERSION = 2
-MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION = 2
-STATUS_CONTRACT_SIGNAL_LIMIT = 3
 EVENT_LEDGER_DECISION_CLASSIFICATIONS = USER_OR_CONTROLLER_CLASSIFICATIONS | {
     "operator_gate_approved",
 }
@@ -330,7 +359,6 @@ LIFECYCLE_PRIORITY = (
     "planned",
     "run_recorded",
 )
-SECTION_HEADING_PATTERN = re.compile(r"^##+\s+(.+?)\s*$")
 MAX_STATUS_TODOS_PER_ROLE = _TODO_SUMMARY_MAX_STATUS_TODOS_PER_ROLE
 MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE = MAX_STATUS_TODOS_PER_ROLE
 MAX_PROJECT_ASSET_TODO_ITEMS = _TODO_SUMMARY_MAX_PROJECT_ASSET_TODO_ITEMS
@@ -343,16 +371,7 @@ MAX_AUTONOMOUS_BACKLOG_CANDIDATES = _MAX_AUTONOMOUS_TODO_CANDIDATES
 MAX_BACKLOG_HYGIENE_EVIDENCE_ITEMS = _MAX_BACKLOG_HYGIENE_EVIDENCE_ITEMS_READ_MODEL
 MAX_AUTONOMOUS_REPLAN_TRIGGERS = _MAX_AUTONOMOUS_REPLAN_TRIGGERS_READ_MODEL
 AUTONOMOUS_REPLAN_STALL_THRESHOLD = _AUTONOMOUS_REPLAN_STALL_THRESHOLD_READ_MODEL
-DEAD_MONITOR_REPEAT_THRESHOLD = 6
-AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD = AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW
 AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK = _AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK
-BACKLOG_HYGIENE_SECTION_HEADINGS = ("Next Action", "Operating Lessons")
-BACKLOG_HYGIENE_BULLET_PATTERN = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$")
-BACKLOG_HYGIENE_HINT_PATTERN = re.compile(
-    r"(?i)(?:\[p[0-4]\]|todo|backlog|follow[- ]?up|queue|audit|regression|smoke|cadence|mirror|monitor|sub-?agent|待办|回归|审计|修复|检查|推进)"
-)
-AUTONOMOUS_REPLAN_SCHEMA_VERSION = "autonomous_replan_obligation_v0"
-DEAD_MONITOR_REPEAT_SCHEMA_VERSION = "dead_monitor_repeat_v0"
 # Refs #4447: one definition for this vocabulary, owned by the control-plane
 # codec that now feeds the replan history policy across status and quota. The
 # facade keeps exporting the established public name for existing callers as an
