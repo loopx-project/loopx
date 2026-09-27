@@ -4,11 +4,12 @@ from . import _read, _root
 from .tracking import _entry, _receipt
 from .roundtrip import reply_status
 from ...chat import redact_local_paths
+from ...control_plane.collaboration import conversation_scope
 
 
 def project_collaboration(store, root, session_id, messages):
     session = store.load_session(session_id)
-    if not session or session.get("channel_id") != "manager":
+    if not session or not conversation_scope(session)["private_conversation"]:
         return messages
     result = []
     for message in messages:
@@ -57,6 +58,7 @@ def project_collaboration(store, root, session_id, messages):
                         "schema_version": "collaboration_request_readback_v0",
                         "request_id": row["request_id"],
                         "agent_id": row["agent_id"],
+                        "goal_id": row["goal_id"],
                         "brief": safe(row["brief"]),
                         "read_status": "unavailable"
                         if read_error
@@ -66,6 +68,7 @@ def project_collaboration(store, root, session_id, messages):
                         "decision": "unavailable"
                         if error
                         else decision.get("decision", "pending"),
+                        "decision_reason": safe(decision.get("reason", "")) if not error else "",
                         "returns": reply_status(root, row),
                     },
                 }
