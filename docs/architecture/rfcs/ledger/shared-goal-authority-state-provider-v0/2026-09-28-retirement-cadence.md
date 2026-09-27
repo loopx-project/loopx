@@ -132,3 +132,33 @@ capture of current production state, or D2 qualification. Raw private snapshots
 and diagnostics remain outside the repository. No production code is deleted
 by this planning PR; it establishes the deletion exits and records their actual
 validation boundary.
+
+### Read-cost qualification update
+
+After #4931 and #5215 integrated, matched detached File/SQLite copies retained
+379 original commits and the same final projection hash. On Node 24.21.0,
+three fresh processes per provider measured File head reads at 5.98–6.32 s
+versus SQLite at 34.5–36.0 ms; repeated reads were 9.1–10.2 ms and 25.7–28.2 ms
+respectively. This is process-cold, not OS-cache-cold: File proves its entire
+retained journal, whereas SQLite reads current state without making the same
+full-history proof. It is evidence for a long-history SQLite candidate, not
+equivalent integrity-work throughput or release-default acceptance.
+
+Alternating two unchanged File stores exposed singleton proof-cache eviction:
+every read cost 6.30–6.49 s. A bounded four-store working set keeps the first
+proof for each store (6.15–6.16 s) and subsequent alternation at 9.8–11.2 ms,
+with identical cursors/hashes. Exact-byte and identity checks remain mandatory;
+eviction and corruption regressions cover the changed cache boundary.
+
+Quota observation reused the existing should-run compactors: a captured single
+Goal row serialized from 1,252,747 to 78,688 UTF-8 bytes, with explicit full
+detail restoring the original row. This is a display measurement; collection,
+decision inputs and first-read verification are not reduced by it.
+
+A separate 148-second isolated run appended 12 commits per provider through
+fresh processes, crossing a checkpoint and checking original-receipt replay,
+changed-intent rejection and projection/hash parity at every step. It qualifies
+that bounded storage journey, **not** Host execution, live Goal adoption or D2's
+ten-day soak. No active authority, release default or legacy-writer deletion
+decision changes. B still needs sustained workload/platform/capacity evidence;
+C still needs consumer/onboarding and supported upgrade acceptance.

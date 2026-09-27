@@ -10,12 +10,15 @@ from pathlib import Path
 import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
+from loopx.cli_commands.quota_context import validate_quota_command_context_request
 from loopx.cli_commands.quota_request import quota_detail_sections_from_args
 from loopx.cli_runtime import _build_selected_parser
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.control_plane.quota.cli_projection import compact_quota_plan_cli_payload
+from loopx.control_plane.quota.error_codes import QuotaCommandValidationError
 from loopx.control_plane.testing.canary_harness import write_fixture_registry
+from loopx.presentation.renderers.quota_markdown import render_quota_markdown
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -44,6 +47,10 @@ def test_plan_projection_retains_decisions_health_and_input_without_mutation():
     for key in ("health_items", "summary", "status_projection_envelope", "ok"):
         assert compact[key] == payload[key]
     assert result["quota"] == row["quota"]
+    selective = compact_quota_plan_cli_payload(payload, detail_sections=frozenset({"agent-todos"}))
+    selected_row = selective["groups"]["eligible"][0]
+    assert selected_row["agent_todos"] == agent
+    assert "items" not in selected_row["user_todos"]
     assert compact_quota_plan_cli_payload(payload, detail_sections=frozenset({"agent-todos", "user-todos"})) == original
     assert compact_quota_plan_cli_payload({"mode": "should-run", "agent_todo_summary": agent}) == {"mode": "should-run", "agent_todo_summary": agent}
 
@@ -78,6 +85,7 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
             compact_row = next(row for group in compact["groups"].values() for row in group)
             full_row = next(row for group in full["groups"].values() for row in group)
             assert compact["summary"] == full["summary"]
+            assert render_quota_markdown(compact) == render_quota_markdown(full)
             for role, count in (("agent", 40), ("user", 20)):
                 c, f = compact_row[f"{role}_todos"], full_row[f"{role}_todos"]
                 assert c["total_count"] == f["total_count"] == count
@@ -96,3 +104,16 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
 def test_plan_all_only_expands_observation_sections():
     args = _build_selected_parser("quota").parse_args(["quota", "plan", "--include-detail", "all"])
     assert quota_detail_sections_from_args(args) == frozenset({"agent-todos", "user-todos"})
+
+
+@pytest.mark.parametrize("command,sections", [
+    ("status", ["decisions"]), ("plan", ["all", "scheduler"]),
+    ("monitor-poll", ["all", "agent-todos"]),
+])
+def test_detail_selector_rejects_foreign_sections_even_with_all(command, sections):
+    argv = ["quota", command]
+    for section in sections:
+        argv.extend(["--include-detail", section])
+    args = _build_selected_parser("quota").parse_args(argv)
+    with pytest.raises(QuotaCommandValidationError, match="does not accept --include-detail"):
+        validate_quota_command_context_request(args)

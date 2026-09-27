@@ -87,11 +87,15 @@ removed without a separately validated caller migration.
 | `evidence-log --thin --limit 5` | explicit-limit cold path | returned-evidence bound | referenced run-history and rollout-event artifacts |
 
 `quota should-run` uses one repeatable cold-path selector:
-`--include-detail scheduler`, `agent-todos`, `user-todos`, or
-`goal-boundary`; `--include-detail all` expands every section. Public docs,
+`--include-detail scheduler`, `agent-todos`, `user-todos`, `vision`, or
+`goal-boundary`. `quota status` and `quota plan` accept `agent-todos` and
+`user-todos`; `quota monitor-poll` accepts `decisions`.
+`--include-detail all` expands the selected command's sections. Public docs,
 emitted `detail_ref` commands, and internal callers use only this selector.
-Unknown sections and selectors attached to another quota command fail before
-status collection.
+Unknown or unsupported sections fail before status collection, including when
+combined with `all`. Status/plan summaries preserve counts and decisions and
+declare omitted lists; explicit detail preserves the full Todo metadata. These
+are CLI display projections after full planning, not truncated provider inputs.
 
 The canonical emitted-output inventory and current characterization ceilings
 live in `loopx.control_plane.testing.cli_output_budget`. Those ceilings are
