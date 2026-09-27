@@ -33,6 +33,10 @@ test("preflight preserves a quota refusal, but rejects effectful or retargeted e
     assert.throws(() => delegationPreflight({...input,preview:{...preview,effects}}),/effect-free/);
   assert.throws(() => delegationPreflight({...input,preview:{...preview,
     selection_rejection:{...(projected.selection_rejection as Record<string,unknown>),requested_todo_id:"other"}}}),/matching/);
+  for (const raw of [["deferred"],["rejected"],["unavailable"]])
+    assert.throws(() => delegationPreflight({...input,preview:{...preview,
+      selection_rejection:{...(projected.selection_rejection as Record<string,unknown>),state:raw},
+      error_code:`turn_todo_selection_${raw[0]}`}}),/matching/);
 });
 
 test("independent delegation requires the current canonical declaration, not a Goal-wide contract", () => {

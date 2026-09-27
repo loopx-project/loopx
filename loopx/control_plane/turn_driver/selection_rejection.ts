@@ -1,16 +1,25 @@
 /** Observe a refused selection from quota's decision; never decide admission. */
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
+import {isStringLiteral, requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 
 function code(value: unknown): string | null {
   return typeof value === "string" && /^[a-z][a-z0-9_]{0,159}$/.test(value) ? value : null;
 }
 
+const REJECTION_STATES = ["deferred", "rejected", "unavailable"] as const;
+type RejectionState = (typeof REJECTION_STATES)[number];
+
+/** Decode the state literal itself; a non-string (e.g. a JSON array) is not a refusal state. */
+export function turnSelectionRejectionState(value: unknown): RejectionState | null {
+  return typeof value === "string" && isStringLiteral(value, REJECTION_STATES) ? value : null;
+}
+
 export function readTurnSelectionRejection(value: unknown, requested: unknown): JsonObject {
   const row = requireJsonObject(value, "Turn selection refusal");
+  const state = turnSelectionRejectionState(row.state);
   if (row.schema_version !== "loopx_turn_selection_rejection_v0" || row.source !== "quota.should-run"
-    || row.requested_todo_id !== requested || !["deferred","rejected","unavailable"].includes(String(row.state))
+    || row.requested_todo_id !== requested || state === null
     || (row.reason_code !== null && code(row.reason_code) === null)
     || (row.recovery_action !== null && code(row.recovery_action) === null)
     || !Array.isArray(row.delivery_preemptions) || row.delivery_preemptions.length > 8
@@ -19,7 +28,8 @@ export function readTurnSelectionRejection(value: unknown, requested: unknown): 
     || (row.contract_error_count !== null && (!Number.isSafeInteger(row.contract_error_count) || Number(row.contract_error_count) < 0)))
     throw new EffectRuntimeRequestError("matching bounded Turn selection refusal required");
   return Object.fromEntries(["schema_version","source","requested_todo_id","state","reason_code",
-    "delivery_preemptions","recovery_action","status_health_ok","contract_error_count"].map(key => [key,row[key]]));
+    "delivery_preemptions","recovery_action","status_health_ok","contract_error_count"]
+    .map(key => [key, key === "state" ? state : row[key]]));
 }
 
 export function projectTurnSelectionRejection(params: JsonObject): JsonObject {
@@ -29,9 +39,9 @@ export function projectTurnSelectionRejection(params: JsonObject): JsonObject {
   const decision = requireJsonObject(params.decision, "current quota decision");
   const raw = decision.action_selection_qualification;
   const qualification = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as JsonObject : {};
-  const state = qualification.requested_todo_id === requested
-    && ["deferred", "rejected"].includes(String(qualification.state))
-    ? qualification.state as string : "unavailable";
+  const refused = qualification.requested_todo_id === requested
+    ? turnSelectionRejectionState(qualification.state) : null;
+  const state = refused === "deferred" || refused === "rejected" ? refused : "unavailable";
   const reasons = Array.isArray(qualification.delivery_preemptions)
     ? qualification.delivery_preemptions.filter(value => code(value) !== null).slice(0, 8) : [];
   const count = params.contract_error_count;

@@ -6,7 +6,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
-import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
+import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -173,12 +173,13 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   const effects = requireJsonObject(preview.effects, "preview effects");
   if (preview.ok === false && preview.selection_rejection !== undefined) {
     const refusal = readTurnSelectionRejection(preview.selection_rejection, binding.todo_id);
+    const refusalState = turnSelectionRejectionState(refusal.state);
     requireThat(preview.effects_scope === "current_invocation"
       && ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"].every(k => effects[k] === false)
       && refusal.schema_version === "loopx_turn_selection_rejection_v0"
       && refusal.source === "quota.should-run" && refusal.requested_todo_id === binding.todo_id
-      && ["deferred", "rejected", "unavailable"].includes(String(refusal.state))
-      && preview.error_code === `turn_todo_selection_${refusal.state}`,
+      && refusalState !== null
+      && preview.error_code === `turn_todo_selection_${refusalState}`,
     "delegation inspection requires a matching effect-free selection refusal");
     const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
     return {

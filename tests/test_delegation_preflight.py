@@ -172,6 +172,46 @@ def test_preflight_surfaces_actual_turn_rejection_without_launch(service):
     assert not (root / "host-started").exists()
 
 
+def test_real_runtime_decodes_only_string_selection_states():
+    """The live managed runtime rejects a JSON-array refusal enum instead of echoing it."""
+    from loopx.control_plane.effect_runtime import (
+        EffectRuntimeRemoteError,
+        effect_runtime_result,
+    )
+
+    binding = {"id": "review", "agent_id": "reviewer", "todo_id": "todo_review"}
+    effects = {"host_invoked": False, "state_written": False,
+               "quota_spent": False, "scheduler_acknowledged": False}
+
+    def params(state):
+        return {
+            "binding": binding,
+            "authority": {"ready": True, "reason": None},
+            "preview": {
+                "ok": False, "effects_scope": "current_invocation", "effects": effects,
+                "error_code": "turn_todo_selection_deferred",
+                "selection_rejection": {
+                    "schema_version": "loopx_turn_selection_rejection_v0",
+                    "source": "quota.should-run", "requested_todo_id": binding["todo_id"],
+                    "state": state, "reason_code": "control_repair",
+                    "delivery_preemptions": ["control_repair"],
+                    "recovery_action": "reenter_guard_without_selection",
+                    "status_health_ok": False, "contract_error_count": 2,
+                },
+            },
+            "acceptance": None, "validation_files_current": False,
+        }
+
+    accepted = effect_runtime_result("collaboration.delegation.preflight", params("deferred"))
+    assert accepted["state"] == "turn_blocked"
+    assert accepted["turn_blocker"]["state"] == "deferred"
+    assert accepted["turn_eligible"] is False and accepted["executor"] is None
+    assert not any(accepted["effects"].values())
+    for raw in (["deferred"], ["rejected"], ["unavailable"]):
+        with pytest.raises(EffectRuntimeRemoteError):
+            effect_runtime_result("collaboration.delegation.preflight", params(raw))
+
+
 def test_preflight_projects_unavailable_authority_without_turn_or_provider(
     service, monkeypatch
 ):

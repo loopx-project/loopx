@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
+import {projectTurnSelectionRejection, readTurnSelectionRejection,
+  turnSelectionRejectionState} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
 const qualification = {schema_version:"action_selection_qualification_v0", state:"deferred",
   requested_todo_id:"todo_worker", reason:"control_repair", recovery_action:"reenter_guard_without_selection",
@@ -20,11 +21,29 @@ test("rejection reflects the quota reason and health count without another eligi
 });
 
 test("absent or different selection stays unavailable, never borrowed or launchable", () => {
-  for (const raw of [undefined,{}, {...qualification,requested_todo_id:"other"}, {...qualification,state:"qualified"}]) {
+  for (const raw of [undefined,{}, {...qualification,requested_todo_id:"other"},
+    {...qualification,state:"qualified"}, {...qualification,state:["deferred"]},
+    {...qualification,state:["rejected"]}, {...qualification,state:["unavailable"]},
+    {...qualification,state:["control_repair"]}]) {
     const result = projectTurnSelectionRejection({...params,decision:{action_selection_qualification:raw}});
     assert.equal(result.error_code,"turn_todo_selection_unavailable");
     assert.equal((result.selection_rejection as Record<string,unknown>).reason_code,null);
   }
+});
+
+test("only a decoded string state is a refusal; array states fail closed at the reader", () => {
+  for (const raw of ["deferred","rejected","unavailable"]) assert.equal(turnSelectionRejectionState(raw),raw);
+  for (const raw of [["deferred"],["rejected"],["unavailable"],[],["control_repair"],null,7,{state:"deferred"}])
+    assert.equal(turnSelectionRejectionState(raw),null);
+  const refusal = (state: unknown) => ({schema_version:"loopx_turn_selection_rejection_v0",source:"quota.should-run",
+    requested_todo_id:"todo_worker",state,reason_code:"control_repair",delivery_preemptions:["control_repair"],
+    recovery_action:"reenter_guard_without_selection",status_health_ok:false,contract_error_count:3});
+  for (const raw of ["deferred","rejected","unavailable"]) {
+    const read = readTurnSelectionRejection(refusal(raw),"todo_worker");
+    assert.equal(read.state,raw); assert.equal(Array.isArray(read.state),false);
+  }
+  for (const raw of [["deferred"],["rejected"],["unavailable"],[],null,7])
+    assert.throws(() => readTurnSelectionRejection(refusal(raw),"todo_worker"),/matching bounded/);
 });
 
 test("raw messages, paths and unsupported counts are not disclosed by the bounded projection", () => {

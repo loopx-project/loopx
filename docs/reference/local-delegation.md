@@ -168,7 +168,9 @@ Use `loopx check --scan-root /absolute/reviewer-worktree` with the same registry
 to diagnose the scan. Repair the source or configuration, then inspect again.
 Do not exempt tests, scan the installed package instead, retarget the Todo or
 start another operation to bypass the refusal. Other unstructured CLI failures
-remain errors. The observation starts no host, Turn journal or quota spend.
+remain errors, and a refusal whose bounded fields are malformed — including a
+`state` that is not one of the decoded string literals — fails closed instead of
+reporting `turn_blocked`. The observation starts no host, Turn journal or quota spend.
 Normal quota selection may still admit unrelated eligible work; this preflight
 never substitutes another Todo.
 
@@ -178,7 +180,9 @@ never substitutes another Todo.
 `executor: null` 表示未检查执行器，不表示模型故障。使用相同 registry 和
 `loopx check --scan-root /absolute/reviewer-worktree` 定位，再修复原来源或配置
 并重做预检。不能豁免测试目录、改扫安装包、换 Todo 或创建新操作绕过拒绝。
-其他无结构 CLI 故障仍报错；该观察不启动 host、Turn journal 或扣额。
+其他无结构 CLI 故障仍报错；拒绝投影字段畸形（含 `state` 不是已解码字符串
+字面量）时按失败关闭报错，不返回 `turn_blocked`；该观察不启动 host、Turn
+journal 或扣额。
 普通 quota 选路仍可安排其他独立且合格的工作；本预检不会替换 Todo。
 
 `request.json` contains the same `collaboration_brief_v0` used by MCP:
