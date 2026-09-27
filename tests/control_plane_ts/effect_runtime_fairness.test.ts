@@ -76,14 +76,20 @@ test("a real runtime serves lightweight work during cold File history verificati
   // Give the dedicated server time to enter its cold read, then exercise a
   // separate socket while its historical proof is still in flight.
   await delay(100);
-  const [ping, decisions, scope, ownership] = await Promise.all([rpc("runtime.ping"), rpc("todo.standing_decision.project", {
+  const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: root,
+    requesters: ["coordinator"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
+  const [ping, decisions, scope, ownership, selectedBinding] = await Promise.all([rpc("runtime.ping"), rpc("todo.standing_decision.project", {
     schema_version: "standing_decision_projection_request_v0", items: [], legacy_source_order: false,
   }), rpc("todo.authoring_scope.plan", {
     schema_version: "todo_authoring_scope_request_v0", command: "class", role: "agent",
     todo: {task_class: "continuous_monitor"}, intent: {},
   }), rpc("todo.ownership_gate.decide", {
     handoff_mode: "hard_lease", ownership_mutation: true, authority_mode: "registered_peer_actor",
+  }), rpc("collaboration.delegation.binding", {
+    agent_id: "coordinator", binding_id: "review",
+    config: {schema_version: "loopx_local_delegation_v0", bindings: [binding]},
   })]);
+  assert.deepEqual(selectedBinding, binding, "grant selection progresses without launching a Host");
   assert.equal(scope.schema_version, "todo_authoring_scope_result_v0");
   assert.equal(ownership.ownership_gate, "require_holder");
   assert.ok(ping.pid);
