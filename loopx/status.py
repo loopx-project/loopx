@@ -90,7 +90,6 @@ from .control_plane.goals.active_state_metadata import (
     parse_state_frontmatter,
 )
 from .control_plane.todos.active_state_todos import (
-    MONITOR_WRITEBACK_CONTRACT_SCHEMA_VERSION as _MONITOR_WRITEBACK_CONTRACT_SCHEMA_VERSION,
     active_state_todo_fields as _active_state_todo_fields_read_model,
 )
 from .control_plane.todos.active_state_todo_parser import (
@@ -271,7 +270,6 @@ MONITOR_DISPLAY_SCHEMA_VERSION = "monitor_quiet_display_v0"
 STATUS_CONTRACT_SCHEMA_VERSION = 2
 MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION = 2
 STATUS_CONTRACT_SIGNAL_LIMIT = 3
-MONITOR_WRITEBACK_CONTRACT_SCHEMA_VERSION = _MONITOR_WRITEBACK_CONTRACT_SCHEMA_VERSION
 EVENT_LEDGER_DECISION_CLASSIFICATIONS = USER_OR_CONTROLLER_CLASSIFICATIONS | {
     "operator_gate_approved",
 }
@@ -360,33 +358,8 @@ AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS = (
 
 
 
-def state_event_log_candidates(goal: dict[str, Any], *, state_path: Path) -> list[Path]:
-    from .control_plane.status.active_state_projection import (
-        state_event_log_candidates as _state_event_log_candidates,
-    )
-
-    return _state_event_log_candidates(goal, state_path=state_path)
 
 
-def active_state_event_projection_fields(
-    goal: dict[str, Any],
-    *,
-    state_path: Path,
-    preferred_todo_ids: set[str] | None = None,
-    rollout_events: list[dict[str, Any]] | None = None,
-    item_limit: int | None = MAX_STATUS_TODOS_PER_ROLE,
-) -> dict[str, Any]:
-    from .control_plane.status.active_state_projection import (
-        active_state_event_projection_fields as _active_state_event_projection_fields,
-    )
-
-    return _active_state_event_projection_fields(
-        goal,
-        state_path=state_path,
-        preferred_todo_ids=preferred_todo_ids,
-        rollout_events=rollout_events,
-        item_limit=item_limit,
-    )
 
 
 def active_state_sections(state_text: str, headings: tuple[str, ...]) -> dict[str, list[str]]:
@@ -723,7 +696,6 @@ def active_state_todo_fields(
         load_rollout_events=load_rollout_events,
         rollout_event_log_path=rollout_event_log_path,
         max_todo_index_rollout_events_per_goal=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
-        active_state_event_projection_fields=active_state_event_projection_fields,
         parse_active_state_todos=parse_active_state_todos,
         parse_issue_meta_surface=parse_issue_meta_surface,
         backlog_hygiene_warning=backlog_hygiene_warning,

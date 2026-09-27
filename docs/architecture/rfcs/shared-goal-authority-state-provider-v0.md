@@ -45,6 +45,20 @@ SQLite reuse logical archives for cross-provider isolated recovery.
 This adds no provider/default promotion and retires no Python business owner.
 [Automatic backup/migration, cold costs and qualification limits](../../reference/file-authority-state-log.md).
 
+## Todo event retirement (2026-09-25)
+
+PR #5054 replaces its original event-writer capture proposal with removal of
+that experimental Todo source. `events.jsonl` is no longer projected, overlaid,
+backfilled or used for completion. Nonempty default/aliased sources are refused
+without changing their bytes; empty/absent sources permit the Markdown path.
+Promoted Goals continue reading their selected provider even if stale legacy
+files remain. The supervisor uses its own local-private experimental log.
+
+This closes the *retired source* branch by deletion, not by claiming event-writer
+capture was qualified. Whole-Goal migration/rollback and default onboarding
+still require their existing acceptance; this change does not make all Python
+writers or PostgreSQL deployment ready. Do not add a replacement event capture
+PR to the remaining work. [Decision and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-25-todo-event-retirement.md).
 
 ## Persistence route for steward scale (2026-09-16)
 
@@ -84,8 +98,7 @@ integration defects; it neither recounts shipped capture nor flips global defaul
 [Operation and boundaries](../../reference/reviewed-coordination-promotion.md).
 
 Handoff-mode changes now share one TS ownership-fact classifier before and
-after promotion. Legacy event-only claims reject rather than disappear at a
-Markdown boundary; event append locks protect the observation through writeback.
+after promotion. Legacy nonempty event sources are refused before any Markdown substitution.
 Canonical changes reuse durable command receipt recovery. This is an L2/L3
 compatibility correction with Python decision deletion, not cohort migration,
 SQLite D2 completion or a default flip. Remaining work depends on executor/consumer closure, qualification,
@@ -1201,7 +1214,7 @@ Qualify an **embedded transactional store, with SQLite as the first candidate**,
 behind the existing TypeScript `AuthorityStore` owner. A local goal must not
 require a PostgreSQL service. The file-v0 provider remains a conformance/import
 baseline; no general-purpose ten-day promotion may rely on its full-history
-rewrite. [PR #4121](https://github.com/huangruiteng/loopx/pull/4121) supplies an
+rewrite. [PR #4121](https://github.com/loopx-project/loopx/pull/4121) supplies an
 opt-in SQLite conformance candidate behind that owner; it does not by itself
 qualify long-goal durability or change the default. Dependency/package,
 Windows/macOS/Linux and supported Node-profile evidence remain explicit gates.

@@ -18,7 +18,6 @@ Two scheduling-only seams exist, both outside every product decision:
 
 from __future__ import annotations
 
-import importlib
 import json
 import select
 import subprocess
@@ -96,7 +95,7 @@ GROWTH_TEXT_TEMPLATE = "Growth workload todo %02d " + "x" * 160
 # byte delta may grow by about one Todo record per transaction. A larger jump
 # means something beyond the live projection is being re-published.
 GROWTH_DELTA_ACCELERATION_ENVELOPE_BYTES = 2048
-EVENT_ONLY_HOLD = "event_log_writer_not_bound"
+EVENT_ONLY_HOLD = "legacy_todo_event_source_retired"
 CONTINUITY_HOLD = "source_partition_continuity_unproved"
 SHADOW_READ_MODULE = Path("loopx") / "control_plane" / "coordination" / "local_authority_shadow.ts"
 SHADOW_READ_REQUEST_SCHEMA = "loopx_coordination_runtime_shadow_outbox_read_v0"
@@ -919,7 +918,7 @@ def row_parity_divergent_detects_foreign_edit(context: RowContext) -> RowOutcome
 
 
 def row_event_only_todo_source_holds(context: RowContext) -> RowOutcome:
-    """An event-only Todo source holds qualification and candidate reads fail-closed; recovery needs rollback and rebootstrap."""
+    """A retired source refuses candidate/primary operations; preserving both sources allows explicit cleanup."""
 
     workspace = capture_workspace(context, "ladder-event")
     todo_ids: list[str] = []
@@ -929,47 +928,24 @@ def row_event_only_todo_source_holds(context: RowContext) -> RowOutcome:
         todo_ids.append(str(added["todo_id"]))
     qualified(qualify(workspace), label="baseline")
     log = workspace.state_path.with_name("events.jsonl")
-    # The product's own state-event store writes the event-only source. It is
-    # loaded lazily so this strictly typed ladder module does not follow the
-    # untyped state-event module at type-check time.
-    state_events = importlib.import_module("loopx.event_sourced_state")
-    state_events.AppendOnlyStateEventStore(log).append(
-        state_events.make_state_event(
-            event_id="ladder-event-only-todo",
-            goal_id=workspace.goal_id,
-            event_type=state_events.TODO_ADDED,
-            refs={"todo_id": "todo_event_only"},
-            payload={"role": "agent", "title": "An event-only todo without a Markdown writer.", "task_class": "advancement_task"},
-            recorded_at="2026-09-06T00:00:00+00:00",
-        )
-    )
+    log.write_text(json.dumps({"schema_version": "loopx_state_event_v0",
+        "event_type": "todo_added", "refs": {"todo_id": "todo_event_only"}}) + "\n", encoding="utf-8")
     log_bytes = log.read_bytes()
     surfaces = {"inspect": inspect(workspace), "qualify": qualify(workspace), "read-candidate": read_candidate(workspace, todo_ids[0])}
     for label, payload in surfaces.items():
-        expect(payload.get("ok") is False and payload.get("error") == EVENT_ONLY_HOLD, f"{label} must hold on the unbound event source")
+        expect(payload.get("ok") is False and str(payload.get("error") or "").startswith(EVENT_ONLY_HOLD), f"{label} must refuse retired source: {payload.get('error')}")
     status = shadow_status(workspace)
     expect(status.get("ok") is True and management_status(status) == "active", "status must stay readable while the lineage is held")
-    during = add_todo(workspace, "Markdown write during the event-only hold.")
-    expect(during.get("added") is True, "the primary write must still commit")
-    held = capture_evidence(during, label="todo add (during hold)")
-    expect(held.get("outcome") == "pending" and held.get("reason_code") == CONTINUITY_HOLD, "the capture must hold on unproven continuity")
-    expect(log.read_bytes() == log_bytes, "the hold must not touch the event log")
-    expect(backlog(shadow_status(workspace), "todos").get("committed_pending") == 1, "the held entry must stay pending")
-    log.unlink()
-    removed = rejected(qualify(workspace), "qualification", label="qualify after removal")
-    expect(removed.get("reason_code") == "outbox_pending", "removing the event source must not requalify the held lineage")
-    stopped = drain(workspace)
-    expect(stopped.get("outcome") == "stopped" and stopped.get("reason_code") == CONTINUITY_HOLD, "drain must keep holding the entry")
-    summary = _recover_by_rollback_and_rebootstrap(workspace, label="event-only")
-    return passed(
-        hold=EVENT_ONLY_HOLD,
-        held_surfaces=sorted(surfaces),
-        primary_write_during_hold=CONTINUITY_HOLD,
-        event_log_untouched=True,
-        removal_requalifies=False,
-        recovered_by="rollback_then_bootstrap",
-        rebootstrap_baseline_todos=summary.get("todo_count"),
-    )
+    before = workspace.state_path.read_bytes()
+    during = goal_cli(workspace, "todo", "add", "--role", "agent",
+        "--text", "Markdown write during the retired event hold.", check=False)
+    expect(during.get("ok") is False, "retired source must reject primary writes")
+    expect(workspace.state_path.read_bytes() == before, "refusal must preserve Markdown")
+    expect(log.read_bytes() == log_bytes, "refusal must preserve the event file")
+    log.unlink()  # The fixture owns this file; product never removes it.
+    qualified(qualify(workspace), label="retired source removed without any write")
+    return passed(hold=EVENT_ONLY_HOLD, held_surfaces=sorted(surfaces),
+        primary_write_refused=True, event_log_untouched=True)
 
 
 @dataclass(frozen=True)

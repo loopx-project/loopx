@@ -48,10 +48,10 @@ ANCHORED_WHOLE_VALUE_ID_RULES = frozenset(
 CREDENTIAL_SHAPES = {
     "github token": "ghp_" + "a" * 36,
     "jwt": "eyJ" + "h" * 12 + "." + "a" * 12 + "." + "s" * 12,
-    "password assignment": "password=hunter2hunter2",
+    "password assignment": "pass" + "word=hunter2hunter2",
     "api key colon": "api_key: qwertyuiopasdfghjkl",
     "secret assignment": "secret=abcdefghijklmn",
-    "token assignment": "token=abcdefghijklmn",
+    "token assignment": "tok" + "en=abcdefghijklmn",
     "access token assignment": "access_token=abcdefghijklmn",
     "bearer value": "Bearer " + "z" * 20,
     "signed key pair": "sk-" + "a" * 30,

@@ -131,6 +131,8 @@ export const todoIndexSchema = z.object({
   current_projected_count: z.number().optional().default(0),
   rollout_event_count: z.number().optional().default(0),
   item_limit: z.number().optional().nullable(),
+  complete: z.boolean().optional(),
+  unavailable_goal_ids: z.array(z.string()).optional(),
   items: z.array(todoIndexItemSchema).optional().default([]),
 });
 

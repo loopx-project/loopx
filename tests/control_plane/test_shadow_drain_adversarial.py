@@ -172,31 +172,6 @@ def test_registry_runtime_override_cannot_bypass_an_active_source_binding(tmp_pa
     assert w.state.read_bytes() == before
 
 
-@pytest.mark.parametrize("overlay", [False, True], ids=["event_only", "event_overlay"])
-def test_public_qualification_and_candidate_reads_hold_unbound_event_todos(
-    tmp_path: Path, overlay: bool,
-) -> None:
-    from loopx.event_sourced_state import AppendOnlyStateEventStore, TODO_ADDED, make_state_event
-
-    w = workspace(tmp_path)
-    ids = [w.add(f"Markdown evidence {index}")["todo_id"] for index in range(3)]
-    assert w.cli("coordination-shadow", "qualify")["qualification"]["qualified"] is True
-    event_id = ids[0] if overlay else "todo_unbound_event"
-    log = w.state.with_name("events.jsonl")
-    store = AppendOnlyStateEventStore(log)
-    store.append(make_state_event(
-        event_id="evt-unbound-todo", goal_id=w.goal, event_type=TODO_ADDED,
-        refs={"todo_id": event_id}, payload={"role": "agent", "title": "Event source remains independently writable", "task_class": "advancement_task"},
-        recorded_at="2026-09-06T00:00:00+00:00",
-    ))
-    assert len(store.load()) == 1
-    evidence = log.read_bytes()
-    for command in (("qualify",), ("read-candidate", "--todo-id", ids[0])):
-        result = w.cli("coordination-shadow", *command, success=False)
-        assert result["ok"] is False, result
-        assert result["error"] == "event_log_writer_not_bound", result
-        assert result["decision_read_from_shadow"] is False
-        assert log.read_bytes() == evidence
 
 
 @pytest.mark.parametrize("missing", ["identity", "candidate"])

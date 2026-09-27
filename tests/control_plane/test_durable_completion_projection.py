@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -11,12 +10,6 @@ from loopx.control_plane.todos.durable_completion import (
     project_durable_terminal_completion_readback,
     read_persisted_todo_record,
     read_persisted_todo_record_with_source,
-)
-from loopx.event_sourced_state import (
-    TODO_ADDED,
-    TODO_COMPLETED,
-    AppendOnlyStateEventStore,
-    make_state_event,
 )
 
 TODO_DONE = {
@@ -90,7 +83,6 @@ def test_projects_terminal_intent_without_premature_completion() -> None:
     [
         ("blocked", "materialized"),
         ("deferred", "materialized"),
-        ("deferred", "event_log"),
     ],
 )
 def test_terminal_readback_does_not_treat_ambiguous_state_as_absent(
@@ -325,95 +317,3 @@ def test_read_persisted_todo_record_fails_closed_when_todo_is_missing(
             state_file,
             todo_id="todo_fixture0001",
         )
-
-
-def test_read_persisted_todo_record_falls_back_to_event_projection(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    state_file = repo / "ACTIVE_GOAL_STATE.md"
-    state_file.write_text(
-        "\n".join(
-            [
-                "---",
-                "status: active",
-                "updated_at: 2026-01-01T00:00:00+00:00",
-                "---",
-                "",
-                "# Fixture",
-                "",
-                "## Agent Todo",
-                "",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    # The event-sourced Todo lives only in the event log, mirroring the
-    # completion payload shape written by complete_event_projected_goal_todo.
-    goal_id = "fixture-goal"
-    events = [
-        make_state_event(
-            event_id="add-fixture-1",
-            goal_id=goal_id,
-            event_type=TODO_ADDED,
-            refs={"todo_id": "todo_fixture0001"},
-            payload={
-                "role": "agent",
-                "priority": "P0",
-                "title": "Advance one public fixture.",
-                "text": "Advance one public fixture.",
-                "planner_order": 1,
-                "task_class": "advancement_task",
-            },
-        ),
-        make_state_event(
-            event_id="complete-fixture-1",
-            goal_id=goal_id,
-            event_type=TODO_COMPLETED,
-            refs={"todo_id": "todo_fixture0001"},
-            payload={
-                "no_followup": "true",
-                "completion_continuation": "no_followup",
-            },
-        ),
-    ]
-    AppendOnlyStateEventStore(repo / "events.jsonl").append_many(events)
-    registry = tmp_path / "registry.global.json"
-    registry.write_text(
-        json.dumps(
-            {
-                "common_runtime_root": str(tmp_path / "runtime"),
-                "goals": [
-                    {
-                        "id": goal_id,
-                        "domain": "fixture",
-                        "status": "active",
-                        "repo": str(repo),
-                        "state_file": state_file.name,
-                        "adapter": {"kind": "fixture_v0"},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    todo, existing_todo_ids, projection_source = read_persisted_todo_record_with_source(
-        state_file,
-        todo_id="todo_fixture0001",
-        registry_path=registry,
-        goal_id=goal_id,
-    )
-    assert projection_source == "event_log"
-    assert existing_todo_ids == {"todo_fixture0001"}
-    outcome = project_durable_completion_outcome(
-        todo=todo,
-        expected_todo_id="todo_fixture0001",
-        existing_todo_ids=existing_todo_ids,
-    )
-    assert outcome == {
-        "todo_id": "todo_fixture0001",
-        "continuation": "no_followup",
-    }

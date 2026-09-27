@@ -769,7 +769,6 @@ class TodoPartitionCapture:
         )
         self._seq: int | None = None
         self._entry_id: str | None = None
-        self._event_id: str | None = None
         self._lineage_id: str | None = None
         self.outcome = CaptureOutcome(partition=TODO_PARTITION if enabled else None)
 
@@ -829,12 +828,8 @@ class TodoPartitionCapture:
             "error_class": error.__class__.__name__,
         }
 
-    def prepare(self, new_text: str, *, event_id: str | None = None) -> None:
-        """Record the prepared entry for the bytes about to be written.
-
-        Event-only writers have no source-owned outbox transaction and return
-        an explicit hold without creating an entry.
-        """
+    def prepare(self, new_text: str) -> None:
+        """Prepare capture for the exact Markdown bytes about to be written."""
 
         if not self.enabled or self._directory is None or self._runtime_root is None:
             self.outcome.skipped_reason = "shadow_disabled"
@@ -848,9 +843,6 @@ class TodoPartitionCapture:
         binding = binding_view["binding"]
         self._lineage_id = str(binding["capture_lineage_id"])
         source_root_digest = str(binding["source_root_digest"])
-        if event_id is not None:
-            self.outcome.skipped_reason = "event_log_writer_not_bound"
-            return
         try:
             projection = self._project(new_text)
             digest = partition_digest(projection)
@@ -880,7 +872,7 @@ class TodoPartitionCapture:
                 writer=_writer(
                     self._write_class,
                     runtime=WRITER_RUNTIME_PYTHON,
-                    operation_id=event_id,
+                    operation_id=None,
                 ),
                 source={
                     "kind": source_kind,
@@ -888,7 +880,7 @@ class TodoPartitionCapture:
                     "previous_partition_digest": previous_digest,
                     "bytes_digest": bytes_digest,
                     "lease": None,
-                    "event_id": event_id,
+                    "event_id": None,
                 },
                 source_root_digest=source_root_digest,
                 capture_lineage_id=self._lineage_id,
@@ -904,7 +896,6 @@ class TodoPartitionCapture:
             return
         self._seq = seq
         self._entry_id = entry_id
-        self._event_id = event_id
         self.outcome.entry_id = entry_id
         self.outcome.seq = seq
         self.outcome.partition_digest = digest

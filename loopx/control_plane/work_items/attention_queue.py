@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AbstractSet, Any, Callable, Optional
 
+from ..goals.legacy_event_source import RetiredTodoEventSourceError
+
 
 AttentionItemBuilder = Callable[..., dict[str, Any]]
 GlobalRegistryShadowAttacher = Callable[[dict[str, Any], dict[str, Any]], None]
@@ -166,7 +168,23 @@ def build_attention_queue(
         current_status_run = context.latest_run(goal)
         goal_latest_runs = goal.get("latest_runs") if isinstance(goal.get("latest_runs"), list) else []
         if goal.get("registry_member"):
-            active_state_fields = context.active_state_todo_fields(goal, runtime_root=runtime_root)
+            try:
+                active_state_fields = context.active_state_todo_fields(goal, runtime_root=runtime_root)
+            except RetiredTodoEventSourceError as error:
+                # Refuse this source without hiding independent Goals or turning
+                # stale Todo/run projections into executable fallback work.
+                item = context.attention_item(
+                    goal_id=str(goal.get("id") or ""),
+                    status=error.reason_code,
+                    waiting_on="user_or_controller",
+                    severity="high",
+                    recommended_action=str(error),
+                    source="active_state",
+                )
+                item["todo_source"] = "unavailable"
+                item["activation_state"] = str(goal.get("activation_state") or "active")
+                history_items.append(item)
+                continue
             active_state_item = context.active_state_todo_attention_item(
                 goal,
                 active_state_fields,

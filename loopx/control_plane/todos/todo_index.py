@@ -149,12 +149,18 @@ def build_todo_index(
     events_for_goal: EventsForGoal | None = None,
 ) -> dict[str, Any]:
     indexed: dict[tuple[str, str], dict[str, Any]] = {}
+    unavailable_goal_ids = {
+        str(item["goal_id"])
+        for item in queue.get("items") or []
+        if isinstance(item, dict) and item.get("goal_id")
+        and item.get("todo_source") == "unavailable"
+    }
     current_count = 0
     for item in queue.get("items") or []:
         if not isinstance(item, dict):
             continue
         goal_id = str(item.get("goal_id") or "")
-        if not goal_id:
+        if not goal_id or goal_id in unavailable_goal_ids:
             continue
         for role in ("user", "agent"):
             todos = item.get(f"{role}_todos")
@@ -182,6 +188,8 @@ def build_todo_index(
         if isinstance(goal, dict) and str(goal.get("id") or "")
     ]
     for goal_id in sorted(set(goal_ids)):
+        if goal_id in unavailable_goal_ids:
+            continue
         events = (
             events_for_goal(
                 goal_id,
@@ -232,7 +240,7 @@ def build_todo_index(
             str(item.get("latest_event_at") or ""),
         ),
     )
-    return {
+    result: dict[str, Any] = {
         "schema_version": TODO_INDEX_SCHEMA_VERSION,
         "source": "attention_queue_and_rollout_event_log",
         "total_count": len(items),
@@ -241,3 +249,7 @@ def build_todo_index(
         "item_limit": limit,
         "items": items[: max(0, limit)],
     }
+    if unavailable_goal_ids:
+        result["complete"] = False
+        result["unavailable_goal_ids"] = sorted(unavailable_goal_ids)
+    return result
