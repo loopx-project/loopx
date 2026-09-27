@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {execFileSync} from "node:child_process";
 import {readFile, readdir, writeFile, unlink} from "node:fs/promises";
 import {join} from "node:path";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -8,8 +7,9 @@ import {drainShadowOutbox, SHADOW_DRAIN_SCHEMA} from "../../loopx/control_plane/
 import {commitLocalAuthorityShadowEntry} from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
 import {fixture, pendingEntry, todo, type ShadowFixture} from "./shadow_file_fixture.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
 
-const python = execFileSync("python3", ["-c", "import sys; print(sys.executable)"], {encoding: "utf8"}).trim();
+const python = resolveTestPython();
 function request(f: ShadowFixture, extra: JsonObject = {}): JsonObject {
   return {schema_version: SHADOW_DRAIN_SCHEMA, runtime_root: f.root, goal_id: "goal-a", python_executable: python,
     config_enabled: true, max_entries: 256, budget_seconds: 30, lock_timeout_seconds: 1, ...extra};
