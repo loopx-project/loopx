@@ -24,24 +24,20 @@
   [Chinese version](./shared-goal-authority-state-provider-v0.zh-CN.md) and this
   English version are semantic mirrors. A difference between them is a defect.
 
-## Current delivery frontier (2026-09-27)
+## Current delivery frontier (2026-09-28)
 
-Audit `157ab7b11` and current PR states: source capture, pagination, File format
-upgrade and Python prototype retirement are delivered. This delivery repairs
-reviewed-input recovery and adds independent retained-history audit. Plan four
-scoped PRs starting here: this recovery slice, external execution interval
-protection, whole-Goal activation/rollback integration, and default entrypoints
-with final bounded Python retirement. Three planned scopes follow this PR;
-existing #5054/#4931 and D2/D3 evidence remain separate. This is not a guaranteed
-count of future defect repairs.
-[Current inventory, rationale and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-27-recovery-audit.md).
+Audit `ce3862e33`: #5054, #5140, #5144, #5156, #5173, #5175 and #5169
+are merged. Do not count event retirement, archive recovery, managed process
+supervision, reviewed local cutover or native drain as new pending PRs.
+#4931 remains an open SQLite optimization, not a completed D2 qualification.
 
-Managed Host supervision lands in the same window as a separate delivered slice:
-one TS supervisor now owns generic command and Codex CLI process lifetimes, so
-authority-bound execution stays open rather than closing here, and the old three
-architectural packages remain a pointer instead of a decrementing PR counter.
-Its named plan, changed estimate and boundaries are recorded separately.
-[Named plan, changed estimate and boundaries](ledger/shared-goal-authority-state-provider-v0/2026-09-27-host-supervision.md).
+Next: qualify whole-Goal execution/consumer integration and matched local
+profiles in parallel; then unify new-Goal/install/settings and supported upgrade
+entrypoints, deleting each replaced writer with its last caller. Retain necessary
+Host IO, original receipts and migration readers. No additional dead Python
+module is certified by this audit, and no fixed remaining-PR total is promised.
+[Deletion inventory, engineering windows, local evidence and remaining work](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md)
+supersedes older current-count estimates; their execution evidence stays historical.
 
 File retained-state storage now reuses the existing TS checkpoint/delta codec,
 stacked on #5063's verified read cache and RPC budgets. Original revisions,

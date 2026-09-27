@@ -21,19 +21,17 @@
 - 语言说明：[英文版](./shared-goal-authority-state-provider-v0.md)与本中文版互为
   语义镜像；两者不一致属于缺陷
 
-## 当前交付边界（2026-09-27）
+## 当前交付边界（2026-09-28）
 
-按 `157ab7b11` 与当前 PR 核对，来源捕获、分页、File 格式升级及 Python 原型
-退役已交付。本次修复审核输入恢复并增加独立历史审计；从本次开始规划四个交付
-PR：本次恢复切片、外部执行区间保护、整 Goal 激活/回退集成、默认入口及最后
-一批有界 Python 退役。本次之后剩后三个规划范围；#5054/#4931 已有 PR，D2/D3
-缺失证据另列，不能保证最终缺陷修复数量。
-[当前清单、依据及退出条件](ledger/shared-goal-authority-state-provider-v0/2026-09-27-recovery-audit.zh-CN.md)。
+按 `ce3862e33` 核对，#5054、#5140、#5144、#5156、#5173、#5175、#5169
+均已合并。事件退役、archive 恢复、managed 进程监督、reviewed 本地切换和 native
+drain 不再计作新待办 PR。#4931 仍是开放的 SQLite 优化，不是已完成 D2 验收。
 
-同一窗口另有已交付的进程监督切片：通用命令与 Codex CLI 的进程生命周期改由
-一个 TS supervisor 承担，因此执行中租约约束仍开放，不由本次关闭；旧“三个
-架构包”仍是指针，不是递减 PR 计数器。该切片的逐项计划、估算变化与边界单列。
-[核对的逐项计划、估算变化与边界](ledger/shared-goal-authority-state-provider-v0/2026-09-27-host-supervision.zh-CN.md)。
+接下来并行验证整 Goal 执行／消费者集成和本地 profile，再统一新 Goal／安装／设置
+及受支持升级入口，切走最后调用方时同步删除对应旧 writer。保留必要 Host IO、
+原回执与迁移 reader。本轮未认证额外某个 Python 模块已死，也不承诺固定剩余 PR 数。
+[删除清单、工程窗口、本机证据及剩余工作](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md)
+替代旧记录的当前数量估算，旧执行证据仍按历史保留。
 
 ## Todo 事件路径退役（2026-09-25）
 
