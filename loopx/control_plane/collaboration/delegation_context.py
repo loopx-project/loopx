@@ -65,6 +65,11 @@ def _route(binding: dict[str, Any]) -> dict[str, Any]:
     reason = str(executor.get("unavailable_reason") or "").strip()
     if reason:
         row["reason_code"] = reason
+    # Transport the existing host owner's public observations unchanged. The
+    # Python adapter neither reprobes nor derives another admission decision.
+    for key in ("runtime_probe", "unavailable_remediation"):
+        if key in executor:
+            row[key] = executor[key]
     return row
 
 

@@ -96,6 +96,70 @@ test("preflight separates task admission, acceptance binding and runtime availab
   assert.throws(() => delegationPreflight({...params, preview: {...preview, effects: {...effects, host_invoked: true}}}));
 });
 
+const runtimePreflight = (executor: Record<string, unknown>) => delegationPreflight({
+  binding, validation_files_current: true, acceptance: {todo_id: binding.todo_id, state: "ready"},
+  preview: {dry_run: true, status: "preview",
+    effects: {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: binding.todo_id},
+    managed_executor: executor},
+});
+
+test("preflight retains scoped runtime facts without leaking host configuration", () => {
+  const probe = {schema_version: "managed_runtime_probe_v0", scope: "probing_interpreter",
+    module: "deepseek_harness", available: false};
+  const remedies = ["configure_dsh_runtime", "select_individual_host"];
+  const result = runtimePreflight({executor: "dsh", available: false,
+    unavailable_reason: "dsh_runtime_unavailable", execution_profile: "explicit-profile",
+    runtime_probe: {...probe, private_path: "/private/interpreter"}, unavailable_remediation: remedies,
+    credential_env: "PRIVATE_CREDENTIAL", endpoint_env: "PRIVATE_ENDPOINT"});
+  assert.equal(result.state, "runtime_unavailable");
+  assert.deepEqual(result.executor, {host: "dsh", available: false,
+    reason: "dsh_runtime_unavailable", profile: "explicit-profile",
+    runtime_probe: probe, unavailable_remediation: remedies});
+  assert.equal(JSON.stringify(result).includes("PRIVATE_"), false);
+  assert.equal(JSON.stringify(result).includes("/private/interpreter"), false);
+  assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
+});
+
+test("runtime probes cannot override credential failure or unprobed generic readiness", () => {
+  const result = runtimePreflight({executor: "dsh", available: false,
+    unavailable_reason: "operator_credential_unconfigured", execution_profile: "explicit-profile",
+    runtime_probe: {schema_version: "managed_runtime_probe_v0", scope: "configured_runner",
+      module: null, available: true},
+    unavailable_remediation: ["configure_operator_credential", "select_individual_host"]});
+  assert.equal(result.state, "runtime_unavailable");
+  assert.equal((result.executor as Record<string, unknown>).available, false);
+  assert.deepEqual((result.executor as Record<string, unknown>).runtime_probe,
+    {schema_version: "managed_runtime_probe_v0", scope: "configured_runner", module: null, available: true});
+  const generic = runtimePreflight({executor: "generic-cli", available: null,
+    unavailable_reason: null, execution_profile: null, runtime_probe: null, unavailable_remediation: []});
+  assert.equal(generic.state, "runtime_unverified");
+  assert.deepEqual(generic.executor, {host: "generic-cli", available: null, reason: null,
+    profile: null, runtime_probe: null, unavailable_remediation: []});
+});
+
+test("malformed scoped runtime facts fail closed; legacy omissions remain compatible", () => {
+  const probe = {schema_version: "managed_runtime_probe_v0", scope: "probing_interpreter",
+    module: "deepseek_harness", available: false};
+  const executor = {executor: "dsh", available: false, unavailable_reason: "dsh_runtime_unavailable",
+    execution_profile: "explicit-profile", runtime_probe: probe, unavailable_remediation: ["configure_dsh_runtime"]};
+  for (const runtime_probe of [false, {}, {...probe, schema_version: "other"},
+    {...probe, scope: "whole_machine"}, {...probe, scope: ["probing_interpreter"]},
+    {...probe, module: "/private/path"},
+    {...probe, available: "false"}]) {
+    assert.throws(() => runtimePreflight({...executor, runtime_probe}), /runtime probe/);
+  }
+  for (const unavailable_remediation of [null, "configure_dsh_runtime", ["/private/path"],
+    ["x".repeat(81)], Array(9).fill("configure_dsh_runtime")]) {
+    assert.throws(() => runtimePreflight({...executor, unavailable_remediation}), /runtime remediation/);
+  }
+  const legacy = runtimePreflight({executor: "dsh", available: true, unavailable_reason: null,
+    execution_profile: "explicit-profile"});
+  assert.equal(legacy.state, "launchable");
+  assert.deepEqual(legacy.executor,
+    {host: "dsh", available: true, reason: null, profile: "explicit-profile"});
+});
+
 test("requester adoption needs accepted downstream use, not reading, revision or prose", () => {
   const artifact = {ref: "result.json", sha256: "a".repeat(64)};
   const source = {operation_id: "source", status: "accepted", artifacts: [artifact]};

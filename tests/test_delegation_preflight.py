@@ -28,6 +28,34 @@ def test_real_cli_preflight_preserves_unknown_runtime_and_state(service):
     assert result["turn_eligible"] and result["acceptance_ready"]
     assert result["executor"]["host"] == "generic-cli"
     assert result["executor"]["available"] is None
+    assert result["executor"]["runtime_probe"] is None
+    assert result["executor"]["unavailable_remediation"] == []
+    assert not any(result["effects"].values())
+    assert runner.registry.read_bytes() == before
+    assert not (root / "host-started").exists()
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+    assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
+
+
+def test_real_cli_dsh_preflight_preserves_interpreter_probe_without_launch(service):
+    root, runner = service
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["host_args"] = ["--host", "dsh"]
+    runner.config.write_text(json.dumps(config))
+    before = runner.registry.read_bytes()
+    status, result = cli(runner, "inspect", "--binding-id", "analysis")
+    assert status == 0, result
+    executor = result["executor"]
+    probe = executor["runtime_probe"]
+    assert probe["schema_version"] == "managed_runtime_probe_v0"
+    assert probe["scope"] == "probing_interpreter"
+    assert probe["module"] == "deepseek_harness"
+    assert isinstance(probe["available"], bool)
+    if not probe["available"]:
+        assert executor["available"] is False
+        assert executor["reason"] == "dsh_runtime_unavailable"
+        assert executor["unavailable_remediation"] == ["configure_dsh_runtime", "select_individual_host"]
+    assert "credential_env" not in executor and "endpoint_env" not in executor
     assert not any(result["effects"].values())
     assert runner.registry.read_bytes() == before
     assert not (root / "host-started").exists()
@@ -348,6 +376,8 @@ def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
         "available": None,
         "reason": None,
         "profile": "gpt-5.6-sol@xhigh",
+        "runtime_probe": None,
+        "unavailable_remediation": [],
     }
     assert result["state"] == "runtime_unverified"
     assert not any(result["effects"].values())

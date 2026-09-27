@@ -60,6 +60,34 @@ export function delegationTurnPlanDecision(params: JsonObject): JsonObject {
   };
 }
 
+/** Preserve the host owner's public diagnosis, not its private configuration.
+ * Optional fields keep older host previews compatible; null means unprobed. */
+export function delegationRuntimeFacts(executor: JsonObject): JsonObject {
+  const facts: JsonObject = {};
+  if (Object.hasOwn(executor, "runtime_probe")) {
+    if (executor.runtime_probe === null) facts.runtime_probe = null;
+    else {
+      const probe = requireJsonObject(executor.runtime_probe, "runtime probe");
+      requireThat(probe.schema_version === "managed_runtime_probe_v0"
+        && typeof probe.scope === "string"
+        && ["probing_interpreter", "configured_runner"].includes(probe.scope)
+        && (probe.module === null || (typeof probe.module === "string"
+          && probe.module.length <= 128 && /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(probe.module)))
+        && typeof probe.available === "boolean", "invalid runtime probe observation");
+      facts.runtime_probe = {schema_version: probe.schema_version, scope: probe.scope,
+        module: probe.module, available: probe.available};
+    }
+  }
+  if (Object.hasOwn(executor, "unavailable_remediation")) {
+    const remedies = executor.unavailable_remediation;
+    requireThat(Array.isArray(remedies) && remedies.length <= 8
+      && remedies.every(code => typeof code === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(code)),
+    "invalid runtime remediation codes");
+    facts.unavailable_remediation = [...remedies];
+  }
+  return facts;
+}
+
 /** Read the actual dry-run route/profile, never infer readiness from assignment. */
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
@@ -115,7 +143,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     authority_state: "promoted", authority_next_action: "none",
     promotion_from_surface_allowed: false,
     executor: {host: executor.executor, available: executor.available,
-      reason: executor.unavailable_reason, profile: executor.execution_profile},
+      reason: executor.unavailable_reason, profile: executor.execution_profile,
+      ...delegationRuntimeFacts(executor)},
     effects,
     note: "Point-in-time preflight, not an execution permit or evidence of running work. "
       + "Start rechecks admission; inspect original operations before dispatching replacements. "

@@ -182,6 +182,40 @@ test("maximum delegation directory stays within provider budget", () => {
   assert.ok(Buffer.byteLength(JSON.stringify(packet.contributions[0])) <= 2048);
 });
 
+test("planning progressively discloses probe scope without crowding out a second route", () => {
+  const probe = {schema_version: "managed_runtime_probe_v0", scope: "probing_interpreter",
+    module: "deepseek_harness", available: false};
+  const routes = [
+    {binding_id: "managed-evidence/" + "x".repeat(34),
+      agent_id: "managed-worker-" + "x".repeat(12), todo_id: "todo_" + "a".repeat(12), runtime_id: "dsh",
+      readiness: "blocked", runtime_readiness: "blocked", executor_kind: "managed",
+      execution_profile: "deepseek-v4-flash@high", reason_code: "dsh_runtime_unavailable",
+      runtime_probe: {...probe, private_path: "/private/interpreter"},
+      unavailable_remediation: ["configure_dsh_runtime", "select_individual_host"]},
+    {binding_id: "generic-verifier/" + "x".repeat(34),
+      agent_id: "generic-worker-" + "x".repeat(12), todo_id: "todo_" + "b".repeat(12), runtime_id: "generic-cli",
+      readiness: "unknown", runtime_readiness: "unknown", executor_kind: "generic",
+      runtime_probe: null, unavailable_remediation: []},
+  ];
+  for (const phase of ["before_plan", "before_delegate"]) {
+    const packet = evaluateSubagentContext({phase, scope, orchestration: policy, observations: {
+      delegation_context: {schema_version: "loopx_delegation_context_v0", configuration_state: "ready",
+        observed_at: "2026-09-19T04:20:00+00:00", authorized_count: 2, projected_count: 2, routes},
+    }})!;
+    assert.deepEqual(packet.failures, []);
+    const [contribution] = packet.contributions as Record<string, any>[];
+    const context = contribution.facts.delegation_context;
+    assert.equal(context.projected_count, 2);
+    assert.equal(context.preflight, "required");
+    assert.deepEqual(context.routes.map((route: any) => route.probe_scope), ["probing_interpreter", undefined]);
+    assert.deepEqual(context.routes.map((route: any) => route.readiness), ["blocked", "unknown"]);
+    assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 900);
+    assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
+    assert.ok(!JSON.stringify(packet).includes("/private/interpreter"));
+    assert.ok(!JSON.stringify(packet).includes("configure_dsh_runtime"));
+  }
+});
+
 // Rich model identifiers and the complete participation guidance must survive
 // the actual provider budget, not disappear as an isolated provider failure.
 test("coordinator participation guidance survives all bounded lifecycle projections", () => {

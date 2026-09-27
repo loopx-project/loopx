@@ -2,6 +2,7 @@
 import { AGENT_CONTEXT_PHASES, projectAgentContext, type AgentContextProvider } from "./agent_context.ts";
 import type { JsonObject } from "./effect_program.ts";
 import { jsonObject, requireJsonObject } from "./runtime_decode.ts";
+import { delegationRuntimeFacts } from "./collaboration/delegation.ts";
 
 export const subagentContextProvider: AgentContextProvider = {
   hookId: "multi_subagent.coordinator", capabilityId: "multi_subagent", revision: "v5",
@@ -131,6 +132,11 @@ function boundedDelegationContext(value: unknown): JsonObject | null {
     if (executorKind) compact.executor_kind = executorKind;
     if (profile) compact.execution_profile = profile;
     if (reason) compact.reason_code = reason;
+    // Planning discloses scope only; inspect the same binding for full probe
+    // and remedies. Keep the existing route/contribution budgets unchanged.
+    const runtimeFacts = delegationRuntimeFacts(route);
+    const probe = jsonObject(runtimeFacts.runtime_probe);
+    if (probe) compact.probe_scope = probe.scope;
     return [compact];
   }) : [];
   const rawReceipts = jsonObject(source.operation_receipts);
