@@ -134,7 +134,11 @@ export const goalActivityScenario = {
         await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count(),
         "The brief and the needs-you lane agree",
       );
-      assert.ok(await page.getByTestId("personal-brief-completed").locator(".personal-brief-row").count() > 0, "Recently completed work is surfaced");
+      assert.deepEqual(
+        await page.getByTestId("personal-brief-completed").locator(".personal-brief-row strong").allTextContents(),
+        ["Newest cross-goal result", "Completed B", "Completed C"],
+        "Recent work survives status parsing and is sorted across Goals before taking three rows",
+      );
       await page.screenshot({ path: resolve(outputDir, "goal-activity-sidebar.png"), animations: "disabled" });
       await running.locator(".personal-goal-link").click();
       await page.locator(".personal-channel-activity", { hasText: "执行中" }).waitFor();
