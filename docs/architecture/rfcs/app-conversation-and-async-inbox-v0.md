@@ -120,6 +120,39 @@ existing creation/connect, conversation reliability, affinity handoff and
 small-team Todos; do not create duplicate planning queues. Packaging/first-use
 checks run with each usable phase, not at the end of an architectural rewrite.
 
+### Nearest user-visible exit: one request, controllable work, returned result
+
+Qualify one concrete G0/R3 journey before expanding the feature inventory. The
+user says **“Prepare a community survey for LoopX; bring me a draft.”** The App
+finds the qualified existing owner, retains the request, shows its actual
+disposition, and returns a readable Markdown draft with sources. The correction
+**“Chinese first; do not publish.”** must reach and be adopted by the actual
+receiver. Publication is outside this draft-only pilot.
+
+Freeze GQ02/GQ04/GQ08/GQ09 with these observable exits:
+
+- No manual Agent-id lookup, old-session link, repeated context, reminder or
+  result relay. Recipient identity and task purpose are visible.
+- Accepted, deferred, rejected, executing and returned facts remain distinct.
+  A delivered deferral is not task completion. Explain delay beside the request;
+  private receiver reasoning never enters an external audience automatically.
+- One authorized driver performs the work. Correction and scoped-stop variants
+  require receiver/runtime readback, not only a transport ACK.
+- The draft opens in the original App conversation after reload or session
+  replacement. Record source, packaged UI and real native execution separately
+  as passed, failed, blocked or not run.
+
+Then qualify existing G1 with **“Get a small team to check the cash-flow numbers
+and resolve the disagreement.”** Two or three real workers consume versioned
+inputs, independently challenge a period/unit error, adopt the revision and
+return a checked synthesis. A second cycle changes the consumed input basis.
+This is GQ05/GQ11–13, not a new milestone or queue.
+
+Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
+recovery, GoalRef and late-return changes. Shared TS refactors accompany the
+affected transaction; full migration, Lark visual parity, scale and promotional
+film do not block this pilot. Component PR merges do not certify the journey.
+
 ## TS and generic async inbox: migrate with the user path
 
 ### Semantic boundary

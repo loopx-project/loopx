@@ -36,7 +36,12 @@ embedding a transcript or sending an inbox ACK does not complete that transition
 [App conversations and asynchronous inbox](app-conversation-and-async-inbox-v0.md)
 refines R1–R3 without adding a milestone: repair ordinary input and durable
 entry; qualify connect/continue, truthful activity, stop/recovery and readable
-results; then complete G1's two real collaboration cycles. Prioritize these
+results. The nearest observable exit is one natural App request through an
+existing qualified owner to a reviewable draft, with adopted correction and
+recovery, without manual owner lookup, reminders or result relay. A delivered
+deferral stays deferred. Then complete G1's two real collaboration cycles.
+Use the [concrete pilot and exits](app-conversation-and-async-inbox-v0.md#nearest-user-visible-exit-one-request-controllable-work-returned-result).
+Prioritize these
 before cross-channel visual parity or scale. Lark's reusable inbox lifecycle
 should converge into the existing typed coordination owner, while provider
 authentication/addressing/reactions remain in its extension. Product-facing TS
