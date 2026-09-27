@@ -39,7 +39,9 @@ import { newestDraftScenario } from "./personal-workspace-browser/newest-draft.m
 import { conversationInputScenario } from "./personal-workspace-browser/conversation-input.mjs";
 import { goalActivityScenario } from "./personal-workspace-browser/goal-activity.mjs";
 
-const scenarioCatalog = [conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario];
+import {stewardGroupTriggerScenario} from "./personal-workspace-browser/steward-group-trigger.mjs";
+
+const scenarioCatalog = [stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario];
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

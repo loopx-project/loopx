@@ -567,6 +567,7 @@ class LarkChatRequestMixin:
                 "capture_scope",
                 "connection_id",
                 "conversation_kind",
+                "turn_trigger",
                 "executor_endpoint_id",
                 "chat_id",
                 "chat_name",
@@ -623,6 +624,11 @@ class LarkChatRequestMixin:
                 or stored_routing.get("conversation_kind")
                 or "goal"
             )
+            if "turn_trigger" in body:
+                from .control_plane.collaboration import conversation_trigger
+                if conversation_kind != "manager" or app_refs_by_agent is not None:
+                    raise ValueError("turn_trigger is only supported for manager connections")
+                conversation_trigger(body["turn_trigger"])
             # The machine owns its manager channel's executor, so the machine
             # setting -- not a stored connection field or a request field --
             # decides which endpoint this connection runs on and which Session
@@ -743,6 +749,7 @@ class LarkChatRequestMixin:
                     agent_id=agent_id,
                     connection_id=connection_id,
                     conversation_kind=conversation_kind,
+                    turn_trigger=body.get("turn_trigger"),
                     executor_endpoint_id=executor_endpoint_id
                     if conversation_kind == "manager"
                     else None,

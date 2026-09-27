@@ -3210,3 +3210,58 @@ def test_an_authorized_manager_session_must_run_on_the_machine_executor(
     assert authorized_manager_goal_ids(
         snapshot, {**bound, "agent_id": "dsh"}, runtime_root=runtime_root
     ) == ["goal-alpha"]
+
+
+def test_manager_direct_group_messages_roundtrip_and_revoke(tmp_path, monkeypatch):
+    """The real route/inbox pipeline admits live human input once after opt-in."""
+    from datetime import UTC, datetime
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from test_lark_goal_topic_runtime import _reply_runner
+
+    kwargs, _, bindings = _manager_fixture(tmp_path)
+    binding = binding_for_goal(bindings, "goal-alpha")
+    edit = {**kwargs, "agent_id": "loopx-manager", "connection_id": binding["connection_id"],
+            "session_id": "manager-session", "conversation_kind": "manager"}
+    before = kwargs["binding_path"].read_bytes()
+    preview = connect_lark_goal_topic(**{**edit, "execute": False}, turn_trigger="human_messages")
+    assert preview["details"]["turn_trigger"] == "human_messages"
+    assert kwargs["binding_path"].read_bytes() == before
+    assert connect_lark_goal_topic(**edit, turn_trigger="human_messages")["ok"]
+    # Older clients editing another field must preserve the explicit choice.
+    assert connect_lark_goal_topic(**edit)["details"]["turn_trigger"] == "human_messages"
+    def options():
+        return {"target_payload": read_goal_channel_targets(kwargs["target_path"]),
+                "binding_payloads": {"goal-alpha": read_goal_channel_binding(kwargs["binding_path"])}}
+    event = {"chat_id": CHAT_ID, "message_id": "om_direct_request", "event_id": "evt_direct_request",
+             "sender_type": "user", "sender_id": "ou_human", "mentions": [],
+             "create_time": datetime.now(UTC).isoformat(), "content": "帮我总结一下当前进展。"}
+    decision = decide_lark_topic_event(**options(), event=event)
+    assert decision["route"]["authority_mode"] == "turn_authorized"
+    assert decision["route"]["trigger_reason"] == "configured_human_message"
+    for patch in [{"sender_type": "app"}, {"sender_type": ""}, {"sender_id": ""},
+                  {"historical_context_only": True},
+                  {"historical_context_only": True, "mentions": [{"id": APP_ID}]}]:
+        assert decide_lark_topic_event(**options(), event={**event, **patch})["route"]["authority_mode"] == "context_only"
+    monkeypatch.setattr(runtime, "ensure_lark_event_inbox_received_reaction", lambda **_: {"ok": True})
+    answers, replies = [], {}
+    def answer(route, text):
+        answers.append(text)
+        return {"response_text": "已整理当前进展。", "effect_receipt": runtime._session_turn_effect(route)}
+    # Transport doubles do not replace the TS rule, JSON inbox, locks or receipts.
+    def reply_runner(args):
+        result = _reply_runner(replies)(args)
+        result["stdout"] = result["stdout"].replace("linkmacbot", "LoopX Mew")
+        return result
+    result = runtime.process_lark_goal_topic_event(**options(), event=event,
+        runtime_root=tmp_path / "runtime", answer=answer, reply_runner=reply_runner)
+    assert result["status"] == "replied_and_acknowledged", json.dumps(result, ensure_ascii=False, indent=2)
+    replay = runtime.process_lark_goal_topic_event(**options(), event=event,
+        runtime_root=tmp_path / "runtime", answer=answer, reply_runner=reply_runner)
+    assert replay["status"] == "already_acknowledged", replay
+    assert answers == [event["content"]]
+    assert replies["reply_text"] == "已整理当前进展。"
+    assert connect_lark_goal_topic(**edit, turn_trigger="addressed")["ok"]
+    assert decide_lark_topic_event(**options(), event={**event, "message_id": "om_after_revoke"})["route"]["authority_mode"] == "context_only"
+    assert decide_lark_topic_event(**options(), event={**event, "mentions": [{"id": APP_ID}]})["route"]["authority_mode"] == "turn_authorized"
+    with pytest.raises(ValueError, match="conversation trigger"):
+        connect_lark_goal_topic(**edit, turn_trigger="all")

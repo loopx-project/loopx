@@ -57,6 +57,20 @@ must finish before work on the next layer can start. GQ17 repeats the ordinary
 parallel-work intent at larger fixture sizes; basic parallel work is already P0
 in GQ11, and the steward should not overstaff a small task.
 
+### Direct group conversation / 群里直接说话
+
+For the Lark variant of P0 reliable entry, configure the steward connection to
+respond without mentions. Send “帮我总结一下当前进展。” / “Summarize the current
+progress” as an ordinary new human message, then a concise correction. Require
+one retained request and one checked answer through the existing conversation;
+replay the same provider message and prove there is no second execution/reply.
+Disable the option and verify that another unaddressed message remains context
+while a mention or verified bot reply still works. Bots, missing sender evidence,
+historical backfill (even with an old mention), an unrelated group and a worker's
+own Topic are negative cases. This admission probe does not qualify autonomous
+execution: the external read-only profile and recipient grants must be evaluated
+separately. Passing transport fixtures is not evidence of a deployed group run.
+
 ### App-first execution profiles and ordinary questions
 
 Qualify the installed App first; Lark is independently scored, not required to
