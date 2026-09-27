@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -8,6 +10,8 @@ import { configure, inspect, observe, endpoint } from "../../loopx/control_plane
 import type { Context, Post } from "../../loopx/control_plane/runtime/usage_statistics.ts";
 import { validAggregate, validPing, AGGREGATE_SCHEMA, durationBucket } from "../../loopx/control_plane/runtime/usage_statistics_contract.ts";
 import type { Counter } from "../../loopx/control_plane/runtime/usage_statistics_contract.ts";
+import { acquireFileMutationLock, releaseFileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
+import type { FileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 
 const row: Counter = { feature: "todo", outcome: "ok", duration: "lt_1s", error: "none", count: 1 };
 const context = (day = "2026-09-26"): Context => ({ env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:8787/v1/ping" }, version: "1.2.0", python: "3.13", channel: "source", now: new Date(day + "T12:00:00Z") });
@@ -77,6 +81,34 @@ test("one heartbeat per UTC day; closed-day aggregation is separate and identifi
   assert.ok(sent[2].url.endsWith("/aggregate"));
   assert.deepEqual(sent[2].payload, { schema: AGGREGATE_SCHEMA, counters: [{ ...row, count: 2 }] });
   assert.equal((await state()).counters[0].count, 1);
+});
+
+test("a daily claim starts its request before a competing observer can take the released lock", async t => {
+  const { path, state } = await fixture(t); const ctx = context();
+  await configure(path, ctx, "enable"); const generation = (await state()).generation;
+  let contender: FileMutationLock | undefined;
+  const rename = fs.rename;
+  // Control only the scheduling boundary; state, acquisition and retirement
+  // still use the real filesystem lock. A second worker wins immediately after
+  // the daily claim is persisted and its owner retires the lock.
+  const hook = t.mock.method(fs, "rename", async (...args: Parameters<typeof rename>) => {
+    await rename(...args);
+    if (args[0] === path + ".ts-effect.lock" && !contender) contender = await acquireFileMutationLock(path, process.pid, 0);
+  });
+  syncBuiltinESMExports();
+  t.after(async () => {
+    hook.mock.restore(); syncBuiltinESMExports();
+    if (contender) await releaseFileMutationLock(path, contender.token);
+  });
+  let requests = 0;
+  const result = await observe(path, ctx, generation, row, async () => { requests++; return 204; });
+  assert.ok(contender);
+  assert.equal((await state()).last_attempt_day, "2026-09-26");
+  assert.equal(requests, 1, "a durable daily claim must not need another lock acquisition to initiate its request");
+  assert.equal(result.sent, true);
+  hook.mock.restore(); syncBuiltinESMExports();
+  await releaseFileMutationLock(path, contender.token); contender = undefined;
+  await observe(path, ctx, generation, row, noPost);
 });
 
 test("disable clears ID and pending counts; queued observers and in-flight completion cannot resurrect either", async t => {

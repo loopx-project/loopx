@@ -110,7 +110,10 @@ CLI invocation reads only a small local hint; a detached Node process owns
 measurement, locks and network I/O. A first-use/settings operation may wait for
 local Node execution, never for a collector connection.
 
-Each installation attempts at most one heartbeat per UTC day. Counts are capped
+Each installation attempts at most one heartbeat per UTC day. The detached
+sender persists that daily claim and starts the request under one short lock;
+network waiting happens after release, so another observer cannot consume the
+claim between persistence and request initiation. Counts are capped
 at 128 distinct rows and 10,000 per row, then flushed on the first eligible
 command after the UTC day closes. Unsent counts older than seven days are
 discarded. An installation that never runs again will not flush its final day.

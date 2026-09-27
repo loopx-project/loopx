@@ -133,6 +133,7 @@ const post: Post = async (url, payload) => (await fetch(url, {
 export async function observe(path: string, ctx: Context, generation: string, counter: Counter | null, send: Post = post, goal?: GoalObservation, cycle?: CycleObservation) {
   if (counter !== null && (!validCounter(counter) || counter.count !== 1)) return { sent: false, reason: "invalid_observation" };
   let heartbeat: Ping | null = null;
+  let heartbeatRequest: Promise<number> | undefined;
   let aggregate: Aggregate | null = null;
   let goals: GoalAggregate | null = null;
   const today = day(ctx);
@@ -165,6 +166,13 @@ export async function observe(path: string, ctx: Context, generation: string, co
       state.last_attempt_day = today; // claim before I/O; failures are not retried
     } else aggregate = null;
     await save(path, state);
+    // Persist the daily claim, then initiate its request before releasing this
+    // lock. A competing observer must not consume a second acquisition between
+    // the claim and the request. Network waiting stays outside the lock.
+    if (heartbeat) {
+      try { heartbeatRequest = send(endpoint(ctx.env), heartbeat).catch(() => 0); }
+      catch { heartbeatRequest = Promise.resolve(0); }
+    }
     return true;
   }, 0); // Never queue behind business or telemetry work.
   if (!allowed) return { sent: false, reason: "blocked" };
@@ -173,13 +181,15 @@ export async function observe(path: string, ctx: Context, generation: string, co
     if (!payload) continue;
     if (!(validPing(payload) || validAggregate(payload) || validGoalAggregate(payload))) continue;
     try {
-      let request: Promise<number> | undefined;
+      let request = url.endsWith("/ping") ? heartbeatRequest : undefined;
       // Start under the same short lock as disable, but never hold it while
       // awaiting network I/O. Once disable returns, no new channel can start.
-      await withFileMutationLock(path, async () => {
-        const current = await load(path);
-        if (!blockedBy(current, ctx) && current.generation === generation) request = send(url, payload).catch(() => 0);
-      }, 0);
+      if (!url.endsWith("/ping")) {
+        await withFileMutationLock(path, async () => {
+          const current = await load(path);
+          if (!blockedBy(current, ctx) && current.generation === generation) request = send(url, payload).catch(() => 0);
+        }, 0);
+      }
       if (!request) break;
       const code = await request;
       if (url.endsWith("/ping") && code >= 200 && code < 300) {
