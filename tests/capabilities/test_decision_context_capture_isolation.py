@@ -9,6 +9,9 @@ from loopx.capabilities.decision_context.capture import capture_profile_sources
 from loopx.capabilities.decision_context.providers import (
     LocalFileDecisionSourceProvider,
 )
+from loopx.capabilities.decision_context.profile import (
+    resolve_decision_context_activation,
+)
 from test_decision_context_capture import setup as capture_setup, settle_batch
 
 
@@ -189,6 +192,53 @@ def test_failed_source_uses_budget_without_starving_oldest_source(pair):
     assert second["sources"][0]["failure_streak"] == 1
     assert second["sources"][0]["last_read_at"] is None
     assert second["scan_budget"]["deferred_source_ids"] == [calls[0]]
+
+
+@pytest.mark.parametrize(
+    "disabled_scope", ["profile", "capture", "unlisted-agent", "new-agent"]
+)
+def test_capture_budget_metadata_stays_inside_enabled_scope(pair, disabled_scope):
+    args, payload, _, _ = pair
+    if disabled_scope == "profile":
+        payload["enabled"] = False
+    elif disabled_scope == "capture":
+        payload["automation"]["automatic_capture"] = False
+    else:
+        args = {**args, "agent_id": disabled_scope}
+    args["profile_path"].write_text(json.dumps(payload))
+    activation, _ = resolve_decision_context_activation(
+        goal_id=args["goal_id"],
+        agent_id=args["agent_id"],
+        profile_path=args["profile_path"],
+    )
+    assert "capture_max_sources_per_tick" not in activation
+    for execute in (False, True):
+        assert capture_profile_sources(**args, execute=execute) == {
+            "activation": activation,
+            "status": "capture_disabled",
+            "executed": False,
+        }
+    assert not args["spool_path"].exists()
+    assert not args["cursor_path"].exists()
+
+
+def test_enabled_capture_projects_budget_without_changing_shared_activation(pair):
+    args, payload, _, _ = pair
+    payload["automation"]["max_sources_per_tick"] = 1
+    args["profile_path"].write_text(json.dumps(payload))
+    activation, _ = resolve_decision_context_activation(
+        goal_id=args["goal_id"],
+        agent_id=args["agent_id"],
+        profile_path=args["profile_path"],
+    )
+    assert activation["available"] is True
+    assert "capture_max_sources_per_tick" not in activation
+    result = capture_profile_sources(**args, execute=True)
+    assert result["activation"]["capture_max_sources_per_tick"] == 1
+    assert result["scan_budget"]["attempted_source_count"] == 1
+    before = args["spool_path"].read_bytes()
+    assert capture_profile_sources(**args)["activation"] == result["activation"]
+    assert args["spool_path"].read_bytes() == before
 
 
 @pytest.mark.parametrize("invalid", [0, -1, 65, True, "8", 1.5])

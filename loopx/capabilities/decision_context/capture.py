@@ -267,6 +267,9 @@ def capture_profile_sources(
             "status": "capture_disabled",
             "executed": False,
         }
+    activation = activation | {
+        "capture_max_sources_per_tick": profile.capture_max_sources_per_tick,
+    }
     if private_file_digest(profile_path) != digest_before:
         raise ValueError("capture profile changed during activation")
     if spool_path.resolve() == profile_path.resolve() or (

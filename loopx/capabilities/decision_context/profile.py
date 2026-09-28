@@ -489,7 +489,6 @@ def resolve_decision_context_activation(
         "automatic_capture": config.automatic_capture,
         "capture_source_count": len(config.capture_source_ids),
         "capture_interval_seconds": config.capture_interval_seconds,
-        "capture_max_sources_per_tick": config.capture_max_sources_per_tick,
     }
     if not config.enabled:
         return status | {"status": "disabled"}, config
