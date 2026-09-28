@@ -15,11 +15,8 @@ typed runtime profile and the identity resolver are Kiro-specific.
 """
 from __future__ import annotations
 
-import os
 import sys
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 # The provisioned MCP interpreter does not have LoopX installed; the package
 # root is two levels above this file in both a checkout and a wheel install.
@@ -27,18 +24,15 @@ PACKAGE_PARENT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_PARENT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_PARENT))
 
-from loopx.goal_mode_context import find_registry, resolve_goal_context  # noqa: E402
+from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
+    SchedulerRuntimeProfile,
+)
 from loopx.goal_mode_mcp import GoalModeMCPConfig, create_fastmcp_server  # noqa: E402
-from loopx.kiro_cli_goal_mode import (  # noqa: E402
-    KIRO_CLI_AGENT_TYPE,
-    KIRO_CLI_SESSION_ID_ENV,
-)
-from loopx.thread_agent_binding import (  # noqa: E402
-    ThreadBindingRequestError,
-    resolve_registry_thread_agent_binding,
-)
+from loopx.kiro_cli_goal_mode import KIRO_CLI_SESSION_ID_ENV  # noqa: E402
+from loopx.kiro_cli_goal_mode.session_context import goal_context  # noqa: E402
 
-KIRO_CLI_RUNTIME_PROFILE = "kiro_cli"
+# The typed scheduler profile is the single owner of the Kiro profile id.
+KIRO_CLI_RUNTIME_PROFILE = SchedulerRuntimeProfile.KIRO_CLI_VISIBLE.value
 
 CONFIG = GoalModeMCPConfig(
     server_name="loopx",
@@ -50,39 +44,7 @@ CONFIG = GoalModeMCPConfig(
     ),
 )
 
-
-def goal_context(
-    cwd: str | Path,
-    environ: Mapping[str, str] | None = None,
-) -> dict[str, Any] | None:
-    """The Goal and agent this Kiro session is bound to, or None.
-
-    Identity comes only from the thread binding for this exact session id.
-    A missing id, a missing binding and an ambiguous binding all resolve to
-    None so the control plane fails closed rather than guessing an agent.
-    """
-    session_id = str((environ or os.environ).get(KIRO_CLI_SESSION_ID_ENV) or "")
-    if not session_id.strip():
-        return None
-    registry = find_registry(cwd)
-    if registry is None:
-        return None
-    try:
-        binding = resolve_registry_thread_agent_binding(
-            registry_path=registry,
-            host_surface=KIRO_CLI_AGENT_TYPE,
-            thread_id=session_id,
-        )
-    except (ThreadBindingRequestError, OSError, ValueError):
-        return None
-    if binding.get("status") != "bound":
-        return None
-    return resolve_goal_context(
-        cwd,
-        preferred_goal_id=str(binding["goal_id"]),
-        preferred_agent_id=str(binding["agent_id"]),
-        require_preferred_binding=True,
-    )
+__all__ = ["CONFIG", "goal_context", "main"]
 
 
 mcp, control = create_fastmcp_server(CONFIG, lambda: goal_context(Path.cwd()))
