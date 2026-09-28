@@ -431,3 +431,216 @@ def test_semantic_receipt_survives_ts_failure_without_claiming_completion(tmp_pa
     assert result.application_receipt["outcome"] == "ignored"
     assert result.public_packet["provider_call_count"] == provider.calls == 1
     assert result.output == arguments["base_output"]
+
+
+def test_delivery_projection_recovers_exact_result_without_recalling_or_reapplying(tmp_path, monkeypatch):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+    transport = decision.effect_runtime_result
+    deliveries = []
+
+    def deliver(base, items):
+        deliveries.append(items)
+        return delivery(base, items)
+
+    def reject_projection(method, params):
+        if method == "reward_memory.decision.project":
+            raise RuntimeError("private transport diagnostic")
+        return transport(method, params)
+
+    monkeypatch.setattr(decision, "effect_runtime_result", reject_projection)
+    failed = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=deliver, provider=provider, **arguments)
+    assert failed.output == arguments["base_output"]
+    assert not failed.public_packet["context_delivery_verified"]
+    assert len(deliveries) == provider.calls == 1
+    monkeypatch.setattr(decision, "effect_runtime_result", transport)
+    recovered = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=deliver, previous_result=failed, provider=provider, **arguments)
+    assert recovered.public_packet["status"] == "context_delivered"
+    assert recovered.public_packet["context_delivery_verified"] is True
+    assert not recovered.public_packet["decision_consumption_complete"]
+    assert recovered.output["private_context"] == ["Private reviewed summary language lesson."]
+    assert recovered.context_delivery_receipt == failed.application_receipt
+    assert len(deliveries) == provider.calls == recovered.public_packet["provider_call_count"] == 1
+    assert "private transport diagnostic" not in json.dumps(recovered.public_packet)
+
+
+@pytest.mark.parametrize("outcome", ["applied", "ignored", "refuted", "invalid"])
+def test_assessment_projection_recovers_original_output_without_second_judgment(tmp_path, monkeypatch, outcome):
+    config, arguments, records = context(tmp_path, two_corpora=True)
+    next(iter(records.values()))["corpus_id"] = "unrelated"
+    provider = Provider(records)
+    transport = decision.effect_runtime_result
+    delivered = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, provider=provider, **arguments)
+    assessments = []
+
+    def judge(base, items):
+        assessments.append(items)
+        return {"outcome": "ignored" if outcome == "invalid" else outcome,
+            "output": {"summary": "reviewed"} if outcome == "applied" else base,
+            "memory_refs": ["foreign"] if outcome == "invalid" else [item.memory_ref for item in items],
+            "current_artifact_verified": True,
+            "reasoning_summary": "Compared this exact retained context with the current artifact."}
+
+    def reject_projection(*args):
+        raise RuntimeError("TS unavailable")
+
+    monkeypatch.setattr(decision, "effect_runtime_result", reject_projection)
+    failed = assess_reward_memory_decision(delivered, apply_memory=judge)
+    assert failed.output == arguments["base_output"]
+    assert not failed.public_packet["decision_consumption_complete"]
+    assert len(assessments) == 1
+    monkeypatch.setattr(decision, "effect_runtime_result", transport)
+    recovered = assess_reward_memory_decision(failed, apply_memory=lambda *args: pytest.fail("second model judgment"))
+    assert recovered.public_packet["decision_consumption_complete"] is (outcome != "invalid")
+    assert recovered.public_packet["context_delivery_verified"] is True
+    assert recovered.public_packet["semantic_disposition"] == (None if outcome == "invalid" else outcome)
+    assert recovered.output == ({"summary": "reviewed"} if outcome == "applied" else arguments["base_output"])
+    assert recovered.public_packet["provider_call_count"] == provider.calls == 2
+    assert recovered.public_packet["filtered_count"] == 1
+    assert len(assessments) == 1
+    assert recovered.public_packet["utility_verified"] is False
+
+
+def test_assess_recovers_delivery_before_one_bound_judgment(tmp_path, monkeypatch):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+    transport = decision.effect_runtime_result
+
+    def reject_projection(method, params):
+        if method == "reward_memory.decision.project":
+            raise RuntimeError("TS unavailable")
+        return transport(method, params)
+
+    monkeypatch.setattr(decision, "effect_runtime_result", reject_projection)
+    failed = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, provider=provider, **arguments)
+    assert assess_reward_memory_decision(failed, apply_memory=lambda *args: pytest.fail("unverified delivery")) is failed
+    monkeypatch.setattr(decision, "effect_runtime_result", transport)
+    judgments = []
+
+    def judge(base, items):
+        judgments.append(items)
+        return {"outcome": "ignored", "output": base, "memory_refs": [items[0].memory_ref],
+            "current_artifact_verified": True, "reasoning_summary": "The current artifact already covers this lesson."}
+
+    result = assess_reward_memory_decision(failed, apply_memory=judge)
+    assert result.public_packet["decision_consumption_complete"] is True
+    assert result.public_packet["context_delivery_verified"] is True
+    assert result.output == arguments["base_output"]
+    assert len(judgments) == provider.calls == 1
+
+
+@pytest.mark.parametrize("change", ["artifact", "query", "scope", "configuration"])
+def test_pending_projection_keeps_exact_request_fence(tmp_path, monkeypatch, change):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+    transport = decision.effect_runtime_result
+
+    def reject_projection(method, params):
+        if method == "reward_memory.decision.project":
+            raise RuntimeError("TS unavailable")
+        return transport(method, params)
+
+    monkeypatch.setattr(decision, "effect_runtime_result", reject_projection)
+    failed = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, provider=provider, **arguments)
+    changed_config, changed_arguments = copy.deepcopy(config), copy.deepcopy(arguments)
+    if change == "configuration":
+        changed_config["surfaces"][SURFACE]["recall_profile"]["limit"] = 1
+    elif change == "artifact":
+        changed_arguments["artifact_ref"] = "artifact:new"
+    elif change == "query":
+        changed_arguments["queries"][0]["query"] = "A different question"
+    else:
+        changed_arguments["workspace_ref"] = "workspace:unrelated"
+    monkeypatch.setattr(decision, "effect_runtime_result", lambda *args: pytest.fail("mismatch TS call"))
+    mismatch = run_reward_memory_decision(changed_config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, previous_result=failed, provider=provider, **changed_arguments)
+    assert mismatch.public_packet["reason_code"] == "replay_request_mismatch"
+    assert mismatch.output == changed_arguments["base_output"]
+    assert provider.calls == 1
+    monkeypatch.setattr(decision, "effect_runtime_result", transport)
+    recovered = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, previous_result=failed, provider=provider, **arguments)
+    assert recovered.public_packet["context_delivery_verified"] is True
+    assert provider.calls == 1
+
+
+def test_projection_recovery_cannot_upgrade_invalid_model_evidence(tmp_path, monkeypatch):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+    transport = decision.effect_runtime_result
+    judgments = []
+
+    def invalid(base, items):
+        judgments.append(items)
+        return {"outcome": "applied", "output": {"summary": "unverified"}, "memory_refs": ["foreign"],
+            "current_artifact_verified": True, "reasoning_summary": "Foreign attribution is not valid."}
+
+    def reject_projection(method, params):
+        if method == "reward_memory.decision.project":
+            raise RuntimeError("TS unavailable")
+        return transport(method, params)
+
+    monkeypatch.setattr(decision, "effect_runtime_result", reject_projection)
+    failed = run_reward_memory_decision(config, query_ready=True, application_kind="semantic_application",
+        apply_memory=invalid, provider=provider, **arguments)
+    monkeypatch.setattr(decision, "effect_runtime_result", transport)
+    recovered = run_reward_memory_decision(config, query_ready=True, application_kind="semantic_application",
+        apply_memory=invalid, previous_result=failed, provider=provider, **arguments)
+    assert recovered.public_packet["status"] == "incomplete"
+    assert not recovered.public_packet["decision_consumption_complete"]
+    assert not recovered.public_packet["context_delivery_verified"]
+    assert recovered.output == arguments["base_output"]
+    assert len(judgments) == provider.calls == 1
+
+
+def test_pre_provider_transport_failure_does_not_implicitly_restart_work(tmp_path, monkeypatch):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+
+    def reject_transport(*args):
+        raise RuntimeError("TS unavailable")
+
+    monkeypatch.setattr(decision, "effect_runtime_result", reject_transport)
+    failed = run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, provider=provider, **arguments)
+    assert failed.public_packet["reason_code"] == "consumer_input_or_runtime_failed"
+    monkeypatch.setattr(decision, "effect_runtime_result", lambda *args: pytest.fail("implicit work restart"))
+    assert run_reward_memory_decision(config, query_ready=True, application_kind="context_delivery",
+        apply_memory=delivery, previous_result=failed, provider=provider, **arguments) is failed
+    assert provider.calls == 0
+
+
+def test_direct_semantic_projection_recovers_without_inventing_delivery(tmp_path, monkeypatch):
+    config, arguments, records = context(tmp_path)
+    provider = Provider(records)
+    transport = decision.effect_runtime_result
+    output = {"summary": "reviewed"}
+    judgments = []
+
+    def judge(base, items):
+        judgments.append(items)
+        return {"outcome": "applied", "output": output, "memory_refs": [items[0].memory_ref],
+            "current_artifact_verified": True, "reasoning_summary": "Applied this lesson to the current artifact."}
+
+    def reject_projection(method, params):
+        if method == "reward_memory.decision.project":
+            raise RuntimeError("TS unavailable")
+        return transport(method, params)
+
+    monkeypatch.setattr(decision, "effect_runtime_result", reject_projection)
+    failed = run_reward_memory_decision(config, query_ready=True, application_kind="semantic_application",
+        apply_memory=judge, provider=provider, **arguments)
+    output["summary"] = "later unrelated mutation"
+    monkeypatch.setattr(decision, "effect_runtime_result", transport)
+    recovered = run_reward_memory_decision(config, query_ready=True, application_kind="semantic_application",
+        apply_memory=judge, previous_result=failed, provider=provider, **arguments)
+    assert recovered.public_packet["decision_consumption_complete"] is True
+    assert recovered.public_packet["context_delivery_verified"] is False
+    assert recovered.output == {"summary": "reviewed"}
+    assert recovered.context_delivery_receipt is None
+    assert len(judgments) == provider.calls == 1

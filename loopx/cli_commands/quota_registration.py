@@ -40,7 +40,7 @@ def register_quota_command(
     )
     quota_parser.add_argument(
         "--goal-id",
-        help="Goal id to check. Required for one-goal quota commands, including should-run, scheduler ACK/failure, spend, and void.",
+        help="Goal id to check. Optional for status/plan (omit for all goals); required for should-run, scheduler ACK/failure, spend, and void. A scoped status/plan ranks only the selected goal, not the global next turn.",
     )
     quota_parser.add_argument(
         "--agent-id",

@@ -1,4 +1,4 @@
-.TH LOOPX 1 "" "LoopX 1.2.1" "User Commands"
+.TH LOOPX 1 "" "LoopX 1.2.2" "User Commands"
 .SH NAME
 loopx \- control-plane helper for long-running agent work
 .SH SYNOPSIS
@@ -224,6 +224,9 @@ Register an automation agent.
 .TP
 \fBloopx agent\-directory\fR
 Produce the local, goal\-scoped peer agent directory this host can hand work to.
+.TP
+\fBloopx resolve\-peer\-route\fR
+Resolve an existing peer to one exact host route before sending work.
 .TP
 \fBloopx lark\-kanban\fR
 Project LoopX state into a Feishu/Lark Base board.

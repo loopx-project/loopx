@@ -85,7 +85,9 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
             compact_row = next(row for group in compact["groups"].values() for row in group)
             full_row = next(row for group in full["groups"].values() for row in group)
             assert compact["summary"] == full["summary"]
-            assert render_quota_markdown(compact) == render_quota_markdown(full)
+            # Compare one observation basis: separate CLI calls legitimately carry
+            # different freshness timestamps, unrelated to display compaction.
+            assert render_quota_markdown(compact_quota_plan_cli_payload(full)) == render_quota_markdown(full)
             for role, count in (("agent", 40), ("user", 20)):
                 c, f = compact_row[f"{role}_todos"], full_row[f"{role}_todos"]
                 assert c["total_count"] == f["total_count"] == count

@@ -47,7 +47,7 @@ def test_app_server_command_can_disable_web_search() -> None:
     assert "tools.web_search=true" not in command
 
 
-def test_app_server_environment_adds_only_nonsecret_gateway_sentinel(
+def test_app_server_environment_keeps_profile_temp_scope_and_nonsecret_sentinel(
     tmp_path: Path,
 ) -> None:
     mod = _load_runner()
@@ -60,6 +60,9 @@ def test_app_server_environment_adds_only_nonsecret_gateway_sentinel(
         profile,
         {
             "PATH": "/bin",
+            "TMPDIR": "/external-temporary-scope",
+            "TMP": "/external-temporary-scope",
+            "TEMP": "/external-temporary-scope",
             "UNRELATED_PRIVATE_TOKEN": "must-not-propagate",
             "ARK_OPENAI_API_KEY": "must-not-propagate",
         },
@@ -67,6 +70,9 @@ def test_app_server_environment_adds_only_nonsecret_gateway_sentinel(
     assert environment == {
         "PATH": f"{tmp_path / 'bin'}:/bin",
         "HOME": str(tmp_path / "home"),
+        "TMPDIR": str(tmp_path / "home"),
+        "TMP": str(tmp_path / "home"),
+        "TEMP": str(tmp_path / "home"),
         "CODEX_HOME": str(tmp_path / "codex-home"),
         "LOOPX_MODEL_PROVIDER_SENTINEL": "runner-owned-gateway-no-upstream-secret",
     }

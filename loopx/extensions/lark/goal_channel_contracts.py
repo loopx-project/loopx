@@ -715,29 +715,20 @@ def gate_message(
         or "A human decision is required.",
         limit=900,
     )
-    interaction = quota_packet.get("interaction_contract")
-    interaction = interaction if isinstance(interaction, Mapping) else {}
-    user_channel = interaction.get("user_channel")
-    user_channel = user_channel if isinstance(user_channel, Mapping) else {}
-    raw_actions = user_channel.get("actions")
-    action_lines = (
-        [public_safe_compact_text(action, limit=300) for action in raw_actions[:3]]
-        if isinstance(raw_actions, list)
-        else []
-    )
-    if not any(action_lines):
-        action_lines = [
-            public_safe_compact_text(
-                item.get("text") or item.get("title"),
-                limit=300,
-            )
+    # Scheduling labels cannot substitute for a decision request body.
+    from ...control_plane.effect_runtime import effect_runtime_result
+
+    notice = effect_runtime_result("presentation.decision_notice.project", {
+        "requests": [
+            {
+                "request_id": public_safe_compact_text(item.get("todo_id") or item.get("gate_id"), limit=120),
+                "text": public_safe_compact_text(item.get("text"), limit=900),
+                "reason": public_safe_compact_text(item.get("note") or item.get("reason"), limit=450),
+                "evidence": public_safe_compact_text(item.get("evidence"), limit=450),
+            }
             for item in _quota_human_gate_items(quota_packet)
-        ]
-    unique_actions: list[str] = []
-    for action in action_lines or [question]:
-        cleaned = GATE_ACTION_PREFIX.sub("", action.strip()).strip()
-        if cleaned and cleaned not in unique_actions:
-            unique_actions.append(cleaned)
+        ],
+    })
     lines = [
         "LoopX · Action required",
         "",
@@ -745,17 +736,26 @@ def gate_message(
     ]
     if objective and objective != goal_id:
         lines.append(f"Objective: {objective}")
-    lines.extend(["", "Please confirm:"])
-    lines.extend(
-        f"{index}. {action}" for index, action in enumerate(unique_actions, start=1)
-    )
-    lines.extend(
-        [
-            "",
-            "Reply: approve / reject / done / still pending, plus a one-sentence reason.",
-            "Unchanged gate state will stay quiet until an explicit reminder window.",
-        ]
-    )
+    lines.extend(["", "Decision requests:"])
+    if notice["source"] == "unavailable":
+        lines.append("Request details are unavailable. Open the current request in LoopX; a scheduling summary is not a decision body.")
+    for index, item in enumerate(notice["items"], start=1):
+        body = GATE_ACTION_PREFIX.sub("", item["text"]).strip()
+        lines.append(f"{index}. {body}")
+        if item["request_id"]:
+            lines.append(f"   Request: {item['request_id']}")
+        if item["reason"]:
+            lines.append(f"   Context: {item['reason']}")
+        if item["evidence"]:
+            lines.append(f"   Evidence: {item['evidence']}")
+    lines.extend([
+        "",
+        "Review the current request in LoopX before deciding; this notification is a bounded preview.",
+
+        "Unchanged gate state will stay quiet until an explicit reminder window.",
+    ])
+    if notice["items"]:
+        lines.append("Reply with the request ID (or number), your decision and a one-sentence reason.")
     if kanban_url:
         lines.extend(["", f"Kanban: {kanban_url}"])
     return "\n".join(lines), question

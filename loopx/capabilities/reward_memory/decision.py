@@ -21,6 +21,18 @@ from .runtime_hooks import run_reward_memory_automatic_recall_hook
 
 
 @dataclass(frozen=True)
+class _PendingDecisionProjection:
+    """Private SDK observation awaiting the existing TS projection, not new work."""
+
+    request: dict[str, Any]
+    status: str
+    telemetry: Mapping[str, Any]
+    receipt: Mapping[str, Any] | None
+    context_delivery_receipt: Mapping[str, Any] | None
+    output: Any
+
+
+@dataclass(frozen=True)
 class RewardMemoryDecisionResult:
     """Only public_packet is a projection. All other fields stay caller-private."""
 
@@ -33,6 +45,7 @@ class RewardMemoryDecisionResult:
     application_receipt: Mapping[str, Any] | None = None
     recall_telemetry: Mapping[str, Any] | None = None
     context_delivery_receipt: Mapping[str, Any] | None = None
+    pending_projection: _PendingDecisionProjection | None = None
 
 
 def _transport_failure(
@@ -93,6 +106,25 @@ def _project(
     })
 
 
+def _recover_pending_projection(result: RewardMemoryDecisionResult) -> RewardMemoryDecisionResult:
+    pending = result.pending_projection
+    if pending is None:
+        return result
+    try:
+        packet = _project(pending.request, pending.status, pending.telemetry,
+                          pending.receipt, pending.context_delivery_receipt)
+        delivery_receipt = pending.context_delivery_receipt
+        if delivery_receipt is None and packet["context_delivery_verified"]:
+            delivery_receipt = deepcopy(pending.receipt)
+        return replace(result, public_packet=packet, request=pending.request,
+                       output=result.base_output if packet["preserve_base_output"] else pending.output,
+                       application_receipt=pending.receipt, recall_telemetry=pending.telemetry,
+                       context_delivery_receipt=delivery_receipt, pending_projection=None)
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+        # Keep the same private observation and fail-open baseline; do not rerun SDK work.
+        return result
+
+
 def run_reward_memory_decision(
     config: Mapping[str, Any] | None,
     *,
@@ -131,7 +163,7 @@ privately to replay the exact request or assess delivered context without recall
                 return RewardMemoryDecisionResult(
                     _transport_failure(request, "replay_request_mismatch"), base, base, digest, request,
                 )
-            return previous_result
+            return _recover_pending_projection(previous_result)
         plan = effect_runtime_result("reward_memory.decision.plan", request)
         if not plan["should_recall"]:
             return RewardMemoryDecisionResult(plan, base, base, digest, request)
@@ -154,12 +186,13 @@ privately to replay the exact request or assess delivered context without recall
         session = RewardMemoryRecallSession(attempts[-1], captured) if captured and attempts else None
         receipt = application.get("receipt")
         telemetry = _recall_telemetry(hook)
-        packet = _project(request, hook["status"], telemetry, receipt)
-        return RewardMemoryDecisionResult(
-            packet, base if packet["preserve_base_output"] else hook["output"],
-            base, digest, request, session, receipt, telemetry,
-            deepcopy(receipt) if packet["context_delivery_verified"] else None,
+        pending = _PendingDecisionProjection(deepcopy(request), hook["status"],
+            deepcopy(telemetry), deepcopy(receipt), None, deepcopy(hook["output"]))
+        result = RewardMemoryDecisionResult(
+            _transport_failure(request, "consumer_input_or_runtime_failed", telemetry),
+            base, base, digest, request, session, receipt, telemetry, pending_projection=pending,
         )
+        return _recover_pending_projection(result)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return RewardMemoryDecisionResult(
             _transport_failure(request, "consumer_input_or_runtime_failed", telemetry),
@@ -176,8 +209,14 @@ def assess_reward_memory_decision(
 
     The callback returns the existing SDK's output, applied/ignored/refuted,
     current_artifact_verified, memory_refs and reasoning_summary fields. A
-    previously assessed result is already the receipt, not another model call.
+    pending projection retries only TS readback; a completed assessment never
+    calls the model again.
     """
+    recovering_assessment = (delivered.pending_projection is not None and
+        delivered.pending_projection.request.get("application_kind") == "semantic_application")
+    delivered = _recover_pending_projection(delivered)
+    if recovering_assessment or delivered.pending_projection is not None:
+        return delivered
     if delivered.public_packet.get("decision_consumption_complete") is True:
         return delivered
     request = {**delivered.request, "application_kind": "semantic_application",
@@ -193,11 +232,14 @@ def assess_reward_memory_decision(
         )
         receipt = application["receipt"]
         # Reassessment is not recall: retain every corpus's original cumulative counters.
-        packet = _project(request, application["status"], delivered.recall_telemetry or {},
-                          application["receipt"], delivered.context_delivery_receipt)
-        return replace(delivered, public_packet=packet, request=request,
-                       output=delivered.base_output if packet["preserve_base_output"] else application["output"],
-                       application_receipt=application["receipt"])
+        pending = _PendingDecisionProjection(deepcopy(request), application["status"],
+            deepcopy(delivered.recall_telemetry or {}), deepcopy(receipt),
+            deepcopy(delivered.context_delivery_receipt), deepcopy(application["output"]))
+        result = replace(delivered,
+            public_packet=_transport_failure(request, "consumer_input_or_runtime_failed", delivered.recall_telemetry),
+            request=request, output=delivered.base_output, application_receipt=receipt,
+            pending_projection=pending)
+        return _recover_pending_projection(result)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return replace(delivered, public_packet=_transport_failure(request, "consumer_input_or_runtime_failed", delivered.recall_telemetry), output=delivered.base_output,
                        request=request, application_receipt=receipt)

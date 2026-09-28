@@ -54,6 +54,7 @@ import {
 } from "./heartbeat_receipt_identity.ts";
 
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
+import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait } from "./blocked_wait.ts";
 
 export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
   "loopx_quota_settlement_readback_request_v0";
@@ -1071,6 +1072,9 @@ export function readQuotaSettlementFromSnapshot(
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
+  if (jsonObject(value)?.schema_version === BLOCKED_WAIT_REQUEST_SCHEMA) {
+    return prepareBlockedWait(value);
+  }
   const request = decodeRequest(value);
   return readQuotaSettlementFromRequest(
     request,

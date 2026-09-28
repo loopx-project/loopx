@@ -295,7 +295,9 @@ def prepare_quota_command_context(
         require_monitor_poll_source_available(
             runtime_root=runtime_root, goal_id=args.goal_id,
         )
-    status_goal_id = args.goal_id if command not in {"status", "plan"} else None
+    # Observation commands use the same scoped collector/cache as execution
+    # commands. Only an omitted selector requests the whole registry.
+    status_goal_id = args.goal_id
     projection_cache_ttl_seconds = int(
         getattr(args, "projection_cache_ttl_seconds", 120)
     )

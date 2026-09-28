@@ -175,6 +175,21 @@ are separate facts. This flag attests the caller's verified SDK context callback
 **not** frontend/Lark transport delivery or model utility. Public packets alone
 cannot recreate that private lineage or upgrade historical receipts.
 
+If the SDK provider/application has finished but TS result projection is
+temporarily unavailable, the complete result retains its private observation
+and pending output. An exact `previous_result` replay retries only the existing
+TS projection. Assessment first recovers the projection; it may then make the
+first semantic judgment after verified context delivery, but does not repeat
+an already-attempted semantic callback, even when its evidence is invalid.
+A later explicit assessment may correct that incomplete SDK evidence without
+recall. While TS remains unavailable, the same
+incomplete result and baseline remain; after recovery, TS revalidates the
+original receipts before exposing the retained output or completion. Changed
+configuration/question/scope/artifact still fails the exact request fence;
+invalid application evidence is not upgraded. Pre-provider failures are not
+automatically retried. No new provider permission, persistent store, retry loop
+or cross-process restore API is introduced.
+
 仅 `public_packet` 用于展示，其余结果私有。通过既有执行上下文保留结果；
 `previous_result` 仅复用配置和输入均匹配的请求，变化则拒绝复用。后续判断使用
 原条目和累计多 corpus 遥测，不重复查询。这不是自动跨进程存储或新的缓存。
@@ -187,6 +202,15 @@ EOF/重启丢失 recall_session 时，交付过上下文也不能完成 assessme
 没有该回执时仍为 `context_delivery_verified=false`，语义判断与效果另行记录。
 该标记证明调用方已验证的 SDK 上下文 callback，不证明前端/飞书传输或模型收益；
 仅凭公开 packet 不能重建这条私有链路，也不追溯升级历史回执。
+
+若原 SDK 的 provider/应用已完成，但 TS 结果投影暂时不可用，完整 result 保留
+私有观察和待确认产物。相同请求的 previous_result 仅重试既有 TS 投影；assessment
+先恢复投影，可在交付验证后作第一次语义判断，但不重复已尝试的语义 callback，
+即使其证据无效。后续显式 assessment 可纠正不完整的 SDK 证据，但不重新召回。
+故障期间仍返回同一 incomplete 结果和
+基线；恢复后由 TS 重新核验原回执，再披露已保留产物或完成状态。配置、问题、范围
+或产物变化仍被精确请求 fence 拒绝，无效判断不能升级；provider 前的失败不自动
+重试。不新增 provider 权限、持久存储、自动重试循环或跨进程恢复 API。
 
 Empty/filtered/unavailable and invalid model/transport results preserve the base
 and allow ordinary research. Post-provider transport failure retains actual

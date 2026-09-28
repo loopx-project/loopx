@@ -183,7 +183,7 @@
     },
     {
       "site": "loopx/capabilities/manager_context/__init__.py::<module>.configure_delivery_target::codec_read:load_registry#1",
-      "line": 317,
+      "line": 321,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -191,7 +191,7 @@
     },
     {
       "site": "loopx/capabilities/manager_context/__init__.py::<module>.configure_evidence_scope::codec_read:load_registry#1",
-      "line": 275,
+      "line": 279,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -703,7 +703,7 @@
     },
     {
       "site": "loopx/cli_commands/quota.py::<module>._dispatch_quota_turn_start_hooks::codec_read:load_registry#1",
-      "line": 270,
+      "line": 271,
       "column": 37,
       "kind": "codec_read",
       "api": "load_registry",

@@ -22,6 +22,138 @@ from test_local_delegation import service as delegation_service
 service = delegation_service
 
 
+@pytest.mark.parametrize("workspace_state", ["missing", "not_directory"])
+def test_real_cli_workspace_fault_is_typed_without_authority_or_launch(
+    service, workspace_state
+):
+    root, runner = service
+    config = json.loads(runner.config.read_text())
+    unavailable = root / "unavailable-worker"
+    if workspace_state == "not_directory":
+        unavailable.write_text("not a workspace")
+    config["bindings"][0]["workspace"] = str(unavailable)
+    runner.config.write_text(json.dumps(config))
+    before = runner.registry.read_bytes(), runner.config.read_bytes()
+
+    status, result = cli(runner, "inspect", "--binding-id", "analysis")
+
+    assert status == 0, result
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == workspace_state
+    assert result["workspace_next_action"] == "review_operator_workspace_binding"
+    assert result["authority_ready"] is None
+    assert result["authority_state"] == "uninspected"
+    assert result["authority_next_action"] == "none"
+    assert not result["turn_eligible"] and not result["acceptance_ready"]
+    assert result["executor"] is None
+    assert not any(result["effects"].values())
+    assert str(unavailable) not in json.dumps(result)
+    assert (runner.registry.read_bytes(), runner.config.read_bytes()) == before
+    assert not (root / "host-started").exists()
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+    assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
+    if workspace_state == "not_directory":
+        assert unavailable.is_file()
+    else:
+        assert not unavailable.exists()
+
+
+@pytest.mark.parametrize("fault", ["missing", "not_directory", "unavailable"])
+def test_workspace_fault_skips_authority_and_preserves_the_original_binding(
+    service, monkeypatch, fault
+):
+    from loopx import collaboration_mcp as delegation
+
+    _, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_stat = Path.stat
+    faults = {"missing": FileNotFoundError, "not_directory": NotADirectoryError,
+              "unavailable": PermissionError}
+    calls = []
+
+    def unavailable(path, *args, **kwargs):
+        if path == workspace:
+            raise faults[fault]("private filesystem details must not be exported")
+        return original_stat(path, *args, **kwargs)
+
+    def no_inspection(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("unavailable cwd must not inspect authority or a Turn")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "stat", unavailable)
+        patch.setattr(delegation.delegation_validation, "capture", no_inspection)
+        patch.setattr(runner, "_cli", no_inspection)
+        result = runner.inspect("analysis")
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == fault
+    assert "private filesystem" not in json.dumps(result)
+    assert calls == []
+    # Restoring the original filesystem fact re-enters the ordinary preflight;
+    # no persisted fault, replacement operation or retargeted work is introduced.
+    restored = runner.inspect("analysis")
+    assert restored["state"] == "runtime_unverified"
+    assert restored["binding"] == result["binding"]
+    assert restored["turn_eligible"] and not any(restored["effects"].values())
+
+
+def test_workspace_fault_cannot_hide_denied_caller_or_changed_binding(service, monkeypatch):
+    from loopx.collaboration_mcp import Delegations
+    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+
+    root, runner = service
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["workspace"] = str(root / "missing-worker")
+    runner.config.write_text(json.dumps(config))
+    denied = Delegations(runner.root, runner.registry, runner.goal_id, "reviewer", runner.config)
+    with pytest.raises(EffectRuntimeRemoteError, match="no delegation grant"):
+        denied.inspect("analysis")
+
+    original_binding = runner.binding
+    calls = 0
+
+    def changed_binding(binding_id, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            config["bindings"][0]["workspace"] = str(root / "another-missing-worker")
+            runner.config.write_text(json.dumps(config))
+        return original_binding(binding_id, **kwargs)
+
+    monkeypatch.setattr(runner, "binding", changed_binding)
+    with pytest.raises(ValueError, match="source changed"):
+        runner.inspect("analysis")
+
+
+def test_mcp_workspace_fault_is_a_read_only_observation(service):
+    root, runner = service
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["workspace"] = str(root / "missing-worker")
+    runner.config.write_text(json.dumps(config))
+    before = runner.registry.read_bytes(), runner.config.read_bytes()
+
+    async def inspect_mcp():
+        params = StdioServerParameters(command=sys.executable, args=[
+            "-m", "loopx.collaboration_mcp", "--registry", str(runner.registry),
+            "--runtime-root", str(runner.root), "--goal-id", runner.goal_id,
+            "--agent-id", runner.agent_id, "--workspace", str(root / "lead"),
+            "--execution-config", str(runner.config),
+        ])
+        async with stdio_client(params) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                inspected = await session.call_tool("inspect_execution_binding", {"binding_id": "analysis"})
+                assert not inspected.isError
+                return json.loads(inspected.content[0].text)
+
+    result = asyncio.run(inspect_mcp())
+    assert result["state"] == "workspace_unavailable"
+    assert result["authority_ready"] is None and result["executor"] is None
+    assert not any(result["effects"].values())
+    assert (runner.registry.read_bytes(), runner.config.read_bytes()) == before
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+
+
 @pytest.mark.parametrize("health_repair", [False, True])
 def test_actual_workspace_scan_refusal_is_typed_and_effect_free(service, health_repair):
     root, runner = service
@@ -553,7 +685,7 @@ def test_preflight_does_not_call_an_invalidated_acceptance_ready(service):
     assert result["state"] in {"turn_blocked", "acceptance_unavailable"}
 
 
-@pytest.mark.parametrize("validation_basis", ["goal_acceptance", "independent"])
+@pytest.mark.parametrize("validation_basis", ["goal_acceptance", "independent", "missing_workspace"])
 def test_http_team_readback_uses_original_scope_without_a_new_turn(service, validation_basis):
     import http.client
     import threading
@@ -566,6 +698,10 @@ def test_http_team_readback_uses_original_scope_without_a_new_turn(service, vali
         from test_independent_delegation_validation import independent_binding
 
         independent_binding(service)
+    elif validation_basis == "missing_workspace":
+        binding_config = json.loads(runner.config.read_text())
+        binding_config["bindings"][0]["workspace"] = str(root / "missing-worker")
+        runner.config.write_text(json.dumps(binding_config))
     from loopx.agent_registry import load_goal_from_registry
     from pathlib import Path
 
@@ -643,7 +779,15 @@ def test_http_team_readback_uses_original_scope_without_a_new_turn(service, vali
             conn.close()
             assert response.status == expected, result
             if body["operation"] == "inspect":
-                assert result["state"] == "runtime_unverified"
+                assert result["state"] == (
+                    "workspace_unavailable" if validation_basis == "missing_workspace"
+                    else "runtime_unverified"
+                )
+                assert not any(result["effects"].values())
+                if validation_basis == "missing_workspace":
+                    assert result["authority_ready"] is None
+                    assert result["workspace_next_action"] == "review_operator_workspace_binding"
+                    assert str(root / "missing-worker") not in json.dumps(result)
         assert store.load_session(session["session_id"]).get("active_turn_id") is None
         assert not (root / "host-started").exists()
     finally:

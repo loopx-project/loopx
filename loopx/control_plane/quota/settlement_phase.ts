@@ -1,8 +1,10 @@
 import type { SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
+import { isCausalBlockedWait } from "./blocked_wait.ts";
 
-/** A typed blocked Turn may close without spend only with a bounded retry. */
+/** A blocked Turn needs a bounded retry or a verified canonical causal wait. */
 export function isBoundedBlockedRetry(value: unknown, todoId: string | null): boolean {
+  if (isCausalBlockedWait(value, todoId)) return true;
   const retry = jsonObject(value);
   if (!retry || retry.schema_version !== "quota_blocked_retry_v0" ||
       (retry.source !== "todo" && retry.source !== "turn_settlement") ||

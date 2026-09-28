@@ -136,7 +136,7 @@ def test_quota_include_detail_rejects_unknown_section(
     assert "--include-detail" in stderr
 
 
-def test_quota_include_detail_rejects_non_should_run_command(
+def test_quota_status_rejects_scheduler_detail(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     exit_code = main(
@@ -155,8 +155,7 @@ def test_quota_include_detail_rejects_non_should_run_command(
     assert payload["ok"] is False
     assert payload["error_code"] == "QUOTA_VALIDATION_FAILED"
     assert payload["error"] == (
-        "--include-detail is only valid with `quota should-run` or "
-        "`quota monitor-poll`"
+        "`quota status` does not accept --include-detail scheduler"
     )
 
 

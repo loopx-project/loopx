@@ -4,6 +4,7 @@ import type { WorkspaceAttention } from "./personal-workspace-model";
 export type AttentionDetails = {
   interaction: "decision" | "unknown";
   lifecycle: "open" | "closed" | "deferred" | "superseded" | "unknown" | "unavailable";
+  requestText?: string | null;
   reason: string | null;
   evidence: string | null;
   blocksAgent: string | null;
@@ -28,6 +29,7 @@ export function attentionDetails(todo: Record<string, unknown>): AttentionDetail
       : todo.status === "deferred" ? "deferred"
         : todo.done === true || ["done", "completed", "closed", "archived"].includes(String(todo.status)) ? "closed"
           : todo.status === "open" || todo.status === "blocked" ? "open" : "unknown",
+    requestText: text(todo.text),
     reason: text(todo.note),
     evidence: text(todo.evidence),
     blocksAgent: text(todo.blocks_agent),
