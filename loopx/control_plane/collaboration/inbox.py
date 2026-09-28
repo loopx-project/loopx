@@ -125,11 +125,20 @@ def pending(
     scope: CollaborationGoalScope | None = None,
 ) -> dict:
     cursor_scope = _hash(
-        [
-            "pending_requests_v1",
-            str(runtime_root.resolve()),
-            _target(goal_id, agent_id, scope),
-        ]
+        (
+            [
+                "pending_requests_v1",
+                str(runtime_root.resolve()),
+                _target(goal_id, agent_id, scope),
+            ]
+            if scope is not None and scope.exact
+            else [
+                "pending_requests_v1",
+                str(runtime_root.resolve()),
+                goal_id,
+                agent_id,
+            ]
+        )
     )
     after = ""
     if cursor is not None:

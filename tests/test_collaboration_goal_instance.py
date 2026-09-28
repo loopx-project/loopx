@@ -3,6 +3,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,11 @@ from loopx.capabilities.manager_context import (
     POLICY_SCHEMA,
     register_ingress,
 )
-from loopx.capabilities.manager_context.roundtrip import drain, report
+from loopx.capabilities.manager_context.roundtrip import (
+    EXACT_DELIVERY_ADMISSION_SECONDS,
+    drain,
+    report,
+)
 from loopx.capabilities.manager_context.tracking import query
 from loopx.chat_store import ChatSessionStore
 from loopx.collaboration_mcp import register_collaboration_tools
@@ -359,11 +364,39 @@ def test_same_peer_operation_id_is_distinct_after_goal_recreation(
     ]
 
 
-def test_exact_return_releases_lifetime_lock_around_provider_io(
+def test_exact_inbox_cursor_cannot_cross_goal_recreation(tmp_path: Path) -> None:
+    registry = _create_source_registry(tmp_path)
+    for index in range(21):
+        request(
+            tmp_path,
+            registry,
+            "delivery",
+            "builder",
+            "reviewer",
+            f"review-a-{index}",
+            _brief(f"Review A item {index}"),
+        )
+    first = read_inbox(tmp_path, registry, "delivery", "reviewer")
+    assert first["has_more"]
+
+    _recreate(registry)
+
+    with pytest.raises(ValueError, match="cursor scope mismatch"):
+        read_inbox(
+            tmp_path,
+            registry,
+            "delivery",
+            "reviewer",
+            cursor=first["next_cursor"],
+        )
+
+
+def test_exact_return_single_flight_outlives_admission_without_holding_lifetime(
     tmp_path: Path,
 ) -> None:
     registry = _create_source_registry(tmp_path)
     store, _, receipt = _external_manager_request(tmp_path, registry)
+    admitted_at = datetime(2026, 9, 28, tzinfo=timezone.utc)
 
     entered = threading.Event()
     release = threading.Event()
@@ -373,8 +406,9 @@ def test_exact_return_releases_lifetime_lock_around_provider_io(
 
         def __call__(self, *_args):
             self.calls += 1
-            entered.set()
-            assert release.wait(timeout=5)
+            if self.calls == 1:
+                entered.set()
+                assert release.wait(timeout=5)
             return {
                 "reply_verified": True,
                 "idempotency_key": "sha256:provider-proof",
@@ -388,6 +422,7 @@ def test_exact_return_releases_lifetime_lock_around_provider_io(
             registry,
             store,
             transport,
+            now=admitted_at,
         )
         assert entered.wait(timeout=5)
         _recreate(registry)
@@ -397,6 +432,8 @@ def test_exact_return_releases_lifetime_lock_around_provider_io(
             registry,
             store,
             transport,
+            now=admitted_at
+            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
         )
         assert second.result(timeout=5) == 0
         release.set()
@@ -416,11 +453,72 @@ def test_exact_return_releases_lifetime_lock_around_provider_io(
     assert "admission" not in state
 
 
+def test_exact_external_return_does_not_resend_after_expired_unknown_admission(
+    tmp_path: Path,
+) -> None:
+    registry = _create_source_registry(tmp_path)
+    store, _, receipt = _external_manager_request(tmp_path, registry)
+    admitted_at = datetime(2026, 9, 28, tzinfo=timezone.utc)
+    state_path = (
+        _root(tmp_path)
+        / "replies"
+        / receipt["request_id"]
+        / "conclusion.delivery.json"
+    )
+    _write(
+        state_path,
+        {
+            "status": "admitted",
+            "goal_ref": receipt["goal_ref"],
+            "admission": {
+                "token": "interrupted-writer",
+                "prior_status": "queued",
+                "admitted_at": admitted_at.isoformat(),
+                "expires_at": (
+                    admitted_at
+                    + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS)
+                ).isoformat(),
+            },
+        },
+    )
+
+    class Transport:
+        calls = 0
+
+        def __call__(self, *_args):
+            self.calls += 1
+            return {
+                "reply_verified": True,
+                "idempotency_key": "sha256:unexpected-resend",
+            }
+
+    transport = Transport()
+    assert (
+        drain(
+            tmp_path,
+            registry,
+            store,
+            transport,
+            now=admitted_at
+            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+        )
+        == 0
+    )
+    assert transport.calls == 0
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state == {
+        "status": "explicit_unverified",
+        "error": "provider_delivery_unverified",
+        "goal_ref": receipt["goal_ref"],
+    }
+
+
 def test_exact_external_return_verifies_after_recreation_without_resend(
     tmp_path: Path,
 ) -> None:
     registry = _create_source_registry(tmp_path)
     store, _, receipt = _external_manager_request(tmp_path, registry)
+    admitted_at = datetime(2026, 9, 28, tzinfo=timezone.utc)
 
     class Transport:
         send_calls = 0
@@ -444,10 +542,7 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
                     "provider_receipt": "sha256:" + "b" * 64,
                 }
             )
-            return {
-                "external_write_performed": True,
-                "reply_verified": False,
-            }
+            raise SystemExit("simulated sender crash after attempt persistence")
 
         def verify(self, *_args):
             self.verify_calls += 1
@@ -458,7 +553,17 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
             }
 
     transport = Transport()
-    assert drain(tmp_path, registry, store, transport) == 1
+    with pytest.raises(
+        SystemExit,
+        match="simulated sender crash after attempt persistence",
+    ):
+        drain(
+            tmp_path,
+            registry,
+            store,
+            transport,
+            now=admitted_at,
+        )
     first = json.loads(
         (
             _root(tmp_path)
@@ -467,11 +572,22 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
             / "conclusion.delivery.json"
         ).read_text(encoding="utf-8")
     )
-    assert first["status"] == "verification_required"
+    assert first["status"] == "admitted"
+    assert first["attempt"]["message_ref"] == "om_exact_reply"
     assert first["goal_ref"] == receipt["goal_ref"]
 
     _recreate(registry)
-    assert drain(tmp_path, registry, store, transport) == 1
+    assert (
+        drain(
+            tmp_path,
+            registry,
+            store,
+            transport,
+            now=admitted_at
+            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+        )
+        == 1
+    )
     assert transport.send_calls == 1
     assert transport.verify_calls == 1
     state = json.loads(

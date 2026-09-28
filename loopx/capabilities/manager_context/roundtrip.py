@@ -9,12 +9,17 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from contextlib import ExitStack
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 
 from . import _root, _read, _write, _hash, authority
 from .tracking import _entry, _now
-from ...file_lock import exclusive_file_lock
+from ...file_lock import (
+    LockAcquisitionPolicy,
+    LockAcquireTimeoutError,
+    exclusive_file_lock,
+)
 from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
@@ -458,6 +463,20 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             ):
                 return None
             if (
+                state.get("status") == "admitted"
+                and state.get("attempt") is None
+                and not conversation_scope(session)["private_conversation"]
+            ):
+                _write(
+                    state_path,
+                    {
+                        "status": "explicit_unverified",
+                        "error": "provider_delivery_unverified",
+                        "goal_ref": row["goal_ref"],
+                    },
+                )
+                return None
+            if (
                 state.get("retry_at")
                 and state.get("status") != "admitted"
                 and now.isoformat() < state["retry_at"]
@@ -588,6 +607,20 @@ def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
         if path.stem not in PHASES:
             continue
         state_path = path.with_name(path.stem + ".delivery.json")
+        effect_locks = ExitStack()
+        try:
+            effect_locks.enter_context(
+                exclusive_file_lock(
+                    _root(root)
+                    / "return-effect-locks"
+                    / path.parent.name
+                    / path.stem,
+                    policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
+                    operation="manager_return_delivery",
+                )
+            )
+        except LockAcquireTimeoutError:
+            continue
         try:
             context = _exact_return_context(
                 root,
@@ -598,11 +631,13 @@ def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
                 now,
             )
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            effect_locks.close()
             logging.getLogger(__name__).warning(
                 "Exact manager return admission unavailable"
             )
             continue
         if context is None:
+            effect_locks.close()
             continue
         row = context["row"]
         route = context["route"]
@@ -833,6 +868,8 @@ def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
                 logging.getLogger(__name__).warning(
                     "Exact manager return settlement unavailable"
                 )
+        finally:
+            effect_locks.close()
         processed += 1
         if processed >= 20:
             break
