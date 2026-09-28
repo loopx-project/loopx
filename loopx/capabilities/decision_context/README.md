@@ -299,7 +299,8 @@ Add these fields to an existing private profile's `automation` object:
   "fail_open": true,
   "source_ids": ["source:authority:baseline"],
   "interval_seconds": 900,
-  "max_pending_batches": 1000
+  "max_pending_batches": 1000,
+  "max_sources_per_tick": 8
 }
 ```
 
@@ -313,7 +314,17 @@ loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
   --cursor-state <reviewed-cursors.json> --format json
 ```
 
-Add `--execute` for one tick. Use `capture-status` with the same arguments
+Add `--execute` for one tick.
+
+Each tick attempts at most `automation.max_sources_per_tick` providers (default
+8, integer 1–64), in oldest-attempt-first order. Failed calls count toward this
+budget; held, pressured, and interval-skipped sources do not. Deferred sources
+keep their cursors and freshness timestamps and resume on later host ticks.
+`scan_budget` reports attempts and deferred source IDs. This bounds provider
+calls, not wall time: providers must still honor their timeout and the host
+must enforce its process deadline. Profile-race rollback remains atomic.
+
+Use `capture-status` with the same arguments
 and without `--execute` for readback. Configure a host scheduler to invoke the
 tick; the capability enforces `interval_seconds`, while the host owns process
 startup, an outer process timeout, and stop/uninstall. No model heartbeat is

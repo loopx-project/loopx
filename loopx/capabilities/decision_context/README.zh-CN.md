@@ -268,7 +268,8 @@ cursor。
   "fail_open": true,
   "source_ids": ["source:authority:baseline"],
   "interval_seconds": 900,
-  "max_pending_batches": 1000
+  "max_pending_batches": 1000,
+  "max_sources_per_tick": 8
 }
 ```
 
@@ -280,6 +281,12 @@ loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
   --profile <private-profile.json> --spool <private-capture.sqlite> \
   --cursor-state <reviewed-cursors.json> --format json
 ```
+
+每轮最多调用 `automation.max_sources_per_tick` 个 provider（默认 8，整数 1–64），
+优先读取最久未尝试的来源。失败调用消耗名额；hold、背压和未到读取间隔的来源不消耗。
+延期来源保留采集游标和 freshness 时间，下轮继续；`scan_budget` 报告尝试数与延期来源。
+该预算限制调用次数，不保证墙钟耗时；provider 仍须遵守 timeout，宿主仍须施加进程期限。
+profile 并发修改时仍保持整轮原子回滚。
 
 `capture-status` 使用相同参数但不带 `--execute`，只读回查。宿主负责定时调用、
 进程总超时和启动/卸载；capability 执行配置中的采集间隔，不创建模型 heartbeat。

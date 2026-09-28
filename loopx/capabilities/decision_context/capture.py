@@ -361,7 +361,23 @@ def _execute_capture_tick(
         source_capacity = _source_capacity(
             profile.capture_max_pending_batches, len(sources)
         )
-        for source in sources:
+        checked = {
+            row["source_id"]: row["checked_at"]
+            for row in db.execute("SELECT source_id, checked_at FROM sources")
+        }
+        # Stable oldest-attempt-first order lets subsequent ticks resume the
+        # remaining sources, including when a provider repeatedly fails.
+        scan_order = sorted(
+            sources,
+            key=lambda source: (
+                datetime.fromisoformat(checked[source.source_id]).timestamp()
+                if checked.get(source.source_id)
+                else float("-inf")
+            ),
+        )
+        attempted = 0
+        deferred = []
+        for source in scan_order:
             if (
                 db.execute(
                     "SELECT 1 FROM sqlite_master WHERE name='capture_holds'"
@@ -428,6 +444,10 @@ def _execute_capture_tick(
             )
             status = pressure.value if pressure else "provider_failed"
             if pressure is None:
+                if attempted >= profile.capture_max_sources_per_tick:
+                    deferred.append(source.source_id)
+                    continue
+                attempted += 1
                 try:
                     scan = providers[source.provider_id].scan(
                         source=source,
@@ -500,6 +520,11 @@ def _execute_capture_tick(
         result = {
             "activation": activation,
             "executed": True,
+            "scan_budget": {
+                "max_sources_per_tick": profile.capture_max_sources_per_tick,
+                "attempted_source_count": attempted,
+                "deferred_source_ids": deferred,
+            },
             **_status(
                 db, sources, now=now, capacity=profile.capture_max_pending_batches
             ),

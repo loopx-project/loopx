@@ -134,3 +134,69 @@ def test_undersized_total_is_explicit_and_never_overflows(pair):
     assert result["capacity_policy"]["reservation_capacity_sufficient"] is False
     assert result["sources"][1]["status"] == "backpressure"
     assert result["pending_batch_count"] == 1
+
+
+def test_bounded_ticks_resume_deferred_sources_and_preserve_freshness(pair):
+    args, payload, _, _ = pair
+    payload["automation"]["max_sources_per_tick"] = 1
+    args["profile_path"].write_text(json.dumps(payload))
+    first = capture_profile_sources(**args, execute=True)
+    assert first["scan_budget"]["attempted_source_count"] == 1
+    assert first["scan_budget"]["deferred_source_ids"] == ["quiet"]
+    assert first["sources"][1]["last_read_at"] is None
+    assert first["sources"][1]["last_checked_at"] is None
+    assert first["sources"][1]["status"] == "never_checked"
+    second = capture_profile_sources(**args, execute=True)
+    assert second["scan_budget"]["attempted_source_count"] == 1
+    assert second["scan_budget"]["deferred_source_ids"] == []
+    assert second["sources"][1]["status"] == "completed"
+    assert first["sources"][0] == second["sources"][0]
+    assert second["pending_batch_count"] == 2
+    assert not args["cursor_path"].exists()
+
+
+def test_failed_source_uses_budget_without_starving_oldest_source(pair):
+    args, payload, _, _ = pair
+    payload["automation"]["max_sources_per_tick"] = 1
+    args["profile_path"].write_text(json.dumps(payload))
+    calls = []
+
+    class FailingProvider(LocalFileDecisionSourceProvider):
+        def scan(self, **kwargs):
+            calls.append(kwargs["source"].source_id)
+            if len(calls) == 1:
+                raise RuntimeError("synthetic failure")
+            return super().scan(**kwargs)
+
+    providers = {
+        "local-authority": FailingProvider(
+            provider_id="local-authority", max_bytes=4096
+        )
+    }
+    first = capture_profile_sources(
+        **args, execute=True, source_provider_overrides=providers
+    )
+    assert first["sources"][0]["status"] == "provider_failed"
+    assert first["scan_budget"]["attempted_source_count"] == 1
+    # Both are due, but the never-attempted source must win over the failed one.
+    with sqlite3.connect(args["spool_path"]) as db:
+        db.execute("UPDATE sources SET checked_at='2000-01-01T00:00:00+00:00'")
+    second = capture_profile_sources(
+        **args, execute=True, source_provider_overrides=providers
+    )
+    assert calls == [payload["sources"][0]["source_id"], "quiet"]
+    assert second["sources"][0]["failure_streak"] == 1
+    assert second["sources"][0]["last_read_at"] is None
+    assert second["scan_budget"]["deferred_source_ids"] == [calls[0]]
+
+
+@pytest.mark.parametrize("invalid", [0, -1, 65, True, "8", 1.5])
+def test_capture_tick_budget_rejects_invalid_configuration(pair, invalid):
+    from loopx.capabilities.decision_context.profile import (
+        normalize_decision_context_profile,
+    )
+
+    _, payload, _, _ = pair
+    payload["automation"]["max_sources_per_tick"] = invalid
+    with pytest.raises(ValueError, match="max_sources_per_tick"):
+        normalize_decision_context_profile(payload)
