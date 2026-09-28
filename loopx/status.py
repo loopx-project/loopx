@@ -9,6 +9,7 @@ from .control_plane.work_items.replan_history_codec import (
 )
 
 from .control_plane import compact_control_plane_policy
+from .control_plane.coordination.local_authority import CanonicalTodoSnapshot as _CanonicalTodoSnapshot
 from .control_plane.effect_runtime import effect_runtime_request_scope
 # Refs #4447: one definition for each carrier this facade used to restate. The
 # owner is the projection that feeds the value into a read model; `loopx/status.py`
@@ -710,12 +711,14 @@ def active_state_todo_fields(
     goal: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    todo_snapshot: _CanonicalTodoSnapshot | None = None,
     rollout_events: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return _active_state_todo_fields_read_model(
         goal,
         runtime_root=runtime_root,
         rollout_events=rollout_events,
+        **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         resolve_goal_local_path=resolve_goal_local_path,
         active_state_next_action_entries=active_state_next_action_entries,
         active_next_action_todo_ids=active_next_action_todo_ids,
@@ -1086,6 +1089,7 @@ def build_attention_queue(
     goal_id_filter: str | None = None,
     include_stopped_goal_context: bool = False,
     events_for_goal: EventsForGoal | None = None,
+    todo_snapshot: _CanonicalTodoSnapshot | None = None,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1105,6 +1109,7 @@ def build_attention_queue(
             goal,
             runtime_root=runtime_root,
             rollout_events=supplied_events,
+            **({"todo_snapshot": todo_snapshot} if todo_snapshot is not None else {}),
         )
 
     queue = _build_attention_queue_read_model(

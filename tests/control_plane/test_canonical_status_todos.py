@@ -323,3 +323,48 @@ def test_large_canonical_user_narratives_do_not_enter_diagnostics_rpc(tmp_path, 
     payload = json.loads(result.stdout)
     assert payload["contract"]["ok"] is True
     assert state.read_text() == "# Goal\n\n## User Todo\n\n"
+
+
+def test_whole_status_reuses_the_contract_snapshot_and_refreshes_next_request(
+    promoted_goal, tmp_path, monkeypatch, provider,
+):
+    """Real provider input is shared, even if it disappears between consumers."""
+    import loopx.status as status_module
+    from loopx.control_plane.coordination import local_authority
+
+    goal, runtime, state = promoted_goal
+    registry = tmp_path / 'registry.json'
+    registry.write_text(json.dumps({'goals': [goal], 'common_runtime_root': str(runtime)}))
+    reads = []
+    original = local_authority.read_canonical_todos_if_promoted
+
+    def observe(**kwargs):
+        result = original(**kwargs)
+        reads.append(result)
+        return result
+
+    monkeypatch.setattr(local_authority, 'read_canonical_todos_if_promoted', observe)
+    # After the contract's complete provider read, make a later provider read
+    # impossible. The current status is a historical observation, not admission.
+    original_queue = status_module.build_attention_queue
+    unavailable = runtime / 'unavailable-provider'
+    provider_path = runtime / 'authority' / f'{provider}-v0'
+
+    def remove_then_project(**kwargs):
+        provider_path.rename(unavailable)
+        return original_queue(**kwargs)
+
+    monkeypatch.setattr(status_module, 'build_attention_queue', remove_then_project)
+    arguments = dict(registry_path=registry, runtime_root_override=str(runtime),
+                     scan_roots=[], limit=5, goal_id=goal['id'],
+                     include_public_boundary_scan=False)
+    payload = status_module.collect_status(**arguments)
+    assert len(reads) == 1
+    queue = next(item for item in payload['attention_queue']['items'] if item['goal_id'] == goal['id'])
+    assert queue['agent_todos']['items'][0]['todo_id'] == 'todo_canonical'
+    assert queue['standing_decision_authority']['entries'][0]['outcome'] == 'reject'
+    monkeypatch.setattr(status_module, 'build_attention_queue', original_queue)
+    # A separate request cannot resurrect the previous successful snapshot.
+    with pytest.raises(local_authority.LocalCoordinationAuthorityUnavailable):
+        status_module.collect_status(**arguments)
+    assert 'todo_stale' in state.read_text()
