@@ -27,7 +27,9 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
-from .control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
+from .control_plane.effect_runtime import (
+    effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
+)
 from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.todos.handoff_mode import show_goal_handoff_mode
 from .control_plane.turn_driver.journal_store import (
@@ -357,6 +359,13 @@ class Delegations:
 
     def inspect(self, binding_id: str) -> dict:
         """Observe the real Turn preflight; never create a request or run a host."""
+        # Pin executable source only for this observation, not authority data.
+        # Bindings, acceptance and validation files are still read twice below;
+        # the next inspection must resolve its own current source revision.
+        with effect_runtime_request_scope():
+            return self._inspect(binding_id)
+
+    def _inspect(self, binding_id: str) -> dict[str, object]:
         binding = self.binding(binding_id, require_active=True)
         # Host filesystem facts only; the shared TS owner projects readiness.
         # Do not expose a path/error body or probe authority in a missing cwd.
@@ -417,10 +426,13 @@ class Delegations:
                      "--turn-instance-id", operation, *self._execution_arguments(binding, operation)]
         # Host arguments are operator-owned, but inspection must stay read-only
         # even when they contain an abbreviated execution flag or a selector.
-        from .cli import build_parser
+        from .cli_runtime import add_subcommand_format, build_cli_parser
+        from .cli_commands.turn_registration import register_turn_commands
 
+        parser, subparsers = build_cli_parser()
+        register_turn_commands(subparsers, add_subcommand_format)
         try:
-            selected = build_parser().parse_args(arguments)
+            selected = parser.parse_args(arguments)
         except SystemExit as exc:
             raise ValueError("invalid delegation Turn arguments") from exc
         workspace = Path(binding["workspace"]).resolve()

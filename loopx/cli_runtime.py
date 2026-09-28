@@ -59,7 +59,9 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 )
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
-_SELECTED_COMMANDS = _STATUS_COMMANDS | {"todo", "quota", "change-window"}
+_SELECTED_COMMANDS = _STATUS_COMMANDS | {
+	"todo", "quota", "change-window", "delegation", "turn",
+}
 
 
 class LoopXArgumentParser(argparse.ArgumentParser):
@@ -218,6 +220,14 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .capabilities.repository_change_window.cli import register_repository_change_window_commands
 
 		register_repository_change_window_commands(subparsers, add_subcommand_format)
+	elif command == "delegation":
+		from .cli_commands.delegation import register_delegation
+
+		register_delegation(subparsers, add_subcommand_format)
+	elif command == "turn":
+		from .cli_commands.turn_registration import register_turn_commands
+
+		register_turn_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -229,6 +239,26 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "delegation":
+		from .cli_commands.delegation import handle_delegation
+		from .control_plane.coordination.local_authority_shadow_adapter import (
+			effective_runtime_root,
+		)
+
+		return handle_delegation(
+			args, registry_path,
+			effective_runtime_root(registry_path, args.runtime_root),
+		)
+	if args.command == "turn":
+		from .cli_commands.turn import handle_turn_command
+
+		return handle_turn_command(
+			args,
+			registry_path=registry_path,
+			runtime_root_arg=args.runtime_root,
+			output_format=output_format,
+			print_payload=print_payload,
+		)
 	if args.command == "change-window":
 		from .capabilities.repository_change_window.cli import handle_repository_change_window_command
 

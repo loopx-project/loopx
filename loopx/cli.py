@@ -24,7 +24,7 @@ from .capabilities.multi_subagent.cli import (
 )
 from .cli_commands.todo_continuation import register_todo_continuation, handle_todo_continuation
 from .cli_commands.manager_inbox import register_manager_inbox, handle_manager_inbox
-from .cli_commands.delegation import register_delegation, handle_delegation
+from .cli_commands.delegation import register_delegation
 from .capabilities.content_ops.cli import (
     handle_content_ops_command,
     register_content_ops_commands,
@@ -93,7 +93,6 @@ from .capabilities.external_research.cli import (
     register_external_evidence_commands,
 )
 from .cli_commands import (
-    handle_turn_command,
     handle_benchmark_command,
     handle_bootstrap_connect_command,
     handle_canary_command,
@@ -554,16 +553,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ml-experiment":
         return handle_ml_experiment_command(args, output_format=output_format, print_payload=print_payload)
 
-    turn_result = handle_turn_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if turn_result is not None:
-        return turn_result
-
     host_mode_plan_result = handle_host_mode_plan_command(
         args,
         output_format=output_format,
@@ -848,9 +837,6 @@ def main(argv: list[str] | None = None) -> int:
                 registry_path=registry_path,
             ),
         )
-    if args.command == "delegation":
-        return handle_delegation(args, registry_path, effective_runtime_root(registry_path, args.runtime_root))
-
     lark_inbox_result = handle_lark_inbox_command(
         args,
         registry_path=registry_path,

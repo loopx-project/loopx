@@ -7,12 +7,17 @@ conversation or installing tools into an already running host session.
 from __future__ import annotations
 
 import json
+import argparse
+from collections.abc import Callable
 from pathlib import Path
 
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError
 
 
-def register_delegation(subparsers, add_format):
+def register_delegation(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    add_format: Callable[[argparse.ArgumentParser], None],
+) -> None:
     parser = subparsers.add_parser(
         "delegation", help="Launch and recover authorized peer work; returns JSON."
     )
@@ -32,7 +37,9 @@ def register_delegation(subparsers, add_format):
     parser.add_argument("--execute", action="store_true", help="Required for start/resume/adopt; grants no additional authority.")
 
 
-def handle_delegation(args, registry_path, runtime_root):
+def handle_delegation(
+    args: argparse.Namespace, registry_path: Path, runtime_root: Path,
+) -> int:
     # The shared host is importable without the optional MCP server dependency.
     from ..collaboration_mcp import Delegations
 
