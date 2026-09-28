@@ -57,6 +57,17 @@ and synthetic fixture or authorized read-only snapshot. Preserve integrity,
 receipt recovery and lease/CAS semantics; do not benchmark by mutating an active
 Goal. Check existing PRs before starting an overlapping store refactor.
 
+A different registry, `--runtime-root`, archive destination or worktree does not
+isolate the Effect server: identical source fingerprints can reuse the same
+process through the user's temporary directory. Follow the testing guide's
+**Isolate the managed Effect process as well as the data** procedure: use a
+private existing directory for `TMPDIR`, `TEMP` and `TMP`, account for Python's
+cached `tempfile.tempdir`, and check the serving PID before heavy work. Stop
+only the isolated server after requests settle. If a rehearsal shared the live
+server, retain its correctness/receipt evidence but exclude affected timings;
+resample without overlapping heavy work before attributing a regression to a
+provider or upgrade. Process isolation alone does not remove host CPU contention.
+
 When unrelated lightweight rules and `runtime.ping` slow down together, test
 shared event-loop starvation before attributing the timeout to the named rule.
 Compare cold, warm and alternating-Goal reads in a separate runtime using fixed
@@ -81,9 +92,11 @@ precondition must still come from its authority owner. Do not add a Python
 cache that bypasses the typed owner, or assume different providers share a
 filesystem invalidation rule.
 
-Separate this from storage-specific work. File-v0's retained journal decoding
-and whole-file rewrite, SQLite transactions/indexes, and PostgreSQL queries and
-network round trips have different costs. Prove a shared optimization through
+Separate this from storage-specific work. Current File checkpoint/delta
+verification and replay, SQLite transactions/indexes, and PostgreSQL queries and
+network round trips have different costs. Identify the actual stored format;
+do not apply retired File-v0 whole-history-write assumptions to File-v1.
+Prove a shared optimization through
 the common read/transaction contract, then qualify each affected real backend.
 Preserve original-receipt recovery, stale-revision rejection and missing-state
 fail-closed behavior. A successful promotion establishes authority ownership;

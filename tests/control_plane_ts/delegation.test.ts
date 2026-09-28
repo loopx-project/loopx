@@ -271,6 +271,39 @@ test("preflight reports unavailable canonical authority without pretending to in
     preview: {}, acceptance: null, validation_files_current: false}));
 });
 
+test("workspace faults are bounded observations, not authority or launch permits", () => {
+  const input = {binding, authority: null, preview: null, acceptance: null,
+    validation_files_current: false};
+  for (const state of ["missing", "not_directory", "unavailable"]) {
+    const result = delegationPreflight({...input, workspace: {state, path: "/private/workspace"}});
+    assert.equal(result.state, "workspace_unavailable");
+    assert.equal(result.workspace_state, state);
+    assert.equal(result.workspace_next_action, "review_operator_workspace_binding");
+    assert.equal(result.authority_ready, null);
+    assert.equal(result.authority_state, "uninspected");
+    assert.equal(result.authority_next_action, "none");
+    assert.equal(result.authority_reason, null);
+    assert.equal(result.acceptance_ready, false);
+    assert.equal(result.turn_eligible, false);
+    assert.equal(result.executor, null);
+    assert.deepEqual(result.binding, {id: binding.id, agent_id: binding.agent_id, todo_id: binding.todo_id});
+    assert.equal(result.promotion_from_surface_allowed, false);
+    assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
+    assert.equal(JSON.stringify(result).includes("/private"), false);
+    for (const patch of [{authority: {ready: true}}, {preview: {}},
+      {acceptance: {todo_id: binding.todo_id, state: "ready"}}, {validation_files_current: true}]) {
+      assert.throws(() => delegationPreflight({...input, workspace: {state}, ...patch}), /cannot claim/);
+    }
+  }
+  for (const workspace of [null, false, {}, {state: ["missing"]}, {state: "unknown"}])
+    assert.throws(() => delegationPreflight({...input, workspace}), /workspace observation/);
+  // A present directory does not bypass the existing authority or Turn owners.
+  assert.throws(() => delegationPreflight({...input, workspace: {state: "available"}}), /authority readiness/);
+  const unavailable = {...input, authority: {ready: false, reason: "canonical read failed"}};
+  assert.deepEqual(delegationPreflight({...unavailable, workspace: {state: "available"}}),
+    delegationPreflight(unavailable));
+});
+
 test("Turn plan decision preserves a rejection and validates a successful transaction", () => {
   const rejected = delegationTurnPlanDecision({plan: {ok: false,
     error: "Requested Turn Todo is not accepted by canonical authority"}});

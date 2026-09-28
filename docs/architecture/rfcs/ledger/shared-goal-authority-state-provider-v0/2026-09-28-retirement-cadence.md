@@ -1,6 +1,6 @@
 # Local authority: retirement cadence after integration
 
-- Audit: `ce3862e33`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
+- Audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
 - Owners: overall roadmap R3/R4/R5/R6; shared authority D1–D3; TS migration T0–T4.
 - This replaces the **current inventory/estimates** in the September 27 recovery
   and Host-supervision ledgers, not their historical validation results.
@@ -17,8 +17,9 @@
 | #5175 | One native source-outbox drain; Python sequencing and obsolete entry-planning RPC removed |
 | #5169 | Verified identical operation replay on File/SQLite |
 | #5170 | App delegated-result continuity; not every Turn/instance consumer |
+| #4931 | Owned TS state replay reduces SQLite/archive historical reconstruction; no default change or D2 qualification |
 
-At this audit #4931 (SQLite read cost), #5106 (collaboration GoalRef), #5130
+At the adoption follow-up #5106 (collaboration GoalRef), #5130
 (session GoalRef), #5139 (App Turn acceptance recovery) and #4915 (local-state
 location migration) remain open. Integrate/review those owners rather than
 reimplementing them. Their scopes are dependencies only for affected callers;
@@ -132,3 +133,74 @@ capture of current production state, or D2 qualification. Raw private snapshots
 and diagnostics remain outside the repository. No production code is deleted
 by this planning PR; it establishes the deletion exits and records their actual
 validation boundary.
+
+## Adoption follow-up and next decision
+
+At `71525ab90`, the installed CLI, locally built App/bundled runtime and both
+services resolve to the same source. Installation doctor reports the pair as
+matching; the actual chat page renders and the previous delivery's entry JS/CSS
+remain available with identical bytes. This is local installation evidence,
+not a signed/notarized release or a messaging/settlement acceptance result.
+
+Fresh logical archives retain 379 and 993 original transactions. Restore plus
+exact audit matches the 379-transaction archive on File and SQLite and the
+993-transaction archive on SQLite, including the original transaction/receipt
+proofs and complete projections. This extends the earlier synthetic-drain
+evidence to retained real history. It does not test reverse migration after a
+new write in this run; the earlier bounded result remains separately scoped.
+Private archives, registry data and raw diagnostics remain outside Git.
+
+The initial rehearsal separated data but reused a live Effect process. Those
+latency samples are excluded. The final audit used a verified independent
+process; ordinary command resampling succeeded after shared work settled.
+The [testing guide](../../../../development/testing-and-quality.md#isolate-the-managed-effect-process-as-well-as-the-data)
+now specifies both isolation boundaries. Concurrent heavy-admin fairness is
+not qualified by the clean resample.
+
+Keep existing authority providers unchanged. Reuse #4931's measured SQLite
+candidate decision for B, rather than reopening the same optimization. Before
+selecting a consumer optimization, trace whole-command costs and duplicated
+projections: a history row limit does not bound semantic history, and status
+and quota can still produce multi-megabyte diagnostic packets. Preserve
+decision completeness and existing drill-down contracts at their shared typed
+owner; do not infer that backend switching alone fixes these costs. A/C still
+need integrated execution/adoption evidence, and no D2 elapsed soak starts or
+legacy-writer deletion is certified by this follow-up.
+
+### Read-cost qualification update
+
+After #4931 and #5215 integrated, matched detached File/SQLite copies retained
+379 original commits and the same final projection hash. On Node 24.21.0,
+three fresh processes per provider measured File head reads at 5.98–6.32 s
+versus SQLite at 34.5–36.0 ms; repeated reads were 9.1–10.2 ms and 25.7–28.2 ms
+respectively. This is process-cold, not OS-cache-cold: File proves its entire
+retained journal, whereas SQLite reads current state without making the same
+full-history proof. It is evidence for a long-history SQLite candidate, not
+equivalent integrity-work throughput or release-default acceptance.
+
+Alternating two unchanged File stores exposed singleton proof-cache eviction:
+every read cost 6.30–6.49 s. A bounded four-store working set keeps the first
+proof for each store (6.15–6.16 s) and subsequent alternation at 9.8–11.2 ms,
+with identical cursors/hashes. Exact-byte and identity checks remain mandatory;
+eviction and corruption regressions cover the changed cache boundary.
+
+Quota observation reused the existing should-run compactors: a captured single
+Goal row serialized from 1,252,747 to 78,688 UTF-8 bytes, with explicit full
+detail restoring the original row. This is a display measurement; collection,
+decision inputs and first-read verification are not reduced by it.
+
+A separate 148-second isolated run appended 12 commits per provider through
+fresh processes, crossing a checkpoint and checking original-receipt replay,
+changed-intent rejection and projection/hash parity at every step. It qualifies
+that bounded storage journey, **not** Host execution, live Goal adoption or D2's
+ten-day soak. No active authority, release default or legacy-writer deletion
+decision changes. B still needs sustained workload/platform/capacity evidence;
+C still needs consumer/onboarding and supported upgrade acceptance.
+
+The next B slice is the remaining whole-command cold path: profile history
+artifact lookup, active-contract validation and public-boundary scanning on
+the same retained inputs before selecting the owning repair. Separate provider
+head-read time from caller work; preserve freshness, full decision inputs and
+corruption rejection. Re-run installed CLI consumers after integration. Do not
+count this read optimization as closing A/C or use a fixed remaining-PR estimate;
+retire a writer only with its last supported caller and recovery acceptance.

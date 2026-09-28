@@ -1,3 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AttentionDetailCard } from "../src/features/personal-workspace/attention-detail-card";
+import { WorkspaceI18nProvider } from "../src/features/personal-workspace/i18n";
 import { todoItemSchema } from "../src/data/status";
 import { attentionDetails, attentionSuccessor, canReviewAttention, refreshAttention, sourceAttention } from "../src/features/personal-workspace/attention-details";
 import { normalizePersonalHomeModel, type WorkspaceAttention } from "../src/features/personal-workspace/personal-workspace-model";
@@ -55,3 +59,14 @@ const healthySource = sourceAttention(row, "source-b", true, "Healthy Goal");
 assert(canReviewAttention(refreshAttention(healthySource, [failedSource, healthySource])), "another source failure cannot fence healthy source");
 const healthyGoal = sourceAttention({ ...row, goalId: "healthy-goal" }, "source-a", true);
 assert(canReviewAttention(refreshAttention(healthyGoal, [failedSource, healthyGoal])), "another Goal read failure cannot fence healthy Goal");
+
+const longRequest = "Review the public release evidence. ".repeat(12) + "Publish version 2.0 to stable only after acceptance.";
+const longSource = todoItemSchema.parse({ ...source, text: longRequest });
+const longRow = { ...row, text: "Release review", details: attentionDetails(longSource) };
+const longModel = normalizePersonalHomeModel({ blockingTodoCount: 1, goals: [], openUserTodoCount: 1, userTodos: [longRow], attentionHistory: [longRow] });
+assert(longModel.userTodos[0]?.details?.requestText === longRequest, "App decision detail retains the object after the short card label");
+assert(longModel.userTodos[0]?.details?.evidence === source.evidence, "App decision evidence retained with the full request");
+
+const markup = renderToStaticMarkup(createElement(WorkspaceI18nProvider, null, createElement(AttentionDetailCard, { item: longModel.userTodos[0] })));
+assert(markup.includes("Publish version 2.0 to stable only after acceptance."), "rendered App detail contains object beyond compact label");
+assert(markup.includes(source.evidence), "rendered App detail contains evidence");

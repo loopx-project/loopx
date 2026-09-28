@@ -72,6 +72,14 @@ Transfer the hierarchy, not the artwork or untested claims:
   conversation for a requested answer.
 - Put one useful next action beside the relevant failure or decision. Fold
   routine activity; preserve missing authority, stale information and failures.
+  Decision notices use the request body, object and evidence rather than a short
+  scheduling label. Keep distinct request identities and label bounded previews;
+  users inspect the current request before deciding. App detail drawers retain
+  the request separately from the compact card label. Provider notices use the
+  same content distinction: missing request bodies are explicitly unavailable,
+  never reconstructed from legacy action labels or free-form gate prompts.
+  Retire obsolete presentation branches rather than preserving old data shapes
+  without an active caller or a documented migration requirement.
 - Use typography, spacing and restrained state accents from the existing design
   system. Motion explains verified transitions, never invents busy workers.
 - Recent-completion previews sort all loaded Goals by recorded completion time

@@ -298,8 +298,28 @@ class Delegations:
     def inspect(self, binding_id: str) -> dict:
         """Observe the real Turn preflight; never create a request or run a host."""
         binding = self.binding(binding_id, require_active=True)
-        if not Path(binding["workspace"]).is_dir():
-            raise ValueError("delegation workspace unavailable")
+        # Host filesystem facts only; the shared TS owner projects readiness.
+        # Do not expose a path/error body or probe authority in a missing cwd.
+        try:
+            workspace_state = (
+                "available" if stat.S_ISDIR(Path(binding["workspace"]).stat().st_mode)
+                else "not_directory"
+            )
+        except FileNotFoundError:
+            workspace_state = "missing"
+        except NotADirectoryError:
+            workspace_state = "not_directory"
+        except OSError:
+            workspace_state = "unavailable"
+        if workspace_state != "available":
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            return effect_runtime_result("collaboration.delegation.preflight", {
+                "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+                "workspace": {"state": workspace_state},
+                "authority": None, "preview": None, "acceptance": None,
+                "validation_files_current": False,
+            })
         try:
             acceptance = delegation_validation.capture(self, binding)
         except (OSError, ValueError) as exc:
@@ -318,6 +338,7 @@ class Delegations:
                 promoted = True
             return effect_runtime_result("collaboration.delegation.preflight", {
                 "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+                "workspace": {"state": workspace_state},
                 "authority": {
                     "ready": False,
                     "reason": str(exc),
@@ -363,6 +384,7 @@ class Delegations:
             raise ValueError("delegation preflight source changed; retry inspection")
         return effect_runtime_result("collaboration.delegation.preflight", {
             "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+            "workspace": {"state": workspace_state},
             "authority": {"ready": True, "reason": None},
             "preview": preview, "acceptance": acceptance["plan"],
             "validation_files_current": acceptance["files_current"],

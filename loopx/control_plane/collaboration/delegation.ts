@@ -140,6 +140,34 @@ export function delegationRuntimeFacts(executor: JsonObject): JsonObject {
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
   requireThat([binding.id, binding.agent_id, binding.todo_id].every(text), "binding identities required");
+  // Missing observations preserve older host compatibility. Filesystem facts
+  // cannot establish canonical authority or executor readiness.
+  if (params.workspace !== undefined) {
+    const workspace = requireJsonObject(params.workspace, "workspace observation");
+    requireThat(typeof workspace.state === "string"
+      && ["available", "missing", "not_directory", "unavailable"].includes(workspace.state),
+    "invalid workspace observation");
+    if (workspace.state !== "available") {
+      requireThat(params.authority === null && params.preview === null
+        && params.acceptance === null && params.validation_files_current === false,
+      "unavailable workspace cannot claim authority, Turn or task acceptance inspection");
+      return {
+        schema_version: "loopx_delegation_preflight_v0",
+        binding: {id: binding.id, agent_id: binding.agent_id, todo_id: binding.todo_id},
+        state: "workspace_unavailable", workspace_state: workspace.state,
+        workspace_next_action: "review_operator_workspace_binding",
+        turn_eligible: false, turn_route: null, acceptance_ready: false,
+        authority_ready: null, authority_reason: null, authority_state: "uninspected",
+        authority_next_action: "none", promotion_from_surface_allowed: false,
+        executor: null,
+        effects: {host_invoked: false, state_written: false, quota_spent: false,
+          scheduler_acknowledged: false},
+        note: "Review the original operator-owned workspace binding, then retry inspection. "
+          + "Authority, acceptance and runtime were not inspected. No workspace is created, "
+          + "binding retargeted or worker launched.",
+      };
+    }
+  }
   const authority = params.authority === undefined
     ? {ready: true, reason: null}
     : requireJsonObject(params.authority, "canonical authority readiness");

@@ -22,8 +22,13 @@ append-only even though File atomically replaces its physical envelope.
 
 Cold reads verify every retained transaction and the final head; a valid head
 cannot hide a corrupt old delta or receipt. Verified pagination reconstructs at
-most 63 predecessor deltas plus the requested page. The exact-byte cache remains
-bounded. File still reads/hashes and rewrites one retained file: this reduces
+most 63 predecessor deltas plus the requested page. The exact-byte cache retains
+at most four store paths in least-recently-used order, with a shared 128 MiB
+serialized history/read-view budget. A large journal can retain only its head
+and receipt index (up to 16 MiB per read view); scans and writes still verify its
+history. Every cache hit requires matching file digest and store identity, not
+only file timestamps. These are encoded-data bounds, not a heap/RSS limit.
+File still reads/hashes and rewrites one retained file: this reduces
 repeated data, not asymptotic growth. Cold verification can be slower. Measure
 upgrade, cold verification, warm reads and steady writes separately.
 

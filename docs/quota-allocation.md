@@ -890,6 +890,24 @@ The first screen should make it obvious why a project is quiet:
 
 ## CLI Surface
 
+`quota status` and `quota plan` now default to bounded Todo summaries in JSON,
+reusing the summaries already used by `quota should-run`. Previously these two
+observation commands returned full Todo lists. Counts, quota decisions, ordering
+and health remain intact; `payload_compaction` identifies omitted lists and their
+detail command. Planning still consumes complete input before this CLI projection.
+Consumers that read individual Todo metadata or every item must opt into detail:
+
+```bash
+loopx --format json quota status --include-detail all
+loopx --format json quota plan --include-detail agent-todos --include-detail user-todos
+```
+
+Keep the original registry, runtime and Goal selection when following a detail
+command. `all` expands only the sections supported by that command. Detail reads
+do not acquire a Turn or spend quota. Markdown plan rendering and standalone
+`status`/`todo list` are unchanged. This bounds Todo-list display growth, not the
+cost of gathering and verifying the input or the total number of Goals returned.
+
 The first read-only or preview commands are:
 
 ```bash

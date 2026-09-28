@@ -422,6 +422,28 @@ Normal start still reads current admission and independently validates output.
 If the existing Turn rejects preflight, inspection reports that error rather than
 manufacturing a launchable result; no request is created.
 
+Workspace failures are observed before authority or Turn inspection, but after
+the caller's binding grant and active Goal are checked. `workspace_unavailable`
+retains a bounded `workspace_state`: `missing`, `not_directory`, or `unavailable`
+(the filesystem could not be read). `authority_ready: null` and
+`authority_state: uninspected` do not claim an authority failure or promotion
+requirement. `workspace_next_action: review_operator_workspace_binding` asks the
+operator to check the original execution configuration and its directory, then
+repeat inspection. The same projection is rendered in **Team execution** and
+returned by CLI/MCP/Goal Chat. Inspection creates no directory, retargets no
+binding, launches no worker and exports no private path or filesystem error.
+It is a point-in-time observation; a changed binding fails closed and start
+still rechecks the existing work/authority boundaries.
+
+中文：工作目录故障在调用者授权与 Goal 活跃检查之后、Authority 与 Turn 检查之前
+返回 `workspace_unavailable`。`workspace_state` 区分 `missing`（不存在）、
+`not_directory`（不是目录）和 `unavailable`（文件系统无法读取）。
+`authority_ready: null`、`authority_state: uninspected` 表示尚未检查，不能解释为
+权限故障或需要晋级。`workspace_next_action: review_operator_workspace_binding`
+要求核对原执行配置及绑定目录后重新检查；团队执行页面与 CLI/MCP/Goal Chat 消费
+同一投影。检查不创建目录、不改绑、不启动成员，也不暴露私人路径或文件系统错误。
+结果只是时点观察；配置变更仍拒绝，实际启动仍须重新通过原有工作与权限边界。
+
 `executor.runtime_probe` preserves the host's bounded probe scope: a DSH
 `probing_interpreter` result concerns module availability in the interpreter
 running this inspection, not every installation or remote host. A

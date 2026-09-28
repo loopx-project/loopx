@@ -1,6 +1,6 @@
 # 合并后的本地权威退役节奏
 
-- 核对基线：`ce3862e33`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
+- 核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
 - Owner：总 roadmap R3/R4/R5/R6、shared authority D1–D3、TS 迁移 T0–T4。
 - 本记录替代 9 月 27 日 recovery、Host supervision 记录的**当前清单和估算**，
   不替代其历史验证结果。
@@ -17,8 +17,9 @@
 | #5175 | 完整 outbox drain 由 TS 拥有；Python 编排及旧逐条规划 RPC 已删除 |
 | #5169 | File/SQLite 完整意图与历史证明匹配的操作重放 |
 | #5170 | App 委派结果连续性；不代表全部 Turn／实例消费者完成 |
+| #4931 | TS 私有状态重放降低 SQLite／archive 历史重建成本；未切默认、未完成 D2 |
 
-本次核对时，#4931（SQLite 读取成本）、#5106（collaboration GoalRef）、#5130
+采用后续核对时，#5106（collaboration GoalRef）、#5130
 （session GoalRef）、#5139（App Turn 接受恢复）、#4915（本地状态路径迁移）仍开放。
 复用和推进这些 owner，不重复实现；只对确实受影响的调用方建立依赖，本地默认切换
 不等待无关云端或百 Agent 工作。
@@ -104,3 +105,57 @@ CLI 全部 drain，原 Todo JSON 完整相等。所得四笔事务恢复／审�
 活跃 Goal。这证明有界 drain 和逻辑 archive 连续性，**不是**全部原始 224 笔历史重放、
 live selector cutover、重新捕获当前生产状态或 D2 验收。私有快照和原始诊断不入库。
 本规划 PR 不删除生产代码，只确定删除出口并记录实际验证边界。
+
+## 采用后续核对与下一步决策
+
+在 `71525ab90` 上，已安装 CLI、本地构建 App／bundled runtime 及两个服务使用同一
+源码；安装 doctor 确认配对，实际 chat 页面可渲染，上一份交付的入口 JS／CSS 仍可
+取回且字节相同。这是本机安装证据，不是签名／公证 release，也不代表发送消息或
+settlement 链路验收。
+
+新捕获的逻辑 archive 分别保留 379、993 笔原始事务。379 笔 archive 恢复到 File
+和 SQLite 后均通过 exact audit；993 笔在 SQLite 上通过。核对包括原事务／回执证明
+和完整 projection，将之前的合成 drain 证据推进到真实保留历史。本轮没有再验证
+追加新写入后的反向迁移，之前的有界结果仍单独计证。私有 archive、registry 和
+原始诊断不入 Git。
+
+首轮演练隔离了数据，却复用了活跃 Effect 进程，因此排除其受污染耗时。最后一次
+审计核对了独立进程；共享重型工作结束后的日常命令重新采样成功。
+[验证指南](../../../../development/testing-and-quality.md#isolate-the-managed-effect-process-as-well-as-the-data)
+已明确两层隔离。干净重采样不代表重型管理工作并发时的公平性已验收。
+
+现有权威 provider 保持不变。B 复用 #4931 实测形成的 SQLite 候选决策，不重新做同一
+优化。消费者优化先追踪完整命令成本与重复投影：history 的行数限制不限制 semantic
+history，status／quota 仍可能生成数 MB 诊断包。在现有共享 typed owner 保留决策
+完整性与 drill-down 合同，不能推断换后端就能消除这些成本。A/C 仍需执行／采用集成
+证据；本轮没有启动 D2 自然时间 soak，也没有认证旧 writer 可以删除。
+
+### 读取成本验收更新
+
+#4931、#5215 集成后，配对的 File／SQLite 隔离副本保留 379 笔原始提交，最终
+projection hash 相同。Node 24.21.0 下，每个 provider 分别启动三个新进程，
+File 首次 head 读取为 5.98–6.32 秒，SQLite 为 34.5–36.0 毫秒；后续读取分别为
+9.1–10.2 毫秒、25.7–28.2 毫秒。这是进程冷读，没有清空 OS 文件缓存；File
+验证全部保留历史，SQLite 读取当前状态，不承担相同的全历史证明。这支持将 SQLite
+作为长历史候选，但不是同等完整性工作量的吞吐比较，也不构成发布默认值验收。
+
+交替读取两个未变化的 File 存储，暴露了单份证明缓存互相淘汰的问题：每次都要
+6.30–6.49 秒。改为有总容量上限的四份缓存后，各存储首次验证仍为 6.15–6.16 秒，
+后续交替读取为 9.8–11.2 毫秒，cursor／hash 相同。每次仍检查实际字节摘要和存储
+身份；淘汰与损坏回归覆盖缓存边界。
+
+Quota 观察复用既有 should-run 摘要：捕获的单 Goal 行序列化由 1,252,747 降至
+78,688 UTF-8 字节，显式明细恢复原行。这是展示体积测量，未减少采集、决策输入或
+首次读取的验证成本。
+
+另一项 148 秒隔离演练通过新进程为两种 provider 各追加 12 笔提交，跨越 checkpoint，
+逐轮验证原回执重放、变更意图拒绝及 projection／hash 一致性。它证明这段有界存储
+流程，**不代表** Host 执行、活跃 Goal 采用或 D2 的十天 soak 已完成。本次不改变活跃
+authority、发布默认值或旧 writer 删除决定。B 仍缺持续负载／平台／容量证据；C 仍需
+consumer／新建入口及受支持升级验收。
+
+B 的下一段是剩余整命令冷路径：在相同保留输入上分别分析历史 artifact 查找、
+active-contract 验证和公共边界扫描，再选择所属 owner 修复。区分 provider head
+读取与调用方工作，保留 freshness、完整决策输入和损坏拒绝；集成后重跑安装态 CLI
+消费者。不能把读取优化计为 A/C 完成，也不继续给固定的剩余 PR 数；只有最后受支持
+调用方退出且恢复验收通过，才能删除对应 writer。

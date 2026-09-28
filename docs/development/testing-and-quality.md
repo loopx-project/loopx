@@ -261,6 +261,43 @@ not overwritten or restored by the test. Stop the temporary server afterward.
 lease。私有快照和原始输出不得进入 Git 或公开 review；快照演练前后比较源指纹。
 发现并发源变更只报告，不擅自覆盖或恢复。测试后停止临时数据库。
 
+#### Isolate the managed Effect process as well as the data
+
+A separate worktree, registry, `--runtime-root` or archive `--destination`
+isolates neither CPU work nor the managed Effect server. Its discovery directory
+uses Python's temporary directory and user identity; the server is selected by
+source fingerprint. Identical checkouts and an installed release can therefore
+share the same process. A large restore/audit can delay ordinary CLI requests
+even when it writes only to a disposable store.
+
+Before a snapshot rehearsal, create a private existing temporary directory and
+set **all three** of `TMPDIR`, `TEMP`, and `TMP` to it for every child command.
+Keep the separate data/registry paths too: process isolation does not isolate
+data. In a Python process that already imported `tempfile`, also scope and
+restore its cached `tempfile.tempdir`; the existing
+`tests/control_plane/canonical_authority_fixture.py::isolate_sqlite_runtime`
+fixture demonstrates both boundaries. Record the serving runtime PID and verify
+it differs from the live server before dispatching expensive work. Stop only
+that isolated runtime after its requests settle, retaining the same temporary
+environment for shutdown; never restart a live server as test cleanup.
+
+Process isolation still shares machine resources. Run matched timing arms
+sequentially without overlapping builds or recovery work. If interference is
+discovered, retain failures and durable-receipt evidence, mark latency samples
+contaminated and resample after quiescence. A client timeout does not prove its
+server operation stopped; do not launch a duplicate restore while the first
+request may still be running. Neither a successful restore nor a clean resample
+qualifies concurrent administrative-work fairness or elapsed soak.
+
+独立 worktree、registry、`--runtime-root` 或 archive `--destination` 不会隔离
+Effect 后台进程；相同源码指纹可能让源码环境与已安装版本共享进程。演练前创建私有
+临时目录，对所有子命令同时设置 `TMPDIR`、`TEMP`、`TMP`；Python 进程若已缓存
+`tempfile.tempdir`，须在同一作用域覆盖并恢复。数据／registry 仍须单独隔离，且在
+重型操作前核对服务 PID 与活跃服务不同。等请求结束后，只在同一临时环境中停止
+演练进程。进程隔离不消除整机资源竞争：耗时对照顺序运行，发现竞争则保留失败与
+回执、作废受污染耗时并重新采样；超时不能当作服务端已停止，也不能因此重复恢复。
+恢复成功不证明并发管理操作公平性或自然时间 soak 已合格。
+
 Keep a deterministic, public-safe production-scale fixture beside the focused
 cases. Its envelope should cover realistic role/status distributions,
 multi-agent claims, user gates and standing decisions, current and retired

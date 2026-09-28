@@ -20,6 +20,7 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.capability_hooks import InteractionProjectionHookRegistration
 from ..control_plane.quota.cli_projection import (
     compact_quota_monitor_poll_cli_payload,
+    compact_quota_plan_cli_payload,
     compact_quota_should_run_cli_payload,
 )
 from ..control_plane.quota.effective_action import EffectiveAction
@@ -318,6 +319,8 @@ def _project_quota_cli_payload(
     instead of masking it with a crash (issue #3687).
     """
     if not bool(getattr(args, "turn_envelope", False)):
+        if args.quota_command in {"status", "plan"}:
+            return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
         if args.quota_command == "should-run":
             return compact_quota_should_run_cli_payload(
                 payload,

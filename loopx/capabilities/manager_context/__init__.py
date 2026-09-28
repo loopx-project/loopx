@@ -160,13 +160,17 @@ def deliver(
         exists = path.exists()
         if exists and {k: v for k, v in _read(path).items() if k not in {"delivered_at", "source_channel"}} != value:
             raise ValueError("context request identity conflict")
+        # The entry rename publishes work to independently scheduled receivers.
+        # Persist and verify its exact return route first, as peer requests do.
+        # A route without an entry is inert and recoverable by the same retry;
+        # an entry without a route can execute but cannot return its result.
+        from .roundtrip import register
+        register(runtime_root, value, session, turn)
         if not exists:
             from .tracking import _now
             _write(path, value | {"delivered_at": _now(), "source_channel": session.get("channel_id")})
         if {k: v for k, v in _read(path).items() if k not in {"delivered_at", "source_channel"}} != value:
             raise ValueError("context delivery readback failed")
-    from .roundtrip import register
-    register(runtime_root, value, session, turn)
     return {
         "request_id": request_id,
         "status": "delivered",

@@ -57,6 +57,16 @@ must finish before work on the next layer can start. GQ17 repeats the ordinary
 parallel-work intent at larger fixture sizes; basic parallel work is already P0
 in GQ11, and the steward should not overstaff a small task.
 
+### Readable decisions / 看得懂再决定
+
+“要我决定什么？把对象和依据说清楚。” / “What do you need me to decide?”
+For GQ10, prepare a public release request whose concrete channel/version appears
+past the compact scheduling label, with a public evidence link. The App detail
+and provider notice must retain the request object and available evidence. Two
+requests with the same title remain distinguishable; a replay sends no second
+notice. Bound oversized content explicitly and preserve redaction. A notification
+is a preview, not proof of approval, execution or a fresh authorization grant.
+
 ### Direct group conversation / 群里直接说话
 
 For the Lark variant of P0 reliable entry, configure the steward connection to

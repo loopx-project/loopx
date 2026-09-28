@@ -30,8 +30,7 @@ from ..control_plane.scheduler.state import (
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from ..turn_identity import mint_turn_instance_id, normalize_turn_instance_id
 from .quota_request import (
-    QUOTA_MONITOR_POLL_DETAIL_SECTIONS,
-    QUOTA_SHOULD_RUN_DETAIL_SECTIONS,
+    QUOTA_COMMAND_DETAIL_SECTIONS,
     quota_detail_sections_from_args,
     validate_quota_command_request,
 )
@@ -124,17 +123,13 @@ def validate_quota_command_context_request(
             "--turn-envelope is only valid with `quota should-run`"
         )
     requested_details = set(getattr(args, "include_details", None) or ())
-    if requested_details and command not in {"should-run", "monitor-poll"}:
+    if requested_details and command not in QUOTA_COMMAND_DETAIL_SECTIONS:
         raise QuotaCommandValidationError(
-            "--include-detail is only valid with `quota should-run` or "
-            "`quota monitor-poll`"
+            "--include-detail is only valid with `quota status`, `quota plan`, "
+            "`quota should-run` or `quota monitor-poll`"
         )
-    if requested_details and "all" not in requested_details:
-        allowed_details = set(
-            QUOTA_MONITOR_POLL_DETAIL_SECTIONS
-            if command == "monitor-poll"
-            else QUOTA_SHOULD_RUN_DETAIL_SECTIONS
-        )
+    if requested_details:
+        allowed_details = {*QUOTA_COMMAND_DETAIL_SECTIONS[command], "all"}
         unsupported_details = sorted(requested_details - allowed_details)
         if unsupported_details:
             raise QuotaCommandValidationError(

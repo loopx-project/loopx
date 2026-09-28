@@ -140,6 +140,9 @@ def register(root, row, session, turn):
                 raise ValueError("context return route conflict")
         else:
             _write(path, value | {"registered_at": _now()})
+        saved = _read(path)
+        if any(saved.get(k) != v for k, v in value.items()):
+            raise ValueError("context return route readback failed")
 
 
 def _route(root, row):
