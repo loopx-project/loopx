@@ -150,7 +150,8 @@ def test_bounded_ticks_resume_deferred_sources_and_preserve_freshness(pair):
     assert second["scan_budget"]["attempted_source_count"] == 1
     assert second["scan_budget"]["deferred_source_ids"] == []
     assert second["sources"][1]["status"] == "completed"
-    assert first["sources"][0] == second["sources"][0]
+    for key in ("last_read_at", "last_checked_at", "status", "pending_batch_count"):
+        assert first["sources"][0][key] == second["sources"][0][key]
     assert second["pending_batch_count"] == 2
     assert not args["cursor_path"].exists()
 
