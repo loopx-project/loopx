@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA,
+  evaluateUserTodoContractDiagnostics, TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA,
   userTodoScopeConflict } from "../../loopx/control_plane/todos/authoring_scope.ts";
 
 function plan(intent: JsonObject, overrides: JsonObject = {}): JsonObject {
@@ -105,4 +106,37 @@ test("malformed intent cannot turn a truthy string or an unknown field into scop
   for (const intent of [{global_gate: "true"}, {goal_bound: 1}, {global_gat: true}]) {
     assert.throws(() => plan({task_class: "user_gate", actor_agent_id: "agent-a", ...intent}), /boolean|does not own/);
   }
+});
+
+test("canonical diagnostics keep the non-terminal user rules without repairing rows", () => {
+  const evaluate = (todos: JsonObject[], agents = ["agent-a"], terminal = ["done", "deferred", "archived"]) =>
+    evaluateUserTodoContractDiagnostics({schema_version: TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA,
+      todos, registered_agents: agents, terminal_statuses: terminal});
+  const open = (extra: JsonObject): JsonObject => ({schema_version: "todo_item_v0", todo_id: "todo_x",
+    role: "user", status: "open", done: false, text: "raw text that must not surface", ...extra});
+  const codes = (todos: JsonObject[], agents = ["agent-a"], terminal = ["done", "deferred", "archived"]) =>
+    (evaluate(todos, agents, terminal).diagnostics as JsonObject[]).map(row => row.code);
+  assert.deepEqual(codes([open({})]), ["user_todo_task_class_missing"]);
+  assert.deepEqual(codes([open({done: true})]), ["user_todo_task_class_missing"]);
+  assert.deepEqual(codes([open({task_class: "user_action", global_gate: true})]), ["user_action_blocking_scope_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true, blocks_agent: "agent-a"})]),
+    ["user_gate_scope_conflict"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", goal_bound: true, bound_agent: "agent-a"})]),
+    ["user_todo_response_scope_conflict"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true, bound_agent: "agent-a"})]),
+    ["goal_user_gate_agent_binding_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", blocks_agent: "agent-a", goal_bound: true})]),
+    ["agent_user_gate_goal_binding_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", goal_bound: true})], ["agent-a", "agent-b"]),
+    ["multi_agent_user_gate_missing_scope"]);
+  assert.deepEqual(codes([open({task_class: "user_action"})], ["agent-a", "agent-b"]),
+    ["multi_agent_user_todo_missing_response_scope"]);
+  // Controls: valid open user work, completed history without a class, and agent rows stay healthy.
+  assert.deepEqual(codes([open({task_class: "user_action"})]), []);
+  assert.deepEqual(codes([{...open({}), status: "done", done: true}]), []);
+  assert.deepEqual(codes([{schema_version: "todo_item_v0", todo_id: "todo_a", role: "agent",
+    status: "open", done: false}]), []);
+  const observed = evaluate([open({}), {...open({}), status: "done", done: true}]);
+  assert.equal(observed.checked, 1);
+  assert.equal(JSON.stringify(observed).includes("raw text"), false);
 });
