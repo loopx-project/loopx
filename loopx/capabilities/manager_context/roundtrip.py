@@ -44,18 +44,6 @@ DELIVERY_ERRORS = {
     "delivery_state_unreadable",
 }
 
-# Bounded reasons why one return cannot be resolved at all. Adapters raise
-# ``ReturnResolutionBlocked`` with one of these instead of relying on their prose
-# being re-parsed, so delivery state never depends on message substrings.
-RETURN_RESOLUTION_REASONS = frozenset(
-    {
-        "return_authorization_unavailable",
-        "original_route_unavailable",
-        "initial_delivery_receipt_unavailable",
-    }
-)
-
-
 class ReturnResolutionBlocked(ValueError, RuntimeError):
     """A return cannot be resolved; ``reason`` is the provider-neutral code.
 
@@ -64,7 +52,10 @@ class ReturnResolutionBlocked(ValueError, RuntimeError):
     """
 
     def __init__(self, reason, message):
-        if reason not in RETURN_RESOLUTION_REASONS:
+        decision = _verification_decision({
+            "verification_performed": False, "reply_verified": False, "blocker": reason,
+        })
+        if decision["status"] != "explicit_unverified":
             raise ValueError("unsupported return resolution reason")
         self.reason = reason
         super().__init__(message)
@@ -105,23 +96,12 @@ def _verification_decision(outcome):
 
 
 def _verification_exception_error(exc):
-    reason = getattr(exc, "reason", None)
-    if reason in RETURN_RESOLUTION_REASONS:
-        return reason
-    # Compatibility fallback for adapter text that still arrives as prose. New
-    # adapter failures must raise ReturnResolutionBlocked with a typed reason.
-    message = str(exc)
-    if (
-        "authorization" in message
-        or "authorized" in message
-        or "authority" in message
-    ):
-        return "return_authorization_unavailable"
-    if any(token in message for token in ("conversation", "route", "binding", "target")):
-        return "original_route_unavailable"
-    if "initial reply" in message or "initial_receipt" in message:
-        return "initial_delivery_receipt_unavailable"
-    return None
+    decision = _verification_decision({
+        "verification_performed": False,
+        "reply_verified": False,
+        "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None,
+    })
+    return decision["error"] if decision["status"] == "explicit_unverified" else None
 
 
 def register(root, row, session, turn):
@@ -170,16 +150,18 @@ def _route(root, row):
                 if receipt.get("request_id") == row["request_id"]:
                     matches.append((session, turn))
         if len(matches) != 1:
-            raise ValueError("original Chat return route unavailable or ambiguous")
+            raise ReturnResolutionBlocked(
+                "original_route_unavailable", "original Chat return route unavailable or ambiguous"
+            )
         register(root, row, *matches[0])
     value = _read(path)
     if value.get("kind") == "peer" and (row.get("source_kind") != "peer" or value.get("source_agent_id") != row.get("source_agent_id")):
-        raise ValueError("peer return route identity mismatch")
+        raise ReturnResolutionBlocked("original_route_unavailable", "peer return route identity mismatch")
     if any(
         value.get(k) != row.get(k)
         for k in ("request_id", "goal_id", "agent_id", "source_id")
     ):
-        raise ValueError("context return route identity mismatch")
+        raise ReturnResolutionBlocked("original_route_unavailable", "context return route identity mismatch")
     return value
 
 
@@ -338,16 +320,16 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     or session.get("channel_id") != route["channel_id"]
                     or not turn
                 ):
-                    raise ValueError("original_conversation_unavailable")
+                    raise ReturnResolutionBlocked("original_route_unavailable", "original_conversation_unavailable")
                 grant = authority(root, registry, session, turn)
                 target = {k: row[k] for k in ("goal_id", "agent_id")}
                 if (
                     target not in grant["targets"]
                     or grant.get("source_id") != row["source_id"]
                 ):
-                    raise ValueError("return_authorization_unavailable")
+                    raise ReturnResolutionBlocked("return_authorization_unavailable", "return_authorization_unavailable")
                 if turn.get("status") != "completed":
-                    raise ValueError("initial_receipt_not_completed")
+                    raise ReturnResolutionBlocked("initial_delivery_receipt_unavailable", "initial_receipt_not_completed")
                 if (
                     path.stem == "decision"
                     and (path.parent / "conclusion.json").exists()

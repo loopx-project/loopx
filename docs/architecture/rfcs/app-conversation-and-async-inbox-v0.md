@@ -220,6 +220,14 @@ Todo/lease, model admission and artifact acceptance keep their existing owners.
 Dispatch events wake the existing driver within admission; polling repairs gaps.
 An inbox is not permission to start another automation.
 
+The return-verification slice uses the existing TS classification owner for
+both adapter results and typed resolution failures. Exception text is diagnostic,
+not route/authority evidence: a transient read failure retains its locator and
+backoff, then reconciles the original result without another send. Explicit
+revocation, lost routing and missing initial receipts remain terminal. This
+qualifies the persisted recovery boundary, not live provider availability or
+the complete GQ09 journey.
+
 Before each extraction report base/head real-call latency, boundary crossings,
 bytes, owners deleted/retained and compatibility callers. Product delivery must
 not wait for full Python retirement. Python may retain IO; TS owns migrated

@@ -96,6 +96,14 @@ export function classifyManagerReturnVerification(value: unknown): JsonObject {
     };
   }
   if (!performed) {
+    // A transport outage is not proof that the original route or grant was
+    // revoked. Only exact, adapter-declared resolution reasons stop readback.
+    const blocker = outcome.blocker;
+    if (blocker === "return_authorization_unavailable"
+      || blocker === "original_route_unavailable"
+      || blocker === "initial_delivery_receipt_unavailable") {
+      return { status: "explicit_unverified", error: blocker, verification: null };
+    }
     return {
       status: "verification_required",
       error: "provider_verification_unavailable",
