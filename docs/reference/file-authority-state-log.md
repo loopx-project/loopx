@@ -22,8 +22,13 @@ append-only even though File atomically replaces its physical envelope.
 
 Cold reads verify every retained transaction and the final head; a valid head
 cannot hide a corrupt old delta or receipt. Verified pagination reconstructs at
-most 63 predecessor deltas plus the requested page. The exact-byte cache remains
-bounded. File still reads/hashes and rewrites one retained file: this reduces
+most 63 predecessor deltas plus the requested page. The exact-byte cache retains
+at most four store paths in least-recently-used order, with a shared 128 MiB
+serialized history/read-view budget. A large journal can retain only its head
+and receipt index (up to 16 MiB per read view); scans and writes still verify its
+history. Every cache hit requires matching file digest and store identity, not
+only file timestamps. These are encoded-data bounds, not a heap/RSS limit.
+File still reads/hashes and rewrites one retained file: this reduces
 repeated data, not asymptotic growth. Cold verification can be slower. Measure
 upgrade, cold verification, warm reads and steady writes separately.
 
@@ -111,6 +116,12 @@ loopx --format json authority-archive export --goal-id example --archive /absolu
 loopx --format json authority-archive verify --archive /absolute/history.ndjson
 loopx --format json authority-archive restore --goal-id example --archive /absolute/history.ndjson \
   --destination /absolute/new-isolated-store --provider sqlite --archive-sha256 DIGEST --execute
+# Independently audit the actual restored provider, not just its old success file.
+loopx --format json authority-archive audit --goal-id example --archive /absolute/history.ndjson \
+  --archive-sha256 DIGEST --destination /absolute/new-isolated-store
+# Audit the selected runtime's retained prefix after it has received later writes.
+loopx --format json authority-archive audit --goal-id example --archive /absolute/history.ndjson \
+  --archive-sha256 DIGEST --allow-newer-head
 ```
 
 File/SQLite exports restore into either File or SQLite. Restore creates a new
@@ -120,12 +131,81 @@ converter for every pair of storage formats. PostgreSQL's existing archive
 source contract remains unchanged; authenticated service activation, cutover
 and PostgreSQL destination administration are separate work.
 
+Restore first copies the input into a private temporary directory and verifies
+that copy against the reviewed digest. All subsequent reads use that same copy.
+Previously, replacing the original path between verification and restore could
+write unreviewed rows into the isolated destination before the final seal check
+failed. Replacement or in-place edits to the original now cannot change the
+accepted restore input. A corrupt or wrong-digest copy fails before target
+access. Normal completion/failure removes the temporary directory; abrupt process
+death can leave private temporary files for normal system/operator cleanup.
+Budget additional local disk space approximately equal to the archive size.
+
+Resume checks the target's entire existing prefix before appending its missing
+suffix. Prefix scans use at most 16 reconstructed transactions per page; each
+original operation is also looked up through the provider's receipt index. The
+same TS comparator serves restore and independent audit. Acknowledged new writes
+also share a page proof; an uncertain write forces immediate readback before any
+later write, without retrying the uncertain operation. Logical commits remain
+individual CAS operations. SQLite resolves all requested operation IDs in one
+read transaction and verifies each touched checkpoint window once per batch;
+other providers use the same contract with scalar receipt lookup as a fallback.
+This removes redundant replay without skipping old receipts, caching proof
+across calls, or claiming constant memory independent of state size.
+Input decoding retains one reconstructed state plus operation-ID uniqueness
+tracking; target pages retain up to 16 full states. This is count-bounded paging,
+not a new provider byte-budget guarantee.
+
+`audit` is read-only and never creates a missing authority. It compares every
+historical projection, event, operation ID and original receipt, including
+receipt lookup cursor/version. Physical provider revisions may differ across
+providers. A matching final head alone cannot pass. Reports expose a typed
+reason and first failing cursor, not private state or receipt bodies.
+
+- Default `exact` requires the target to contain exactly the archive's commits
+  and remain at that head through readback. Concurrent advancement asks for a
+  retry; it is not silently classified as equality.
+- Explicit `--allow-newer-head` verifies only the archive's retained prefix and
+  tolerates later append-only commits in the same store lineage. The report says
+  `retained_prefix`; it does not certify those later commits against the backup.
+- `--destination` reads the isolated restore binding to choose File or SQLite;
+  without it, audit uses the selected runtime provider. A wrong binding, source
+  digest, missing historical receipt or unavailable provider fails closed.
+
+An audit proves retained data, not active execution safety. It does not transfer
+leases, select a provider, remove a writer fence, or authorize rollback over
+newer writes. `verified-restore.json` remains a historical completion receipt;
+run `audit` for current evidence rather than trusting the file's presence.
+
 Old raw backups can be copied into an **isolated** provider directory, with their
 original identity and canonical filename, then upgraded and exported. Never
 rewrite a schema label or restore an old backup over newer acknowledged writes.
 Binary rollback requires the target runtime to pass `--require-current`; an old
 binary without that gate is not automatically activated. Data rollback and
 provider cutover require their own reviewed, fenced recovery operation.
+
+## 恢复与审计
+
+恢复先复制到权限受限的临时目录，再核对审核摘要，后续只读这一份副本。旧实现
+在校验后重开原路径，可能先将被替换的内容写入隔离目标、最后才报错；现在原路径
+被替换或原地改写不会改变已接受的恢复输入。正常结束会清理副本；进程被强制杀掉
+可能留下私有临时文件。需预留约一份归档大小的额外磁盘空间。
+
+续传先核对已有前缀，再追加缺失后缀；TS 的同一比对规则同时服务恢复与独立审计。
+最多每页 16 条完整历史投影，逐笔核对原始回执。新写入仍是独立 CAS，但明确成功的
+提交可共享分页回读；遇到不确定写入，立即回读证明后才可继续，绝不盲目重发。
+SQLite 在一个读事务内按操作 ID 查询回执，同一批只重放一次每个涉及的检查点窗口；
+其他 provider 通过同一接口回退到逐笔查询。不跨请求缓存证明，不跳过旧回执，也不
+声称内存与状态大小无关。
+
+`authority-archive audit` 不写业务状态、不创建缺失存储。默认 exact 要求当前目标
+与归档完整一致；显式 `--allow-newer-head` 只证明归档对应的保留历史前缀，允许随后
+追加，但不把之后的提交算成已审核。`--destination` 审计隔离恢复目录，否则审计
+当前选择的 runtime provider。逐笔状态、事件、操作身份及回执查询都必须相符；
+最终 head 一样不足以通过。不同 provider 的物理 CAS 版本无需相同。
+
+审计不选择 authority、不转移执行租约、不撤销 writer fence，也不授权覆盖新写入。
+`verified-restore.json` 是过去的完成回执，当前完整性应重新 audit。
 
 ## Qualification and limits
 
@@ -159,3 +239,82 @@ platform CI evidence; POSIX validation does not substitute for it.
 升级失败时可能已有部分 store 完成，必须据实报告并重试，不能覆盖之后产生的写入。
 备份仍是旧格式，恢复时应先在隔离目录升级。只回退二进制并不等于安全回退数据。
 该方案减少重复存储和后续写入耗时，但冷校验仍验证全历史，可能更慢。
+
+## Reviewed File/SQLite cutover
+
+An already-promoted, quiescent canonical Goal can change between the built-in
+File and SQLite providers. Stop its writers and settle its task leases first.
+An expired but still `active` lease is a hold: expiry does not prove that the
+old Host stopped. This command does not stop Hosts, settle Turns, retire leases,
+change a registry, or remove the legacy writer fence. PostgreSQL service
+activation and migration from a legacy Markdown Goal are separate operations.
+
+```bash
+# Use the same explicit runtime root for planning, preview and execution.
+loopx --runtime-root /absolute/runtime --format json authority-archive plan-migration \
+  --goal-id example --provider sqlite --plan /absolute/migration-plan.json
+# Review the saved plan and take PLAN_SHA256 from the planning response.
+loopx --runtime-root /absolute/runtime --format json authority-archive migrate \
+  --goal-id example --plan /absolute/migration-plan.json --plan-sha256 PLAN_SHA256
+loopx --runtime-root /absolute/runtime --format json authority-archive migrate \
+  --goal-id example --plan /absolute/migration-plan.json --plan-sha256 PLAN_SHA256 --execute
+```
+
+The plan binds the canonical runtime path, Goal, source store identity, revision,
+cursor, projection digest, writer-fence digest and destination provider. A
+changed source requires a new reviewed plan. Plans are created exclusively;
+choose a new path instead of overwriting an already-reviewed artifact.
+
+Migration copies complete committed projections, events and original receipts;
+it does not rebuild Todos from display columns or reapply a metadata allowlist.
+Historical metadata values, absent keys, explicit nulls, false, zero and empty
+arrays remain distinct. Auditing excludes only the transaction's physical
+provider revision, which legitimately changes with the backend. It cannot prove
+that an earlier legacy-to-canonical capture included every external field, nor
+does it copy attachment files or independently-owned Host/Turn stores.
+
+Execution shares the maintenance guard used by canonical command writers. It
+saves a verified logical backup below the runtime's
+`authority-transition/local-provider/<plan digest>/`, binds the target identity,
+restores missing history, independently audits every retained transaction and
+receipt, then atomically publishes the selector. Selected local stores check
+their identity on every operation. A missing/replaced selected store fails
+closed; it is never recreated or silently replaced with another provider.
+
+An implicit File source becomes an explicit identity-bound File selection before
+SQLite preparation. This keeps the source readable while the target is being
+built. It does not change the source's domain history. Backup and target creation
+consume additional disk space; retain the backup and recovery record for retries
+and investigation. No automatic cleanup deletes these recovery artifacts.
+
+Retry **the same plan and digest** after interruption. A partial restore audits
+its prefix before appending. If publication already happened, recovery audits
+the retained prefix without discarding later target writes. A publication error
+can return `authority_changed: null`: the outcome is uncertain, so retry rather
+than assume the source is still selected. A completed plan superseded by another
+migration cannot reactivate its former target.
+
+To return to File, create a **new** plan with `--provider file`, then preview and
+execute it. This carries the current SQLite history back to File and retains
+new acknowledged writes. An old File history is reusable only if it is an exact
+prefix. Divergent/extra target history rejects migration; do not delete it or
+copy old bytes over live state to force acceptance.
+
+Provider rollback is distinct from binary downgrade. Earlier binaries that do
+not recognize explicit File selectors cannot operate this runtime. Keep a
+migration-capable binary; do not remove the selector to make an old binary start.
+The generic historical format check alone does not prove selector compatibility.
+This operation qualifies local storage continuity, not D2 capacity/soak, all
+Host lifecycles, all Goal consumers, or permission to enable a provider by default.
+
+### 已晋升 Goal 的本地 provider 切换
+
+先停止写入并结算租约，再通过 `plan-migration` 保存并审核计划，用输出的摘要调用
+`migrate` 预览和执行。未结算的租约即使过期也会阻止迁移。TS 在同一个 canonical
+写锁下完成备份、历史与回执核对、selector 发布及回读；Python 只传参数和结果。
+
+中断后用同一计划重试；切换后产生的新写入会被保留。回退是另做一个 `--provider
+file` 的新计划，把最新历史迁回 File，不能覆盖旧备份。此处不负责停 Host、结算
+Turn、旧 Markdown Goal 晋升或 PostgreSQL 服务部署，也不代表默认值资格通过。
+旧版本若不认识显式 File selector，会拒绝读取；保留支持迁移的运行时，不删除
+selector 绕过检查。

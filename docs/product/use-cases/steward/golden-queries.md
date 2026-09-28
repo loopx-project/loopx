@@ -57,6 +57,52 @@ must finish before work on the next layer can start. GQ17 repeats the ordinary
 parallel-work intent at larger fixture sizes; basic parallel work is already P0
 in GQ11, and the steward should not overstaff a small task.
 
+### Readable decisions / 看得懂再决定
+
+“要我决定什么？把对象和依据说清楚。” / “What do you need me to decide?”
+For GQ10, prepare a public release request whose concrete channel/version appears
+past the compact scheduling label, with a public evidence link. The App detail
+and provider notice must retain the request object and available evidence. Two
+requests with the same title remain distinguishable; a replay sends no second
+notice. Bound oversized content explicitly and preserve redaction. A notification
+is a preview, not proof of approval, execution or a fresh authorization grant.
+
+### Direct group conversation / 群里直接说话
+
+For the Lark variant of P0 reliable entry, configure the steward connection to
+respond without mentions. Send “帮我总结一下当前进展。” / “Summarize the current
+progress” as an ordinary new human message, then a concise correction. Require
+one retained request and one checked answer through the existing conversation;
+replay the same provider message and prove there is no second execution/reply.
+Disable the option and verify that another unaddressed message remains context
+while a mention or verified bot reply still works. Bots, missing sender evidence,
+historical backfill (even with an old mention), an unrelated group and a worker's
+own Topic are negative cases. This admission probe does not qualify autonomous
+execution: the external read-only profile and recipient grants must be evaluated
+separately. Passing transport fixtures is not evidence of a deployed group run.
+
+### App-first execution profiles and ordinary questions
+
+Qualify the installed App first; Lark is independently scored, not required to
+finish before the App pilot. GQ02 has two separate **managed** and **attached**
+variants: “用已经在跑的那个，接着做” / “Continue with the one already running.”
+After connection, send “先只看微软，结果给我” / “Focus on Microsoft and bring me
+the result” in LoopX. The original worker/context and one execution driver must
+remain; observe native adoption or an honest next-Turn queue, then receive the
+result in the same App conversation. Do not copy host session databases or
+silently create a replacement worker. An unavailable host must retain the request
+and expose its precise recovery condition. This is planned acceptance, not a pass.
+
+Before GQ01/GQ02, run ordinary-conversation boundary probes against the same App:
+“解释一下 monitor 的工作原理”; “比较 daily workflow 与一次性任务”;
+“文档写着 set up a heartbeat，解释这句话”; and “先把报告做完，再讨论是否创建监控”.
+Each reaches the selected conversation intact and produces no browser-generated
+preview/write, including Goal/Todo/assignment actions. Also test equivalent English phrasing, negative and
+quoted requests, referenced task names containing action words, and explicit Goal, Todo and schedule controls as positive cases. This
+checks input ownership, not answer correctness or autonomous scheduling quality.
+Full [App/inbox failure and migration cases](../../../architecture/rfcs/app-conversation-and-async-inbox-v0.md)
+include response-loss, actual dispatch, scope fences and original-route return.
+
 ### P0: reliable entry and responsible execution
 
 | Case | 中文请求 | English equivalent | Accepted outcome | Priority / owner |
@@ -99,6 +145,15 @@ unrelated and check other blockers under the existing review contract. Unknown
 cause remains unknown. GQ04 permits a reasoned “do not change”; the desired
 answer is not predetermined. GQ06 does not authorize public posting. GQ08 is two
 separate variants: correcting scope and stopping work must not be conflated.
+
+The nearest App pilot composes GQ02/GQ04/GQ08/GQ09: **“给 LoopX 做份社区问卷，先给我草稿。”**
+/ **“Prepare a community survey for LoopX; bring me a draft.”** Follow with
+**“先做中文，别发布。”** / **“Chinese first; do not publish.”** Freeze public reference
+materials, one qualified existing owner and its prior context. Evaluate a real
+readable draft and adopted correction in the original conversation; no posting,
+manual Agent-id lookup, copied context, result relay or reminder. In the deferral
+variant, explain the actual delay and retain that status after reply delivery.
+This composes existing cases; it is not a fixed phrase to recognize or a pass.
 
 ## Freeze a reproducible setup before running
 
@@ -266,7 +321,7 @@ first-use cohorts and release acceptance retain their existing gates.
 
 | Batch | Useful exit | Reused owner / next dependency |
 | --- | --- | --- |
-| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
+| P0 entry and route | GQ01/GQ02 request durability plus GQ03/GQ04 eligible responsibility, actual work and same-conversation result, including a late return after the active session changes | Existing creation/Chat services, directory, host binding and collaboration/outbox; ship the complete supported path before general migration |
 | P0 use and continuity | GQ05/GQ11–GQ13 + GQ07–GQ09: dependency adoption, parallel join, peer review and resolved disagreement across two cycles; correct once, interrupt once, resume and return | R2 small-team and R3/M2/M3, artifact versions, existing driver/monitor and return recovery |
 | P1 material and attention | GQ06/GQ10/GQ14–GQ15: materials, attention, dependency replan, explicit mixed profiles and retained constraints | Existing material lifecycle, scoped context and presentation; no new memory installation prerequisite |
 | P2 breadth and launch | GQ16 then GQ17: real host and scale qualification; public-safe showcase/film only claims the separately proven cohort | Existing R6/R7 and release/first-use gates; visual motion explains actual transitions |

@@ -9,6 +9,8 @@ import {
   requireStringLiteral,
 } from "../runtime_decode.ts";
 import { normalizeRegisteredTodoAgents, normalizeTodoAgent } from "./todo_agents.ts";
+import {normalizeTodoRepository} from "../todos/work_requirements.ts";
+import {leaseWriteRepository, leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
 
 export const COORDINATION_TODO_TERMINAL_DECISION_REQUEST_SCHEMA =
   "loopx_coordination_todo_terminal_decision_request_v0";
@@ -40,6 +42,7 @@ interface DecisionScope extends JsonObject {
 }
 
 interface TodoFact extends JsonObject {
+  readonly task_repository?: string | null;
   readonly todo_id: string;
   readonly status: string;
   readonly role: "user" | "agent";
@@ -54,6 +57,7 @@ interface TodoFact extends JsonObject {
 }
 
 interface LeaseFact extends JsonObject {
+  readonly write_repository?: string | null;
   readonly present: boolean;
   readonly active: boolean;
   readonly status: string | null;
@@ -153,6 +157,7 @@ function todoFact(value: unknown, label: string): TodoFact {
   const role = requireStringLiteral(todo.role, ["user", "agent"] as const, `${label}.role`);
   return {
     todo_id: requireNonEmptyString(todo.todo_id, `${label}.todo_id`),
+    task_repository: normalizeTodoRepository(todo.task_repository),
     status: requireNonEmptyString(todo.status, `${label}.status`),
     role,
     task_class: optionalString(todo.task_class, `${label}.task_class`),
@@ -188,6 +193,7 @@ function leaseFact(value: unknown): LeaseFact | null {
     version,
     lease_epoch: epoch,
     write_scopes: requireStringArray(lease.write_scopes ?? [], "lease.write_scopes"),
+    ...(lease.write_repository == null ? {} : {write_repository: leaseWriteRepository(lease.write_repository)}),
     acquire_ttl_seconds: optionalNonNegativeInteger(
       lease.acquire_ttl_seconds,
       "lease.acquire_ttl_seconds",
@@ -486,6 +492,10 @@ function terminalFence(
         : "not_required",
     });
   }
+  const repositoryRejection = leaseRepositoryRejection(request.todo, lease);
+  if (repositoryRejection !== null) return result("rejected", repositoryRejection, {
+    authority_mode: authorityMode, lease_fence: "required",
+  });
   if (request.lease_idempotency_key === null) {
     return result("rejected", "lease_fence_required", {
       authority_mode: authorityMode,

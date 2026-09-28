@@ -24,6 +24,7 @@ AGENT_PROFILE_FIELDS = {
 }
 AGENT_PROFILE_ACTION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_*-]{0,79}$")
 AGENT_PROFILE_ACTION_PATTERN_LIMIT = 16
+AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS = 320
 AGENT_PROFILE_HIERARCHY_ROLES = {
     "leader",
     "manager",
@@ -173,7 +174,7 @@ def normalize_agent_profile(
         "scope_summary": _bounded_text(
             raw_profile.get("scope_summary"),
             field="scope_summary",
-            limit=320,
+            limit=AGENT_PROFILE_SCOPE_SUMMARY_MAX_CHARS,
         ),
         "default_task_classes": task_classes,
         "vision_requirement": _vision_requirement(

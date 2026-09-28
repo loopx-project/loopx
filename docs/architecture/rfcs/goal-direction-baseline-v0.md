@@ -1,6 +1,7 @@
 # RFC: Goal Direction Baseline (v0)
 
-- **RFC status:** Draft; under maintainer review
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers and contributors
 - **Created:** 2026-09-10

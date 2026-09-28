@@ -17,13 +17,27 @@ LOCAL_PATH_SURFACE_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
+# Refs #5136: one definition for "this string carries a raw remote location".
+# Three validators each restated the same scheme list, and the canonical
+# public-safety owner had no counterpart, so a fourth caller had to invent one.
+REMOTE_LOCATION_SURFACE_PATTERN = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
 SECRET_LIKE_SURFACE_PATTERN = re.compile(
     r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
-    r"\b(?:access|secret)[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"\b(?:access|api|secret)[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
     r"\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
     r"(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|"
-    r"\bgh[pousr]_[a-z0-9]{20,}\b|"
+    r"\bgh[pousr]_[a-z0-9]{16,}\b|"
+    r"\bgithub_pat_[a-z0-9_]{20,}|"
+    r"\b(?:akia|asia)[a-z0-9]{16}\b|"
+    r"\bxox[baprs]-[a-z0-9-]{10,}|"
+    r"\baiza[a-z0-9_-]{20,}|"
+    r"\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|"
+    r"\bnpm_[a-z0-9]{20,}|"
+    r"\bpypi-[a-z0-9_-]{20,}|"
     r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b|"
+    r"\b(?:access|refresh)[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
+    r"\b(?:password|secret)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
+    r"-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY|"
     r"\btoken[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,})"
 )
 _CREDENTIAL_FIELD_FAMILIES = frozenset(
@@ -92,14 +106,19 @@ def validate_public_safe_value(
 ) -> None:
     """Fail closed for private material in a typed public-output payload.
 
-    Field classification is exact after case, separator, and camelCase
-    normalization. Values are then checked recursively so nested maps and lists
-    cannot bypass the same credential and local-path boundary.
+    Mapping field names must be strings. Field classification is exact after
+    case, separator, and camelCase normalization. Values are then checked
+    recursively so nested maps and lists cannot bypass the same credential
+    and local-path boundary.
     """
 
     if isinstance(value, Mapping):
         for key, item in value.items():
-            key_text = str(key)
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"{path} contains a non-string field name ({type(key).__name__})"
+                )
+            key_text = key
             if LOCAL_PATH_SURFACE_PATTERN.search(
                 key_text
             ) or SECRET_LIKE_SURFACE_PATTERN.search(key_text):

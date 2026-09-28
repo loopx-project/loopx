@@ -18,7 +18,6 @@ Two scheduling-only seams exist, both outside every product decision:
 
 from __future__ import annotations
 
-import importlib
 import json
 import select
 import subprocess
@@ -28,7 +27,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ..coordination import local_authority_shadow_outbox as shadow_outbox
 from .authority_e2e_fixtures import (
     REPO_ROOT,
@@ -96,7 +95,7 @@ GROWTH_TEXT_TEMPLATE = "Growth workload todo %02d " + "x" * 160
 # byte delta may grow by about one Todo record per transaction. A larger jump
 # means something beyond the live projection is being re-published.
 GROWTH_DELTA_ACCELERATION_ENVELOPE_BYTES = 2048
-EVENT_ONLY_HOLD = "event_log_writer_not_bound"
+EVENT_ONLY_HOLD = "legacy_todo_event_source_retired"
 CONTINUITY_HOLD = "source_partition_continuity_unproved"
 SHADOW_READ_MODULE = Path("loopx") / "control_plane" / "coordination" / "local_authority_shadow.ts"
 SHADOW_READ_REQUEST_SCHEMA = "loopx_coordination_runtime_shadow_outbox_read_v0"
@@ -111,48 +110,47 @@ from loopx.cli import main
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
 from loopx.control_plane.coordination import local_authority_shadow_outbox as outbox
 from loopx.control_plane.todos import active_state_editing
-window, state = sys.argv[1], pathlib.Path(sys.argv[2]).resolve()
-def pause():
-    print('BARRIER ' + json.dumps({'window': window}), flush=True)
+window, state = sys.argv[1], pathlib.Path(sys.argv[2])
+def pause(payload=None):
+    print('BARRIER ' + json.dumps(payload or {}), flush=True)
     time.sleep(40)
     raise RuntimeError('parent failed to terminate at persistence barrier')
 actual_rpc = adapter.effect_runtime_result
 def rpc(method, request, **kwargs):
-    if method == 'coordination.runtime_shadow.commit_entry' and window == 'before_commit':
-        pause()
-    result = actual_rpc(method, request, **kwargs)
-    if method == 'coordination.runtime_shadow.commit_entry' and window == 'after_commit':
-        pause()
-    return result
+    if method == 'coordination.runtime_shadow.drain' and window in {'before_commit', 'after_commit', 'after_cursor', 'between_unlinks'}:
+        import subprocess
+        child = subprocess.Popen(['node', '--no-warnings', '--experimental-strip-types',
+            'loopx/control_plane/testing/shadow_drain_fault_process.ts', window],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        child.stdin.write(json.dumps(request)); child.stdin.close()
+        for line in child.stdout:
+            if line.startswith('BARRIER '):
+                print(line, end='', flush=True)
+                sys.stdin.readline()  # Parent requests death at the observed barrier.
+                child.kill(); child.wait(timeout=10)
+                print('REAPED', flush=True)
+                time.sleep(40)
+                raise RuntimeError('parent failed to terminate crash worker')
+        raise RuntimeError('native barrier missing: ' + child.stderr.read())
+    return actual_rpc(method, request, **kwargs)
 adapter.effect_runtime_result = rpc
-actual_cursor = outbox.write_cursor
-def cursor(*args, **kwargs):
-    result = actual_cursor(*args, **kwargs)
-    if window == 'after_cursor':
-        pause()
-    return result
-outbox.write_cursor = cursor
 actual_json = outbox.durable_write_json
 def write_json(path, value):
-    if window == 'before_marker' and path.name.endswith('.committed.json'):
-        pause()
+    if window == 'before_marker' and path.name.endswith('.committed.json'): pause()
     return actual_json(path, value)
 outbox.durable_write_json = write_json
 actual_replace = active_state_editing.os.replace
 def replace(source, target):
-    is_primary = pathlib.Path(target).resolve() == state
-    if is_primary and window == 'before_replace':
-        pause()
+    is_primary = pathlib.Path(target) == state
+    if is_primary and window == 'before_replace': pause()
     result = actual_replace(source, target)
-    if is_primary and window == 'after_replace':
-        pause()
+    if is_primary and window == 'after_replace': pause()
     return result
 active_state_editing.os.replace = replace
 actual_unlink = pathlib.Path.unlink
 def unlink(path, *args, **kwargs):
     result = actual_unlink(path, *args, **kwargs)
-    if window == 'between_unlinks' and path.name.endswith('.prepared.json'):
-        pause()
+    if window == 'between_unlinks' and path.name.endswith('.prepared.json'): pause()
     return result
 pathlib.Path.unlink = unlink
 raise SystemExit(main(sys.argv[3:]))
@@ -408,9 +406,14 @@ def todo_count(workspace: GoalWorkspace) -> int:
 
 @contextmanager
 def hold_drain_lock(workspace: GoalWorkspace) -> Iterator[None]:
-    """Hold the stable maintenance lock so writers defer their post-commit drain."""
+    """Hold the maintenance lock so writers defer their post-commit drain.
 
-    with exclusive_file_lock(
+    The native batch takes the TypeScript mutation marker, so the window must
+    hold the same cross-runtime lock the production readers take; a kernel-only
+    flock would no longer exclude it.
+    """
+
+    with exclusive_cross_runtime_file_lock(
         shadow_outbox.drain_lock_target(workspace.runtime_root, workspace.goal_id),
         operation="e2e_window",
     ):
@@ -425,6 +428,7 @@ def crash_cli(workspace: GoalWorkspace, window: str, *args: str) -> None:
         command,
         cwd=REPO_ROOT,
         env=cli_env(workspace),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
@@ -436,6 +440,14 @@ def crash_cli(workspace: GoalWorkspace, window: str, *args: str) -> None:
         if readable:
             line = process.stdout.readline()
     finally:
+        if line.startswith("BARRIER "):
+            barrier = json.loads(line.removeprefix("BARRIER "))
+            if barrier.get("native_pid"):
+                assert process.stdin is not None and process.stdout is not None
+                process.stdin.write("terminate_native\n")
+                process.stdin.flush()
+                readable, _, _ = select.select([process.stdout], [], [], 10)
+                expect(bool(readable) and process.stdout.readline().strip() == "REAPED", "native owner must be reaped")
         process.kill()
         _, stderr = process.communicate(timeout=10)
     expect(line.startswith("BARRIER "), f"{window}: the CLI did not reach its persistence window: {stderr[-200:]}")
@@ -919,7 +931,7 @@ def row_parity_divergent_detects_foreign_edit(context: RowContext) -> RowOutcome
 
 
 def row_event_only_todo_source_holds(context: RowContext) -> RowOutcome:
-    """An event-only Todo source holds qualification and candidate reads fail-closed; recovery needs rollback and rebootstrap."""
+    """A retired source refuses candidate/primary operations; preserving both sources allows explicit cleanup."""
 
     workspace = capture_workspace(context, "ladder-event")
     todo_ids: list[str] = []
@@ -929,47 +941,24 @@ def row_event_only_todo_source_holds(context: RowContext) -> RowOutcome:
         todo_ids.append(str(added["todo_id"]))
     qualified(qualify(workspace), label="baseline")
     log = workspace.state_path.with_name("events.jsonl")
-    # The product's own state-event store writes the event-only source. It is
-    # loaded lazily so this strictly typed ladder module does not follow the
-    # untyped state-event module at type-check time.
-    state_events = importlib.import_module("loopx.event_sourced_state")
-    state_events.AppendOnlyStateEventStore(log).append(
-        state_events.make_state_event(
-            event_id="ladder-event-only-todo",
-            goal_id=workspace.goal_id,
-            event_type=state_events.TODO_ADDED,
-            refs={"todo_id": "todo_event_only"},
-            payload={"role": "agent", "title": "An event-only todo without a Markdown writer.", "task_class": "advancement_task"},
-            recorded_at="2026-09-06T00:00:00+00:00",
-        )
-    )
+    log.write_text(json.dumps({"schema_version": "loopx_state_event_v0",
+        "event_type": "todo_added", "refs": {"todo_id": "todo_event_only"}}) + "\n", encoding="utf-8")
     log_bytes = log.read_bytes()
     surfaces = {"inspect": inspect(workspace), "qualify": qualify(workspace), "read-candidate": read_candidate(workspace, todo_ids[0])}
     for label, payload in surfaces.items():
-        expect(payload.get("ok") is False and payload.get("error") == EVENT_ONLY_HOLD, f"{label} must hold on the unbound event source")
+        expect(payload.get("ok") is False and str(payload.get("error") or "").startswith(EVENT_ONLY_HOLD), f"{label} must refuse retired source: {payload.get('error')}")
     status = shadow_status(workspace)
     expect(status.get("ok") is True and management_status(status) == "active", "status must stay readable while the lineage is held")
-    during = add_todo(workspace, "Markdown write during the event-only hold.")
-    expect(during.get("added") is True, "the primary write must still commit")
-    held = capture_evidence(during, label="todo add (during hold)")
-    expect(held.get("outcome") == "pending" and held.get("reason_code") == CONTINUITY_HOLD, "the capture must hold on unproven continuity")
-    expect(log.read_bytes() == log_bytes, "the hold must not touch the event log")
-    expect(backlog(shadow_status(workspace), "todos").get("committed_pending") == 1, "the held entry must stay pending")
-    log.unlink()
-    removed = rejected(qualify(workspace), "qualification", label="qualify after removal")
-    expect(removed.get("reason_code") == "outbox_pending", "removing the event source must not requalify the held lineage")
-    stopped = drain(workspace)
-    expect(stopped.get("outcome") == "stopped" and stopped.get("reason_code") == CONTINUITY_HOLD, "drain must keep holding the entry")
-    summary = _recover_by_rollback_and_rebootstrap(workspace, label="event-only")
-    return passed(
-        hold=EVENT_ONLY_HOLD,
-        held_surfaces=sorted(surfaces),
-        primary_write_during_hold=CONTINUITY_HOLD,
-        event_log_untouched=True,
-        removal_requalifies=False,
-        recovered_by="rollback_then_bootstrap",
-        rebootstrap_baseline_todos=summary.get("todo_count"),
-    )
+    before = workspace.state_path.read_bytes()
+    during = goal_cli(workspace, "todo", "add", "--role", "agent",
+        "--text", "Markdown write during the retired event hold.", check=False)
+    expect(during.get("ok") is False, "retired source must reject primary writes")
+    expect(workspace.state_path.read_bytes() == before, "refusal must preserve Markdown")
+    expect(log.read_bytes() == log_bytes, "refusal must preserve the event file")
+    log.unlink()  # The fixture owns this file; product never removes it.
+    qualified(qualify(workspace), label="retired source removed without any write")
+    return passed(hold=EVENT_ONLY_HOLD, held_surfaces=sorted(surfaces),
+        primary_write_refused=True, event_log_untouched=True)
 
 
 @dataclass(frozen=True)

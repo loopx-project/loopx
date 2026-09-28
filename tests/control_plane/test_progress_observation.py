@@ -453,7 +453,13 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         "required_outcome",
         "writeback_contract",
         "allowed_terminal",
+        "planning_guidance",
     }
+    assert len(packet["planning_guidance"]) == 2
+    assert all(
+        isinstance(instruction, str) and instruction
+        for instruction in packet["planning_guidance"]
+    )
     assert packet["writeback_contract"] == {}
     assert packet["allowed_terminal"] == [
         "exploration_exhausted",

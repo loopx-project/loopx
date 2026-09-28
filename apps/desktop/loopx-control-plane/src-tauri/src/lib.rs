@@ -229,6 +229,11 @@ mod tests {
         assert!(style.contains("--warning: #f5a623"));
         assert!(script.contains("desktop_update_status"));
         assert!(script.contains("window.loopxBootRetrying"));
+        // Services connect concurrently, so the phase names the loopback set
+        // until one connection outlives its peer and can be named on its own.
+        assert!(script.contains("正在连接本地服务"));
+        assert!(script.contains("正在连接状态服务"));
+        assert!(script.contains("正在连接管家对话服务"));
         // The first screen must offer both operator choices, not a repair path
         // that silently replaces the CLI runtime.
         assert!(html.contains("id=\"pairing-align\""));

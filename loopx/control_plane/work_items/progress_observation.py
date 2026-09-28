@@ -342,6 +342,27 @@ def required_semantic_outcomes(obligation: Mapping[str, Any]) -> list[str]:
     return list(replan_writeback_requirements(obligation)["required_any_of"])
 
 
+def guarded_replan_transition_delta(
+    *, guard_scoped: bool, selected_obligation_id: str | None,
+    transition_acks: list[dict[str, Any] | None],
+) -> dict[str, Any] | None:
+    """Adapt revalidated canonical receipts to the TS-owned exact Turn gate."""
+    try:
+        result = effect_runtime_result("work_item.replan_semantics.project", {
+            "operation": "turn_transition", "guard_scoped": guard_scoped,
+            "selected_obligation_id": selected_obligation_id,
+            "transition_acks": transition_acks,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    if not isinstance(result, Mapping) or "semantic_delta" not in result:
+        raise RuntimeError("TypeScript guarded replan transition shape mismatch")
+    delta = result["semantic_delta"]
+    if delta is not None and not isinstance(delta, Mapping):
+        raise RuntimeError("TypeScript guarded replan delta must be an object or null")
+    return dict(delta) if delta is not None else None
+
+
 def replan_obligation_trigger_kinds(
     obligation: Mapping[str, Any],
 ) -> list[str]:
@@ -563,7 +584,8 @@ def build_replan_action_packet(
             "explore_result_node_refs"
         ),
     )
-    writeback_contract = replan_writeback_requirements(obligation)["writeback_contract"]
+    requirements = replan_writeback_requirements(obligation)
+    writeback_contract = requirements["writeback_contract"]
     successor_summary = str(
         selected_gap_values.get("successor_summary") or ""
     ).strip()[:240]
@@ -612,6 +634,7 @@ def build_replan_action_packet(
         "obligation_id": obligation.get("obligation_id"),
         "uncovered_frontier": context.get("uncovered_frontier"),
         "required_outcome": "semantic_delta",
+        "planning_guidance": requirements["planning_guidance"],
         "writeback_contract": writeback_contract,
         "allowed_terminal": [
             ProgressResultClass.EXPLORATION_EXHAUSTED.value,

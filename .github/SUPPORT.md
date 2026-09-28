@@ -1,9 +1,11 @@
 # LoopX Support
 
 LoopX is an open-source project supported on a best-effort community basis.
-The project does not provide a response-time or resolution SLA, and it does not
-currently provide commercial support through this repository or its community
-channels.
+The project does not provide a response-time or resolution SLA for support
+requests, and it does not currently provide commercial support through this
+repository or its community channels. Pull-request review has published
+targets instead; see
+[Review Service Levels](GOVERNANCE.md#review-service-levels).
 
 ## Choose A Channel
 

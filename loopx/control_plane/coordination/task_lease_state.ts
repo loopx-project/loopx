@@ -7,6 +7,8 @@ import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import {leaseVersion, leaseEpoch, leaseInteger, leaseIsActive, normalizeOwner,
   normalizeIdempotencyKey, TASK_LEASE_SCHEMA_VERSION, type LeaseRecord, type TodoFact} from "../work_items/task_lease_acquire.ts";
 import type {AcquireDecisionInput} from "../work_items/task_lease_acquire_decision.ts";
+import {normalizeTodoRepository} from "../todos/work_requirements.ts";
+import {leaseWriteRepository} from "../work_items/task_lease_repository.ts";
 
 export function canonicalTaskLease(value: JsonObject, goalId: string, todoId: string): LeaseRecord {
   if ((value.schema_version !== undefined && value.schema_version !== TASK_LEASE_SCHEMA_VERSION) ||
@@ -19,6 +21,8 @@ export function canonicalTaskLease(value: JsonObject, goalId: string, todoId: st
     throw new AuthorityStoreProtocolError("canonical lease owner and execution key must be normalized strings");
   }
   leaseVersion(value); leaseEpoch(value);
+  try { leaseWriteRepository(value.write_repository); }
+  catch { throw new AuthorityStoreProtocolError("canonical lease write_repository must be a canonical repository identity or null"); }
   if (value.write_scopes !== undefined && (!Array.isArray(value.write_scopes) ||
       value.write_scopes.some(scope => typeof scope !== "string"))) {
     throw new AuthorityStoreProtocolError("canonical lease write_scopes must be strings");
@@ -33,6 +37,7 @@ export function canonicalLeaseTodoFact(todo: JsonObject | undefined): TodoFact |
   const excluded = todo.excluded_agents ?? [];
   if (!Array.isArray(excluded)) throw new AuthorityStoreProtocolError("Todo exclusions must be an array");
   return {todo_id: String(todo.todo_id), status: String(todo.status),
+    task_repository: normalizeTodoRepository(todo.task_repository),
     claimed_by: todo.claimed_by == null ? null : normalizeTodoAgent(todo.claimed_by, "todo.claimed_by"),
     excluded_agents: excluded.map(value => normalizeTodoAgent(value, "todo.excluded_agents"))};
 }
@@ -47,14 +52,15 @@ export function canonicalTaskLeaseAcquireFacts(index: ReturnType<typeof indexCoo
   const lease = current === null ? null : {present: true, active: leaseIsActive(current, now),
     status: String(current.status), owner: String(current.owner), idempotency_key: String(current.idempotency_key),
     version: leaseVersion(current), lease_epoch: leaseEpoch(current),
-    write_scopes: (current.write_scopes ?? []) as string[], acquire_ttl_seconds: leaseInteger(current, "acquire_ttl_seconds")};
+    write_scopes: (current.write_scopes ?? []) as string[], write_repository: leaseWriteRepository(current.write_repository),
+    acquire_ttl_seconds: leaseInteger(current, "acquire_ttl_seconds")};
   const other_leases = [...index.leases].flatMap(([id, rawLease]) => {
     if (id === todoId) return [];
     const candidate = canonicalTaskLease(rawLease, goalId, id);
     const active = leaseIsActive(candidate, now);
     return [{todo_id: id, active,
       effective: active && leaseOwnerRejection(canonicalLeaseTodoFact(index.todos.get(id)), String(candidate.owner), registered) === null,
-      write_scopes: (candidate.write_scopes ?? []) as string[]}];
+      write_scopes: (candidate.write_scopes ?? []) as string[], write_repository: leaseWriteRepository(candidate.write_repository)}];
   });
   return {todo, lease, other_leases, current};
 }

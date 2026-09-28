@@ -134,6 +134,7 @@ _RETAINED_MONITOR_POLL_INTERACTION_FIELDS = {
         "spend_after_validation",
         "spend_policy",
         "delivery_workspace_causality",
+        "settlement_resume_ref",
     ),
 }
 _RETAINED_MONITOR_POLL_RESPONSE_PLAN_FIELDS = (
@@ -292,7 +293,9 @@ def _compact_nested_item_lists(
     return compact
 
 
-def _compact_agent_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _compact_agent_todo_summary(
+    summary: dict[str, Any], *, detail_command: str = QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND
+) -> dict[str, Any]:
     compact: dict[str, Any] = {}
     omitted_lanes: dict[str, int] = {}
     for key, value in summary.items():
@@ -326,12 +329,14 @@ def _compact_agent_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
             if lane != "current_agent_blocker_items" or summary.get(lane)
         ),
         "omitted_lanes": omitted_lanes,
-        "full_detail_cold_path": QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND,
+        "full_detail_cold_path": detail_command,
     }
     return compact
 
 
-def _compact_user_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _compact_user_todo_summary(
+    summary: dict[str, Any], *, detail_command: str = QUOTA_CLI_USER_TODO_SUMMARY_DETAIL_COMMAND
+) -> dict[str, Any]:
     compact: dict[str, Any] = {}
     omitted_lanes: dict[str, int] = {}
     for key, value in summary.items():
@@ -358,7 +363,7 @@ def _compact_user_todo_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "schema_version": QUOTA_CLI_USER_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION,
         "retained_item_lanes": sorted(_RETAINED_USER_ITEM_LANES),
         "omitted_lanes": omitted_lanes,
-        "full_detail_cold_path": QUOTA_CLI_USER_TODO_SUMMARY_DETAIL_COMMAND,
+        "full_detail_cold_path": detail_command,
     }
     return compact
 
@@ -789,3 +794,28 @@ def compact_quota_should_run_cli_payload(
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )
+
+
+def compact_quota_plan_cli_payload(
+    payload: dict[str, Any], *, detail_sections: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """Bound read-only CLI summaries after complete planning; retain full opt-ins."""
+    if payload.get("mode") not in {"status", "plan"} or not isinstance(payload.get("groups"), dict):
+        return payload
+
+    def project_row(row: dict[str, Any]) -> dict[str, Any]:
+        result = dict(row)
+        for role, compact_summary in (("agent", _compact_agent_todo_summary), ("user", _compact_user_todo_summary)):
+            key = f"{role}_todos"
+            if f"{role}-todos" not in detail_sections and isinstance(row.get(key), dict):
+                result[key] = compact_summary(row[key], detail_command=(
+                    f"quota {payload['mode']} --include-detail {role}-todos"
+                ))
+        return result
+
+    result = dict(payload)
+    result["groups"] = {state: [project_row(row) for row in rows]
+                        for state, rows in payload["groups"].items()}
+    if isinstance(payload.get("next_automatic_turn"), dict):
+        result["next_automatic_turn"] = project_row(payload["next_automatic_turn"])
+    return result

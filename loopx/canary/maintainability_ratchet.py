@@ -56,9 +56,11 @@ REVIEWED_MAINTAINABILITY_EXCEPTIONS: dict[str, dict[str, Any]] = {
         metric_ceilings={"package_reexport_count": 101, "source_module_count": 37},
     ),
     "compatibility_facade:loopx.status": _exception(
-        "The public loopx.status import surface remains a supported compatibility contract.",
+        "The public loopx.status import surface remains a supported compatibility contract. "
+        "Fifteen existing carriers now import their single owners instead of restating "
+        "local values; the import count changes without adding public names.",
         "Keep internal consumers on canonical modules and shrink exports as callers migrate.",
-        metric_ceilings={"package_reexport_count": 117, "source_module_count": 50},
+        metric_ceilings={"package_reexport_count": 119, "source_module_count": 50},
     ),
 }
 
@@ -204,8 +206,11 @@ def _finding_id(category: str, identity: str) -> str:
 
 
 def tracked_python_paths(repository_root: Path) -> set[Path]:
+    # `-z` frames each pathname on NUL, so a path carrying U+0085/U+2028/U+2029
+    # stays one record even in a repository that sets `core.quotePath=false`,
+    # where `git ls-files` emits it raw and `str.splitlines()` would tear it.
     completed = subprocess.run(
-        ["git", "ls-files", "*.py"],
+        ["git", "ls-files", "-z", "*.py"],
         cwd=repository_root,
         check=True,
         text=True, encoding="utf-8", errors="replace",
@@ -213,7 +218,7 @@ def tracked_python_paths(repository_root: Path) -> set[Path]:
     )
     return {
         repository_root / relative_path
-        for relative_path in completed.stdout.splitlines()
+        for relative_path in completed.stdout.split("\0")
         if relative_path and (repository_root / relative_path).is_file()
     }
 

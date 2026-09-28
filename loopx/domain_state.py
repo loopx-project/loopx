@@ -71,7 +71,7 @@ def upsert_domain_state_jsonl(
         candidate = {**payload, "domain_state_key": key}
         if path.exists():
             for index, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
+                path.read_text(encoding="utf-8").split("\n"), start=1
             ):
                 if not line.strip():
                     continue

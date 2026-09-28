@@ -2,7 +2,8 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | Draft，产品方向与交付合同 |
+| 状态 | 已接受 |
+| 替代 / 关闭 | 无 |
 | 日期 | 2026-08-16 |
 | 作者 | LoopX maintainers |
 | 范围 | Observer-first 可靠性诊断、有界治理交付、benchmark qualification 与可重复企业部署 |

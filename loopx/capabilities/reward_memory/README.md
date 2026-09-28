@@ -650,6 +650,11 @@ performs no provider or external write.
 
 ## Stage 3 recall and application seam
 
+For an explicit query-ready decision, use the optional
+[decision-consumption caller API](../../../docs/reference/reward-memory-decision-consumption.md).
+It distinguishes private context delivery from attributed semantic assessment,
+reuses the existing provider/applier, and retains the original optional-callback SDK path.
+
 Stage 3 accepts only an explicit `reward_memory_recall_request_v0` naming one
 registered corpus and one module-owned surface. The request carries a matching
 read-authority checkpoint and current freshness/conflict observations. A

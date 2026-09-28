@@ -27,7 +27,7 @@ def build_codex_app_compatibility_projection(
     build_failure_hint: Callable[..., dict[str, Any]],
     build_fallback_hint: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
-    """Translate the canonical App packet to the exact legacy Codex shape."""
+    """Translate the App packet without changing its durable authority scope."""
 
     legacy = copy.deepcopy(app_automation)
     legacy["applicability"] = "applicable"
@@ -37,14 +37,18 @@ def build_codex_app_compatibility_projection(
         else None
     )
     backoff = legacy.get("stateful_backoff")
+    state_key = (
+        backoff["state_key"]
+        if isinstance(backoff, dict)
+        else CODEX_APP_STATEFUL_BACKOFF_STATE_KEY
+    )
     if isinstance(backoff, dict):
         backoff["schema_version"] = CODEX_APP_STATEFUL_BACKOFF_SCHEMA_VERSION
-        backoff["state_key"] = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY
     legacy_facts = (
         {
             **scheduler_host_facts,
             "surface": CODEX_APP_SURFACE,
-            "state_key": CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+            "state_key": state_key,
         }
         if isinstance(scheduler_host_facts, Mapping)
         else None
@@ -64,6 +68,7 @@ def build_codex_app_compatibility_projection(
             else None
         )
         legacy["failure_hint"] = build_failure_hint(
+            state_key=state_key,
             goal_id=goal_id,
             agent_id=agent_id,
             failed_rrule=legacy.get("recommended_rrule"),
@@ -86,6 +91,7 @@ def build_codex_app_compatibility_projection(
             else {}
         )
         legacy["ack_hint"] = build_ack_hint(
+            state_key=state_key,
             goal_id=goal_id,
             agent_id=agent_id,
             applied_rrule=canonical_args.get("applied_rrule"),

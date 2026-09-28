@@ -31,7 +31,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {
                 "command": "loopx usage-ping [status|enable|disable]",
-                "purpose": "Show or change the off-by-default anonymous daily usage ping and its exact payload.",
+                "purpose": "Show or change the default-on basic usage statistics and its exact payload.",
             },
             {
                 "command": "loopx slash-commands --install",
@@ -270,6 +270,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx agent-directory",
                 "purpose": "Produce the local, goal-scoped peer agent directory this host can hand work to.",
             },
+            {
+                "command": "loopx resolve-peer-route",
+                "purpose": "Resolve an existing peer to one exact host route before sending work.",
+            },
             {"command": "loopx lark-kanban", "purpose": "Project LoopX state into a Feishu/Lark Base board."},
             {
                 "command": "loopx presentation",
@@ -370,6 +374,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "import-doc-registry-authority",
         "lark-inbox",
         "migrate-state",
+        "native-child",
         "ml-experiment",
         "opencode2-goal-worker",
         "operator-gate",

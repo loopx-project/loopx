@@ -38,6 +38,39 @@ user value, maturity, entry commands, explicit write boundary, implemented
 protocols, and durable validation for one capability. Use that readback before
 enabling an advanced path or optional provider.
 
+## Inspect This Goal / 检查本 Goal
+
+```bash
+loopx capability inspect --goal-id <goal> --format json
+loopx capability inspect --goal-id <goal> --agent-id <registered-agent> \
+  --phase before_plan --format json
+```
+
+This explicit, read-only cold path returns the same effective configuration,
+source and revision as Goal settings. Supplying both Agent and phase also calls
+the existing bounded TS coordinator-context owner. Its output is projected
+guidance, not proof of delivery, adoption or utility. Without them, context is
+`not_requested`; a requested empty result is `no_contribution`, not “all
+capabilities disabled”. Provider errors remain errors. The read does not enable
+features, start workers, recall private memories, write state or spend quota.
+
+This is configuration-catalog coverage, not a complete provider inventory;
+continue to use `list`/`show` and a capability's native readiness/receipt entry.
+Configuration and context are independent owner reads, not an execution
+snapshot. Settings use the invoking runtime's machine defaults, like Dashboard;
+delegation observations use the canonical Goal runtime (or explicit
+`--runtime-root`). Reinspect native readiness before acting. Do not attach this
+full catalog to every Turn or add a second adoption switch.
+
+这是显式、只读的冷路径，与 Goal 设置复用相同的有效配置、来源和版本。只有同时
+给出 Agent 与阶段才读取既有 TS 上下文投影；未请求为 `not_requested`，空结果为
+`no_contribution`，不等于“所有能力关闭”。投影指导不证明已经投递、采纳或有效，
+服务异常不会伪装成关闭。此入口不启用能力、不启动 worker、不召回私有记忆、
+不写状态或扣额。目录仅覆盖配置能力，不是完整 provider 清单；实际可用性和执行
+回执仍读各能力原入口。配置与上下文是独立读数，不是执行快照；设置复用调用端
+机器默认值，委派观察读取 Goal 原运行时（或显式 `--runtime-root`）。不要每轮灌入
+完整目录，也不要增加第二个采用开关。
+
 ## Choose By Outcome
 
 The selected documents below explain human usage paths behind registered

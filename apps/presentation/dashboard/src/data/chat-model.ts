@@ -83,6 +83,8 @@ export type CollaborationReadback = {
   schema_version: "collaboration_request_readback_v0";
   request_id: string;
   agent_id: string;
+  goal_id?: string;
+  decision_reason?: string;
   brief: {
     purpose: string;
     context: string;

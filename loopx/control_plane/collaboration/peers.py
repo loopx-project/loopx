@@ -31,6 +31,7 @@ from .goal_instance_scope import (
     decide_collaboration_lifecycle,
 )
 from ...agent_registry import registered_agent_ids_for_goal
+from ...thread_agent_binding import resolve_thread_agent_binding
 from ..projects.registry_codec import load_project_registry
 
 PEER_INSTRUCTION = (
@@ -77,6 +78,7 @@ def request(
     parent_request_id=None,
     *,
     caller_goal_ref=None,
+    host_route=None,
 ):
     normalized = normalize_request(
         {"goal_id": goal_id, "agent_id": target_agent_id, "brief": brief}
@@ -95,6 +97,24 @@ def request(
             goal_scope,
             operation="request_create",
         )
+        if host_route is not None:
+            if (
+                not isinstance(host_route, dict)
+                or set(host_route) != {"host_surface", "thread_id"}
+            ):
+                raise ValueError("peer host route must contain one exact host task")
+            binding = resolve_thread_agent_binding(
+                goal_scope.goal,
+                host_surface=host_route["host_surface"],
+                thread_id=host_route["thread_id"],
+            )
+            if (
+                binding["status"] != "bound"
+                or binding["agent_id"] != target_agent_id
+            ):
+                raise ValueError(
+                    "peer host route is not bound to the receiving Agent"
+                )
         inherited = None
         if parent_request_id:
             parent = _entry(
@@ -149,6 +169,11 @@ def request(
             "message": normalized["brief"]["purpose"],
             "instruction": PEER_INSTRUCTION,
         }
+        if host_route is not None:
+            row["host_route"] = {
+                "host_surface": binding["host_surface"],
+                "thread_id": binding["thread_id"],
+            }
         operation_path = (
             _root(root)
             / "peer-operations"

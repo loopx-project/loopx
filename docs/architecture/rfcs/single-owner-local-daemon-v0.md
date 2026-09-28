@@ -1,6 +1,7 @@
 # RFC: Single-Owner Local Daemon (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Proposal
 - **Authors / owners:** Contributor proposal; lifecycle decisions require maintainer acceptance.
 - **Created:** 2026-09-07

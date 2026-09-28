@@ -1,6 +1,7 @@
 # RFC: Capable Agent Manager and Semantic Work Handoff (v0)
 
-- **RFC status:** Draft, under maintainer review
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Partial; private runtime profile, team-plan confirmation and Todo materialization shipped; complete M1–M4 remain unqualified.
 - **Authors / owners:** LoopX maintainers; manager engineering owner
 - **Created / last normative revision:** 2026-09-13 / 2026-09-15
@@ -110,18 +111,7 @@ A separate pending [#4312](https://github.com/huangruiteng/loopx/pull/4312) at `
 
 The reviewed [PR #4306](https://github.com/huangruiteng/loopx/pull/4306), subsequently closed as recorded in Appendix B, proposed a special GitHub evidence reader with revision guards, pagination, typed failure handling and routing policy. Its latest reviewed shape was read-first, so it was not merely a forwarding workaround. Nevertheless, the manager should not need this additional per-resource tool surface for ordinary host investigation. Section 6 rejects it as the chosen product path, retaining useful regression requirements.
 
-### 4.1 Cross-RFC implementation checkpoint
-
-Rechecked `origin/main` at the implementation baseline above on 2026-09-13. These are source/history findings, not fresh deployment qualification. RFC status and shipped slices must be reported separately; an old index or a merged refactor title is insufficient.
-
-| Contract | Verified foundation at this baseline | Still outside this RFC's delivery claim |
-| --- | --- | --- |
-| **TS migration** | Accepted; Stage 1/2A foundations and active Stage 2B transaction cutovers. `todos/public_update.ts`, `coordination/todo_update.ts`, `todo_monitor_poll.ts` and structured consumers already own substantial semantics. | T0–T4 are a continuing execution plan, not all completed. Native field/lease/monitor support remains bounded. Moving a planner to TS is not moving its commit. |
-| **Shared authority** | Draft with implemented foundations. `AuthorityStore` defines conditional durable state/events/receipt commit, readback and scan. [#4280](https://github.com/huangruiteng/loopx/pull/4280), [#4283](https://github.com/huangruiteng/loopx/pull/4283), [#4287](https://github.com/huangruiteng/loopx/pull/4287) consolidate transaction, presentation and retained-journal semantics. File/NoKV and SQLite/PostgreSQL candidate paths exist. | A provider implementation is not default promotion or a shared service. D1 projection, D2 profile qualification/soak and D3 fenced cutover retain their own evidence and approval conditions. |
-| **Shared Goal alignment/amendment** | Draft with Stage 1/2 foundations: `goals/shared_goal_alignment.{py,ts}` reads the current work basis; `goal_amendment_proposal.{py,ts}` validates/retains proposals with no canonical effect. Their source basis includes canonical Todo/lease revision when promoted. | Complete Goal-intent versioning, governed Stage 3 commit, verifier/lease-impact handling and its qualification are not supplied by proposal admission. An event sequence or Todo provider revision is not the full Goal revision. |
-| **Manager and handoff (#4330)** | Existing manager inbox/context/tracking/return paths are the migration source; Section 4 identifies their owners. | Capable profile promotion, the general collaboration transaction and A1–A16 remain proposed. This RFC must consume the other owners rather than implement them again. |
-
-Supplemental checkpoint at `6b337bcbde8457bc3268ec7d2780367ace3c6147`: merged #4286 (`c0b572d2d508bb10c32701057dd71ff4f8eb663c`) adds `coordination/command_receipt.ts` as the shared recovery owner for canonical Todo commands and separates archive transactions into `todo_archive.ts`. Its File/SQLite/PostgreSQL/NoKV conformance matrix is reusable M2 foundation, not a capability to design again. Use the original-operation ambiguous recovery semantics when reconciling request/work commits. This removes duplicate TS transaction rules, not Python writers, T1/T2 gaps or D1–D3 promotion requirements.
+- Checkpoint moved to the execution ledger: [Cross-RFC implementation checkpoint](ledger/capable-manager-semantic-handoff-v0/2026-09-13-cross-rfc-implementation.md).
 
 ### 4.2 Four questions, four ownership boundaries
 
@@ -157,6 +147,14 @@ The manager performs short investigations and routine reversible work directly. 
 At session start, expose the effective host, model/effort, accessible resource classes, tool availability, relevant standing grants and instruction revisions. Separate configured preference from verified runtime capability. For the existing Codex adapter, keep the current strong model default; providers retain explicit equivalent profiles. Do not request hidden reasoning traces as evidence of intelligence.
 
 ### 5.2 Target boundaries: refactor around work, not the manager
+
+The [App-first conversation/inbox design](app-conversation-and-async-inbox-v0.md)
+is the delivery sequence for this boundary: connect managed or attached work,
+keep subsequent requests and results in LoopX, then converge the reusable
+accept/read/disposition/return lifecycle into its existing TS owner. Lark is an
+adapter, not the owner of generic asynchronous coordination. This plan preserves
+its identity, authority and reply behavior while the App path is qualified first.
+
 
 The steward's cross-project relationship and a project coordinator's scoped
 delivery commitment are distinct product responsibilities. Neither is a new
@@ -605,6 +603,41 @@ Target an ingress receipt within two seconds on a healthy local service, indepen
 
 Use existing service recovery and receipt pumps. No manager-specific business automation for each kind of request. Expose configuration and failures through the existing CLI, capability settings and manager conversation. Troubleshooting distinguishes model failure, tool/policy denial, state conflict, unreachable receiver and transport formatting/delivery failure.
 
+**Accepted queue preparation failures (S1/S10, A12/A22/A23):** an accepted
+request owns a terminal outcome even before an adapter starts. A missing runtime
+asset, invalid workspace or failed session restoration must settle the affected
+queued Turn through the shared Chat lifecycle and release its claim. Waiting for
+an answer must observe that durable failure promptly, rather than wait for the
+model timeout while leaving runnable work behind. Keep the original typed
+provider failure where available; unexpected local preparation errors use
+`runtime_unavailable`, with private diagnostics retained locally. Cancellation
+and an already terminal result win over a late preparation error. Restoring the
+runtime must not replay a failed request; the same ingress identity returns the
+same failure, while a fresh explicit request can run after repair.
+
+The bounded Python queue repair uses the existing store's fenced failure and
+claim-release operations for all queue callers; Lark only translates the typed
+outcome. It does not create a separate manager scheduler or new TS authority.
+The TS turn-driver migration must preserve this pre-dispatch failure matrix
+alongside accepted-request recovery. Validate with a removed-release fixture,
+multiple queued requests, a stop race, same-identity redelivery and a fresh
+request after recovery. These qualify the preparation boundary, not successful
+owner selection, receiver adoption or the complete A24 journey. Operational
+recovery must also verify the service's actual installed release: a healthy HTTP
+listener alone does not prove its lazy-loaded runtime assets still exist.
+
+**Request publication and return preparation (S1/S3, A8/A9/A24):** persist
+and verify the trusted original-conversation route before publishing an Inbox
+entry. An independent receiver may consume the entry before the sender receives
+its acknowledgement. A failed route write/readback must leave no visible work;
+a prepared route without an entry is inert and an exact retry can finish it.
+Keep the existing request identity and conflict checks. This matches the peer
+request's route-before-entry ordering; it changes Python filesystem IO ordering,
+not the shared TypeScript request or return-state authority. Exercise App,
+Goal Chat and external-audience ingress, immediate receiver results, interrupted
+publication and original-transcript return after restart. This qualification
+does not establish native worker selection, execution or the full A24 journey.
+
 ## 11. Normative delivery plan
 
 Implement coherent end-to-end slices, not one PR per incidental field. The manager engineering owner maintains canonical Todos and a private incident-to-acceptance map; PRs link this RFC milestone and acceptance IDs. Public progress updates contain only safe results. Milestone completion requires current deployment evidence, not merged PR count.
@@ -674,7 +707,7 @@ The external sources inform the design; they do not prove LoopX behavior. The na
 
 2026-09-13: reconciled shared-authority, shared-alignment and TS migration progress at the pinned baseline; added Sections 4.1–4.2, 5.12 and 11.1–11.2 plus A15–A16. Updated the companion RFCs and index, retained separate promotion/commit owners, and sharpened A13 elapsed-time and A14 actual-use evidence. No upstream qualification hold is waived.
 
-Record future decisions as dated links to reviewed changes, naming the normative sections affected. Preserve previous source revisions and unresolved requests. Do not turn an append-only delivery log into an alternate task authority.
+Later dated checkpoints live in the [per-entry ledger](ledger/capable-manager-semantic-handoff-v0/), one file per slice. Record future decisions as dated links to reviewed changes, naming the normative sections affected. Preserve previous source revisions and unresolved requests. Do not turn an append-only delivery log into an alternate task authority.
 
 ## Appendix C: Grok Bot product and implementation study
 

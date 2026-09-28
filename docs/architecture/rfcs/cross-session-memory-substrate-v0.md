@@ -1,5 +1,8 @@
 # Explicit Todo continuation: Stage A
 
+- **RFC status:** Accepted (Stage A shipped in #4094; the historical filename is retained on purpose)
+- **Supersedes / closes:** none
+
 ## Delivery status and integration direction (2026-09-13)
 
 Stage A shipped in [#4094](https://github.com/huangruiteng/loopx/pull/4094), merge `2ebd921ee989f7c696a7214ba1176d3bd5de6fb3`. The historical filename does not imply that a generic memory substrate shipped. The [capable manager and semantic handoff RFC](capable-manager-semantic-handoff-v0.md#513-integrate-shipped-explicit-continuation-4094) includes this implementation in its M2/M3 refactor scope. That successor remains proposed; this document remains the shipped CLI compatibility and authority reference until its replacement qualifies.

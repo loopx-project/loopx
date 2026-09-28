@@ -94,11 +94,15 @@ try {
       window.dispatchEvent(new CustomEvent("loopx:setup-copy", { detail: "never-send-this" }));
     });
     await page.getByRole("button", { name: "Close setup", exact: true }).click();
+    await page.evaluate(() => document.querySelector(".hero-download")?.addEventListener("click", (event) => event.preventDefault()));
+    await page.locator(".hero-download").click();
     await page.locator(".language-toggle").click();
     const rows = await page.evaluate(() => window.dataLayer.map((args) => [...args]));
     assert.equal(rows.filter((r) => r[0] === "event" && r[1] === "page_view").length, 1);
     assert.equal(rows.filter((r) => r[0] === "event" && r[1] === "setup_open").length, 1);
     assert.equal(rows.filter((r) => r[0] === "event" && r[1] === "setup_copy").length, 1);
+    assert.equal(rows.filter((r) => r[0] === "event" && r[1] === "desktop_download").length, 1);
+    assert.equal(rows.filter((r) => r[0] === "event" && r[1] === "github_click").length, 0, "Mac download is not a repository visit");
     assert(!JSON.stringify(rows).includes("never-send-this") && !JSON.stringify(rows).includes("private-task"));
     assert.equal(rows.find((r) => r[0] === "config")[2].allow_google_signals, false);
     await page.evaluate(() => {

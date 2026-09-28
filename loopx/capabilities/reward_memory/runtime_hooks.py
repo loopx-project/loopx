@@ -7,6 +7,7 @@ from ..context_providers.base import ContextProvider
 from .application import (
     RewardMemoryApplier,
     RewardMemoryRecallSession,
+    RewardMemoryRecallInputError,
     apply_reward_memory_recall,
     build_reward_memory_recall_request,
     execute_reward_memory_recall,
@@ -168,6 +169,14 @@ def run_reward_memory_automatic_recall_hook(
                 provider_binding=corpus_route["provider_binding"],
                 provider=provider,
             )
+        except RewardMemoryRecallInputError as exc:
+            return base | {
+                "status": "guard_rejected",
+                "reason_code": "exact_corpus_request_invalid",
+                "boundary_detail_code": exc.reason_code,
+                "recall_attempts": attempts,
+                "telemetry": telemetry,
+            }
         except (KeyError, OSError, RuntimeError, TypeError, ValueError):
             return base | {
                 "status": "guard_rejected",

@@ -352,3 +352,43 @@ def test_resolution_rejects_values_for_unsupported_scopes() -> None:
             "periodic_report",
             goal_override=True,
         )
+
+
+@pytest.mark.parametrize(
+    ("capability_id", "scopes"),
+    [
+        ("manager_runtime", ["machine"]),
+        ("steward_executor", ["machine"]),
+        ("periodic_report", ["machine", "goal"]),
+        ("change_quality_qualification", ["machine", "goal"]),
+        ("pull_request_review", ["machine", "goal"]),
+        ("todo_replan_cadence", ["machine", "goal"]),
+        ("multi_subagent", ["goal"]),
+        ("peer_task_coordination", ["goal"]),
+        ("explore_harness", ["goal"]),
+        ("explore_graph", ["goal"]),
+        ("progress_review", ["goal"]),
+        ("reward_memory", ["goal"]),
+        ("lark_kanban_heartbeat_sync", ["goal"]),
+        ("lark_event_inbox", ["goal"]),
+        ("coordination_runtime_shadow", ["goal"]),
+        ("local_authority_shadow", ["goal"]),
+    ],
+)
+def test_capability_scope_matches_product_ownership(capability_id, scopes) -> None:
+    """Host authority, reusable defaults and Goal bindings stay distinct."""
+
+    catalog = build_capability_configuration_catalog(
+        machine_namespaces=build_builtin_machine_configuration_registry().public_catalog()[
+            "namespaces"
+        ],
+        goal_features=build_configuration_capability_descriptors(),
+    )
+    descriptor = next(c for c in catalog["capabilities"] if c["capability_id"] == capability_id)
+    assert descriptor["available_scopes"] == scopes
+    assert descriptor["configuration_editor"]["supported_scopes"] == scopes
+    assert set(descriptor["configuration_editor"]["writable_scopes"]) <= set(scopes)
+    for scope, keyword in (("machine", "machine_default"), ("goal", "goal_override")):
+        if scope not in scopes:
+            with pytest.raises(ValueError, match="does not support"):
+                resolve_capability_configuration(capability_id, **{keyword: {}})

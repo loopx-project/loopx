@@ -1,6 +1,7 @@
 # RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)
 
-- Status: Draft; under maintainer review
+- Status: Accepted
+- Supersedes / closes: none
 - Tracking issue: [#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - Date: 2026-09-02
 - Last updated: 2026-09-16
@@ -88,32 +89,8 @@ bounded evidence       bounded evidence
        every frontier rebases or gates
 ```
 
-### 1.1 Verified delivery and manager integration checkpoint (2026-09-13)
-
-At `7eb4b7bb1661bd5eff63a8725a33169792d5964b`, the Stage 1 alignment reader
-and Stage 2 proposal admission/retention exist, including #3874 and the
-canonical Todo/lease source convergence in #4143. Their owners are
-`goals/shared_goal_alignment.{py,ts}` and `goal_amendment_proposal.{py,ts}`
-under `loopx/control_plane`. The latter explicitly returns
-`canonical_effect: none`; it has no approved status or commit path.
-These are implemented foundations, not full canonical intent versioning or
-Stage 3–5 acceptance. The RFC remains Draft.
-
-The [manager/handoff RFC](capable-manager-semantic-handoff-v0.md) should reuse
-the alignment reader for work-basis context; amendment admission applies only
-after classification when the request satisfies that admission contract. Its request, brief or
-delivery revision is not a Goal-intent revision. A manager's higher tool
-freedom does not confer shared-amendment authority, and handoff receipt does
-not acknowledge a new Goal on behalf of every peer. Section 9.1 and that RFC's
-M2/A16 define integration; they do not introduce a second amendment policy.
-
-### 1.2 Owner-authorized acceptance checkpoint
-
-The [acceptance contract v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
-adds local-owner configuration and readback on existing canonical Goal authority.
-#3836's next slice is **governed acceptance amendments and peer adoption**:
-bind the contract to amendment policy, exact-base commit and receiver readback;
-qualify Lark separately. Full intent versioning and Stage 3–5 remain incomplete.
+- Checkpoint moved to the execution ledger: [Verified delivery and manager integration checkpoint (2026-09-13)](ledger/shared-goal-alignment-and-governed-amendment-v0/2026-09-13-verified-delivery-and-manager-integration.md).
+- Checkpoint moved to the execution ledger: [Owner-authorized acceptance checkpoint](ledger/shared-goal-alignment-and-governed-amendment-v0/2026-09-17-owner-authorized-acceptance.md).
 
 ## 2. Problem and current boundary
 
@@ -691,3 +668,11 @@ transcripts are also not part of the Goal aggregate or a durable evidence store.
 The smallest useful outcome is a legible, read-only alignment projection and a
 proposal that is visibly non-authoritative. Runtime commit follows only after
 that boundary proves useful in real multi-Agent work.
+
+## Appendix A: Execution ledger
+
+Dated checkpoints for this RFC live in the
+[per-entry ledger](ledger/shared-goal-alignment-and-governed-amendment-v0/), one
+file per measured slice. Sections 1–12 above stay the normative contract; a
+ledger entry records what shipped and what it did not establish without
+changing that contract.

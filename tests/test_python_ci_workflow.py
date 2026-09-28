@@ -209,8 +209,13 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
     assert "name: chat-bundle-${{ github.sha }}" in job
     producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
     assert "npm run smoke:personal-workspace-packaged" in producer
+    assert "npm run smoke:chat-turn-acceptance-retry" in producer
     assert "npm run smoke:chat-upgrade" in producer
-    assert producer.index("npm run smoke:personal-workspace-packaged") < producer.index("actions/upload-artifact")
+    assert (
+        producer.index("npm run smoke:personal-workspace-packaged")
+        < producer.index("npm run smoke:chat-turn-acceptance-retry")
+        < producer.index("actions/upload-artifact")
+    )
     assert "scripts/chat_bundle.py verify --source" in job
     assert "status --short --untracked-files=all -- loopx/web/chat" not in job
     assert "continue-on-error" not in job
@@ -237,6 +242,21 @@ def test_windows_lane_rebuilds_the_frontend_without_a_usable_python3() -> None:
     assert job.index("npm run build:chat") < job.index(
         "python scripts/chat_bundle.py verify --source"
     )
+
+
+def test_windows_lifecycle_suite_references_existing_tests() -> None:
+    job = WORKFLOW.split("  windows-powershell:\n", 1)[1].split(
+        "  presentation:\n", 1,
+    )[0]
+    step = job.split("name: Run native Windows lifecycle tests", 1)[1].split(
+        "\n\n      - name:", 1,
+    )[0]
+    test_paths = re.findall(r"^\s+(tests/\S+\.py)\s*$", step, re.MULTILINE)
+
+    assert test_paths
+    assert [
+        path for path in test_paths if not (WORKFLOW_ROOT / path).is_file()
+    ] == []
 
 
 def test_four_shards_execute_each_test_once_and_merge_portable_coverage(

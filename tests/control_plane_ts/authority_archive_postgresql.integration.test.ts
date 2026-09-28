@@ -11,6 +11,7 @@ import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlit
 import {installPostgreSqlAuthorityStoreSchema, PostgreSqlAuthorityStore,
   type PostgreSqlAuthorityDatabase} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {exportAuthorityArchive, restoreAuthorityArchive} from "../../loopx/control_plane/coordination/authority_archive.ts";
+import {auditAuthorityArchive} from "../../loopx/control_plane/coordination/authority_archive_audit.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
 
 const url = process.env.LOOPX_TEST_POSTGRES_URL;
@@ -44,6 +45,7 @@ for (const local of ["file", "sqlite"] as const) {
         const restored = await restoreAuthorityArchive(archive, target, exported.archive_sha256);
         assert.equal(restored.status, "restored");
         const reopened = direction === "to-postgresql" ? new PostgreSqlAuthorityStore(database, options) : target;
+        assert.equal((await auditAuthorityArchive(archive, reopened, exported.archive_sha256)).status, "matched");
         const rows = await reopened.scanCommitted(null, 10);
         assert.equal(rows.status, "page");
         if (rows.status !== "page") throw new Error("readback failed");
@@ -60,6 +62,7 @@ for (const local of ["file", "sqlite"] as const) {
           operation_id: "isolated-recovery-probe", events: [], receipts: [{probe: true}],
           next_projection: {...projection, observation: 4}})).status, "applied");
         await assert.rejects(restoreAuthorityArchive(archive, reopened, exported.archive_sha256), /extra commits/);
+        assert.equal((await auditAuthorityArchive(archive, reopened, exported.archive_sha256, "retained_prefix")).status, "matched");
         const unchanged = await source.loadAuthority();
         assert.equal(unchanged.status, "loaded");
         if (unchanged.status === "loaded") assert.equal(unchanged.cursor, "3");

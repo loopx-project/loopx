@@ -20,7 +20,7 @@ them as though they were interchangeable PRs.
 | #4870 claim-preserving writes; #4888 reviewed cutover; #4920 drain planning | Implemented. Exercise their combined head; do not commission replacements. |
 | #4922 complete canonical snapshot pagination; #4960 qualified SQLite runtime admission; #4961 display refresh recovery; #4964 shared source summaries | Implemented. Consumer and packaged-client acceptance still needs integration evidence; a whole new pagination/recovery implementation is not pending. |
 | #4967 typed complete-source assembly; #4968 native outbox delivery/recovery | Implemented. Complete-source transport is also merged in #5013; capture assembly is not missing. |
-| #5003 atomic event-owned completion | Merged. Solves batch publication/retry, **not** the event writer's shadow-capture binding. |
+| #5003 atomic event-owned completion | Historical implementation; retired with its Todo event source in #5054. Do not rebuild capture for it. |
 | #4994 explicit leased Agent handoff; #4995 generated Monitor proof; #4991 rejected poll reservation; #4992 deferred receipt-bound Turn | Merged. Audit the integrated callers before deciding what remains; do not recreate them under a new caller-refactor PR. |
 | #4931 retained SQLite proof encoding, contributor #4224 | Open optimization plus incomplete D2 qualification. A speedup is not capacity/recovery/soak acceptance. |
 | #4915 default `.loopx` filesystem placement | Separate configuration migration; does not select File/SQLite authority. |

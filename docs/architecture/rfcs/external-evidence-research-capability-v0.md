@@ -1,6 +1,7 @@
 # RFC: External Evidence Research Capability v0
 
-- Status: Draft implementation slice
+- Status: Accepted
+- Supersedes / closes: none
 - Scope: provider-neutral research planning, provenance admission, projection,
   and retirement
 - Roadmap: S8 capabilities and domain integration

@@ -422,6 +422,12 @@ def _derive_session_id(request: Mapping[str, Any], turn_key: str) -> str:
     # values are not lineage identities, while their positions stay encoded.
     lineage = [value if value else None for value in lineage]
     if any(lineage):
+        goal_ref = _mapping(request.get("goal_ref"))
+        goal_instance_id = goal_ref.get("goal_instance_id")
+        if goal_instance_id:
+            return "dsh-lineage-v2-" + _canonical_hash(
+                [*lineage, goal_instance_id]
+            ).removeprefix("sha256:")
         return "dsh-lineage-v1-" + _canonical_hash(lineage).removeprefix("sha256:")
     return f"dsh-{turn_key.removeprefix('sha256:')[:24]}"
 

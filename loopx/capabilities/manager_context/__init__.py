@@ -235,12 +235,12 @@ def deliver(
                 goal_scope,
                 path.with_suffix(".lock"),
             ):
-                exists = persist_entry()
                 _register_unlocked(runtime_root, value, session, turn)
+                exists = persist_entry()
         else:
             with exclusive_file_lock(path.with_suffix(".lock")):
+                register(runtime_root, value, session, turn)
                 exists = persist_entry()
-            register(runtime_root, value, session, turn)
         return {
             "request_id": request_id,
             "status": "delivered",

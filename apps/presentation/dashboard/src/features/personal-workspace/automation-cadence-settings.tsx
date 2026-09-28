@@ -12,10 +12,9 @@ type Scope = "goal" | "agent" | "automation";
 
 export function AutomationCadenceSettings({ goal }: Readonly<{ goal: WorkspaceGoal }>) {
   const { t } = useWorkspaceI18n();
-  const agentLanes = useMemo(() => goal.agentLanes?.length
-    ? goal.agentLanes : goal.agentId ? [{ agentId: goal.agentId, label: goal.agentLabel ?? goal.agentId }] : [], [goal]);
-  const [scope, setScope] = useState<Scope>("goal");
-  const [agentId, setAgentId] = useState(agentLanes[0]?.agentId ?? "");
+  const agentLanes = useMemo(() => goal.agentLanes ?? (goal.agentId ? [{ agentId: goal.agentId, label: goal.agentLabel ?? goal.agentId }] : []), [goal]);
+  const [scope, setScope] = useState<Scope>("agent");
+  const [agentId, setAgentId] = useState("");
   const [automationId, setAutomationId] = useState("");
   const [inspection, setInspection] = useState<AutomationCadence | null>(null);
   const [minutes, setMinutes] = useState("0");
@@ -28,14 +27,10 @@ export function AutomationCadenceSettings({ goal }: Readonly<{ goal: WorkspaceGo
   const [reloadSequence, setReloadSequence] = useState(0);
   const scopedAgent = scope === "goal" ? null : agentId.trim() || null;
   const scopedAutomation = scope === "automation" ? automationId.trim() || null : null;
-  const scopeReady = scope === "goal" || Boolean(scopedAgent && (scope !== "automation" || scopedAutomation));
+  const scopeReady = scope === "goal" || Boolean(scopedAgent && agentLanes.some((lane) => lane.agentId === scopedAgent) && (scope !== "automation" || scopedAutomation));
 
   useEffect(() => {
-    setAgentId(agentLanes[0]?.agentId ?? "");
-  }, [goal.goalId]);
-
-  useEffect(() => {
-    if (!scopeReady) { setInspection(null); setPreview(null); return; }
+    if (!scopeReady) { setInspection(null); setPreview(null); setBusy(null); return; }
     let active = true;
     setBusy("load");
     setError(null);
@@ -53,7 +48,7 @@ export function AutomationCadenceSettings({ goal }: Readonly<{ goal: WorkspaceGo
       .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : t("cadence.loadFailed")); })
       .finally(() => { if (active) setBusy(null); });
     return () => { active = false; };
-  }, [goal.goalId, scope, scopedAgent, scopedAutomation, reloadSequence, t]);
+  }, [goal.goalId, scope, scopedAgent, scopedAutomation, scopeReady, reloadSequence, t]);
 
   const directRule = inspection?.sources.find((source) => source.agent_id === scopedAgent && source.automation_id === scopedAutomation);
   const inheritedFloor = Math.max(0, ...(inspection?.sources.filter((source) => source !== directRule).map((source) => source.min_interval_minutes) ?? []));
@@ -109,8 +104,10 @@ export function AutomationCadenceSettings({ goal }: Readonly<{ goal: WorkspaceGo
         <label key={option}><input checked={scope === option} disabled={Boolean(busy)} onChange={() => { setScope(option); invalidate(); }} type="radio" name="cadence-scope" value={option} />{t(`cadence.scope.${option}`)}</label>)}
     </fieldset>
     {scope !== "goal" ? <div className="personal-cadence-fields">
-      <label>{t("cadence.agentId")}<input disabled={Boolean(busy)} list="cadence-agent-lanes" onChange={(event) => { setAgentId(event.target.value); invalidate(); }} value={agentId} /></label>
-      <datalist id="cadence-agent-lanes">{agentLanes.map((lane) => <option key={lane.agentId} value={lane.agentId}>{lane.label}</option>)}</datalist>
+      <label>{t("cadence.agentId")}<select aria-label={t("cadence.agentId")} aria-describedby="cadence-agent-hint" disabled={Boolean(busy) || agentLanes.length === 0} onChange={(event) => { setAgentId(event.target.value); invalidate(); }} value={agentId}>
+        <option value="">{t(agentLanes.length ? "cadence.chooseAgent" : "cadence.noAgents")}</option>
+        {agentLanes.map((lane) => <option key={lane.agentId} value={lane.agentId}>{lane.label === lane.agentId ? lane.agentId : `${lane.label} · ${lane.agentId}`}</option>)}
+      </select><small id="cadence-agent-hint">{t("cadence.agentHint")}</small></label>
       {scope === "automation" ? <label>{t("cadence.automationId")}<input disabled={Boolean(busy)} onChange={(event) => { setAutomationId(event.target.value); invalidate(); }} value={automationId} /></label> : null}
     </div> : null}
     {busy === "load" ? <p aria-live="polite">{t("common.loading")}</p> : null}
@@ -127,7 +124,7 @@ export function AutomationCadenceSettings({ goal }: Readonly<{ goal: WorkspaceGo
         <label>{t("cadence.ownerReference")}<input disabled={Boolean(busy)} maxLength={256} onChange={(event) => { setOwnerReference(event.target.value); invalidate(); }} value={ownerReference} /><small>{t("cadence.referenceHint")}</small></label>
       </div>
       {reduction ? <label className="personal-cadence-reduction"><input checked={approveReduction} disabled={Boolean(busy)} onChange={(event) => { setApproveReduction(event.target.checked); invalidate(); }} type="checkbox" />{t("cadence.reduction")}</label> : null}
-      {preview ? <div className="personal-cadence-preview"><strong>{t("cadence.preview")}</strong><span>{t("cadence.previewValue", { minutes: preview.min_interval_minutes })}</span><small>{t("cadence.previewLocked")}</small></div> : null}
+      {preview ? <div className="personal-cadence-preview"><strong>{t("cadence.preview")}</strong><small>{goal.title} · {scopedAgent ?? t("cadence.scope.goal")}{scopedAutomation ? ` · ${scopedAutomation}` : ""}</small><span>{t("cadence.previewValue", { minutes: preview.min_interval_minutes })}</span><small>{t("cadence.previewLocked")}</small></div> : null}
       <div className="personal-cadence-actions"><button disabled={!canPreview} onClick={() => void createPreview()} type="button">{t("cadence.preview")}</button><button className="is-primary" disabled={!preview || Boolean(busy)} onClick={() => void apply()} type="button">{t("cadence.apply")}</button></div>
     </> : null}
     {error ? <p className="personal-machine-error" role="alert">{error} <button onClick={() => { invalidate(); setReloadSequence((value) => value + 1); }} type="button"><RefreshCw aria-hidden size={14} />{t("cadence.retry")}</button></p> : null}

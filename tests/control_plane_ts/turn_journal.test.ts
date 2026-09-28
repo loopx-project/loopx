@@ -157,6 +157,8 @@ test("journal replay uses its own decision without a quota action slot", () => {
       checks: [{ kind: "journal_consistency", outcome: "passed" }],
     },
     last_recovery: null,
+    recorded_effects: {host_invoked: true, state_written: true,
+      quota_spent: true, scheduler_acknowledged: null},
     effects: [],
   });
 });
@@ -179,6 +181,87 @@ test("non-terminal replay blocking does not block executor recovery", () => {
     retry_failed: false,
     checks: [{ kind: "journal_consistency", outcome: "passed" }],
   });
+});
+
+test("recorded effects distinguish checkpoint, prepared uncertainty and no attempt", () => {
+  const input = request("in_progress");
+  input.journal.completed_phases = ["host_execute", "typed_result", "validation"];
+  input.journal.effect_attempts = {durable_writeback: {
+    status: "prepared", effect_ref: `${effectId("fixture-goal", "fixture-agent")}#durable_writeback`,
+  }};
+  const result = interpretTurnJournal(input);
+  assert.deepEqual(result.recorded_effects, {
+    host_invoked: true, state_written: null, quota_spent: false,
+    scheduler_acknowledged: false,
+  });
+  assert.equal(result.recovery_decision.reinvoke_host, false);
+
+  input.journal.completed_phases = [];
+  delete input.journal.effect_attempts;
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, false);
+  input.journal.host_attempt_count = 1;
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, null);
+});
+
+test("pending spend and foreign lineage cannot certify a quota charge", () => {
+  const input = request("in_progress");
+  input.journal.completed_phases = ["host_execute", "typed_result", "validation", "durable_writeback"];
+  input.journal.effect_attempts = {quota_spend: {
+    status: "prepared", effect_ref: `${effectId("fixture-goal", "fixture-agent")}#quota_spend`,
+  }};
+  assert.deepEqual(interpretTurnJournal(input).recorded_effects, {
+    host_invoked: true, state_written: true, quota_spent: null,
+    scheduler_acknowledged: false,
+  });
+  assert.deepEqual(interpretTurnJournal({...input, agent_id: "another-caller"}).recorded_effects, {
+    host_invoked: null, state_written: null, quota_spent: null,
+    scheduler_acknowledged: null,
+  });
+  input.journal.completed_phases = ["typed_result"];
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, null);
+});
+
+test("outer-controller completion does not manufacture scheduler acknowledgement", () => {
+  const input = request();
+  input.journal.scheduler = {completed: true, acknowledged: false};
+  assert.equal(interpretTurnJournal(input).recorded_effects.scheduler_acknowledged, false);
+});
+
+test("malformed attempt facts never certify absence of an effect", () => {
+  const input = request("in_progress");
+  input.journal.completed_phases = [];
+  input.journal.host_attempt_count = "1";
+  input.journal.effect_attempts = {durable_writeback: {status: "invalid"}};
+  assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, null);
+  assert.equal(interpretTurnJournal(input).recorded_effects.state_written, null);
+  input.journal.effect_attempts = [];
+  assert.equal(interpretTurnJournal(input).recorded_effects.quota_spent, null);
+});
+
+test("unknown prepared steps block recovery without false non-execution facts", () => {
+  for (const completedPhases of [[], ["host_execute", "typed_result", "validation"]]) {
+    const input = request("in_progress");
+    input.journal.completed_phases = completedPhases;
+    input.journal.effect_attempts = {unknown_provider_step: {
+      status: "prepared",
+      effect_ref: `${effectId("fixture-goal", "fixture-agent")}#durable_writeback`,
+    }};
+    input.journal.scheduler = {acknowledged: false};
+    const before = structuredClone(input);
+    const result = interpretTurnJournal(input);
+    assert.equal(result.journal_consistent, false);
+    assert.ok(result.violations.includes("prepared_effect_step_unsupported"));
+    assert.equal(result.recovery_decision.action, "blocked");
+    assert.equal(result.recovery_decision.can_continue, false);
+    assert.equal(result.recovery_decision.reinvoke_host, false);
+    assert.equal(result.recovery_decision.resume_from, null);
+    assert.deepEqual(result.recorded_effects, {
+      host_invoked: completedPhases.length ? true : null,
+      state_written: null, quota_spent: null, scheduler_acknowledged: null,
+    });
+    assert.deepEqual(result.effects, []);
+    assert.deepEqual(input, before);
+  }
 });
 
 test("scheduler recovery resumes only scheduler apply", () => {
@@ -420,7 +503,8 @@ test("prepared effects are delegated to the existing provider readback step", ()
   const input = request("in_progress");
   input.journal.completed_phases = ["host_execute", "typed_result", "validation"];
   input.journal.effect_attempts = {
-    durable_writeback: { status: "prepared", effect_ref: "effect:fixture" },
+    durable_writeback: { status: "prepared",
+      effect_ref: `${effectId("fixture-goal", "fixture-agent")}#durable_writeback` },
   };
 
   const result = interpretTurnJournal(input);

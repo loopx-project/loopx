@@ -18,6 +18,7 @@ const server = packaged
   ? spawn(resolveTestPython(), ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" })
   : startViteDashboardServer({ dashboardDir, port });
 const url = `http://127.0.0.1:${port}/${packaged ? "chat/" : ""}?statusUrl=/status.json`;
+const requestBody = "Review the public release evidence and the selected publication channel. ".repeat(5) + "Publish version 2.0 to stable only after acceptance.";
 let browser;
 try {
   await waitForHttp(url);
@@ -55,12 +56,12 @@ try {
       const original = {
         index: 1, todo_id: "todo_original", role: "user", task_class: "user_gate",
         done: state === "superseded", status: state === "superseded" ? "done" : "open",
-        text: "Review the bounded direction", note: "A direction choice is needed before todo_target can continue.",
+        title: "Release review", text: requestBody, note: "A direction choice is needed before todo_target can continue.",
         evidence: "review:bounded-validation", blocks_agent: "worker-one", unblocks_todo_id: "todo_target",
         decision_scope: { schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "route-one" },
         ...(state === "superseded" ? { superseded_by: "todo_replacement" } : {}),
       };
-      const replacement = { ...original, index: 2, todo_id: "todo_replacement", text: "Review the replacement direction", done: false, status: "open", superseded_by: undefined };
+      const replacement = { ...original, index: 2, todo_id: "todo_replacement", title: "Review the replacement direction", text: "Review the replacement direction", done: false, status: "open", superseded_by: undefined };
       queue.user_todos = { items: state === "missing" ? [replacement] : state === "superseded" ? [original, replacement] : [original], total_count: 2, open_count: 1 };
       if (locale === "en") queue.project_asset = { owner: "fixture-owner", gate: "pending", next_action: "Review direction", stop_condition: "Await decision", ...(queue.project_asset ?? {}), user_todos: { items: queue.user_todos.items, total: 2, open: 1 } };
       return route.fulfill({ json: fixture });
@@ -70,7 +71,7 @@ try {
     await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
     await page.locator(".personal-object-list").first().getByRole("button").first().click();
     const drawer = page.locator(".personal-drawer-body");
-    for (const value of ["worker-one", "todo_target", "direction · action · route-one", "review:bounded-validation", "A direction choice is needed before todo_target can continue."]) {
+    for (const value of [requestBody, "worker-one", "todo_target", "direction · action · route-one", "review:bounded-validation", "A direction choice is needed before todo_target can continue."]) {
       await drawer.getByText(value, { exact: true }).waitFor({ state: "visible" });
     }
     await page.screenshot({ path: resolve(output, `${packaged ? "packaged" : "dev"}-${locale}${readOnly ? "-readonly" : ""}.png`), fullPage: false });

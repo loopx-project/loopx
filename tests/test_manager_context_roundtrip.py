@@ -47,7 +47,7 @@ def flow(tmp_path):
     )
     store = ChatSessionStore(tmp_path)
 
-    def create(external=False, project=False):
+    def create(external=False, project=False, brief=None):
         session = store.create_session(
             goal_id="research" if project else "loopx-manager",
             agent_id="codex",
@@ -85,7 +85,8 @@ def flow(tmp_path):
                 source_id="lark:om_fixture_source",
             )
         receipt = deliver(
-            tmp_path, registry, session=session, turn=turn, request=target
+            tmp_path, registry, session=session, turn=turn,
+            request={**target, **({"brief": brief} if brief else {})}
         )
         store.update_turn(
             session["session_id"],
@@ -865,3 +866,52 @@ def test_provider_write_without_a_locator_is_terminal_and_not_repeated(flow):
     assert again["status"] == "explicit_unverified"
     assert transport.send_calls == 1
     assert transport.verify_calls == 0
+
+
+@pytest.mark.parametrize("project", [False, True], ids=["steward", "goal-chat"])
+@pytest.mark.parametrize("decision", ["defer", "reject", "adopt", "no_change"])
+def test_reply_delivery_does_not_replace_receiver_disposition(flow, project, decision):
+    root, registry, store, create = flow
+    brief = dict(
+        schema_version="collaboration_brief_v0", purpose="Draft a community survey",
+        context="Prepare a reviewable draft before publication.",
+        constraints=["Do not publish"], inputs=[],
+        acceptance=["A readable survey with concrete questions"],
+        return_requirement="Return the draft or explain why it is deferred",
+    )
+    session, turn, receipt = create(project=project, brief=brief)
+    rid = receipt["request_id"]
+    reason = "Recipient assessment; private evidence at /Users/example/private/notes.md"
+    acknowledge(root, "research", "worker", rid, decision, reason)
+    report(root, "research", "worker", rid, "conclusion", "The assessment is available.")
+    drain(root, registry, store, lambda *_: pytest.fail("private return sent externally"))
+    snapshot = project_chat_session_snapshot(root, ChatSessionStore(root), session["session_id"])
+    collaboration = next(row["collaboration"] for row in snapshot["messages"] if row.get("collaboration"))
+    assert collaboration["decision"] == decision
+    assert collaboration["goal_id"] == "research"
+    assert "Recipient assessment" in collaboration["decision_reason"]
+    assert "/Users/example" not in collaboration["decision_reason"]
+    assert collaboration["returns"][0]["status"] == "delivered"
+    reply = next(row for row in snapshot["messages"] if row.get("origin") == "manager_followup")
+    assert reply["text"].startswith("协作回复 · worker")
+    assert "处理结论" not in reply["text"]
+    assert "Recipient assessment" not in reply["text"]
+    assert len(list((store.root / "sessions" / session["session_id"] / "turns").glob("*.json"))) == 1
+
+
+def test_external_reply_never_exposes_private_receiver_reason(flow):
+    root, registry, store, create = flow
+    session, _, receipt = create(external=True)
+    acknowledge(root, "research", "worker", receipt["request_id"], "defer", "Private receiver rationale")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "This request is deferred.")
+    sent = []
+    def sender(_route, _session, _turn, payload):
+        sent.append(payload)
+        return {"ok": True, "reply_verified": True, "verification_performed": True}
+    drain(root, registry, store, sender)
+    snapshot = project_chat_session_snapshot(root, store, session["session_id"])
+    assert "Private receiver rationale" not in json.dumps(snapshot)
+    assert len(sent) == 1
+    assert sent[0].startswith("协作回复 · worker")
+    assert "Private receiver rationale" not in json.dumps(sent)
+    assert all(not row.get("collaboration") for row in snapshot["messages"])

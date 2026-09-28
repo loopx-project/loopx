@@ -36,6 +36,11 @@ from .ingestion import (
     normalize_reward_memory_standing_policy,
 )
 from .evaluation import run_reward_memory_evaluation
+from .decision import (
+    RewardMemoryDecisionResult,
+    assess_reward_memory_decision,
+    run_reward_memory_decision,
+)
 from .dogfood import (
     build_reward_memory_dogfood_batch,
     build_reward_memory_dogfood_receipt,
@@ -56,6 +61,7 @@ from .runtime_hooks import (
     run_reward_memory_automatic_ingest_hook,
     run_reward_memory_automatic_recall_hook,
 )
+from .read_authority import build_reward_memory_surface_read_authority_checkpoints
 from .outcome_lifecycle import (
     reconcile_pending_turn_outcome_ingests,
     reconcile_pending_turn_outcome_ingests_fail_open,
@@ -65,6 +71,10 @@ from .outcome_lifecycle import (
 
 __all__ = [
     "build_reward_memory_architecture_packet",
+    "RewardMemoryDecisionResult",
+    "assess_reward_memory_decision",
+    "run_reward_memory_decision",
+    "build_reward_memory_surface_read_authority_checkpoints",
     "RewardMemoryFilteredRecallItem",
     "RewardMemoryRecallItem",
     "RewardMemoryRecallSession",

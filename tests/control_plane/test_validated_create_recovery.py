@@ -52,8 +52,8 @@ def project(registry, runtime):
 def test_lost_response_replays_exact_create_after_another_edit(promoted, monkeypatch):
     registry, runtime, state = promoted
     real = provider_create.effect_runtime_result
-    def lose_response(method, request):
-        real(method, request)
+    def lose_response(method, request, **kwargs):
+        real(method, request, **kwargs)
         raise EffectRuntimeResponseAmbiguous(method, timeout=1)
     monkeypatch.setattr(provider_create, "effect_runtime_result", lose_response)
     with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
@@ -108,8 +108,8 @@ def test_revision_lost_response_still_projects_exact_new_declaration(promoted, m
     registry, runtime, _ = promoted
     created = add_goal_todo(**intent(registry))
     real = provider_update.effect_runtime_result
-    def lose_response(method, request):
-        real(method, request)
+    def lose_response(method, request, **kwargs):
+        real(method, request, **kwargs)
         raise EffectRuntimeResponseAmbiguous(method, timeout=1)
     monkeypatch.setattr(provider_update, "effect_runtime_result", lose_response)
     with pytest.raises(EffectRuntimeResponseAmbiguous):
@@ -174,8 +174,8 @@ from pathlib import Path
 from loopx.control_plane.todos import provider_create
 from loopx.todos import add_goal_todo
 real = provider_create.effect_runtime_result
-def exit_after_commit(method, request):
-    real(method, request)
+def exit_after_commit(method, request, **kwargs):
+    real(method, request, **kwargs)
     os._exit(77)
 provider_create.effect_runtime_result = exit_after_commit
 add_goal_todo(registry_path=Path(sys.argv[1]), goal_id="goal-a", role="agent",

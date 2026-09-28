@@ -50,6 +50,9 @@ OBSERVED_OWNER_IDS = {
     "global_goal_projection",
     "project_registry_goal",
 }
+PARTIALLY_ENFORCED_OWNER_IDS = {
+    "first_party_host_runtime",
+}
 TYPESCRIPT_DECLARATION = re.compile(
     r"^(?:export\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
     re.MULTILINE,
@@ -156,6 +159,10 @@ def test_m1_observation_claims_are_bounded_to_the_selected_lifecycle() -> None:
                 "build_goal_action_catalog"
             )
             assert owner["target_milestone"] == "M2"
+        elif owner["owner_id"] in PARTIALLY_ENFORCED_OWNER_IDS:
+            assert owner["m1_disposition"] == "source_exact_partial_enforcement"
+            assert owner["current_identity_strength"] == "source_exact_partial"
+            assert owner["target_milestone"] == "M3"
         else:
             assert owner["m1_disposition"] == "alias_only_inventory"
             assert owner["current_identity_strength"] == "goal_alias_only"

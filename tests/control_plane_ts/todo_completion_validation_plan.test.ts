@@ -17,7 +17,7 @@ const baseTodo = {
 function request(todo: Record<string, unknown>) {
   return {
     schema_version: TODO_COMPLETION_VALIDATION_PLAN_REQUEST_SCHEMA,
-    projection_source: "event_log",
+    projection_source: "materialized",
     todo: { ...baseTodo, ...todo },
     requested_no_followup: false,
     requested_completion_turn_key: null,
@@ -25,16 +25,10 @@ function request(todo: Record<string, unknown>) {
   };
 }
 
-test("event-log deferred todos replay before validation execution", () => {
-  const result = evaluateTodoCompletionValidationPlan(
-    request({
-      status: "deferred",
-      validation_command: "false",
-    }),
-  );
-
-  assert.equal(result.effect, "skip");
-  assert.equal(result.reason, "terminal_replay");
+test("retired event source cannot admit a validation effect", () => {
+  assert.throws(() => evaluateTodoCompletionValidationPlan({
+    ...request({status: "deferred", validation_command: "false"}), projection_source: "event_log",
+  }), /projection_source is unsupported/);
 });
 
 test("valid command and argv declarations produce run effects", () => {

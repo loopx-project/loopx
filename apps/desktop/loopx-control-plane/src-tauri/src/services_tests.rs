@@ -424,3 +424,122 @@ fn service_supervisor_reuses_matching_replaces_stale_and_rejects_foreign() {
 
     fs::remove_dir_all(&fixture_root).expect("remove service supervisor fixture");
 }
+
+#[test]
+fn pending_service_label_names_one_service_and_the_concurrent_set() {
+    // A single pending service keeps its own name so a stalled connection is
+    // still diagnosable; a set that is connecting together has no single name.
+    assert_eq!(ServiceKind::pending_label(&[ServiceKind::Status]), "status");
+    assert_eq!(ServiceKind::pending_label(&[ServiceKind::Chat]), "chat");
+    assert_eq!(ServiceKind::pending_label(&SERVICE_KINDS), "local");
+    assert_eq!(ServiceKind::pending_label(&[]), "local");
+}
+
+#[test]
+fn service_connections_run_concurrently_and_name_the_remaining_service() {
+    // Concurrency is the contract, not a timing coincidence: each connection
+    // must be able to observe its peer in flight. A sequential implementation
+    // can never satisfy the peer wait, and fails on the bounded timeout
+    // instead of hanging the suite.
+    let in_flight = std::sync::Mutex::new(0usize);
+    let peer_arrived = std::sync::Condvar::new();
+    let saw_peer = Mutex::new(Vec::new());
+    let published = Mutex::new(Vec::new());
+
+    let outcomes = connect_all(
+        SERVICE_KINDS,
+        |kind| {
+            let mut count = in_flight.lock().expect("in-flight lock");
+            *count += 1;
+            peer_arrived.notify_all();
+            let mut timed_out = false;
+            while *count < SERVICE_KINDS.len() && !timed_out {
+                let (waited, timeout) = peer_arrived
+                    .wait_timeout(count, Duration::from_secs(10))
+                    .expect("peer wait");
+                count = waited;
+                timed_out = timeout.timed_out();
+            }
+            let observed = *count >= SERVICE_KINDS.len();
+            drop(count);
+            saw_peer
+                .lock()
+                .expect("observation lock")
+                .push((kind, observed));
+            ServiceOutcome {
+                owned: None,
+                healed: false,
+                result: Ok(()),
+            }
+        },
+        |pending| {
+            published
+                .lock()
+                .expect("published lock")
+                .push(pending.to_vec())
+        },
+    );
+
+    assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
+    let saw_peer = saw_peer.into_inner().expect("observation lock");
+    assert_eq!(saw_peer.len(), SERVICE_KINDS.len());
+    assert!(
+        saw_peer.iter().all(|(_, observed)| *observed),
+        "every service must connect while its peer is still in flight: {saw_peer:?}"
+    );
+
+    // The boot page first sees the set connecting together, then the single
+    // service whose connection outlived its peer. A finished set publishes
+    // nothing, because there is no remaining service to name.
+    let published = published.into_inner().expect("published lock");
+    assert_eq!(published.len(), 2, "{published:?}");
+    assert_eq!(published[0], SERVICE_KINDS.to_vec());
+    assert_eq!(published[1].len(), 1, "{published:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_service_set_stops_the_child_its_peer_started() {
+    // Ownership must travel with every outcome: a peer that failed still
+    // leaves this App responsible for the process it already spawned.
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "exec sleep 30"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = command.group_spawn().expect("spawn owned service fixture");
+    let pid = child.id();
+
+    let Err(error) = ServiceSet::collect([
+        ServiceOutcome {
+            owned: Some(OwnedService { child }),
+            healed: false,
+            result: Ok(()),
+        },
+        ServiceOutcome {
+            owned: None,
+            healed: false,
+            result: Err(ServiceError("LoopX chat did not become ready".into())),
+        },
+    ]) else {
+        panic!("a failed peer must fail the whole set");
+    };
+    assert!(error.to_string().contains("did not become ready"));
+
+    let mut alive = true;
+    for _ in 0..50 {
+        if !Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .expect("kill -0")
+            .success()
+        {
+            alive = false;
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!alive, "owned service {pid} outlived the failed set");
+}

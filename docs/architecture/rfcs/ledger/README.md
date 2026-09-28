@@ -30,5 +30,11 @@ same day touch two different files and merge cleanly with no resolution at all.
   remove.
 - Entries are append-only history. Correct a wrong entry with a later entry that
   says what was wrong; do not rewrite a record someone may have cited.
+- Dated checkpoints are ledger entries, not RFC sections. An RFC body must not
+  contain a heading with `checkpoint` in it; the body keeps a one-line pointer
+  (`Checkpoint moved to the execution ledger: <link to ledger/<rfc-slug>/<file>>`)
+  where the section used to be. Sections moved from an RFC after the fact open
+  with a provenance line naming the source RFC, the former section title, the
+  move date and the RFC baseline commit, so a reader can diff the move.
 
 `examples/docs-governance-smoke.py` checks the naming and the mirror pairing.

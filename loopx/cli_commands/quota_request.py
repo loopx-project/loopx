@@ -13,6 +13,13 @@ QUOTA_SHOULD_RUN_DETAIL_SECTIONS = (
     "vision",
 )
 QUOTA_MONITOR_POLL_DETAIL_SECTIONS = ("decisions",)
+QUOTA_PLAN_DETAIL_SECTIONS = ("agent-todos", "user-todos")
+QUOTA_COMMAND_DETAIL_SECTIONS = {
+    "status": QUOTA_PLAN_DETAIL_SECTIONS,
+    "plan": QUOTA_PLAN_DETAIL_SECTIONS,
+    "should-run": QUOTA_SHOULD_RUN_DETAIL_SECTIONS,
+    "monitor-poll": QUOTA_MONITOR_POLL_DETAIL_SECTIONS,
+}
 QUOTA_DETAIL_SECTIONS = (
     *QUOTA_SHOULD_RUN_DETAIL_SECTIONS,
     *QUOTA_MONITOR_POLL_DETAIL_SECTIONS,
@@ -178,9 +185,7 @@ def quota_detail_sections_from_args(args: argparse.Namespace) -> frozenset[str]:
         sections.add("scheduler")
     if "all" in sections:
         sections.update(
-            QUOTA_MONITOR_POLL_DETAIL_SECTIONS
-            if args.quota_command == "monitor-poll"
-            else QUOTA_SHOULD_RUN_DETAIL_SECTIONS
+            QUOTA_COMMAND_DETAIL_SECTIONS.get(args.quota_command, ())
         )
         sections.discard("all")
     return frozenset(sections)

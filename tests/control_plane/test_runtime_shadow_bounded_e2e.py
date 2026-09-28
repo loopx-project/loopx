@@ -16,6 +16,7 @@ import pytest
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 
 from loopx.control_plane.coordination.coordination_state_contract_generated import (
+    LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA,
     TASK_LEASE_ACQUIRE_REQUEST_SCHEMA,
 )
 from loopx.control_plane.coordination.runtime_shadow import (
@@ -513,7 +514,23 @@ def test_public_committed_primary_cannot_be_relabelled_abandoned_by_native_reque
     w.crash("before_commit", "todo", "add", "--role", "agent", "--text", "A committed primary is never abandoned")
     directory = outbox.partition_directory(w.runtime, w.goal, "todos")
     [entry] = outbox.list_entries(directory)
-    request = adapter._commit_entry_request(runtime_root=w.runtime, goal_id=w.goal, entry=entry)
+    # The batch drain owns public commits now, so the witnessed selection is
+    # built here from durable entry bytes instead of a retired private helper.
+    request = {
+        "schema_version": LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA,
+        "runtime_root": str(w.runtime),
+        "goal_id": w.goal,
+        "entry_id": entry.entry_id,
+        "partition": entry.partition,
+        "seq": entry.seq,
+        "capture_lineage_id": entry.prepared.get("capture_lineage_id"),
+        "prepared_sha256": outbox.raw_bytes_digest(entry.prepared_path.read_bytes()),
+        "committed_sha256": (
+            outbox.raw_bytes_digest(entry.committed_path.read_bytes())
+            if entry.committed_path
+            else None
+        ),
+    }
     assert request["committed_sha256"] is not None
     request["resolution"] = "abandoned"
     before = {path.name: path.read_bytes() for path in directory.iterdir()}

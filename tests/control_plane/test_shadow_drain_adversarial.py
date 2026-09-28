@@ -136,7 +136,11 @@ def test_native_markerless_resolution_requires_source_evidence(
     w.crash(window, "todo", "add", "--role", "agent", "--text", "Source proof is not a caller flag")
     directory = outbox.partition_directory(w.runtime, w.goal, "todos")
     [entry] = outbox.list_entries(directory)
-    request = adapter._commit_entry_request(runtime_root=w.runtime, goal_id=w.goal, entry=entry)
+    request = {"schema_version": "loopx_shadow_entry_delivery_request_v0", "runtime_root": str(w.runtime),
+               "goal_id": w.goal, "partition": entry.partition, "seq": entry.seq, "entry_id": entry.entry_id,
+               "capture_lineage_id": entry.prepared["capture_lineage_id"],
+               "prepared_sha256": outbox.raw_bytes_digest(entry.prepared_path.read_bytes()),
+               "committed_sha256": None}
     request["resolution"] = claimed_resolution
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
     with pytest.raises(EffectRuntimeRejected, match="shadow_entry_selection_invalid"):
@@ -172,31 +176,6 @@ def test_registry_runtime_override_cannot_bypass_an_active_source_binding(tmp_pa
     assert w.state.read_bytes() == before
 
 
-@pytest.mark.parametrize("overlay", [False, True], ids=["event_only", "event_overlay"])
-def test_public_qualification_and_candidate_reads_hold_unbound_event_todos(
-    tmp_path: Path, overlay: bool,
-) -> None:
-    from loopx.event_sourced_state import AppendOnlyStateEventStore, TODO_ADDED, make_state_event
-
-    w = workspace(tmp_path)
-    ids = [w.add(f"Markdown evidence {index}")["todo_id"] for index in range(3)]
-    assert w.cli("coordination-shadow", "qualify")["qualification"]["qualified"] is True
-    event_id = ids[0] if overlay else "todo_unbound_event"
-    log = w.state.with_name("events.jsonl")
-    store = AppendOnlyStateEventStore(log)
-    store.append(make_state_event(
-        event_id="evt-unbound-todo", goal_id=w.goal, event_type=TODO_ADDED,
-        refs={"todo_id": event_id}, payload={"role": "agent", "title": "Event source remains independently writable", "task_class": "advancement_task"},
-        recorded_at="2026-09-06T00:00:00+00:00",
-    ))
-    assert len(store.load()) == 1
-    evidence = log.read_bytes()
-    for command in (("qualify",), ("read-candidate", "--todo-id", ids[0])):
-        result = w.cli("coordination-shadow", *command, success=False)
-        assert result["ok"] is False, result
-        assert result["error"] == "event_log_writer_not_bound", result
-        assert result["decision_read_from_shadow"] is False
-        assert log.read_bytes() == evidence
 
 
 @pytest.mark.parametrize("missing", ["identity", "candidate"])

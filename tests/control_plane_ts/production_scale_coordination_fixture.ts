@@ -199,7 +199,7 @@ function todoRecords(
         ...(index % 8 === 0 ? {watch_only: "true"} : {max_no_change_before_replan: "5"})});
     }
     if (role === "agent" && status === "done" && index < 3) {
-      record.successor_todo_ids = [todoId("agent", envelope.completion_target_index + index)];
+      record.successor_todo_ids = [todoId("agent", PRODUCTION_SCALE_COMPLETION_TARGET_INDEX + index)];
       record.completion_continuation = "successor";
     }
     if (role === "user" && index < envelope.standing_user_decision_count) {
@@ -219,7 +219,7 @@ function todoRecords(
       record.decision_scope = {kind: "direction", granularity: "goal", scope_key: goalId};
       if (index >= partialEnd) {
         record.decision_outcome = "approve";
-        record.unblocks_todo_id = todoId("agent", envelope.completion_target_index);
+        record.unblocks_todo_id = todoId("agent", PRODUCTION_SCALE_COMPLETION_TARGET_INDEX);
       }
     }
     // An explicit rejection is a recorded decision, not absent authority: the
@@ -255,8 +255,8 @@ export function productionScaleCoordinationFixture(
   const archiveDependent = [...agents].reverse().find(item => item.status === "open")!;
   archiveDependent.task_class = "advancement_task";
   archiveDependent.resume_when = `todo_done:${todoId("agent", 3)}`;
-  const completionTodo = agents[envelope.completion_target_index]!;
-  const supersedeTodo = agents[envelope.supersede_target_index]!;
+  const completionTodo = agents[PRODUCTION_SCALE_COMPLETION_TARGET_INDEX]!;
+  const supersedeTodo = agents[PRODUCTION_SCALE_SUPERSEDE_TARGET_INDEX]!;
   completionTodo.task_class = "advancement_task";
   completionTodo.claimed_by = "agent-a";
   completionTodo.completion_validation_required = true;
@@ -354,6 +354,38 @@ function requireSafeCount(value: number, label: string): number {
   }
   return value;
 }
+
+/**
+ * Validate the two envelope fields that address a generated agent Todo.
+ *
+ * The envelope is parsed JSON, so `as` proves nothing about its numbers: the
+ * two target indices below are the only envelope fields a consumer turns into a
+ * positional lookup. They are validated once here, at the boundary, and every
+ * consumer reads the validated constant instead of the raw field, so a drifted
+ * index fails the fixture instead of yielding `undefined` mid-construction.
+ */
+export function requireProductionScaleTargetIndex(
+  value: number,
+  label: string,
+  agentTodoCount: number,
+): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value >= agentTodoCount) {
+    throw new Error(`production fixture ${label} does not address a generated agent Todo`);
+  }
+  return value;
+}
+
+export const PRODUCTION_SCALE_AGENT_TODO_COUNT = statusSeries(
+  envelope.agent_status_counts, envelope.agent_status_order, "agent",
+).length;
+
+export const PRODUCTION_SCALE_COMPLETION_TARGET_INDEX = requireProductionScaleTargetIndex(
+  envelope.completion_target_index, "completion target index", PRODUCTION_SCALE_AGENT_TODO_COUNT,
+);
+
+export const PRODUCTION_SCALE_SUPERSEDE_TARGET_INDEX = requireProductionScaleTargetIndex(
+  envelope.supersede_target_index, "supersede target index", PRODUCTION_SCALE_AGENT_TODO_COUNT,
+);
 
 /**
  * Checked while the module loads, so a drifted history envelope fails every

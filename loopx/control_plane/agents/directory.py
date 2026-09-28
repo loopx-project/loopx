@@ -26,6 +26,8 @@ from typing import Any
 
 from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.time import now_utc_iso
+from ...thread_agent_binding import summarize_agent_binding_routes
+from ..runtime.public_safety import validate_public_safe_value
 from ..todos.contract import normalize_todo_id
 from .management_projection import build_agent_management_projection
 
@@ -35,6 +37,7 @@ PEER_AGENT_DIRECTORY_SCOPE = "goal_registered_agents"
 MAX_DIRECTORY_ROWS = 24
 MAX_OBSERVATION_REFS = 1
 MAX_DELIVERY_REFS = 1
+MAX_ROUTE_CANDIDATES = 3
 MAX_ROLLUP_AGENTS = 8
 
 # Limitation codes are contract vocabulary, not prose: a reader switches on them.
@@ -43,6 +46,7 @@ LIMITATION_PRESENCE_IS_ADVISORY = "presence_is_advisory"
 LIMITATION_LEASE_STATE_NOT_PROJECTED = "lease_state_not_projected"
 LIMITATION_CALLER_IDENTITY_NOT_SUPPLIED = "caller_identity_not_supplied"
 LIMITATION_ROWS_TRUNCATED = "rows_truncated_at_cap"
+LIMITATION_ROUTE_CANDIDATE_WITHHELD = "route_candidate_withheld"
 
 GAP_AUDIENCE_NOT_AUTHORIZED = "audience_not_authorized"
 
@@ -72,6 +76,31 @@ def _compact_refs(value: Any, *, limit: int) -> list[str]:
         if len(refs) >= limit:
             break
     return refs
+
+
+def _publishable_route(route: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Cap the candidate list and withhold entries the public boundary rejects.
+
+    Withholding is reported, never silent: `candidate_count` keeps the withheld
+    entries, so a filtered candidate cannot be read as a binding that does not
+    exist. Values are never truncated to make them pass, because a half a thread
+    identifier is a locator that no longer locates.
+    """
+
+    visible: list[dict[str, str]] = []
+    withheld = 0
+    for candidate in route["candidates"]:
+        try:
+            validate_public_safe_value(candidate, path="peer_route.candidate")
+        except ValueError:
+            withheld += 1
+            continue
+        visible.append(candidate)
+    published = {key: value for key, value in route.items() if key != "candidates"}
+    published["candidates"] = visible[:MAX_ROUTE_CANDIDATES]
+    if withheld:
+        published["withheld_candidate_count"] = withheld
+    return published, withheld
 
 
 def _work_block(agent_row: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -187,8 +216,12 @@ def build_peer_agent_directory(
     if not caller:
         limitations.append(LIMITATION_CALLER_IDENTITY_NOT_SUPPLIED)
 
+    # Route candidates are read from the same published bindings the management
+    # projection walks, but only the owning resolver module interprets them.
+    binding_goals = _as_list(_as_mapping(payload.get("run_history")).get("goals"))
     rows: list[dict[str, Any]] = []
     dropped_at_cap = 0
+    withheld_route_candidates = 0
     for row in agent_rows:
         agent_id = _compact(row.get("agent_id"), limit=120)
         if not agent_id:
@@ -199,6 +232,10 @@ def build_peer_agent_directory(
             dropped_at_cap += 1
             continue
         work = _work_block(row)
+        peer_route, withheld_candidates = _publishable_route(
+            summarize_agent_binding_routes(binding_goals, agent_id=agent_id)
+        )
+        withheld_route_candidates += withheld_candidates
         directory_row: dict[str, Any] = {
             "agent_id": agent_id,
             "registered": True,
@@ -210,6 +247,7 @@ def build_peer_agent_directory(
             "delivery_refs": _compact_refs(
                 row.get("handoff_refs"), limit=MAX_DELIVERY_REFS
             ),
+            "peer_route": peer_route,
         }
         rows.append(
             {
@@ -230,6 +268,8 @@ def build_peer_agent_directory(
     )
     if omitted:
         limitations.append(LIMITATION_ROWS_TRUNCATED)
+    if withheld_route_candidates:
+        limitations.append(LIMITATION_ROUTE_CANDIDATE_WITHHELD)
 
     packet: dict[str, Any] = {
         "ok": True,

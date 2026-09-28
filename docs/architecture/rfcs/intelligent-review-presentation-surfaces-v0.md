@@ -1,6 +1,7 @@
 # RFC: Intelligent Review and Dynamic Presentation Surfaces v0
 
-- Status: Draft, under maintainer review
+- Status: Accepted
+- Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-09-01
 - Scope: a provider-neutral typed interaction projection that selects,
@@ -681,11 +682,21 @@ semantic zoom and historical replay. Purposeful motion is a product objective;
 registration, execution, return, independent acceptance and requester adoption
 remain distinct. Preserve source/revision lineage and uncertainty; never infer
 activity from decorative motion or confidence from agreement counts. This is a
-Draft presentation slice, not a shipped team stream or new scheduling authority.
+Accepted design for a planned presentation slice; no shipped team stream or new scheduling authority is claimed.
 Its L1–L3 plan and V1–V7 acceptance extend this RFC's Stage 3 presentation journey;
 they do not close cross-channel or governed settlement acceptance here.
 
 ### 8.8 Reusable conversation work surface
+
+**App-first continuation.** The [App/inbox integration design](app-conversation-and-async-inbox-v0.md)
+turns this surface into the working conversation for managed and attached
+LoopX Agents. Preserve the existing runtime binding and work lineage, show
+native steering versus next-Turn delivery honestly, and return artifacts here.
+Named conversations, compact owner/return lines and a dominant readable answer
+area take precedence over a dashboard of protocol fields. Lark uses the same
+facts after separate qualification; visual parity is not an App release blocker.
+The design includes the Lorca screenshot's observed hierarchy, its evidence
+limits, failure matrix and existing-owner refactor cadence.
 
 Steward Chat, Goal Chat, direct Agent conversations and their frontend/Lark
 projections share one interaction pattern. A short factual question deserves a
@@ -1151,7 +1162,7 @@ success.
 
 ## 18. Acceptance criteria for this RFC
 
-The RFC may move beyond Draft when maintainers agree on:
+Merge accepts this design basis. Implementation qualification still covers:
 
 1. the projection-only authority boundary;
 2. the closed interaction modes and precedence;

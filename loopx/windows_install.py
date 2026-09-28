@@ -159,6 +159,44 @@ def _validate_candidate(
         )
 
 
+def _upgrade_authority_archive(
+    release_root: Path,
+    *,
+    python: Path,
+    skills_dir: Path,
+) -> None:
+    env = dict(os.environ)
+    env["LOOPX_RELEASE_ROOT"] = str(release_root)
+    env["CODEX_HOME"] = str(skills_dir.parent)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        _entry_command(
+            release_root,
+            python,
+            [
+                "--format",
+                "json",
+                "authority-archive",
+                "upgrade",
+                "--all-known",
+                "--execute",
+            ],
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Authority format upgrade failed before launcher activation; "
+            "backups and candidate retained. "
+            f"stdout={result.stdout[-2000:]!r}, stderr={result.stderr[-2000:]!r}"
+        )
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -328,14 +366,11 @@ def install_windows(
             shutil.rmtree(temporary, ignore_errors=True)
             raise
 
-        upgrade = subprocess.run(
-            _entry_command(release_root, python, ["--format", "json", "authority-archive", "upgrade",
-                                                 "--all-known", "--execute"]),
-            capture_output=True, text=True, timeout=600,
+        _upgrade_authority_archive(
+            release_root,
+            python=python,
+            skills_dir=skills_dir,
         )
-        if upgrade.returncode != 0:
-            raise RuntimeError("Authority format upgrade failed before launcher activation; "
-                               "backups and candidate retained. " + upgrade.stdout[-2000:])
 
         launcher = bin_dir / "loopx.ps1"
         pointer = install_root / "current-release.json"

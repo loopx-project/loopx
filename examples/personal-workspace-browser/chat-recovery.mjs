@@ -39,7 +39,7 @@ export const chatRecoveryScenario = {
       if (!api.turnRequests.some((turn) => turn.message.includes("汇总所有活跃 Goal 的最新进展与阻塞"))) throw new Error("Progress report shortcut did not send a useful scoped request");
       while (await page.getByRole("button", { name: "汇总所有 Goal 进展" }).isDisabled()) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
       await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
-      if (!(await page.getByTestId("personal-home-lane-running").isVisible())) throw new Error("Manager send replaced the four-lane home overview");
+      if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
       await page.getByRole("button", { name: "询问全局待办", exact: true }).click();
       await page.getByLabel("向 LoopX 发送消息").fill("我现在该做什么？只读回答，不要创建或修改任何状态。");
@@ -116,6 +116,24 @@ export const chatRecoveryScenario = {
       await page.setViewportSize({ width: 1512, height: 982 });
       await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
       await page.screenshot({ path: resolve(outputDir, "collaboration-brief-desktop.png"), fullPage: false, animations: "disabled" });
+      delegatedMessage.collaboration.goal_id = "community";
+      delegatedMessage.collaboration.decision = "defer";
+      delegatedMessage.collaboration.decision_reason = "先完成正在进行的交付；问卷尚未制作。";
+      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "delivered" }];
+      await collaboration.getByText("接收方判断: 已暂缓", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+      await collaboration.getByText("原因: 先完成正在进行的交付；问卷尚未制作。", { exact: true }).waitFor({ state: "visible" });
+      await collaboration.getByText("回复已送达", { exact: true }).waitFor({ state: "visible" });
+      await collaboration.getByText("接收方: community / worker", { exact: true }).waitFor({ state: "visible" });
+      if ((await collaboration.innerText()).includes("结论已回传")) throw new Error("Deferred reply was presented as a completed conclusion");
+      await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: resolve(outputDir, "collaboration-deferred-desktop.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Deferred explanation overflows on mobile");
+      await page.screenshot({ path: resolve(outputDir, "collaboration-deferred-mobile.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
+      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "explicit_unverified" }];
+      await collaboration.getByText("回复送达尚未核验", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+      if (api.turnRequests.length !== turnsBeforeReturn) throw new Error("Disposition readback started another model turn");
       pass("collaboration-brief", "Original conversation preserves context, constraints, inputs and receiver decision without a new turn");
 
       const returnText = "处理结论：已核验新约束并关联现有计划，无需再次追问。";

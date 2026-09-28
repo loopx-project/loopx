@@ -1,6 +1,7 @@
 # RFC：Goal Artifact 生命周期投影（milestone / guard / next-transition）v0
 
-- 状态：Draft，maintainer 评审中
+- 状态：已接受
+- 替代 / 关闭：无
 - 提出方：LoopX maintainers
 - 日期：2026-08-12
 - 范围：一个只读的 goal 级生命周期投影，由现有 typed state 派生；全局聚合视图作为后续切片；不改变运行时状态机，不引入流程引擎

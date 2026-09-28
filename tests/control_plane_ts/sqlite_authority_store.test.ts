@@ -11,12 +11,15 @@ import { AUTHORITY_STATE_CHECKPOINT_INTERVAL } from "../../loopx/control_plane/c
 import { canonicalAuthorityBytes } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import { authorityStoreCommitFixture, registerAuthorityStoreConformance } from "./authority_store_conformance.ts";
 
+import {registerAuthorityOperationReplayConformance} from "./authority_operation_replay_conformance.ts";
+
 async function fixture(t: test.TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "sqlite-authority-"));
   t.after(() => rm(directory, {recursive: true, force: true}));
   return {store: new SqliteAuthorityStore(directory, "goal"), contender: new SqliteAuthorityStore(directory, "goal")};
 }
-registerAuthorityStoreConformance("SQLite", fixture);
+registerAuthorityStoreConformance("SQLite", fixture, "applied");
+registerAuthorityOperationReplayConformance("SQLite", fixture);
 
 test("SQLite commits and reads back every JSON object key", {timeout: 30000}, async t => {
   const {store} = await fixture(t);
@@ -60,6 +63,52 @@ test("SQLite commits and reads back every JSON object key", {timeout: 30000}, as
       canonicalAuthorityBytes(projection).toString("utf8"), `projection ${index}`);
   }
   assert.equal(({} as Record<string, unknown>).marker, undefined);
+});
+
+test("SQLite large unchanged projections retain independent receipts and reject a forged digest chain", async t => {
+  const {store} = await fixture(t);
+  const projection = {capacity_padding: "p".repeat(1024 * 1024), marker: "constant"};
+  let revision: string | null = null;
+  for (let index = 1; index <= 3; index++) {
+    const result = await store.commitAuthority({expected_provider_revision: revision,
+      operation_id: `large-${index}`, next_projection: projection,
+      events: [{index}], receipts: [{operation_id: `large-${index}`, index}]});
+    assert.equal(result.status, "applied");
+    if (result.status !== "applied") return;
+    revision = result.provider_revision;
+  }
+  const found = await store.readReceipt("large-3");
+  assert.equal(found.status, "found");
+  if (found.status === "found") assert.equal(found.receipts[0]?.index, 3);
+  const page = await store.scanCommitted(null, 3);
+  assert.equal(page.status, "page");
+  if (page.status === "page") {
+    assert.deepEqual(page.transactions.map(row => row.operation_id), ["large-1", "large-2", "large-3"]);
+    (page.transactions[0]!.projection as {marker: string}).marker = "edited only in returned data";
+    assert.equal((page.transactions[1]!.projection as {marker: string}).marker, "constant");
+  }
+  const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+  const db = new DatabaseSync(store.path);
+  try {
+    const forged = "0".repeat(64);
+    db.prepare("UPDATE commits SET state_digest=? WHERE cursor=2").run(forged);
+    db.prepare("UPDATE commits SET parent_state_digest=? WHERE cursor=3").run(forged);
+  } finally { db.close(); }
+  // The current head can still load; a historical read must prove the empty
+  // delta's claimed state digest rather than trusting the forged chain.
+  assert.equal((await store.loadAuthority()).status, "loaded");
+  for (const result of [await store.readReceipt("large-3"), await store.scanCommitted(null, 3)]) {
+    assert.equal(result.status, "failed");
+    if (result.status === "failed") assert.equal(result.reason_code, "provider_protocol_violation");
+  }
+});
+
+test("SQLite first empty projection still derives its root digest", async t => {
+  const {store} = await fixture(t);
+  const committed = await store.commitAuthority({expected_provider_revision: null,
+    operation_id: "empty-root", next_projection: {}, events: [], receipts: [{operation_id: "empty-root"}]});
+  assert.equal(committed.status, "applied");
+  assert.equal((await store.readReceipt("empty-root")).status, "found");
 });
 
 test("SQLite head continuity is independent of retained history", {timeout: 30000}, async t => {
@@ -361,3 +410,89 @@ test("SQLite real processes serialize CAS and preserve a lost-response receipt",
   assert.equal(reopened.status, "loaded");
   if (reopened.status === "loaded") assert.equal(reopened.cursor, "2");
 });
+
+
+test("SQLite receipt batches preserve scalar proofs and order across checkpoints without repeated replay", async t => {
+  const {store} = await fixture(t);
+  let revision: string | null = null;
+  for (let i = 1; i <= 130; i++) {
+    const result = await store.commitAuthority(authorityStoreCommitFixture(revision, `batch-${i}`, i, i));
+    assert.equal(result.status, "applied"); if (result.status !== "applied") return;
+    revision = result.provider_revision;
+  }
+  const ids = ["batch-63", "batch-2", "missing", "batch-65", "batch-64", "batch-2", "batch-129"];
+  const expected = await Promise.all(ids.map(id => store.readReceipt(id)));
+  assert.deepEqual(await store.readReceipts(ids), {status: "receipts", results: expected});
+  const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+  const prepare = DatabaseSync.prototype.prepare;
+  let rowsRead = 0;
+  DatabaseSync.prototype.prepare = function(this: import("node:sqlite").DatabaseSync, sql: string) {
+    const statement = prepare.call(this, sql);
+    if (!/FROM commits\b/i.test(sql)) return statement;
+    return new Proxy(statement, {get(target, property) {
+      const value = Reflect.get(target, property);
+      if (typeof value !== "function") return value;
+      if (property !== "all" && property !== "get") return value.bind(target);
+      return (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        rowsRead += Array.isArray(result) ? result.length : result === undefined ? 0 : 1;
+        return result;
+      };
+    }});
+  };
+  try {
+    const grouped = await store.readReceipts(Array.from({length: 16}, (_, i) => `batch-${i + 48}`));
+    assert.equal(grouped.status, "receipts");
+    // Sixteen indexed lookups, one <=64-row checkpoint proof, and bounded head proof.
+    // Replaying the same window for every receipt would exceed this by an order of magnitude.
+    assert.ok(rowsRead <= 90, `batch materialized ${rowsRead} retained rows`);
+  } finally { DatabaseSync.prototype.prepare = prepare; }
+  // A successful earlier batch must not cache a proof over a later disk mutation.
+  const db = new DatabaseSync(store.path);
+  db.prepare("UPDATE commits SET receipts=? WHERE cursor=2").run(JSON.stringify([{forged: true}]));
+  db.close();
+  assert.equal((await store.loadAuthority()).status, "loaded");
+  const failed = await store.readReceipts(["batch-129", "missing", "batch-2"]);
+  assert.equal(failed.status, "failed");
+  if (failed.status === "failed") assert.equal(failed.reason_code, "provider_protocol_violation");
+});
+
+test("SQLite receipt batch bounds are checked before opening storage", async t => {
+  const {store} = await fixture(t);
+  for (const ids of [[], Array(65).fill("operation"), [""]]) {
+    assert.equal((await store.readReceipts(ids)).status, "failed");
+  }
+  assert.deepEqual(await store.readReceipts(["missing", "missing"]),
+    {status: "receipts", results: [{status: "missing"}, {status: "missing"}]});
+  const {existsSync} = await import("node:fs");
+  assert.equal(existsSync(store.path), false);
+});
+
+for (const cursor of [1, 2]) for (const field of ["events", "receipts"] as const) {
+  test(`SQLite replay refuses corrupt retained ${field} at cursor ${cursor}`, async t => {
+    const {store} = await fixture(t);
+    let revision: string | null = null;
+    const inputs = [];
+    for (let index = 1; index <= 3; index++) {
+      const input = authorityStoreCommitFixture(revision, `replay-${index}`, index, index);
+      inputs.push(input);
+      const committed = await store.commitAuthority(input);
+      assert.equal(committed.status, "applied"); if (committed.status !== "applied") return;
+      revision = committed.provider_revision;
+    }
+    const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+    const db = new DatabaseSync(store.path);
+    try {
+      db.prepare(`UPDATE commits SET ${field}=? WHERE cursor=?`).run('[{"forged":true}]', cursor);
+      const before = db.prepare("SELECT * FROM commits ORDER BY cursor").all();
+      assert.equal((await store.loadAuthority()).status, "loaded", "current head remains valid");
+      assert.equal((await store.readReceipt(`replay-${cursor}`)).status, "failed");
+      const replay = await store.commitAuthority(inputs[cursor - 1]!);
+      assert.equal(replay.status, "failed", "stored digest alone cannot prove the retained transaction");
+      if (replay.status === "failed") assert.equal(replay.reason_code, "provider_protocol_violation");
+      assert.deepEqual(db.prepare("SELECT * FROM commits ORDER BY cursor").all(), before);
+      const head = await store.loadAuthority();
+      assert.equal(head.status, "loaded"); if (head.status === "loaded") assert.equal(head.cursor, "3");
+    } finally { db.close(); }
+  });
+}

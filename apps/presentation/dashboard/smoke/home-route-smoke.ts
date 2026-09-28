@@ -16,6 +16,7 @@ function excludes(source: string, snippet: string, label: string) {
 const routerSource = readFileSync("src/router.tsx", "utf8");
 const dashboardSource = readFileSync("src/views/dashboard-page.tsx", "utf8");
 const workspacePageSource = readFileSync("src/features/personal-workspace/personal-workspace-page.tsx", "utf8");
+const actionFormSource = readFileSync("src/features/personal-workspace/workspace-action-form.tsx", "utf8");
 const sidebarSource = readFileSync("src/features/personal-workspace/goal-sidebar.tsx", "utf8");
 const shellSource = readFileSync("src/features/personal-workspace/workspace-shell.tsx", "utf8");
 const drawerSource = readFileSync("src/features/personal-workspace/context-drawer.tsx", "utf8");
@@ -55,8 +56,9 @@ includes(workspacePageSource, 'kind: "run"', "run row projection");
 includes(workspacePageSource, 'kind: "output"', "output row projection");
 includes(workspacePageSource, 'kind: "schedule"', "schedule row projection");
 includes(workspacePageSource, 'kind: "proposal"', "typed proposal projection");
-includes(workspacePageSource, 'actionKind: "goal.create"', "natural language Goal preview");
-includes(workspacePageSource, '"heartbeat.bind" : "monitor.create"', "heartbeat and monitor classification");
+includes(workspacePageSource, "callbacks.onSendMessage?.(message, selectedAgentId, selectedGoalId", "selected conversation receives free text");
+includes(actionFormSource, 'draft.kind === "goal" ? "goal.create"', "explicit Goal form action");
+includes(actionFormSource, '"heartbeat.bind" : "monitor.create"', "explicit heartbeat and monitor form actions");
 includes(workspacePageSource, 'error.payload.error_code === "protected_action"', "protected host Gate rendering");
 includes(workspacePageSource, 'todo.taskClass === "continuous_monitor"', "canonical continuous monitor projection");
 

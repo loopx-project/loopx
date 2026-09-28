@@ -2,7 +2,8 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | Draft，研究计划 |
+| 状态 | 已接受 |
+| 替代 / 关闭 | 无 |
 | 日期 | 2026-08-16 |
 | 作者 | LoopX maintainers |
 | 范围 | 外部能力证据、benchmark 协作、harness 实验与机制 qualification |

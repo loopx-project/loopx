@@ -12,6 +12,8 @@ chat_port="${LOOPX_CHAT_PORT:-8767}"
 host="${LOOPX_DASHBOARD_HOST:-127.0.0.1}"
 chat_runtime_endpoint="$host:$chat_port"
 label_prefix="${LOOPX_LAUNCH_LABEL_PREFIX:-com.loopx}"
+log_max_bytes_override="${LOOPX_LOG_MAX_BYTES:-}"
+log_max_bytes="${log_max_bytes_override:-10485760}"
 
 uid="$(id -u)"
 launch_agents_dir="$HOME/Library/LaunchAgents"
@@ -44,6 +46,7 @@ Environment overrides:
   LOOPX_CHAT_PORT
   LOOPX_DASHBOARD_HOST
   LOOPX_LAUNCH_LABEL_PREFIX
+  LOOPX_LOG_MAX_BYTES    Rotate an agent log once it exceeds this size (default 10 MiB)
   LOOPX_CHAT_CODEX_HOME  Explicit managed Codex home (upgrades preserve the existing binding)
 EOF
 }
@@ -59,6 +62,48 @@ xml_escape() {
 
 shell_quote() {
   printf '%q' "$1"
+}
+
+# Keep the agent logs bounded. KeepAlive means these files outlive every
+# release: without a retention step they only ever grow, and a service that
+# becomes noisy for a while leaves that output on disk forever.
+#
+# Rotation has to run inside the agent's own wrapper, because launchd restarts
+# the service on its own and those restarts never re-enter this installer.
+# It also must not rename the live file: launchd opens StandardOutPath before
+# the wrapper runs and keeps appending to that descriptor, so renaming would
+# send the service's output to the rotated copy and leave the live path empty.
+# Copy the previous generation aside and truncate in place instead, which the
+# append-mode descriptor follows back to offset zero.
+#
+# The truncate is conditional on the copy succeeding. A failed copy (read-only
+# target, full disk) must leave the live log intact: dropping it would destroy
+# the only record of the failure the operator is trying to diagnose. Retention
+# is retried at the next agent start, and the warning goes to the agent's own
+# error log.
+log_rotation_prelude() {
+  local basename="$1"
+  printf 'for loopx_log in %s %s; do [ -f "$loopx_log" ] || continue; loopx_size="$(stat -f%%z "$loopx_log" 2>/dev/null || echo 0)"; case "$loopx_size" in [0-9]*) ;; *) continue; esac; [ "$loopx_size" -gt %s ] || continue; if [ ! -d "$loopx_log.1" ] && cp -f "$loopx_log" "$loopx_log.1" 2>/dev/null; then : >"$loopx_log"; else printf "loopx-launchagent: kept %%s and skipped retention: could not write %%s.1; the next start retries\\n" "$loopx_log" "$loopx_log" >&2; fi; done; unset loopx_log loopx_size;' \
+    "$(shell_quote "$logs_dir/$basename.out.log")" \
+    "$(shell_quote "$logs_dir/$basename.err.log")" \
+    "$log_max_bytes"
+}
+
+# The installed retention policy is whatever the installed wrapper runs; the
+# caller's environment describes a future install. Read the value back out of
+# the plist so status cannot report a setting that is not in effect.
+installed_log_max_bytes() {
+  local plist="$1" value
+  [[ -f "$plist" ]] || return 1
+  value="$(grep -o -- '-gt [0-9][0-9]*' "$plist" 2>/dev/null | head -n 1 | awk '{print $2}')"
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$value"
+}
+
+# Fail fast instead of writing a wrapper whose retention step can never match.
+validate_log_max_bytes() {
+  [[ "$log_max_bytes" =~ ^[0-9]+$ ]] || return 1
+  (( log_max_bytes > 0 ))
 }
 
 require_macos() {
@@ -221,8 +266,8 @@ write_plists() {
   fi
   chat_codex_home="$(resolve_chat_codex_home "$python_command")"
   codex_home_export=" export CODEX_HOME=$(shell_quote "$chat_codex_home"); export LOOPX_CHAT_CODEX_HOME=$(shell_quote "$chat_codex_home");"
-  status_shell="export LOOPX_PYTHON=$(shell_quote "$python_command"); export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") serve-status --global-registry --host $(shell_quote "$host") --port $(shell_quote "$status_port") --limit $(shell_quote "$status_limit")$control_plane_write_arg"
-  chat_shell="export LOOPX_PYTHON=$(shell_quote "$python_command");$codex_home_export export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") chat --global-registry --host $(shell_quote "$host") --port $(shell_quote "$chat_port") --codex-bin $(shell_quote "$codex_command") --claude-bin $(shell_quote "$claude_command")$lark_cli_arg --replace-existing-loopx-chat --no-open"
+  status_shell="$(log_rotation_prelude status) export LOOPX_PYTHON=$(shell_quote "$python_command"); export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") serve-status --global-registry --host $(shell_quote "$host") --port $(shell_quote "$status_port") --limit $(shell_quote "$status_limit")$control_plane_write_arg"
+  chat_shell="$(log_rotation_prelude chat) export LOOPX_PYTHON=$(shell_quote "$python_command");$codex_home_export export PATH=$(shell_quote "$path_prefix"):\$PATH; exec $(shell_quote "$status_command") --registry $(shell_quote "$registry") chat --global-registry --host $(shell_quote "$host") --port $(shell_quote "$chat_port") --codex-bin $(shell_quote "$codex_command") --claude-bin $(shell_quote "$claude_command")$lark_cli_arg --replace-existing-loopx-chat --no-open"
 
   mkdir -p "$launch_agents_dir" "$logs_dir"
 
@@ -411,6 +456,7 @@ print_status_contract_health() {
 }
 
 print_status() {
+  local installed_log_max
   echo "LaunchAgents:"
   launchctl print "gui/$uid/$status_label" >/dev/null 2>&1 \
     && echo "- $status_label: loaded" \
@@ -429,10 +475,26 @@ print_status() {
   echo "- $logs_dir/status.err.log"
   echo "- $logs_dir/chat.out.log"
   echo "- $logs_dir/chat.err.log"
+  if installed_log_max="$(installed_log_max_bytes "$status_plist")"; then
+    echo "- retention: rotated to .1 at each agent start once a log exceeds $installed_log_max bytes"
+    if [[ -n "$log_max_bytes_override" ]] && (( installed_log_max != log_max_bytes )); then
+      echo "  note: LOOPX_LOG_MAX_BYTES=$log_max_bytes is not in effect; the installed value holds until the next install or restart"
+    fi
+  else
+    echo "- retention: unknown (the installed agents carry no retention step; run: $0 install)"
+  fi
 }
 
 main() {
   require_macos
+  case "${1:-}" in
+    install|restart)
+      if ! validate_log_max_bytes; then
+        echo "LOOPX_LOG_MAX_BYTES must be a positive byte count, got: $log_max_bytes" >&2
+        exit 2
+      fi
+      ;;
+  esac
   case "${1:-}" in
     install)
       write_plists

@@ -9,6 +9,8 @@ The open, local-first control plane for long-horizon agents and personal agent t
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd)
 
+<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
+
 [Get started](#try-loopx) · [Workspace](#meet-the-personal-agent-workspace) · [LHTB results](#lhtb-results) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
 **[LHTB](https://zli12321.github.io/LHTB/index.html) · 46 tasks · GPT-5.6 Sol:** LoopX 1.0.3 Heartbeat reaches **0.4948 mean reward** — **+17.3% vs Plain Codex**, **+10.6% vs native Codex Goal**.<br>
@@ -411,10 +413,11 @@ include logs, paths, credentials, internal project names, or goal contents:
 `loopx first-run-report` prints the same prefilled link locally without
 sending anything.
 
-Separately, `loopx usage-ping enable` opts this machine into one anonymous
-ping per day (a random id, LoopX version, OS family, Python version, and
-install channel) so we can count active installations. It is off unless you
-enable it; see [Usage ping](docs/reference/usage-ping.md).
+Basic usage statistics default on after first-use disclosure: a daily random-ID
+heartbeat for platform support and continued use, plus separate ID-free CLI
+counts. No content is collected. Disable both in Settings → Capability Center
+or with `loopx usage-ping disable` / `LOOPX_USAGE_PING=0`; inspect payloads with
+`loopx usage-ping status`. See [Basic usage statistics](docs/reference/usage-ping.md).
 
 A successful connection has:
 
@@ -821,8 +824,6 @@ benchmark evidence, operator surface and IM integration, shared-goal cross-host
 coordination, and an explicitly staged architecture and research incubator.
 
 ## Star History
-
-<a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
 <p align="center">
   <a href="https://github.com/loopx-project/loopx/stargazers"><img src="https://loopx-project.github.io/loopx/site-assets/star-history.svg" alt="LoopX GitHub star history from verified snapshots" width="800"></a><br>

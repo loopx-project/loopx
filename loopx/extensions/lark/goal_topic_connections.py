@@ -369,6 +369,7 @@ def connect_lark_goal_topic(
     capture_scope: str | None = None,
     ingress_mode: str | None = None,
     conversation_kind: str | None = None,
+    turn_trigger: str | None = None,
     executor_endpoint_id: str | None = None,
     runtime_root: str | Path | None = None,
     reply_mode: str = "topic_reply",
@@ -405,6 +406,15 @@ def connect_lark_goal_topic(
         executor_endpoint_id=executor_endpoint_id,
         ingress_mode=ingress_mode,
         runtime_root=runtime_root,
+    )
+    from ...control_plane.collaboration import conversation_trigger
+    if turn_trigger is not None and conversation_kind != "manager":
+        raise ValueError("turn_trigger is only supported for manager connections")
+    effective_turn_trigger = (
+        conversation_trigger(
+            turn_trigger if turn_trigger is not None
+            else (editing or {}).get("routing", {}).get("turn_trigger")
+        )["mode"] if conversation_kind == "manager" else "addressed"
     )
     if conversation_kind == "manager":
         agent_id = MANAGER_AGENT_GOAL_ID
@@ -548,6 +558,7 @@ def connect_lark_goal_topic(
                     ),
                     limit=120,
                 ),
+                **({"turn_trigger": effective_turn_trigger} if conversation_kind == "manager" else {}),
                 "incoming_mode": effective_incoming_mode,
                 "capture_scope": effective_capture_scope,
                 "ingress_mode": ingress_mode,
@@ -834,6 +845,7 @@ def connect_lark_goal_topic(
                 "created_automatically": True,
             },
             "routing": {
+                **({"turn_trigger": effective_turn_trigger} if conversation_kind == "manager" else {}),
                 "incoming_mode": effective_incoming_mode,
                 "capture_scope": effective_capture_scope,
                 "ingress_mode": ingress_mode,
@@ -883,6 +895,7 @@ def connect_lark_goal_topic(
             "chat_name": public_safe_compact_text(chat_name, limit=60),
             "target_ref": target_name,
             "topic_name": topic_name,
+            **({"turn_trigger": effective_turn_trigger} if conversation_kind == "manager" else {}),
             "incoming_mode": effective_incoming_mode,
             "capture_scope": effective_capture_scope,
             "ingress_mode": ingress_mode,
@@ -1058,11 +1071,8 @@ def list_lark_connections(
                 if isinstance(binding.get("topic"), Mapping)
                 else {}
             )
-            routing = (
-                binding.get("routing")
-                if isinstance(binding.get("routing"), Mapping)
-                else {}
-            )
+            raw_routing = binding.get("routing")
+            routing = raw_routing if isinstance(raw_routing, Mapping) else {}
             connector_status: dict[str, Any] | None = None
             try:
                 capture_scope, ingress_mode, reply_mode = _connection_routing_modes(routing)
@@ -1112,6 +1122,7 @@ def list_lark_connections(
                         routing.get("conversation_kind") or "goal"
                     ),
                     "session_bound": bool(binding.get("session_id")),
+                    "turn_trigger": routing.get("turn_trigger", "addressed"),
                     "incoming_mode": str(routing.get("incoming_mode") or "mentions"),
                     "capture_scope": capture_scope,
                     "ingress_mode": ingress_mode,
@@ -1218,11 +1229,8 @@ def decide_lark_topic_event(
                 or binding_channel.get("pinned_message_id")
                 or ""
             )
-            routing = (
-                binding.get("routing")
-                if isinstance(binding.get("routing"), Mapping)
-                else {}
-            )
+            raw_routing = binding.get("routing")
+            routing = raw_routing if isinstance(raw_routing, Mapping) else {}
             try:
                 capture_scope, ingress_mode, reply_mode = _connection_routing_modes(routing)
                 connector = binding.get("connector")

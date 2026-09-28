@@ -164,7 +164,7 @@ def _reply_runner(state: dict[str, Any]):
             }
         elif args[3:6] == ["im", "chats", "get"]:
             payload = {"data": {"chat_id": "oc_public_fixture"}}
-        elif "+messages-reply" in args:
+        elif "+messages-reply" in args or "+messages-send" in args:
             if "--content" in args:
                 state["reply_content"] = args[args.index("--content") + 1]
                 state["reply_type"] = "post"
@@ -2570,6 +2570,8 @@ def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, m
 @pytest.mark.parametrize("error_code,label", [
     ("cyber_policy", "安全策略拦截"),
     ("rate_limit_exceeded", "请求频率限制"),
+    ("runtime_unavailable", "本地运行环境初始化失败"),
+    ("resume_failed", "原 Agent 会话恢复失败"),
     ("private-upstream-detail", "管家处理失败"),
 ])
 @pytest.mark.parametrize("reply_ok", [True, False])

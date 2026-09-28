@@ -1,6 +1,7 @@
 # RFC: Automatic Execution Admission (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Partial, proposed implementation; not promoted
 - **Owners:** Quota, scheduler and host-runtime maintainers
 - **Created / last normative revision:** 2026-09-23
@@ -233,7 +234,11 @@ start, so an older or hand-edited file fails closed rather than resuming.
 
 The M3 settings companion presents the quota-owned Goal/agent/automation policy
 through a revision-locked local preview, apply and readback, and reports stale
-configuration intent as a typed conflict instead of parsing error text. It does
+configuration intent as a typed conflict instead of parsing error text. Settings
+start with an explicit Agent choice from the Goal’s projected Agent list, rather
+than preselecting an arbitrary Agent or filtering suggestions by its current ID.
+Switching the target invalidates the preview; the preview names its Goal and
+Agent. Per-Agent overrides preserve peer and Goal defaults. It does
 not edit existing Codex App timers, and next-eligible time plus Lark/CLI wait
 parity remain open. The App timer-to-hook path, non-Turn launchers and live
 model-host promotion remain unqualified; M4 remains a design option. No existing

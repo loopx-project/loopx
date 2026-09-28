@@ -1,5 +1,8 @@
 # 显式 Todo 接续：阶段 A
 
+- **RFC 状态：** Accepted（阶段 A 已在 #4094 合入；历史文件名有意保留）
+- **替代 / 关闭：** 无
+
 ## 交付状态与整合方向（2026-09-13）
 
 Stage A 已在 [#4094](https://github.com/huangruiteng/loopx/pull/4094) 以 `2ebd921ee989f7c696a7214ba1176d3bd5de6fb3` 合并。历史文件名不表示通用 memory substrate 已交付。[强能力管家与语义交接 RFC](capable-manager-semantic-handoff-v0.zh-CN.md#513-整合已交付的显式接续4094) 将本实现纳入 M2/M3 重构范围。后继方案仍是提案；替代路径验收前，本文继续作为已交付 CLI 兼容性及权威边界参考。

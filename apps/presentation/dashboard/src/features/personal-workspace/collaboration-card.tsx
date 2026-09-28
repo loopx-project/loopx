@@ -8,14 +8,16 @@ const copy = {
     acceptance: "验收要求", return: "需要回传", supplied: "已提供给接收方", pending: "等待接收方读取",
     decision: "接收方判断", unknown: "尚未记录", unavailable: "暂时无法读取",
     adopt: "已采纳", defer: "已暂缓", reject: "未采纳", no_change: "无需调整",
-    result: "结论已保存", delivered: "结论已回传", details: "查看交办内容",
+    result: "回复等待送达", delivered: "回复已送达", unverified: "回复送达尚未核验", details: "查看交办内容",
+    owner: "接收方", reason: "原因",
   },
   en: {
     title: "Delegation brief", context: "Context & corrections", constraints: "Constraints", inputs: "Inputs",
     acceptance: "Acceptance", return: "Expected return", supplied: "Supplied to receiver", pending: "Awaiting receiver read",
     decision: "Receiver decision", unknown: "Not recorded", unavailable: "Readback unavailable",
     adopt: "Adopted", defer: "Deferred", reject: "Rejected", no_change: "No change needed",
-    result: "Conclusion saved", delivered: "Conclusion returned", details: "View delegation details",
+    result: "Reply awaiting delivery", delivered: "Reply delivered", unverified: "Reply delivery unverified", details: "View delegation details",
+    owner: "Recipient", reason: "Reason",
   },
 };
 
@@ -27,12 +29,14 @@ export function CollaborationCard({ request }: { request?: CollaborationReadback
   const decision = request.decision as "adopt" | "defer" | "reject" | "no_change";
   const conclusion = request.returns.find((reply) => reply.phase === "conclusion");
   return <section className="personal-collaboration" aria-label={c.title}>
-    <header><strong>{brief.purpose}</strong><span>{request.agent_id}</span></header>
+    <header><strong>{brief.purpose}</strong><span>{c.owner}: {request.goal_id ? `${request.goal_id} / ` : ""}{request.agent_id}</span></header>
     <p className="personal-collaboration-status">
       <span>{request.read_status === "supplied" ? c.supplied : request.read_status === "unavailable" ? c.unavailable : c.pending}</span>
       <span>{c.decision}: {c[decision] ?? (request.decision === "unavailable" ? c.unavailable : c.unknown)}</span>
-      {conclusion ? <span>{conclusion.status === "delivered" ? c.delivered : c.result}</span> : null}
+      {conclusion ? <span>{conclusion.status === "delivered" ? c.delivered
+        : conclusion.status === "queued" ? c.result : c.unverified}</span> : null}
     </p>
+    {request.decision_reason ? <p>{c.reason}: {request.decision_reason}</p> : null}
     <details>
       <summary>{c.details}</summary>
       <h4>{c.context}</h4><p>{brief.context}</p>

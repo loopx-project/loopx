@@ -26,13 +26,11 @@ from ..control_plane.scheduler.execution_context import (
 )
 from ..control_plane.scheduler.state import (
     APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
-    CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from ..turn_identity import mint_turn_instance_id, normalize_turn_instance_id
 from .quota_request import (
-    QUOTA_MONITOR_POLL_DETAIL_SECTIONS,
-    QUOTA_SHOULD_RUN_DETAIL_SECTIONS,
+    QUOTA_COMMAND_DETAIL_SECTIONS,
     quota_detail_sections_from_args,
     validate_quota_command_request,
 )
@@ -125,17 +123,13 @@ def validate_quota_command_context_request(
             "--turn-envelope is only valid with `quota should-run`"
         )
     requested_details = set(getattr(args, "include_details", None) or ())
-    if requested_details and command not in {"should-run", "monitor-poll"}:
+    if requested_details and command not in QUOTA_COMMAND_DETAIL_SECTIONS:
         raise QuotaCommandValidationError(
-            "--include-detail is only valid with `quota should-run` or "
-            "`quota monitor-poll`"
+            "--include-detail is only valid with `quota status`, `quota plan`, "
+            "`quota should-run` or `quota monitor-poll`"
         )
-    if requested_details and "all" not in requested_details:
-        allowed_details = set(
-            QUOTA_MONITOR_POLL_DETAIL_SECTIONS
-            if command == "monitor-poll"
-            else QUOTA_SHOULD_RUN_DETAIL_SECTIONS
-        )
+    if requested_details:
+        allowed_details = {*QUOTA_COMMAND_DETAIL_SECTIONS[command], "all"}
         unsupported_details = sorted(requested_details - allowed_details)
         if unsupported_details:
             raise QuotaCommandValidationError(
@@ -232,7 +226,7 @@ def validate_quota_command_context_request(
         default_state_key = (
             APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
             if selected_surface == HostSurface.TRAE_APP.value
-            else CODEX_APP_STATEFUL_BACKOFF_STATE_KEY
+            else None
         )
         if (
             selected_surface == HostSurface.TRAE_APP.value
@@ -301,7 +295,9 @@ def prepare_quota_command_context(
         require_monitor_poll_source_available(
             runtime_root=runtime_root, goal_id=args.goal_id,
         )
-    status_goal_id = args.goal_id if command not in {"status", "plan"} else None
+    # Observation commands use the same scoped collector/cache as execution
+    # commands. Only an omitted selector requests the whole registry.
+    status_goal_id = args.goal_id
     projection_cache_ttl_seconds = int(
         getattr(args, "projection_cache_ttl_seconds", 120)
     )

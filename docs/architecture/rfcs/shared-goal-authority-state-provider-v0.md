@@ -1,6 +1,7 @@
 # RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)
 
-- Status: Draft, under maintainer review
+- Status: Accepted
+- Supersedes / closes: none
 - Initially proposed by: NoKV Lab
 - Widened by: LoopX maintainers
 - Date: 2026-08-05; revised 2026-09-13
@@ -23,16 +24,20 @@
   [Chinese version](./shared-goal-authority-state-provider-v0.zh-CN.md) and this
   English version are semantic mirrors. A difference between them is a defect.
 
-## Current delivery frontier (2026-09-25)
+## Current delivery frontier (2026-09-28)
 
-Audit `37bbaec79` and current PR states: complete-source transport, transaction
-capture, source assembly and the five previously open caller/event fixes are
-merged, not future implementation. After the current promotion-admission repair,
-three named code boundaries remain planned: external-effect execution fencing;
-event-writer binding plus whole-Goal migration/rollback; default onboarding plus
-bounded Python retirement. #4931 and outstanding D2 evidence are tracked
-separately. Three is a delivery plan, not a guaranteed total PR count.
-[Current inventory and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md).
+Audit `ce3862e33`: #5054, #5140, #5144, #5156, #5173, #5175 and #5169
+are merged. Do not count event retirement, archive recovery, managed process
+supervision, reviewed local cutover or native drain as new pending PRs.
+#4931 remains an open SQLite optimization, not a completed D2 qualification.
+
+Next: qualify whole-Goal execution/consumer integration and matched local
+profiles in parallel; then unify new-Goal/install/settings and supported upgrade
+entrypoints, deleting each replaced writer with its last caller. Retain necessary
+Host IO, original receipts and migration readers. No additional dead Python
+module is certified by this audit, and no fixed remaining-PR total is promised.
+[Deletion inventory, engineering windows, local evidence and remaining work](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md)
+supersedes older current-count estimates; their execution evidence stays historical.
 
 File retained-state storage now reuses the existing TS checkpoint/delta codec,
 stacked on #5063's verified read cache and RPC budgets. Original revisions,
@@ -43,6 +48,20 @@ SQLite reuse logical archives for cross-provider isolated recovery.
 This adds no provider/default promotion and retires no Python business owner.
 [Automatic backup/migration, cold costs and qualification limits](../../reference/file-authority-state-log.md).
 
+## Todo event retirement (2026-09-25)
+
+PR #5054 replaces its original event-writer capture proposal with removal of
+that experimental Todo source. `events.jsonl` is no longer projected, overlaid,
+backfilled or used for completion. Nonempty default/aliased sources are refused
+without changing their bytes; empty/absent sources permit the Markdown path.
+Promoted Goals continue reading their selected provider even if stale legacy
+files remain. The supervisor uses its own local-private experimental log.
+
+This closes the *retired source* branch by deletion, not by claiming event-writer
+capture was qualified. Whole-Goal migration/rollback and default onboarding
+still require their existing acceptance; this change does not make all Python
+writers or PostgreSQL deployment ready. Do not add a replacement event capture
+PR to the remaining work. [Decision and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-25-todo-event-retirement.md).
 
 ## Persistence route for steward scale (2026-09-16)
 
@@ -50,15 +69,13 @@ This adds no provider/default promotion and retires no Python business owner.
 
 `e94759d88` adds [PostgreSQL service admission](../../reference/postgresql-authority-service-v0.md), with authentication/tenant verification injection and identity rotation. It is an in-process service boundary, not a deployed network service. The P lane should reuse it and finish transport, real identity policy, pool/cancellation/failover and operations qualification rather than rebuilding admission. R7 must separately report registration, active executors and measured capacity. Directory, presence, a plan or one source read grants no shared authority. Existing fail-closed source, receipt/replay and rollback contracts remain.
 
-## Observation retirement checkpoint (2026-09-24)
-
-[Current delivery inventory](ledger/shared-goal-authority-state-provider-v0/2026-09-24-observation-retirement.md)
+**Observation retirement (2026-09-24).** [Current delivery inventory](ledger/shared-goal-authority-state-provider-v0/2026-09-24-observation-retirement.md)
 separates merged code, open PRs and qualification gates. This delivery removes
 the obsolete Python observation writer and TS observation commit path; it does
 not implement executor liveness or event-writer binding. There is one writable
 shadow lineage, still default-off and subject to explicit bootstrap.
 
-## Current implementation checkpoint
+## Current implementation facts
 
 Long-history closeout reuse retains only re-verifiable parsed prefixes; it adds
 no durable authority and relaxes no writer fence or D2 gate. This runtime repair
@@ -84,8 +101,7 @@ integration defects; it neither recounts shipped capture nor flips global defaul
 [Operation and boundaries](../../reference/reviewed-coordination-promotion.md).
 
 Handoff-mode changes now share one TS ownership-fact classifier before and
-after promotion. Legacy event-only claims reject rather than disappear at a
-Markdown boundary; event append locks protect the observation through writeback.
+after promotion. Legacy nonempty event sources are refused before any Markdown substitution.
 Canonical changes reuse durable command receipt recovery. This is an L2/L3
 compatibility correction with Python decision deletion, not cohort migration,
 SQLite D2 completion or a default flip. Remaining work depends on executor/consumer closure, qualification,
@@ -129,20 +145,7 @@ explicit shared-authority promotion, only sections covered by the typed
 contract become deterministic compatibility projections; free-form human
 narrative remains outside the coordination head.
 
-### Manager integration checkpoint (2026-09-13)
-
-Source audit at `7eb4b7bb1661bd5eff63a8725a33169792d5964b` confirms the
-`AuthorityStore` seam and the transaction/presentation/journal consolidations
-in #4280, #4283 and #4287. This updates the integration baseline, not the
-qualification evidence or historical provider baselines above. Candidate
-SQLite/PostgreSQL paths, provider-specific holds and the D1–D3 plan remain;
-neither a default source switch nor a shared service is declared shipped.
-
-The [capable manager and semantic handoff RFC](capable-manager-semantic-handoff-v0.md)
-consumes this authority. Its M1 host-tool work and M2 request-ledger refactor
-can proceed without provider promotion. Section 1.4 defines their boundary;
-the [TS execution cards](typescript-control-plane-migration-v0.md#execution-cards-after-the-current-stack)
-still own business-rule consolidation and legacy-caller deletion.
+- Checkpoint moved to the execution ledger: [Manager integration checkpoint (2026-09-13)](ledger/shared-goal-authority-state-provider-v0/2026-09-13-manager-integration.md).
 
 ### Local provider opening boundary (2026-09-13)
 
@@ -1198,15 +1201,22 @@ Keep live-state size fixed when isolating history growth, then grow live state
 separately. No goal-wide unbounded list of completed Todos or receipts may be
 hidden inside the supposedly fixed live projection.
 
-For the current `FileAuthorityStore`, a fixed projection of P bytes retained in
-each of N transactions costs approximately P*N final history bytes and
-P*N*(N+1)/2 cumulative document-publication bytes, before head, event, receipt,
-and envelope overhead. Normal reads also decode and validate the full chain.
-With P=15 KiB, the renewal-only case gives about **534 GiB** of cumulative
-publication at day 10 and **4.69 TiB** at day 30. The former 380 MiB estimate was
-only N*P at day 30, not the cumulative rewrite of retained projections. These
-are analytical payload estimates, not physical SSD writes or measured latency;
-growing receipt indexes inside every projection can make the model worse.
+The original full-projection File journal retained approximately P*N payload
+bytes and republished approximately P*N*(N+1)/2 bytes across N commits. That
+historical model must not be applied to the current checkpoint/delta format:
+#5102 retired that layout from ordinary reads and writes.
+
+The current File provider retains a checkpoint every 64 commits plus deltas,
+events and original receipts in one envelope. Its approximate retained bytes
+are `H(N) = ceil(N/64)*P + sum(delta/event/receipt/metadata bytes)`, before the
+live head and envelope overhead. Each commit still durably replaces the whole
+envelope, so cumulative application publication is `sum(H(n))`. Warm reads
+read/hash the envelope and may reuse its verified view; cold reads reconstruct
+and verify the history. SQLite instead updates transactional indexed rows and
+bounded checkpoint windows. These mechanisms motivate a matched experiment;
+neither a formula nor a cache hit establishes a short-term default choice.
+Report application publication separately from physical disk writes, and
+compare current code on equal state, history, durability and cold/warm workload.
 
 #### Preferred local direction and compatibility boundary
 
@@ -1214,7 +1224,7 @@ Qualify an **embedded transactional store, with SQLite as the first candidate**,
 behind the existing TypeScript `AuthorityStore` owner. A local goal must not
 require a PostgreSQL service. The file-v0 provider remains a conformance/import
 baseline; no general-purpose ten-day promotion may rely on its full-history
-rewrite. [PR #4121](https://github.com/huangruiteng/loopx/pull/4121) supplies an
+rewrite. [PR #4121](https://github.com/loopx-project/loopx/pull/4121) supplies an
 opt-in SQLite conformance candidate behind that owner; it does not by itself
 qualify long-goal durability or change the default. Dependency/package,
 Windows/macOS/Linux and supported Node-profile evidence remain explicit gates.
@@ -2831,91 +2841,8 @@ parity at the same revision before changing a binding or manifest. Questions 8
 and 10's completeness rule applies to domain facts and retained compatibility
 provenance; it does not require native callers to manufacture Markdown addresses.
 
-### Provider-first terminal lifecycle checkpoint (2026-09-07)
-
-Promoted `complete`, `supersede`, and role-scoped `archive` now use one native
-TypeScript transaction across file, NoKV, and PostgreSQL. The authority owner
-decides actor/claim/lease admission; derives successor priority, capability and
-Agent bindings, exclusions, continuation, and predecessor relations from typed
-caller intent; reduces completion policy; commits the Todo/lease/head/outbox
-write set with CAS; and persists replay receipts. Python remains an adapter for
-registry facts, the caller-approved validation effect, intent/result transport,
-and compatibility projection drain; it does not select a different terminal or
-successor outcome for a provider. The legacy Markdown and event writers reuse
-the same pure TypeScript successor decision before materializing their records.
-
-Validation declarations cross the canonical boundary as a required marker and
-SHA-256 digest only. Raw argv stays in a 0600 host-local sidecar and recovery
-must prove the digest before executing it. This keeps provider heads portable
-and public-safe without turning recovery into a silent validation bypass.
-Imported v0 `index` remains the archive-order compatibility fact; native records
-fall back to durable completion/update time and Todo identity. Legacy lease
-files whose Todo no longer exists in the current canonical collection remain
-historical audit material and are excluded from live projection.
-
-Qualification uses one read-only, production-complex snapshot for three arms:
-an immutable legacy baseline clone, an isolated file store, and an isolated
-real PostgreSQL tenant. The provider heads compare exactly; the legacy result
-compares through the declared compatibility projection. Archive comparison
-removes provider-retained archived records and their historical leases from the
-legacy hot view, and ignores absolute imported indexes only after separately
-proving identical per-role relative order. Domain fields, archive selection,
-active leases, and non-target records are never normalized; the source snapshot
-must remain unchanged. The executable rehearsal is
-`examples/control_plane/authority-three-arm-rehearsal.py`. A checked-in,
-deterministic, public-safe scale fixture exercises the same distribution and
-pressure, including hard-lease fences, across every provider conformance suite. It cannot replace the
-read-only three-arm rehearsal because all providers share the new semantic
-owner and can therefore agree on the same regression.
-
-Every pull request that claims progress against this RFC follows the
-[production-scale fixture stewardship contract](../../development/testing-and-quality.md#production-scale-fixture-stewardship--生产规模-fixture-维护契约).
-It declares fixture impact, exercises every affected provider arm, and keeps
-the read-only three-arm rehearsal as a separate promotion gate.
-
-Legacy lifecycle field assembly now calls the single TS field planner described
-in the [TS retirement checkpoint](typescript-control-plane-migration-v0.md#legacy-field-rule-retirement-checkpoint).
-This removes Python decisions without changing the per-goal authority phase:
-unpromoted goals still commit through the locked Markdown writer, while promoted
-goals retain their existing provider transactions and unsupported-field fences.
-The planner neither reads a provider nor grants a lease, CAS receipt, or write
-permission. This checkpoint closes one rule owner, not the remaining mutation
-inventory or local-store/promotion qualification.
-
-### Cross-RFC semantic and presentation conformance checkpoint (2026-09-12)
-
-The TypeScript migration and this provider RFC now share one explicit Todo
-semantic boundary. Python production callers import `todos/todo_semantics.py`
-directly; `todos/projection.py` is retained only as an import-compatible facade
-for external integrations. This is an ownership cleanup, not a second kernel.
-The typed TypeScript `projection_delivery` union also owns the distinction
-between mutation intent (`pending`/`not_required`) and provider readback
-(`delivered`/`current`); unknown states fail closed before acknowledgement.
-
-Priority intent now follows the same admitted create/update transaction on File,
-SQLite and PostgreSQL. Explicit set/clear, omission and conflicting legacy text
-are resolved by `todos/priority.ts`; Python reads share the generated grammar.
-Markdown remains compatible display, while native records retain matching
-priority/title. CLI and reviewed Chat edits preserve CAS and historical retry
-identity. Real backend readback and a disposable clone of a long-lived local
-Goal qualify this bounded change. See the [caller contract](../../project-agent-todo-contract.md#priority-intent).
-This does not change provider defaults or close the remaining promotion gates.
-
-Presentation is canonical at the projection layer, not in the domain record.
-`source_section` and `index` are the v0 wire shape's display coordinates, while
-native records derive the same display section from role/archive state and use
-timestamp plus Todo identity as a deterministic fallback instead of a fake
-persistent index. The normalized presentation metadata is therefore one
-contract even when the wire shapes differ. The same rule is exercised by the
-production-scale fixture and by File, SQLite, and NoKV conformance arms.
-Provider revision tokens remain provider-owned and are compared only for the
-provider-specific replay rules; they are not normalized into Todo semantics.
-
-This checkpoint changes read/ordering and compatibility-adapter semantics only:
-it does not promote a provider, add a writer, alter the transaction decoder
-delivered by #4280, or make Markdown a second authority. The shared RFC still
-owns durable truth, recovery, cutover, and projection delivery; the TS RFC owns
-business-rule ownership and caller deletion.
+- Checkpoint moved to the execution ledger: [Provider-first terminal lifecycle checkpoint (2026-09-07)](ledger/shared-goal-authority-state-provider-v0/2026-09-07-provider-first-terminal-lifecycle.md).
+- Checkpoint moved to the execution ledger: [Cross-RFC semantic and presentation conformance checkpoint (2026-09-12)](ledger/shared-goal-authority-state-provider-v0/2026-09-12-cross-rfc-semantic-and-presentation-conformance.md).
 
 ### Next delivery and parallel provider work
 
@@ -3277,7 +3204,16 @@ Qualify **one** long-lived local default profile. SQLite is the current D2
 candidate; File remains the real reference/explicit profile and migration
 rehearsal backend. Do not publish two ambiguous defaults, declare the current
 File history layout long-horizon-qualified, or silently fall back from a
-selected SQLite store. The final profile decision must cite its D2 evidence.
+selected SQLite store. Release activation must cite its D2 evidence. The September 27 matched
+short-history experiments also select SQLite as the **short-term default
+implementation target**: mutation/restart costs beat current checkpoint/delta
+File, while warm read tradeoffs depend on the projection. PR #4931 now shares
+privately owned TS replay between SQLite proofs and provider-neutral archive
+recovery, retaining exact byte proofs and isolating returned rows. Matched
+Linux evidence reduces many-field receipt/scan p95 by 88%/68%, but large-state
+budgets and sustained-memory qualification remain open. This is not permission
+to enable the default now.
+[Measurements, reproduction and D2/D3/L9 dependencies](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment).
 PostgreSQL shares the TS semantic contracts but has independent service,
 tenant, restore and capacity qualification; its deployment must not delay the
 local profile's work.
@@ -3345,32 +3281,7 @@ semantic corrections. A green unit suite, a canonical selector, or a new config
 field alone cannot advance a package to default readiness. Planned integration,
 soak, release, merge and live promotion retain their respective authorization.
 
-### Reviewed cutover checkpoint
-
-The saved-plan/recovery slice closes a concrete operator gap: execution can be
-bound to the reviewed source/provider/policy, and a fenced cutover can be
-completed or read back without reconstructing intent from legacy Markdown.
-The TS owner shares durable qualification and exact receipt proof between both
-paths. See [operation and acceptance](../../reference/reviewed-coordination-promotion.md).
-This stage does not authorize an active Goal migration or flip a default.
-
-Claim-preserving migration #4870 and reviewed cutover #4888 are merged;
-shadow drain planning #4920 is also merged. Qualify their combined current head
-for an existing claimed Goal rather than treating an old PR hold as current. Preserve the registered owners, existing claims and leases; do not
-clear ownership to make storage migration appear ready. The saved-plan carrier
-must retain migration strategy, registered-agent facts and target digest during
-combined qualification.
-
-The current seven-boundary plan above separates caller admission, executor
-fences and snapshot reads; D2 and integrated migration may each split. This
-portable-recovery slice contributes to migration qualification, not an entire
-completed package. Use that single current plan instead of counting leaf fixes.
-Actual elapsed soak cannot be compressed into a promised number of PRs.
-PostgreSQL service admission and operations remain a separate medium-term lane.
-
-现有 Goal 的可审核晋升与恢复、所有新 Goal 默认选用 provider、删除全部 Python，
-是三个不同完成条件。先交付一条能保留状态、能读回、能恢复的真实迁移路径，再按调用方
-闭合程度删除旧实现。不要用已合入 PR 数量替代端到端验收。
+- Checkpoint moved to the execution ledger: [Reviewed cutover checkpoint](ledger/shared-goal-authority-state-provider-v0/2026-09-22-reviewed-cutover.md).
 
 ### Parallel delivery plan
 

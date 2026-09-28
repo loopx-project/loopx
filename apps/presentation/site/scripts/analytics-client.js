@@ -125,6 +125,11 @@
       const anchor = target?.closest("a[href]");
       if (!anchor) return;
       const url = new URL(anchor.href);
+      if (marked === "desktop_download" && url.hostname === "github.com" &&
+          url.pathname === "/loopx-project/loopx/releases/latest/download/LoopX.app.zip") {
+        event("desktop_download", { platform: "macos", artifact: "app_zip" });
+        return;
+      }
       if (url.hostname === "github.com" && /^\/(?:loopx-project|huangruiteng)\/loopx(?:\/|$)/.test(url.pathname)) {
         event("github_click", { destination: url.pathname.includes("packages/dsh-loopx-plugin") ? "dsh_plugin" : "repository" });
       } else if (url.origin === location.origin && url.pathname.startsWith("/loopx/docs/") && url.pathname !== location.pathname) {

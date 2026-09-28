@@ -27,9 +27,7 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
-from .todos import list_goal_todos
 from .control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
-from .control_plane.goals.acceptance import inspect_goal_acceptance, validate_goal_task_acceptance, goal_task_validation_files_current
 from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.todos.handoff_mode import show_goal_handoff_mode
 from .control_plane.turn_driver.journal_store import (
@@ -46,7 +44,7 @@ from .control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
 )
-from .control_plane.collaboration import delegation_results
+from .control_plane.collaboration import delegation_results, delegation_validation
 from .control_plane.collaboration.peers import (
     _goal,
     consume_return,
@@ -360,13 +358,30 @@ class Delegations:
     def inspect(self, binding_id: str) -> dict:
         """Observe the real Turn preflight; never create a request or run a host."""
         binding = self.binding(binding_id, require_active=True)
-        if not Path(binding["workspace"]).is_dir():
-            raise ValueError("delegation workspace unavailable")
+        # Host filesystem facts only; the shared TS owner projects readiness.
+        # Do not expose a path/error body or probe authority in a missing cwd.
         try:
-            acceptance = inspect_goal_acceptance(registry_path=self.registry, goal_id=self.goal_id,
-                                                  runtime_root=str(self.root))
-            files_current = goal_task_validation_files_current(registry_path=self.registry,
-                runtime_root=str(self.root), goal_id=self.goal_id, agent_id=binding["agent_id"], todo_id=binding["todo_id"])
+            workspace_state = (
+                "available" if stat.S_ISDIR(Path(binding["workspace"]).stat().st_mode)
+                else "not_directory"
+            )
+        except FileNotFoundError:
+            workspace_state = "missing"
+        except NotADirectoryError:
+            workspace_state = "not_directory"
+        except OSError:
+            workspace_state = "unavailable"
+        if workspace_state != "available":
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            return effect_runtime_result("collaboration.delegation.preflight", {
+                "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+                "workspace": {"state": workspace_state},
+                "authority": None, "preview": None, "acceptance": None,
+                "validation_files_current": False,
+            })
+        try:
+            acceptance = delegation_validation.capture(self, binding)
         except (OSError, ValueError) as exc:
             # Authority admission is a readiness observation, not a reason for
             # inspection to invent a provider launch or collapse into a raw CLI error.
@@ -383,6 +398,7 @@ class Delegations:
                 promoted = True
             return effect_runtime_result("collaboration.delegation.preflight", {
                 "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+                "workspace": {"state": workspace_state},
                 "authority": {
                     "ready": False,
                     "reason": str(exc),
@@ -421,21 +437,17 @@ class Delegations:
                 or selected_scan_root.resolve() != workspace):
             raise ValueError("delegation inspection cannot execute or retarget bound work")
         preview = self._cli(binding, *arguments)
-        if preview.get("status") != "preview":
+        if preview.get("status") != "preview" and "selection_rejection" not in preview:
             raise ValueError(f"delegation Turn preflight unavailable: {preview.get('error') or preview.get('status')}")
-        current = inspect_goal_acceptance(registry_path=self.registry, goal_id=self.goal_id,
-                                          runtime_root=str(self.root))
-        if (acceptance != current or self.binding(binding_id, require_active=True) != binding
-                or files_current != goal_task_validation_files_current(registry_path=self.registry,
-                    runtime_root=str(self.root), goal_id=self.goal_id,
-                    agent_id=binding["agent_id"], todo_id=binding["todo_id"])):
+        current = delegation_validation.capture(self, binding)
+        if acceptance != current or self.binding(binding_id, require_active=True) != binding:
             raise ValueError("delegation preflight source changed; retry inspection")
-        task = next((row for row in (acceptance.get("goal_acceptance_contract") or {}).get("tasks", [])
-                     if row.get("todo_id") == binding["todo_id"]), None)
         return effect_runtime_result("collaboration.delegation.preflight", {
             "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
+            "workspace": {"state": workspace_state},
             "authority": {"ready": True, "reason": None},
-            "preview": preview, "acceptance": task, "validation_files_current": files_current,
+            "preview": preview, "acceptance": acceptance["plan"],
+            "validation_files_current": acceptance["files_current"],
         })
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
@@ -653,22 +665,12 @@ class Delegations:
             )
         return value
 
-    def _validate(self, binding: dict) -> None:
-        value = validate_goal_task_acceptance(registry_path=self.registry, runtime_root=str(self.root),
-            goal_id=self.goal_id, agent_id=binding["agent_id"], todo_id=binding["todo_id"])
-        if not value["passed"]:
-            raise ValueError("delegation task acceptance rejected")
+    def _validate(self, binding: dict) -> dict:
+        return delegation_validation.validate(self, binding)
 
     def _accepted(self, binding: dict) -> list[dict]:
-        self._validate(binding)
-        todos = list_goal_todos(registry_path=self.registry, goal_id=self.goal_id, runtime_root_arg=str(self.root))
-        basis = inspect_goal_acceptance(registry_path=self.registry, goal_id=self.goal_id, runtime_root=str(self.root))
-        if todos.get("authority_read", {}).get("provider_revision") != basis.get("provider_revision"):
-            raise ValueError("delegation canonical snapshot changed; retry readback")
-        todo = next((row for row in todos["todos"] if row["todo_id"] == binding["todo_id"]), {})
-        guard = next((row for row in basis["goal_acceptance_contract"]["tasks"]
-                      if row["todo_id"] == binding["todo_id"]), {})
-        if not todo.get("done") or todo.get("status") != "done" or guard.get("state") != "ready":
+        validation = self._validate(binding)
+        if not validation["plan"]["canonical_done"]:
             raise ValueError("delegation requires current canonical completion")
         workspace = Path(binding["workspace"]).resolve()
         artifacts = []
@@ -962,8 +964,10 @@ class Delegations:
                 "--task-lease-expected-version",
                 str(lease["version"]),
             ]
-        else:
-            arguments.append("--no-follow-up")
+        # A bounded member task returns to its requester; it is not terminal
+        # Goal intent. Ordinary completion may precede its original Turn's
+        # accounting (controller validation requires that order). Do not add
+        # no-follow-up, which correctly requires already-settled receipts.
         result = self._cli(binding, *arguments)
         if result.get("ok") is not True:
             raise ValueError(
@@ -976,6 +980,9 @@ class Delegations:
         execution = self._execution_arguments(binding, row["identity"]["operation_id"])
         try:
             if row["status"] == "prepared":
+                acceptance = delegation_validation.capture(self, binding)
+                if acceptance["plan"]["state"] != "ready" or not acceptance["files_current"]:
+                    raise ValueError("delegation task acceptance rejected before host launch")
                 row["turn_instance_id"] = self._turn_instance_id(row)
                 self._write_delegation_bootstrap(row, binding)
                 self._acquire_delegation_lease(path, row, binding)

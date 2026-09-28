@@ -2,7 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft, research proposal |
+| Status | Accepted |
+| Supersedes / closes | none |
 | Date | 2026-08-15 |
 | Authors | LoopX maintainers |
 | Scope | Effect feedback, bounded delivery, authority escalation, model qualification, and long-horizon efficiency |

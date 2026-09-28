@@ -479,7 +479,9 @@ for the current requester and projects as many as fit the existing context byte
 budget; `authorized_count` and `routes_truncated` make omissions explicit. Each
 route carries only binding/Agent/Todo/runtime
 identity, separate `runtime_readiness` and `readiness` observations, an optional public-safe execution profile and
-one stable `loopx delegation` entrypoint. A separate, explicit
+the existing host owner's `probe_scope` for a supplied non-null probe, and one stable
+`loopx delegation` entrypoint. Full probe/remediation facts are disclosed by
+inspecting that binding, not inlined into the planning budget. A separate, explicit
 `agent-context --phase after_delegate_result` read may include bounded
 operation-status and recovery-required counts. Automatic planning and managed
 return paths do not enumerate the operation journal. These reads do not launch,
@@ -508,6 +510,10 @@ surfaces consume this same capability context, not another route configuration.
 `readiness=unknown`、`preflight=required`，通过现有 `loopx delegation inspect`
 核验权威状态、任务验证与 Turn 准入。未知不等于禁用，ready 运行库也不等于可执行。
 用户的异构偏好影响批次选择，不要求每次心跳重启所有路线，不绕过任一真实门禁。
+投影保留 host owner 非空 probe 的 `probe_scope`，完整 probe 与修复代码通过原
+绑定预检渐进式披露，不额外发起探测或决定准入。`probing_interpreter` 的模块缺失只针对本次检查的解释器，不能
+推断整机没有运行库；未探测的通用适配器仍为 `null/unknown`。修复原绑定环境后必须
+重新核验，不通过创建替代 worker、静默换模型或复用旧任务成功来伪造恢复。
 
 中文：可在现有 `multi_subagent` 能力中配置
 `.loopx/config/delegations.json` 指针，让当前请求 Agent 在规划前看到自己已获授权的

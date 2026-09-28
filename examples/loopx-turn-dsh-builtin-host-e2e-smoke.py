@@ -229,6 +229,8 @@ def _capacity_leg(timeout_seconds: float) -> dict[str, Any]:
             "quota_slot_spend_count": _base._quota_spend_count(runtime),
             "exhausted_exit_code": exhausted_exit_code,
             "exhausted_effects": exhausted_payload.get("effects"),
+            "exhausted_effects_scope": exhausted_payload.get("effects_scope"),
+            "exhausted_journal_observation": exhausted_payload.get("journal_observation"),
             "exhausted_recovery_decision": exhausted_payload.get(
                 "recovery_decision"
             ),
@@ -276,10 +278,10 @@ def main() -> int:
         "scheduler_acknowledged": False,
     }
     expected_exhausted_effects = {
-        "host_invoked": False,
-        "state_written": False,
-        "quota_spent": False,
-        "scheduler_acknowledged": False,
+        "host_invoked": None,
+        "state_written": None,
+        "quota_spent": None,
+        "scheduler_acknowledged": None,
     }
     expected_failure_records = [
         {
@@ -314,6 +316,9 @@ def main() -> int:
         and capacity["quota_slot_spend_count"] == 0
         and capacity["exhausted_exit_code"] == 1
         and capacity["exhausted_effects"] == expected_exhausted_effects
+        and capacity["exhausted_effects_scope"] == "current_invocation"
+        and capacity["exhausted_journal_observation"]["scope"] == "original_turn"
+        and capacity["exhausted_journal_observation"]["recorded_effects"]["quota_spent"] is False
         and exhausted_decision.get("reason") == "host_retry_budget_exhausted"
         and exhausted_decision.get("reinvoke_host") is False
         and capacity["host_invocation_count"] == 3

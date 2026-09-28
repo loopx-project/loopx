@@ -202,6 +202,9 @@ def _formal_install_environment(
     env.update(
         {
             "HOME": str(paths["home"]),
+            "TMPDIR": str(paths["home"]),
+            "TMP": str(paths["home"]),
+            "TEMP": str(paths["home"]),
             "SHELL": "/bin/sh",
             "CODEX_HOME": str(paths["codex_home"]),
             "LOOPX_PYTHON": python_executable,
@@ -240,6 +243,11 @@ def native_codex_profile_environment(
     env.update(
         {
             "HOME": str(profile.home),
+            # The Effect runtime locator is temp-scoped and content-addressed.
+            # Equal-source profiles must not share its writer or stop owner.
+            "TMPDIR": str(profile.home),
+            "TMP": str(profile.home),
+            "TEMP": str(profile.home),
             "CODEX_HOME": str(profile.codex_home),
             "PATH": f"{profile.bin_dir}{os.pathsep}{inherited_path}",
         }

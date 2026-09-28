@@ -46,7 +46,7 @@ export const TODO_COMPLETION_POLICY_FAILURE_SCHEMA =
   "loopx_todo_completion_policy_failure_v0";
 const CALLER_VALIDATION_RECEIPT_SCHEMA = "issue_fix_validation_command_v0";
 
-const PROJECTION_SOURCES = ["materialized", "event_log"] as const;
+const PROJECTION_SOURCES = ["materialized"] as const;
 const COMPLETION_IDENTITY_SOURCES = [
   "turn_settlement",
   "unscoped_completion",

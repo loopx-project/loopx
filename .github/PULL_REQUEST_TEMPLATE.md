@@ -1,11 +1,14 @@
 ## Goal And Delivered Outcome
 
-<!-- Use a few concrete sentences; references are optional when the request or
-regression is self-contained. State the accepted outcome, not a list of files.
-For cross-cutting LoopX work, link the relevant overall-roadmap/domain acceptance
-when useful. A roadmap id is not required for ordinary fixes or maintenance.
-These are author facts; the review capability independently judges delivery.
+<!-- State the reproduced defect, accepted request or concrete maintenance
+outcome. A public issue, roadmap card or RFC section is optional for a
+self-contained ordinary contribution. Curated board work follows its anchor
+rule; do not invent an issue or roadmap id only to admit a useful repair.
+Catalog entries, behavior-pinning tests and fixture dimensions still need a
+concrete gap and consumer. These author facts are independently reviewed.
 -->
+
+- Outcome basis / optional anchor:
 
 - Goal/source and gap:
 - Observable before → after, with the validation row that proves it:

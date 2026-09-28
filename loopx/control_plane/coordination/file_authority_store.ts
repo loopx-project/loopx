@@ -28,13 +28,15 @@ import {AuthorityJournalScan} from "./authority_journal_scan.ts";
 
 const STORE_IDENTITY_PATTERN = /^file:[0-9a-f]{32}$/;
 // File retains a checkpoint/delta journal in one durable envelope. A managed Effect server
-// opens a new store handle for each request. Keep one verified read view across
-// handles, keyed by exact bytes and store identity. Large journals retain only
+// opens a new store handle for each request. Retain a bounded working set across
+// handles so alternating Goals do not evict each other on every observation.
+// Every lookup still reads and hashes the full file and checks store identity. Large journals retain only
 // the head and receipt index in memory; commits and scans still load and verify
 // the complete history. This is a bounded read optimization, not a new source
 // of authority or a substitute for the SQLite long-goal profile.
 const MAX_CACHED_DOCUMENT_BYTES = 128 * 1024 * 1024;
 const MAX_CACHED_READ_VIEW_BYTES = 16 * 1024 * 1024;
+const MAX_CACHED_STORES = 4;
 interface VerifiedDocument {
   path: string;
   identity: string;
@@ -49,7 +51,10 @@ interface VerifiedDocument {
   }>;
   document?: FileAuthorityJournal;
 }
-let verifiedDocument: VerifiedDocument | null = null;
+const verifiedDocuments = new Map<string, {view: VerifiedDocument; bytes: number}>();
+// Only identical immutable input bytes share in-flight verification. Failed
+// proofs are removed too; neither a path nor a pending promise grants authority.
+const pendingVerification = new Map<string, Promise<FileAuthorityJournal>>();
 
 function documentDigest(raw: Uint8Array): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -73,10 +78,22 @@ function rememberVerifiedDocument(path: string, identity: string, raw: Uint8Arra
   const view: VerifiedDocument = {path, identity, digest, head: document.head,
     providerRevision: document.provider_revision, cursor: document.cursor,
     receipts, document};
-  verifiedDocument = raw.byteLength <= maxDocumentBytes ? view
-    : viewBytes <= MAX_CACHED_READ_VIEW_BYTES
-      ? {...view, document: undefined}
-      : null;
+  // Account for serialized history and the separate head/receipt index. This
+  // is a retained-byte bound, not a claim about the JS heap or process RSS.
+  const fullBytes = raw.byteLength + viewBytes;
+  const retainHistory = raw.byteLength <= maxDocumentBytes && fullBytes <= MAX_CACHED_DOCUMENT_BYTES;
+  const retained = retainHistory ? view : {...view, document: undefined};
+  const bytes = retainHistory ? fullBytes : viewBytes;
+  verifiedDocuments.delete(path);
+  if (retainHistory || viewBytes <= MAX_CACHED_READ_VIEW_BYTES) {
+    verifiedDocuments.set(path, {view: retained, bytes});
+    let total = [...verifiedDocuments.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+    while (verifiedDocuments.size > MAX_CACHED_STORES || total > MAX_CACHED_DOCUMENT_BYTES) {
+      const oldest = verifiedDocuments.keys().next().value!;
+      total -= verifiedDocuments.get(oldest)!.bytes;
+      verifiedDocuments.delete(oldest);
+    }
+  }
   return view;
 }
 
@@ -153,7 +170,7 @@ function decodeDocument(
   value: unknown,
   goalId: string,
   storeIdentity: string,
-): FileAuthorityJournal {
+): Promise<FileAuthorityJournal> {
   return FileAuthorityJournal.decode(value, goalId, storeIdentity, (previous, transaction) =>
     fileAuthorityRevision(goalId, storeIdentity, previous, transaction));
 }
@@ -177,8 +194,9 @@ export class FileAuthorityStore implements AuthorityStore {
   readonly path: string;
   readonly identityPath: string;
   private readonly existingOnly: boolean;
+  private readonly expectedIdentity: string | undefined;
 
-  constructor(directory: string, goalId: string, options: { existingOnly?: boolean } = {}) {
+  constructor(directory: string, goalId: string, options: { existingOnly?: boolean; expectedIdentity?: string } = {}) {
     this.goalId = requireAuthorityStoreId(goalId, "goal id");
     if (typeof directory !== "string" || directory.length === 0) {
       throw new AuthorityStoreProtocolError("store directory is required");
@@ -188,6 +206,7 @@ export class FileAuthorityStore implements AuthorityStore {
     this.path = join(this.directory, `authority-store-${digest}.json`);
     this.identityPath = join(this.directory, "store-identity");
     this.existingOnly = options.existingOnly === true;
+    this.expectedIdentity = options.expectedIdentity;
   }
 
   /** Narrow effect seam for crash-window qualification; not a semantic hook. */
@@ -199,7 +218,7 @@ export class FileAuthorityStore implements AuthorityStore {
   protected async archiveRenamed(): Promise<void> {}
 
   /** Full-history verification seam; unchanged byte-identical reads may reuse it. */
-  protected decodeStoredDocument(value: unknown, identity: string): FileAuthorityJournal {
+  protected decodeStoredDocument(value: unknown, identity: string): Promise<FileAuthorityJournal> {
     return decodeDocument(value, this.goalId, identity);
   }
 
@@ -211,20 +230,22 @@ export class FileAuthorityStore implements AuthorityStore {
   private async readStoreIdentity(createIfMissing = !this.existingOnly): Promise<string> {
     try {
       const identity = await readFile(this.identityPath, "utf8");
-      if (!STORE_IDENTITY_PATTERN.test(identity)) {
-        throw new AuthorityStoreProtocolError("store identity does not match file:<32 lowercase hex>");
+      if (!STORE_IDENTITY_PATTERN.test(identity) ||
+          (this.expectedIdentity !== undefined && identity !== this.expectedIdentity)) {
+        throw new AuthorityStoreProtocolError("store identity is invalid or differs from the expected File lineage");
       }
       if (createIfMissing) await syncAuthorityDirectory(this.directory);
       return identity;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    if (!createIfMissing) throw new FileStoreUnavailableError("existing store identity is missing");
+    if (!createIfMissing || this.expectedIdentity !== undefined) throw new FileStoreUnavailableError("existing store identity is missing");
     return await withFileMutationLock(this.identityPath, async () => {
       try {
         const identity = await readFile(this.identityPath, "utf8");
-        if (!STORE_IDENTITY_PATTERN.test(identity)) {
-          throw new AuthorityStoreProtocolError("store identity does not match file:<32 lowercase hex>");
+        if (!STORE_IDENTITY_PATTERN.test(identity) ||
+          (this.expectedIdentity !== undefined && identity !== this.expectedIdentity)) {
+          throw new AuthorityStoreProtocolError("store identity is invalid or differs from the expected File lineage");
         }
         await syncAuthorityDirectory(this.directory);
         return identity;
@@ -267,12 +288,24 @@ export class FileAuthorityStore implements AuthorityStore {
     const identity = knownIdentity ?? await this.readStoreIdentity();
     try {
       const digest = documentDigest(raw);
-      if (verifiedDocument?.path === this.path &&
-          verifiedDocument.identity === identity && verifiedDocument.digest === digest &&
-          (!requireHistory || verifiedDocument.document !== undefined)) {
-        return verifiedDocument;
+      const cached = verifiedDocuments.get(this.path);
+      if (cached?.view.identity === identity && cached.view.digest === digest &&
+          (!requireHistory || cached.view.document !== undefined)) {
+        verifiedDocuments.delete(this.path);
+        verifiedDocuments.set(this.path, cached);
+        return cached.view;
       }
-      const document = this.decodeStoredDocument(JSON.parse(raw.toString("utf8")), identity);
+      const key = JSON.stringify([this.path, identity, digest]);
+      let proof = pendingVerification.get(key);
+      if (!proof) {
+        proof = this.decodeStoredDocument(JSON.parse(raw.toString("utf8")), identity);
+        pendingVerification.set(key, proof);
+      }
+      let document: FileAuthorityJournal;
+      try { document = await proof; }
+      finally {
+        if (pendingVerification.get(key) === proof) pendingVerification.delete(key);
+      }
       return rememberVerifiedDocument(this.path, identity, raw, digest, document,
         this.fullDocumentCacheLimitBytes());
     } catch (error) {
@@ -350,20 +383,45 @@ export class FileAuthorityStore implements AuthorityStore {
         if (this.existingOnly && current === null) {
           return { status: "failed", reason_code: "existing_authority_missing", reason: "existing-only store cannot bootstrap a missing authority" };
         }
+        // Content-aware idempotency: same operation_id with matching full body
+        // ({events, receipts, projection}) returns the original receipt
+        // (retry-after-crash); the check must precede the revision gate so a
+        // stuck writer can't block the already-committed replay. A different
+        // body (including a projection-only drift) remains a conflict.
+        if (current !== null) {
+          const existing = current.receipt(normalized.operation_id);
+          if (existing) {
+            const cursorIndex = Number(existing.cursor) - 1;
+            const [historical] = current.scan(cursorIndex, 1);
+            if (!historical) {
+              return {status: "failed", reason_code: "provider_protocol_violation",
+                reason: `receipt entry cursor ${existing.cursor} missing from journal scan`};
+            }
+            const intendedBody = {events: normalized.events, receipts: normalized.receipts,
+              projection: normalized.next_projection};
+            const existingBody = {events: existing.events, receipts: existing.receipts,
+              projection: historical.projection};
+            if (canonicalAuthorityBytes(intendedBody).equals(canonicalAuthorityBytes(existingBody))) {
+              return {
+                status: "applied",
+                provider_revision: existing.provider_revision,
+                cursor: existing.cursor,
+              };
+            }
+            return {
+              status: "conflict",
+              conflict_kind: "operation_id_exists",
+              current_provider_revision: current.provider_revision,
+              current_cursor: current.cursor,
+            };
+          }
+        }
         if ((current?.provider_revision ?? null) !== normalized.expected_provider_revision) {
           return {
             status: "conflict",
             conflict_kind: "provider_revision_mismatch",
             current_provider_revision: current?.provider_revision ?? null,
             current_cursor: current?.cursor ?? null,
-          };
-        }
-        if (current?.receipt(normalized.operation_id)) {
-          return {
-            status: "conflict",
-            conflict_kind: "operation_id_exists",
-            current_provider_revision: current.provider_revision,
-            current_cursor: current.cursor,
           };
         }
         const document = FileAuthorityJournal.append(current, this.goalId, identity, normalized, (previous, transaction) =>
@@ -378,7 +436,7 @@ export class FileAuthorityStore implements AuthorityStore {
           // A failure after rename may already have published the new bytes.
           // The next read must prove the actual file rather than reuse either
           // the previous or attempted document.
-          verifiedDocument = null;
+          verifiedDocuments.delete(this.path);
           return {
             status: "ambiguous",
             reason_code: "commit_outcome_unknown",
@@ -473,7 +531,7 @@ export class FileAuthorityStore implements AuthorityStore {
         const identity = await this.readStoreIdentity(false);
         let archived: FileAuthorityJournal | null = null;
         try {
-          archived = decodeDocument(
+          archived = await decodeDocument(
             JSON.parse(await readFile(archivePath, "utf8")),
             this.goalId,
             identity,

@@ -92,3 +92,18 @@ def test_nested_and_listed_payloads_keep_naming_the_callers_key() -> None:
     with pytest.raises(ValueError) as listed:
         validate_public_safe_value([{"accessToken": "synthetic"}], path="p")
     assert str(listed.value) == "p[0].accessToken is a credential-bearing field"
+
+
+@pytest.mark.parametrize("key", [b"raw", b"api_key", b"safe", 0])
+def test_non_string_field_names_fail_closed_before_classification(key: object) -> None:
+    with pytest.raises(ValueError) as raised:
+        validate_public_safe_value({key: "synthetic"}, path="p")
+    assert str(raised.value) == (
+        f"p contains a non-string field name ({type(key).__name__})"
+    )
+
+
+def test_nested_non_string_field_name_reports_its_container() -> None:
+    with pytest.raises(ValueError) as raised:
+        validate_public_safe_value({"outer": [{b"raw": "synthetic"}]}, path="p")
+    assert str(raised.value) == "p.outer[0] contains a non-string field name (bytes)"

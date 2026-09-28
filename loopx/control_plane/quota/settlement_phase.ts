@@ -1,8 +1,10 @@
 import type { SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
+import { isCausalBlockedWait } from "./blocked_wait.ts";
 
-/** A typed blocked Turn may close without spend only with a bounded retry. */
+/** A blocked Turn needs a bounded retry or a verified canonical causal wait. */
 export function isBoundedBlockedRetry(value: unknown, todoId: string | null): boolean {
+  if (isCausalBlockedWait(value, todoId)) return true;
   const retry = jsonObject(value);
   if (!retry || retry.schema_version !== "quota_blocked_retry_v0" ||
       (retry.source !== "todo" && retry.source !== "turn_settlement") ||
@@ -13,6 +15,32 @@ export function isBoundedBlockedRetry(value: unknown, todoId: string | null): bo
   const due = Date.parse(retry.due_at);
   const delay = (due - observed) / 1000;
   return Number.isFinite(delay) && delay >= 60 && delay <= 30 * 60;
+}
+
+/** The committed checkpoint accepts progress for a Turn, not Todo completion.
+ * The caller must first verify this writeback's exact durable receipt. */
+export function isAcceptedInFlightWriteback(
+  value: unknown,
+  identity: SettlementIdentity,
+): boolean {
+  const run = jsonObject(value);
+  const checkpoint = jsonObject(run?.vision_checkpoint);
+  if (identity.binding_kind !== "todo" || identity.todo_id === null ||
+      !run || run.goal_id !== identity.goal_id ||
+      run.agent_id !== identity.agent_id || run.todo_id !== identity.todo_id ||
+      run.turn_instance_id !== identity.turn_instance_id ||
+      run.delivery_outcome !== "outcome_progress" ||
+      !checkpoint || checkpoint.schema_version !== "vision_checkpoint_v0" ||
+      checkpoint.agent_id !== identity.agent_id ||
+      checkpoint.delivery_boundary !== "in_flight_continuation" ||
+      checkpoint.satisfied !== true || !Array.isArray(checkpoint.triggers)) {
+    return false;
+  }
+  return checkpoint.triggers.some((value) => {
+    const trigger = jsonObject(value);
+    return trigger?.kind === "in_flight_continuation" &&
+      trigger.todo_id === identity.todo_id;
+  });
 }
 
 /** Both same-Turn readback and prior-Turn recovery accept the shipped effect identities. */

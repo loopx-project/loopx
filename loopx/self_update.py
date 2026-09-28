@@ -1232,7 +1232,8 @@ def execute_rollback_plan(
         compatible = subprocess.run(
             [str(target_script), "--format", "json", "authority-archive", "upgrade",
              "--all-known", "--require-current"],
-            capture_output=True, text=True, timeout=timeout_seconds,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout_seconds,
         )
         if compatible.returncode != 0:
             raise RuntimeError("Rollback target cannot read current authority formats. "

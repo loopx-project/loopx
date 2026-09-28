@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -102,6 +103,66 @@ def test_chat_bundle_preflight_preserves_stdout_with_legacy_pointer(
     captured = capfd.readouterr()
     assert captured.out == ""
     assert captured.err.splitlines() == ["bundle progress"]
+
+
+def test_authority_upgrade_runs_from_candidate_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_root = tmp_path / "releases" / "candidate"
+    skills_dir = tmp_path / "codex" / "skills"
+    observed_command: list[str] = []
+    observed_env: dict[str, str] = {}
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        observed_command.extend(command)
+        observed_env.update(kwargs["env"])
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(windows_install.subprocess, "run", run)
+
+    windows_install._upgrade_authority_archive(
+        release_root,
+        python=Path(sys.executable),
+        skills_dir=skills_dir,
+    )
+
+    assert observed_command == [
+        sys.executable,
+        "-I",
+        str(release_root / "scripts" / "loopx_entry.py"),
+        "--format",
+        "json",
+        "authority-archive",
+        "upgrade",
+        "--all-known",
+        "--execute",
+    ]
+    assert observed_env["LOOPX_RELEASE_ROOT"] == str(release_root)
+    assert observed_env["CODEX_HOME"] == str(skills_dir.parent)
+    assert observed_env["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
+def test_authority_upgrade_failure_reports_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            2,
+            stdout="",
+            stderr="loopx runtime error: LOOPX_RELEASE_ROOT is not set",
+        )
+
+    monkeypatch.setattr(windows_install.subprocess, "run", run)
+
+    with pytest.raises(RuntimeError, match="LOOPX_RELEASE_ROOT is not set"):
+        windows_install._upgrade_authority_archive(
+            tmp_path / "release",
+            python=Path(sys.executable),
+            skills_dir=tmp_path / "codex" / "skills",
+        )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")
@@ -377,7 +438,7 @@ def test_windows_installer_keeps_pointer_when_candidate_validation_fails(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")
-def test_windows_installer_rolls_back_late_user_surface_failure(
+def test_windows_installer_rolls_back_user_surfaces_and_retains_upgraded_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -424,4 +485,6 @@ def test_windows_installer_rolls_back_late_user_surface_failure(
         '{"release_id":"known-good"}\n'
     )
     assert existing_skill.read_text(encoding="utf-8") == "# known-good skill\n"
-    assert not (install_root / "releases" / "rejected-late").exists()
+    retained_candidate = install_root / "releases" / "rejected-late"
+    assert retained_candidate.is_dir()
+    assert (retained_candidate / "scripts" / "loopx_entry.py").is_file()

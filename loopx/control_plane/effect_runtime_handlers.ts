@@ -1,8 +1,8 @@
-import {planStateEventReplay} from "./goals/state_event_replay.ts";
+import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
-import {readShadowDrainPlan} from "./coordination/shadow_drain_plan.ts";
+import {drainShadowOutbox} from "./coordination/shadow_drain.ts";
 import {readCanonicalSnapshotPage} from "./coordination/canonical_snapshot_page.ts";
 import {manageLocalAuthorityArchive} from "./coordination/local_authority_archive.ts";
 import {selectPeriodicReportProgress, selectPeriodicReportApprovalRetry} from "./capabilities/periodic_report_progress.ts";
@@ -14,9 +14,11 @@ import {evaluateUserCompletion} from "./todos/user_completion.ts";
 import {projectTodoSuccession} from "./todos/succession.ts";
 import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
-import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {resolveConversationTrigger} from "./collaboration/conversation_trigger.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
+import {planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
 import {commitLocalTeamPlan} from "./work_items/team_plan_authority.ts";
 import {inspectLocalGoalAcceptance, commitLocalGoalAcceptance,
@@ -89,6 +91,7 @@ import {
   type TurnJournalInspectionRequest,
 } from "./turn_driver/turn_journal.ts";
 import { commitTurnJournal } from "./turn_driver/turn_journal_effects.ts";
+import { projectTurnSelectionRejection } from "./turn_driver/selection_rejection.ts";
 import {
   evaluateTodoCompletionFence,
 } from "./todos/completion_fence.ts";
@@ -129,6 +132,7 @@ import {
   decideProjectSessionBind,
   decideProjectSessionUnbind,
 } from "./goals/source_session_lifetime.ts";
+import { decideFirstPartyHostRuntime } from "./goals/first_party_host_runtime.ts";
 import {
   evaluateDeliveryRoute,
 } from "./turn_driver/delivery_continuity.ts";
@@ -198,7 +202,7 @@ import {evaluateCapabilityGate} from "./agents/capability_gate.ts";
 import {projectCoordinationSource} from "./coordination/source_projection.ts";
 import {withCoordinationSourceTransfer} from "./coordination/source_transfer.ts";
 import {captureArchivedTodoDependencies} from "./todos/archive_capture.ts";
-import {planStateEventAppend} from "./goals/state_event_append.ts";
+import {planSupervisorEventAppend} from "./agents/supervisor_event_append.ts";
 import {projectAdvancementFrontier, evaluateLongTodoChain} from "./todos/frontier_revision.ts";
 import { evaluateCoordinationTodoSuccessorDerivation } from "./coordination/todo_successor_derivation.ts";
 import {
@@ -232,6 +236,11 @@ import {
   projectExternalEvidenceRetirement,
   recordExternalEvidenceReceiptObservation,
 } from "./capabilities/external_evidence.ts";
+import {
+  buildRewardMemorySurfaceReadCheckpoints,
+  planRewardMemoryDecision,
+  projectRewardMemoryDecision,
+} from "./capabilities/reward_memory_decision.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
@@ -441,7 +450,6 @@ export function createEffectRuntimeHandlers(
       (params) => interpretTurnJournal(turnJournalInspectionRequest(params)),
     ],
     ["turn_journal.write", commitTurnJournal],
-    ["goal.state_event.plan_replay", planStateEventReplay],
     ["todo.completion_fence.evaluate", evaluateTodoCompletionFence],
     ["todo.completion_state.normalize", normalizeTodoCompletionValue],
     ["todo.completion_state.require_metadata", requireTodoCompletionMetadataValue],
@@ -461,7 +469,7 @@ export function createEffectRuntimeHandlers(
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],
     ["agent.capability_memory", agentCapabilityMemory],
     ["todo.archive.capture_dependencies", withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies)],
-    ["goal.state_event.plan_append", planStateEventAppend],
+    ["agent.supervisor.plan_append", planSupervisorEventAppend],
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
     ["todo.monitor_metadata.plan", planMonitorMetadata],
     ["todo.authoring_scope.plan", planTodoAuthoringScope],
@@ -533,6 +541,7 @@ export function createEffectRuntimeHandlers(
     ["goal.source_session.bind.decide", decideProjectSessionBind],
     ["goal.source_session.unbind.decide", decideProjectSessionUnbind],
     ["goal.source_session.recreate.decide", decideGoalRecreation],
+    ["goal.first_party_host_runtime.decide", decideFirstPartyHostRuntime],
     ["goal.acceptance.inspect", inspectLocalGoalAcceptance],
     ["goal.acceptance.configure", commitLocalGoalAcceptance],
     ["goal.acceptance.verify.commit", commitLocalGoalAcceptanceVerification],
@@ -603,6 +612,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["task_lease.write_scopes.overlap", evaluateTaskLeaseWriteScopesOverlap],
     ["quota.monitor_poll.commit", evaluateQuotaMonitorPollCommit],
+    ["presentation.decision_notice.project", projectDecisionNotice],
     ["presentation.action_review_plan.compile", (params) =>
       compileActionReviewPlan(params.proposal)],
     ["scheduler.monitor_successor.plan", planMonitorSuccessor],
@@ -611,7 +621,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority_shadow.record", recordLocalAuthorityShadow],
     ["coordination.runtime_shadow.commit_entry", deliverShadowEntry],
     ["coordination.runtime_shadow.outbox_read", readLocalAuthorityShadow],
-    ["coordination.runtime_shadow.plan_drain", readShadowDrainPlan],
+    ["coordination.runtime_shadow.drain", drainShadowOutbox],
     [
       "effect.program_from_ordered_steps",
       (params) => effectProgramFromOrderedSteps(
@@ -709,12 +719,16 @@ export function createEffectRuntimeHandlers(
       evaluatePostWritebackHookTransaction,
     ],
     ["collaboration.delegation.binding", selectDelegationBinding],
+    ["turn.selection.rejection", projectTurnSelectionRejection],
     ["collaboration.delegation.preflight", delegationPreflight],
+    ["collaboration.delegation.validation_plan", delegationValidationPlan],
     ["collaboration.delegation.turn_plan", delegationTurnPlanDecision],
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],
+    ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
+    ["chat.turn.accept", planChatTurnAcceptance],
     ["collaboration.delegation.observe", transitionDelegationObservation],
     ["collaboration.delegation.recover_validated_settlement", recoverValidatedDelegationSettlement],
     ["collaboration.delegation.adoption", recordDelegationAdoption],
@@ -731,6 +745,9 @@ export function createEffectRuntimeHandlers(
     ["external_evidence.receipt", recordExternalEvidenceReceiptObservation],
     ["external_evidence.admit", evaluateExternalEvidenceAdmission],
     ["external_evidence.retire", projectExternalEvidenceRetirement],
+    ["reward_memory.decision.plan", planRewardMemoryDecision],
+    ["reward_memory.decision.project", projectRewardMemoryDecision],
+    ["reward_memory.read_authority.surface_checkpoints", buildRewardMemorySurfaceReadCheckpoints],
     [
       "manager.return_delivery.normalize_attempt",
       (params) => normalizeManagerReturnDeliveryAttempt(params.attempt),

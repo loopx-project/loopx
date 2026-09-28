@@ -89,7 +89,7 @@ def test_provider_failure_is_not_a_legacy_fallback(canonical_mode, monkeypatch):
     state, runtime, _ = canonical_mode
     from loopx.control_plane.todos import provider_handoff_mode
     from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
-    monkeypatch.setattr(provider_handoff_mode, "effect_runtime_result", lambda *_args: {
+    monkeypatch.setattr(provider_handoff_mode, "effect_runtime_result", lambda *_args, **_kwargs: {
         "status": "unavailable", "reason_code": "synthetic_provider_down", "reason": "Unavailable"})
     before = state.read_bytes()
     with pytest.raises(LocalCoordinationAuthorityUnavailable, match="Unavailable"):

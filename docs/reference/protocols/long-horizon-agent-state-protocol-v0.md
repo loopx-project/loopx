@@ -43,7 +43,7 @@ them directly.
 | `loopx_rollout_event_v0` | `loopx/rollout_event_log.py` | Append-only public-safe event stream for todo, validation, PR, handoff, quota, repair, and failure events. |
 | `operator_gate` | `loopx operator-gate`, `loopx/review_packet.py`, `loopx/status.py` | User/controller decision point with decision, reason, follow-up, and optional handoff command. |
 | `human_reward` | `loopx reward`, `loopx/history.py`, `loopx/status.py` | Run-bound human judgment overlay; not generic write-control. |
-| `delivery_outcome` | `loopx/delivery_outcome.py`, `loopx/history.py`, `loopx/status.py` | Machine-readable result tier: surface-only, outcome gap, outcome progress, or primary goal outcome. |
+| `delivery_outcome` | `loopx/control_plane/work_items/delivery_outcome.py`, `loopx/history.py`, `loopx/status.py` | Machine-readable result tier: surface-only, outcome gap, outcome progress, or primary goal outcome. |
 | `rollback_packet_v0` | `docs/reference/protocols/rollback-packet-v0.md` | Compensating action record linking todo, commit, event, decision, external resource, and validation plan. |
 
 ### Candidate discovery and command retirement

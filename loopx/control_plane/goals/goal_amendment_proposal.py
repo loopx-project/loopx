@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
-from ...event_sourced_state import now_utc_iso
+from ..runtime.time import now_utc_iso
 from ...file_lock import exclusive_file_lock
 from ...history import load_index, load_registry
 from ...runtime import validate_goal_id_path_segment

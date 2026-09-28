@@ -72,10 +72,10 @@ def main(request):
     adapter = provider_update if mode == "writer" else checkpoint_context_io
     original = adapter.effect_runtime_result
 
-    def native(method, params):
+    def native(method, params, **kwargs):
         target = "coordination.local_authority.todo_update" if mode == "writer" else "goal.checkpoint_read_context.commit"
         if method != target:
-            return original(method, params)
+            return original(method, params, **kwargs)
         envelope = {"mode": "writer" if mode == "writer" else "checkpoint", "barrier": str(barrier),
                     "provider": request["provider"], "method": method, "params": params,
                     "provider_direct": request.get("provider_direct", False)}

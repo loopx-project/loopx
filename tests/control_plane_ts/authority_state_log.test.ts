@@ -181,3 +181,88 @@ test("authority state deltas keep every JSON key the stored projection could car
   assert.equal(text(created), text(JSON.parse(legacyText)));
   assert.equal(Object.getPrototypeOf(created), Object.prototype);
 });
+
+test("delta batches preserve input ownership and apply operations in order", () => {
+  const previous = {nested: {metadata: {attempt: 1}}, list: [{value: 1}, {value: 2}]};
+  const operations = [
+    {op: "set", path: ["nested", "metadata", "attempt"], value: 2},
+    {op: "splice", path: ["list"], index: 1, remove: 1, insert: [{value: 3}]},
+    {op: "set", path: ["new"], value: {branch: 1}},
+    {op: "remove", path: ["new", "branch"]},
+  ];
+  const delta = {schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations} as never;
+  const result = applyAuthorityStateDelta(previous, delta);
+  assert.deepEqual(result, {nested: {metadata: {attempt: 2}}, list: [{value: 1}, {value: 3}], new: {}});
+  assert.deepEqual(previous, {nested: {metadata: {attempt: 1}}, list: [{value: 1}, {value: 2}]});
+  (result.nested as {metadata: {attempt: number}}).metadata.attempt = 99;
+  assert.equal(previous.nested.metadata.attempt, 1);
+  assert.throws(() => applyAuthorityStateDelta(previous, {schema_version: AUTHORITY_STATE_DELTA_SCHEMA,
+    operations: [...operations, {op: "remove", path: ["absent"]}]} as never));
+  assert.equal(previous.nested.metadata.attempt, 1);
+  assert.deepEqual(applyAuthorityStateDelta({negative: -0, list: Array(2)},
+    {schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: []}), {negative: -0, list: Array(2)});
+});
+
+test("private replay keeps exact proofs while copying only changed paths", async () => {
+  const {AuthorityStateReplay} = await import("../../loopx/control_plane/coordination/authority_state_log.ts");
+  const {canonicalAuthoritySha256} = await import("../../loopx/control_plane/coordination/authority_store_codec.ts");
+  const initial = {todos: [{id: "a", metadata: {attempt: 1}}, {id: "b"}], nested: {value: 1}};
+  const replay = new AuthorityStateReplay(initial);
+  initial.todos[0]!.metadata!.attempt = 100; // Caller never owns the replay's nodes.
+  const before = replay.canonicalJson();
+  const beforeDigest = replay.stateDigest();
+  assert.equal(before, '{"nested":{"value":1},"todos":[{"id":"a","metadata":{"attempt":1}},{"id":"b"}]}');
+  const insert = {id: "a", metadata: {attempt: 2}};
+  replay.apply({schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: [
+    {op: "splice", path: ["todos"], index: 0, remove: 1, insert: [insert]},
+    {op: "set", path: ["nested", "value"], value: 2},
+  ]});
+  insert.metadata.attempt = 200;
+  const expected = {nested: {value: 2}, todos: [{id: "a", metadata: {attempt: 2}}, {id: "b"}]};
+  assert.deepEqual(replay.snapshot(), expected);
+  assert.notEqual(replay.stateDigest(), beforeDigest);
+  assert.equal(replay.stateDigest(), canonicalAuthoritySha256(expected));
+  const fields = {expected_provider_revision: "store:1", operation_id: "op-2", events: [{step: 2}], receipts: [{done: true}]};
+  assert.equal(replay.commitDigest(fields), canonicalAuthoritySha256({...fields, next_projection: expected}));
+  fields.receipts[0]!.done = false;
+  assert.equal(replay.commitDigest(fields), canonicalAuthoritySha256({...fields, next_projection: expected}));
+  const copy = replay.snapshot(); (copy.nested as {value: number}).value = 999;
+  const durableCopy = JSON.parse(replay.canonicalJson()); durableCopy.todos[1].id = "changed";
+  assert.deepEqual(replay.snapshot(), expected);
+  const stable = replay.canonicalJson();
+  assert.throws(() => replay.apply({schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: [
+    {op: "set", path: ["nested", "value"], value: 3}, {op: "remove", path: ["missing"]},
+  ]}));
+  assert.equal(replay.canonicalJson(), stable, "failed batch must not advance replay");
+  replay.apply({schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: []});
+  assert.equal(replay.canonicalJson(), stable);
+});
+
+test("replay encoding preserves canonical Unicode, sparse values, numeric keys and strict boundaries", async () => {
+  const {AuthorityStateReplay} = await import("../../loopx/control_plane/coordination/authority_state_log.ts");
+  const {createHash} = await import("node:crypto");
+  const hash = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
+  const value = JSON.parse('{"10":1,"2":2,"__proto__":{"own":true},"":0,"Ω":"🙂"}');
+  const replay = new AuthorityStateReplay(value);
+  assert.equal(replay.stateDigest(), hash('{"2":2,"10":1,"":0,"__proto__":{"own":true},"Ω":"🙂"}'));
+  replay.apply({schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: [
+    {op: "set", path: ["1"], value: "first"}, {op: "remove", path: ["__proto__", "own"]},
+  ]});
+  assert.equal(replay.canonicalJson(), '{"1":"first","2":2,"10":1,"":0,"__proto__":{},"Ω":"🙂"}');
+  const sparse = new AuthorityStateReplay({items: Array(2)});
+  assert.equal(sparse.canonicalJson(), '{"items":[null,null]}');
+  const cycle: unknown[] = []; cycle.push(cycle);
+  for (const bad of [undefined, NaN, Infinity, 1n, new Date(), {bad: undefined}, {cycle}]) {
+    assert.throws(() => new AuthorityStateReplay(bad));
+  }
+  for (const delta of [
+    {schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: Array(1)},
+    {schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: [{op: "set", path: Array(1), value: 1}]},
+    {schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: [{op: "splice", path: ["items"], index: 0, remove: 0, insert: Array(1)}]},
+  ]) assert.throws(() => sparse.apply(delta as never));
+  for (const text of ['"\\\n'.repeat(1200), "\ud800".repeat(1200), "🙂".repeat(600), "x".repeat(3 * 1024 ** 2),
+    ...Array.from({length: 8}, (_, i) => String(i).repeat(1024 ** 2))]) {
+    replay.apply({schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: [{op: "set", path: ["payload"], value: text}]});
+    assert.equal(replay.stateDigest(), hash(canonicalAuthorityBytes(replay.snapshot()).toString("utf8")));
+  }
+});

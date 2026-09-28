@@ -182,6 +182,40 @@ test("maximum delegation directory stays within provider budget", () => {
   assert.ok(Buffer.byteLength(JSON.stringify(packet.contributions[0])) <= 2048);
 });
 
+test("planning progressively discloses probe scope without crowding out a second route", () => {
+  const probe = {schema_version: "managed_runtime_probe_v0", scope: "probing_interpreter",
+    module: "deepseek_harness", available: false};
+  const routes = [
+    {binding_id: "managed-evidence/" + "x".repeat(34),
+      agent_id: "managed-worker-" + "x".repeat(12), todo_id: "todo_" + "a".repeat(12), runtime_id: "dsh",
+      readiness: "blocked", runtime_readiness: "blocked", executor_kind: "managed",
+      execution_profile: "deepseek-v4-flash@high", reason_code: "dsh_runtime_unavailable",
+      runtime_probe: {...probe, private_path: "/private/interpreter"},
+      unavailable_remediation: ["configure_dsh_runtime", "select_individual_host"]},
+    {binding_id: "generic-verifier/" + "x".repeat(34),
+      agent_id: "generic-worker-" + "x".repeat(12), todo_id: "todo_" + "b".repeat(12), runtime_id: "generic-cli",
+      readiness: "unknown", runtime_readiness: "unknown", executor_kind: "generic",
+      runtime_probe: null, unavailable_remediation: []},
+  ];
+  for (const phase of ["before_plan", "before_delegate"]) {
+    const packet = evaluateSubagentContext({phase, scope, orchestration: policy, observations: {
+      delegation_context: {schema_version: "loopx_delegation_context_v0", configuration_state: "ready",
+        observed_at: "2026-09-19T04:20:00+00:00", authorized_count: 2, projected_count: 2, routes},
+    }})!;
+    assert.deepEqual(packet.failures, []);
+    const [contribution] = packet.contributions as Record<string, any>[];
+    const context = contribution.facts.delegation_context;
+    assert.equal(context.projected_count, 2);
+    assert.equal(context.preflight, "required");
+    assert.deepEqual(context.routes.map((route: any) => route.probe_scope), ["probing_interpreter", undefined]);
+    assert.deepEqual(context.routes.map((route: any) => route.readiness), ["blocked", "unknown"]);
+    assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 900);
+    assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
+    assert.ok(!JSON.stringify(packet).includes("/private/interpreter"));
+    assert.ok(!JSON.stringify(packet).includes("configure_dsh_runtime"));
+  }
+});
+
 // Rich model identifiers and the complete participation guidance must survive
 // the actual provider budget, not disappear as an isolated provider failure.
 test("coordinator participation guidance survives all bounded lifecycle projections", () => {
@@ -192,7 +226,7 @@ test("coordinator participation guidance survives all bounded lifecycle projecti
     } })!;
     assert.deepEqual(packet.failures, []);
     const [contribution] = packet.contributions as Record<string, any>[];
-    assert.equal(contribution.revision, "v5");
+    assert.equal(contribution.revision, "v6");
     assert.equal(packet.authority, "guidance_only");
     assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
     assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 3072);
@@ -248,4 +282,31 @@ test("configured child limit stays distinct from typed native host capacity", ()
   const succeededFacts = (succeeded.contributions as Record<string, any>[])[0].facts;
   assert.equal(succeededFacts.capacity_contract.live_availability, "attempt_observed");
   assert.equal(succeededFacts.native_host_capacity.retry_same_turn, undefined);
+});
+
+test("durable native child report is bounded and does not claim host attestation", () => {
+  const packet = evaluateSubagentContext({ phase: "after_delegate_result", scope,
+    orchestration: { ...policy, max_children: 6 }, observations: {
+      native_child_activity: {
+        schema_version: "native_subagent_activity_v0",
+        entrypoint_scope: "host_native_child_tools",
+        observation: "coordinator_reported",
+        host_attested: true,
+        configured_limit: 6,
+        attempted_count: 2,
+        launched_count: 1,
+        skipped_count: 0,
+        capacity_rejected_count: 1,
+        host_failed_count: 0,
+        parent_accepted_count: 0,
+        retry_same_turn: false,
+        raw_host_result: "private result",
+      },
+    } })!;
+  const facts = (packet.contributions as Record<string, any>[])[0].facts;
+  assert.equal(facts.native_child_activity.host_attested, false);
+  assert.equal(facts.native_child_activity.launched_count, 1);
+  assert.equal(facts.native_child_activity.retry_same_turn, false);
+  assert.equal(facts.native_receipt_observation, "coordinator_reported");
+  assert.ok(!JSON.stringify(packet).includes("private result"));
 });

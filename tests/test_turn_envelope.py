@@ -1047,7 +1047,8 @@ def test_protocol_packet_compatibility_does_not_bypass_host_signature_check(
 
 @pytest.mark.parametrize("has_packet", [False, True])
 def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_packet: bool) -> None:
-    from loopx.cli_commands.quota import _render_turn_envelope_payload
+    from loopx.cli_commands.quota import _project_quota_cli_payload
+    from argparse import Namespace
 
     failure: dict[str, Any] = {
         "ok": False, "decision": "skip", "should_run": False,
@@ -1058,7 +1059,7 @@ def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_pa
             "schema_version": "protocol_action_packet_v0", "summary": HISTORICAL_V0_SUMMARY,
         }
     before = deepcopy(failure)
-    rendered = _render_turn_envelope_payload(failure, None)
+    rendered = _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
     assert "interaction_contract must be an object" in rendered.pop("turn_envelope_skipped")
     assert rendered == before
     assert failure == before

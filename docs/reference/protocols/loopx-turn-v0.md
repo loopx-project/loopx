@@ -253,6 +253,48 @@ dedicated typed result channel; passing `trae chat` directly as the adapter is
 not sufficient. Check the installed CLI's help and pin the qualified command
 shape because flags and headless behavior may vary by version.
 
+### Managed Host Process Lifetime
+
+The generic command executor and built-in Codex CLI adapter now share a TS
+process supervisor. Existing `turn run-once` commands need no new option. Node
+uses the same supported-version discovery as the control-plane runtime; the
+private request stream is limited to 8 MiB and is not a durable protocol.
+
+A Host leader exiting, its output pipes closing and its descendants stopping
+are distinct observations. On POSIX, LoopX starts a dedicated process group,
+sends TERM and escalates to KILL after 300 ms, **including when the leader has
+already exited**. Normal result return also cleans up leftover group members.
+Host commands must not use that group to launch intended persistent services.
+Windows retains Python command-launch compatibility (including batch entrypoints)
+through a transport-only relay, then attempts tree termination before killing
+the leader. Windows uses best-effort process-tree cleanup; this delivery does not claim
+POSIX-equivalent cancellation or Windows qualification.
+
+Timeout, output-consumer failure and loss of the owning Python process trigger
+cleanup. The control pipe remains open for the job lifetime; EOF cancels work.
+After leader exit, output drain is bounded (normally two seconds), rather than
+waiting indefinitely for inherited pipes. Generic stdout is capped at its
+existing 12,000-byte result budget while streaming. Codex output is consumed
+transiently with LF-framed records capped at 1,048,576 characters and a finite
+set of failure categories; an oversized record makes diagnostic observation
+incomplete. UTF-8 characters split across byte chunks remain intact. Raw Host
+output is not written to LoopX state.
+
+Generic results require complete output and zero exit status. Codex retains its
+existing separate typed result-file contract: incomplete diagnostics do not
+invent a failure category, and a validated result file remains usable. Timeout
+still preserves the observed opaque session for the existing retry path. No
+process observation certifies Todo completion, refunds spend or rolls back an
+external effect; independent validation and settlement keep their owners.
+
+This is **process supervision, not execution authority or a sandbox**. It does
+not renew provider leases, prevent stale remote side effects, cancel attached
+App sessions, or supervise in-process DSH execution. Descendants that escape the
+process group and killing the supervisor itself with SIGKILL are outside this
+boundary. Caller death can precede cleanup; the local lane lock alone cannot
+certify no overlap with a replacement executor. Authority-bound renewal,
+revocation and uncertain-effect recovery remain a separate delivery.
+
 ### Repeatable Codex CLI Qualification
 
 The repository includes an opt-in end-to-end qualification that creates an
@@ -382,6 +424,42 @@ existing journal lock, and projects `interpret_turn_journal` into
 quota construction, scheduler context, planning, host invocation, settlement,
 spend, or state writeback. Its `effects` field is therefore always an empty
 list.
+
+`recorded_effects` separately reports lower-bound observations of the **original
+Turn**, not effects performed by this inspection or a recovery invocation.
+Boolean values mean checkpointed execution or no recorded attempt; `null` means
+unknown. A saved Host attempt precedes launch confirmation; a `prepared` writeback
+or spend is not a commit receipt. Inconsistent/foreign identity or phase lineage
+supplies only unknown effect facts. A scheduler phase does not imply host acknowledgement.
+
+The inspector and journal writer share the original TS prepared-intent contract:
+one supported step, object shape, `prepared` status, exact settlement effect ref,
+the next phase and a nonterminal status. Unknown or malformed intents block the
+existing recovery decision, including Host reinvocation. Valid lineage's already
+completed effects remain proved; other effects are unknown, not `false`. The
+writer's empty-map rejection is retained: no pending intent uses an absent field;
+committed history is carried by completed checkpoints, not retained intents.
+
+If executing `run-once` raises unexpectedly, its error response retains the
+original error and resume key, marks uncertain current-invocation `effects` as
+`null`, and adds `journal_observation` from this same read-only TS owner. Its
+`scope=original_turn` prevents a saved Host result being mistaken for another
+launch. Unavailable inspection remains explicit; there is no Python fallback.
+Use the original `recovery_decision` and provider readback to recover, never a
+fresh task or repeated model call inferred from a failed CLI reply. This readback
+does not bypass controller completion validation, lease conflicts or quota gates.
+Pre-execution failures retain known Turn-start hook writes without claiming Host
+execution. Normal successful/replayed `effects` remain invocation-scoped.
+
+中文：`recorded_effects` 是原 Turn 的持久观察，不是本次检查或恢复又发生了副作用。
+`null` 表示未知：已登记 Host attempt 不等于模型已启动，`prepared` 不等于写回或扣额
+已提交。异常返回保留原错误/恢复身份，以同一 TS owner 的只读 `journal_observation`
+区分本次调用与原 Turn；读回失败不猜测“没有执行”。按原恢复判定和 provider 回执
+继续，不能因 CLI 报错新建任务重跑模型，也不放松验收、租约或扣额门禁。
+检查与写入共用原 TS prepared-intent 合同，校验步骤、形状、状态、effect 身份和
+阶段绑定。未知或畸形 intent 阻断原恢复判定，不能建议重调 Host；保留合法身份与
+阶段已经证明的执行事实，其余返回未知而非 `false`。不放松原 writer 的空 map
+拒绝语义：无待决 intent 应省略该字段，已提交历史由完成 checkpoint 表达。
 
 Exit zero means that inspection completed, including when `decision` is
 `replay_blocked`. A non-zero exit means the command could not inspect the
@@ -540,6 +618,35 @@ Every attempted tick returns one result kind:
 | `host_failure` | The host could not start, resume, or finish a turn. | Record the failure class and retry or repair policy. |
 | `validation_failed` | Host output exists but task validation failed or is inconclusive. | Preserve failure evidence and route to repair/replan. |
 | `writeback_failed` | Validated work could not be durably recorded. | Do not spend; retry idempotent writeback before more delivery. |
+
+### In-flight Turn settlement / 在途 Turn 结算
+
+A Todo can stay open across several bounded Turns. An exact accountable
+`outcome_progress` writeback with an accepted `vision_checkpoint_v0`
+`in_flight_continuation` boundary discharges that Turn's progress obligation,
+not the Todo's terminal acceptance. With its matching durable writeback and
+quota-spend receipts, the original Turn replays as `heartbeat_settled_skip`:
+no more work and no second debit. Without the spend receipt it remains
+`settlement_pending`; a missing writeback receipt, unaccepted checkpoint or
+wrong Goal/Agent/Todo/Turn cannot prove settlement. A plain progress claim or
+`semantic_closeout` checkpoint is not this exception.
+
+Todo 可以跨多个有界 Turn 保持开放。与原始身份精确绑定的 `outcome_progress`
+写回，只有携带已获准的 `vision_checkpoint_v0`、`in_flight_continuation` 边界和
+当前 Todo 的 trigger，才履行该 Turn 的进展义务，而非 Todo 的最终验收。有匹配
+的写回和扣额回执后，同一 Turn 返回 `heartbeat_settled_skip`，不得再次执行或
+重复扣额；缺少扣额回执时仍是 `settlement_pending`。缺少写回回执、未获准
+checkpoint 或错配 Goal/Agent/Todo/Turn 均不能证明结算，普通进展声明或
+`semantic_closeout` 也不能替代这项凭证。
+
+Waiting conditions and frontier/successor changes do not reopen a settled Turn.
+A fresh Turn must recompute admission to continue the open Todo or select an
+independent successor. The Todo's completion validator, definition revision,
+leases and Goal acceptance remain authoritative and unchanged.
+
+等待条件和 frontier／后继变化不能重新打开已结算 Turn。继续开放 Todo 或选择
+独立后继必须用新 Turn 重新准入。Todo 完成验证器、定义版本、租约和 Goal 验收
+仍由原权威负责，不因在途结算而放宽或改写。
 
 `validated_completion` is admitted only when the Turn caller supplies an
 explicit Todo lifecycle adapter. After independent validation, the adapter must

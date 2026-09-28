@@ -121,6 +121,11 @@ export function CapabilityDetailHeader({ capability, locale, source }: Readonly<
 }>) {
   const { t } = useWorkspaceI18n();
   const localized = localizeCapability(capability, locale);
+  // Capability ownership remains visible even when this editor is read-only.
+  const scopes = capability.configuration_editor.supported_scopes;
+  const scopeKind = scopes.includes("machine")
+    ? scopes.includes("goal") ? "machineAndGoal" : "machine"
+    : scopes.includes("goal") ? "goal" : "unknown";
   return (
     <header>
       <span className="personal-settings-icon"><SlidersHorizontal aria-hidden size={18} /></span>
@@ -129,6 +134,7 @@ export function CapabilityDetailHeader({ capability, locale, source }: Readonly<
           <h2>{localized.display_name}</h2>
           <CapabilityEffectiveSource source={source} t={t} />
         </div>
+        <p className="personal-capability-supported-scopes">{t(`capabilities.configurationScope.${scopeKind}`)}</p>
         {capability.context_contribution && (
           <details className="personal-capability-help" data-testid="capability-context-phases">
             <summary>{locale === "zh-CN" ? "主 Agent 协作指导" : "Coordinator workflow guidance"}</summary>

@@ -38,6 +38,16 @@ Keep examples public-safe. Do not copy raw benchmark tasks, raw trajectories,
 private logs, verifier output tails, credentials, internal URLs, or local
 machine paths.
 
+### Admission Of New Patterns
+
+A new `IP-` entry is not a contributor task on its own. Since 2026-09-26 the
+catalog accepts a new pattern only when the same change, or a linked merged
+change, names the consumer that reads it: a controller decision, dashboard or
+notification copy, a smoke that asserts the pattern's state contract, or an
+RFC section that cites the entry. Patterns that only restate an existing
+`IP-` under a new trigger are folded into the existing entry. See the
+[Contributor Task Board](../development/contributor-tasks.md#task-admission-rule).
+
 ## Catalog Maintenance And Validation Design
 
 The catalog is for reusable user / agent / state interaction shapes. Do not add
@@ -2545,12 +2555,11 @@ keep "we never heard back" from becoming "nothing happened".
    second time".
 2. **Recover by readback, not by blind retry.** A re-sent operation returns the
    original receipt rather than a second effect:
-   `tests/control_plane/test_coordination_recoverable_execution.py:693` asserts
-   `result == "already_applied"` with an identical `original_receipt`, and
-   `:694` that the head's `receipt_index` holds exactly one entry per operation
-   id. `tests/control_plane/test_coordination_provider_parity.py:222` makes
-   `operation_identity_reuse` a dimension every coordination provider must
-   answer the same way (expectation recorded at `:308`).
+   `tests/control_plane_ts/authority_store_conformance.ts:833` replays the same
+   `archive-completed` request and asserts the second call reports `replayed`
+   with an identical `original_receipt` and an unchanged authority (`:836`-`:839`),
+   while the same operation id carrying a changed intent is rejected with
+   `coordination_operation_identity_mismatch` (`:843`).
 3. **Publish the material an authoritative record points at before, or under the
    same identity as, that record.** A committed pointer with no backing content
    is worse than no commit, because every later reader must guess. `#5007` is
@@ -2610,10 +2619,10 @@ flowchart TD
 
 **Validation**
 
-- `tests/control_plane/test_coordination_provider_parity.py` keeps
-  `operation_identity_reuse` honest across every provider arm, and
-  `tests/control_plane/test_coordination_recoverable_execution.py` pins the
-  replay-and-receipt path for leases and renewals.
+- `tests/control_plane_ts/authority_store_conformance.ts` keeps operation
+  identity honest across every provider arm — the shared suite is registered
+  once per store — and pins the replay-and-receipt path together with the
+  lease-fenced write paths.
 - `tests/cli_commands/test_source_session_lifetime.py` pins the negative twin:
   one identity may not carry two different intents.
 - `loopx/control_plane/coordination/local_authority_shadow_adapter.py` and
@@ -2905,7 +2914,7 @@ from a meta/controller poll that was only authorized to observe.
 **Validation**
 
 - `regression/external-evidence-observation-real-codex.py`
-- `examples/benchmark-lifecycle-state-smoke.py`
+- `deprecate/benchmark-legacy/examples/benchmark-lifecycle-state-smoke.py` (retired)
 - `docs/state-interaction-model.md`
 
 #### IP-015 Benchmark Lifecycle Countability

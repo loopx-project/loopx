@@ -1,0 +1,73 @@
+# Mergify workflow automation for loopx-project/loopx.
+#
+# Scope: conflict detection and contributor nudges only. Merge decisions stay
+# with maintainers; no merge queue, no auto-merge, no auto-approve rules.
+# Enable Workflow Automation for this repository in the Mergify dashboard;
+# installation and a valid file alone do not execute these rules. Validate in
+# the configuration editor before merging. Disable the product or remove this
+# file to stop these label/comment rules.
+
+pull_request_rules:
+  - name: ping author on conflicts and add 'needs-rebase' label
+    description: Mark pull requests that no longer merge cleanly into their base branch.
+    conditions:
+      - conflict
+      - -closed
+    actions:
+      label:
+        add:
+          - needs-rebase
+      comment:
+        message: |
+          This pull request has merge conflicts with `{{ base }}` and cannot be merged
+          until they are resolved. Please rebase or merge the base branch, @{{ author }}.
+
+          Choose the remote for the base repository, not an out-of-date fork.
+          For a fork clone, first inspect `git remote -v`; `upstream` must point
+          to https://github.com/loopx-project/loopx.git. If it is absent, add it
+          with `git remote add upstream https://github.com/loopx-project/loopx.git`.
+          Then run:
+
+          ```bash
+          git fetch upstream
+          git rebase upstream/{{ base }}
+          # Resolve each conflict, git add the resolved files, then git rebase --continue.
+          git push --force-with-lease origin HEAD
+          ```
+
+          For a same-repository clone whose `origin` points to
+          https://github.com/loopx-project/loopx.git, use `origin` instead of
+          `upstream` for fetch/rebase. If you prefer merging the base, use
+          `git merge <base-remote>/{{ base }}` and push normally.
+
+          Keep the DCO `Signed-off-by` trailer on every commit when you rebase.
+          https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/syncing-a-fork
+
+  - name: remove 'needs-rebase' label when conflict is resolved
+    conditions:
+      - -conflict
+      - -closed
+    actions:
+      label:
+        remove:
+          - needs-rebase
+
+  - name: comment on DCO failure
+    description: Point contributors at the sign-off fix when the DCO workflow fails.
+    conditions:
+      - check-failure=@github-actions/Sign-off
+      - -check-cancelled=@github-actions/Sign-off
+      - -closed
+      - -draft
+    actions:
+      comment:
+        message: |
+          Hi @{{ author }}, the DCO `Sign-off` check did not pass. Please inspect
+          its details first: checkout, fetch, timeout or infrastructure errors
+          need their own recovery, not a rewrite of otherwise signed commits.
+
+          If the log confirms a missing `Signed-off-by` trailer, amend the
+          affected commit with `git commit --amend -s`; for multiple commits,
+          use an interactive rebase against the current base from the correct
+          base-repository remote and sign off each affected commit. Push the
+          rewritten PR branch with `git push --force-with-lease origin HEAD`.

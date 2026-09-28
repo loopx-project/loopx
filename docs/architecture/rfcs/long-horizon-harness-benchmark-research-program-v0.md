@@ -2,7 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft, research program |
+| Status | Accepted |
+| Supersedes / closes | none |
 | Date | 2026-08-16 |
 | Authors | LoopX maintainers |
 | Scope | External capability evidence, benchmark collaboration, harness experiments, and mechanism qualification |

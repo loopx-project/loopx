@@ -1,6 +1,7 @@
 # RFC：自动执行准入（v0）
 
-- **RFC 状态：** Draft
+- **RFC 状态：** 已接受
+- **替代 / 关闭：** 无
 - **交付成熟度：** Partial，候选实现，尚未推广
 - **维护边界：** quota、scheduler、host runtime
 - **创建 / 规范修订：** 2026-09-23
@@ -174,6 +175,8 @@ fail-closed，显式手动理由也无法绕过。缺少阶段字段的旧记录
 
 M3 设置页阶段成果复用 quota 权威，提供 Goal／Agent／Automation 作用域的修订号锁定
 预览、应用与读回，并把过期的配置意图作为 typed conflict 报出，而不是解析错误文案。
+默认从 Goal 投影的 Agent 列表中明确选择目标，不预选任意 Agent，也不按当前 ID 过滤候选。
+切换目标会清除旧预览；预览展示 Goal 和 Agent。单个 Agent 的下限不会修改其他 Agent 或 Goal 默认值。
 它不修改已有 Codex App 定时器；下次可运行时间及 Lark／CLI 等待反馈一致性仍未完成。
 App 定时器到 hook、非 Turn launcher 及真实模型宿主推广仍未验收，M4 仍是设计选项。
 本提案不激活、不改绑任何已有自动化；测试和 PR 必须区分确定性验证与宿主推广。

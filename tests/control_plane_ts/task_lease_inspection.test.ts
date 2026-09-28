@@ -59,6 +59,13 @@ async function fixture(t: test.TestContext, provider: Provider, schema: "native"
   ];
   // Canonical heads prohibit orphan leases; legacy files may retain them.
   if (provider !== "legacy") cases.splice(cases.findIndex(item => item.name === "orphan"), 1);
+  if (provider !== "legacy") cases.push(
+    {name: "repository-bound", todo: {task_repository: "git:github.com/team/a"},
+      lease: {write_repository: "git:github.com/team/a"}, active: true},
+    {name: "repository-drift", todo: {task_repository: "git:github.com/team/b"},
+      lease: {write_repository: "git:github.com/team/a"}, active: false,
+      constraint: {effective: false, reason: "lease_repository_divergence"}},
+  );
   const todos = [...originalTodos], leases = [...originalLeases];
   for (const item of cases) {
     if (item.todo !== null) todos.push({...todo, todo_id: `todo_inspect_${item.name}`, ...item.todo});
@@ -121,6 +128,7 @@ for (const provider of ["legacy", "file", "sqlite", "postgresql"] as const) {
         assert.equal(result.ok, true, JSON.stringify(result));
         assert.equal(result.active, item.active, item.name);
         assert.deepEqual(result.executor_constraint, item.constraint, item.name);
+        if (item.name === "repository-bound") assert.equal((result.lease as JsonObject).write_repository, "git:github.com/team/a");
         if (store && before?.status === "loaded") {
           assert.equal(result.source_authority, `${provider}_v0`);
           assert.equal(result.provider_revision, before.provider_revision);

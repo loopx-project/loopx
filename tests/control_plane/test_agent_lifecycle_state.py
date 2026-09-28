@@ -51,7 +51,7 @@ def test_projected_state(monkeypatch, kwargs, expected):
     row = packet["agents"][0]
     assert row["state"] == expected
     assert "lifecycle_state" not in row
-    assert ("session_binding" in row) == kwargs.get("binding", False)
+    assert ("session_binding_candidates" in row) == kwargs.get("binding", False)
     assert packet["truth_contract"]["projection_is_writable"] is False
 
 

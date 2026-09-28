@@ -156,6 +156,9 @@ def _register_unlocked(root, row, session, turn):
             raise ValueError("context return route conflict")
     else:
         _write(path, value | {"registered_at": _now()})
+    saved = _read(path)
+    if any(saved.get(key) != value for key, value in value.items()):
+        raise ValueError("context return route readback failed")
 
 
 def register(root, row, session, turn, *, scope=None):
@@ -914,7 +917,9 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                         {"status": "superseded", "reason": "conclusion_ready"},
                     )
                     continue
-                prefix = "处理结论" if path.stem == "conclusion" else "处理进展"
+                # A conclusion can be a deferral or rejection. Transport completion
+                # is not completion of the delegated work.
+                prefix = "协作回复" if path.stem == "conclusion" else "协作进展"
                 text = f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}\n\n{reply['text']}"
                 # Transcript writes are independently idempotent, including when
                 # Lark is offline. Keep the original Turn and logical conversation.

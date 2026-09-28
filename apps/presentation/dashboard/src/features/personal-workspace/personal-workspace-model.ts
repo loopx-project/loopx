@@ -4,11 +4,12 @@ import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/pre
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError } from "../../data/workspace-progressive-status";
+import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
   | "等待条件"
-  | "推进中"
+  | "已安排"
   | "安静运行"
   | "已完成"
   | "已停止";
@@ -16,12 +17,14 @@ export type WorkspaceGoalState =
 export type WorkspaceHomeLane =
   | "needs_you"
   | "running"
+  | "claimed"
   | "observing"
   | "scheduled"
   | "history"
   | "stopped";
 
 export type WorkspaceAgentTodo = {
+  completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
   resumeReceiptId?: string | null;
@@ -100,9 +103,14 @@ export type WorkspaceGoal = {
   agentLabel?: string;
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
+  /** Host surfaces of threads bound to this Goal; binding proves ownership, never execution. */
+  boundHostSurfaces?: string[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
+  execution?: WorkspaceGoalExecution;
   goalId: string;
+  /** Bound host threads as observed from the host's own records. */
+  hostThreadActivity?: GoalHostThreadActivity;
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
@@ -110,6 +118,16 @@ export type WorkspaceGoal = {
   repository?: WorkspaceRepositoryContext;
   state: WorkspaceGoalState;
   subagentExecution?: WorkspaceGoalSubagentConfiguration;
+  nativeChildActivity?: {
+    turn_instance_id: string;
+    observation: "unknown" | "coordinator_reported";
+    host_attested: false;
+    launched_count: number;
+    skipped_count: number;
+    capacity_rejected_count: number;
+    host_failed_count: number;
+    parent_accepted_count: number;
+  } | null;
   title: string;
   usage?: WorkspaceGoalUsage | null;
 };
@@ -243,6 +261,12 @@ export type WorkspaceActionPreview = {
     nextAction?: string;
     summary: string;
   };
+  // The stored typed action's own times. The workspace restores the list in
+  // `ChatActionStore.list` order, which is (`updated_at`, `proposal_id`)
+  // newest first, while a draft created in this session is appended last; a
+  // reader that needs the newest draft compares these instead of the position.
+  // See proposal-recency.ts.
+  createdAt?: string;
   previewId: string;
   primaryLabel?: string;
   errorMessage?: string;
@@ -256,6 +280,7 @@ export type WorkspaceActionPreview = {
   teamPlanTodoIds?: string[];
   title: string;
   sourceRequest?: WorkspaceActionPreviewRequest;
+  updatedAt?: string;
   workspaceCandidates?: Array<{ label: string; workspaceRef: string }>;
 };
 
@@ -489,18 +514,23 @@ export function workspaceSessionStatusLabel(status?: string): string {
 
 /** A quiet persistent conversation must not masquerade as waiting work. */
 export function goalHasExecutionSummary(goal: Pick<WorkspaceGoal, "state">): boolean {
-  return ["推进中", "需修复", "等待条件"].includes(goal.state);
+  return ["已安排", "需修复", "等待条件"].includes(goal.state);
 }
 
 /**
- * Project the detailed Goal lifecycle onto the five manager-home buckets.
- * The home shows populated active lanes and collapses terminal work into history.
+ * Project the detailed Goal lifecycle onto the manager-home buckets. Execution
+ * is read through the shared claim/execution rule, so a host claim gets its own
+ * lane instead of borrowing the running one. The home shows populated active
+ * lanes and collapses terminal work into history.
  */
 export function workspaceHomeLaneForGoal(goal: WorkspaceGoal): WorkspaceHomeLane {
   if (goal.activationState === "stopped" || goal.state === "已停止") return "stopped";
   if (goal.state === "已完成") return "history";
   if (goal.needsYou || goal.state === "等你") return "needs_you";
-  if (goal.state === "推进中" || goal.state === "需修复") return "running";
+  if (goal.state === "需修复") return "running";
+  const work = goalWorkKind(goal);
+  if (work === "executing") return "running";
+  if (work === "claimed") return "claimed";
   if (goal.state === "安静运行") return "observing";
   return "scheduled";
 }

@@ -128,7 +128,8 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
       todo: canonicalLeaseTodoFact(claim.todo),
       lease: lease ? {present: true, active: leaseIsActive(lease, input.now), status: String(lease.status),
         owner: normalizeOwner(lease.owner), idempotency_key: normalizeIdempotencyKey(lease.idempotency_key),
-        version: leaseVersion(lease), lease_epoch: leaseEpoch(lease), write_scopes: (lease.write_scopes ?? []) as string[], acquire_ttl_seconds: null} : null,
+        version: leaseVersion(lease), lease_epoch: leaseEpoch(lease), write_scopes: (lease.write_scopes ?? []) as string[],
+        ...(lease.write_repository == null ? {} : {write_repository: String(lease.write_repository)}), acquire_ttl_seconds: null} : null,
       command});
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
       return {...failed(decision.code, `canonical task lease ${input.operation} rejected: ${decision.code}`),

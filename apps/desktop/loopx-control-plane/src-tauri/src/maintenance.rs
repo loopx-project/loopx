@@ -749,9 +749,10 @@ pub fn start_services(app: &AppHandle) -> Result<Option<crate::services::Service
             }
             return Err(error);
         }
-        crate::services::ServiceSet::start(|kind| {
+        crate::services::ServiceSet::start(|pending| {
+            let service = crate::services::ServiceKind::pending_label(pending);
             app.state::<Maintenance>()
-                .publish("connecting", json!({"service":kind.label()}));
+                .publish("connecting", json!({"service":service}));
         })
         .map_err(|e| e.to_string())
     })

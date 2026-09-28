@@ -2,7 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented behind explicit provider configuration |
+| Status | Accepted; implemented behind explicit provider configuration |
+| Supersedes / closes | none |
 | Date | 2026-08-26 |
 | Decision boundary | How fresh external inbox evidence reaches an Agent before it selects ordinary Goal work |
 | Core owner | Hook admission, ordering, bounded public receipt, and Agent-read obligation |

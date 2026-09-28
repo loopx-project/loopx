@@ -3,22 +3,14 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
 
-from ..goals.active_state_event_projection import (
-    active_state_event_projection_fields as _active_state_event_projection_fields,
-    state_event_log_candidates as _state_event_log_candidates,
-)
 from ..goals.active_state_sections import (
     active_state_section_entries as _active_state_section_entries,
     active_state_sections as _active_state_sections,
 )
-from ..goals.path_resolution import resolve_goal_local_path
 from ..runtime.public_safety import public_safe_compact_text
-from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.todo_summary import (
-    MAX_STATUS_TODOS_PER_ROLE,
     normalize_todo_text,
 )
 from ..work_items.backlog_hygiene import (
@@ -30,42 +22,12 @@ from ..work_items.issue_meta_surface import (
 )
 
 
-STATE_EVENT_LOG_BASENAME = "events.jsonl"
 SECTION_HEADING_PATTERN = re.compile(r"^##+\s+(.+?)\s*$")
 BACKLOG_HYGIENE_SECTION_HEADINGS = ("Next Action", "Operating Lessons")
 BACKLOG_HYGIENE_BULLET_PATTERN = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$")
 BACKLOG_HYGIENE_HINT_PATTERN = re.compile(
     r"(?i)(?:\[p[0-4]\]|todo|backlog|follow[- ]?up|queue|audit|regression|smoke|cadence|mirror|monitor|sub-?agent|待办|回归|审计|修复|检查|推进)"
 )
-
-
-def state_event_log_candidates(goal: dict[str, Any], *, state_path: Path) -> list[Path]:
-    return _state_event_log_candidates(
-        goal,
-        state_path=state_path,
-        resolve_goal_local_path=resolve_goal_local_path,
-        event_log_basename=STATE_EVENT_LOG_BASENAME,
-    )
-
-
-def active_state_event_projection_fields(
-    goal: dict[str, Any],
-    *,
-    state_path: Path,
-    preferred_todo_ids: set[str] | None = None,
-    rollout_events: list[dict[str, Any]] | None = None,
-    item_limit: int | None = MAX_STATUS_TODOS_PER_ROLE,
-) -> dict[str, Any]:
-    return _active_state_event_projection_fields(
-        goal,
-        state_path=state_path,
-        resolve_goal_local_path=resolve_goal_local_path,
-        parse_active_state_todos=parse_active_state_todos,
-        preferred_todo_ids=preferred_todo_ids,
-        rollout_events=rollout_events,
-        item_limit=item_limit,
-        event_log_basename=STATE_EVENT_LOG_BASENAME,
-    )
 
 
 def active_state_sections(state_text: str, headings: tuple[str, ...]) -> dict[str, list[str]]:

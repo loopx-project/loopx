@@ -32,6 +32,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isCommittedMonitorPollEffect,
+  isAcceptedInFlightWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
@@ -53,6 +54,7 @@ import {
 } from "./heartbeat_receipt_identity.ts";
 
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
+import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait } from "./blocked_wait.ts";
 
 export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
   "loopx_quota_settlement_readback_request_v0";
@@ -1006,6 +1008,8 @@ function readQuotaSettlementFromRequest(
   const todoBoundReplan = identity.binding_kind === "todo" &&
     semanticReplanGuard.scope === "turn_guard" &&
     semanticReplanGuard.selected_obligation_id !== null;
+  const inFlightWriteback = writeback.failure === null &&
+    isAcceptedInFlightWriteback(writebackRun, identity);
 
   const recovery = request.refresh_retry === null ? null : refreshRecovery(
     request.refresh_retry, writebackRun, writeback.failure === null,
@@ -1051,7 +1055,7 @@ function readQuotaSettlementFromRequest(
     }),
     replay_phase: receiptBoundReplayPhase({
       binding_kind: identity.binding_kind,
-      writeback_completes_binding: todoBoundReplan || blockedNoSpend,
+      writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback,
       completion_receipt_present: completionEvent !== null,
       durable_writeback_present: writeback.failure === null,
       quota_spend_present: spend.failure === null,
@@ -1068,6 +1072,9 @@ export function readQuotaSettlementFromSnapshot(
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
+  if (jsonObject(value)?.schema_version === BLOCKED_WAIT_REQUEST_SCHEMA) {
+    return prepareBlockedWait(value);
+  }
   const request = decodeRequest(value);
   return readQuotaSettlementFromRequest(
     request,

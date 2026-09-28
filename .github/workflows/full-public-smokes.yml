@@ -70,6 +70,9 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Install the shell used by launch-agent contract checks
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Install smoke runtime dependencies
         run: python -m pip install --disable-pip-version-check "jsonschema>=4.23,<5"
 

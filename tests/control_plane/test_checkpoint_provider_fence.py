@@ -115,9 +115,9 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
     original = context_io.effect_runtime_result
     observed = []
 
-    def native(method, params):
+    def native(method, params, **kwargs):
         if method != "goal.checkpoint_read_context.commit":
-            return original(method, params)
+            return original(method, params, **kwargs)
         checkpoint = start_probe({"mode": "checkpoint", "provider": provider, "barrier": str(barrier),
                                   "params": params, "repeat": True})
         writer = None
@@ -206,9 +206,9 @@ def test_failed_save_releases_provider_and_requires_fresh_comparison(tmp_path, m
     barrier.mkdir()
     original = context_io.effect_runtime_result
 
-    def native(method, params):
+    def native(method, params, **kwargs):
         if method != "goal.checkpoint_read_context.commit":
-            return original(method, params)
+            return original(method, params, **kwargs)
         child = start_probe({"mode": "checkpoint", "provider": provider, "barrier": str(barrier),
                              "params": params, "fault": fault})
         try:

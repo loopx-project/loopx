@@ -1,6 +1,7 @@
 # RFC：Obelisk Session Evidence Provider v0
 
-- 状态：集成提案草案
+- 状态：已接受
+- 替代 / 关闭：无
 - 日期：2026-09-01
 - 跟踪 Issue：[#3792](https://github.com/huangruiteng/loopx/issues/3792)
 - 决策边界：LoopX 是否以及如何把历史 Agent Session 作为 Replan 与 Turn Admission 的有界证据

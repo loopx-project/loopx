@@ -39,7 +39,7 @@ export async function migrateFileAuthorityStore(directory: string, goal: string,
     const value: unknown = JSON.parse(source.toString("utf8"));
     if (!isAuthorityJsonObject(value)) throw new Error("Invalid authority document");
     if (value.schema_version === FILE_AUTHORITY_JOURNAL_SCHEMA) {
-      const current = FileAuthorityJournal.decode(value, goal, identity, revisionFor);
+      const current = await FileAuthorityJournal.decode(value, goal, identity, revisionFor);
       return {status: "already_current", provider: "file", cursor: current.cursor,
         provider_revision: current.provider_revision};
     }
@@ -48,7 +48,7 @@ export async function migrateFileAuthorityStore(directory: string, goal: string,
       throw new Error("Unsupported file authority format or mismatched lineage; source was not changed");
     }
     const legacy = decodeRetainedAuthorityJournal(value, "file migration source", revisionFor);
-    const compact = FileAuthorityJournal.fromTransactions(goal, identity, legacy.committed, revisionFor);
+    const compact = await FileAuthorityJournal.fromTransactions(goal, identity, legacy.committed, revisionFor);
     // Compare complete logical history, not only the head or receipt count.
     const logicalDigest = canonicalAuthoritySha256(legacy.committed);
     if (canonicalAuthoritySha256(compact.scan(0, legacy.committed.length)) !== logicalDigest) {

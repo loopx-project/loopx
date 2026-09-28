@@ -1,6 +1,7 @@
 # RFC：Human Attention Wishlist v0
 
-- 状态：Draft，maintainer 评审中
+- 状态：已接受
+- 替代 / 关闭：无
 - 提出方：LoopX maintainers
 - 日期：2026-08-14
 - 范围：一个类型化、非阻塞的人类注意力子类型，以及有界的 agent 写入 sidecar；不新增 capability、任务存储、权限授予、调度器或 quota lane

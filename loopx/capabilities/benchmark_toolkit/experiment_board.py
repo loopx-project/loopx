@@ -396,7 +396,7 @@ def read_benchmark_experiment_board_rows(
         return []
     rows: list[dict[str, Any]] = []
     for index, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
+        path.read_text(encoding="utf-8").split("\n"), start=1
     ):
         if not line.strip():
             continue

@@ -1,6 +1,7 @@
 # RFC：共享 Goal 对齐与受治理 Amendment 协议（v0）
 
-- 状态：草案；维护者评审中
+- 状态：已接受
+- 替代 / 关闭：无
 - 跟踪 Issue：[#3836](https://github.com/huangruiteng/loopx/issues/3836)
 - 日期：2026-09-02
 - 最后更新：2026-09-16
@@ -79,29 +80,8 @@ bounded evidence       bounded evidence
           每个 frontier rebase 或被 gate
 ```
 
-### 1.1 已核验交付与管家衔接检查点（2026-09-13）
-
-在 `7eb4b7bb1661bd5eff63a8725a33169792d5964b`，Stage 1 alignment reader
-与 Stage 2 proposal admission/retention 已存在，包括 #3874 和 #4143 的
-canonical Todo/lease 来源收敛。owner 是 `loopx/control_plane` 下的
-`goals/shared_goal_alignment.{py,ts}` 与 `goal_amendment_proposal.{py,ts}`。
-后者明确返回 `canonical_effect: none`，没有 approved 状态或 commit 路径。
-这些是已实现基础，不代表完整 canonical intent 版本化或 Stage 3–5 验收；RFC
-仍是 Draft。
-
-[管家/handoff RFC](capable-manager-semantic-handoff-v0.zh-CN.md) 在接收方评估时
-复用 alignment reader 获取工作基线；仅在分类后且请求符合准入契约时调用 amendment
-admission。它的请求、brief、投递版本不是 Goal-intent revision。
-管家更高的工具自由度不赋予共享 amendment authority；handoff 回执也不代所有
-peer 确认新 Goal。第 9.1 节及该 RFC 的 M2/A16 定义衔接，不新增第二 amendment
-policy。
-
-### 1.2 所有者授权验收检查点
-
-[验收合同 v0](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
-在既有 canonical Goal authority 上增加本地所有者配置与读回。
-#3836 的下一切片是**受治理的验收修订与 peer 采用**：将合同接入 amendment policy、
-精确基线提交和接收方读回，Lark 单独验证。完整意图版本化与 Stage 3–5 仍未完成。
+- 检查点已移至执行账本：[已核验交付与管家衔接检查点（2026-09-13）](ledger/shared-goal-alignment-and-governed-amendment-v0/2026-09-13-verified-delivery-and-manager-integration.zh-CN.md)。
+- 检查点已移至执行账本：[所有者授权验收检查点](ledger/shared-goal-alignment-and-governed-amendment-v0/2026-09-17-owner-authorized-acceptance.zh-CN.md)。
 
 ## 2. 问题与当前边界
 
@@ -600,3 +580,10 @@ durable evidence store。
 最小有用结果是一份清晰的只读 alignment projection，以及一份显式不具 authority
 的 proposal。只有这条边界在真实多 Agent 工作中证明有价值后，runtime commit 才
 继续推进。
+
+## 附录 A：执行账本
+
+本 RFC 带日期的检查点记录存于
+[逐条 ledger](ledger/shared-goal-alignment-and-governed-amendment-v0/)，每个已实测
+切片一个文件。上文第 1–12 节仍是规范合同；ledger 条目只记录交付了什么、没有确立
+什么，不改变该合同。

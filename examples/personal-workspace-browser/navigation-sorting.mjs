@@ -19,16 +19,16 @@ export const navigationSortingScenario = {
       // settled home model, not the transient directory-only classification.
       await page.waitForFunction(() => (
         document.querySelectorAll(".personal-home-lanes .personal-home-goal-card").length === 5
-        && !document.querySelector('[data-testid="personal-home-lane-scheduled"]')
+        && !document.querySelector('[data-testid="personal-home-lane-running"]')
       ), null, { timeout: 6_000 });
       const body = await page.locator("body").innerText();
-      for (const text of ["LoopX 管家", "需要你", "执行中", "观察中", "GOALS", "Codex"]) {
+      for (const text of ["LoopX 管家", "需要你", "已安排", "观察中", "GOALS", "Codex"]) {
         if (!body.includes(text)) {
           await page.screenshot({ path: resolve(outputDir, "desktop-first-screen-failed.png"), fullPage: false, animations: "disabled" });
           throw new Error(`First screen missing ${text}; body=${body.slice(0, 2000)}`);
         }
       }
-      if (await page.getByTestId("personal-home-lane-scheduled").count()) throw new Error("An empty scheduled lane consumed home space");
+      if (await page.getByTestId("personal-home-lane-running").count()) throw new Error("Queued work without an active turn was shown as running");
       if (await page.locator(".personal-home-lanes .personal-home-goal-card").count() !== 5) throw new Error("Compacting empty lanes hid an active Goal");
       if (body.includes("接下来")) throw new Error("Manager home still exposes the ambiguous 接下来 label");
       if (body.includes("stale-browser-goal")) throw new Error("An unregistered historical Goal remained interactive");
@@ -128,7 +128,7 @@ export const navigationSortingScenario = {
         throw new Error(`Settings entry still renders as a weak transparent footer row: ${JSON.stringify(settingsEntryVisual)}`);
       }
       await page.screenshot({ path: resolve(outputDir, "desktop-first-screen.png"), fullPage: false, animations: "disabled" });
-      pass(4, "First viewport exposes populated Goal lanes; stopped Goals remain in the sidebar and empty scheduled/history sections do not compete with active work.");
+      pass(4, "First viewport exposes populated Goal lanes; stopped Goals remain in the sidebar and an empty running lane and empty history do not compete with active work.");
       pass(15, "Desktop viewport matches the approved single-sidebar/channel/drawer composition.");
       await page.locator(".personal-goal-link").filter({ hasText: "LoopX meta" }).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();

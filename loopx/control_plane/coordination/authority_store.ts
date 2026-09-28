@@ -156,6 +156,13 @@ export type AuthorityStoreReceiptResult =
   | { status: "missing" }
   | AuthorityStoreReadFailure;
 
+/** Results retain caller order, including duplicate IDs and missing receipts.
+ * Each item has exactly the same proof contract as readReceipt. No global
+ * snapshot promise is made by the fallback; native providers may strengthen it. */
+export type AuthorityStoreReceiptBatchResult =
+  | {status: "receipts"; results: readonly AuthorityStoreReceiptResult[]}
+  | AuthorityStoreReadFailure;
+
 export type AuthorityStoreScanResult =
   | {
     status: "page";
@@ -177,7 +184,18 @@ export interface AuthorityStore {
   loadAuthority(): Promise<AuthorityStoreLoadResult>;
   commitAuthority(commit: AuthorityStoreCommit): Promise<AuthorityStoreCommitResult>;
   readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult>;
+  /** Optional bounded acceleration; never a weaker receipt verification path. */
+  readReceipts?(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult>;
   scanCommitted(afterCursor: string | null, limit: number): Promise<AuthorityStoreScanResult>;
+}
+
+export async function readAuthorityReceipts(store: AuthorityStore,
+  operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult> {
+  if (operationIds.length < 1 || operationIds.length > 64) throw new TypeError("receipt batch requires 1..64 operations");
+  if (store.readReceipts !== undefined) return store.readReceipts(operationIds);
+  const results: AuthorityStoreReceiptResult[] = [];
+  for (const id of operationIds) results.push(await store.readReceipt(id));
+  return {status: "receipts", results};
 }
 
 /** Map a storage implementation to the public source label used by adapters. */

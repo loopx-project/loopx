@@ -126,6 +126,7 @@ def build_loopx_turn_transaction_plan(
     session_action: str,
     scheduler_owner: str = "none",
     turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     normalized_instance_id = normalize_turn_instance_id(turn_instance_id)
     identity = {
@@ -137,6 +138,8 @@ def build_loopx_turn_transaction_plan(
     }
     if normalized_instance_id is not None:
         identity["turn_instance_id"] = normalized_instance_id
+    if goal_ref is not None:
+        identity["goal_ref"] = dict(goal_ref)
     turn_key = _canonical_hash(identity)
     settlement_identity = SettlementIdentity(
         goal_id=str(lineage.get("goal_id") or ""),
@@ -198,6 +201,8 @@ def build_loopx_turn_transaction_plan(
         plan["settlement_plan"] = settlement_plan.as_dict()
     if normalized_instance_id is not None:
         plan["turn_instance_id"] = normalized_instance_id
+    if goal_ref is not None:
+        plan["goal_ref"] = dict(goal_ref)
     return plan
 
 

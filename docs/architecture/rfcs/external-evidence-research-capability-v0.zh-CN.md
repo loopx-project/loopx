@@ -1,6 +1,7 @@
 # RFC：外部证据研究能力 v0
 
-- 状态：Draft implementation slice
+- 状态：已接受
+- 替代 / 关闭：无
 - 范围：provider-neutral 的研究规划、provenance 准入、投影与退休
 - 路线图：S8 能力与领域集成
 - 语言说明：本文件与 [English](external-evidence-research-capability-v0.md) 语义镜像；语义漂移属于缺陷。

@@ -31,7 +31,7 @@ from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
     project_todo_lifecycle_settlement_reentry,
 )
-from .progress_observation import semantic_delta_from_writeback
+from .progress_observation import guarded_replan_transition_delta, semantic_delta_from_writeback
 from .repair_delta import (
     build_repair_delta_contract,
     repair_delta_kinds_have_accountable_progress,
@@ -198,6 +198,8 @@ def qualify_replan_writeback(
     completion_turn_key: str | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
+    guard_scoped: bool = False,
+    guard_semantic_replan_obligation_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return the shared open obligation and the writeback's typed delta.
 
@@ -295,6 +297,17 @@ def qualify_replan_writeback(
             else None
         ),
     )
+    if guard_scoped and guard_semantic_replan_obligation_id:
+        transition_delta = guarded_replan_transition_delta(
+            guard_scoped=guard_scoped,
+            selected_obligation_id=guard_semantic_replan_obligation_id,
+            transition_acks=[context.get("run_replan_transition_ack"),
+                             context.get("replan_transition_ack")],
+        )
+        if transition_delta is not None:
+            # This closes only the selected Turn obligation. The freshly
+            # derived frontier obligation remains visible to the next guard.
+            return None, transition_delta
     obligation = context.get("replan_obligation")
     if not obligation:
         # A validated Todo transition can discharge the read-model obligation
@@ -373,6 +386,8 @@ def enforce_open_replan_writeback(
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
         todo_fields=todo_fields,
+        guard_scoped=guard_scoped,
+        guard_semantic_replan_obligation_id=guard_semantic_replan_obligation_id,
     )
     if not obligation:
         if isinstance(semantic_delta, dict) and semantic_delta.get("accepted") is True:

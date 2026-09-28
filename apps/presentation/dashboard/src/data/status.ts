@@ -86,13 +86,14 @@ export const todoItemSchema = z.object({
   required_capabilities: z.array(z.string()).optional(),
   note: z.string().optional().nullable(),
   evidence: z.string().optional().nullable(),
+  completed_at: z.string().optional().nullable(),
   updated_at: z.string().optional().nullable(),
   completion_validation_required: z.boolean().optional().nullable(),
   completion_validation_sha256: z.string().optional().nullable(),
   completion_validation_revision: z.number().int().nonnegative().optional().nullable(),
   completion_validation_revision_history: z.array(z.object({
     revision: z.number().int().positive(),
-    previous_declaration_sha256: z.string(),
+    previous_declaration_sha256: z.string().nullable(),
     declaration_sha256: z.string(),
     actor_agent_id: z.string(),
     revised_at: z.string(),
@@ -111,6 +112,7 @@ export const todoGroupSchema = z.object({
   advancement_done_count: z.number().optional(),
   items: z.array(todoItemSchema).optional().default([]),
   deferred_items: z.array(todoItemSchema).optional(),
+  recent_completed_advancement_items: z.array(todoItemSchema).optional(),
 });
 
 export const todoIndexItemSchema = todoItemSchema.safeExtend({
@@ -131,6 +133,8 @@ export const todoIndexSchema = z.object({
   current_projected_count: z.number().optional().default(0),
   rollout_event_count: z.number().optional().default(0),
   item_limit: z.number().optional().nullable(),
+  complete: z.boolean().optional(),
+  unavailable_goal_ids: z.array(z.string()).optional(),
   items: z.array(todoIndexItemSchema).optional().default([]),
 });
 
@@ -341,6 +345,19 @@ export const projectAssetTodoProjectionGapSchema = z.object({
   recommended_action: z.string().optional().nullable(),
 });
 
+export const nativeChildActivitySchema = z.object({
+  schema_version: z.literal("native_subagent_activity_v0"),
+  observation: z.enum(["unknown", "coordinator_reported"]),
+  host_attested: z.literal(false),
+  configured_limit: z.number().int().nonnegative(),
+  launched_count: z.number().int().nonnegative(),
+  skipped_count: z.number().int().nonnegative(),
+  capacity_rejected_count: z.number().int().nonnegative(),
+  host_failed_count: z.number().int().nonnegative(),
+  parent_accepted_count: z.number().int().nonnegative(),
+  turn_instance_id: z.string(),
+});
+
 export const projectAssetSchema = z.object({
   owner: z.string(),
   gate: z.string(),
@@ -351,6 +368,7 @@ export const projectAssetSchema = z.object({
   quota: quotaSchema.optional().nullable(),
   control_plane: controlPlaneSchema.optional().nullable(),
   orchestration: orchestrationPolicySchema.optional().nullable(),
+  native_child_activity: nativeChildActivitySchema.optional().nullable(),
   latest_validation: projectAssetLatestValidationSchema.optional().nullable(),
   stale_latest_run_warning: staleLatestRunWarningSchema.optional().nullable(),
   todo_projection_gap: projectAssetTodoProjectionGapSchema.optional().nullable(),
@@ -521,7 +539,26 @@ export const runGoalSchema = z.object({
   coordination: z.object({
     agent_model: z.string().optional().nullable(),
     registered_agents: z.array(z.string()).optional().default([]),
+    // Opaque host thread ids stay out of the App state.
+    thread_agent_bindings: z.array(z.object({
+      agent_id: z.string().optional().nullable(),
+      host_surface: z.string().optional().nullable(),
+    })).optional().default([]).catch([]),
   }).optional().nullable(),
+  host_thread_activity: z.object({
+    observed_at: z.string().optional().nullable(),
+    // Older or malformed observations cannot prove that every binding was read.
+    completeness: z.enum(["complete", "incomplete"]).catch("incomplete").default("incomplete"),
+    threads: z.array(z.object({
+      agent_id: z.string().optional().nullable(),
+      host_surface: z.string(),
+      state: z.enum(["turn_open", "idle", "archived", "unknown"]).catch("unknown"),
+      reason: z.string().optional().nullable(),
+      turn_started_at: z.string().optional().nullable(),
+      last_turn_ended_at: z.string().optional().nullable(),
+      last_event_at: z.string().optional().nullable(),
+    })).optional().default([]),
+  }).optional().nullable().catch(null),
   index_exists: z.boolean().optional().default(false),
   raw_index_records: z.number().optional().default(0),
   unique_runs: z.number().optional().default(0),

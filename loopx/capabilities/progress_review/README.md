@@ -19,7 +19,7 @@ periodic review after 20 durable runs.
 | The core | Never |
 | --- | --- |
 | Reads receipts through one strict schema, `progress_review_receipt_v0` | Calls a model, reads a raw delta, or imports the observer package |
-| Joins receipts to run rows by `turn_instance_id`, else by `(generated_at, agent_id)` | Overwrites or supplements the Agent's own `progress_observation` |
+| Joins receipts to run rows by `turn_instance_id`, else by `(generated_at, agent_id, todo_id)` | Overwrites or supplements the Agent's own `progress_observation` |
 | Counts only `completed` receipts whose selected drift signal is `True` | Counts `unknown`, `abstained`, `failed`, `stale` or missing receipts |
 | Stops the streak at an acknowledged autonomous replan and re-arms | Pauses turns, opens user gates, or settles Goal acceptance |
 | Binds the newest typed `progress_observation` in the window as the obligation's `progress_baseline` and carries every distinct claim of the window as `progress_window`; the shared outcome policy refuses an acknowledgement that replays any of them or only renames identifiers over their evidence ids | Lets the observer or its model acknowledge, or accepts a renamed or replayed identifier as a pivot |
@@ -90,9 +90,21 @@ state as a whole, so churn on a file that already satisfies acceptance is drift,
 while documentation, a negative finding or a prerequisite test that serves a
 criterion or adds evidence about it is not.
 
-Receipts found by `turn_instance_id` must also agree on Agent and Todo when both
-sides name them; an ambiguous `(generated_at, agent_id)` fallback is never
-attributed. Every captured transition is one of three things: **drift**
+Receipts found by `turn_instance_id` must name the same nonempty Agent and
+exactly the same Todo, including absence on both sides for unbound work. Missing
+identity is not a wildcard. Contradictory Agent/Todo claims for one Turn, in
+receipts or retained retries, make it unattributable; clocks cannot resolve an
+identity conflict. Later evaluations of the same identity still use recency.
+Only genuinely absent Turn identity permits the `(generated_at, agent_id, todo_id)`
+fallback, which must be unique on both the run and evidence sides. Invalid or
+conflicting direct/settlement Turn IDs cannot fall back. ACKs apply only to the
+named Agent lane; anonymous rows cannot acknowledge it or supply its progress
+baseline. A valid lane ACK still applies on neutral bookkeeping rows.
+
+This tightens the original stage-0 `assist` compatibility: incompletely bound
+historical receipts remain visible in shadow/status but cannot form or clear an
+obligation. Existing off behavior, model requests, manual revision pins and typed
+replan outcomes are unchanged. Every captured transition is one of three things: **drift**
 (completed, selected signal `true`, pinned revision), **on-goal** (completed,
 signal `false`) or **unevaluated** for one typed reason (`pending`, `failed`,
 `abstained`, `stale`, `undecided`, `missing`, `unattributed`,

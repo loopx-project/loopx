@@ -90,6 +90,9 @@ export const answerPresentationScenario = {
       const originalTurnCount = api.turnRequests.length;
       await page.goto(reportHref, { waitUntil: "networkidle" });
       await page.getByRole("heading", { name: "完整答复" }).waitFor({ state: "visible" });
+      // The report heading is static while the saved answer arrives from
+      // ``fetchChatSession``; wait for hydration before asserting its content.
+      await page.locator(".answer-report-content table").waitFor({ state: "visible", timeout: 15_000 });
       if (await page.locator(".answer-report-content table").count() !== 1
         || !(await page.locator(".answer-report-content").innerText()).includes("可回退路径")
         || await page.locator(".answer-report-content script").count() || await page.evaluate(() => window.pwned === true)) {

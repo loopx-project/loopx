@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 
 
 def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection: dict, *, state_path: Path, provider: str = "file") -> dict:
@@ -45,9 +46,12 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
 def isolate_sqlite_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
     # Do not reuse an Effect runtime started by the minimum-Node CI step.
-    # Each CLI subprocess resolves its own tempfile root from this environment.
+    # CLI subprocesses resolve their root from the environment; the current
+    # process may already have cached a different root in tempfile.tempdir.
+    # Patch both for the same lifetime, restoring the cache at fixture teardown.
     for variable in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.setenv(variable, str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
 
 def single_snapshot_page(result: dict, goal_id: str = "goal-a") -> dict:

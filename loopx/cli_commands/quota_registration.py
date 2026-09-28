@@ -40,7 +40,7 @@ def register_quota_command(
     )
     quota_parser.add_argument(
         "--goal-id",
-        help="Goal id to check. Required for one-goal quota commands, including should-run, scheduler ACK/failure, spend, and void.",
+        help="Goal id to check. Optional for status/plan (omit for all goals); required for should-run, scheduler ACK/failure, spend, and void. A scoped status/plan ranks only the selected goal, not the global next turn.",
     )
     quota_parser.add_argument(
         "--agent-id",
@@ -69,7 +69,8 @@ def register_quota_command(
         action="append",
         choices=[*QUOTA_DETAIL_SECTIONS, "all"],
         help=(
-            "Include one command-specific cold-path detail section. For `quota "
+            "Include one command-specific cold-path detail section. Status/plan default "
+            "to bounded Todo summaries; use agent-todos or user-todos for full lists. For `quota "
             "should-run`: scheduler, agent-todos, user-todos, goal-boundary, or "
             "vision. For `quota monitor-poll`: decisions. Repeat for multiple "
             "sections or use `all`."

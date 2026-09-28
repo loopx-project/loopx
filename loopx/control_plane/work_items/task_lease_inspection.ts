@@ -12,6 +12,7 @@ import {decodeTaskLeaseAuthority, leaseIsActive, normalizeGoalId, normalizeTodoI
   readLease, revalidateAuthoritySources, TaskLeaseAcquireError, TASK_LEASE_SCHEMA_VERSION,
   type LeaseRecord, type TodoFact} from "./task_lease_acquire.ts";
 import {leaseOwnerConstraint} from "./task_lease_eligibility.ts";
+import {leaseRepositoryRejection} from "./task_lease_repository.ts";
 
 export const TASK_LEASE_INSPECT_REQUEST = "loopx_task_lease_inspect_request_v0";
 
@@ -82,10 +83,12 @@ export async function inspectTaskLease(value: unknown,
     if (!Number.isFinite(at.valueOf())) throw new TaskLeaseAcquireError("invalid inspection clock", "invalid_inspection_clock");
     const timeActive = leaseIsActive(lease, at);
     const needsProjection = !canonical && input.phase === "lease_record" && timeActive;
-    const constraint = !timeActive || lease === null || needsProjection ? null
+    const ownerConstraint = !timeActive || lease === null || needsProjection ? null
       : authority.todo_projection_error !== null
         ? {effective: false, reason: authority.todo_projection_error.code}
         : leaseOwnerConstraint(todo, typeof lease.owner === "string" ? lease.owner : null, authority.registered_agents);
+    const repositoryRejection = canonical && ownerConstraint?.effective === true ? leaseRepositoryRejection(todo, lease) : null;
+    const constraint = repositoryRejection === null ? ownerConstraint : {effective: false, reason: repositoryRejection};
     // Both registration and route must still describe the source we inspected.
     // No lock is held and no promise is made about later commits or expiry.
     await revalidateAuthoritySources(authority.source_receipts);

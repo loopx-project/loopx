@@ -1,11 +1,12 @@
-"""Bound a typed blocked Turn's no-spend closeout to a durable retry."""
+"""Bind typed blocked Turn closeout to a durable retry or causal wait."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
-from ..todos.contract import normalize_todo_id, normalize_todo_resume_when
+from ..todos.contract import normalize_todo_id
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 BLOCKED_RETRY_SCHEMA_VERSION = "quota_blocked_retry_v0"
 MIN_RETRY_SECONDS = 60
@@ -20,97 +21,25 @@ def require_blocked_retry_wait(
     observed_at: str,
     allow_turn_settlement_retry: bool = False,
 ) -> dict[str, Any]:
-    """Require a bounded Todo wait or mint a canonical Turn-owned retry.
-
-    A peer lease can prevent the blocked agent from updating the Todo. In that
-    case the committed Turn owns a five-minute wait and selection projects it
-    without changing the canonical Todo or its validator.
-    """
-
-    summary = (todo_fields or {}).get("agent_todos")
-    items = summary.get("items") if isinstance(summary, dict) else None
-    todo = (
-        next(
-            (
-                item
-                for item in items
-                if isinstance(item, dict)
-                and normalize_todo_id(item.get("todo_id")) == todo_id
-            ),
-            None,
-        )
-        if isinstance(items, list)
-        else None
-    )
-    resume = normalize_todo_resume_when(todo.get("resume_when")) if todo else None
-    condition = todo.get("resume_condition") if isinstance(todo, dict) else None
-    if (
-        not isinstance(todo, dict)
-        or todo.get("status") not in {"open", "deferred"}
-        or todo.get("task_class") != "advancement_task"
-    ):
-        raise ValueError(
-            "typed blocked no-spend closeout requires the same unfinished "
-            "advancement Todo"
-        )
+    """Transport current Todo facts; TS owns wait qualification and receipts."""
+    items = []
+    for section in ("agent_todos", "user_todos"):
+        summary = (todo_fields or {}).get(section)
+        if isinstance(summary, dict) and isinstance(summary.get("items"), list):
+            items.extend(summary["items"])
     try:
-        observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
-        if observed.tzinfo is None:
-            raise ValueError("observation timestamp must be timezone-aware")
-    except (TypeError, ValueError) as exc:
-        raise ValueError("typed blocked retry wait has an invalid timestamp") from exc
-    if (
-        not resume
-        and not todo.get("resume_when")
-        and allow_turn_settlement_retry
-        and todo.get("status") == "open"
-    ):
-        due_at = (
-            (observed + timedelta(seconds=TURN_SETTLEMENT_RETRY_SECONDS))
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-        return {
-            "schema_version": BLOCKED_RETRY_SCHEMA_VERSION,
-            "source": "turn_settlement",
+        result = effect_runtime_result("quota.settlement.read", {
+            "schema_version": "loopx_quota_blocked_wait_request_v0",
+            "todos": items,
             "todo_id": todo_id,
-            "resume_when": f"resume_at:{due_at}",
             "observed_at": observed_at,
-            "due_at": due_at,
-        }
-    if (
-        not resume
-        or not resume.startswith("resume_at:")
-        or todo.get("resume_ready") is not False
-        or not isinstance(condition, dict)
-        or condition.get("kind") != "resume_at"
-        or condition.get("resume_when") != resume
-        or condition.get("satisfied") is not False
-    ):
-        raise ValueError(
-            "typed blocked no-spend closeout requires the same unfinished Todo to "
-            "have a pending resume_when=resume_at:<timezone-aware-time> wait; "
-            "schedule it with todo update, read it back, then retry this Turn"
-        )
-    try:
-        due_at = resume.partition(":")[2]
-        due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
-        delay = (due - observed).total_seconds()
-    except (TypeError, ValueError) as exc:
-        raise ValueError("typed blocked retry wait has an invalid timestamp") from exc
-    if not MIN_RETRY_SECONDS <= delay <= MAX_RETRY_SECONDS:
-        raise ValueError(
-            "typed blocked retry wait must be due in 1–30 minutes; update "
-            "the Todo resume_at and retry this same Turn"
-        )
-    return {
-        "schema_version": BLOCKED_RETRY_SCHEMA_VERSION,
-        "source": "todo",
-        "todo_id": todo_id,
-        "resume_when": resume,
-        "observed_at": observed_at,
-        "due_at": due_at,
-    }
+            "allow_turn_settlement_retry": allow_turn_settlement_retry,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("TypeScript blocked wait result must be an object")
+    return result
 
 
 def active_turn_retry_for_run(

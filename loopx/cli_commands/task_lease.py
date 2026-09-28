@@ -48,6 +48,7 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
                 f"- status: `{lease.get('status')}`",
                 f"- expires_at: `{lease.get('expires_at')}`",
                 f"- write_scopes: `{', '.join(lease.get('write_scopes') or [])}`",
+                f"- write_repository: `{lease.get('write_repository') or 'unknown (conservative overlap)'}`",
             ]
         )
     if payload.get("lease_path"):
@@ -65,6 +66,7 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
             lines.append(
                 f"  - `{conflict.get('todo_id')}` owner=`{conflict.get('owner')}` "
                 f"expires_at=`{conflict.get('expires_at')}` "
+                f"write_repository=`{conflict.get('write_repository') or 'unknown'}` "
                 f"write_scopes=`{', '.join(conflict.get('write_scopes') or [])}`"
             )
     append_operator_action_markdown(lines, payload)

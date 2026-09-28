@@ -10,6 +10,7 @@ import {requireStringLiteral} from "../runtime_decode.ts";
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import {leaseEpoch, leaseVersion, leaseIsActive} from "../work_items/task_lease_acquire.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
+import {leaseRepositoryRejection, leaseWriteRepository} from "../work_items/task_lease_repository.ts";
 
 interface AcquisitionIdentity {
   goal_id: string; todo_id: string; owner: string; idempotency_key: string;
@@ -54,6 +55,10 @@ export async function currentLeaseAcquisitionProof<S extends string>(store: Auth
       leaseVersion(current) < leaseVersion(original)) {
     return failed("idempotency_key_reuse", "acquire receipt belongs to a retired execution; use a new execution key", details);
   }
+  const repositoryRejection = leaseWriteRepository(current.write_repository) !== leaseWriteRepository(original.write_repository)
+    ? "lease_repository_divergence" : leaseRepositoryRejection(facts.todo, current);
+  if (repositoryRejection !== null) return failed(repositoryRejection,
+    "current Todo repository differs from its frozen lease; reconcile through the owning lifecycle", details);
   const acceptance = acceptanceWorkGuard(head.head, input.goal_id, input.todo_id);
   if (acceptance !== null && !acceptance.allowed) {
     return failed(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,

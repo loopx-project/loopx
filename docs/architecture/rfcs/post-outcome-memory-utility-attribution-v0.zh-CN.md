@@ -1,6 +1,7 @@
 # RFC：结果后记忆效用归因 v0
 
-- 状态：草案，等待 maintainer review
+- 状态：已接受
+- 替代 / 关闭：无
 - 日期：2026-08-15
 - 跟踪 issue：[#3214](https://github.com/huangruiteng/loopx/issues/3214)
 - 决策边界：LoopX 如何在工作结果可验证之后，把结果归因到此前召回的记忆，并产出有界的效用投影

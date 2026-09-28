@@ -1,6 +1,7 @@
 # Goal 实例身份与孤儿状态恢复（v0）
 
-- **RFC 状态：** Draft
+- **RFC 状态：** 已接受
+- **替代 / 关闭：** 无
 - **交付成熟度：** Identity/recovery 提案；codec 前置已由 #4917 交付
 - **作者／Owner：** LoopX contributors
 - **创建日期：** 2026-09-23
@@ -696,6 +697,19 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
   修复、replacement 原字节回滚、operation ID 冲突、容量拒绝和满容量 replay。
 - **剩余 hold：** 所有结果均为 `execution_authority: false`。M3 必须先完成其余
   effect owner 资格化，才能开放既有项目 activation 或 global routing。
+
+### 2026-09-27：第一方 Host runtime 部分 enforcement
+
+- **基线：** `fd96e5e2574272262b9ea604a96581a0d20e94d1`
+- **已交付：** 为 source profile 的 Turn journal、Codex descriptor、DSH session
+  identity 和 Kunlun native runtime journal 增加 TypeScript-owned exact GoalRef
+  决策与 alias-scoped lifecycle guard。
+- **证据：** 负向测试覆盖同名 Goal B 发布后 Goal A 结果迟到、缓存 Turn result
+  恢复、legacy Host state、跨实例 session selection，以及 result/recreation
+  commit 串行化。非 source plan、路径、schema 与持久化字节保持 legacy 行为。
+- **剩余 hold：** 这只是 M3 的部分 enforcement。accepted-before-retirement 的
+  downstream drain、不支持的旧/常驻二进制和其余 inventory owner 尚未
+  qualified；`execution_authority: false` 与 M3 activation hold 保持不变。
 
 ## 附录 B：决策日志
 

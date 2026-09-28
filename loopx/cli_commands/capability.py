@@ -132,6 +132,21 @@ def register_capability_commands(
         help="Capability id to inspect.",
     )
     _add_extension_manifest_argument(show_parser)
+    inspect_parser = capability_sub.add_parser(
+        "inspect",
+        help="Read this Goal's effective settings and optional coordinator guidance.",
+    )
+    add_subcommand_format(inspect_parser)
+    inspect_parser.add_argument("--goal-id", required=True)
+    inspect_parser.add_argument(
+        "--agent-id", help="Registered coordinator; requires --phase."
+    )
+    inspect_parser.add_argument(
+        "--phase",
+        choices=("before_plan", "before_delegate", "after_delegate_result"),
+        help="Read the existing bounded context projection; requires --agent-id.",
+    )
+    inspect_parser.set_defaults(capability_operation_parser=inspect_parser)
     bind_parser = capability_sub.add_parser(
         "bind",
         help="Preview or persist one exact external capability binding for a Goal.",
@@ -195,6 +210,12 @@ def handle_capability_command(
 ) -> int | None:
     if args.command != "capability":
         return None
+    if args.capability_command == "inspect":
+        # Keep this explicit cold-path read out of ordinary CLI/Turn imports.
+        from ..capabilities.goal_inspection import (
+            inspect_goal_capabilities,
+            render_goal_capabilities,
+        )
     manifest_paths = tuple(getattr(args, "extension_manifest", ()))
     try:
         explicit_state_file = getattr(args, "capability_state_file", None)
@@ -217,7 +238,21 @@ def handle_capability_command(
         state_file = Path(
             explicit_state_file or default_extension_state_file(capability_runtime_root)
         ).expanduser()
-        if args.capability_command == "list":
+        if args.capability_command == "inspect":
+            payload = inspect_goal_capabilities(
+                registry_path=registry_path,
+                runtime_root=resolve_runtime_root(
+                    load_registry(registry_path),
+                    runtime_root_arg,
+                    registry_path=registry_path,
+                ),
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                phase=args.phase,
+                runtime_root_override=runtime_root_arg,
+            )
+            renderer = render_goal_capabilities
+        elif args.capability_command == "list":
             payload = build_capability_catalog_packet(
                 manifest_paths,
                 extension_state_file=state_file,
@@ -267,8 +302,17 @@ def handle_capability_command(
             )
             renderer = _render_external_invocation
         else:
-            raise ValueError("capability requires `list`, `show`, `bind`, or `invoke`")
-    except (RuntimeError, ValueError) as exc:
+            raise ValueError(
+                "capability requires `list`, `show`, `inspect`, `bind`, or `invoke`"
+            )
+    except (OSError, KeyError, RuntimeError, ValueError) as exc:
+        if args.capability_command == "inspect":
+            print_payload(
+                {"ok": False, "read_only": True, "error": str(exc)},
+                output_format(args),
+                render_goal_capabilities,
+            )
+            return 2
         if args.capability_command in {"bind", "invoke"}:
             payload = {
                 "ok": False,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import argparse
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ from loopx.capabilities.agent_turn_recall.cli import (
     _write_receipt,
 )
 from loopx.capabilities.agent_turn_recall import runtime as recall_runtime
+from loopx.capabilities.agent_turn_recall import cli as recall_cli
+from loopx.capabilities.reward_memory import read_authority
 from loopx.capabilities.agent_turn_recall.runtime import (
     agent_turn_recall_receipt_path,
     run_configured_agent_turn_recall,
@@ -543,6 +546,71 @@ def test_configured_turn_recall_injects_content_and_deduplicates(
     assert second["context"] == first["context"]
     assert second["provider_call_count"] == 0
     assert provider.calls == 1
+
+
+def test_checkpoint_transport_failure_preserves_turn_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = normalized_config(tmp_path)
+    status = {"ok": True, "status": "available", "available": True}
+    monkeypatch.setattr(recall_runtime, "resolve_reward_memory_experiment", lambda **_kwargs: (status, config))
+    monkeypatch.setattr(recall_runtime, "_goal_repo", lambda *_args, **_kwargs: tmp_path)
+    provider = RecallProvider()
+    original_transport = read_authority.effect_runtime_result
+
+    def unavailable(operation: str, _params: Any) -> Any:
+        assert operation == "reward_memory.read_authority.surface_checkpoints"
+        raise RuntimeError("private runtime startup detail")
+
+    monkeypatch.setattr(read_authority, "effect_runtime_result", unavailable)
+    kwargs = dict(registry_path=tmp_path / "registry.json", goal_id="goal", agent_id="pilot",
+                  quota_decision=quota_decision(), turn_instance_id="turn-recovery", execute=True, provider=provider)
+    result = recall_runtime.run_configured_agent_turn_recall_fail_open(**kwargs)
+    assert result["ok"] and result["fail_open"]
+    assert result["status"] == "runtime_unavailable" and result["context"] is None
+    assert result["provider_call_count"] == provider.calls == 0
+    assert not result["provider_failure_is_user_gate"] and not result["quota_spend_performed"]
+    receipt = agent_turn_recall_receipt_path(tmp_path, goal_id="goal", agent_id="pilot")
+    assert not receipt.exists()
+    assert "private runtime" not in json.dumps(result)
+    monkeypatch.setattr(read_authority, "effect_runtime_result", original_transport)
+    recovered = recall_runtime.run_configured_agent_turn_recall_fail_open(**kwargs)
+    assert recovered["status"] == "not_available"
+    assert recovered["provider_call_count"] == provider.calls == 1
+    assert recovered["same_turn_receipt_written"] and receipt.exists()
+
+
+def test_explicit_cli_checkpoint_transport_failure_returns_safe_packet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = normalized_config(tmp_path)
+    monkeypatch.setattr(recall_cli, "resolve_reward_memory_experiment", lambda **_kwargs: ({"status": "available"}, config))
+    monkeypatch.setattr(recall_cli, "_goal_repo", lambda *_args, **_kwargs: tmp_path)
+    turn = "turn-cli-failure"
+    decision = quota_decision() | {"goal_id": "goal", "agent_identity": {"agent_id": "pilot"},
+        "heartbeat_receipt": {"turn_instance_id": turn, "status": "committed"}}
+    monkeypatch.setattr(recall_cli, "_quota_decision", lambda *_args: decision)
+
+    def unavailable(operation: str, _params: Any) -> Any:
+        assert operation == "reward_memory.read_authority.surface_checkpoints"
+        raise RuntimeError("private runtime startup detail")
+
+    monkeypatch.setattr(read_authority, "effect_runtime_result", unavailable)
+    monkeypatch.setattr(recall_cli, "run_agent_turn_recall", lambda *_args, **_kwargs: pytest.fail("provider boundary reached"))
+    payloads: list[dict[str, Any]] = []
+    result = recall_cli.handle_agent_turn_recall_command(
+        argparse.Namespace(command="agent-turn-recall", goal_id="goal", agent_id="pilot", turn_instance_id=turn,
+                           quota_decision_json="unused", session_ref=None, force_refresh=False, execute=True),
+        registry_path=tmp_path / "registry.json", output_format=lambda *_args: "json",
+        print_payload=lambda payload, *_args: payloads.append(payload),
+    )
+    assert result == 2 and len(payloads) == 1
+    payload = payloads[0]
+    assert not payload["ok"] and payload["status"] == "runtime_unavailable"
+    assert payload["reason_code"] == "automatic_recall_runtime_failed"
+    assert payload["provider_call_count"] == 0 and not payload["quota_spend_performed"]
+    assert "private runtime" not in json.dumps(payload)
+    assert not agent_turn_recall_receipt_path(tmp_path, goal_id="goal", agent_id="pilot").exists()
 
 
 def test_expiry_survives_candidate_review_and_activation(tmp_path: Path) -> None:

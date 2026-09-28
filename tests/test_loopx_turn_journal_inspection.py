@@ -246,6 +246,8 @@ def test_inspection_returns_versioned_allowlisted_projection_without_mutation(
             "checks": [{"kind": "journal_consistency", "outcome": "passed"}],
         },
         "last_recovery": None,
+        "recorded_effects": {"host_invoked": True, "state_written": True,
+                             "quota_spent": True, "scheduler_acknowledged": None},
         "effects": [],
     }
     assert journal_path.read_bytes() == before_bytes
@@ -317,11 +319,20 @@ def test_inspection_rejects_invalid_agent_identity_before_file_access(
         )
 
 
+@pytest.mark.parametrize("unknown_intent", [False, True])
 def test_inspect_journal_cli_branches_before_live_or_write_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    unknown_intent: bool,
 ) -> None:
-    _write_journal(tmp_path, _journal())
+    journal = _journal(status="in_progress" if unknown_intent else "committed")
+    if unknown_intent:
+        journal["completed_phases"] = []
+        journal["effect_attempts"] = {"unknown_provider_step": {
+            "status": "prepared", "effect_ref": "private-effect-ref-not-returned",
+        }}
+    journal_path = _write_journal(tmp_path, journal)
+    before = journal_path.read_bytes()
 
     def unexpected_call(*args: object, **kwargs: object) -> None:
         raise AssertionError("inspect-journal reached a live or write path")
@@ -357,8 +368,17 @@ def test_inspect_journal_cli_branches_before_live_or_write_paths(
     payload = json.loads(raw_output)
     assert exit_code == 0
     assert payload["schema_version"] == "loopx_turn_journal_inspection_v1"
-    assert payload["decision"] == "replay_legal"
+    assert payload["decision"] == ("replay_blocked" if unknown_intent else "replay_legal")
     assert payload["effects"] == []
+    assert journal_path.read_bytes() == before
+    if unknown_intent:
+        assert payload["journal_consistent"] is False
+        assert "prepared_effect_step_unsupported" in payload["violations"]
+        assert payload["recovery_decision"]["action"] == "blocked"
+        assert payload["recovery_decision"]["can_continue"] is False
+        assert payload["recovery_decision"]["reinvoke_host"] is False
+        assert all(value is None for value in payload["recorded_effects"].values())
+        assert "private-effect-ref-not-returned" not in raw_output
 
 
 def test_inspect_journal_cli_json_and_markdown_share_allowlisted_projection(
@@ -391,6 +411,7 @@ def test_inspect_journal_cli_json_and_markdown_share_allowlisted_projection(
         "journal_consistent",
         "recovery_decision",
         "last_recovery",
+        "recorded_effects",
         "effects",
     }
     assert markdown_output == (
@@ -402,6 +423,8 @@ def test_inspect_journal_cli_json_and_markdown_share_allowlisted_projection(
         "- recovery_reason: terminal_result_retained\n"
         "- recovery_checks: journal_consistency:passed\n"
         "- journal_consistent: True\n"
+        "- original_turn_recorded_effects: {'host_invoked': True, 'state_written': True, "
+        "'quota_spent': True, 'scheduler_acknowledged': None}\n"
         "- replay_decision: replay_legal\n"
         "- journal_status: committed\n"
         "- replay_legal: True\n"
@@ -537,6 +560,8 @@ def test_typescript_runtime_uses_one_typed_rpc_call(
                 ],
             },
             "last_recovery": None,
+            "recorded_effects": {"host_invoked": True, "state_written": True,
+                                 "quota_spent": True, "scheduler_acknowledged": None},
             "effects": [],
         }
 
@@ -600,6 +625,8 @@ def test_typescript_runtime_rejects_malformed_projection_types(
             "checks": [{"kind": "journal_consistency", "outcome": "passed"}],
         },
         "last_recovery": None,
+        "recorded_effects": {"host_invoked": True, "state_written": True,
+                             "quota_spent": True, "scheduler_acknowledged": None},
         "effects": [],
     }
 

@@ -7,15 +7,13 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
 import tempfile
-import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from ...runtime import validate_goal_id_path_segment
+from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
 )
@@ -28,6 +26,7 @@ from .executor import (
 )
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
+from .host_process_transport import HostOutputLines, run_host_process
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
 
@@ -238,13 +237,61 @@ def load_codex_cli_session(
     return {**value, "session_id": session_id}
 
 
+def _codex_session_goal_ref(
+    value: Mapping[str, Any],
+    *,
+    lineage: Mapping[str, str],
+) -> object:
+    if (
+        value.get("schema_version") != CODEX_CLI_SESSION_SCHEMA_VERSION
+        or any(value.get(field) != lineage[field] for field in lineage)
+        or _valid_session_id(value.get("session_id")) is None
+    ):
+        return {"malformed": True}
+    goal_ref = value.get("goal_ref")
+    if goal_ref is not None:
+        return goal_ref
+    return {"goal_id": value.get("goal_id")}
+
+
+def _read_codex_cli_session_document(
+    runtime_root: Path,
+    *,
+    lineage: Mapping[str, str],
+) -> dict[str, Any] | None:
+    path = _session_path(runtime_root, lineage)
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"malformed": True}
+    return value if isinstance(value, dict) else {"malformed": True}
+
+
 def codex_cli_session_binding(
     runtime_root: Path,
     turn_envelope: Mapping[str, Any],
+    *,
+    goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, str] | None:
     request = {"turn_envelope": dict(turn_envelope)}
     lineage = _lineage(request)
-    if load_codex_cli_session(runtime_root, lineage=lineage) is None:
+    if goal_admission is None:
+        session = load_codex_cli_session(runtime_root, lineage=lineage)
+    else:
+        selected = goal_admission.select_state(
+            read_state=lambda: _read_codex_cli_session_document(
+                runtime_root,
+                lineage=lineage,
+            ),
+            goal_ref_of=lambda value: _codex_session_goal_ref(
+                value,
+                lineage=lineage,
+            ),
+        )
+        session = dict(selected) if selected is not None else None
+    if session is None:
         return None
     return {
         "schema_version": "loopx_turn_session_binding_v0",
@@ -257,6 +304,7 @@ def _store_codex_cli_session(
     *,
     lineage: Mapping[str, str],
     session_id: str,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> None:
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
@@ -273,13 +321,16 @@ def _store_codex_cli_session(
         handle = os.fdopen(descriptor, "w", encoding="utf-8")
         descriptor = -1
         with handle:
+            payload = {
+                "schema_version": CODEX_CLI_SESSION_SCHEMA_VERSION,
+                **lineage,
+                "host": "codex-cli",
+                "session_id": normalized_session_id,
+            }
+            if goal_ref is not None:
+                payload["goal_ref"] = dict(goal_ref)
             json.dump(
-                {
-                    "schema_version": CODEX_CLI_SESSION_SCHEMA_VERSION,
-                    **lineage,
-                    "host": "codex-cli",
-                    "session_id": normalized_session_id,
-                },
+                payload,
                 handle,
                 ensure_ascii=False,
                 indent=2,
@@ -701,22 +752,6 @@ def _select_failure_category(categories: list[str]) -> str | None:
     )
 
 
-def _terminate_process(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        proc.terminate()
-    try:
-        proc.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
-            proc.kill()
-
-
 def _codex_command(
     *,
     codex_bin: str,
@@ -787,6 +822,7 @@ def run_codex_cli_host(
     reasoning_effort: str | None = None,
     mcp_server: Mapping[str, Any] | None = None,
     timeout_seconds: float = 115.0,
+    goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
@@ -803,11 +839,24 @@ def run_codex_cli_host(
     planned_action = str(planned_session.get("action") or "")
     context_policy = _mapping(planned_session.get("context_policy"))
     fresh_iteration = context_policy.get("mode") == "fresh"
-    binding = (
-        None
-        if fresh_iteration
-        else load_codex_cli_session(runtime_root, lineage=lineage)
-    )
+    if goal_admission is None:
+        binding = (
+            None
+            if fresh_iteration
+            else load_codex_cli_session(runtime_root, lineage=lineage)
+        )
+    else:
+        selected = goal_admission.select_state(
+            read_state=lambda: _read_codex_cli_session_document(
+                runtime_root,
+                lineage=lineage,
+            ),
+            goal_ref_of=lambda value: _codex_session_goal_ref(
+                value,
+                lineage=lineage,
+            ),
+        )
+        binding = None if fresh_iteration else selected
     if planned_action == "resume" and binding is None:
         raise RuntimeError("Codex CLI resume binding disappeared after planning")
     if planned_action == "start_new" and binding is not None:
@@ -815,6 +864,34 @@ def run_codex_cli_host(
     if planned_action not in {"resume", "start_new"}:
         raise ValueError("Codex CLI host request has no executable session action")
     session_id = str(binding.get("session_id")) if binding else None
+    goal_ref = request.get("goal_ref")
+    exact_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
+
+    def store_session(observed_session_id: str) -> None:
+        def commit() -> None:
+            _store_codex_cli_session(
+                runtime_root,
+                lineage=lineage,
+                session_id=observed_session_id,
+                goal_ref=exact_goal_ref,
+            )
+
+        if goal_admission is None:
+            commit()
+        else:
+            goal_admission.accept_result(commit)
+
+    def discard_session() -> None:
+        def commit() -> None:
+            _discard_codex_cli_session(
+                runtime_root,
+                lineage=lineage,
+            )
+
+        if goal_admission is None:
+            commit()
+        else:
+            goal_admission.accept_result(commit)
 
     with tempfile.TemporaryDirectory(prefix="loopx-turn-codex-") as directory:
         temporary = Path(directory)
@@ -839,74 +916,45 @@ def run_codex_cli_host(
             session_id=session_id,
             mcp_server=mcp_server,
         )
-        proc = subprocess.Popen(
-            command,
-            cwd=project,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            start_new_session=True,
-        )
         observed_session: list[str] = []
-        structured_failure_categories: list[str] = []
-        diagnostic_failure_categories: list[str] = []
+        structured_failure_categories: set[str] = set()
+        diagnostic_failure_categories: set[str] = set()
 
-        def discard_events() -> None:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict):
-                    candidate = codex_cli_event_session_id(event)
-                    if candidate and not observed_session:
-                        observed_session.append(candidate)
-                    structured, diagnostic = _event_failure_categories(event)
-                    if structured:
-                        structured_failure_categories.append(structured)
-                    if diagnostic:
-                        diagnostic_failure_categories.append(diagnostic)
+        def observe_event(line: str) -> None:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return
+            if isinstance(event, dict):
+                candidate = codex_cli_event_session_id(event)
+                if candidate and not observed_session:
+                    observed_session.append(candidate)
+                structured, diagnostic = _event_failure_categories(event)
+                if structured:
+                    structured_failure_categories.add(structured)
+                if diagnostic:
+                    diagnostic_failure_categories.add(diagnostic)
 
-        reader = threading.Thread(target=discard_events, daemon=True)
+        def observe_stderr(line: str) -> None:
+            category = _diagnostic_failure_category(line)
+            if category:
+                diagnostic_failure_categories.add(category)
 
-        def discard_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                category = _diagnostic_failure_category(line)
-                if category:
-                    diagnostic_failure_categories.append(category)
-
-        stderr_reader = threading.Thread(target=discard_stderr, daemon=True)
-        reader.start()
-        stderr_reader.start()
-        assert proc.stdin is not None
-        timed_out = False
-        try:
-            proc.stdin.write(_prompt(request))
-            proc.stdin.close()
-            returncode = proc.wait(timeout=max(1.0, timeout_seconds))
-        except subprocess.TimeoutExpired:
-            _terminate_process(proc)
-            timed_out = True
-            returncode = proc.returncode
-        except BaseException:
-            _terminate_process(proc)
-            raise
-        finally:
-            reader.join(timeout=OUTPUT_DRAIN_TIMEOUT_SECONDS)
-            stderr_reader.join(timeout=OUTPUT_DRAIN_TIMEOUT_SECONDS)
-        output_observation_incomplete = reader.is_alive() or stderr_reader.is_alive()
+        events = HostOutputLines(observe_event)
+        diagnostics = HostOutputLines(observe_stderr)
+        observed = run_host_process(command, project=project, input_text=_prompt(request),
+            timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
+            on_stdout=events.feed, on_stderr=diagnostics.feed)
+        events.finish()
+        diagnostics.finish()
+        returncode = observed["returncode"]
+        timed_out = observed["outcome"] == "timeout"
+        output_observation_incomplete = not (observed["output_complete"] and events.complete and diagnostics.complete)
+        if observed["outcome"] not in {"exited", "timeout"}:
+            raise BuiltInHostError("codex_cli_process_" + observed["outcome"])
         if timed_out:
             if observed_session:
-                _store_codex_cli_session(
-                    runtime_root,
-                    lineage=lineage,
-                    session_id=observed_session[0],
-                )
+                store_session(observed_session[0])
             raise BuiltInHostError(
                 "codex_cli_timeout",
                 failure_kind="executor_timeout",
@@ -916,21 +964,17 @@ def run_codex_cli_host(
             "unknown"
             if output_observation_incomplete
             else (
-                _select_failure_category(structured_failure_categories)
-                or _select_failure_category(diagnostic_failure_categories)
+                _select_failure_category(list(structured_failure_categories))
+                or _select_failure_category(list(diagnostic_failure_categories))
                 or "exit_nonzero"
             )
         )
         if returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
-            _discard_codex_cli_session(runtime_root, lineage=lineage)
+            discard_session()
         if observed_session and (
             returncode == 0 or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES
         ):
-            _store_codex_cli_session(
-                runtime_root,
-                lineage=lineage,
-                session_id=observed_session[0],
-            )
+            store_session(observed_session[0])
         if returncode != 0:
             raise BuiltInHostError(
                 f"codex_cli_{category}",

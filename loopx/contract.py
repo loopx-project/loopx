@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from .control_plane.runtime.run_index_duplicates import (
     classify_index_duplicate_records,
     index_identity,
 )
+from .control_plane.runtime.file_text_reads import iter_utf8_file_reads
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
 from .history import (
     RunHistoryAudit,
@@ -863,26 +865,37 @@ def scan_public_boundary(
             file_roots[file_path] = display_root
     files = sorted(set(files))
     policy = _public_boundary_policy(registry or {})
+    private_file_git: dict[Path, dict[str, Any]] = {}
 
-    for path in files:
+    def public_files() -> Iterator[Path]:
+        # Filtering precedes submission: a worker must never open untracked
+        # local-private state. Policy, Git ownership and content classification
+        # stay here, in the existing scan owner, not in the I/O adapter.
+        for path in files:
+            root = file_roots.get(path, path)
+            if _is_local_private_state_path(path, root):
+                git = _git_probe(path)
+                if not git.get("tracked"):
+                    skipped_private_state_files.append(rel_or_abs(path, root))
+                    if git.get("inside_worktree") and not git.get("ignored"):
+                        private_state_git_warnings.append(
+                            f"{rel_or_abs(path, root)}: private state should be gitignored"
+                        )
+                    continue
+                private_file_git[path] = git
+            yield path
+
+    for read in iter_utf8_file_reads(public_files()):
+        path = read.path
         root = file_roots.get(path, path)
-        git: dict[str, Any] | None = None
-        if _is_local_private_state_path(path, root):
-            git = _git_probe(path)
-            if not git.get("tracked"):
-                skipped_private_state_files.append(rel_or_abs(path, root))
-                if git.get("inside_worktree") and not git.get("ignored"):
-                    private_state_git_warnings.append(
-                        f"{rel_or_abs(path, root)}: private state should be gitignored"
-                    )
-                continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+        git: dict[str, Any] | None = private_file_git.pop(path, None)
+        if isinstance(read.error, UnicodeDecodeError):
             continue
-        except OSError as exc:
-            unreadable_files.append(f"{rel_or_abs(path, root)}: {exc.strerror or exc}")
+        if read.error is not None:
+            unreadable_files.append(f"{rel_or_abs(path, root)}: {read.error.strerror or read.error}")
             continue
+        text = read.text
+        assert text is not None
         if path.name == "package-lock.json":
             try:
                 lockfile = json.loads(text)

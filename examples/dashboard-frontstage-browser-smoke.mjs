@@ -182,7 +182,7 @@ try {
       await entry.goForward();
       await entry.waitForFunction(() => document.documentElement.lang === "zh-CN");
       assert.equal(new URL(entry.url()).hash, "#product");
-      await entry.locator('.hero .button-secondary').click();
+      await entry.locator('.hero a[href="#showcases"]').click();
       await assertAnchorInView(entry, "showcases");
       await entry.goBack();
       assert.equal(new URL(entry.url()).hash, "#product", "section CTA must preserve previous history entry");

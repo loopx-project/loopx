@@ -1,3 +1,4 @@
+import { conversationReturnSessions, reconcileConversationReturns } from "../data/conversation-returns";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -113,7 +114,7 @@ import {
   type WorkspaceActionPreview,
   type WorkspaceActionPreviewRequest,
 } from "../features/personal-workspace/personal-workspace-model";
-import { routeWorkspaceInput } from "../features/personal-workspace/personal-workspace-router";
+import { goalExecution } from "../features/personal-workspace/goal-activity";
 
 const protectedOperationLabels: Record<ProtectedActionProposal["operation"], string> = {
   delete: "删除",
@@ -214,6 +215,7 @@ type TodoExplorerItem = {
 };
 
 type PersonalAgentTodoItem = {
+  completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
   resumeReceiptId?: string | null;
@@ -439,7 +441,7 @@ function buildAgentManagementRows(
   });
 }
 
-type PersonalGoalState = "需修复" | "等你" | "等待条件" | "推进中" | "已完成" | "安静运行" | "已停止";
+type PersonalGoalState = "需修复" | "等你" | "等待条件" | "已安排" | "已完成" | "安静运行" | "已停止";
 
 type PersonalGoalItem = {
   acceptanceObservation?: GoalAcceptanceObservation | null;
@@ -459,6 +461,16 @@ type PersonalGoalItem = {
   needsYouTodoId?: string | null;
   nextSentence: string;
   hasRunObservation: boolean;
+  nativeChildActivity?: {
+    turn_instance_id: string;
+    observation: "unknown" | "coordinator_reported";
+    host_attested: false;
+    launched_count: number;
+    skipped_count: number;
+    capacity_rejected_count: number;
+    host_failed_count: number;
+    parent_accepted_count: number;
+  } | null;
   state: PersonalGoalState;
   subagentExecution?: {
     allowedDomains: string[];
@@ -599,7 +611,7 @@ const personalGoalStateVariant: Record<PersonalGoalState, BadgeVariant> = {
   "需修复": "danger",
   "等你": "warning",
   "等待条件": "info",
-  "推进中": "success",
+  "已安排": "info",
   "安静运行": "neutral",
   "已停止": "neutral",
   "已完成": "neutral",
@@ -706,6 +718,7 @@ function personalTodoResumeReceiptId(todo: TodoItem) {
 function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): PersonalAgentTodoItem {
   const latestValidationRevision = todo.completion_validation_revision_history.at(-1);
   return {
+    completedAt: todo.completed_at ?? null,
     resumeWhen: todo.resume_when ?? null,
     resumeReady: todo.resume_ready ?? null,
     resumeReceiptId: personalTodoResumeReceiptId(todo),
@@ -822,7 +835,7 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
       .map((todo) => todo.todo_id?.trim())
       .filter((value): value is string => Boolean(value)),
   );
-  const recentCompleted = (assetTodos?.recent_completed_advancement_items ?? [])
+  const recentCompleted = (queueTodos?.recent_completed_advancement_items ?? assetTodos?.recent_completed_advancement_items ?? [])
     .filter((todo) => !todo.todo_id?.trim() || !seenTodoIds.has(todo.todo_id.trim()))
     .map((todo) => personalAgentTodoFromItem(todo, row));
   const firstOpen = items.find((todo) => !todo.done);
@@ -949,8 +962,9 @@ function personalGoalState(payload: StatusPayload, row: GoalDirectoryRow): Perso
   if (row.waitingOn === "external_evidence") {
     return "等待条件";
   }
+  // Eligibility and open Todos mean work is queued; execution comes from the session owner.
   if (quotaStateForShare(row) === "eligible" || hasOpenAgentTodo) {
-    return "推进中";
+    return "已安排";
   }
   if (isPersonalGoalTerminal(row)) {
     return "已完成";
@@ -968,7 +982,7 @@ function personalAgentSentence(payload: StatusPayload, row: GoalDirectoryRow, st
   if (state === "等你") {
     return agentStatusSentence("needs_you", t);
   }
-  if (state === "推进中") {
+  if (state === "已安排") {
     const todoText = (getShareTodos(row, "agent")?.items ?? [])
       .filter((todo) => !todo.done)
       .flatMap((todo) => [todo.title, todo.text])
@@ -981,8 +995,8 @@ function personalAgentSentence(payload: StatusPayload, row: GoalDirectoryRow, st
     ].map((value) => cleanShareText(value))
       .find((value) => value !== "" && value !== "暂无");
     return progressText
-      ? projectionSentence(progressText, t, "projection.agentAdvancingGoal")
-      : agentStatusSentence("advancing", t);
+      ? projectionSentence(progressText, t, "projection.agentWorkQueued")
+      : agentStatusSentence("queued", t);
   }
   if (state === "等待条件") {
     return agentStatusSentence("waiting_external", t);
@@ -990,104 +1004,17 @@ function personalAgentSentence(payload: StatusPayload, row: GoalDirectoryRow, st
   return agentStatusSentence("idle", t);
 }
 
-function personalManagerMatches(question: string, keywords: string[]) {
-  return keywords.some((keyword) => question.includes(keyword));
-}
-
-
-
-function answerPersonalManagerQuestion(
-  payload: StatusPayload,
-  model: PersonalHomeModel,
-  question: string,
-): PersonalManagerAnswer {
+// The explicit status-only profile is a snapshot, not a keyword-driven answer.
+function personalManagerSnapshot(model: PersonalHomeModel): PersonalManagerAnswer {
   if (model.goals.some((goal) => goal.activationState === "active" && goal.loadState)) return {
-    text: "Goal 状态尚未全部加载，暂不能给出完整统计。可先打开已加载的 Goal，失败项可重试。", lines: [],
+    text: "Goal 状态尚未全部加载。当前是只读状态模式；切换到 Agent 后可继续提问或执行任务。", lines: [],
   };
-  if (personalManagerMatches(question, ["Agent", "agent", "推进", "在做"])) {
-    const activeGoals = model.goals.filter((goal) =>
-      !["安静运行", "已完成", "已停止"].includes(goal.state)
-    );
-    const shownGoals = (activeGoals.length > 0 ? activeGoals : model.goals).slice(0, 3);
-    if (shownGoals.length === 0) {
-      return { text: "当前状态里还没有 Goal 可供汇总。", lines: [] };
-    }
-    return {
-      text: activeGoals.length > 0 ? "Agent 当前关注这些 Goal：" : "当前 Goal 都比较安静：",
-      lines: shownGoals.map((goal) => `${goal.title} · ${goal.state} · ${goal.agentSentence}`),
-    };
-  }
-
-  const asksForNextAction = personalManagerMatches(question, ["现在", "下一步", "我该", "该做什么", "优先处理"]);
-  if (asksForNextAction) {
-    const nextTodo = model.userTodos[0];
-    if (nextTodo) {
-      return {
-        text: nextTodo.blocking
-          ? `先处理「${personalGoalTitle(nextTodo.goalId)}」：${nextTodo.text}`
-          : `当前最先处理「${personalGoalTitle(nextTodo.goalId)}」：${nextTodo.text}`,
-        lines: [],
-      };
-    }
-    const repairGoal = model.goals.find((goal) => goal.state === "需修复");
-    if (repairGoal) {
-      return {
-        text: "没有待办，但这个 Goal 需要先修复。",
-        lines: [`${repairGoal.title} · ${repairGoal.agentSentence}`],
-      };
-    }
-    const progressingGoal = model.goals.find((goal) => goal.state === "推进中");
-    if (progressingGoal) {
-      return {
-        text: "目前不需要你介入，Agent 正在推进。",
-        lines: [`${progressingGoal.title} · ${progressingGoal.agentSentence}`],
-      };
-    }
-    return { text: "当前系统很安静，没有需要你立即处理的事项。", lines: [] };
-  }
-
-  if (personalManagerMatches(question, ["等我", "阻塞", "需要我", "全局待办"])) {
-    if (model.userTodos.length === 0) {
-      return { text: "目前没有 Goal 在等你，开放用户待办为 0。", lines: [] };
-    }
-    return {
-      text: `有 ${model.userTodos.length} 项开放用户待办，阻塞项优先：`,
-      lines: model.userTodos.slice(0, 3).map((todo) =>
-        `${personalGoalTitle(todo.goalId)} · ${todo.blocking ? "阻塞" : "待处理"} · ${todo.text}`
-      ),
-    };
-  }
-
-  if (personalManagerMatches(question, ["状态", "异常", "修复", "健康"])) {
-    const globalHealthFailed = model.systemHealth ? !model.systemHealth.ok : !payload.ok
-      || !payload.contract?.ok
-      || !payload.global_registry?.ok
-      || (payload.global_registry?.summary?.high ?? 0) > 0;
-    const repairGoals = model.goals.filter((goal) => goal.state === "需修复");
-    const lines = repairGoals.slice(0, globalHealthFailed ? 2 : 3)
-      .map((goal) => `${goal.title} · ${goal.agentSentence}`);
-    if (globalHealthFailed) {
-      lines.push("全局状态、契约或注册表健康检查未通过，请进入管理页检查。");
-    }
-    if (lines.length === 0) {
-      return { text: "当前没有发现 Goal 级或全局健康异常。", lines: [] };
-    }
-    return {
-      text: repairGoals.length > 0 ? "当前需要关注这些健康问题：" : "Goal 状态正常，但全局健康需要检查：",
-      lines,
-    };
-  }
-
   return {
-    text: "当前管家支持三类问题：下一步、等待你的事项、Agent 与健康状态。",
-    lines: [
-      "问“我现在该做什么？”",
-      "问“哪些 Goal 在等我？”",
-      "问“Agent 在做什么？”或当前健康状态",
-    ],
+    text: "这是当前只读状态快照，未调用 Agent。切换到 Agent 后可继续提问或执行任务。",
+    lines: model.goals.filter((goal) => goal.activationState === "active").slice(0, 3)
+      .map((goal) => `${goal.title} · ${goal.state} · ${goal.agentSentence}`),
   };
 }
-
 
 function buildPersonalHomeModel(
   payload: StatusPayload,
@@ -1195,7 +1122,17 @@ function buildPersonalHomeModel(
       agentLabel: agentRow?.agentId,
       agentSentence: personalAgentSentence(payload, row, state, t),
       agentTodos: [...goalAgentTodos, ...agentTodoFacts.recentCompleted],
+      boundHostSurfaces: Array.from(new Set((goal.coordination?.thread_agent_bindings ?? [])
+        .flatMap((binding) => binding.host_surface ? [binding.host_surface] : []))),
       doneTodoCount: agentTodoFacts.doneTodoCount,
+      hostThreadActivity: goal.host_thread_activity ? {
+        completeness: goal.host_thread_activity.completeness,
+        threads: goal.host_thread_activity.threads.map((thread) => ({
+          hostSurface: thread.host_surface,
+          lastEventAt: thread.last_event_at ?? null,
+          state: thread.state,
+        })),
+      } : undefined,
       acceptanceObservation: goal.acceptance_observation,
       goalId: goal.id,
       latestActivity: row.latestRun?.generated_at ?? "",
@@ -1208,6 +1145,7 @@ function buildPersonalHomeModel(
       hasRunObservation: Boolean(row.queueItem?.project_asset?.latest_validation
         || row.latestRun
         || payload.event_ledger_summary?.goals.some((item) => item.goal_id === goal.id)),
+      nativeChildActivity: row.queueItem?.project_asset?.native_child_activity,
       state,
       ...(goalSubagentConfigurationEnabled ? {
         subagentExecution: {
@@ -1463,6 +1401,8 @@ function PersonalGoalHome({
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
   const [executionDiscoveryError, setExecutionDiscoveryError] = useState<"partial" | "offline" | null>(null);
   const [executionSessionSnapshots, setExecutionSessionSnapshots] = useState<Record<string, ChatSessionSnapshot>>({});
+  // undefined: not read yet; null: the session owner could not be read.
+  const [goalSessionFacts, setGoalSessionFacts] = useState<ChatSessionSummary[] | null | undefined>(undefined);
   const managerMessageId = useRef(1);
   const proposalId = useRef(1);
   const sessionIds = useRef(new Map<string, string>());
@@ -1547,59 +1487,44 @@ function PersonalGoalHome({
     statusSourceControl.activeSource.statusUrl,
   ]);
 
-  // Worker returns are transcript messages, not new model turns. Keep an open
-  // conversation current without replacing in-flight user/agent text.
-  const conversationReturnSessionId = runtimeBindings[contextId]?.sessionId;
+  // Read the active session plus older sessions that still owe a result. The
+  // stable key changes only when that set changes, never on each stream delta.
+  const conversationReturnSessionKey = JSON.stringify(conversationReturnSessions(
+    runtimeBindings[contextId]?.sessionId, messagesByContext[contextId] ?? [],
+  ));
   useEffect(() => {
-    if (readOnly || !conversationReturnSessionId) return;
+    if (readOnly) return;
+    const sessionIds: string[] = JSON.parse(conversationReturnSessionKey);
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const receive = async () => {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const receive = async (sessionId: string) => {
       try {
-        const snapshot = await fetchChatSession(conversationReturnSessionId);
+        const snapshot = await fetchChatSession(sessionId);
         if (cancelled) return;
-        const replies = snapshot.messages.filter((row) => row.origin === "manager_followup");
         setMessagesByContext((current) => {
           const previous = current[contextId] ?? [];
-          const seen = new Set(previous.map((row) => row.sourceMessageId));
-          const fresh = replies.filter((row) => !seen.has(row.message_id));
-          const deliveryByMessage = new Map(
-            replies.map((row) => [row.message_id, row.return_delivery]),
-          );
-          const byTurn = new Map(snapshot.messages.filter((row) => row.role !== "user" && row.origin !== "manager_followup").map((row) => [row.turn_id, row]));
-          const collaborationByMessage = new Map(snapshot.messages.map((row) => [row.message_id, row.collaboration]));
-          let deliveryChanged = false;
-          const updated = previous.map((row) => {
-            const delivery = row.sourceMessageId
-              ? deliveryByMessage.get(row.sourceMessageId)
-              : undefined;
-            const source = row.sourceTurnId ? byTurn.get(row.sourceTurnId) : undefined;
-            const collaboration = row.sourceMessageId ? collaborationByMessage.get(row.sourceMessageId) : source?.collaboration;
-            if (JSON.stringify(delivery) === JSON.stringify(row.returnDelivery) && JSON.stringify(collaboration) === JSON.stringify(row.collaboration)) return row;
-            deliveryChanged = true;
-            return { ...row, sourceMessageId: row.sourceMessageId ?? source?.message_id,
-              sourceSessionId: row.sourceSessionId ?? (source?.message_id ? conversationReturnSessionId : undefined),
-              returnDelivery: delivery, collaboration };
-          });
-          if (!fresh.length && !deliveryChanged) return current;
-          return { ...current, [contextId]: [...updated, ...fresh.map((row) => ({
+          const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
             id: managerMessageId.current++, sourceMessageId: row.message_id,
-            sourceSessionId: conversationReturnSessionId,
+            sourceSessionId: sessionId,
             role: "assistant" as const,
             agentLabel: "协作回执",
             sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-            returnDelivery: row.return_delivery,
-          }))] };
+            returnDelivery: row.return_delivery, collaboration: row.collaboration,
+          }));
+          return updated === previous ? current : { ...current, [contextId]: updated };
         });
       } catch {
-        // The durable transcript is retried after reconnection; no model replay.
+        // Retry this transcript read independently; never replay the model.
       } finally {
-        if (!cancelled) timer = setTimeout(receive, 3000);
+        if (!cancelled) {
+          const timer = setTimeout(() => { timers.delete(timer); void receive(sessionId); }, 3000);
+          timers.add(timer);
+        }
       }
     };
-    void receive();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [readOnly, conversationReturnSessionId, contextId, selectedAgent.label]);
+    sessionIds.forEach((sessionId) => { void receive(sessionId); });
+    return () => { cancelled = true; timers.forEach(clearTimeout); };
+  }, [readOnly, conversationReturnSessionKey, contextId]);
 
   function recordRuntimeBinding(targetContextId: string, binding: PersonalRuntimeBinding | null) {
     setRuntimeBindings((current) => {
@@ -1766,6 +1691,7 @@ function PersonalGoalHome({
         const streamingMessageId = appendManagerAssistantMessage(targetContextId, {
           activity: ["正在恢复进行中的 Agent 回合"],
           sourceTurnId: activeTurnId,
+          sourceSessionId: created.session_id,
           agentLabel: answerIdentityLabel(targetContextId, selectedAgent.label),
           lines: [],
           pending: true,
@@ -1916,6 +1842,36 @@ function PersonalGoalHome({
       cancelled = true;
     };
   }, [readOnly, sessionDiscoveryKey, selectedGoal?.goalId]);
+
+  useEffect(() => {
+    if (readOnly) {
+      setGoalSessionFacts(null);
+      return;
+    }
+    let cancelled = false;
+    let timer = 0;
+    let failures = 0;
+    const read = async () => {
+      if (cancelled) return;
+      if (!document.hidden) {
+        try {
+          const listed = await fetchChatSessions({});
+          if (cancelled) return;
+          failures = 0;
+          setGoalSessionFacts(listed.sessions);
+        } catch {
+          failures += 1;
+          if (!cancelled) setGoalSessionFacts(null);
+        }
+      }
+      if (!cancelled) timer = window.setTimeout(() => void read(), document.hidden ? 20_000 : Math.min(60_000, 8_000 * 2 ** Math.min(failures, 3)));
+    };
+    void read();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [readOnly]);
 
   useEffect(() => {
     setExecutionDiscoveryError(null);
@@ -2097,7 +2053,7 @@ function PersonalGoalHome({
     setSendingContextId(targetContextId);
 
     if (selectedRoute.agentId === "status-only" || (!targetGoal && targetContextId !== "manager")) {
-      const answer = answerPersonalManagerQuestion(selectedPayload, targetQuestionModel, question);
+      const answer = personalManagerSnapshot(targetQuestionModel);
       const usesStatusOnlyRoute = selectedRoute.agentId === "status-only";
       appendManagerAssistantMessage(targetContextId, {
         agentLabel: usesStatusOnlyRoute ? "仅查状态" : "LoopX 管家",
@@ -2187,7 +2143,7 @@ function PersonalGoalHome({
         },
         onPhase: (_phase: string, turnId: string) => {
           submittedTurnId = turnId;
-          if (streamingMessageId !== null) updateManagerAssistantMessage(targetContextId, streamingMessageId, { sourceTurnId: turnId });
+          if (streamingMessageId !== null) updateManagerAssistantMessage(targetContextId, streamingMessageId, { sourceTurnId: turnId, sourceSessionId: sessionId });
           activeTurnIds.current.set(targetContextId, turnId);
           recordRuntimeBinding(targetContextId, {
             agentId: selectedRoute.agentId,
@@ -2224,6 +2180,7 @@ function PersonalGoalHome({
             item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
           if (answer) updateManagerAssistantMessage(targetContextId, completedMessageId, {
             sourceMessageId: answer.message_id, sourceSessionId: sessionId,
+            collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
           });
         }).catch(() => { /* The original conversation remains readable. */ });
       }
@@ -2676,8 +2633,13 @@ function PersonalGoalHome({
     item, statusSourceControl.activeSource.statusUrl,
     sourceIsReady && !progress?.errors[item.goalId], goalTitles.get(item.goalId),
   );
+  const normalizedModel = normalizePersonalHomeModel(model);
   const workspaceModel = {
-    ...normalizePersonalHomeModel(model),
+    ...normalizedModel,
+    goals: normalizedModel.goals.map((goal) => ({
+      ...goal,
+      execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreadActivity),
+    })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),
     periodicReports: {
@@ -2733,6 +2695,7 @@ function PersonalGoalHome({
               const messageId = appendManagerAssistantMessage(run.goalId, {
                 activity: ["正在把纠偏送入原执行 Session"],
                 sourceTurnId: turnId,
+                sourceSessionId: run.sessionId,
                 agentLabel: run.agentLabel,
                 lines: [],
                 pending: true,

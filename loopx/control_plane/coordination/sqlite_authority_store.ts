@@ -8,13 +8,13 @@ import type { DatabaseSync } from "node:sqlite";
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, AuthorityStoreCommittedTransaction,
   AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreReadFailure, AuthorityStoreHead,
-  AuthorityStoreReceiptResult, AuthorityStoreScanResult } from "./authority_store.ts";
+  AuthorityStoreReceiptResult, AuthorityStoreReceiptBatchResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
-  canonicalAuthorityObjectList, canonicalAuthoritySha256, normalizeAuthorityStoreCommit,
-  requireAuthorityStoreId } from "./authority_store_codec.ts";
+  canonicalAuthorityObjectList, canonicalAuthoritySha256,
+  normalizeAuthorityStoreCommit, requireAuthorityStoreId } from "./authority_store_codec.ts";
 import {
   AUTHORITY_STATE_CHECKPOINT_INTERVAL,
-  applyAuthorityStateDelta,
+  AuthorityStateReplay,
   authorityStateCheckpointCursor,
   authorityStateDelta,
   authorityStateDeltaReconstructs,
@@ -104,17 +104,10 @@ interface SqliteCommitRow {
   receipts: JsonObject[];
 }
 
-interface SqliteVerifiedCommit {
-  state: SqliteStateCursor;
-  transaction: AuthorityStoreCommittedTransaction;
-}
-
-/** One bounded window of retained transactions resumed from a checkpoint. */
-interface SqliteCommitWindow {
-  identity: string;
-  checkpoint: SqliteStateCursor;
-  transactions: readonly AuthorityStoreCommittedTransaction[];
-  state: SqliteStateCursor;
+interface SqliteReplayCursor {
+  cursor: bigint;
+  digest: string;
+  replay: AuthorityStateReplay;
 }
 
 export interface SqliteAuthorityBoundedProfile {
@@ -257,46 +250,39 @@ export class SqliteAuthorityStore implements AuthorityStore {
   private verifyCommitRow(
     row: SqliteCommitRow,
     identity: string,
-    base: {kind: "predecessor" | "sealed"; state: SqliteStateCursor},
-  ): SqliteVerifiedCommit {
-    let projection: JsonObject;
+    base: {kind: "predecessor" | "sealed"; state: SqliteReplayCursor},
+  ): SqliteReplayCursor {
+    const replay = base.state.replay;
     if (base.kind === "sealed") {
       if (row.cursor !== base.state.cursor) protocol("SQLite authority state log window is invalid");
       if (row.state_digest !== base.state.digest) protocol("SQLite authority checkpoint state digest mismatch");
-      projection = base.state.projection;
     } else {
       if (row.cursor !== base.state.cursor + 1n) protocol("SQLite authority state log cursor lineage is invalid");
-      // The first retained commit is the root of the chain and carries no
-      // parent digest; every later commit must name the state it extends.
       const parentMatches = row.cursor === 1n
-        ? row.parent_state_digest === null
-        : row.parent_state_digest === base.state.digest;
+        ? row.parent_state_digest === null : row.parent_state_digest === base.state.digest;
       if (!parentMatches) protocol("SQLite authority state log parent lineage is invalid");
-      projection = applyAuthorityStateDelta(base.state.projection, row.delta);
-      if (authorityStateDigest(projection) !== row.state_digest) {
-        protocol("SQLite authority state log digest mismatch");
-      }
+      replay.apply(row.delta);
+      // Empty deltas retain a proven predecessor, but the root must derive its
+      // own proof. Every row still checks its declared state and full commit.
+      const digest = row.cursor > 1n && row.delta.operations.length === 0
+        ? base.state.digest : replay.stateDigest();
+      if (digest !== row.state_digest) protocol("SQLite authority state log digest mismatch");
     }
-    const expected = commitDigest(identity, row.cursor, row.operation_id, projection, row.events, row.receipts);
+    const expected = replay.commitDigest(commitFields(identity, row.cursor, row.operation_id, row.events, row.receipts));
     if (row.commit_digest !== expected) protocol("SQLite committed row digest mismatch");
-    return {
-      state: {cursor: row.cursor, projection, digest: row.state_digest},
-      transaction: {cursor: row.cursor.toString(), provider_revision: `${identity}:${row.cursor}`,
-        operation_id: row.operation_id, projection, events: row.events, receipts: row.receipts},
-    };
+    return {cursor: row.cursor, digest: row.state_digest, replay};
   }
 
-  private loadCheckpoint(db: DatabaseSync, cursor: bigint): SqliteStateCursor {
+  private loadCheckpoint(db: DatabaseSync, cursor: bigint): SqliteReplayCursor {
     const expected = authorityStateCheckpointCursor(cursor);
     const row = db.prepare(
       "SELECT cursor, projection, projection_digest FROM checkpoints WHERE cursor = ?",
     ).get(expected.toString());
     if (!row) protocol("SQLite authority checkpoint is missing for its window");
-    const projection = canonicalAuthorityObject(this.parseJson(row.projection, "SQLite checkpoint projection"),
-      "SQLite checkpoint projection");
+    const replay = new AuthorityStateReplay(this.parseJson(row.projection, "SQLite checkpoint projection"));
     const digest = this.requireDigest(row.projection_digest, "SQLite checkpoint digest");
-    if (authorityStateDigest(projection) !== digest) protocol("SQLite authority checkpoint digest mismatch");
-    return {cursor: expected, projection, digest};
+    if (replay.stateDigest() !== digest) protocol("SQLite authority checkpoint digest mismatch");
+    return {cursor: expected, replay, digest};
   }
 
   private windowRows(db: DatabaseSync, from: bigint, to: bigint): Record<string, unknown>[] {
@@ -317,24 +303,18 @@ export class SqliteAuthorityStore implements AuthorityStore {
    * state; history outside the requested span is verified when it is read or
    * when `verifyAuthorityHistory` audits the complete archive.
    */
-  private verifiedRange(db: DatabaseSync, from: bigint, to: bigint): SqliteCommitWindow {
+  private verifiedRange(db: DatabaseSync, from: bigint, to: bigint,
+    consume: (row: SqliteCommitRow, replay: AuthorityStateReplay, identity: string) => void): void {
     const identity = this.identity(db);
     const checkpoint = this.loadCheckpoint(db, from);
     const rows = this.windowRows(db, checkpoint.cursor, to);
-    let state: SqliteStateCursor = checkpoint;
-    const transactions: AuthorityStoreCommittedTransaction[] = [];
+    let state = checkpoint;
     for (const raw of rows) {
       const row = this.decodeCommitRow(raw);
-      const verified = this.verifyCommitRow(row, identity,
+      state = this.verifyCommitRow(row, identity,
         row.cursor === checkpoint.cursor ? {kind: "sealed", state} : {kind: "predecessor", state});
-      state = verified.state;
-      if (row.cursor >= from) transactions.push(verified.transaction);
+      if (row.cursor >= from) consume(row, state.replay, identity);
     }
-    return {identity, checkpoint, transactions, state};
-  }
-
-  private verifiedWindow(db: DatabaseSync, target: bigint): SqliteCommitWindow {
-    return this.verifiedRange(db, target, target);
   }
 
   /** The live head, proven without materializing retained history. */
@@ -345,7 +325,8 @@ export class SqliteAuthorityStore implements AuthorityStore {
     // it was reached: the head row's digest covers the live projection, the
     // retained transaction at that cursor must carry the same state digest and
     // must reproduce its exact commit proof, and the cursor bounds must stay
-    // contiguous with the head. Neither cost grows with retained history.
+    // contiguous with the head. Projection decoding never replays history;
+    // the indexed continuity count still depends on retained cursor count.
     const bounds = db.prepare(`SELECT
       (SELECT CAST(MIN(cursor) AS TEXT) FROM commits) AS first,
       (SELECT CAST(MAX(cursor) AS TEXT) FROM commits) AS last,
@@ -467,10 +448,32 @@ export class SqliteAuthorityStore implements AuthorityStore {
       const cursor = current?.state.cursor ?? null;
       const revision = current?.provider_revision ?? null;
       let conflict: "provider_revision_mismatch" | "operation_id_exists" | null = null;
-      if (revision !== normalized.expected_provider_revision) conflict = "provider_revision_mismatch";
-      else if (db.prepare("SELECT 1 FROM commits WHERE operation_id = ?").get(normalized.operation_id)) {
+      // Replay proves the retained transaction in this same write snapshot.
+      // A matching stored digest alone is not evidence that its row is intact.
+      const existingRow = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`)
+        .get(normalized.operation_id);
+      if (existingRow) {
+        const retained = this.decodeCommitRow(existingRow);
+        let verified = false;
+        let replayResult: AuthorityStoreCommitResult | null = null;
+        this.verifiedRange(db, retained.cursor, retained.cursor, (row, _replay, identity) => {
+          if (row.operation_id !== normalized.operation_id) {
+            protocol("SQLite replay is not part of its retained window");
+          }
+          verified = true;
+          const digest = commitDigest(identity, row.cursor, normalized.operation_id,
+            normalized.next_projection, normalized.events, normalized.receipts);
+          if (digest === row.commit_digest) replayResult = {status: "applied",
+            provider_revision: `${identity}:${row.cursor}`, cursor: row.cursor.toString()};
+        });
+        if (!verified) protocol("SQLite replay is not part of its retained window");
+        if (replayResult) {
+          db.exec("ROLLBACK"); transactionOpen = false;
+          return replayResult;
+        }
         conflict = "operation_id_exists";
       }
+      if (!conflict && revision !== normalized.expected_provider_revision) conflict = "provider_revision_mismatch";
       if (conflict) {
         db.exec("ROLLBACK"); transactionOpen = false;
         return {status: "conflict", conflict_kind: conflict, current_provider_revision: revision,
@@ -514,24 +517,59 @@ export class SqliteAuthorityStore implements AuthorityStore {
   }
 
   async readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult> {
+    const batch = await this.readReceipts([operationId]);
+    return batch.status === "receipts" ? batch.results[0]! : batch;
+  }
+
+  /** One snapshot and one proof per touched checkpoint window. The operation
+   * index still resolves each requested ID; scanned data never substitutes for
+   * lookup, and no verified state escapes this transaction as a cache. */
+  async readReceipts(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult> {
     let db: DatabaseSync | null = null;
     try {
-      requireAuthorityStoreId(operationId, "operation id");
+      if (!Array.isArray(operationIds) || operationIds.length < 1 || operationIds.length > 64) {
+        protocol("receipt batch requires 1..64 operations");
+      }
+      for (const id of operationIds) requireAuthorityStoreId(id, "operation id");
+      const missing = (): AuthorityStoreReceiptBatchResult => ({status: "receipts",
+        results: operationIds.map(() => ({status: "missing"}))});
       db = this.open(false);
-      if (!db) return {status: "missing"};
+      if (!db) return missing();
       db.exec("BEGIN");
       const head = this.current(db);
-      if (head === null) return {status: "missing"};
-      const row = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`)
-        .get(operationId) as unknown as Record<string, unknown> | undefined;
-      if (!row) return {status: "missing"};
-      // The selected row is revalidated with the bounded window that produced
-      // it, so a receipt cannot be read without its own proof.
-      const window = this.verifiedWindow(db, this.decodeCommitRow(row).cursor);
-      const transaction = window.transactions.find(item => item.operation_id === operationId);
-      if (!transaction) protocol("SQLite authority receipt is not part of its retained window");
-      return {status: "found", cursor: transaction.cursor,
-        provider_revision: transaction.provider_revision, receipts: transaction.receipts};
+      if (head === null) return missing();
+      const ranges = new Map<bigint, {from: bigint; to: bigint}>();
+      const selected = operationIds.map(id => {
+        const row = db!.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`)
+          .get(id) as unknown as Record<string, unknown> | undefined;
+        if (!row) return null;
+        const cursor = this.decodeCommitRow(row).cursor;
+        const checkpoint = authorityStateCheckpointCursor(cursor);
+        const range = ranges.get(checkpoint);
+        ranges.set(checkpoint, {from: range && range.from < cursor ? range.from : cursor,
+          to: range && range.to > cursor ? range.to : cursor});
+        return cursor;
+      });
+      // Retain only requested receipts, not all reconstructed projections from
+      // every window. Even sparse requests never scan the gap between windows.
+      const verified = new Map<string, AuthorityStoreReceiptResult>();
+      const wanted = new Set(operationIds);
+      for (const {from, to} of ranges.values()) {
+        this.verifiedRange(db, from, to, (row, _replay, identity) => {
+          if (wanted.has(row.operation_id)) verified.set(row.operation_id, {status: "found", cursor: row.cursor.toString(),
+            provider_revision: `${identity}:${row.cursor}`, receipts: row.receipts});
+        });
+      }
+      const results = operationIds.map((id, index): AuthorityStoreReceiptResult => {
+        const cursor = selected[index];
+        if (cursor === null) return {status: "missing"};
+        const result = verified.get(id);
+        if (result?.status !== "found" || result.cursor !== cursor!.toString()) {
+          protocol("SQLite authority receipt is not part of its retained window");
+        }
+        return result;
+      });
+      return {status: "receipts", results};
     } catch (error) { return readFailure(error); }
     finally { db?.close(); }
   }
@@ -552,16 +590,12 @@ export class SqliteAuthorityStore implements AuthorityStore {
       // One bounded pass verifies the whole returned page: recovery starts at
       // the checkpoint covering the first row, and the lookahead row both
       // proves has_more and closes the verified span.
-      const window = rows.length === 0
-        ? null
-        : this.verifiedRange(db, BigInt(String(rows[0]!.sequence)),
-          BigInt(String(rows[rows.length - 1]!.sequence)));
-      const verified = rows.map(raw => {
-        const cursor = BigInt(String(raw.sequence)).toString();
-        const transaction = window?.transactions.find(item => item.cursor === cursor);
-        if (!transaction) protocol("SQLite authority scan row is not part of its retained window");
-        return transaction;
-      });
+      const verified: AuthorityStoreCommittedTransaction[] = [];
+      if (rows.length) this.verifiedRange(db, BigInt(String(rows[0]!.sequence)),
+        BigInt(String(rows[rows.length - 1]!.sequence)), (row, replay, identity) => {
+          verified.push({cursor: row.cursor.toString(), provider_revision: `${identity}:${row.cursor}`,
+            operation_id: row.operation_id, projection: JSON.parse(replay.canonicalJson()) as JsonObject, events: row.events, receipts: row.receipts});
+        });
       return scan.page(verified, head === null ? null : {cursor: head.state.cursor.toString(),
         provider_revision: head.provider_revision, head: head.state.projection});
     } catch (error) { return readFailure(error); }
@@ -590,7 +624,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
         return {schema_version: "loopx_sqlite_authority_history_audit_v0", status: "verified", commits: 0, checkpoints: 0};
       }
       const counted = db.prepare("SELECT COUNT(*) AS count FROM checkpoints").get();
-      let state: SqliteStateCursor | null = null;
+      let state: SqliteReplayCursor = {cursor: 0n, digest: "", replay: new AuthorityStateReplay({})};
       let cursor = 0n;
       let commits = 0;
       for (;;) {
@@ -601,14 +635,12 @@ export class SqliteAuthorityStore implements AuthorityStore {
           const row = this.decodeCommitRow(raw);
           // The exact delta chain is proved from the empty root, so a retained
           // delta can never diverge from the history it claims to extend.
-          const predecessor: SqliteStateCursor = state ?? {cursor: 0n, projection: {}, digest: ""};
-          const replayed: SqliteStateCursor = this.verifyCommitRow(row, identity,
-            {kind: "predecessor", state: predecessor}).state;
+          const replayed = this.verifyCommitRow(row, identity, {kind: "predecessor", state});
           if (isAuthorityStateCheckpoint(row.cursor)) {
             const checkpoint = this.loadCheckpoint(db, row.cursor);
-            const sealed = this.verifyCommitRow(row, identity, {kind: "sealed", state: checkpoint}).state;
+            const sealed = this.verifyCommitRow(row, identity, {kind: "sealed", state: checkpoint});
             if (sealed.digest !== replayed.digest ||
-                !canonicalAuthorityBytes(sealed.projection).equals(canonicalAuthorityBytes(replayed.projection))) {
+                sealed.replay.canonicalJson() !== replayed.replay.canonicalJson()) {
               protocol("SQLite authority checkpoint does not match retained history");
             }
           }
@@ -617,7 +649,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
           commits += 1;
         }
       }
-      if (state === null || state.cursor !== head.state.cursor || state.digest !== head.state.digest) {
+      if (state.cursor !== head.state.cursor || state.digest !== head.state.digest) {
         protocol("SQLite authority history does not reach the head");
       }
       return {schema_version: "loopx_sqlite_authority_history_audit_v0", status: "verified", commits,
@@ -676,8 +708,11 @@ export function commitDigest(
   events: readonly JsonObject[],
   receipts: readonly JsonObject[],
 ): string {
-  return canonicalAuthoritySha256({
-    expected_provider_revision: cursor === 1n ? null : `${identity}:${cursor - 1n}`,
-    operation_id: operationId, next_projection: projection, events, receipts,
-  });
+  return canonicalAuthoritySha256({...commitFields(identity, cursor, operationId, events, receipts), next_projection: projection});
+}
+
+function commitFields(identity: string, cursor: bigint, operationId: string,
+  events: readonly JsonObject[], receipts: readonly JsonObject[]): Omit<AuthorityStoreCommit, "next_projection"> {
+  return {expected_provider_revision: cursor === 1n ? null : `${identity}:${cursor - 1n}`,
+    operation_id: operationId, events, receipts};
 }

@@ -1,6 +1,7 @@
 # Goal Instance Identity and Orphan Recovery (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Identity/recovery proposal; codec prerequisite shipped in #4917
 - **Authors / owners:** LoopX contributors
 - **Created:** 2026-09-23
@@ -767,6 +768,21 @@ promotion retain their own acceptance. No new paid cohort or soak is authorized.
 - **Remaining hold:** Every result has `execution_authority: false`. M3 must
   qualify the remaining effect owners before existing-project activation or
   global routing can open.
+
+### 2026-09-27: first-party Host runtime partial enforcement
+
+- **Baseline:** `fd96e5e2574272262b9ea604a96581a0d20e94d1`
+- **Delivered:** A TypeScript-owned exact GoalRef decision and alias-scoped
+  lifecycle guard for source-profile Turn journals, Codex descriptors, DSH
+  session identity, and the Kunlun native runtime journal.
+- **Evidence:** Negative tests cover Goal A results returning after same-alias
+  Goal B publication, cached Turn-result recovery, legacy Host state,
+  cross-instance session selection, and serialized result/recreation commits.
+  Non-source plans, paths, schemas, and persisted bytes retain legacy behavior.
+- **Remaining hold:** This is partial M3 enforcement. Accepted-before-retirement
+  downstream drain, unsupported/warm binaries, and the remaining inventory
+  owners are not qualified. `execution_authority: false` and the M3 activation
+  hold remain unchanged.
 
 ## Appendix B: Decision log
 

@@ -1,6 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { optionalNonEmptyString, requireJsonObject } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 
 const PROGRESS_OUTCOMES = [
@@ -27,6 +27,14 @@ const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
 const VISION_CLI_ARGS = "--agent-vision-json '<path-to-evidence-linked-goal-vision-replan-contract-v0.json>'";
 
+// Agent guidance only: the typed outcome/authority gates below remain the owner.
+const REPLAN_PLANNING_GUIDANCE = [
+  "Never shrink requested goals for easier tests. Retain unmet requirements; " +
+    "honor user scope, authority, budget and stops.",
+  "Claim achieved only with current authoritative evidence for every requirement. " +
+    "Empty Todos/replan closure is not proof; unproven/blocked/exhausted/superseded is not achieved.",
+];
+
 function object(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
 }
@@ -39,6 +47,38 @@ function triggerKinds(obligation: JsonObject): string[] {
 }
 function isExternalReview(obligation: JsonObject): boolean {
   return triggerKinds(obligation).some(kind => EXTERNAL_REVIEW_TRIGGERS.has(kind));
+}
+
+/** Route only a revalidated canonical transition to its original Turn guard.
+ * A successor frontier duty stays with the next decision; this receipt cannot
+ * discharge an unrelated duty or certify completion of the settlement Todo.
+ */
+function projectTurnTransition(request: JsonObject): JsonObject {
+  if (typeof request.guard_scoped !== "boolean" || !Array.isArray(request.transition_acks)) {
+    throw new EffectRuntimeRequestError("turn transition requires a scoped guard and transition receipts");
+  }
+  const selected = optionalNonEmptyString(request.selected_obligation_id, "selected_obligation_id");
+  if (selected !== null && !/^replan-[a-f0-9]{16}$/.test(selected)) {
+    throw new EffectRuntimeRequestError("selected replan obligation id is malformed");
+  }
+  let delta: JsonObject | null = null;
+  if (request.guard_scoped && selected !== null) {
+    for (const value of request.transition_acks) {
+      const ack = object(value);
+      const candidate = object(ack.semantic_delta);
+      if (ack.schema_version === "autonomous_replan_ack_v0" &&
+          ack.recorded === true && ack.source === "todo_replan_successor_transition" &&
+          candidate.schema_version === "replan_semantic_delta_v0" &&
+          candidate.accepted === true && candidate.obligation_id === selected &&
+          strings(candidate.outcomes).includes("new_runnable_successor") &&
+          strings(candidate.satisfying_outcomes).includes("new_runnable_successor") &&
+          String(candidate.successor_todo_id ?? "").trim()) {
+        delta = candidate;
+        break;
+      }
+    }
+  }
+  return {semantic_delta: delta};
 }
 
 /** One outcome policy for host projection and write-time discharge. */
@@ -100,11 +140,13 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
 
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
+  if (request.operation === "turn_transition") return projectTurnTransition(request);
   const obligation = requireJsonObject(request.obligation, "obligation");
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
-    return {required_any_of: required, ...writebackProjection(required, externalReview)};
+    return {required_any_of: required, planning_guidance: [...REPLAN_PLANNING_GUIDANCE],
+      ...writebackProjection(required, externalReview)};
   }
   if (request.operation !== "qualify") {
     throw new EffectRuntimeRequestError("replan semantics operation must be requirements or qualify");

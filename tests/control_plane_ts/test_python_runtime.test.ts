@@ -30,7 +30,10 @@ test("an invalid explicit test Python never falls back silently", t => {
     /LOOPX_TEST_PYTHON does not resolve to Python 3\.11\+/);
   const current = resolveTestPython();
   assert.equal(resolveTestPython({ env: {
-    ...process.env, LOOPX_TEST_PYTHON: current, LOOPX_PYTHON_BIN: missing,
+    ...process.env,
+    LOOPX_TEST_PYTHON: current,
+    LOOPX_PYTHON_BIN: missing,
+    LOOPX_PYTHON: missing,
   } }), current, "the test override takes precedence over legacy browser overrides");
 });
 
@@ -90,6 +93,7 @@ test("test and browser smokes may not introduce bare python or python3 subproces
     .map(match => new RegExp(`\\b${match[1]}\\s*\\(\\s*["']python3?["']`))
     .some(pattern => pattern.test(source));
   const fallback = /(?:\?\?|\|\|)\s*["']python3?["']/;
+  const conditionalFallback = /\?\s*[^:;\n]+\s*:\s*["']python3?["']/;
   const assigned = /\b(?:const|let)\s+\w+\s*=\s*["']python3?["']/;
   const bare = JSON.stringify("python3");
   const barePython = JSON.stringify("python");
@@ -104,6 +108,12 @@ test("test and browser smokes may not introduce bare python or python3 subproces
   assert.ok(fallback.test(`process.env.LOOPX_TEST_PYTHON ?? ${barePython}`));
   assert.ok(fallback.test(`process.env.NEW_TEST_PYTHON || ${bare}`));
   assert.ok(fallback.test(`process.env.NEW_TEST_PYTHON || ${barePython}`));
+  assert.ok(conditionalFallback.test(
+    `process.env.LOOPX_TEST_PYTHON ?? (existsSync(repositoryPython) ? repositoryPython : ${bare})`,
+  ));
+  assert.ok(conditionalFallback.test(
+    `process.env.LOOPX_TEST_PYTHON ?? (existsSync(repositoryPython) ? repositoryPython : ${barePython})`,
+  ));
   assert.ok(assigned.test(`const PYTHON = ${bare}`));
   assert.ok(assigned.test(`const PYTHON = ${barePython}`));
   assert.ok(assigned.test(`const testInterpreter = ${bare}`));
@@ -123,7 +133,8 @@ test("test and browser smokes may not introduce bare python or python3 subproces
       else if (/\.(?:cjs|js|mjs|mts|ts)$/.test(entry.name)) {
         const source = readFileSync(join(root, path), "utf8");
         if (direct.test(source) || promisified.test(source) || aliasedLaunch(source)
-          || fallback.test(source) || assigned.test(source)) offenders.push(path);
+          || fallback.test(source) || conditionalFallback.test(source)
+          || assigned.test(source)) offenders.push(path);
       }
     }
   }

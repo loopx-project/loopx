@@ -594,7 +594,7 @@ def test_bind_and_unbind_commit_exact_receipts(
     ]
 
 
-def test_recreation_retires_bindings_and_fences_stale_bind(
+def test_recreation_retires_bindings_fences_stale_operations_and_allows_successor(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -607,6 +607,15 @@ def test_recreation_retires_bindings_and_fences_stale_bind(
         operation_id="bind-session-a",
     )
     assert main(bind_arguments) == 0
+    capsys.readouterr()
+    second_bind_arguments = _binding_arguments(
+        registry_path,
+        operation="bind",
+        goal_instance_id=instance_a,
+        operation_id="bind-session-b",
+        session_id="session-b",
+    )
+    assert main(second_bind_arguments) == 0
     capsys.readouterr()
     recreate_arguments = _recreation_arguments(
         registry_path,
@@ -633,7 +642,10 @@ def test_recreation_retires_bindings_and_fences_stale_bind(
     ]
     assert registry["lifetime_receipts"][-1] == recreated["receipt"]
     assert registry["session_receipts"][-1]["operation"] == "retire_bindings"
-    assert registry["session_receipts"][-1]["session_ids"] == ["session-a"]
+    assert registry["session_receipts"][-1]["session_ids"] == [
+        "session-a",
+        "session-b",
+    ]
 
     before_replay = registry_path.read_bytes()
     assert main(recreate_arguments) == 0
@@ -668,6 +680,43 @@ def test_recreation_retires_bindings_and_fences_stale_bind(
     stale_bind_rejection = json.loads(capsys.readouterr().out)
     assert "stale_goal_instance" in stale_bind_rejection["error"]
     assert registry_path.read_bytes() == before_replay
+
+    stale_unbind = _binding_arguments(
+        registry_path,
+        operation="unbind",
+        goal_instance_id=instance_a,
+        operation_id="unbind-after-recreate",
+    )
+    assert main(stale_unbind) == 1
+    stale_unbind_rejection = json.loads(capsys.readouterr().out)
+    assert "stale_goal_instance" in stale_unbind_rejection["error"]
+    assert registry_path.read_bytes() == before_replay
+
+    successor_goal_before = _registry_payload(registry_path)["goals"][0]
+    successor_bind = _binding_arguments(
+        registry_path,
+        operation="bind",
+        goal_instance_id=instance_b,
+        operation_id="bind-successor-session",
+        session_id="successor-session",
+    )
+    assert main(successor_bind) == 0
+    successor_bound = json.loads(capsys.readouterr().out)
+    registry = _registry_payload(registry_path)
+    assert successor_bound["changed"] is True
+    assert registry["goals"][0] == successor_goal_before
+    assert registry["session_bindings"] == [
+        {
+            "session_id": "successor-session",
+            "foreground_goal_ref": recreated["goal_ref"],
+        }
+    ]
+    assert registry["session_receipts"][-1] == successor_bound["receipt"]
+    assert not any(
+        receipt.get("operation_id")
+        in {"bind-after-recreate", "unbind-after-recreate"}
+        for receipt in registry["session_receipts"]
+    )
 
 
 def test_paused_bind_cannot_cross_recreation_aba(

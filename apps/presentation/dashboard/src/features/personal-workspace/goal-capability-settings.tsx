@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Code2, LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Code2, LoaderCircle, RefreshCw } from "lucide-react";
 
 import {
   applyGoalConfiguration,
@@ -248,6 +248,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
         locale={locale}
         onSelect={setSelectedCapabilityId}
         scope="goal"
+        showScope={false}
         selectedCapabilityId={localizedSelected.capability_id}
         t={t}
       />
@@ -361,11 +362,7 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
   if (!inspection) return null;
 
   return (
-    <section className="personal-capability-settings" data-revision={inspection.revision}>
-      <details className="personal-capability-scope-note">
-        <summary><ShieldCheck aria-hidden size={17} />{t("capabilities.atomicOverride")}</summary>
-        <p>{t("capabilities.atomicOverrideDescription")}</p>
-      </details>
+    <section className="personal-capability-settings is-goal-scoped" data-revision={inspection.revision}>
       <CapabilityCatalog
         callbacks={callbacks}
         catalog={inspection.capability_catalog}

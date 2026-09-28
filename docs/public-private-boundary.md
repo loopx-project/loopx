@@ -145,6 +145,12 @@ raw uploaded files, screenshots with private data, unredacted logs, hidden
 provider payloads, or a public artifact that points back to private storage
 ```
 
+Structured public-output mappings use string field names, as JSON does.
+`validate_public_safe_value` rejects a non-string key before classifying the
+field or inspecting its value. String keys are classified after case, separator,
+and camelCase normalization; converting a non-string key with `str()` is not a
+safe substitute for a field name.
+
 ## Sub-Agent Data
 
 Sub-agent orchestration increases leakage risk because child prompts often

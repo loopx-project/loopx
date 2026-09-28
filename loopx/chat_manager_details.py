@@ -28,7 +28,7 @@ def read_manager_goal_details(
             registry_path=registry_path, runtime_root_arg=str(runtime_root),
             goal_id=goal_id,
         )
-        if result.get("ok") is not True or result.get("state_event_projection_warning"):
+        if result.get("ok") is not True:
             raise ValueError("Todo authority unavailable or conflicting")
         records = result.get("todos", [])
         active = [r for r in records if r.get("status") in {"open", "blocked", "deferred"}]

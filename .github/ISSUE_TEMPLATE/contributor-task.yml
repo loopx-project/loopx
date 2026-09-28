@@ -17,7 +17,7 @@ body:
     id: direction
     attributes:
       label: Technical direction
-      description: Choose the closest current program. This routes discussion; it does not make a draft implementation-ready.
+      description: Choose the closest current program. This routes discussion; merged active RFCs are Accepted and claimable, while implementation evidence and authorization remain separate.
       options:
         - Core control-plane hardening
         - Long-horizon benchmark evidence
@@ -38,15 +38,37 @@ body:
         - I found a bug
     validations:
       required: true
+  - type: dropdown
+    id: anchor_type
+    attributes:
+      label: Anchor type
+      description: Curated board work needs its canonical anchor. Ordinary self-contained contributions may use a reproduced defect, accepted request or concrete maintenance outcome without a pre-existing issue or RFC.
+      options:
+        - Roadmap stream / milestone / card (S, G, R) in loopx-overall-roadmap-v0
+        - Accepted RFC section or invariant
+        - Reproduced adoption defect (public issue from a real install, run, upgrade or host)
+        - Self-contained reproduced defect, accepted request or maintenance outcome
+        - None yet; I am asking whether this should become a task
+    validations:
+      required: true
+  - type: input
+    id: anchor_ref
+    attributes:
+      label: Optional anchor reference
+      description: Required for curated board work; optional for an ordinary self-contained contribution. Cite the exact card, RFC section or public issue when one exists.
+      placeholder: "R1 · \"confirmed commitments survive materialization\" / shared-goal-authority-state-provider-v0 §D2 / #4941"
+    validations:
+      required: false
   - type: textarea
     id: summary
     attributes:
-      label: Goal and acceptance gap
-      description: Name the current request or contract, affected user/caller and observable result. Link an existing goal/direction when relevant; a roadmap id is not required.
+      label: Gap, who is blocked, and exit
+      description: Name the current request or contract, the user or caller blocked without this change, the observable result after it, and the condition that closes the task.
       placeholder: |
-        Goal/source:
         Current gap:
+        Who is blocked without it:
         Accepted outcome (before → after):
+        Exit condition:
     validations:
       required: true
   - type: textarea
@@ -98,4 +120,6 @@ body:
         - label: This issue does not include private benchmark traces, verifier output, credentials, internal document links, raw agent sessions, or local runtime state.
           required: true
         - label: I will not run or duplicate maintainer-owned benchmark cases unless a maintainer explicitly splits out a public task.
+          required: true
+        - label: This task is not a standalone catalog entry, behavior-pinning test, fixture dimension, rename, or docs restatement; if it includes one, the anchor above names the code, test, or copy that consumes it.
           required: true

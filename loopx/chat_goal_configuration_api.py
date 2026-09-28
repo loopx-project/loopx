@@ -5,22 +5,19 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
-from .capabilities.configuration_ui import (
-    build_capability_configuration_catalog,
-)
-from .capabilities.machine_configuration.builtins import (
-    build_builtin_machine_configuration_registry,
+from .capabilities.configuration_inspection import (
+    GOAL_CONFIGURATION_INSPECTION_SCHEMA,
+    inspect_machine_namespaces,
+    project_goal_configuration as _public_goal_configuration,
 )
 from .capabilities.multi_subagent import (
     apply_codex_subagent_capacity,
     plan_codex_subagent_capacity,
     public_codex_host_capacity,
 )
-from .capabilities.machine_configuration.store import inspect_machine_configuration
 from .configuration_transaction import (
     build_configuration_update_plan,
     configuration_payload_revision,
-    goal_capability_configuration_revision,
     require_expected_configuration_plan_revision,
 )
 from .control_plane.goals.configure_goal_service import (
@@ -35,7 +32,6 @@ from .orchestration import subagent_model_configuration_options
 CHAT_GOAL_CONFIGURATION_PATH = "/api/chat/goal-configuration"
 CHAT_GOAL_CONFIGURATION_PREVIEW_PATH = f"{CHAT_GOAL_CONFIGURATION_PATH}/preview"
 CHAT_GOAL_CONFIGURATION_APPLY_PATH = f"{CHAT_GOAL_CONFIGURATION_PATH}/apply"
-GOAL_CONFIGURATION_INSPECTION_SCHEMA = "goal_configuration_inspection_v0"
 GoalConfigurationReader = Callable[..., dict[str, Any]]
 GoalConfigurationWriter = Callable[..., dict[str, Any]]
 
@@ -297,60 +293,6 @@ def _mapping(value: object, label: str) -> dict[str, Any]:
     return {str(key): item for key, item in value.items()}
 
 
-def _goal_features_with_machine_context(
-    payload: Mapping[str, Any],
-    catalog: Mapping[str, Any],
-    machine_namespaces: list[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    features = catalog.get("features")
-    if not isinstance(features, list) or any(
-        not isinstance(item, Mapping) for item in features
-    ):
-        raise ValueError("Goal feature catalog is invalid")
-    goal_features = [dict(item) for item in features]
-    machine_has_periodic_report = any(
-        str(item.get("namespace") or "") == "periodic_report"
-        for item in machine_namespaces
-    )
-    goal_has_periodic_report = any(
-        str(item.get("feature_id") or "") == "periodic_report" for item in goal_features
-    )
-    if machine_has_periodic_report and not goal_has_periodic_report:
-        after = payload.get("after")
-        control_plane = (
-            after.get("control_plane")
-            if isinstance(after, Mapping)
-            and isinstance(after.get("control_plane"), Mapping)
-            else {}
-        )
-        current = control_plane.get("periodic_report")
-        periodic_report = {
-            "feature_id": "periodic_report",
-            "display_name": "Periodic report",
-            "availability": "supported_explicit_override",
-            "default": {"enabled": False, "timezone": "UTC"},
-            "effect": "Use a complete Goal-specific report route instead of the live machine default.",
-        }
-        if isinstance(current, Mapping):
-            periodic_report["current"] = dict(current)
-        goal_features.append(periodic_report)
-    return goal_features
-
-
-def _validated_capability_ids(capability_catalog: Mapping[str, Any]) -> list[str]:
-    capabilities = capability_catalog.get("capabilities")
-    if not isinstance(capabilities, list) or any(
-        not isinstance(item, Mapping) for item in capabilities
-    ):
-        raise ValueError("capability catalog is invalid")
-    capability_ids = [
-        str(item.get("capability_id") or "").strip() for item in capabilities
-    ]
-    if not all(capability_ids) or len(set(capability_ids)) != len(capability_ids):
-        raise ValueError("capability catalog contains an invalid identity")
-    return capability_ids
-
-
 def _parse_goal_configuration_update(
     body: Mapping[str, Any], *, execute: bool
 ) -> tuple[str, str, Mapping[str, Any] | None, str]:
@@ -426,41 +368,6 @@ def _goal_configuration_update_plan(
     return plan, desired_configuration
 
 
-def _public_goal_configuration(
-    payload: Mapping[str, Any],
-    *,
-    machine_namespaces: list[Mapping[str, Any]] | None = None,
-) -> dict[str, Any]:
-    goal_id = str(payload.get("goal_id") or "").strip()
-    if not goal_id:
-        raise ValueError("Goal configuration result is missing goal_id")
-    catalog = _mapping(payload.get("configuration_catalog"), "configuration catalog")
-    capability_catalog = _mapping(
-        catalog.get("capability_catalog"), "capability catalog"
-    )
-    if machine_namespaces is not None:
-        goal_features = _goal_features_with_machine_context(
-            payload, catalog, machine_namespaces
-        )
-        capability_catalog = build_capability_configuration_catalog(
-            machine_namespaces=machine_namespaces,
-            goal_features=goal_features,
-        )
-    capability_ids = _validated_capability_ids(capability_catalog)
-    return {
-        "ok": True,
-        "schema_version": GOAL_CONFIGURATION_INSPECTION_SCHEMA,
-        "status": "configured",
-        "goal_id": goal_id,
-        "revision": goal_capability_configuration_revision(
-            goal_id,
-            capability_catalog,
-        ),
-        "available_capabilities": capability_ids,
-        "capability_catalog": capability_catalog,
-    }
-
-
 class GoalConfigurationRequestMixin:
     server: _GoalConfigurationServer
     path: str
@@ -488,24 +395,7 @@ class GoalConfigurationRequestMixin:
         runtime_root = getattr(self.server, "runtime_root", None)
         if not isinstance(runtime_root, Path):
             return None
-        registry = build_builtin_machine_configuration_registry()
-        inspection = inspect_machine_configuration(runtime_root, registry=registry)
-        current_namespaces = (
-            inspection.get("machine_configuration", {}).get("namespaces", {})
-            if isinstance(inspection.get("machine_configuration"), Mapping)
-            else {}
-        )
-        return [
-            {
-                **descriptor,
-                **(
-                    {"current": current_namespaces[descriptor["namespace"]]}
-                    if descriptor["namespace"] in current_namespaces
-                    else {}
-                ),
-            }
-            for descriptor in registry.public_catalog()["namespaces"]
-        ]
+        return inspect_machine_namespaces(runtime_root)
 
     def _goal_configuration_inspect(self) -> None:
         try:

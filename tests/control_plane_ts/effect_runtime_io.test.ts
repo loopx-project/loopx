@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {spawnSync} from "node:child_process";
+import { mkdtemp, open, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -16,6 +17,17 @@ async function workspace(t: TestContext): Promise<string> {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test("zero-wait acquisition retries a reclaimed dead owner but preserves a live owner", async t => {
+  const root = await workspace(t), target = join(root, "state");
+  const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+  assert.equal(dead.status, 0);
+  await writeFile(`${target}.ts-effect.lock`, JSON.stringify({pid: dead.pid, token: "dead"}));
+  const acquired = await acquireFileMutationLock(target, process.pid, 0);
+  await assert.rejects(acquireFileMutationLock(target, process.pid, 0), {code: "mutation_lock_timeout"});
+  assert.equal((await mutationLockOwner(target))?.token, acquired.token);
+  assert.equal(await releaseFileMutationLock(target, acquired.token), true);
+});
 
 test("token-safe release cannot remove a replacement lock", async (t) => {
   const root = await workspace(t);
@@ -92,4 +104,39 @@ test("blank mutation lock tokens are not treated as valid owners", async (t) => 
     "utf8",
   );
   assert.equal(await mutationLockOwner(target), null);
+});
+
+test("acquire rejects success when its lock inode is replaced before owner publication", async (t) => {
+  const root = await workspace(t);
+  const target = join(root, "state");
+  const lockPath = `${target}.ts-effect.lock`;
+  const replacement = { pid: process.pid, token: "replacement-token" };
+  const probe = await open(join(root, "probe"), "w");
+  const prototype = Object.getPrototypeOf(probe) as {
+    writeFile(data: string, encoding: BufferEncoding): Promise<void>;
+  };
+  await probe.close();
+  const writeFileToHandle = prototype.writeFile;
+  let replaced = false;
+
+  prototype.writeFile = async function (data, encoding) {
+    if (!replaced) {
+      replaced = true;
+      await rm(lockPath, { force: true });
+      await writeFile(lockPath, JSON.stringify(replacement), "utf8");
+    }
+    await writeFileToHandle.call(this, data, encoding);
+  };
+
+  try {
+    await assert.rejects(
+      acquireFileMutationLock(target, process.pid, 0),
+      { code: "mutation_lock_timeout" },
+    );
+    assert.equal(replaced, true);
+    assert.deepEqual(await mutationLockOwner(target), replacement);
+  } finally {
+    prototype.writeFile = writeFileToHandle;
+    await rm(lockPath, { force: true });
+  }
 });

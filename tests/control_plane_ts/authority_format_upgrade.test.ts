@@ -128,10 +128,18 @@ test("content inspection separates store, archive, backup and selector regardles
   await assert.rejects(inspectAuthorityFormat(backup), /digest mismatch/);
   const selector = join(runtime, "selector.json");
   await writeFile(selector, JSON.stringify({schema_version: "loopx_local_authority_provider_v0",
-    provider: "postgresql", goal_id: goal, tenant_id: "tenant-a", store_identity: "postgresql:synthetic"}));
+    provider: "postgresql", goal_id: goal, tenant_id: "tenant-a", store_identity: "postgresql:" + "a".repeat(32)}));
   const selected = await inspectAuthorityFormat(selector);
   assert.equal(selected.artifact_kind, "provider_selector");
   assert.equal(selected.verification, "metadata_only");
+  for (const provider of ["file", "sqlite"]) {
+    const binding = {schema_version: "loopx_local_authority_provider_v0", provider, goal_id: goal,
+      store_identity: provider + ":" + "a".repeat(32)};
+    await writeFile(selector, JSON.stringify(binding));
+    assert.equal((await inspectAuthorityFormat(selector)).provider, provider);
+    await writeFile(selector, JSON.stringify({...binding, store_identity: "wrong-provider"}));
+    await assert.rejects(inspectAuthorityFormat(selector), /selector/);
+  }
   await writeFile(misleading, JSON.stringify({schema_version: "loopx_file_authority_store_v999"}));
   assert.equal((await inspectAuthorityFormat(misleading)).status, "unsupported");
 });

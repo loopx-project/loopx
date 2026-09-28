@@ -45,6 +45,13 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
         verified = cli("verify", "--archive", str(archive))
         assert verified["archive"] == exported["archive"]
         assert verified["archive"]["commits"] == "1"
+        audit_args = ("audit", "--goal-id", goal, "--archive", str(archive),
+                      "--archive-sha256", verified["archive"]["archive_sha256"])
+        audited = cli(*audit_args)
+        assert audited["status"] == "audited"
+        assert audited["audit"]["scope"] == "exact"
+        assert audited["audit"]["compared_commits"] == "1"
+        assert not audited["authority_changed"]
         occupied = cli("export", "--goal-id", goal, "--archive", str(archive), exit_code=1)
         assert occupied["status"] == "failed"
         for target_provider in ("file", "sqlite"):
@@ -62,6 +69,10 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
             proof = json.loads((destination / "verified-restore.json").read_text())
             assert proof["archive_sha256"] == verified["archive"]["archive_sha256"]
             assert proof["target_store_identity"] != proof["source_store_identity"]
+            audited = cli(*audit_args, "--destination", str(destination))
+            assert audited["audit"]["status"] == "matched"
+            assert audited["audit"]["target_store_identity"] == proof["target_store_identity"]
+            assert cli(*audit_args, "--allow-newer-head")["audit"]["scope"] == "retained_prefix"
             # Reopen the actual restored backend in a separate process.
             module = REPO / f"loopx/control_plane/coordination/{target_provider}_authority_store.ts"
             class_name = "FileAuthorityStore" if target_provider == "file" else "SqliteAuthorityStore"
@@ -146,3 +157,62 @@ def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp
     assert all(p.read_bytes() == data for p, data in before.items())
     assert not (project / ".loopx/runtime").exists()
     assert not (common / "authority").exists()
+
+
+@pytest.mark.parametrize("initial,target", [("file", "sqlite"), ("sqlite", "file")])
+def test_provider_migration_cli_preserves_readback_and_rollback(tmp_path, monkeypatch, initial, target):
+    from canonical_authority_fixture import promoted_create_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state = promoted_create_fixture(tmp_path, provider=initial)
+    before = state.read_bytes()
+
+    def cli(*args, expected=0):
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+                                 "--format", "json", *args], cwd=REPO, capture_output=True, text=True, timeout=90)
+        assert result.returncode == expected, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    try:
+        for index, destination in enumerate((target, initial)):
+            plan = tmp_path / f"plan-{index}.json"
+            planned = cli("authority-archive", "plan-migration", "--goal-id", "goal-a", "--provider", destination, "--plan", str(plan))
+            arguments = ("authority-archive", "migrate", "--goal-id", "goal-a", "--plan", str(plan), "--plan-sha256", planned["plan_sha256"])
+            assert cli(*arguments)["status"] == "planned"
+            migrated = cli(*arguments, "--execute")
+            assert migrated["status"] == "migrated", migrated
+            assert migrated["selected_provider"] == destination
+            assert migrated["audit"]["compared_commits"] == "1"
+            assert cli(*arguments, "--execute")["status"] == "already_applied"
+            # Independent production CLI reads must follow the published selector.
+            snapshot = cli("authority-archive", "export", "--goal-id", "goal-a", "--archive", str(tmp_path / f"after-{index}.jsonl"))
+            assert snapshot["archive"]["source_provider"] == destination
+        assert state.read_bytes() == before
+    finally:
+        subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],
+                       cwd=REPO, capture_output=True, text=True, timeout=30, check=True)
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_migration_transport_loss_never_asserts_that_execution_did_not_publish(tmp_path, monkeypatch, execute):
+    from argparse import Namespace
+    from loopx.cli_commands import authority_archive
+
+    def disconnected(*args, **kwargs):
+        assert kwargs["retry_safe"] is False
+        raise RuntimeError("Connection lost after request delivery")
+
+    monkeypatch.setattr(authority_archive, "effect_runtime_result", disconnected)
+    registry = tmp_path / "registry.json"
+    registry.write_text("{}")
+    args = Namespace(command="authority-archive", authority_archive_action="migrate", goal_id="example",
+                     plan=tmp_path / "plan.json", plan_sha256="a" * 64, execute=execute)
+    outputs = []
+    status = authority_archive.handle_authority_archive_command(
+        args, registry_path=registry, runtime_root_arg=str(tmp_path / "runtime"),
+        print_payload=lambda payload, *_: outputs.append(payload), output_format=lambda _: "json")
+    assert status == 1
+    assert outputs[0]["authority_changed"] is (None if execute else False)
+    if execute:
+        assert outputs[0]["requires_same_plan_retry"] is True
+        assert outputs[0]["reason_code"] == "migration_outcome_unknown"

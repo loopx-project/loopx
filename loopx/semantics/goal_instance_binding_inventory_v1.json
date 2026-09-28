@@ -36,21 +36,23 @@
       "locator": "<runtime_root>/goals/<goal_id>/sessions and host runtime state",
       "revision_signal": "turn_instance_id",
       "content_digest_signal": "turn_key",
-      "observed_reference": "goal_id",
+      "observed_reference": "goal_id + goal_instance_id for source_session_v1; goal_id otherwise",
       "producer_sites": [
+        "loopx/control_plane/goals/first_party_host_admission.py::capture_first_party_host_goal_ref",
         "loopx/control_plane/turn_driver/codex_cli.py::codex_cli_session_binding",
-        "loopx/control_plane/turn_driver/host_binding.py::managed_executor_binding"
+        "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"
       ],
       "consumer_sites": [
+        "loopx/control_plane/goals/first_party_host_runtime.ts::decideFirstPartyHostRuntime",
         "loopx/control_plane/turn_driver/executor.py::run_loopx_turn_once",
         "loopx/dsh_goal_mode/turn_host_adapter.py::run_dsh_host",
         "loopx/kunluncode_goal_mode/runtime.py::run_native_goal"
       ],
-      "effect_boundary": "loopx/control_plane/turn_driver/executor.py::run_loopx_turn_once",
+      "effect_boundary": "loopx/control_plane/goals/first_party_host_admission.py::FirstPartyHostGoalAdmission.accept_result",
       "authority_role": "host_execution_binding",
-      "current_identity_strength": "goal_alias_only",
+      "current_identity_strength": "source_exact_partial",
       "cleanup_support": "host_session_discard",
-      "m1_disposition": "alias_only_inventory",
+      "m1_disposition": "source_exact_partial_enforcement",
       "target_milestone": "M3"
     },
     {

@@ -435,6 +435,7 @@ def build_loopx_turn_plan(
     session_binding: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     iteration_context_policy: str = "resume_if_available",
+    goal_ref: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Project a TurnEnvelope into a typed, side-effect-free host decision."""
 
@@ -485,6 +486,7 @@ def build_loopx_turn_plan(
         scheduler_owner=str(context_projection.get("scheduler_owner") or ""),
         session_action=str(session.get("action") or "none"),
         turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
     )
     execution_topology = build_subagent_execution_topology(
         turn_envelope=envelope,
@@ -550,6 +552,8 @@ def build_loopx_turn_plan(
             payload["delegation_context"] = context
     if execution_topology:
         payload["subagent_execution_topology"] = execution_topology
+    if goal_ref is not None:
+        payload["goal_ref"] = dict(goal_ref)
     if route is LoopXTurnRoute.CAPABILITY_ACTION_REQUIRED:
         payload["capability_action"] = {
             "status": "required",

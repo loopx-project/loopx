@@ -3,10 +3,7 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
-import {
-  SETTLEMENT_STEP_KINDS,
-  settlementIdentityFromPlan,
-} from "../effect_program.ts";
+import { settlementIdentityFromPlan } from "../effect_program.ts";
 import {
   EffectRuntimeConflictError,
   EffectRuntimeRequestError,
@@ -16,6 +13,7 @@ import {
   withFileMutationLock,
 } from "../effect_runtime_io.ts";
 import { requireNonEmptyString as requiredString } from "../runtime_decode.ts";
+import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import {
   interpretTurnJournalEffect,
   supportedJournalStatuses,
@@ -23,9 +21,6 @@ import {
 } from "./turn_journal.ts";
 
 const terminalStatuses = new Set(["committed", "stopped"]);
-const preparedStepKinds: ReadonlySet<string> = new Set(
-  SETTLEMENT_STEP_KINDS.filter((kind) => kind !== "validation"),
-);
 const statusTransitions: Readonly<Record<string, ReadonlySet<string>>> = {
   in_progress: new Set([
     "in_progress",
@@ -91,39 +86,6 @@ function samePrefix(left: readonly string[], right: readonly string[]): boolean 
   return left.length <= right.length && left.every((phase, index) => phase === right[index]);
 }
 
-function requireValidPreparedAttempt(
-  journal: JsonObject,
-  state: Pick<JournalState, "status" | "completedPhases" | "effectId">,
-): void {
-  if (journal.effect_attempts === undefined) return;
-  const attempts = asObject(journal.effect_attempts);
-  if (Object.keys(attempts).length !== 1) {
-    conflict("Turn journal must carry at most one prepared effect");
-  }
-  const [stepKind, rawAttempt] = Object.entries(attempts)[0] ?? [];
-  if (!stepKind || !preparedStepKinds.has(stepKind)) {
-    conflict("Turn journal carries an unsupported prepared effect step");
-  }
-  const attempt = asObject(rawAttempt);
-  const effectRef = `${state.effectId}#${stepKind}`;
-  if (attempt.status !== "prepared" || attempt.effect_ref !== effectRef) {
-    conflict("Turn journal prepared effect does not match settlement identity");
-  }
-  const phaseIndex = stepKind === "terminal_closeout"
-    ? transactionPhases.indexOf("scheduler_apply")
-    : transactionPhases.indexOf(stepKind);
-  if (
-    phaseIndex < 0 ||
-    state.completedPhases.length !== phaseIndex ||
-    !samePrefix(state.completedPhases, transactionPhases)
-  ) {
-    conflict("Turn journal prepared effect is not the next settlement step");
-  }
-  if (!["in_progress", "failed"].includes(state.status)) {
-    conflict("Turn journal terminal state cannot retain a prepared effect");
-  }
-}
-
 function requireJournalState(journal: JsonObject): JournalState {
   if (journal.schema_version !== "loopx_turn_journal_v0") {
     throw new EffectRuntimeRequestError(
@@ -145,6 +107,12 @@ function requireJournalState(journal: JsonObject): JournalState {
   });
   const context = effect.request.context;
   const effectId = journalEffectId(journal);
+  const attemptViolation = preparedAttemptViolation(journal, {
+    status: context.journal_status,
+    completedPhases: context.completed_phases,
+    effectId: effectId ?? "",
+  });
+  if (attemptViolation) conflict(attemptViolation.message);
   if (!context.journal_consistent || !effectId) {
     throw new EffectRuntimeRequestError(
       `Turn journal snapshot is inconsistent: ${context.violations.join(", ")}`,
@@ -190,7 +158,6 @@ function requireJournalState(journal: JsonObject): JournalState {
     }
   }
   const state = { status, completedPhases, effectId, failedPhase };
-  requireValidPreparedAttempt(journal, state);
   return state;
 }
 

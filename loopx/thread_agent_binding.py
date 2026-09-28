@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from .control_plane.projects.registry_codec import mutate_project_registry
@@ -26,6 +26,11 @@ CODEX_THREAD_HOST_SURFACES = frozenset(
     }
 )
 _CODEX_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+AGENT_BINDING_ROUTE_SCHEMA_VERSION = "loopx_agent_binding_route_v0"
+ROUTE_SINGLE_CANDIDATE = "single_candidate"
+ROUTE_MULTIPLE_CANDIDATES = "multiple_candidates"
+ROUTE_NO_CANDIDATE = "no_candidate"
 
 
 class ThreadBindingRequestError(ValueError):
@@ -166,6 +171,84 @@ def resolve_thread_agent_binding(
         base["status"] = "conflict"
         base["reason"] = "one thread is bound to multiple agent lanes"
     return base
+
+
+def collect_accepted_bindings(goals: Iterable[Any]) -> list[dict[str, str]]:
+    """Return every thread binding the owner accepts, deduplicated, first seen first.
+
+    `_bindings_for_goal` is the single normalisation rule, so an entry the owner
+    cannot name is dropped here rather than counted or published downstream.
+    """
+
+    accepted: list[dict[str, str]] = []
+    for raw_goal in goals:
+        if not isinstance(raw_goal, dict):
+            continue
+        for binding in _bindings_for_goal(raw_goal):
+            candidate = {
+                "thread_id": binding["thread_id"],
+                "host_surface": binding["host_surface"],
+                "agent_id": binding["agent_id"],
+            }
+            if candidate not in accepted:
+                accepted.append(candidate)
+    return accepted
+
+
+def summarize_agent_binding_routes(
+    goals: Iterable[Any],
+    *,
+    agent_id: Any,
+) -> dict[str, Any]:
+    """Classify which published bindings address one Agent, keeping full identity.
+
+    This is the reverse of `resolve_thread_agent_binding`: that resolver answers
+    "which Agent does this exact link belong to", while a coordinator holding a
+    peer name and no link needs to know how many addresses the bindings on record
+    offer for that peer. The vocabulary says only what this walk can prove. The
+    bindings were read from the goals supplied, so `scope` records that; a
+    `single_candidate` result is not a project-level uniqueness claim, and
+    `address_shared` reports the one cross-identity fact that *is* visible here —
+    the same host thread also addresses a different Agent, which the forward
+    resolver would answer `conflict`.
+
+    Nothing selects a route, opens a session or transfers claim, lease or
+    capability. Candidates keep their full accepted identity because this is the
+    internal view: the projection that publishes them owns visibility and size.
+    """
+
+    wanted = normalize_todo_claimed_by(agent_id)
+    accepted = collect_accepted_bindings(goals)
+    candidates = [
+        {"thread_id": item["thread_id"], "host_surface": item["host_surface"]}
+        for item in accepted
+        if wanted and item["agent_id"] == wanted
+    ]
+    other_addresses = {
+        (item["host_surface"], item["thread_id"])
+        for item in accepted
+        if item["agent_id"] != wanted
+    }
+    address_shared = any(
+        (item["host_surface"], item["thread_id"]) in other_addresses
+        for item in candidates
+    )
+    if not candidates:
+        outcome = ROUTE_NO_CANDIDATE
+    elif len(candidates) == 1:
+        outcome = ROUTE_SINGLE_CANDIDATE
+    else:
+        outcome = ROUTE_MULTIPLE_CANDIDATES
+    return {
+        "schema_version": AGENT_BINDING_ROUTE_SCHEMA_VERSION,
+        "agent_id": wanted or "",
+        "outcome": outcome,
+        "address_shared": address_shared,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "scope": "goals_supplied",
+        "provenance": "run_history.goals[].coordination.thread_agent_bindings",
+    }
 
 
 def _registry_thread_binding_request(

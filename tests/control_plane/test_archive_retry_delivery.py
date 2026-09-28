@@ -301,10 +301,10 @@ def test_archive_ack_transport_failure_preserves_committed_result(
     registry, runtime, _ = _fixture(tmp_path)
     execute = provider_terminal_lifecycle.effect_runtime_result
 
-    def unavailable_ack(method, params):
+    def unavailable_ack(method, params, **kwargs):
         if method == "coordination.local_authority.todo_archive_ack":
             raise OSError("injected acknowledgement transport failure")
-        return execute(method, params)
+        return execute(method, params, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(

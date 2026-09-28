@@ -163,61 +163,64 @@ def _default_rows(
 ) -> list[dict]:
     rows: list[dict] = []
     for scenario in probe.SCENARIOS:
-        project, runtime, registry_path, state_file = probe._write_fixture(
-            fixture_root / scenario.name,
-            scenario,
-        )
-        for output_format in ("json", "markdown"):
-            commands = probe._surface_commands(
-                project=project,
-                runtime=runtime,
-                registry_path=registry_path,
-                state_file=state_file,
-                output_format=output_format,
+        # Match _measure_scenario: alias each scenario, not its parent. Otherwise
+        # emitted command paths include the scenario suffix only in this runner.
+        with probe._stable_budget_fixture_root(fixture_root / scenario.name) as root:
+            project, runtime, registry_path, state_file = probe._write_fixture(
+                root,
+                scenario,
             )
-            for surface_id, command in commands.items():
-                exit_code, text = probe._invoke_cli(command)
-                if exit_code != 0:
-                    raise AssertionError(f"{surface_id}/{output_format} failed")
-                measurement = probe.measure_cli_output(
-                    text, output_format=output_format
+            for output_format in ("json", "markdown"):
+                commands = probe._surface_commands(
+                    project=project,
+                    runtime=runtime,
+                    registry_path=registry_path,
+                    state_file=state_file,
+                    output_format=output_format,
                 )
-                surface = probe.CLI_OUTPUT_BUDGET_BY_ID[surface_id]
-                if enforce_budget:
-                    probe.assert_cli_output_baseline(
-                        surface,
-                        scenario=scenario.name,
-                        output_format=output_format,
-                        text=text,
-                        measurement=measurement,
+                for surface_id, command in commands.items():
+                    exit_code, text = probe._invoke_cli(command)
+                    if exit_code != 0:
+                        raise AssertionError(f"{surface_id}/{output_format} failed")
+                    measurement = probe.measure_cli_output(
+                        text, output_format=output_format
                     )
-                else:
-                    _assert_output_contract(
-                        output_format=output_format,
-                        text=text,
-                        measurement=measurement,
-                        semantic_json_keys=surface.semantic_json_keys,
-                        markdown_anchor=surface.markdown_anchor,
-                    )
-                rows.append(
-                    _receipt_row(
-                        semantics=semantics,
-                        row_id=f"surface/{surface_id}/{scenario.name}/{output_format}",
-                        surface_id=surface_id,
-                        scenario=scenario.name,
-                        output_format=output_format,
-                        qualification_policy=surface.qualification_policy,
-                        semantic_json_keys=surface.semantic_json_keys,
-                        markdown_anchor=surface.markdown_anchor,
-                        measurement=measurement,
-                        text=text,
-                        output_contract_version=(
-                            getattr(surface, "output_contract_version", None)
-                            if output_format == "json"
-                            else None
+                    surface = probe.CLI_OUTPUT_BUDGET_BY_ID[surface_id]
+                    if enforce_budget:
+                        probe.assert_cli_output_baseline(
+                            surface,
+                            scenario=scenario.name,
+                            output_format=output_format,
+                            text=text,
+                            measurement=measurement,
+                        )
+                    else:
+                        _assert_output_contract(
+                            output_format=output_format,
+                            text=text,
+                            measurement=measurement,
+                            semantic_json_keys=surface.semantic_json_keys,
+                            markdown_anchor=surface.markdown_anchor,
+                        )
+                    rows.append(
+                        _receipt_row(
+                            semantics=semantics,
+                            row_id=f"surface/{surface_id}/{scenario.name}/{output_format}",
+                            surface_id=surface_id,
+                            scenario=scenario.name,
+                            output_format=output_format,
+                            qualification_policy=surface.qualification_policy,
+                            semantic_json_keys=surface.semantic_json_keys,
+                            markdown_anchor=surface.markdown_anchor,
+                            measurement=measurement,
+                            text=text,
+                            output_contract_version=(
+                                getattr(surface, "output_contract_version", None)
+                                if output_format == "json"
+                                else None
+                            ),
                         ),
                     )
-                )
     return rows
 
 

@@ -131,6 +131,23 @@ an identity.
 Rules:
 
 - a row exists per registered Agent of the Goal, whether or not it is running;
+- `peer_route` summarizes the thread bindings already published for that Agent as
+  `{schema_version, agent_id, outcome, address_shared, candidate_count, candidates,
+  scope, provenance}`. `outcome` describes only what this walk can prove:
+  `single_candidate`, `multiple_candidates` or `no_candidate` — it is never a claim
+  that an exact link has been resolved, which stays the forward resolver's job.
+  `address_shared: true` means one of these addresses also names a different
+  registered Agent, the same registry conflict the forward resolver answers
+  `conflict` for, so a lone candidate is not thereby unique. `scope` is
+  `goals_supplied`: the bindings read for this Goal, which does not bound
+  project-level uniqueness. `candidates` carries at most three entries that
+  survived the public-output boundary, and any entry that did not is witheld:
+  `withheld_candidate_count` and the packet-level `route_candidate_withheld`
+  limitation name it, while `candidate_count` keeps counting it, so a filtered
+  route is visibly filtered and never reads as a binding that does not exist.
+  Withholding never truncates an identifier to make it pass. In every case a
+  route is a locator, not a claim, lease, capability or cross-host resume
+  authority;
 - `presence` is optional and must carry `provider`, `observed_at` and `basis`,
   so a reader can tell "not running" from "this machine cannot see it";
 - `provider_session_ref` is an opaque handle **inside one provider session**.
@@ -140,6 +157,19 @@ Rules:
   injected pane identifiers) may strengthen "I am inside this space". It never
   replaces registry registration, and a failure of that proof means the reader
   reports `unknown`, not `absent`.
+
+For a named existing peer, `resolve-peer-route --goal-id ... --agent-id ...`
+reads the binding owner and the local host observer before any request is
+recorded. `ambiguous` preserves all accepted candidate identities and asks for
+an exact task link; it never selects the last or newest binding. An explicit
+`--thread-link` must resolve to that same Goal and Agent across the project
+registry. `unavailable` includes archived, unknown, unsupported and missing
+host observations. `not_authorized` means the named peer is outside the Goal or
+the supplied link belongs to another identity. A `resolved` result proves only
+an exact project binding plus a readable local host record. The host must still
+verify its own profile and submission permission. Every preview says
+`host_delivery: not_attempted`, and no route preview grants a claim, lease,
+session resume or message-send permission.
 
 ## Presence Vocabulary
 
@@ -195,6 +225,17 @@ facts that are easy to conflate:
 4. **No blind resend.** A timeout or a stall does not prove the request was never
    delivered, so the sender inspects state before repeating; `context_handoff`
    delivery receipts remain the durable record that a delivery happened.
+
+`manager-inbox request --require-host-route` applies that route check before
+the existing peer operation and Inbox write. An ambiguous, unavailable or
+wrong-identity route writes no request. The returned `host_delivery` block is
+an exact target and a content-free notification for an authorized host sender;
+its status remains `not_attempted` until the host actually submits it. Repeating
+the same operation id recovers one Inbox request; using it with another selected
+host task is an identity conflict. A sender must inspect the
+host after a lost submission response before repeating the host message. The
+receiver's `manager-inbox read`, decision and `report` receipts remain distinct
+from host submission and from each other.
 
 ## Target Identity Pinning
 

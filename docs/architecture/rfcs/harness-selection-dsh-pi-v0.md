@@ -1,6 +1,8 @@
 # DSH / Pi: L1 Observation and Managed Runtime Selection
 
-Status: evidence-backed implementation assessment, not a runtime promotion.
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
+
 Scope: the shared goals of [Reliability Diagnostics](./long-running-agent-reliability-diagnostics-governed-delivery-v0.md)
 and [Desktop Execution Frontends](./desktop-execution-frontends-v0.md).
 [中文](./harness-selection-dsh-pi-v0.zh-CN.md)

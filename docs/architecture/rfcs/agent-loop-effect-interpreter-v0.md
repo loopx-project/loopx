@@ -3,6 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Accepted |
+| Supersedes / closes | none |
 | Date | 2026-08-08 |
 | Author | LoopX maintainers |
 | Scope | Public control-plane docs, packet contracts, refactor direction, test strategy |

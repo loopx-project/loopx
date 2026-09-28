@@ -244,13 +244,31 @@ def handle_agent_turn_recall_command(
                     "experiment": experiment_status,
                 }
             else:
+                try:
+                    read_checkpoints = _read_authority_checkpoints(config, args.goal_id)
+                except RuntimeError:
+                    # This failure precedes the provider; do not fabricate a
+                    # zero-call receipt for errors after recall has begun.
+                    payload = {
+                        "ok": False,
+                        "schema_version": AGENT_TURN_RECALL_SCHEMA_VERSION,
+                        "status": "runtime_unavailable",
+                        "reason_code": "automatic_recall_runtime_failed",
+                        "goal_id": args.goal_id,
+                        "agent_id": args.agent_id,
+                        "provider_call_count": 0,
+                        "grants_new_action_authority": False,
+                        "quota_spend_performed": False,
+                        "external_writes_performed": False,
+                        "suppress_external_sinks": True,
+                    }
+                    print_payload(payload, output_format(args), _render)
+                    return 2
                 payload = run_agent_turn_recall(
                     config,
                     situation,
                     observed_at=datetime.now(timezone.utc).isoformat(),
-                    read_authority_checkpoints=_read_authority_checkpoints(
-                        config, args.goal_id
-                    ),
+                    read_authority_checkpoints=read_checkpoints,
                 ) | {
                     "goal_id": args.goal_id,
                     "agent_id": args.agent_id,

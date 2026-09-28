@@ -463,6 +463,11 @@ def test_live_inventory_ignores_missing_or_stale_reports(tmp_path, monkeypatch, 
     monkeypatch.setitem(smoke["check_inventory"].__globals__, "REPO_ROOT", tmp_path)
     inventory, _ = smoke["check_inventory"](registry, sources)
     assert inventory["summary"]["source_files"] == len(sources)
+    # Pin this fixture to its baseline so a fresh fork still overflows after
+    # unrelated source simplification creates room in the production budget.
+    registry["inventory_ratchets"]["same_runtime_forks"] = inventory["summary"]["same_runtime_forks"]
+    monkeypatch.setitem(smoke["BUDGET_ANCHOR"], "same_runtime_forks",
+                        registry["inventory_ratchets"]["same_runtime_forks"])
     # A newly observed duplicate must still fail; an old or missing report cannot hide it.
     duplicate = [smoke["SourceFile"](f"loopx/q9_{name}.py", ".py", 'Q9_DUPLICATE = "same"\n')
                  for name in ("first", "second")]
@@ -794,8 +799,9 @@ def test_inventory_report_discloses_budget_slack(monkeypatch):
     # (the multi_value_twins slack belongs to the multi-value single-source
     # batch, not this one).
     _, pinned = smoke["check_inventory"](registry, sources)
-    assert "slack=conflicting_values" not in pinned, pinned
-    assert "slack=conflicting_definitions" not in pinned, pinned
+    pinned_slack = pinned.partition(" slack=")[2].split(" ", 1)[0].split(",")
+    assert not any(item.startswith("conflicting_values=") for item in pinned_slack), pinned
+    assert not any(item.startswith("conflicting_definitions=") for item in pinned_slack), pinned
     # A two-file budget revert (the merge-trap shape: registry and anchor
     # move back together, so the equality anchor stays satisfied) must show
     # up as disclosed slack instead of passing silently.
@@ -805,7 +811,8 @@ def test_inventory_report_discloses_budget_slack(monkeypatch):
         smoke["BUDGET_ANCHOR"], "conflicting_values", widened["inventory_ratchets"]["conflicting_values"],
     )
     _, line = smoke["check_inventory"](widened, sources)
-    assert "slack=conflicting_values=2" in line, line
+    slack = line.partition(" slack=")[2].split(" ", 1)[0].split(",")
+    assert "conflicting_values=2" in slack, line
 
 
 def _retirement_registry(python_surface: int, typescript_surface: int) -> dict:

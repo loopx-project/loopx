@@ -7,6 +7,31 @@ const obligation = {triggers: [{kind: "required_agent_vision_missing"}]};
 const vision = {vision_patch: {acceptance_summary: "Observed permission boundary"},
   path_delta: {outcome: "continue", evidence_refs: ["evidence-permission"]}};
 
+test("a revalidated successor receipt settles only its exact original Turn guard", () => {
+  const id = "replan-1111111111111111";
+  const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
+    obligation_id: id, successor_todo_id: "todo_independent_successor",
+    outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
+  const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+    source: "todo_replan_successor_transition", semantic_delta: delta};
+  const request = {operation: "turn_transition", guard_scoped: true,
+    selected_obligation_id: id, transition_acks: [null, ack]};
+  assert.deepEqual(projectReplanSemantics(request).semantic_delta, delta);
+  for (const guard of [{guard_scoped: false}, {selected_obligation_id: null},
+    {selected_obligation_id: "replan-2222222222222222"}]) {
+    assert.equal(projectReplanSemantics({...request, ...guard}).semantic_delta, null);
+  }
+  for (const invalid of [{recorded: false}, {source: "prose_claim"},
+    {schema_version: "unknown"}, {semantic_delta: {...delta, accepted: false}},
+    {semantic_delta: {...delta, satisfying_outcomes: []}},
+    {semantic_delta: {...delta, successor_todo_id: null}}]) {
+    assert.equal(projectReplanSemantics({...request, transition_acks: [{...ack, ...invalid}]}).semantic_delta, null);
+  }
+  const next = {...ack, semantic_delta: {...delta, obligation_id: "replan-2222222222222222"}};
+  assert.deepEqual(projectReplanSemantics({...request, transition_acks: [next, ack]}).semantic_delta, delta);
+  assert.throws(() => projectReplanSemantics({...request, selected_obligation_id: "malformed"}), /malformed/);
+});
+
 test("obligation source governs both authoring projection and semantic discharge", () => {
   const projection = projectReplanSemantics({operation: "requirements", obligation});
   assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);
@@ -179,5 +204,20 @@ test("acceptance holds use one typed recovery policy even without a projected ou
     assert.equal(projectReplanSemantics({operation: "qualify", obligation: held, agent_vision: vision}).accepted, false);
     assert.equal(projectReplanSemantics({operation: "qualify", obligation: held,
       observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
+  }
+});
+
+
+test("planning advice cannot discharge a replan or widen source-specific exits", () => {
+  for (const kind of ["typed_progress_repeat", "vision_acceptance_gap", "long_todo_chain",
+    "external_progress_review_drift", "goal_acceptance_stale"]) {
+    const source = {triggers: [{kind}]};
+    const projection = projectReplanSemantics({operation: "requirements", obligation: source});
+    assert.equal((projection.planning_guidance as string[]).length, 2);
+    const refusal = projectReplanSemantics({operation: "qualify", obligation: source,
+      planning_guidance: projection.planning_guidance});
+    assert.equal(refusal.accepted, false);
+    assert.deepEqual(refusal.required_any_of, requiredSemanticOutcomes(source));
+    assert.equal(refusal.planning_guidance, undefined);
   }
 });

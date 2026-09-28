@@ -18,6 +18,14 @@ from loopx.goal_mode_mcp import (
     create_fastmcp_server,
 )
 from loopx.control_plane.effect_program import SettlementIdentity
+from loopx.control_plane.goals.first_party_host_admission import (
+    FirstPartyHostRuntimeRejected,
+)
+from loopx.control_plane.goals.source_session_registry_state import guard_path
+from loopx.control_plane.projects.registry_codec import (
+    source_session_registry_transaction,
+)
+from loopx.file_lock import exclusive_cross_runtime_file_lock
 from loopx.kunluncode_goal_mode import cli
 from loopx.kunluncode_goal_mode.app_server import (
     NATIVE_GOAL_MODES,
@@ -43,6 +51,7 @@ from loopx.kunluncode_goal_mode.runtime import (
     build_native_goal_objective,
     read_runtime_state,
     run_native_goal,
+    runtime_state_path,
     write_runtime_state,
 )
 
@@ -1090,6 +1099,48 @@ def _native_context(tmp_path: Path) -> dict[str, str]:
     }
 
 
+def _write_source_native_registry(tmp_path: Path, instance_id: str) -> Path:
+    registry = tmp_path / ".loopx" / "registry.json"
+    payload = {
+        "schema_version": "0.2",
+        "registry_role": "project-local",
+        "profile_id": "source_session_v1",
+        "common_runtime_root": str(tmp_path / "runtime"),
+        "projects": [],
+        "goals": [
+            {
+                "id": "shared-goal",
+                "goal_instance_id": instance_id,
+                "status": "active",
+                "execution_authority": False,
+            }
+        ],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+        "retired_goal_instances": [],
+    }
+    create = None if registry.exists() else lambda: payload
+    with source_session_registry_transaction(
+        registry,
+        operation="kunlun_host_goal_instance_test",
+        create=create,
+    ) as transaction:
+        current = transaction.payload_copy()
+        current["goals"] = payload["goals"]
+        transaction.commit(current)
+    return registry
+
+
+def _replace_source_native_goal(tmp_path: Path, instance_id: str) -> None:
+    registry = tmp_path / ".loopx" / "registry.json"
+    with exclusive_cross_runtime_file_lock(
+        guard_path(registry, "shared-goal"),
+        operation="kunlun_host_goal_instance_test_recreate",
+    ):
+        _write_source_native_registry(tmp_path, instance_id)
+
+
 def _native_todo(*, claimed: bool = False) -> dict[str, object]:
     return {
         "todo_id": "todo-native-1",
@@ -1361,6 +1412,89 @@ def test_native_goal_pro_commits_only_after_verified_terminal_state(
     assert state["writeback"]["quota_spent"] is True
     journal = (tmp_path / ".loopx" / "kunluncode-runtime.json").read_text()
     assert "Implement and verify the native Goal Pro adapter" not in journal
+
+
+def test_source_native_goal_rejects_alias_only_runtime_state(
+    tmp_path: Path,
+) -> None:
+    _write_source_native_registry(
+        tmp_path,
+        "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    state = _native_state(_native_todo(claimed=True))
+    write_runtime_state(tmp_path, state)
+    before = runtime_state_path(tmp_path).read_bytes()
+    control = _FakeControlPlane(_native_todo(claimed=True))
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_native_goal(
+            tmp_path,
+            _native_context(tmp_path),
+            mode="goal-pro",
+            permission_mode="auto",
+            max_duration_secs=60,
+            controller_timeout_secs=120,
+            kunluncode_bin="/usr/bin/kunluncode",
+            control_plane=control,
+            client_factory=lambda *_args, **_kwargs: pytest.fail(
+                "legacy runtime state must not launch KunlunCode"
+            ),
+        )
+
+    assert exc_info.value.code == "legacy_host_state"
+    assert control.calls == []
+    assert runtime_state_path(tmp_path).read_bytes() == before
+
+
+def test_source_native_goal_rejects_result_after_recreation(
+    tmp_path: Path,
+) -> None:
+    instance_a = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    instance_b = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    _write_source_native_registry(tmp_path, instance_a)
+    control = _FakeControlPlane(_native_todo())
+
+    class RecreatingAppServer(_FakeAppServer):
+        def wait_for_goal_terminal(
+            self,
+            thread_id: str,
+            *,
+            timeout_seconds: float,
+        ) -> dict[str, object]:
+            result = super().wait_for_goal_terminal(
+                thread_id,
+                timeout_seconds=timeout_seconds,
+            )
+            _replace_source_native_goal(tmp_path, instance_b)
+            return result
+
+    with pytest.raises(FirstPartyHostRuntimeRejected) as exc_info:
+        run_native_goal(
+            tmp_path,
+            _native_context(tmp_path),
+            mode="goal-pro",
+            permission_mode="auto",
+            max_duration_secs=60,
+            controller_timeout_secs=120,
+            kunluncode_bin="/usr/bin/kunluncode",
+            control_plane=control,
+            client_factory=lambda command, **kwargs: RecreatingAppServer(
+                command,
+                **kwargs,
+            ),
+        )
+
+    assert exc_info.value.code == "stale_goal_instance"
+    assert control.calls == ["should_run", "claim:todo-native-1"]
+    state = read_runtime_state(tmp_path)
+    assert state is not None
+    assert state["binding"]["goal_instance_id"] == instance_a
+    assert state["native"]["verified"] is False
+    assert state["writeback"] == {
+        "delivery_recorded": False,
+        "todo_completed": False,
+        "quota_spent": False,
+    }
 
 
 def test_native_goal_reconciles_crash_after_writeback_without_repeating_it(

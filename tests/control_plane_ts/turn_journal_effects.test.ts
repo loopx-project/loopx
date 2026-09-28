@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { commitTurnJournal } from "../../loopx/control_plane/turn_driver/turn_journal_effects.ts";
+import { interpretTurnJournal } from "../../loopx/control_plane/turn_driver/turn_journal.ts";
 
 const turnKey = `sha256:${"a".repeat(64)}`;
 const todoId = "todo_fixture0001";
@@ -212,6 +213,62 @@ test("prepared effects must use the settlement identity", async () => {
       commit(path, invalid),
       /prepared effect does not match settlement identity/,
     );
+  });
+});
+
+test("inspector and writer share prepared-intent rejection and valid controls", async () => {
+  const prepared = {status: "prepared", effect_ref: `${effectId()}#durable_writeback`};
+  const cases = [
+    {attempts: {unknown_provider_step: prepared}, code: "prepared_effect_step_unsupported"},
+    {attempts: [], code: "prepared_effect_attempts_invalid"},
+    {attempts: null, code: "prepared_effect_attempts_invalid"},
+    {attempts: {}, code: "prepared_effect_count_invalid"},
+    {attempts: {durable_writeback: prepared, quota_spend: prepared}, code: "prepared_effect_count_invalid"},
+    {attempts: {durable_writeback: null}, code: "prepared_effect_identity_invalid"},
+    {attempts: {durable_writeback: {...prepared, status: "committed"}}, code: "prepared_effect_identity_invalid"},
+    {attempts: {durable_writeback: {...prepared, effect_ref: "foreign#durable_writeback"}}, code: "prepared_effect_identity_invalid"},
+    {attempts: {quota_spend: {status: "prepared", effect_ref: `${effectId()}#quota_spend`}}, code: "prepared_effect_phase_invalid"},
+  ];
+  await withJournalPath(async (path) => {
+    await commit(path, journal());
+    await commit(path, journal("in_progress", phases.slice(0, 2)));
+    await commit(path, journal("in_progress", phases.slice(0, 3)));
+    const inspect = (snapshot: Record<string, unknown>) => interpretTurnJournal({
+      schema_version: "loopx_turn_journal_interpretation_request_v0",
+      journal: snapshot, goal_id: "fixture-goal", agent_id: "fixture-agent", turn_key: turnKey,
+    });
+    const before = await readFile(path, "utf8");
+    for (const {attempts, code} of cases) {
+      const invalid = {...journal("in_progress", phases.slice(0, 3)), effect_attempts: attempts};
+      const result = inspect(invalid);
+      assert.ok(result.violations.includes(code), code);
+      assert.equal(result.journal_consistent, false, code);
+      assert.equal(result.recovery_decision.can_continue, false, code);
+      assert.equal(result.recovery_decision.reinvoke_host, false, code);
+      assert.equal(result.recorded_effects.host_invoked, true, code);
+      assert.equal(result.recorded_effects.state_written, null, code);
+      assert.equal(result.recorded_effects.quota_spent, null, code);
+      assert.deepEqual(result.effects, []);
+      await assert.rejects(commit(path, invalid), /Turn journal/, code);
+      assert.equal(await readFile(path, "utf8"), before, code);
+    }
+    assert.equal(inspect(journal("in_progress", phases.slice(0, 3))).journal_consistent, true);
+    const valid = {...journal("in_progress", phases.slice(0, 3)), effect_attempts: {durable_writeback: prepared}};
+    assert.equal(inspect(valid).recovery_decision.reason, "resolve_prepared_effect");
+    await commit(path, valid);
+    const validCloseout = {...journal("in_progress", phases.slice(0, 5)), effect_attempts: {
+      terminal_closeout: {status: "prepared", effect_ref: `${effectId()}#terminal_closeout`},
+    }};
+    assert.equal(inspect(validCloseout).journal_consistent, true);
+    const invalidTerminalStatus = {...validCloseout, status: "committed"};
+    assert.ok(inspect(invalidTerminalStatus).violations.includes("prepared_effect_status_invalid"));
+    await assert.rejects(commit(path, invalidTerminalStatus), /terminal state cannot retain/);
+    const terminalIntent = {...journal("committed", phases), effect_attempts: {
+      terminal_closeout: {status: "prepared", effect_ref: `${effectId()}#terminal_closeout`},
+    }};
+    assert.equal(inspect(terminalIntent).journal_consistent, false);
+    await assert.rejects(commit(path, terminalIntent), /prepared effect/);
+    assert.equal(inspect(journal("committed", phases)).recovery_decision.action, "return_existing");
   });
 });
 

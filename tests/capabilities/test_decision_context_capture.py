@@ -220,10 +220,23 @@ def test_capture_cli_and_status_are_public_safe(setup, capsys):
         "--spool",
         str(args["spool_path"]),
     ]
+    runtime_root = args["spool_path"].parent / "runtime"
     assert (
-        main(["--format", "json", "decision-context", "capture", *common, "--execute"])
+        main(
+            [
+                "--format",
+                "json",
+                "--runtime-root",
+                str(runtime_root),
+                "decision-context",
+                "capture",
+                *common,
+                "--execute",
+            ]
+        )
         == 0
     )
+    assert len(list((runtime_root / "decision-context" / "capture-hosts").glob("*.json"))) == 1
     captured = capsys.readouterr().out
     assert "private-body" not in captured
     assert json.loads(captured)["pending_batch_count"] == 1

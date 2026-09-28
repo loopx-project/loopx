@@ -19,6 +19,96 @@ Path-scoped subsystem appointments and preferred review assignments are
 recorded below. A subsystem appointment does not by itself grant
 repository-wide maintainer authority.
 
+## Maintainer And Review Roster
+
+This is the public list of everyone who can satisfy a review requirement on
+`main`, and the paths they answer for. It is a snapshot audited on
+**2026-09-26**; the matching routes live in [`CODEOWNERS`](CODEOWNERS) and a
+change to either file changes both in one pull request.
+
+| Account | Role | Scope | `CODEOWNERS` route | Since |
+| --- | --- | --- | --- | --- |
+| [`@huangruiteng`](https://github.com/huangruiteng) | Lead maintainer | Whole repository; governance, CI, releases, security handling, cross-subsystem decisions | Every path, and sole owner of `.github/`, `scripts/ci/`, release policy and technical directions | 2026-05-31 |
+| [`@steven-kid`](https://github.com/steven-kid) | Subsystem maintainer | [Lark integration](#lark-integration) | Lark extension, its CLI delegates, Lark docs and focused tests | 2026-08-16 ([#3236](https://github.com/loopx-project/loopx/pull/3236)) |
+| [`@maxliux5`](https://github.com/maxliux5) | Code owner | Frontend source under `apps/presentation/dashboard/` and chat bundle delivery | Dashboard source, `loopx/presentation/chat_bundle.py`, `scripts/chat_bundle*` | 2026-09-08 ([#4071](https://github.com/loopx-project/loopx/pull/4071)) |
+
+Every other module is owned by the lead maintainer: `CODEOWNERS` gives each
+top-level module an explicit line so that gap stays visible rather than hidden
+behind the `*` fallback. First-review contacts in the
+[table below](#first-review-responsibilities) route the first technical
+response but do not satisfy code-owner review.
+
+### Code Owner Eligibility
+
+GitHub only honours code owners with repository write access, and a code-owner
+approval can merge a change on its paths. A route is therefore added only when
+all of the following hold, and the pull request adding it links the evidence:
+
+1. the account has repository write access;
+2. the account has publicly accepted a cohesive path scope, in
+   [issue #4069](https://github.com/huangruiteng/loopx/issues/4069) or on the
+   pull request that adds the route;
+3. the account has completed at least three substantive cross-author reviews
+   touching that scope in the preceding eight weeks, each naming the exact
+   head, the governing invariant and the validation performed; and
+4. the scope is a coherent set of paths, not every file the account has
+   touched.
+
+Authored-PR counts inform the choice of scope but never satisfy (3) on their
+own. A code owner who gives no review in scope for eight weeks is asked
+whether to keep, narrow or pause the route; the outcome is recorded here
+through a pull request rather than inferred from activity. Contributors who
+meet (2) and (3) without write access are recorded as first-review contacts
+and may be proposed for write access.
+
+## Review Service Levels
+
+These are the review targets the maintainers commit to for pull requests from
+contributors. They were set just below the response times actually observed
+over the 90 days before 2026-09-26, so that they hold with the current number
+of reviewers rather than describing a best week.
+
+Business days are Monday to Friday in UTC+8, excluding public holidays there.
+The clock starts when a pull request is opened or leaves draft, so a pull
+request that sat as a draft before it was ready is measured from the moment it
+left draft.
+
+A "response" means a review, comment or merge by an account on the
+[roster](#maintainer-and-review-roster) above — the accounts that can satisfy a
+review requirement. Comments from anyone else are real conversation, but they
+do not satisfy this target, and neither do bot accounts. Both facts come from
+GitHub's typed actor data rather than from login names.
+
+| Event | Target | Observed 2026-06-28 → 2026-09-26 |
+| --- | --- | --- |
+| First maintainer response: review, routing comment, or close with a reason | Within 2 business days | 90% within 2 business days; median about 1.5 hours, p90 about 13 hours (728 contributor pull requests) |
+| Re-review after the author pushes and re-requests review | Within 2 business days | Not separately measured yet |
+| Decision (approve, request changes, or close with rationale) once required checks pass and no review thread is open | Within 5 business days | Merge measured from the review clock: median about 6 hours, p90 about 2 business days |
+| Security report acknowledgement | Within 5 business days, per [`SECURITY.md`](SECURITY.md) | Unchanged |
+
+- A code owner or first-review contact who cannot respond within the
+  first-response target hands the pull request to the lead maintainer, who
+  is the fallback reviewer for every path.
+- A pull request missing DCO sign-off or failing required checks still gets a
+  first response pointing at the fix; the decision clock starts once checks
+  pass.
+- A pull request whose requested changes see no author activity for 14 days
+  may be closed with a note. Reopening it, or opening a fresh one, is always
+  welcome.
+- These are targets, not a guarantee. They cover pull-request review only;
+  support requests remain best effort, as described in
+  [`SUPPORT.md`](SUPPORT.md).
+
+`python3 scripts/review_sla_report.py --since YYYY-MM-DD` reproduces the
+observed column and the cross-author review counts used for
+[code-owner eligibility](#code-owner-eligibility). Its `--responder` option
+defaults to this page's roster. The report reads one page of review and comment
+history per pull request and prints how many records exceeded that page, so a
+truncated period is disclosed instead of being read as "no response". Those
+cross-author counts are raw public activity; they inform a scope but never
+qualify an account on their own. Revisit the targets and the roster together,
+at least every eight weeks.
+
 ## Repository Developers With Write Access
 
 The following developers have, or have been invited to accept, GitHub's
@@ -38,6 +128,8 @@ as a maintainer or grant release, security, or governance authority.
 | [`@wchwawa`](https://github.com/wchwawa) | Write | Active |
 | [`@now-ing`](https://github.com/now-ing) | Write | Active |
 | [`@cocolord`](https://github.com/cocolord) | Write | Active |
+| [`@liuyizhe`](https://github.com/liuyizhe) | Write | Active |
+| [`@Wanli-Lee`](https://github.com/Wanli-Lee) | Write | Active |
 
 GitHub's repository settings are the operational source of truth for access.
 This public snapshot should be updated through a pull request when a write-role
@@ -119,16 +211,20 @@ The lead maintainer remains the fallback. Contributor availability is
 voluntary: anyone may decline, narrow, pause, or hand back a scope without
 losing attribution for their work. Silence is not acceptance or approval.
 
-| Surface | Contact | Responsibility / status |
-| --- | --- | --- |
-| Chat/runtime session lifecycle | [`@Duang777`](https://github.com/Duang777) | Designated first-review contact: managed-session resume/submit/close, request idempotency, focused regressions and follow-up fixes. Shared goal, quota, lease and permission contracts remain outside this assignment. |
-| Shared goal authority qualification | [`@wchwawa`](https://github.com/wchwawa) | Invited to coordinate implementation review, writer/cursor recovery evidence and bounded qualification. Canonical-authority promotion, provider activation and shared-state policy require separate lead-maintainer review. |
-| Usage and host usage ingestion | [`@liubf21`](https://github.com/liubf21) | Invited to coordinate usage correctness and historical-data compatibility review. Pricing policy and unrelated host/session authority remain outside this scope. |
-| Post-writeback hooks and reporting | [`@now-ing`](https://github.com/now-ing) | Write access active; invited to select one cohesive initial review scope. No CODEOWNERS route until the scope is accepted. |
-| TypeScript transaction migration | [`@hhyykk`](https://github.com/hhyykk) | Proposed paired review of complete transaction cutovers and Python/TypeScript parity; scope confirmation pending. |
-| Task leases and scheduler boundaries | [`@yuefengw`](https://github.com/yuefengw) | Proposed paired review of lease lifecycle and boundary regressions; scope confirmation pending. |
-| DSH integration | [`@wujc12`](https://github.com/wujc12) | Designated first-review contact for the DSH plugin, installation and host-integration regressions. Shared replan and lifecycle contracts stay separately reviewed. |
-| Reliability diagnostics | [`@songoow`](https://github.com/songoow) | Proposed diagnostic/readback review scope; privacy and first-write data boundaries stay separately reviewed. Scope confirmation pending. |
+Status reflects the public record in #4069 as of 2026-09-26. The last column
+says what still separates each contact from a `CODEOWNERS` route under the
+[eligibility rule](#code-owner-eligibility).
+
+| Surface | Contact | Responsibility / status | Path to a code-owner route |
+| --- | --- | --- | --- |
+| Chat/runtime session lifecycle | [`@Duang777`](https://github.com/Duang777) | Accepted 2026-09-08: managed-session resume/submit/close, request idempotency, focused regressions and follow-up fixes. Shared goal, quota, lease and permission contracts remain outside this assignment. | Needs repository write access and three in-scope cross-author reviews. |
+| Shared goal authority qualification | [`@wchwawa`](https://github.com/wchwawa) | Accepted 2026-09-08: implementation review, writer/cursor recovery evidence and bounded qualification. Canonical-authority promotion, provider activation and shared-state policy require separate lead-maintainer review. | Has write access and an accepted scope; needs three in-scope cross-author reviews. |
+| Usage and host usage ingestion | [`@liubf21`](https://github.com/liubf21) | Invited to coordinate usage correctness and historical-data compatibility review; no acceptance recorded. Pricing policy and unrelated host/session authority remain outside this scope. | Has write access; needs scope acceptance and in-scope reviews. |
+| Post-writeback hooks and reporting | [`@now-ing`](https://github.com/now-ing) | Write access active; invited to select one cohesive initial review scope. Authored work concentrates on post-writeback hooks and periodic reports, and substantive cross-author review comments exist on claim, lease and settlement changes. | Has write access and review history; needs to accept a cohesive scope. |
+| TypeScript transaction migration | [`@hhyykk`](https://github.com/hhyykk) | Proposed paired review of complete transaction cutovers and Python/TypeScript parity; scope confirmation pending. | Needs scope acceptance, write access and in-scope reviews. |
+| Task leases and scheduler boundaries | [`@yuefengw`](https://github.com/yuefengw) | Proposed paired review of lease lifecycle and boundary regressions; scope confirmation pending. | Needs scope acceptance, write access and in-scope reviews. |
+| DSH integration | [`@wujc12`](https://github.com/wujc12) | Designated by the lead maintainer 2026-09-07 as first-review contact for the DSH plugin, installation and host-integration regressions; no acceptance recorded. Shared replan and lifecycle contracts stay separately reviewed. | Has write access; needs scope acceptance and in-scope reviews. |
+| Reliability diagnostics | [`@songoow`](https://github.com/songoow) | Accepted 2026-09-09: observer-envelope and ledger integrity, receipt/projection consistency, readback and time-evaluation correctness. Privacy and first-write data boundaries stay separately reviewed. | Needs repository write access and three in-scope cross-author reviews. |
 
 Start by linking a real cross-author PR, not by creating a quota of new
 implementation work. A review should state the exact head, the governing

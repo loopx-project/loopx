@@ -9,6 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,11 +101,15 @@ def assert_wrapper_parity(registry_path: Path, runtime_root: Path, scan_root: Pa
         "goal_id": GOAL_ID,
         "available_capabilities": ["network", "material_lifecycle"],
     }
-    wrapper = status_module.collect_status(**kwargs)
-    direct = collection_read_model.collect_status(
-        **kwargs,
-        context=status_module.build_status_collection_context(),
-    )
+    # Compare one observation time without hiding freshness or coverage fields.
+    with patch.object(
+        collection_read_model, "now_utc_iso", return_value="2026-01-01T00:00:00Z"
+    ):
+        wrapper = status_module.collect_status(**kwargs)
+        direct = collection_read_model.collect_status(
+            **kwargs,
+            context=status_module.build_status_collection_context(),
+        )
 
     assert scrub_volatile(wrapper) == scrub_volatile(direct), (wrapper, direct)
     assert wrapper["ok"] is True, wrapper

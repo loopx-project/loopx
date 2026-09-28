@@ -686,6 +686,12 @@ class _SchedulerHintBuilder:
             if context is not None and context.app_automation_applicable
             else CODEX_APP_SURFACE
         )
+        # The TS store has already validated this scope. Preserve it through
+        # both host projections, including a legacy-only Codex installation.
+        app_state_key = (
+            (self.codex_app_scheduler_state or {}).get("state_key")
+            or APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+        )
         cadence = self._cadence_projections(codex_interval, codex_max, multiplier, cadence_progression_override)
         local_cadence_progression, app_cadence_progression = cadence["local"], cadence["app"]
         app_host_max, codex_max, floor = cadence["app_max"], cadence["local_max"], cadence["floor"]
@@ -880,7 +886,7 @@ class _SchedulerHintBuilder:
             ),
             "stateful_backoff": {
                 "schema_version": APP_AUTOMATION_STATEFUL_BACKOFF_SCHEMA_VERSION,
-                "state_key": APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+                "state_key": app_state_key,
                 "identity_signature": identity_signature,
                 "reset_token": reset_token,
                 "progression_index": current_index,
@@ -921,7 +927,7 @@ class _SchedulerHintBuilder:
                 "goal_id": str(goal_id),
                 "agent_id": str(agent_id),
                 "surface": app_surface,
-                "state_key": APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+                "state_key": app_state_key,
                 "reset_token": reset_token,
                 "identity_signature": identity_signature,
                 "progression_index": current_index,
@@ -940,6 +946,7 @@ class _SchedulerHintBuilder:
             app_automation["recommended_rrule"] = current_rrule
             if goal_id and agent_id:
                 app_automation["failure_hint"] = build_app_automation_scheduler_failure_hint(
+                    state_key=app_state_key,
                     goal_id=goal_id,
                     agent_id=agent_id,
                     failed_rrule=current_rrule,
@@ -965,6 +972,7 @@ class _SchedulerHintBuilder:
                     )
         if ack_needed and goal_id and agent_id:
             app_automation["ack_hint"] = build_app_automation_scheduler_ack_hint(
+                state_key=app_state_key,
                 goal_id=goal_id,
                 agent_id=agent_id,
                 applied_rrule=current_rrule,

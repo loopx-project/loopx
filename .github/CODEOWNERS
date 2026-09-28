@@ -1,30 +1,84 @@
-# Unassigned paths require lead-maintainer review; later narrow routes override.
+# LoopX code owners. Roster, eligibility and review service levels:
+# .github/GOVERNANCE.md ("Maintainer And Review Roster", "Review Service Levels").
+#
+# GitHub applies the LAST matching pattern, so this file runs from broad to
+# narrow: fallback, module map, subsystem routes, then lead-owned governance
+# paths, which must win. When a line lists several owners, approval from any
+# one of them satisfies code-owner review.
+#
+# Only accounts with repository write access and an accepted, publicly recorded
+# scope are listed. First-review contacts, pending invitations and read-only
+# contributors are routed through GOVERNANCE.md, not through this file.
+
+# Fallback for paths no module line claims, such as a new top-level directory.
 * @huangruiteng
 
-# Repository governance, CI and release-policy files remain lead-owned.
-/.github/workflows/** @huangruiteng
-/scripts/ci/** @huangruiteng
-/AGENTS.md @huangruiteng
-/CONTRIBUTING.md @huangruiteng
-/docs/product/release-*.md @huangruiteng
-/.github/CODEOWNERS @huangruiteng
-/.github/GOVERNANCE.md @huangruiteng
-/docs/development/contributor-tasks.md @huangruiteng
-/docs/project/technical-directions*.md @huangruiteng
+# --- Module map --------------------------------------------------------------
+# Every top-level module has an explicit line so ownership is visible per
+# module. A subsystem appointment narrows a path in the next section.
 
-# Frontend source and bundled web assets.
-/apps/presentation/dashboard/** @huangruiteng @maxliux5
-/loopx/web/chat/** @huangruiteng @maxliux5
+# Control-plane kernel: authority, state, quota, todos, leases, TS transactions.
+/loopx/control_plane/ @huangruiteng
+/loopx/semantics/ @huangruiteng
+/loopx/*.py @huangruiteng
 
-# First-review contacts without accepted CODEOWNER appointments are listed in
-# GOVERNANCE.md. Do not add pending invitations as required owners.
+# CLI surface.
+/loopx/cli_commands/ @huangruiteng
 
-# Lark integration review routing.
-/loopx/extensions/lark/** @huangruiteng @steven-kid
+# Capabilities, extensions, domain packs and experiments.
+/loopx/capabilities/ @huangruiteng
+/loopx/extensions/ @huangruiteng
+/loopx/domain_packs/ @huangruiteng
+/loopx/experiments/ @huangruiteng
+
+# Host goal-mode adapters (Claude, DSH, OpenCode, Pi, ...).
+/loopx/*_goal_mode/ @huangruiteng
+
+# Presentation: Python projections, dashboard, site and desktop shell.
+/loopx/presentation/ @huangruiteng
+/apps/presentation/ @huangruiteng
+/apps/desktop/ @huangruiteng
+
+# Canary metrics, benchmarks and regression corpora.
+/loopx/canary/ @huangruiteng
+/benchmark/ @huangruiteng
+/regression/ @huangruiteng
+
+# Optional provider packages.
+/packages/ @huangruiteng
+
+# Agent skills, man pages, docs, examples, tests, scripts and demos.
+/skills/ @huangruiteng
+/man/ @huangruiteng
+/docs/ @huangruiteng
+/examples/ @huangruiteng
+/tests/ @huangruiteng
+/scripts/ @huangruiteng
+/demo/ @huangruiteng
+/deprecate/ @huangruiteng
+
+# --- Subsystem routes --------------------------------------------------------
+
+# Frontend source and chat bundle delivery (built assets are not tracked).
+/apps/presentation/dashboard/ @huangruiteng @maxliux5
+/loopx/presentation/chat_bundle.py @huangruiteng @maxliux5
+/scripts/chat_bundle* @huangruiteng @maxliux5
+
+# Lark integration (subsystem maintainer: @steven-kid).
+/loopx/extensions/lark/ @huangruiteng @steven-kid
 /loopx/cli_commands/lark_*.py @huangruiteng @steven-kid
-/docs/capabilities/lark-*.md @huangruiteng @steven-kid
 /docs/integrations/lark-*.md @huangruiteng @steven-kid
+/docs/reference/protocols/lark-*.md @huangruiteng @steven-kid
 /examples/lark-* @huangruiteng @steven-kid
 /examples/lark_extension_test_support.py @huangruiteng @steven-kid
 /examples/control_plane/lark-* @huangruiteng @steven-kid
 /tests/extensions/test_lark_*.py @huangruiteng @steven-kid
+
+# --- Lead-owned governance, CI and release policy (must stay last) -----------
+/.github/ @huangruiteng
+/scripts/ci/ @huangruiteng
+/AGENTS.md @huangruiteng
+/CONTRIBUTING.md @huangruiteng
+/docs/product/release-*.md @huangruiteng
+/docs/development/contributor-tasks.md @huangruiteng
+/docs/project/technical-directions*.md @huangruiteng

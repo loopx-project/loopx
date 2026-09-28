@@ -1,7 +1,8 @@
 # Manager runtime profile v0
 
-Status: M1 implementation candidate under
-[capable-manager-semantic-handoff-v0](capable-manager-semantic-handoff-v0.md)
+- **RFC status:** Accepted
+  [capable-manager-semantic-handoff-v0](capable-manager-semantic-handoff-v0.md))
+- **Supersedes / closes:** none
 
 > Language note: the
 > [Chinese version](./manager-runtime-profile-v0.zh-CN.md)
