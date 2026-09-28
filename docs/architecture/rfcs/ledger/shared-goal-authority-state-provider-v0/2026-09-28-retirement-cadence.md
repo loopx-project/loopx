@@ -239,8 +239,28 @@ this does not qualify the remaining whole-command payload boundary.
 
 The next B work remains history artifact lookup and remaining public payload/
 cold-path costs, preserving file-change freshness, full decision inputs and
-corruption rejection. Contract checks and attention still read canonical state
-separately; this repair adds no cross-request cache and claims no command-wide
-consistent snapshot. Recheck installed consumers after integration; A/C and D2
+corruption rejection. Contract checks and attention now share one request-local, validated canonical
+Todo snapshot per runtime/Goal. Standalone checks and subsequent requests read
+afresh; lease and projection-writeback reads do not participate. Consumer edits
+cannot mutate retained input, and a failed first read cannot recover midway
+through the request. This is not an atomic snapshot across registry, Markdown,
+history or multiple Goals. Recheck installed consumers after integration; A/C and D2
 retain their own open acceptance. Retire each writer only after its last
 supported caller and recovery acceptance are qualified.
+
+
+A matched isolated current projection with 1,117 retained Todos reduces full
+status assembly from two complete Todo reads to one. Three warm in-process
+samples had medians of 496→430 ms for File and 583→488 ms for SQLite. Base/head
+payload differences were confined to observation timestamps and age fields;
+full metadata and public response schemas are retained. Tracemalloc measured
+Python peak allocations of about 13.5→16.5 MB on both providers: retaining
+consumer-isolated input trades roughly 3 MB peak memory for the avoided read;
+retained allocations after return remain about 2.1 MB. This is current-state
+read-cost evidence, not historical replay, CLI cold-start, D2 qualification or
+a provider-default comparison. Python owns the request's transport-input
+lifetime; TS still owns validation, resume, succession, acceptance and selection.
+Next reduce repeated preparation at the existing typed projection owner, then
+coordinate full-Goal frontend summary/list/detail consumers. Agent status
+already has bounded display; final JSON compaction alone does not remove
+full-source computation.
