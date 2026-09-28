@@ -274,7 +274,10 @@ cursor。
 ```
 
 白名单只能包含已启用、支持 exact read 的 incremental source，不会隐式纳入
-on-demand 来源；goal/agent 的启用边界不变。先预览，再添加 `--execute` 执行一次：
+on-demand 来源；goal/agent 的启用边界不变。只有 profile、当前 agent 和自动采集
+均已启用，capture 返回才包含 `activation.capture_max_sources_per_tick`。
+共用 activation、`inspect-profile` 和 evidence assembly 不投影此采集预算。
+先预览，再添加 `--execute` 执行一次：
 
 ```bash
 loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
@@ -329,8 +332,9 @@ loopx decision-context prepare-captured --goal-id <goal-id> --agent-id <agent-id
 完成 rebase。采集健康不等于决策覆盖完整。
 
 停用时设置 `automatic_capture=false` 并卸载宿主定时任务，已有私有批次仍可回读。
-回滚到旧版本还需移除新增的三个 automation 字段；保留 spool 作为私有检查点，
-不要删除尚未审阅的工作。验证：
+回滚有界续扫时移除 `max_sources_per_tick`；若回滚到尚未支持引用采集的版本，
+还须移除 `source_ids`、`interval_seconds` 和 `max_pending_batches`。
+保留 spool 作为私有检查点，不要删除尚未审阅的工作。验证：
 
 ```bash
 python3 -m pytest -q tests/capabilities/test_decision_context_capture.py

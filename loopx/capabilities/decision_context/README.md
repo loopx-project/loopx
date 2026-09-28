@@ -306,7 +306,10 @@ Add these fields to an existing private profile's `automation` object:
 
 Every listed source must already be enabled, incremental, and exact-readable.
 On-demand sources are never enrolled implicitly. The same goal/agent activation
-checks apply. Preview does not call providers or create the spool:
+checks apply. Capture results include `activation.capture_max_sources_per_tick`
+only after profile, agent and automatic-capture activation. Shared activation,
+`inspect-profile` and evidence assembly do not project this capture budget.
+Preview does not call providers or create the spool:
 
 ```bash
 loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
@@ -382,8 +385,10 @@ replay is impossible. Capture health is not proof of complete decision coverage.
 
 To stop collection, set `automatic_capture=false` and unload the host scheduler.
 Existing reviewable batches remain private and can still be prepared. To roll
-back to an older release, also remove the three new automation fields; retain
-the spool as a private checkpoint rather than deleting unreviewed work.
+back bounded ticks, remove `max_sources_per_tick`. A release that predates
+reference capture also requires removing `source_ids`, `interval_seconds` and
+`max_pending_batches`. Retain the spool as a private checkpoint rather than
+deleting unreviewed work.
 
 #### Recover an unreplayable source without discarding history
 
