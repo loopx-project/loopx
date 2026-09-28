@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
+from loopx.contract import check_contract
+from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from loopx.control_plane.coordination.coordination_state_contract import (
     TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
@@ -20,8 +22,20 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.status import active_state_todo_fields
 
 
+@pytest.fixture(autouse=True)
+def isolated_runtime(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    yield
+    restart_effect_runtime()
+
+
+@pytest.fixture(params=["file", "sqlite"])
+def provider(request):
+    return request.param
+
+
 @pytest.fixture(params=["legacy", "native"])
-def promoted_goal(tmp_path: Path, request):
+def promoted_goal(tmp_path: Path, request, provider):
     state = tmp_path / "ACTIVE_GOAL_STATE.md"
     state.write_text(
         "# Goal\n\n## Next Action\n\nKeep the human narrative.\n\n"
@@ -66,7 +80,7 @@ def promoted_goal(tmp_path: Path, request):
             "todo_count": len(projection["todos"]),
             "records_sha256": hashlib.sha256(canonical_bytes(projection["todos"])).hexdigest(),
         }
-    initialize_canonical_authority(runtime, goal["id"], projection, state_path=state)
+    initialize_canonical_authority(runtime, goal["id"], projection, state_path=state, provider=provider)
     return goal, runtime, state
 
 
@@ -98,9 +112,9 @@ def test_status_uses_provider_and_allows_native_monitor_writeback_without_displa
             assert fields["active_state_next_action"] == "Keep the human narrative."
 
 
-def test_unavailable_provider_does_not_restore_stale_display_tasks(promoted_goal):
+def test_unavailable_provider_does_not_restore_stale_display_tasks(promoted_goal, provider):
     goal, runtime, state = promoted_goal
-    (runtime / "authority" / "file-v0").rename(runtime / "unavailable-provider")
+    (runtime / "authority" / f"{provider}-v0").rename(runtime / "unavailable-provider")
     with pytest.raises(LocalCoordinationAuthorityUnavailable):
         active_state_todo_fields(goal, runtime_root=runtime)
     assert "todo_stale" in state.read_text()
@@ -135,9 +149,19 @@ def test_unpromoted_status_retains_markdown_without_starting_authority(tmp_path,
     assert fields["agent_todos"]["items"][0]["text"] == "Legacy work"
 
 
-def test_public_status_cli_reads_canonical_attention_without_markdown(promoted_goal, tmp_path):
+@pytest.mark.parametrize("display", ["missing", "invalid_utf8", "invalid_user_todo"])
+def test_public_status_cli_uses_canonical_contract_and_attention(promoted_goal, tmp_path, display):
     goal, runtime, state = promoted_goal
-    state.unlink()
+    if display == "missing":
+        state.unlink()
+    elif display == "invalid_utf8":
+        state.write_bytes(b"\xff")
+    else:
+        state.write_text(
+            "# Goal\n\n## User Todo\n\n- [ ] Obsolete display-only gate\n"
+            "  <!-- loopx:todo todo_id=todo_stale status=open -->\n",
+        )
+    original = state.read_bytes() if state.exists() else None
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({
         "schema_version": 1, "common_runtime_root": str(runtime), "goals": [goal],
@@ -147,8 +171,44 @@ def test_public_status_cli_reads_canonical_attention_without_markdown(promoted_g
          "--format", "json", "status", "--goal-id", goal["id"]],
         capture_output=True, text=True, timeout=60,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
+    assert payload["contract"]["ok"] is True
     assert "todo_canonical" in json.dumps(payload["attention_queue"])
     assert "todo_stale" not in json.dumps(payload["attention_queue"])
-    assert not state.exists()
+    assert (state.read_bytes() if state.exists() else None) == original
+
+
+def test_contract_reports_promoted_failure_without_legacy_rescue(promoted_goal, provider, tmp_path):
+    goal, runtime, state = promoted_goal
+    (runtime / "authority" / f"{provider}-v0").rename(runtime / "unavailable-provider")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [goal]}))
+    result = check_contract(
+        registry_path=registry, runtime_root_override=str(runtime), scan_roots=[], limit=3,
+        goal_id_filter=goal["id"], include_public_boundary_scan=False,
+    )
+    assert result["ok"] is False
+    assert result["goal_errors"][goal["id"]]
+    assert any("canonical Todo contract unavailable" in row["message"]
+               for row in result["error_diagnostics"])
+
+
+def test_contract_rejects_corrupt_canonical_read_model_despite_valid_display(tmp_path, provider):
+    state = tmp_path / "state.md"
+    state.write_text("# Goal\n\n## Agent Todo\n\n")
+    runtime = tmp_path / "runtime"
+    goal = {"id": "goal-a", "repo": str(tmp_path), "state_file": str(state),
+            "domain": "software", "adapter": {"kind": "read_only_project_map_v0"}}
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[])
+    projection["todo_read_model"]["records_sha256"] = "0" * 64
+    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [goal]}))
+    result = check_contract(
+        registry_path=registry, runtime_root_override=str(runtime), scan_roots=[], limit=3,
+        goal_id_filter="goal-a", include_public_boundary_scan=False,
+    )
+    assert result["ok"] is False
+    assert any("read-model digest mismatch" in row["message"]
+               for row in result["error_diagnostics"])

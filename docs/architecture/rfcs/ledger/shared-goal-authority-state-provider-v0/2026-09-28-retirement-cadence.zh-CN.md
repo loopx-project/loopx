@@ -154,8 +154,26 @@ Quota 观察复用既有 should-run 摘要：捕获的单 Goal 行序列化由 1
 authority、发布默认值或旧 writer 删除决定。B 仍缺持续负载／平台／容量证据；C 仍需
 consumer／新建入口及受支持升级验收。
 
-B 的下一段是剩余整命令冷路径：在相同保留输入上分别分析历史 artifact 查找、
-active-contract 验证和公共边界扫描，再选择所属 owner 修复。区分 provider head
-读取与调用方工作，保留 freshness、完整决策输入和损坏拒绝；集成后重跑安装态 CLI
-消费者。不能把读取优化计为 A/C 完成，也不继续给固定的剩余 PR 数；只有最后受支持
-调用方退出且恢复验收通过，才能删除对应 writer。
+### 合同健康检查的权威归属
+
+#5222 已合并并完成本机备份、CLI／App／服务升级及实际页面读回。默认 quota
+响应约 93 KB，显式全明细约 1.37 MB，Todo 计数相同；上一份交付的 13 个静态资源
+字节一致。这是采用证据，不代表新一轮正式 release、provider 默认切换或 D2 完成。
+
+后续公共 CLI 的隔离反例表明：Todo 列表已读 canonical provider，但合同健康检查
+仍解析旧 Markdown Todo。仅在展示副本增加一条缺少 task_class 的旧 User Todo，
+File 和 SQLite 的正常 Goal 均被判为不健康，status 退出码变成 1。
+修复让晋升后的合同检查复用既有 TS canonical 快照／记录校验；Python 只适配诊断。
+provider 缺失或读模型损坏仍报 Goal 范围的错误，不回退 Markdown。未晋升 Goal
+保留旧格式检查；叙述、registry、历史及公共边界检查不因此取消。此处不新增或替代
+Todo 写入时的业务校验，也不声称读模型校验会重审所有历史操作的授权。
+
+用保留历史所得的 1,109 个 Todo 当前 projection 和约 7 MB 展示文件，在隔离存储中
+配对测量合同检查。三个热样本由 0.52–0.58 秒降为 File 的 0.11–0.12 秒、SQLite
+的 0.14–0.16 秒。此实验重新初始化当前 projection，不是完整历史重放，也不是
+整个 status 延迟或跨平台容量验收。私有输入不入库。
+
+B 下一步仍是历史 artifact 查找和剩余公共包体／冷路径，保留文件变化 freshness、
+完整决策输入及损坏拒绝。合同检查与 attention 仍各自读取 canonical 快照；本次没有
+引入跨请求缓存或声称命令级一致快照。集成后继续核对安装态消费者，A/C 与 D2
+维持各自未完成项；只有最后受支持调用方退出且恢复验收通过，才能删除对应 writer。
