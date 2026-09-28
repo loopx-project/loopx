@@ -847,6 +847,123 @@ export function registerAuthorityStoreConformance(
     assert.deepEqual(await store.loadAuthority(), after);
   });
 
+  test(`${providerName} conformance: original completion receipt permits only the same-Turn closeout phase`, async t => {
+    const {store} = await factory(t);
+    const goalId = "goal-terminal-phases", turnKey = `${goalId}:agent-a:todo-terminal:original-turn`;
+    const digest = createHash("sha256").update(
+      `loopx-provider-terminal-operation-v0\0complete\0${goalId}\0todo-terminal\0${turnKey}`,
+    ).digest("hex").slice(0, 32);
+    assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-phases",
+      next_projection: todoTerminalProjection(goalId), events: [], receipts: []})).status, "applied");
+    const original = {
+      goal_id: goalId, todo_id: "todo-terminal", expected_role: "agent" as const,
+      command: "complete" as const, actor_agent_id: "agent-a", registered_agents: ["agent-a", "agent-b"],
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      // A pre-upgrade adapter generated this explicit receipt. Its identity and
+      // request digest must remain recoverable after adopting the typed phase.
+      operation_identity: {kind: "explicit" as const, operation_id: `todo-terminal:${digest}`},
+      lease_idempotency_key: "terminal-lease", lease_expected_version: 1, allow_user_gate_auto_acquire: false,
+      requested_no_followup: false, requested_completion_turn_key: turnKey,
+      requested_completion_identity_source: "turn_settlement" as const,
+      linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: "Declared check passed",
+      reason: null, clear_claim: false, validation_declaration: TERMINAL_VALIDATION_DECLARATION,
+      validation_receipt: {schema_version: "issue_fix_validation_command_v0", command_label: "provider conformance validation",
+        passed: true, exit_code: 0, stdout_captured: false, stderr_captured: false, local_path_captured: false},
+      completion_policy_request: null, dry_run: false, now: new Date("2026-09-07T06:02:00Z"),
+    };
+    const completed = await executeCoordinationTodoTerminalLifecycle(store, original);
+    assert.equal(completed.status, "applied", JSON.stringify(completed));
+    assert.equal(completed.completion_continuation, "active_goal");
+    const before = await store.loadAuthority();
+    const closeout = {...original, operation_identity: {kind: "completion_turn" as const},
+      requested_no_followup: true, validation_receipt: null, now: new Date("2026-09-07T09:00:00Z")};
+    for (const change of [{lease_expected_version: 99}, {lease_idempotency_key: "borrowed"},
+      {requested_completion_turn_key: "different-turn"}, {actor_agent_id: "agent-b"},
+      {validation_declaration: {...TERMINAL_VALIDATION_DECLARATION, validation_label: "different check"}}]) {
+      assert.equal((await executeCoordinationTodoTerminalLifecycle(store, {...closeout, ...change})).status, "failed");
+      assert.deepEqual(await store.loadAuthority(), before);
+    }
+    const missingReceipt = new Proxy(store, {get(target, key) {
+      if (key === "readReceipt") return async (id: string) => id === `todo-terminal:${digest}`
+        ? {status: "missing"} : target.readReceipt(id);
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(missingReceipt, closeout)).reason_code,
+      "terminal_completion_receipt_required");
+    assert.deepEqual(await store.loadAuthority(), before);
+    const lostCloseoutResponse = new Proxy(store, {get(target, key) {
+      if (key === "commitAuthority") return async (commit: AuthorityStoreCommit) => {
+        await target.commitAuthority(commit);
+        throw new Error("closeout committed, response lost");
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const closed = await executeCoordinationTodoTerminalLifecycle(lostCloseoutResponse, closeout);
+    assert.equal(closed.status, "recovered", JSON.stringify(closed));
+    assert.equal(closed.completion_continuation, "no_followup");
+    assert.equal(closed.completion_recovery, "same_turn_terminal_closeout");
+    assert.deepEqual(closed.validation_receipt, completed.validation_receipt);
+    const after = await store.loadAuthority();
+    assert.equal(before.status, "loaded"); assert.equal(after.status, "loaded");
+    if (before.status === "loaded" && after.status === "loaded") {
+      assert.deepEqual(after.head.leases, before.head.leases, "no new lease or second release");
+      const oldTodos = before.head.todos as Record<string, unknown>[], newTodos = after.head.todos as Record<string, unknown>[];
+      assert.deepEqual(newTodos.filter(row => row.todo_id !== "todo-terminal"),
+        oldTodos.filter(row => row.todo_id !== "todo-terminal"));
+      assert.equal(newTodos.length, oldTodos.length, "no manufactured successor");
+      const target = newTodos.find(row => row.todo_id === "todo-terminal")!;
+      assert.equal(target.completion_turn_key, turnKey);
+      assert.equal(target.completion_validation_sha256, canonicalAuthoritySha256(TERMINAL_VALIDATION_DECLARATION));
+    }
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(store, closeout)).status, "replayed");
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(store, {...original,
+      operation_identity: {kind: "completion_turn"}})).status, "replayed");
+    assert.deepEqual(await store.loadAuthority(), after);
+  });
+
+  test(`${providerName} conformance: pre-upgrade terminal receipt recovers before current authority access`, async t => {
+    const {store} = await factory(t);
+    const goalId = "goal-historical-terminal", turnKey = `${goalId}:agent-a:todo-terminal:original-turn`;
+    const digest = createHash("sha256").update(
+      `loopx-provider-terminal-operation-v0\0complete\0${goalId}\0todo-terminal\0${turnKey}`,
+    ).digest("hex").slice(0, 32);
+    assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-historical-terminal",
+      next_projection: todoTerminalProjection(goalId), events: [], receipts: []})).status, "applied");
+    const request = {
+      goal_id: goalId, todo_id: "todo-terminal", expected_role: "agent" as const,
+      command: "complete" as const, actor_agent_id: "agent-a", registered_agents: ["agent-a", "agent-b"],
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      operation_identity: {kind: "explicit" as const, operation_id: `todo-terminal:${digest}`},
+      lease_idempotency_key: "terminal-lease", lease_expected_version: 1, allow_user_gate_auto_acquire: false,
+      requested_no_followup: true, requested_completion_turn_key: turnKey,
+      requested_completion_identity_source: "turn_settlement" as const,
+      linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: "Declared check passed",
+      reason: null, clear_claim: false, validation_declaration: TERMINAL_VALIDATION_DECLARATION,
+      validation_receipt: {schema_version: "issue_fix_validation_command_v0", command_label: "provider conformance validation",
+        passed: true, exit_code: 0, stdout_captured: false, stderr_captured: false, local_path_captured: false},
+      completion_policy_request: null, dry_run: false, now: new Date("2026-09-07T06:02:00Z"),
+    };
+    const applied = await executeCoordinationTodoTerminalLifecycle(store, request);
+    assert.equal(applied.status, "applied", JSON.stringify(applied));
+    const before = await store.loadAuthority();
+    const historicalOnly = new Proxy(store, {get(target, key) {
+      if (key === "loadAuthority" || key === "commitAuthority") return async () => {
+        throw new Error("historical recovery must not read current authority or commit");
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const recovered = await executeCoordinationTodoTerminalLifecycle(historicalOnly, {
+      ...request, operation_identity: {kind: "completion_turn"}, now: new Date("2026-09-08T09:00:00Z"),
+    }, async () => {throw new Error("historical recovery precedes current source authorization");});
+    assert.equal(recovered.status, "replayed", JSON.stringify(recovered));
+    assert.deepEqual(recovered.original_receipt, applied.original_receipt);
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(`todo-terminal-closeout:${digest}`)).status, "missing");
+  });
+
   test(`${providerName} conformance: supersede preserves the legacy terminal continuation`, async (t) => {
     const {store} = await factory(t);
     const goalId = "goal-supersede";

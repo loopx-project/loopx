@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
@@ -17,6 +18,8 @@ from ..control_plane.todos.contract import (
 from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.quota.settlement import (
     QuotaSettlementReadback,
+    SettlementIdentity,
+    build_turn_scoped_cli_settlement_plan,
     read_heartbeat_settlement,
     settlement_result_payload,
 )
@@ -97,6 +100,33 @@ def _completion_settlement_error(
         "terminal no-follow-up closeout requires matching writeback and quota spend receipts: "
         + settlement_readback.settlement.failure.reason
     )
+
+
+def _completion_settlement_plan(
+    identity: SettlementIdentity, *, args: argparse.Namespace,
+    registry_path: Path, runtime_root: Path,
+) -> dict[str, object]:
+    """Render the native plan with the original route and supplied lease facts."""
+    actor_args = ""
+    path_args = ""
+    for name, option in (
+        ("project", "--project"), ("state_file", "--state-file"),
+        ("task_lease_idempotency_key", "--task-lease-idempotency-key"),
+        ("task_lease_expected_version", "--task-lease-expected-version"),
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            argument = f" {option} {shlex.quote(str(value))}"
+            actor_args += argument
+            if name in {"project", "state_file"}:
+                path_args += argument
+    prefix = (f"loopx --registry {shlex.quote(str(registry_path))}"
+              f" --runtime-root {shlex.quote(str(runtime_root))}")
+    return build_turn_scoped_cli_settlement_plan(
+        goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+        turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
+        scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
+    ).as_dict()
 
 
 def _validated_replan_successor_obligation(
@@ -521,6 +551,9 @@ def handle_todo_command(
                         "settlement_identity": identity.as_dict(),
                         "settlement_result": settlement_result_payload(
                             settlement_result
+                        ),
+                        "settlement_plan": _completion_settlement_plan(
+                            identity, args=args, registry_path=registry_path, runtime_root=runtime_root,
                         ),
                         "error": completion_error,
                     }

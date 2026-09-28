@@ -13,7 +13,7 @@ a lost response:
 
 ```bash
 loopx todo complete --goal-id example-goal --todo-id todo_work \
-  --agent-id agent-a --completion-identity-key reviewed-result --no-follow-up
+  --agent-id agent-a --completion-identity-key reviewed-result
 loopx todo list --goal-id example-goal --todo-id todo_work
 loopx todo project-markdown --goal-id example-goal --execute
 ```
@@ -50,6 +50,9 @@ supersede. `operation_identity` explicitly selects the operation's meaning:
 
 - `{kind: "explicit", operation_id: "..."}` executes or recovers that named
   operation, including historical receipts created by earlier runtimes.
+- `{kind: "completion_turn"}` completes a keyed `turn_settlement` deliverable
+  or closes out its already accepted ordinary completion. TypeScript derives
+  both stable phase ids; callers cannot supply an alternate operation id.
 - `{kind: "current_monitor_cycle"}` completes a `continuous_monitor` without an
   explicit completion turn key. The TypeScript owner derives the operation id
   from Goal id, Todo id and authoritative `material_change_generation`.
@@ -57,8 +60,8 @@ supersede. `operation_identity` explicitly selects the operation's meaning:
 Reopening the Monitor advances its generation, so earlier-cycle receipts cannot
 complete the current open cycle. If an explicit operation already completed the
 current cycle, the core records a generation-scoped no-change receipt. It never
-infers cycle membership from an old unscoped receipt. Both identity modes share
-one terminal transaction; ordinary completion and supersede use explicit identity.
+infers cycle membership from an old unscoped receipt. All three identity modes
+share one terminal transaction; unscoped completion and supersede use explicit identity.
 
 The terminal method also accepts these bounded additions:
 
@@ -105,3 +108,35 @@ terminal basis for exactly Agent completion and Monitor stop. The packaged Chat
 bundle includes the original-operation retry path and distinguishes pending
 display from verified completion; no new configuration or visual control is required. Lark receives no new
 command or transport in this slice.
+
+## Quota-bound CLI completion
+
+A declared deliverable passing its validator is not the same event as its Turn
+being settled. The shared TypeScript settlement plan orders ordinary Todo
+completion, durable `refresh-state`, one `quota spend-slot`, then final
+`todo complete --no-follow-up`, all bound to the original Goal, Agent, Todo and
+Turn. Ordinary completion retains `active_goal` continuation without creating
+an artificial successor. Its command has the condition
+`todo_deliverable_complete`; required validation is never conditional or waived.
+Qualified `in_flight_continuation` leaves unfinished work open and omits ordinary
+completion rather than pretending the deliverable passed.
+
+If final closeout is attempted before writeback/accounting, CLI JSON and Markdown
+return that same recovery plan. Supplied registry/runtime, project/state routes
+and original lease proof are retained where the corresponding command accepts
+them. A command template is guidance, not a lease or validation receipt.
+
+The typed `completion_turn` identity retains the historical ordinary operation
+id and names a separate deterministic closeout phase, with the same completion
+key. Upgrading `active_goal` to `no_followup` requires the exact original ordinary
+receipt, including its actor, lease and declaration commitment; the original
+caller validator is not rerun and a retired lease is not reacquired. Revision-zero
+receipts remain recoverable through their exact request commitment. Newer
+declarations still require the matching receipt digest. Existing terminal
+receipts recover before reading current authority, and current Goal Acceptance
+criteria retain their freshness rules. No validation or spending gate is weakened.
+
+This addition changes the CLI/managed guidance and canonical response readback,
+not configuration. Reviewed Chat actions continue to use their explicit operation
+identity and existing shared projection; no new frontend setting, visual control
+or Lark transport is introduced.

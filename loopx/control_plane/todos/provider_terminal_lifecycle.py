@@ -386,6 +386,9 @@ def terminal_canonical_todo_if_promoted(
             "operation_identity": (
                 {"kind": "current_monitor_cycle"}
                 if implicit_monitor_cycle
+                else {"kind": "completion_turn"}
+                if command == "complete" and completion_turn_key is not None
+                and completion_identity_source == "turn_settlement"
                 else {"kind": "explicit", "operation_id": _terminal_operation_id(
                     command=command, goal_id=goal_id, todo_id=todo_id,
                     completion_turn_key=completion_turn_key,
@@ -500,6 +503,7 @@ def terminal_canonical_todo_if_promoted(
     idempotent_replay = provider_status in {"replayed", "no_change"} or (
         isinstance(terminal_decision, Mapping)
         and terminal_decision.get("idempotent") is True
+        and payload.get("changed") is not True
     )
     response = {
         **payload,

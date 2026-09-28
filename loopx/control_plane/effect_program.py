@@ -589,6 +589,7 @@ class SettlementStep:
     expected_receipt: str
     command_template: str | None = None
     conditional: bool = False
+    command_condition: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         step: dict[str, Any] = {
@@ -602,6 +603,8 @@ class SettlementStep:
             step["command_template"] = self.command_template
         if self.conditional:
             step["conditional"] = True
+        if self.command_condition:
+            step["command_condition"] = self.command_condition
         return step
 
 
@@ -609,8 +612,13 @@ class SettlementStep:
 class SettlementPlan:
     identity: SettlementIdentity
     steps: tuple[SettlementStep, ...]
+    _runtime_payload: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict[str, Any]:
+        if self._runtime_payload is not None:
+            # A native plan is already serialized and validated by its owner.
+            # Re-rendering guidance must not add another runtime crossing.
+            return dict(json.loads(json.dumps(self._runtime_payload)))
         payload = effect_runtime_result(
             "settlement.plan_payload",
             {

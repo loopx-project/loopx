@@ -698,6 +698,46 @@ def test_codex_app_plan_projects_one_identity_across_settlement_steps() -> None:
     assert plan["host_handoff"]["inside_agent_settlement"] is False
 
 
+def test_cli_validation_projects_ordinary_completion_not_terminal_intent() -> None:
+    plan = build_codex_app_settlement_plan(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        scoped_cli_args="", lifecycle_actor_args="", turn_instance_id_ref=TURN_ID,
+    ).as_dict()
+    validation = plan["ordered_steps"][0]
+    assert validation["command_condition"] == "todo_deliverable_complete"
+    command = settlement_step_command(plan, SettlementStepKind.VALIDATION)
+    assert command is not None
+    argv = shlex.split(command)
+    assert "--no-follow-up" not in argv
+    assert "--next-agent-todo" not in argv
+    assert argv[argv.index("--todo-id") + 1] == TODO_ID
+    assert argv[argv.index("--agent-id") + 1] == AGENT_ID
+    assert argv[argv.index("--turn-instance-id") + 1] == TURN_ID
+
+
+def test_in_flight_validation_never_projects_a_completion_command() -> None:
+    plan = build_codex_app_settlement_plan(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        scoped_cli_args="", lifecycle_actor_args="", turn_instance_id_ref=TURN_ID,
+        delivery_boundary="in_flight_continuation",
+    ).as_dict()
+    assert settlement_step_command(plan, SettlementStepKind.VALIDATION) is None
+    assert "command_condition" not in plan["ordered_steps"][0]
+
+
+def test_native_plan_rerender_reuses_one_runtime_projection_without_shared_mutability() -> None:
+    with patch.object(quota_effect_program, "effect_runtime_result",
+                      wraps=quota_effect_program.effect_runtime_result) as runtime:
+        plan = build_codex_app_settlement_plan(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            scoped_cli_args="", lifecycle_actor_args="", turn_instance_id_ref=TURN_ID,
+        )
+        first = plan.as_dict()
+        first["ordered_steps"][0]["command_template"] = "modified by a consumer"
+        assert plan.as_dict()["ordered_steps"][0]["command_template"] != "modified by a consumer"
+        assert runtime.call_count == 1
+
+
 @pytest.mark.parametrize(
     ("todo_id", "replan_obligation_id"),
     [
