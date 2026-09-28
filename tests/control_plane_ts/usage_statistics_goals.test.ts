@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { configure, inspect, observe } from "../../loopx/control_plane/runtime/usage_statistics.ts";
 import type { Context, Post } from "../../loopx/control_plane/runtime/usage_statistics.ts";
 import { union, recordGoalUsage, goalPreview } from "../../loopx/control_plane/runtime/usage_statistics_goals.ts";
-import { GOAL_SCHEMA, validGoalAggregate, validGoalObservation, goalDuration } from "../../loopx/control_plane/runtime/usage_statistics_goal_contract.ts";
+import { GOAL_SCHEMA, validGoalAggregate, validGoalObservation, goalDuration, hostCategory } from "../../loopx/control_plane/runtime/usage_statistics_goal_contract.ts";
 const base = Date.parse("2026-09-01T12:00:00Z");
 const day = 86400000;
 const key = "a".repeat(64);
@@ -105,6 +105,17 @@ test("closed contract rejects identifiers, timestamps and extra fields; long dur
   }
   assert.equal(validGoalAggregate({ ...valid, counters: [valid.counters[0], valid.counters[0]] }), false);
   assert.equal(goalDuration(30 * day), "gte_30d");
+});
+
+test("Kiro CLI has its own fixed Host label instead of other/unknown", () => {
+  // Quota observations pass the runtime profile; activation and turns pass the
+  // agent type. Both spellings must land on the same closed label.
+  assert.equal(hostCategory("kiro_cli"), "kiro_cli");
+  assert.equal(hostCategory("kiro-cli"), "kiro_cli");
+  assert.equal(hostCategory("generic_cli"), "other");
+  assert.equal(hostCategory("kiro"), "unknown");
+  const row = { measurement: "quota_cycle", host: "kiro_cli", span: "lt_1h", duration: "lt_10m", count: 1 };
+  assert.ok(validGoalAggregate({ schema: GOAL_SCHEMA, counters: [row] }));
 });
 
 test("late replay after daily claim cannot invent a second observed day", async t => {
