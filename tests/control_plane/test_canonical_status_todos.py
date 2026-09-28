@@ -244,21 +244,36 @@ def test_contract_rejects_corrupt_canonical_read_model_despite_valid_display(tmp
      ["agent-a"], "user_gate_blocks_unregistered_agent"),
     ({"task_class": "user_gate", "goal_bound": True}, ["agent-a", "agent-b"], "multi_agent_user_gate_missing_scope"),
     ({"task_class": "user_action"}, ["agent-a", "agent-b"], "multi_agent_user_todo_missing_response_scope"),
+    ({"role": "agent", "blocks_agent": "agent-a"}, ["agent-a"], "agent_todo_blocks_agent_invalid"),
+    ({"role": "agent", "claimed_by": "agent-a", "excluded_agents": ["agent-a"]},
+     ["agent-a"], "todo_claimed_by_excluded_agent"),
+    ({"role": "agent", "excluded_agents": ["agent-other"]}, ["agent-a"], "todo_excludes_unregistered_agent"),
+    ({"role": "agent", "removed_continuation_policy": "review_handoff"},
+     ["agent-a"], "agent_todo_removed_continuation_policy"),
+    ({"role": "agent", "excluded_agents": ["!"]}, ["agent-a"], "todo_excluded_agents_invalid"),
+    ({"task_class": "user_action", "excluded_agents": ["agent-a"]},
+     ["agent-a"], "todo_executor_exclusion_scope_invalid"),
+    ({"role": "agent", "claimed_by": "agent-a", "excluded_agents": ["agent-b"]},
+     ["agent-a", "agent-b"], None),
+    ({"status": "done", "done": True, "archive_state": "archive", "excluded_agents": ["agent-a"]},
+     ["agent-a"], None),
+    ({"status": "done", "done": True, "excluded_agents": ["agent-a"]},
+     ["agent-a"], "todo_executor_exclusion_scope_invalid"),
     ({"task_class": "user_action"}, ["agent-a"], None),
     ({"task_class": "user_gate", "global_gate": True}, ["agent-a", "agent-b"], None),
     ({"task_class": "user_gate", "blocks_agent": "agent-a"}, ["agent-a", "agent-b"], None),
     ({"status": "done", "done": True}, ["agent-a", "agent-b"], None),
     ({"status": "deferred", "done": True, "resume_when": "capacity_available:network"}, ["agent-a", "agent-b"], None),
 ])
-def test_canonical_user_semantics_without_display(tmp_path, provider, record_format, fields, agents, expected_code):
+def test_canonical_todo_semantics_without_display(tmp_path, provider, record_format, fields, agents, expected_code):
     state = tmp_path / "state.md"
     state.write_text("# Goal\n\n## User Todo\n\n")
     runtime = tmp_path / "runtime"
     goal = {"id": "goal-a", "repo": str(tmp_path), "state_file": str(state),
             "domain": "software", "adapter": {"kind": "read_only_project_map_v0"},
             "coordination": {"registered_agents": agents}}
-    records = [{"schema_version": "todo_item_v0", "todo_id": "todo_user", "index": 1,
-                "role": "user", "status": "open", "done": False, "text": "User work",
+    records = [{"schema_version": "todo_item_v0", "todo_id": "todo_checked", "index": 1,
+                "role": "user", "status": "open", "done": False, "text": "Canonical work",
                 "priority": "P1", "archive_state": "active", "source_section": "User Todo", **fields}]
     initialize_canonical_authority(runtime, goal["id"], _projection(goal["id"], records, record_format),
                                    state_path=state, provider=provider)
@@ -276,6 +291,14 @@ def test_canonical_user_semantics_without_display(tmp_path, provider, record_for
     assert process.returncode == (1 if expected_code else 0), process.stdout + process.stderr
     assert json.loads(process.stdout)["contract"]["ok"] is (expected_code is None)
     assert not state.exists()
+
+
+@pytest.mark.parametrize("fields", [{"role": "agent", "status": "bogus"},
+                                  {"role": "user", "task_class": "user_action", "status": "bogus"}])
+def test_legacy_canonical_status_is_validated_without_display(tmp_path, provider, fields):
+    test_canonical_todo_semantics_without_display(
+        tmp_path, provider, "legacy", fields, ["agent-a"], "todo_status_invalid",
+    )
 
 
 def test_large_canonical_user_narratives_do_not_enter_diagnostics_rpc(tmp_path, provider, record_format):
