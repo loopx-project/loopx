@@ -86,6 +86,25 @@ PrintPayload = Callable[
 ]
 
 
+def _read_todo_turn_settlement(
+    args: argparse.Namespace, *, runtime_root: Path,
+) -> QuotaSettlementReadback:
+    """Transport the original lifecycle tuple to the TS identity owner."""
+    readback = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+        turn_instance_id=args.turn_instance_id,
+    )
+    if readback is None:
+        raise RuntimeError("exact settlement readback unexpectedly returned not-found")
+    if readback.identity.failure is not None:
+        raise ValueError(readback.identity.failure.reason)
+    if readback.identity.value is None:
+        operation = "completion" if args.todo_command == "complete" else "supersede"
+        raise ValueError(f"turn-scoped Todo {operation} has no identity")
+    return readback
+
+
 def _completion_settlement_error(
     settlement_readback: QuotaSettlementReadback,
     *,
@@ -491,27 +510,13 @@ def handle_todo_command(
             completion_identity_source = None
             completion_delivery_workspace = None
             if getattr(args, "turn_instance_id", None):
-                runtime_root = resolve_runtime_root(
-                    load_registry(registry_path),
-                    runtime_root_arg,
+                runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+                settlement_readback = _read_todo_turn_settlement(
+                    args, runtime_root=runtime_root,
                 )
-                settlement_readback = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    todo_id=args.todo_id,
-                    turn_instance_id=getattr(args, "turn_instance_id", None),
-                )
-                if settlement_readback is None:
-                    raise RuntimeError(
-                        "exact settlement readback unexpectedly returned not-found"
-                    )
                 settlement_result = settlement_readback.identity
-                if settlement_result.failure is not None:
-                    raise ValueError(settlement_result.failure.reason)
-                if settlement_result.value is None:
-                    raise ValueError("turn-scoped Todo completion has no identity")
                 identity = settlement_result.value
+                assert identity is not None
                 settlement_identity = identity
                 todo_payload = list_goal_todos(
                     registry_path=registry_path,
@@ -624,6 +629,11 @@ def handle_todo_command(
                     )
         elif args.todo_command == "supersede":
             validate_todo_supersede_options(args)
+            supersede_readback = (
+                _read_todo_turn_settlement(
+                    args, runtime_root=resolve_runtime_root(load_registry(registry_path), runtime_root_arg),
+                ) if args.turn_instance_id else None
+            )
             payload = supersede_goal_todo(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -648,6 +658,11 @@ def handle_todo_command(
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
+            if supersede_readback is not None:
+                identity = supersede_readback.identity.value
+                assert identity is not None
+                payload["settlement_identity"] = identity.as_dict()
+                payload["settlement_result"] = settlement_result_payload(supersede_readback.identity)
         elif args.todo_command == "archive-completed":
             validate_todo_archive_completed_options(args)
             payload = archive_completed_todos(

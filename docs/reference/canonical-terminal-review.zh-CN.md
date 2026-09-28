@@ -111,3 +111,20 @@ project/state 路由和租约证明保留在对应命令支持的参数中。命
 此补充改变 CLI/managed 引导和 canonical 响应读回，不改变配置。已审核 Chat 操作
 继续使用 explicit operation identity 和已有共享投影；无需新增前端设置、视觉控件
 或 Lark 传输。
+
+## 原 Turn 的替代退役与已有后继
+
+`todo supersede --turn-instance-id <原 Turn>` 现在接受普通完成已有的精确
+Goal/Agent/Todo/Turn guard 身份。先验证原身份，再由已有 terminal authority 决定
+退役；租约、actor 和重试意图不变的门禁仍然保留。若已有真实的未来 Monitor，先用
+`todo update --successor-todo-id` 关联，再 supersede，不制造另一条替代任务。
+
+scoped 退役回执、原永久写回和原一次扣额都齐全后，同 Turn 的 `quota should-run`
+返回 `heartbeat_settled_skip`。退役不代表交付通过 validator，不关闭 Goal，也不消费
+或提前执行未来 Monitor。其到期时间、责任 Agent 和后继关联仍由 canonical 状态保存；
+独立工作在下一条新 Turn 重新判断。
+
+旧无绑定 supersede 回执不会被猜测属于某个 Turn。原 caller 可保留原 supersede
+意图、原 Turn ID 和原租约证明幂等重试，恢复已提交退役并补写 scoped 回执；不重研、
+不重跑验证、不重复扣额。未知或错配的 Turn 身份在 lifecycle 效果前拒绝。新增 CLI
+输入也在 `todo --help` 中说明；原无绑定 CLI、已审核 Chat 和 Lark 语义不变。

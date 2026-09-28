@@ -140,3 +140,27 @@ This addition changes the CLI/managed guidance and canonical response readback,
 not configuration. Reviewed Chat actions continue to use their explicit operation
 identity and existing shared projection; no new frontend setting, visual control
 or Lark transport is introduced.
+
+## Retiring an original Turn with an existing successor
+
+`todo supersede --turn-instance-id <original-turn>` now accepts the same exact
+Goal/Agent/Todo/Turn guard identity as ordinary completion. It validates that
+identity before the existing terminal authority admits retirement; lease,
+actor and unchanged-intent recovery rules still apply. Link an existing future
+Monitor with `todo update --successor-todo-id` before superseding rather than
+manufacturing another replacement.
+
+Once that scoped retirement, the original durable writeback and one original
+quota spend all exist, same-Turn `quota should-run` returns
+`heartbeat_settled_skip`. Retirement does not certify the deliverable's validator,
+does not close the Goal, and does not consume or advance the future Monitor.
+Its due time, owner and successor relation remain canonical facts; independent
+work is evaluated on the next fresh Turn.
+
+Earlier unscoped supersede receipts are deliberately not inferred to belong to
+a Turn. The original caller can retry the same supersede intent with its original
+Turn ID and original lease proof to recover the committed retirement and append
+the scoped receipt. This does not repeat research, validation or quota spending.
+Unknown or mismatched Turn identities fail before lifecycle effects. The new
+accepted CLI input is also documented by `todo --help`; existing unscoped CLI,
+reviewed Chat and Lark behavior is unchanged.

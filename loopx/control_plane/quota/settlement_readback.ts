@@ -967,6 +967,7 @@ function readQuotaSettlementFromRequest(
   );
   const spendEvent = findStepEvent(events, identity, "quota_spend");
   const completionEvent = findStepEvent(events, identity, "todo_complete");
+  const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
@@ -1057,6 +1058,8 @@ function readQuotaSettlementFromRequest(
       binding_kind: identity.binding_kind,
       writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback,
       completion_receipt_present: completionEvent !== null,
+      supersede_receipt_present: supersedeEvent?.status === "done" &&
+        optionalString(supersedeEvent.todo_id) === identity.todo_id,
       durable_writeback_present: writeback.failure === null,
       quota_spend_present: spend.failure === null,
       no_spend_closeout_present: blockedNoSpend,

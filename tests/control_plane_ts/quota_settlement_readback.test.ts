@@ -242,6 +242,36 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("scoped supersede settles only its exact Turn and never terminal acceptance", async t => {
+  const cases = [
+    {name: "original tuple", expected: "settled", patch: {}},
+    {name: "missing turn", expected: "open", patch: {run_id: null}},
+    {name: "foreign turn", expected: "open", patch: {run_id: "other-turn"}},
+    {name: "foreign goal", expected: "open", patch: {goal_id: "other-goal"}},
+    {name: "foreign actor", expected: "open", patch: {agent_id: "other-agent"}},
+    {name: "foreign Todo", expected: "open", patch: {todo_id: "todo_other"}},
+    {name: "failed retirement", expected: "open", patch: {status: "failed"}},
+    {name: "missing effect", expected: "open", patch: {details: {}}},
+    {name: "foreign effect", expected: "open", patch: {details: {settlement_effect_id: "other-effect"}}},
+  ];
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const root = await fixture({writeback: true, spend: true});
+    try {
+      const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      await appendFile(path, JSON.stringify({
+        schema_version: "loopx_rollout_event_v0", event_id: "supersede-receipt",
+        event_kind: "todo_supersede", status: "done", goal_id: goalId,
+        agent_id: agentId, todo_id: todoId, run_id: turnId,
+        details: {settlement_effect_id: identity.effect_id}, ...entry.patch,
+      }) + "\n");
+      const result = await readQuotaSettlement(request(root));
+      assert.equal(result.replay_phase, entry.expected);
+      assert.equal(result.completion_event, null);
+      assert.equal((result.terminal_closeout as {payload: {ok: boolean}}).payload.ok, false);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+});
+
 test("settlement progress requires both effects and exact receipts", async t => {
   const cases = [
     { guard: false, state: "identity_required", next: "validation" },
