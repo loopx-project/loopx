@@ -197,7 +197,9 @@ observed activity, including pauses; **duration** is the union of observed
 intervals. Parallel or nested overlap counts once within that series. Both stop
 growing without new evidence. They are not Goal age, CPU time, completion or
 billing evidence. Fixed Host labels are `codex_app`, `codex_cli`, `claude_code`,
-`dsh`, `opencode`, `trae`, `other`, `unknown`; custom names never go on the wire.
+`dsh`, `opencode`, `trae`, `kiro_cli`, `other`, `unknown`; custom names never go on
+the wire. A new label is accepted only by a collector built from the same
+contract, so deploy the collector before releasing a client that emits it.
 
 One cumulative snapshot per observed series/UTC day is claimed after that day
 closes, when another observation or normal usage occurs. Unfinished Goals count;

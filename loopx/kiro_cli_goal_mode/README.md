@@ -84,7 +84,8 @@ loopx slash-commands --install --surface kiro-cli
 
 Writes the managed LoopX skill facades (`loopx/SKILL.md`,
 `loopx-global-*/SKILL.md`, …) into `<KIRO_HOME>/skills/` using Kiro's per-skill
-directory layout. `KIRO_HOME` is the host's own override for that global root,
+directory layout, and registers the LoopX MCP server as the `loopx` entry in
+`<KIRO_HOME>/settings/mcp.json` (see [MCP control plane](#mcp-control-plane)). `KIRO_HOME` is the host's own override for that global root,
 so LoopX resolves it and falls back to `~/.kiro` when it is unset; install and
 uninstall always target the same resolved root. Managed files carry the
 `loopx-managed-slash-command` marker and are refreshed by rerunning the
@@ -112,6 +113,48 @@ what LoopX recorded.
 
 Kiro CLI exports `KIRO_SESSION_ID` for every session; it is the stable value a
 LoopX thread binding should key on instead of prose.
+
+## Runtime profile
+
+Kiro CLI has its own typed scheduler runtime profile, `kiro_cli`
+(`host_surface=kiro_cli`, `scheduler_owner=agent_cli_loop`,
+`execution_mode=interactive`). Generated guards carry
+`--runtime-profile kiro_cli`, and a validated Kiro iteration settles as a
+`visible-goal` quota spend, the same accounting Codex CLI and Claude Code use
+for their in-session loops. Before this profile existed Kiro fell through to
+`generic_cli`, which booked the same work as a `heartbeat` spend and skipped
+the visible-Goal Turn re-entry check. The heartbeat task body is unchanged: it
+still asks the agent to mint `LOOPX_TURN` per iteration, because the Codex
+native-goal body and its blocked-state rules do not apply to Kiro.
+
+## MCP control plane
+
+The kiro-cli surface registers `loopx/kiro_cli_goal_mode/mcp_server.py` in
+`<KIRO_HOME>/settings/mcp.json`, which Kiro's default agent loads, so the
+session that runs `/loopx` also gets the typed `should_run`, `list_todos`,
+`claim_task`, `complete_task` and `review_task_vision` tools. It is the shared
+`loopx.goal_mode_mcp` server Claude Code and KunlunCode use, run under the
+`kiro_cli` profile.
+
+- **Identity is the session binding.** Kiro starts each MCP server as a child
+  of the session with that session's `KIRO_SESSION_ID` (verified on 2.24.1: the
+  child sees the id ACP `session/new` returns). `start-goal --host-surface
+  kiro-cli` binds that id to one registered agent through `bind-agent-thread`.
+  The server acts only for that binding; with no id, no binding, a binding
+  under another host surface, an unregistered agent, or one id bound to two
+  lanes, every tool returns the setup hint instead of acting.
+- **Ownership stays with the user.** Only the `loopx` key is written. A
+  same-named entry LoopX did not write is reported as
+  `skipped_user_owned_mcp_entry` and never replaced or removed; a malformed
+  file is reported as `blocked_invalid_kiro_cli_mcp_json`. Provenance lives in
+  the sidecar `<KIRO_HOME>/settings/.loopx-managed-mcp.json`.
+- **Not an enforcement hook.** The tools make the control plane typed; they do
+  not stop Kiro from running other tools, so quota pacing stays advisory.
+
+Check it with `kiro-cli mcp list` (the `loopx` server appears under the
+default agent), and remove it with
+`loopx slash-commands --uninstall --surface kiro-cli`, which retires the skills
+and the `loopx` entry only while it still matches what LoopX wrote.
 
 ## Dashboard and Chat agent
 
@@ -165,5 +208,8 @@ a host by identity, and each one needs Kiro CLI in its table:
 
 - `__init__.py` — host facts: install surface id, fixed skills root resolution,
   the agent-type catalog entry, the activation extras (native goal command,
-  host iteration budget, completion tool, advisory quota boundary), and the
-  Chat/ACP launch facts the dashboard's built-in Agent row is built from.
+  host iteration budget, completion tool, advisory quota boundary), the MCP
+  config location, and the Chat/ACP launch facts the dashboard's built-in Agent
+  row is built from.
+- `mcp_server.py` — the stdio MCP entrypoint: the shared control plane under
+  the `kiro_cli` profile, with identity resolved from the session binding.

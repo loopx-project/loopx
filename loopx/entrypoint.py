@@ -20,6 +20,11 @@ def _bound_option_present(argv: list[str], option: str) -> bool:
 def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
     """Select only generated, receipt-bound scheduler follow-up commands."""
 
+    # The selected Python dispatcher owns the existing outer-controller guard.
+    # Do not process-replace it before it can reject a model-visible write.
+    if os.environ.get("LOOPX_KUNLUNCODE_OUTER_CONTROLLER") == "1":
+        return None
+
     value_options = {"--format", "--registry", "--runtime-root"}
     positionals: list[str] = []
     skip_value = False

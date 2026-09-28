@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+# Source-tree invocations must use the same bounded entrypoint as the console
+# script. Keep the full parser below importable for compatibility callers; the
+# entrypoint can still import this module by name when a full-parser fallback is
+# required, without executing this module-entry branch a second time.
+if __name__ == "__main__":
+    from .entrypoint import main as _entrypoint_main
+
+    raise SystemExit(_entrypoint_main())
+
 from .cli_commands.automation_cadence import (
     register_automation_cadence_command, handle_automation_cadence_command,
 )
@@ -827,7 +836,18 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "manager-inbox":
-        return handle_manager_inbox(args, registry_path, effective_runtime_root(registry_path, args.runtime_root))
+        from .control_plane.projects.registry_codec import load_project_registry
+        from .paths import resolve_runtime_root
+
+        return handle_manager_inbox(
+            args,
+            registry_path,
+            resolve_runtime_root(
+                load_project_registry(registry_path),
+                args.runtime_root,
+                registry_path=registry_path,
+            ),
+        )
     if args.command == "delegation":
         return handle_delegation(args, registry_path, effective_runtime_root(registry_path, args.runtime_root))
 
@@ -1029,7 +1049,3 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

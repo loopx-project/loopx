@@ -245,6 +245,27 @@ def _archive_operation_id(
     return f"todo-archive:{digest[:32]}"
 
 
+def _persist_validated_completion_result(
+    *,
+    request: Mapping[str, Any],
+    source: Path,
+    runtime_root: Path,
+    goal_id: str,
+    expected_descriptor: Mapping[str, Any] | None,
+) -> None:
+    """Persist host-local bytes only after the owner's validation effects pass."""
+    receipts = request.get("goal_acceptance_validation_receipts")
+    passed = (isinstance(receipts, list) and bool(receipts) and
+              all(isinstance(row, Mapping) and isinstance(row.get("receipt"), Mapping) and
+                  row["receipt"].get("passed") is True for row in receipts))
+    caller_receipt = request.get("validation_receipt")
+    if passed and (caller_receipt is None or
+                   isinstance(caller_receipt, Mapping) and caller_receipt.get("passed") is True):
+        staged = store_completion_result(source=source, runtime_root=runtime_root, goal_id=goal_id)
+        if staged != expected_descriptor:
+            raise ValueError("completion result changed during acceptance validation")
+
+
 def terminal_canonical_todo_if_promoted(
     *,
     registry_path: Path,
@@ -386,6 +407,9 @@ def terminal_canonical_todo_if_promoted(
             "operation_identity": (
                 {"kind": "current_monitor_cycle"}
                 if implicit_monitor_cycle
+                else {"kind": "completion_turn"}
+                if command == "complete" and completion_turn_key is not None
+                and completion_identity_source == "turn_settlement"
                 else {"kind": "explicit", "operation_id": _terminal_operation_id(
                     command=command, goal_id=goal_id, todo_id=todo_id,
                     completion_turn_key=completion_turn_key,
@@ -440,19 +464,10 @@ def terminal_canonical_todo_if_promoted(
             validation_workspace_path=completion_validation_workspace_path,
         ))
         if completion_result_file is not None and not dry_run:
-            receipts = request.get("goal_acceptance_validation_receipts")
-            passed = (isinstance(receipts, list) and bool(receipts) and
-                      all(isinstance(row, Mapping) and isinstance(row.get("receipt"), Mapping) and
-                          row["receipt"].get("passed") is True for row in receipts))
-            caller_receipt = request.get("validation_receipt")
-            if passed and (caller_receipt is None or
-                           isinstance(caller_receipt, Mapping) and caller_receipt.get("passed") is True):
-                staged = store_completion_result(
-                    source=completion_result_file, runtime_root=runtime_root,
-                    goal_id=goal_id,
-                )
-                if staged != result_descriptor:
-                    raise ValueError("completion result changed during acceptance validation")
+            _persist_validated_completion_result(
+                request=request, source=completion_result_file, runtime_root=runtime_root,
+                goal_id=goal_id, expected_descriptor=result_descriptor,
+            )
         completion_validation_executed = True
         request["observed_at"] = now_local()
         result = effect_runtime_result(
@@ -500,6 +515,7 @@ def terminal_canonical_todo_if_promoted(
     idempotent_replay = provider_status in {"replayed", "no_change"} or (
         isinstance(terminal_decision, Mapping)
         and terminal_decision.get("idempotent") is True
+        and payload.get("changed") is not True
     )
     response = {
         **payload,

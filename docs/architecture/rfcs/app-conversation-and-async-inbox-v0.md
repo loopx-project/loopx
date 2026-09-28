@@ -297,3 +297,66 @@ The explicit status-only profile returns a labelled snapshot, not a keyword-buil
 answer. Converting a reply into a task opens the complete editable text rather
 than guessing its next-action sentence. Structured ID/date/resume-condition
 validation remains. Lark routing is unchanged.
+
+### Conversational goal preparation: integrating the team-workspace proposal
+
+[PR #4376](https://github.com/loopx-project/loopx/pull/4376), contributed by
+[KashiwaByte](https://github.com/KashiwaByte), contributes a useful interaction
+idea: help the owner clarify a goal through one consequential question at a time,
+with contextual reply suggestions. Integrate that idea into the existing App
+conversation and Goal action path. Its independent workspace, JSON store,
+subprocess runner and scheduler are not adopted; the unshipped prototype is
+removed from this PR's final product delta. Preserve its contribution in history.
+
+| Idea | Existing owner and acceptance |
+| --- | --- |
+| Conversational goal draft and contextual options | R1 / GQ01: shared typed `goal_draft` in Chat; reusable App card and editable Goal form. Suggestions fill the composer and require explicit send. Unknown requirements remain empty; no regex intent classifier or automatic creation |
+| Ask a person to supply information, perform work or judge a result | Existing operator inbox, user gates and review/adoption contracts. Keep those different decisions visible; a reply does not imply delegated authority. End-to-end acceptance remains open |
+| Remember corrections and collaborator strengths | Existing scoped brief/context and capability-memory owners. Corrections may inform subsequent work; they cannot mint permissions, prove capability or silently change an execution binding |
+| Rolling plans and independent checks | R2/R3 work graph, managed/attached Turn and independent acceptance owners. Require real dependency adoption, correction, stop and result return; a conversational draft does not qualify a team |
+| Optional remote executor | Existing extension and execution-profile contracts. No additional provider is admitted without a real caller, explicit binding and lifecycle qualification |
+
+The bounded implementation adds a provider-response suggestion, not another
+planner or source of Goal truth. TypeScript admits its structure in the existing
+collaboration owner; Python performs transport redaction and persists it alongside
+the completed message. App history and reconnect use that message. Both managed
+and attached completion storage retain the same optional field. Ordinary answers
+and malformed drafts preserve the old response contract. A provider must actually
+emit the structured suggestion; storage/UI acceptance is not proof of model
+intent quality or a live attached-host loop.
+
+Before drafting, resolve the current conversation and inspect permitted existing
+work. A continuation or correction uses the existing qualified owner and scoped
+handoff; an owner already answering in Goal Chat keeps the conversation. Compare
+all plausible candidates; ambiguous identity asks one useful question. Missing
+grants or stopped work are explicit gaps, never reasons to create a replacement.
+An explicitly separate goal may overlap an existing topic. This is semantic model
+selection against host evidence, not keyword routing or a new discovery service.
+TypeScript prevents a response with a handoff, protected action, proposal or gate
+from also advertising a new Goal. The host still verifies recipient authority.
+
+A complete draft opens the existing typed `goal.create` preview directly, with
+one explicit apply. Optional editing reuses the existing form and the same request
+builder. Incomplete drafts remain editable. Retry/reopen of the same source
+message and draft preserves operation identity; a separate message is a separate
+request. Draft-derived previews remain read-only with heartbeat disabled. The old
+explicit form keeps its current default. Workspace, owner and permission checks
+remain authoritative; creation is not proof of worker execution or delivery.
+Lark receives the shared semantic answer/handoff behavior, while draft cards and
+direct preview are App-only. No new capability, provider or scheduler is added.
+
+The [public model evaluation](../../../examples/evaluations/chat-intake.py) runs
+only during release-candidate qualification, with explicit paid-call opt-in and
+at least two repeats per default or newly advertised model profile. Routine PR
+work and heartbeats use offline regressions and affected browser scenarios; they
+do not launch paid evaluation. Record candidate identity and retain failures or
+skips rather than presenting an unqualified profile as passing. The suite uses
+the production prompt/parser and fixed public contexts. Its frozen outcomes
+cover new work, existing owners, ambiguity, stopped/ungranted recipients, scope
+correction, current-Goal follow-ups, quotes, negation and ordinary questions in
+Chinese/English. Output conflicts, omitted envelopes and truncated generations
+fail rather than being counted as successful intent recognition. Report model,
+prompt/case hashes, request settings, token usage and repeat count. This layer
+qualifies model interpretation of supplied evidence, not live discovery, actual
+dispatch, stop enforcement or full GQ01/GQ02 completion. Packaged browser and
+real collaboration transport tests qualify those separate boundaries.

@@ -1833,6 +1833,23 @@ It mirrors the compact run index, but strips local artifact paths. UIs should
 show artifact availability with `json_exists` and `markdown_exists` instead of
 linking directly to local files.
 
+Artifact flags are fresh observations for every returned Run, not facts trusted
+from the persisted index. History collection first reads and deduplicates the
+complete index and computes quota and semantic history; only then does it check
+files for retained recent, latest-status, agent-lane and semantic-evidence rows.
+`--limit 0` does not discard old vision, owner correction or active blocked-retry
+evidence. Creating or deleting an artifact is visible on the next read even when
+the index bytes are unchanged. Full `load_index`/`load_index_snapshot` readers
+still observe every row by default. This is a caller filesystem optimization,
+independent of the Todo authority provider, not an index cache or a limit on
+decision history.
+
+文件存在性是每次读取对返回记录的实时观测，不信任索引中保存的布尔值。先用完整索引
+完成去重、额度和语义历史归约，再检查近期记录、最新状态、Agent 窗口及保留语义证据
+的文件；即使 `--limit 0`，旧愿景、用户纠偏和有效阻塞重试也不会因此丢失。索引不变时，
+文件创建／删除仍在下次读取生效；底层完整索引接口默认保留逐条检查行为。这不改变
+File／SQLite 等 Todo provider 的权威，也不限制决策历史。
+
 On the `status`, `quota should-run`, and `history` read paths, relative
 `common_runtime_root` values, relative `--runtime-root` overrides, and relative
 run-index artifact paths are resolved against the project root that owns the

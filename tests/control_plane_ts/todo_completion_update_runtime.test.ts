@@ -87,6 +87,12 @@ test("terminal identity rejects ambiguous or inapplicable intent before opening 
     [{operation_identity: {kind: "explicit", operation_id: "op", extra: true}}, /invalid terminal operation identity/],
     [{command: "supersede"}, /requires an unkeyed completion/],
     [{requested_completion_turn_key: "explicit-turn"}, /requires an unkeyed completion/],
+    [{operation_identity: {kind: "completion_turn"}}, /requires a keyed turn_settlement completion/],
+    [{operation_identity: {kind: "completion_turn"}, requested_completion_turn_key: "turn"}, /requires a keyed turn_settlement completion/],
+    [{operation_identity: {kind: "completion_turn"}, command: "supersede",
+      requested_completion_turn_key: "turn", requested_completion_identity_source: "turn_settlement"}, /requires a keyed turn_settlement completion/],
+    [{operation_identity: {kind: "completion_turn", operation_id: "ambiguous"},
+      requested_completion_turn_key: "turn", requested_completion_identity_source: "turn_settlement"}, /invalid terminal operation identity/],
   ] as const) {
     let opened = false;
     const result = await terminalLifecycleLocalCoordinationTodo(monitorCycleTerminalRequest(overrides), {

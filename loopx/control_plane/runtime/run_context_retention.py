@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from ..quota.blocked_retry import active_turn_retry_for_run
@@ -230,6 +230,23 @@ def goal_semantic_history_from_runs(
     if latest_owner_correction_run is not None:
         semantic_history["latest_owner_correction_run"] = latest_owner_correction_run
     return semantic_history
+
+
+def iter_goal_semantic_history_runs(value: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Enumerate retained Run references without reselecting or limiting history.
+
+    The filesystem adapter uses this shape-owned traversal to observe artifacts
+    after semantic reduction, including evidence outside the recent-run window.
+    """
+    for context in value.get("agents", []):
+        for field in SEMANTIC_CONTEXT_RUN_FIELDS:
+            run = context.get(field)
+            if isinstance(run, dict):
+                yield run
+    yield from value.get("active_blocked_retry_runs", [])
+    correction = value.get("latest_owner_correction_run")
+    if isinstance(correction, dict):
+        yield correction
 
 
 def compact_goal_semantic_history(

@@ -112,6 +112,7 @@ def register_heartbeat_control_commands(
             "generic_cli",
             "claude_code",
             "kunluncode",
+            "kiro_cli",
             "local_scheduler",
         ],
         help="Host surface embedded in the generated quota guard.",

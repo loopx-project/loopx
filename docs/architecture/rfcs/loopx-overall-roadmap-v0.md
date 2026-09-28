@@ -8,6 +8,12 @@
 
 **Local authority retirement checkpoint (2026-09-28).** R5/T4 now use the [reconciled deletion and qualification cadence](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md). Reviewed local cutover and native drain are merged; whole-Goal execution/consumer closure, profile qualification and default-entry adoption still have separate exits. Delete a replaced writer with its last caller; retain necessary migration/receipt readers. Existing GoalRef/Turn PRs own their affected consumers. R6 PostgreSQL service qualification is separate, and the historical PR-count estimates are not current forecasts.
 
+Conversational preparation from [PR #4376](https://github.com/loopx-project/loopx/pull/4376)
+is integrated under R1/GQ01 through the existing Chat draft and reviewed Goal
+creation path; see the [absorption map](app-conversation-and-async-inbox-v0.md#conversational-goal-preparation-integrating-the-team-workspace-proposal).
+Its separate workspace/executor is not adopted. This entry improvement does not
+close GQ01 execution/return or R2 small-team acceptance.
+
 ## 1. Overall Objective and Product Routes
 
 LoopX aims to let people express, revise and accept complex goals through a local frontend or Lark, while a persistent steward coordinates long-running LoopX Agents with independent work commitments across local managed and cloud runtimes. Single-Agent long-horizon reliability is the foundation. Multi-Agent collaboration, handoff, recovery and convergence on shared goals are core capabilities. Hundred-Agent scale is a separate system qualification.

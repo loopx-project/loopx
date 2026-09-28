@@ -411,6 +411,9 @@ def handle_support_control_command(
             SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value,
             SchedulerRuntimeProfile.TRAE_APP.value,
             SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value,
+            # Kiro CLI moved off generic_cli onto its own profile; its facade
+            # still reads the thin Agent input, so keep that output shape.
+            SchedulerRuntimeProfile.KIRO_CLI_VISIBLE.value,
         }
         recurring_thin_surface = bool(
             recurring_runtime_profile and args.visible_goal_host is None

@@ -151,8 +151,9 @@ Codex 发现使用既有 Goal/agent/task 绑定和所选 `CODEX_HOME` 的只读�
 每个 Goal/口径/Host 分别计算 **span**（首次至最近观测活动，包含中间暂停）和
 **duration**（已观测区间的并集）。同口径同 Host 内并行重叠只计一次；没有新证据
 就不增长。它们不是 Goal 年龄、CPU 用时、完成证据或计费时长。Host 只允许固定枚举
-`codex_app`、`codex_cli`、`claude_code`、`dsh`、`opencode`、`trae`、`other`、
-`unknown`，不发送自定义名称。
+`codex_app`、`codex_cli`、`claude_code`、`dsh`、`opencode`、`trae`、`kiro_cli`、
+`other`、`unknown`，不发送自定义名称。新增标签只会被基于同一契约构建的接收端接受，
+因此须先部署接收端，再发布会发送该标签的客户端。
 
 每个有活动的统计序列每 UTC 日最多一份累计快照，次日发生观测或普通使用时发送。
 未完成 Goal 也计入；静默 Goal 不每天重复计数。直接 Host 打点每分钟提交检查点。

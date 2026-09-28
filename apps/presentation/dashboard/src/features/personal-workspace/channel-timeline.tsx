@@ -1,3 +1,5 @@
+import { GoalDraftCard } from "./goal-draft-card";
+import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import {Fragment, useRef, useState} from "react";
 import { ChatApiError } from "../../data/chat.js";
 import { CollaborationCard } from "./collaboration-card";
@@ -104,6 +106,8 @@ export function ChannelTimeline({
   onSelect,
   selectedGoal,
   showManagerTeamResults = false,
+  onReviewGoalDraft,
+  onSuggestReply,
   onOpenGoalEvidence,
   onInterruptTurn,
   onSteerTurn,
@@ -112,6 +116,8 @@ export function ChannelTimeline({
   onSelect: (selection: WorkspaceDrawerSelection) => void;
   selectedGoal: WorkspaceGoal | null;
   showManagerTeamResults?: boolean;
+  onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<void>;
+  onSuggestReply?: (text: string) => void;
   onOpenGoalEvidence?: (goalId: string) => void;
   onInterruptTurn?: (turnId: string) => Promise<void>;
   onSteerTurn?: (turnId: string, text: string, ingressId: string) => Promise<void>;
@@ -212,6 +218,8 @@ export function ChannelTimeline({
                 target="_blank" rel="noopener noreferrer">{locale === "zh-CN" ? "单独阅读完整答复" : "Read full answer separately"}</a>
             : null}
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length) ? <MessageActivity message={item.message} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn}/> : null}
+          {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
+            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
           <CollaborationCard request={item.message.collaboration} />
               <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
         </div>

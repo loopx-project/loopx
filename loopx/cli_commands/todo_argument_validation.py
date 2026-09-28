@@ -537,9 +537,9 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         "complete",
         "supersede",
     }
-    if getattr(args, "turn_instance_id", None) and args.todo_command != "complete":
+    if getattr(args, "turn_instance_id", None) and args.todo_command not in {"complete", "supersede"}:
         raise ValueError(
-            "--turn-instance-id is supported only by todo complete settlement"
+            "--turn-instance-id is supported only by todo complete/supersede settlement"
         )
     if getattr(args, "update_operation_id", None) is not None and args.todo_command != "update":
         raise ValueError("--update-operation-id is supported only by todo update")

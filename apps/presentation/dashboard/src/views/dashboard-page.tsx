@@ -1,3 +1,4 @@
+import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { conversationReturnSessions, reconcileConversationReturns } from "../data/conversation-returns";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
@@ -509,6 +510,7 @@ type PersonalHomeModel = {
   workers?: WorkspaceWorker[];
 };
 type PersonalManagerMessage = {
+  goalDraft?: GoalDraft | null;
   sourceMessageId?: string;
   sourceSessionId?: string;
   sourceTurnId?: string;
@@ -1607,6 +1609,7 @@ function PersonalGoalHome({
             ...current,
             [targetContextId]: history.messages.map((message) => ({
               sourceMessageId: message.message_id,
+              goalDraft: normalizeGoalDraft(message.goal_draft),
               sourceSessionId: message.session_id,
               agentLabel: message.role === "user"
                 ? undefined
@@ -1729,6 +1732,7 @@ function PersonalGoalHome({
               ? [streamed.response.gate.summary, streamed.response.gate.next_action].filter(Boolean).slice(0, 2)
               : [],
             pending: false,
+            goalDraft: streamed.response.goal_draft,
             text: streamed.response.message
               || streamedText.trim()
               || `${answerIdentityLabel(targetContextId, selectedAgent.label)} 已完成分析。`,
@@ -2165,6 +2169,7 @@ function PersonalGoalHome({
       }
       const response = streamed.response;
       updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+        goalDraft: response.goal_draft,
         lines: response.gate ? [response.gate.summary, response.gate.next_action].filter(Boolean).slice(0, 2) : [],
         pending: false,
         text: visibleAgentMessage(response.message || streamedText.trim())
@@ -2583,6 +2588,7 @@ function PersonalGoalHome({
         pending: message.pending,
         returnDelivery: message.returnDelivery,
         collaboration: message.collaboration,
+        goalDraft: message.goalDraft,
         role: message.role,
         sourceTurnId: message.sourceTurnId,
         sourceMessageId: message.sourceMessageId,
@@ -2779,6 +2785,7 @@ function PersonalGoalHome({
               ...current,
               [run.goalId]: snapshot.messages.map((message) => ({
                 sourceMessageId: message.message_id,
+              goalDraft: normalizeGoalDraft(message.goal_draft),
                 sourceSessionId: sessionId,
                 agentLabel: message.role === "user" ? undefined : run.agentLabel,
                 attachments: workspaceImageAttachments(message.attachments),

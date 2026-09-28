@@ -596,6 +596,7 @@ class ChatSessionStore(ChatIngressStore):
         attachments: list[dict[str, Any]] | None = None,
         origin: str | None = None,
         message_id: str | None = None,
+        goal_draft: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session_dir = self._session_dir(session_id)
         path = session_dir / "messages.jsonl"
@@ -610,6 +611,7 @@ class ChatSessionStore(ChatIngressStore):
             "text": str(text),
             **({"origin": _opaque_id(origin, field="origin")} if origin else {}),
             **({"attachments": attachments} if attachments else {}),
+            **({"goal_draft": goal_draft} if goal_draft and role == "agent" else {}),
             "created_at": utc_now(),
         }
         with exclusive_file_lock(path, agent_id="loopx-chat", operation="append_chat_message"):
@@ -1284,6 +1286,7 @@ class ChatSessionStore(ChatIngressStore):
                     text=str(response["message"]),
                     turn_id=turn_id,
                     message_id=f"managed.{turn_id}.completed",
+                    goal_draft=response.get("goal_draft"),
                 )
             self.append_completed_response_events(
                 session_id,
@@ -1361,6 +1364,7 @@ class ChatSessionStore(ChatIngressStore):
                 self.append_message(
                     session_id, role="agent", text=str(response.get("message") or ""),
                     turn_id=turn_id, origin="attached_host", message_id=message_id,
+                    goal_draft=response.get("goal_draft"),
                 )
             self.append_completed_response_events(
                 session_id,

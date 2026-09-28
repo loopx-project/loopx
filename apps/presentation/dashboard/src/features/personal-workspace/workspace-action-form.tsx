@@ -1,3 +1,4 @@
+import { goalCreateContent, goalCreateRequest } from "./goal-create-request";
 import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceActionPreviewRequest } from "./personal-workspace-model";
@@ -9,6 +10,9 @@ export type WorkspaceActionDraft = {
   goalTitle: string;
   agentId: string;
   text?: string;
+  completionCriteria?: string;
+  executionBoundary?: string;
+  permission?: "read_only";
 };
 
 // Mirrors the backend preview normalizer: whitespace is collapsed, then code points are counted.
@@ -31,17 +35,16 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [objective, setObjective] = useState(draft.text ?? "");
-  const [completion, setCompletion] = useState("");
-  const [boundary, setBoundary] = useState("");
-  const [permission, setPermission] = useState("workspace_write_on_confirmation");
+  const [completion, setCompletion] = useState(draft.completionCriteria ?? "");
+  const [boundary, setBoundary] = useState(draft.executionBoundary ?? "");
+  const [permission, setPermission] = useState<string>(draft.permission ?? "workspace_write_on_confirmation");
   const [interval, setInterval] = useState(draft.kind === "heartbeat" ? "1" : "2");
   const [unit, setUnit] = useState(draft.kind === "heartbeat" ? "d" : "h");
   const [stop, setStop] = useState("goal_complete");
   const [target, setTarget] = useState(t("schedule.defaultTarget"));
   const scheduled = draft.kind === "heartbeat" || draft.kind === "monitor";
   const title = draft.kind === "goal" ? t("composer.createGoal") : draft.kind === "todo" ? (zh ? "创建任务" : "Create task") : draft.kind === "heartbeat" ? t("schedule.heartbeat") : t("composer.monitor");
-  const goalObjective = [objective.trim(), t("goal.objectiveCompletion", { criteria: completion.trim() }), boundary.trim() ? t("goal.objectiveBoundary", { boundary: boundary.trim() }) : ""].filter(Boolean).join("\n");
-  const goalInitialTodo = t("goal.initialTodo", { criteria: completion.trim() });
+  const { objective: goalObjective, initial_todos: [goalInitialTodo] } = goalCreateContent({ objective, completion, boundary }, t);
   const lengthIssue = draft.kind === "todo" && boundedLength(objective) > todoTextLimit
     ? (zh ? `任务内容 ${boundedLength(objective)}/${todoTextLimit} 字，请精简后再检查。` : `Task is ${boundedLength(objective)}/${todoTextLimit} characters. Shorten it before review.`)
     : draft.kind === "goal" && boundedLength(goalObjective) > goalObjectiveLimit
@@ -61,23 +64,23 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
     setBusy(true);
     setError("");
     try {
-      const goalId = draft.kind === "goal" ? `goal-${crypto.randomUUID()}` : draft.goalId;
+      if (draft.kind === "goal") {
+        await onPreview(goalCreateRequest({ objective, completion, boundary, permission,
+          agentId: draft.agentId, contextGoalId: draft.goalId }, t));
+        onClose();
+        return;
+      }
+      const goalId = draft.goalId;
       if (!goalId) throw new Error(zh ? "请先选择 Goal。" : "Select a Goal first.");
-      const actionKind = draft.kind === "goal" ? "goal.create" : draft.kind === "todo" ? "todo.create" : draft.kind === "heartbeat" ? "heartbeat.bind" : "monitor.create";
-      const parameters = draft.kind === "goal" ? {
-        goal_id: goalId, agent_id: draft.agentId, title: objective.trim().slice(0, 80),
-        objective: goalObjective,
-        completion_criteria: completion.trim(), execution_boundary: boundary.trim(),
-        initial_todos: [goalInitialTodo], permission,
-        workspace_ref: "current", heartbeat: { enabled: false, cadence: "1d", timezone: "Asia/Shanghai" }, stop_condition: "goal_complete",
-      } : draft.kind === "todo" ? { goal_id: goalId, text: objective.trim() } : {
+      const actionKind = draft.kind === "todo" ? "todo.create" : draft.kind === "heartbeat" ? "heartbeat.bind" : "monitor.create";
+      const parameters = draft.kind === "todo" ? { goal_id: goalId, text: objective.trim() } : {
         goal_id: goalId, agent_id: draft.agentId, cadence: `${interval}${unit}`, stop_condition: stop,
         timezone: "Asia/Shanghai",
         ...(draft.kind === "monitor" ? { target: target.trim(), target_key: `goal-${goalId}` } : {}),
       };
-      await onPreview({ actionKind, context: { kind: draft.kind === "goal" ? "manager" : "goal", goal_id: draft.goalId },
+      await onPreview({ actionKind, context: { kind: "goal", goal_id: draft.goalId },
         idempotencyKey: `workspace-${actionKind}-${crypto.randomUUID()}`, normalizedParameters: parameters,
-        summary: draft.kind === "goal" ? t("proposal.summary.goalCreate", { title: objective.trim().slice(0, 80) }) : title });
+        summary: title });
       onClose();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
