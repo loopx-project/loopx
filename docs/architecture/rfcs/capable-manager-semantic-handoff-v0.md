@@ -626,6 +626,18 @@ owner selection, receiver adoption or the complete A24 journey. Operational
 recovery must also verify the service's actual installed release: a healthy HTTP
 listener alone does not prove its lazy-loaded runtime assets still exist.
 
+**Request publication and return preparation (S1/S3, A8/A9/A24):** persist
+and verify the trusted original-conversation route before publishing an Inbox
+entry. An independent receiver may consume the entry before the sender receives
+its acknowledgement. A failed route write/readback must leave no visible work;
+a prepared route without an entry is inert and an exact retry can finish it.
+Keep the existing request identity and conflict checks. This matches the peer
+request's route-before-entry ordering; it changes Python filesystem IO ordering,
+not the shared TypeScript request or return-state authority. Exercise App,
+Goal Chat and external-audience ingress, immediate receiver results, interrupted
+publication and original-transcript return after restart. This qualification
+does not establish native worker selection, execution or the full A24 journey.
+
 ## 11. Normative delivery plan
 
 Implement coherent end-to-end slices, not one PR per incidental field. The manager engineering owner maintains canonical Todos and a private incident-to-acceptance map; PRs link this RFC milestone and acceptance IDs. Public progress updates contain only safe results. Milestone completion requires current deployment evidence, not merged PR count.
