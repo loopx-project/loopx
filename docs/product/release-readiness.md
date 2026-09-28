@@ -56,7 +56,7 @@ its own updater.
 For contributors, keep the clone-plus-canary path:
 
 ```bash
-git clone https://github.com/huangruiteng/loopx ~/loopx
+git clone https://github.com/loopx-project/loopx ~/loopx
 ~/loopx/scripts/install-local.sh
 loopx doctor
 loopx-canary doctor
@@ -152,6 +152,9 @@ Before moving `stable`, maintainers should:
 
 - bump `loopx.__version__` and `pyproject.toml` together when user-visible
   release behavior changes;
+- before freezing the candidate, align the existing canonical help catalog,
+  generated versioned manpage and current developer-book release checkpoint;
+  run the documentation preflight below without changing historical examples;
 - create or verify the matching Git tag, for example `v0.1.3`;
 - for host Goal/prompt changes, explicitly run the
   [release-only native Goal regression](../development/testing-and-quality.md#release-only-native-goal-regression--仅发布前的原生-goal-回归)
@@ -164,6 +167,14 @@ Before moving `stable`, maintainers should:
   `loopx update apply` when the check recommends or when they want to
   refresh to the named stable release.
 
+Run the existing documentation preflight from the candidate worktree:
+
+```bash
+uv run --extra test python scripts/render-manpage.py --output man/loopx.1
+uv run --extra test python examples/cli-help-manpage-smoke.py
+uv run --extra test python examples/dev-book-publication-smoke.py
+```
+
 The release workflow builds a wheel and source distribution from the tagged
 commit. Its release assets include a canonical `SHA256SUMS` file, and GitHub
 records build-provenance attestations for both packages and the checksum
@@ -171,8 +182,8 @@ manifest. Verify a downloaded bundle before installation:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify loopx-X.Y.Z-py3-none-any.whl --repo huangruiteng/loopx
-gh attestation verify loopx-X.Y.Z.tar.gz --repo huangruiteng/loopx
+gh attestation verify loopx-X.Y.Z-py3-none-any.whl --repo loopx-project/loopx
+gh attestation verify loopx-X.Y.Z.tar.gz --repo loopx-project/loopx
 ```
 
 The checksum proves that the downloaded bytes match the release manifest. The
@@ -184,7 +195,7 @@ PyPI publication is an explicit, fail-closed extension of the same build. The
 release workflow publishes only when maintainers have configured all of these:
 
 - a PyPI project named `loopx` with a Trusted Publisher for
-  `huangruiteng/loopx` and `.github/workflows/release-artifacts.yml`;
+  `loopx-project/loopx` and `.github/workflows/release-artifacts.yml`;
 - a protected GitHub environment named `pypi` that matches the Trusted
   Publisher configuration;
 - the repository variable `PYPI_PUBLISH_ENABLED=true`.
@@ -639,6 +650,17 @@ path, and canary route rather than as a user-facing release baseline.
   and lifecycle compatibility at commit `fce1a4bac`.
   The published package, desktop artifacts, signed update feed, and website
   were verified against the release source before `stable` fast-forwarded.
+
+- `v1.2.2` on 2026-09-28 07:17 +08:00: recoverable App conversations,
+  delegation continuity and local authority replay at commit
+  `ee9dad81b`. Settings identify device, Goal and Agent
+  targets; usage statistics preserve visible disclosure and persistent opt-out.
+  The published package, four Mac/Windows desktop artifacts, signed update
+  feed, PyPI installation and public Pages were verified against the tagged
+  source before `stable` fast-forwarded. The first full-public attempt hit a
+  disposable native-profile cleanup race; the complete same-source rerun passed
+  under unchanged budgets. Its remaining fixture-quiescence limit is retained
+  on the [existing profile lifecycle owner](https://github.com/loopx-project/loopx/pull/5226#issuecomment-5860681814).
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
