@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ...extensions.process_runtime import terminate_process_tree
+
 # Frozen wire id shared with capabilities/issue_fix. Kept verbatim for wire
 # compatibility with existing caller-repo-branch receipts.
 CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION = "issue_fix_validation_command_v0"
@@ -28,7 +30,9 @@ def run_caller_validation(
     Only ``exit_code`` and the boolean ``passed`` are recorded; command stdout,
     stderr, and local paths are deliberately not captured. A timeout raises
     ``subprocess.TimeoutExpired``; callers decide whether to convert that into
-    a failure receipt.
+    a failure receipt. Timeout and caller cancellation terminate the command's
+    owned process tree, not just its leader. Declared deadlines and receipt
+    decisions remain with the caller's existing TypeScript owner.
     """
     if (validation_command is None) == (validation_argv is None):
         raise ValueError(
@@ -41,20 +45,29 @@ def run_caller_validation(
     )
     if not argv:
         raise ValueError("validation command must not be empty")
-    result = subprocess.run(
+    with subprocess.Popen(
         argv,
         cwd=workspace,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=timeout_seconds,
-    )
+        start_new_session=os.name == "posix",
+    ) as process:
+        try:
+            # Output is transient and never part of the public receipt.
+            process.communicate(timeout=timeout_seconds)
+        except BaseException:
+            # Reuse the existing OS transport cleanup. A zero grace preserves
+            # subprocess.run's immediate-kill cancellation rather than adding
+            # time to the declared validation budget. It also handles an exited
+            # POSIX leader whose surviving children still hold the output pipes.
+            terminate_process_tree(process, grace_seconds=0)
+            raise
     return {
         "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
         "command_label": validation_label or "caller-declared validation",
-        "exit_code": result.returncode,
-        "passed": result.returncode == 0,
+        "exit_code": process.returncode,
+        "passed": process.returncode == 0,
         "stdout_captured": False,
         "stderr_captured": False,
         "local_path_captured": False,

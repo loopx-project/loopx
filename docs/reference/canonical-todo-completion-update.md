@@ -111,6 +111,39 @@ Markdown is a display projection and is not required to admit a completion.
 Private validation declarations remain in their private store; they are neither
 imported from an untrusted display nor embedded in public completion receipts.
 
+## Validation timeout and cancellation cleanup / 验证超时与取消清理
+
+The shared host validation executor runs non-interactive declared commands in
+an owned POSIX process group. A timeout or caller cancellation force-stops that
+group, including children holding inherited output pipes after the leader has
+exited. Zero-grace cleanup sends KILL directly; it does not add a termination
+delay or replace the original timeout with a TERM/KILL race error. Existing
+argv/text parsing, cwd, inherited environment/stdin and privacy-safe receipt
+fields are unchanged. Commands that intentionally escape the process group are
+not contained by this transport. Windows retains the existing `taskkill /T`
+adapter; this is not a new Windows containment qualification.
+
+This is Python OS I/O reuse, not another decision owner: TS still admits the
+command, owns the declaration/deadline, checks the source/lease witnesses and
+decides completion. A timeout keeps the Todo open and its canonical revision and
+private declaration unchanged. It is not a passed validator, accepted progress
+or a debit authorization. CLI/managed Turn and existing Chat/Lark consumers keep
+the same failure projection; no setting, field editor or separate UI authority
+is added. Synthetic File/SQLite real-CLI regression tests verify this readback;
+they do not certify a long-running batch fits the synchronous deadline.
+
+共享 host 验证器将非交互式声明命令放入其拥有的 POSIX 进程组。超时或调用方取消会
+直接终止整组，包括父进程已退出、仍持有输出管道的子进程；零宽限直接发送 KILL，
+不增加延迟，也不让 TERM/KILL 退出竞态遮盖原超时。argv/文本解析、工作目录、继承
+的环境与 stdin，以及隐私安全回执字段保持不变。主动脱离进程组的命令不在此传输
+的隔离保证内；Windows 复用已有 `taskkill /T`，本改动不宣称完成新的 Windows 验收。
+
+Python 只复用 OS I/O；准入、声明、期限、源/租约见证和完成决策仍由 TS 权威负责。
+超时保持 Todo 开放，canonical revision 和私有声明不变，不等于验收通过、进展
+获准或扣额授权。CLI/managed Turn 与现有 Chat/Lark 消费方保持原失败投影，不新增
+设置、字段编辑器或 UI 权威。File/SQLite 的隔离真实 CLI 回归验证了读回，但不能
+证明长批次已经满足同步期限。
+
 ## Linked User completion effects
 
 An admitted `todo complete --decision-outcome approve|reject|cancel` now commits
