@@ -215,7 +215,7 @@
     },
     {
       "site": "loopx/capabilities/manager_context/roundtrip.py::<module>.drain::codec_read:load_project_registry#1",
-      "line": 883,
+      "line": 865,
       "column": 22,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -447,7 +447,7 @@
     },
     {
       "site": "loopx/cli.py::<module>.main::codec_read:load_project_registry#1",
-      "line": 837,
+      "line": 846,
       "column": 17,
       "kind": "codec_read",
       "api": "load_project_registry",
