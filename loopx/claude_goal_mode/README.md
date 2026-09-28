@@ -45,8 +45,10 @@ python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /pat
 ### Optional hardening (`--harden`)
 
 Adds an opt-in, **project-scoped** `PreToolUse` gate (plus a statusline). It is a
-deterministic policy layer, **not a sandbox**. Off by default. While goal-mode is
-armed, for each tool call it:
+deterministic policy layer, **not a sandbox**. Off by default. The rule is the
+host-neutral `loopx/control_plane/goal_mode_tool_policy.py`, shared with Kiro CLI's opt-in
+`loopx` agent; `hooks/goal_policy.py` only maps Claude Code's event and output
+shapes onto it. While goal-mode is armed, for each tool call it:
 
 - **allows** read-only tools (`Read` / `Glob` / `Grep` / …) unconditionally,
   before consulting the gate;
