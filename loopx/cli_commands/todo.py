@@ -515,8 +515,8 @@ def handle_todo_command(
                     args, runtime_root=runtime_root,
                 )
                 settlement_result = settlement_readback.identity
+                assert settlement_result.value is not None
                 identity = settlement_result.value
-                assert identity is not None
                 settlement_identity = identity
                 todo_payload = list_goal_todos(
                     registry_path=registry_path,
@@ -659,9 +659,9 @@ def handle_todo_command(
                 dry_run=bool(args.dry_run),
             )
             if supersede_readback is not None:
-                identity = supersede_readback.identity.value
-                assert identity is not None
-                payload["settlement_identity"] = identity.as_dict()
+                retirement_identity = supersede_readback.identity.value
+                assert retirement_identity is not None
+                payload["settlement_identity"] = retirement_identity.as_dict()
                 payload["settlement_result"] = settlement_result_payload(supersede_readback.identity)
         elif args.todo_command == "archive-completed":
             validate_todo_archive_completed_options(args)
