@@ -3,6 +3,8 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
+import { AuthorityStoreProtocolError } from "../coordination/authority_store_codec.ts";
+import { removedTodoContinuationPolicy } from "./legacy_continuation_policy_migration.ts";
 import { normalizeRegisteredTodoAgents, normalizeTodoAgent, stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import {
   normalizeTodoResumeWhen,
@@ -16,6 +18,7 @@ export const TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA = "todo_contract_diagnosti
 export const TODO_CONTRACT_DIAGNOSTICS_RESULT_SCHEMA = "todo_contract_diagnostics_result_v0";
 export const USER_TODO_TASK_CLASSES: ReadonlySet<string> = new Set(["user_action", "user_gate"]);
 export const AGENT_TODO_TASK_CLASSES: ReadonlySet<string> = new Set(["advancement_task", "continuous_monitor", "blocker"]);
+const TODO_STATUSES: ReadonlySet<string> = new Set(["open", "done", "blocked", "deferred"]);
 export const TODO_OWNERSHIP_INTENT_FIELDS = ["claimed_by", "clear_claim", "excluded_agents"] as const;
 
 /** Normalize explicit execution-owner intent before binding its replay identity.
@@ -83,10 +86,20 @@ export type TodoContractDiagnosticCode = "user_todo_task_class_missing" | "user_
   "user_gate_scope_conflict" | "user_todo_response_scope_conflict" | "goal_user_gate_agent_binding_invalid" |
   "agent_user_gate_goal_binding_invalid" | "agent_user_gate_response_binding_mismatch" |
   "user_todo_bound_agent_unregistered" | "multi_agent_user_todo_missing_response_scope" |
-  "user_gate_blocks_unregistered_agent" | "multi_agent_user_gate_missing_scope";
+  "user_gate_blocks_unregistered_agent" | "multi_agent_user_gate_missing_scope" |
+  "todo_status_invalid" | "todo_excluded_agents_invalid" | "agent_todo_removed_continuation_policy" |
+  "agent_todo_blocks_agent_invalid" | "todo_claimed_by_excluded_agent" |
+  "todo_executor_exclusion_scope_invalid" | "todo_excludes_unregistered_agent";
 
 /** Bounded, target-neutral explanations. They never quote row text. */
 const TODO_CONTRACT_DIAGNOSTIC_DETAILS: Record<TodoContractDiagnosticCode, string> = {
+  todo_status_invalid: "todo status must be open, done, blocked, or deferred",
+  todo_excluded_agents_invalid: "todo excluded_agents must contain public-safe agent ids",
+  agent_todo_removed_continuation_policy: "agent todo uses a removed continuation policy; repair it explicitly before claiming",
+  agent_todo_blocks_agent_invalid: "blocks_agent is reserved for user gates; agent executor constraints use excluded_agents",
+  todo_claimed_by_excluded_agent: "todo cannot claim an agent that is also excluded",
+  todo_executor_exclusion_scope_invalid: "executor exclusions are only valid for agent todos",
+  todo_excludes_unregistered_agent: "agent todo excludes an agent that is not registered for this goal",
   user_todo_task_class_missing: "open user todo requires task_class=user_gate or task_class=user_action",
   user_action_blocking_scope_invalid: "open user_action todo is non-blocking and cannot set blocks_agent or global_gate",
   user_gate_scope_conflict: "open user_gate todo cannot set both blocks_agent and global_gate",
@@ -104,18 +117,64 @@ function optionalText(value: unknown): string | null {
   return typeof value === "string" ? stripPythonWhitespace(value) || null : null;
 }
 
+type TodoOwnershipViolation = "claim_excluded" | "exclusion_role";
+
+function todoOwnershipViolations(role: string, claim: unknown, exclusions: unknown): TodoOwnershipViolation[] {
+  if (!Array.isArray(exclusions)) return [];
+  const violations: TodoOwnershipViolation[] = [];
+  if (claim && exclusions.includes(claim)) violations.push("claim_excluded");
+  if (role !== "agent" && exclusions.length) violations.push("exclusion_role");
+  return violations;
+}
+
+function optionalAgent(value: unknown): string | null {
+  if (!optionalText(value)) return null;
+  try { return normalizeTodoAgent(value, "Todo agent"); }
+  catch (error) {
+    if (error instanceof AuthorityStoreProtocolError) return null;
+    throw error;
+  }
+}
+
+/** Preserve the supported metadata health rules, independently of authorizing a write. */
+function todoMetadataDiagnostics(row: JsonObject, status: string, terminal: ReadonlySet<string>,
+  agents: readonly string[]): TodoContractDiagnosticCode[] {
+  const codes: TodoContractDiagnosticCode[] = [];
+  if (!TODO_STATUSES.has(status)) codes.push("todo_status_invalid");
+  let exclusions: string[] = [];
+  try {
+    const raw = typeof row.excluded_agents === "string" ? row.excluded_agents.split(",") : row.excluded_agents;
+    exclusions = normalizeTodoOwnershipIntent({excluded_agents: raw}).excluded_agents as string[] ?? [];
+  } catch (error) {
+    if (!(error instanceof AuthorityStoreProtocolError || error instanceof EffectRuntimeRequestError)) throw error;
+    codes.push("todo_excluded_agents_invalid");
+  }
+  if (row.role === "agent" && removedTodoContinuationPolicy(row.removed_continuation_policy)) {
+    codes.push("agent_todo_removed_continuation_policy");
+  }
+  if (row.role === "agent" && optionalAgent(row.blocks_agent)) codes.push("agent_todo_blocks_agent_invalid");
+  const ownership = todoOwnershipViolations(String(row.role), optionalAgent(row.claimed_by), exclusions);
+  if (ownership.includes("claim_excluded")) codes.push("todo_claimed_by_excluded_agent");
+  const archivedTerminal = row.archive_state === "archive" && terminal.has(status);
+  if (ownership.includes("exclusion_role") && !archivedTerminal) codes.push("todo_executor_exclusion_scope_invalid");
+  if (row.role === "agent" && agents.length && exclusions.some(agent => !agents.includes(agent))) {
+    codes.push("todo_excludes_unregistered_agent");
+  }
+  return codes;
+}
+
 /** Check read-model scope with the same class/scope rules as authoring.
  * Historical rows retain their existing implied continuation binding. */
 function userTodoContractDiagnostic(row: JsonObject, registeredAgents: readonly string[]): TodoContractDiagnosticCode | null {
   const taskClass = optionalText(row.task_class);
-  const blocks = optionalText(row.blocks_agent);
+  const blocks = optionalAgent(row.blocks_agent);
   const global = row.global_gate === true;
-  const bound = optionalText(row.bound_agent);
+  const bound = optionalAgent(row.bound_agent);
   const goalBound = row.goal_bound === true;
   const classViolation = todoClassViolation("user", taskClass, blocks, global);
   if (classViolation === "task_class_missing") return "user_todo_task_class_missing";
   if (classViolation === "user_action_scope_invalid") return "user_action_blocking_scope_invalid";
-  const effectiveBound = bound ?? (taskClass === "user_gate" ? blocks : null) ?? optionalText(row.claimed_by);
+  const effectiveBound = bound ?? (taskClass === "user_gate" ? blocks : null) ?? optionalAgent(row.claimed_by);
   const effectiveGoalBound = goalBound || (taskClass === "user_gate" && global);
   const conflict = userTodoScopeConflict(taskClass, {
     bound_agent: effectiveBound, goal_bound: effectiveGoalBound,
@@ -139,7 +198,7 @@ function userTodoContractDiagnostic(row: JsonObject, registeredAgents: readonly 
 }
 
 /** Evaluate canonical read-model rows without reading Markdown or writing state. */
-export function evaluateUserTodoContractDiagnostics(value: unknown): JsonObject {
+export function evaluateTodoContractDiagnostics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "Todo contract diagnostics request");
   if (request.schema_version !== TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA) {
     fail("Todo contract diagnostics schema mismatch");
@@ -155,10 +214,13 @@ export function evaluateUserTodoContractDiagnostics(value: unknown): JsonObject 
   for (const raw of request.todos) {
     const row = requireJsonObject(raw, "Todo contract row");
     const status = stripPythonWhitespace(String(row.status ?? "")).toLowerCase();
-    if (row.role !== "user" || terminal.has(status)) continue;
-    checked += 1;
-    const code = userTodoContractDiagnostic(row, agents);
-    if (code) diagnostics.push({todo_id: optionalText(row.todo_id), code, detail: TODO_CONTRACT_DIAGNOSTIC_DETAILS[code]});
+    const codes = todoMetadataDiagnostics(row, status, terminal, agents);
+    if (row.role === "user" && !terminal.has(status)) {
+      checked += 1;
+      const code = userTodoContractDiagnostic(row, agents);
+      if (code) codes.push(code);
+    }
+    for (const code of codes) diagnostics.push({todo_id: optionalText(row.todo_id), code, detail: TODO_CONTRACT_DIAGNOSTIC_DETAILS[code]});
   }
   return {schema_version: TODO_CONTRACT_DIAGNOSTICS_RESULT_SCHEMA, checked, diagnostics};
 }
@@ -272,19 +334,18 @@ export function planTodoAuthoringScope(value: unknown): JsonObject {
   if (!Array.isArray(registeredAgents)) fail("registered_agents must be an array");
   const agents = normalizeRegisteredTodoAgents(registeredAgents);
   const status = stripPythonWhitespace(string(intent.status, "status") ?? "").toLowerCase() || string(todo.status, "status") || "open";
-  if (!["open", "done", "blocked", "deferred"].includes(status)) fail("todo status must be one of: open, done, blocked, deferred");
+  if (!TODO_STATUSES.has(status)) fail("todo status must be one of: open, done, blocked, deferred");
   if (command === "create" && status === "done") fail("todo add cannot create completed work; add it open and use `loopx todo complete`");
   if (command === "update" && role === "agent" && intent.status && status === "done") fail("agent todo completion must use complete_goal_todo " +
     "(CLI: `loopx todo complete`) so completion policy, successor, and no-follow-up contracts are enforced");
   const scope = planScope(command ?? "", role, taskClass, todo, intent, agents, string(request.goal_id, "goal_id") ?? "");
   const exclusions = intent.excluded_agents ?? todo.excluded_agents;
-  if (TODO_OWNERSHIP_INTENT_FIELDS.some(field => intent[field] != null && intent[field] !== false)) {
-    const claim = intent.clear_claim ? null : intent.claimed_by || todo.claimed_by;
-    if (claim && Array.isArray(exclusions) && exclusions.includes(claim)) {
-      fail("claimed_by cannot also appear in excluded_agents; clear or transfer the claim in the same update");
-    }
+  const ownership = todoOwnershipViolations(role, intent.clear_claim ? null : intent.claimed_by || todo.claimed_by, exclusions);
+  if (TODO_OWNERSHIP_INTENT_FIELDS.some(field => intent[field] != null && intent[field] !== false)
+    && ownership.includes("claim_excluded")) {
+    fail("claimed_by cannot also appear in excluded_agents; clear or transfer the claim in the same update");
   }
-  if (role !== "agent" && Array.isArray(exclusions) && exclusions.length) fail("excluded_agents is only valid for agent todos; clear exclusions before moving this todo to a user role");
+  if (ownership.includes("exclusion_role")) fail("excluded_agents is only valid for agent todos; clear exclusions before moving this todo to a user role");
   // Completed history remains repairable; it does not create an active gate.
   if (status !== "done") {
     requireTaskClass(role, taskClass, scope.blocks_agent, scope.global_gate);

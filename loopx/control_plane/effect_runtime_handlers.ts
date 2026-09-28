@@ -107,7 +107,7 @@ import { transitionTodoNextAction } from "./todos/next_action.ts";
 import { planTodoFieldUpdate } from "./todos/field_update.ts";
 import { planPublicTodoUpdate } from "./todos/public_update.ts";
 import { planMonitorMetadata } from "./todos/monitor_metadata.ts";
-import { evaluateUserTodoContractDiagnostics, planTodoAuthoringScope } from "./todos/authoring_scope.ts";
+import { evaluateTodoContractDiagnostics, planTodoAuthoringScope } from "./todos/authoring_scope.ts";
 import {
   evaluateTodoResumeConditions,
   normalizeTodoResumeWhen,
@@ -480,7 +480,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
     ["todo.monitor_metadata.plan", planMonitorMetadata],
     ["todo.authoring_scope.plan", planTodoAuthoringScope],
-    ["todo.contract_diagnostics.evaluate", evaluateUserTodoContractDiagnostics],
+    ["todo.contract_diagnostics.evaluate", evaluateTodoContractDiagnostics],
     [
       "todo.claim.decide",
       (params) => evaluateCoordinationTodoClaimDecision(

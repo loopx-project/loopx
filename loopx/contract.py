@@ -30,7 +30,7 @@ from .control_plane.runtime.run_index_duplicates import (
 )
 from .control_plane.runtime.file_text_reads import iter_utf8_file_reads
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
-from .control_plane.todos.authoring_scope import user_todo_contract_diagnostics
+from .control_plane.todos.authoring_scope import todo_contract_diagnostics
 from .history import (
     RunHistoryAudit,
     build_run_history_audit,
@@ -475,10 +475,10 @@ def _todo_contract_diagnostics(
             add_error(exc.code, f"{goal_id}: canonical Todo contract unavailable: {exc}")
             continue
         if canonical is not None:
-            # Structural validity does not replace the shared non-terminal user
-            # class/scope rules. Evaluate provider rows without reading display.
+            # Structural validity does not replace the shared Todo metadata
+            # and non-terminal User class/scope rules. Evaluate provider rows without reading display.
             try:
-                canonical_diagnostics = user_todo_contract_diagnostics(
+                canonical_diagnostics = todo_contract_diagnostics(
                     todos=canonical["todos"],
                     registered_agents=registered_agent_ids_for_goal(goal),
                     terminal_statuses=TERMINAL_TODO_STATUSES,
@@ -491,7 +491,7 @@ def _todo_contract_diagnostics(
                 continue
             checked += canonical_diagnostics["checked"]
             for row in canonical_diagnostics["diagnostics"]:
-                add_error(row["code"], f"{goal_id}: canonical user todo {row['todo_id']} {row['detail']}")
+                add_error(row["code"], f"{goal_id}: canonical todo {row['todo_id']} {row['detail']}")
             continue
 
         registered_agents = registered_agent_ids_for_goal(goal)

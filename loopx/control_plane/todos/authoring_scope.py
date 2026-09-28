@@ -45,15 +45,16 @@ def require_user_todo_task_class(
     }, registered_agents=[], goal_id="")
 
 
-def user_todo_contract_diagnostics(
+def todo_contract_diagnostics(
     *, todos: list[dict[str, Any]], registered_agents: list[str],
     terminal_statuses: set[str] | frozenset[str],
 ) -> dict[str, Any]:
     """Read-only canonical Todo diagnostics; the shared TS owner keeps the rule."""
-    # Transport only bounded semantic facts, never narrative text or other roles.
+    # Transport only bounded semantic facts, never narrative text.
     fields = ("todo_id", "role", "status", "task_class", "blocks_agent",
-              "global_gate", "bound_agent", "goal_bound", "claimed_by")
-    rows = [{field: todo.get(field) for field in fields} for todo in todos if todo.get("role") == "user"]
+              "global_gate", "bound_agent", "goal_bound", "claimed_by",
+              "excluded_agents", "removed_continuation_policy", "archive_state")
+    rows = [{field: todo.get(field) for field in fields} for todo in todos]
     diagnostics: list[dict[str, Any]] = []
     checked = 0
     for offset in range(0, len(rows), 512):

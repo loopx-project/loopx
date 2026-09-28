@@ -13,15 +13,19 @@ function existingAgent(value: unknown): string | null {
   }
 }
 
+/** Recognize the retained legacy policy markers without authorizing a repair. */
+export function removedTodoContinuationPolicy(value: unknown): "primary_review" | "review_handoff" | null {
+  const policy = stripPythonWhitespace(String(value ?? "")).toLowerCase();
+  return policy === "primary_review" || policy === "review_handoff" ? policy : null;
+}
+
 export function validateLegacyContinuationPolicyRepair(
   block: JsonObject,
   intent: JsonObject,
   todoId: string,
 ): void {
-  const removed = stripPythonWhitespace(
-    String(block.removed_continuation_policy ?? ""),
-  ).toLowerCase();
-  if (removed !== "primary_review" && removed !== "review_handoff") return;
+  const removed = removedTodoContinuationPolicy(block.removed_continuation_policy);
+  if (removed === null) return;
   const prefix = `todo_id '${todoId}' uses removed continuation_policy=${removed}; `;
   if (intent.claim_only) {
     throw new EffectRuntimeRequestError(prefix + "repair it before claiming");
