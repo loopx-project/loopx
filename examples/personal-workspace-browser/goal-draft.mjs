@@ -46,6 +46,7 @@ export const goalDraftScenario = {
       await page.getByText("确认执行", {exact: true}).waitFor();
       const preview = api.actionPreviews.at(-1);
       assert.equal(preview.action_kind, "goal.create");
+      assert.equal(preview.normalized_parameters.workspace_ref, "current");
       assert.equal(preview.normalized_parameters.permission, "read_only");
       assert.equal(preview.normalized_parameters.heartbeat.enabled, false);
       assert.equal(api.durableWriteCount, writes);
@@ -62,6 +63,7 @@ export const goalDraftScenario = {
       await page.getByText("确认执行", {exact: true}).waitFor();
       assert.equal(await form.count(), 0, "Complete draft should skip the redundant form");
       assert.equal(api.actionPreviews.length, beforePreview + 1);
+      assert.equal(api.actionPreviews.at(-1).normalized_parameters.workspace_ref, "current");
       assert.equal(api.actionPreviews.at(-1).normalized_parameters.completion_criteria, "重点比较资本支出，列出来源");
       assert.equal(api.actionPreviews.at(-1).normalized_parameters.permission, "read_only");
       assert.equal(api.actionPreviews.at(-1).normalized_parameters.heartbeat.enabled, false);
