@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,6 +33,7 @@ GOAL_ID = "release"
 AGENT_ID = "release-worker"
 HOST_SURFACE = "codex-app-ssh"
 HOST_SESSION_ID = "host-thread"
+ATTACHED_MUTATION_OPERATIONS = ("submit", "enqueue", "resume", "claim", "complete")
 
 
 def _register(tmp_path: Path) -> tuple[Path, Path, ChatSessionStore, str]:
@@ -112,6 +114,117 @@ def _recreate(registry_path: Path, instance_id: str) -> str:
         )
     )
     return str(result["goal_ref"]["goal_instance_id"])
+
+
+def _create_unstamped_attached_session(store: ChatSessionStore) -> str:
+    session = store.create_session(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        adapter_kind="attached_host_session",
+        upstream_thread_id=HOST_SESSION_ID,
+        session_mode="attached_host",
+        host_surface=HOST_SURFACE,
+    )
+    return str(session["session_id"])
+
+
+def _prepare_attached_operation(
+    store: ChatSessionStore,
+    *,
+    session_id: str,
+    operation: str,
+) -> dict[str, Any] | None:
+    if operation == "resume":
+        store.update_session(
+            session_id,
+            status="resume_failed",
+            last_error_code="fixture",
+        )
+        return None
+    if operation not in {"claim", "complete"}:
+        return None
+    turn, _created = store.create_queued_turn(
+        session_id,
+        client_turn_id=f"{operation}-turn",
+        message="exercise attached operation",
+    )
+    if operation == "complete":
+        claimed = store.claim_next_queued_turn(
+            session_id,
+            host_claim_id="fixture-claim",
+        )
+        assert claimed is not None
+        return claimed
+    return turn
+
+
+def _invoke_attached_operation(
+    *,
+    store: ChatSessionStore,
+    registry_path: Path,
+    session_id: str,
+    operation: str,
+    turn: dict[str, Any] | None,
+    work_dir: Path,
+) -> Any:
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="missing-codex",
+        registry_path=registry_path,
+    )
+    if operation == "submit":
+        return runtime.submit_turn(
+            session_id=session_id,
+            client_turn_id="missing-registry-submit",
+            message="exercise attached operation",
+            work_dir=work_dir,
+            objective="Ship the release.",
+        )
+    if operation == "enqueue":
+        return runtime.enqueue_turn(
+            session_id=session_id,
+            client_turn_id="missing-registry-enqueue",
+            message="exercise attached operation",
+            work_dir=work_dir,
+            objective="Ship the release.",
+        )
+    if operation == "resume":
+        return runtime.resume_session(
+            session_id=session_id,
+            work_dir=work_dir,
+            objective="Ship the release.",
+        )
+    if operation == "claim":
+        return claim_attached_agent_turn(
+            store=store,
+            registry_path=registry_path,
+            session_id=session_id,
+            host_surface=HOST_SURFACE,
+            host_session_id=HOST_SESSION_ID,
+            claim_id="fixture-claim",
+        )
+    if operation == "complete":
+        assert turn is not None
+        return complete_attached_agent_turn(
+            store=store,
+            registry_path=registry_path,
+            session_id=session_id,
+            turn_id=str(turn["turn_id"]),
+            host_surface=HOST_SURFACE,
+            host_session_id=HOST_SESSION_ID,
+            claim_id="fixture-claim",
+            completion_id="fixture-completion",
+            response={"message": "exercise attached operation"},
+        )
+    raise AssertionError(f"unsupported attached operation fixture: {operation}")
+
+
+def _chat_business_state(store: ChatSessionStore) -> dict[str, bytes]:
+    return {
+        path.relative_to(store.root).as_posix(): path.read_bytes()
+        for path in sorted(store.root.rglob("*"))
+        if path.is_file() and path.suffix in {".json", ".jsonl"}
+    }
 
 
 def test_recreated_goal_cannot_reuse_or_claim_from_attached_session(
@@ -242,7 +355,7 @@ def test_stale_attached_enqueue_is_rejected_without_mutation(
 
 @pytest.mark.parametrize(
     "operation",
-    ["submit", "enqueue", "resume", "claim", "complete"],
+    ATTACHED_MUTATION_OPERATIONS,
 )
 def test_strict_profile_rejects_unstamped_attached_session(
     tmp_path: Path,
@@ -333,6 +446,83 @@ def test_strict_profile_rejects_unstamped_attached_session(
         assert store.load_turn(session_id, str(turn["turn_id"])) == before_turn
     assert store.turn_for_client(session_id, "strict-submit") is None
     assert store.turn_for_client(session_id, "strict-enqueue") is None
+
+
+@pytest.mark.parametrize("operation", ATTACHED_MUTATION_OPERATIONS)
+@pytest.mark.parametrize("target", ["exact", "unstamped"])
+def test_missing_registry_rejects_mutation_after_exact_session_history(
+    tmp_path: Path,
+    operation: str,
+    target: str,
+) -> None:
+    registry_path, _runtime_root, store, _instance_a = _register(tmp_path)
+    exact_session_id = str(_bind(store, registry_path)["session"]["session_id"])  # type: ignore[index]
+    session_id = (
+        exact_session_id
+        if target == "exact"
+        else _create_unstamped_attached_session(store)
+    )
+    turn = _prepare_attached_operation(
+        store,
+        session_id=session_id,
+        operation=operation,
+    )
+    registry_path.unlink()
+    before = _chat_business_state(store)
+
+    with pytest.raises(FileNotFoundError):
+        _invoke_attached_operation(
+            store=store,
+            registry_path=registry_path,
+            session_id=session_id,
+            operation=operation,
+            turn=turn,
+            work_dir=tmp_path,
+        )
+
+    assert _chat_business_state(store) == before
+
+
+@pytest.mark.parametrize("operation", ATTACHED_MUTATION_OPERATIONS)
+def test_missing_registry_without_exact_history_preserves_legacy_mutation(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    store = ChatSessionStore(tmp_path / "runtime")
+    session_id = _create_unstamped_attached_session(store)
+    turn = _prepare_attached_operation(
+        store,
+        session_id=session_id,
+        operation=operation,
+    )
+    result = _invoke_attached_operation(
+        store=store,
+        registry_path=tmp_path / "missing-registry.json",
+        session_id=session_id,
+        operation=operation,
+        turn=turn,
+        work_dir=tmp_path,
+    )
+
+    if operation in {"submit", "enqueue"}:
+        queued_turn, created = result
+        assert created is True
+        assert "goal_instance_id" not in queued_turn
+    elif operation == "resume":
+        assert result["status"] == "ready"
+        assert result["last_error_code"] is None
+    elif operation == "claim":
+        assert result["claimed"] is True
+        claimed_turn = store.load_turn(session_id, str(turn["turn_id"]))  # type: ignore[index]
+        assert claimed_turn is not None
+        assert claimed_turn["status"] == "running"
+        assert "admitted_goal_instance_id" not in claimed_turn
+    else:
+        assert result["created"] is True
+        completed_turn = store.load_turn(session_id, str(turn["turn_id"]))  # type: ignore[index]
+        assert completed_turn is not None
+        assert completed_turn["status"] == "completed"
+        assert "admitted_goal_instance_id" not in completed_turn
 
 
 def test_claim_wait_does_not_hold_goal_lifetime_guard(tmp_path: Path) -> None:
@@ -465,12 +655,16 @@ def test_strict_managed_open_fails_before_provider_start(
     assert raised.value.error_code == "source_session_managed_chat_unsupported"
 
 
-def test_strict_session_does_not_fall_back_when_registry_disappears(
+@pytest.mark.parametrize("latest_session", ["exact", "unstamped"])
+def test_strict_context_does_not_fall_back_when_registry_disappears(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    latest_session: str,
 ) -> None:
     registry_path, _runtime_root, store, _instance_a = _register(tmp_path)
     _bind(store, registry_path)
+    if latest_session == "unstamped":
+        _create_unstamped_attached_session(store)
     registry_path.unlink()
     runtime = ChatRuntimeController(
         store=store,

@@ -144,6 +144,32 @@ def _strict_registry(
     return registry if registry.get("profile_id") == SOURCE_SESSION_PROFILE_ID else None
 
 
+def _source_registry_path_or_legacy(
+    *,
+    store: ChatSessionStore,
+    registry_path: Path | None,
+    goal_id: str,
+    agent_id: str,
+    channel_id: str,
+) -> Path | None:
+    """Resolve source context without downgrading known exact history."""
+
+    if registry_path is not None and registry_path.exists():
+        return registry_path
+    candidates = store.session_candidates(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        channel_id=channel_id,
+    )
+    if not any(
+        candidate.get("goal_instance_id") is not None for candidate in candidates
+    ):
+        return None
+    if registry_path is None:
+        raise ValueError("source-session attached operation requires registry_path")
+    raise FileNotFoundError(registry_path)
+
+
 def load_attached_session_registry(registry_path: Path) -> dict[str, Any]:
     """Load the source-aware registry for this qualified owner only."""
 
@@ -465,9 +491,7 @@ def _attached_session_lifetime(
     registry_path: Path | None,
     session_id: str,
     allow_closed: bool = False,
-) -> Iterator[
-    tuple[dict[str, Any], dict[str, Any] | None, dict[str, str] | None]
-]:
+) -> Iterator[tuple[dict[str, Any], dict[str, Any] | None, dict[str, str] | None]]:
     """Load authoritative Goal context before choosing strict or legacy behavior."""
 
     session = store.load_session(session_id)
@@ -475,28 +499,25 @@ def _attached_session_lifetime(
         raise KeyError("attached Agent session was not found")
     if session.get("session_mode") != CHAT_SESSION_MODE_ATTACHED:
         raise ValueError("the selected Session is not an attached host session")
-    exact_session = session.get("goal_instance_id") is not None
-    if registry_path is None:
-        if exact_session:
-            raise ValueError("source-session attached operation requires registry_path")
-        yield session, None, None
-        return
-    if not registry_path.exists():
-        if exact_session:
-            raise FileNotFoundError(registry_path)
+    goal_id = str(session.get("goal_id") or "")
+    source_registry_path = _source_registry_path_or_legacy(
+        store=store,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        agent_id=str(session.get("agent_id") or ""),
+        channel_id=str(session.get("channel_id") or f"goal.{goal_id}"),
+    )
+    if source_registry_path is None:
         yield session, None, None
         return
 
-    goal_id = str(session.get("goal_id") or "")
     with exclusive_cross_runtime_file_lock(
-        guard_path(registry_path, goal_id),
+        guard_path(source_registry_path, goal_id),
         operation="source_session_goal_lifetime",
     ):
-        registry = load_project_registry(registry_path)
+        registry = load_project_registry(source_registry_path)
         session = store.load_session(session_id)
-        if session is None or (
-            session.get("status") == "closed" and not allow_closed
-        ):
+        if session is None or (session.get("status") == "closed" and not allow_closed):
             raise KeyError("attached Agent session was not found")
         if session.get("session_mode") != CHAT_SESSION_MODE_ATTACHED:
             raise ValueError("the selected Session is not an attached host session")
@@ -517,15 +538,14 @@ def select_current_attached_session(
 ) -> tuple[dict[str, Any] | None, bool]:
     """Select an attached Session and report whether strict identity is active."""
 
-    if registry_path is not None and not registry_path.exists():
-        candidates = store.session_candidates(
-            goal_id=goal_id,
-            agent_id=agent_id,
-            channel_id=channel_id,
-        )
-        if any(candidate.get("goal_instance_id") is not None for candidate in candidates):
-            raise FileNotFoundError(registry_path)
-    registry = _strict_registry(registry_path)
+    source_registry_path = _source_registry_path_or_legacy(
+        store=store,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        channel_id=channel_id,
+    )
+    registry = _strict_registry(source_registry_path)
     if registry is None:
         return (
             store.latest_session(
@@ -535,8 +555,8 @@ def select_current_attached_session(
             ),
             False,
         )
-    assert registry_path is not None
-    guard = guard_path(registry_path, goal_id)
+    assert source_registry_path is not None
+    guard = guard_path(source_registry_path, goal_id)
     with exclusive_cross_runtime_file_lock(
         guard,
         operation="source_session_goal_lifetime",
@@ -873,7 +893,11 @@ def render_attached_session_broker_markdown(payload: dict[str, Any]) -> str:
             f"{turn.get('message')}"
         )
     session = payload.get("session")
-    session_id = session.get("session_id") if isinstance(session, dict) else payload.get("session_id")
+    session_id = (
+        session.get("session_id")
+        if isinstance(session, dict)
+        else payload.get("session_id")
+    )
     return (
         "# Attached Agent Session\n\n"
         f"- Action: `{action}`\n"
