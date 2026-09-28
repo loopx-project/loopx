@@ -866,11 +866,18 @@ function parseSseBlock(block: string): ChatStreamEvent | null {
   }
 }
 
+// The Chat service sends an SSE heartbeat every 15 seconds while a Turn runs.
+// Three missed heartbeats mean the connection is stuck rather than slow, so the
+// reader reconnects from its cursor instead of waiting on a silent socket.
+export const CHAT_STREAM_STALL_TIMEOUT_MS = 45_000;
+
 export async function streamChatTurn(
   eventsUrl: string,
   onEvent: (event: ChatStreamEvent) => void,
   signal?: AbortSignal,
+  options: { stallTimeoutMs?: number } = {},
 ) {
+  const stallTimeoutMs = options.stallTimeoutMs ?? CHAT_STREAM_STALL_TIMEOUT_MS;
   let cursor = "";
   let attempts = 0;
   let terminal = false;
@@ -878,11 +885,20 @@ export async function streamChatTurn(
     const origin = typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
     const url = new URL(chatApiUrl(eventsUrl), origin);
     if (cursor) url.searchParams.set("after", cursor);
+    const attempt = new AbortController();
+    const abortAttempt = () => attempt.abort();
+    signal?.addEventListener("abort", abortAttempt, { once: true });
+    let stallTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const armStallTimer = () => {
+      if (stallTimer !== undefined) globalThis.clearTimeout(stallTimer);
+      stallTimer = globalThis.setTimeout(abortAttempt, stallTimeoutMs);
+    };
     try {
+      armStallTimer();
       const response = await fetch(url, {
         cache: "no-store",
         headers: { Accept: "text/event-stream" },
-        signal,
+        signal: attempt.signal,
       });
       if (!response.ok || !response.body) {
         throw new ChatApiError(`SSE HTTP ${response.status}`, { status: response.status });
@@ -891,6 +907,7 @@ export async function streamChatTurn(
       const decoder = new TextDecoder();
       let buffer = "";
       while (true) {
+        armStallTimer();
         const { done, value } = await reader.read();
         buffer += decoder.decode(value, { stream: !done }).replaceAll("\r\n", "\n");
         let boundary = buffer.indexOf("\n\n");
@@ -912,7 +929,19 @@ export async function streamChatTurn(
       if (signal?.aborted) throw error;
       attempts += 1;
       if (attempts >= 4) throw error;
+      // A local phase keeps the pending reply honest while the reader resumes
+      // from its cursor. It carries no event id, so the cursor is unchanged.
+      onEvent({
+        created_at: new Date().toISOString(),
+        event_id: "",
+        kind: "agent.phase",
+        payload: { label: "连接中断，正在重连…", method: "client/reconnect" },
+        sequence: 0,
+      });
       await new Promise((resolve) => globalThis.setTimeout(resolve, 250 * 2 ** (attempts - 1)));
+    } finally {
+      if (stallTimer !== undefined) globalThis.clearTimeout(stallTimer);
+      signal?.removeEventListener("abort", abortAttempt);
     }
   }
   if (!terminal) {
