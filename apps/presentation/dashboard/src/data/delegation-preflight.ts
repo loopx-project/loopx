@@ -4,6 +4,8 @@ export type DelegationPreflight = {
   workspace_next_action?: "review_operator_workspace_binding";
   turn_eligible: boolean;
   acceptance_ready: boolean;
+  acceptance_reason_code?: "independent_delegation_validation_required" | "completion_validation_declaration_unavailable" | "completion_validation_declaration_mismatch" | "validation_files_unavailable" | "acceptance_binding_unavailable" | null;
+  acceptance_next_action?: "review_original_todo_validation" | "restore_original_validation_files" | "review_original_task_acceptance" | "none";
   turn_route: string | null;
   authority_ready: boolean | null;
   authority_reason: string | null;

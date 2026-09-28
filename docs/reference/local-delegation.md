@@ -422,6 +422,40 @@ Normal start still reads current admission and independently validates output.
 If the existing Turn rejects preflight, inspection reports that error rather than
 manufacturing a launchable result; no request is created.
 
+`acceptance_reason_code` and `acceptance_next_action` retain bounded diagnostics
+from the same TS validation plan; they do not change admission or grant repair
+authority. A current matching task can report
+`independent_delegation_validation_required`,
+`completion_validation_declaration_unavailable`, or
+`completion_validation_declaration_mismatch`, with
+`review_original_todo_validation`. A ready declaration with unavailable pinned
+files reports `validation_files_unavailable` and `restore_original_validation_files`.
+Missing, stale, foreign-task or unknown observations report
+`acceptance_binding_unavailable` and `review_original_task_acceptance` rather
+than exposing private errors. Workspace/authority stops did not inspect task
+validation, so their reason is `null` and action is `none`; ready acceptance
+also has no recovery action. Older clients may omit these optional fields.
+
+CLI, MCP and Goal Chat return this same projection. **Team execution** shows
+the matching Chinese/English cause and asks the original configuration owner
+to review the original task declaration/contract or restore pinned files, then
+recheck. A missing independent validator is not a runtime outage, a request to
+expand Goal acceptance, or permission to retarget/replay an old operation.
+Commands, file paths and validator effects are not part of the public diagnosis.
+
+中文：`acceptance_reason_code` 与 `acceptance_next_action` 来自同一 TS 验收计划，
+只补诊断，不改变准入或授予修复权限。同一当前任务缺少独立声明、已声明内容无法
+读取或指纹不符时，返回对应原因和 `review_original_todo_validation`；声明已就绪
+但固定文件不可用时，返回 `validation_files_unavailable` 与
+`restore_original_validation_files`。缺失、陈旧、其他任务或未知观察只能返回
+`acceptance_binding_unavailable` 与 `review_original_task_acceptance`，不输出私有
+异常。工作目录／权限提前停止代表验收尚未检查，原因为 `null`、动作为 `none`；
+验收已就绪也没有修复动作。旧客户端可省略这两个可选字段。
+
+CLI、MCP、Goal Chat 和「团队执行」消费同一投影；页面中英文提示由原配置责任人
+核对原任务声明／契约或恢复固定文件，再重新检查。缺少独立校验不等于运行时故障，
+不建议扩大 Goal 验收范围，不改绑或重放旧操作，也不暴露命令、路径与校验 effects。
+
 Workspace failures are observed before authority or Turn inspection, but after
 the caller's binding grant and active Goal are checked. `workspace_unavailable`
 retains a bounded `workspace_state`: `missing`, `not_directory`, or `unavailable`
