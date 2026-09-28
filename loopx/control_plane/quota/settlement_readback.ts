@@ -55,6 +55,7 @@ import {
 
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
 import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait } from "./blocked_wait.ts";
+import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 
 export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
   "loopx_quota_settlement_readback_request_v0";
@@ -74,6 +75,7 @@ interface ReadbackRequest {
   replan_obligation_id: string | null;
   infer_turn_instance_id: boolean;
   allow_unbound_binding: boolean;
+  resolve_original_binding: boolean;
   refresh_retry: RefreshRetryRequest | null;
 }
 
@@ -168,6 +170,13 @@ function decodeRequest(value: unknown): ReadbackRequest {
   if (typeof request.allow_unbound_binding !== "boolean") {
     throw new EffectRuntimeRequestError("allow_unbound_binding must be a boolean");
   }
+  if (request.resolve_original_binding !== undefined &&
+      typeof request.resolve_original_binding !== "boolean") {
+    throw new EffectRuntimeRequestError("resolve_original_binding must be a boolean");
+  }
+  if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
+    throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
+  }
   return {
     runtime_root: runtimeRoot,
     goal_id: goalId,
@@ -183,6 +192,7 @@ function decodeRequest(value: unknown): ReadbackRequest {
     ),
     infer_turn_instance_id: request.infer_turn_instance_id,
     allow_unbound_binding: request.allow_unbound_binding,
+    resolve_original_binding: request.resolve_original_binding === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
   };
 }
@@ -747,6 +757,32 @@ function resolveIdentity(
       "invalid_identity",
     );
   }
+  if (request.resolve_original_binding && agentId && turnInstanceId) {
+    // Resolve only this exact Turn's committed guard. This is a read, never
+    // the guard's binder, a current-Todo selection or a latest-run inference.
+    let guard: JsonObject | null;
+    try {
+      guard = effectiveHeartbeatReceipt(events, {
+        goal_id: request.goal_id, agent_id: agentId, turn_instance_id: turnInstanceId,
+      });
+    } catch (error) {
+      return failedIdentity((error as Error).message, "identity_mismatch");
+    }
+    if (!guard) return failedIdentity("matching Turn guard is missing", "receipt_missing");
+    const fact = heartbeatReceiptFactFromEvent(guard);
+    const originalTodoId = normalizeTodoId(fact.todo_id);
+    const originalReplanId = normalizeReplanObligationId(fact.replan_obligation_id);
+    if (!originalTodoId && !originalReplanId) {
+      return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
+    }
+    if ((request.todo_id !== null && (todoId === null || todoId !== originalTodoId)) ||
+        (request.replan_obligation_id !== null &&
+          (replanObligationId === null || replanObligationId !== originalReplanId))) {
+      return failedIdentity("requested binding differs from the original Turn guard", "identity_mismatch");
+    }
+    todoId = originalTodoId;
+    replanObligationId = originalReplanId;
+  }
   if (!agentId || !turnInstanceId || Boolean(todoId) === Boolean(replanObligationId)) {
     return failedIdentity(
       "turn-scoped settlement requires agent_id, turn_instance_id, and exactly one todo_id or replan_obligation_id",
@@ -894,6 +930,7 @@ function failedReadback(
     monitor_phase: null,
     replay_phase: null,
     refresh_recovery: null,
+    native_child_admission: null,
   };
 }
 
@@ -967,6 +1004,7 @@ function readQuotaSettlementFromRequest(
   );
   const spendEvent = findStepEvent(events, identity, "quota_spend");
   const completionEvent = findStepEvent(events, identity, "todo_complete");
+  const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
@@ -1010,6 +1048,16 @@ function readQuotaSettlementFromRequest(
     semanticReplanGuard.selected_obligation_id !== null;
   const inFlightWriteback = writeback.failure === null &&
     isAcceptedInFlightWriteback(writebackRun, identity);
+  const replayPhase = receiptBoundReplayPhase({
+    binding_kind: identity.binding_kind,
+    writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback,
+    completion_receipt_present: completionEvent !== null,
+    supersede_receipt_present: supersedeEvent?.status === "done" &&
+      optionalString(supersedeEvent.todo_id) === identity.todo_id,
+    durable_writeback_present: writeback.failure === null,
+    quota_spend_present: spend.failure === null,
+    no_spend_closeout_present: blockedNoSpend,
+  });
 
   const recovery = request.refresh_retry === null ? null : refreshRecovery(
     request.refresh_retry, writebackRun, writeback.failure === null,
@@ -1053,14 +1101,12 @@ function readQuotaSettlementFromRequest(
       durable_writeback_present: writeback.failure === null,
       quota_spend_present: spend.failure === null,
     }),
-    replay_phase: receiptBoundReplayPhase({
-      binding_kind: identity.binding_kind,
-      writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback,
-      completion_receipt_present: completionEvent !== null,
-      durable_writeback_present: writeback.failure === null,
-      quota_spend_present: spend.failure === null,
-      no_spend_closeout_present: blockedNoSpend,
-    }),
+    replay_phase: replayPhase,
+    native_child_admission: nativeChildReportAdmission(
+      receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,
+      [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
+        .some((receipt) => receipt !== null),
+    ),
   };
 }
 

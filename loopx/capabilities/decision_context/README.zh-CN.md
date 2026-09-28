@@ -268,18 +268,28 @@ cursor。
   "fail_open": true,
   "source_ids": ["source:authority:baseline"],
   "interval_seconds": 900,
-  "max_pending_batches": 1000
+  "max_pending_batches": 1000,
+  "max_sources_per_tick": 8
 }
 ```
 
 白名单只能包含已启用、支持 exact read 的 incremental source，不会隐式纳入
-on-demand 来源；goal/agent 的启用边界不变。先预览，再添加 `--execute` 执行一次：
+on-demand 来源；goal/agent 的启用边界不变。只有 profile、当前 agent 和自动采集
+均已启用，capture 返回才包含 `activation.capture_max_sources_per_tick`。
+共用 activation、`inspect-profile` 和 evidence assembly 不投影此采集预算。
+先预览，再添加 `--execute` 执行一次：
 
 ```bash
 loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
   --profile <private-profile.json> --spool <private-capture.sqlite> \
   --cursor-state <reviewed-cursors.json> --format json
 ```
+
+每轮最多调用 `automation.max_sources_per_tick` 个 provider（默认 8，整数 1–64），
+优先读取最久未尝试的来源。失败调用消耗名额；hold、背压和未到读取间隔的来源不消耗。
+延期来源保留采集游标和 freshness 时间，下轮继续；`scan_budget` 报告尝试数与延期来源。
+该预算限制调用次数，不保证墙钟耗时；provider 仍须遵守 timeout，宿主仍须施加进程期限。
+profile 并发修改时仍保持整轮原子回滚。
 
 `capture-status` 使用相同参数但不带 `--execute`，只读回查。宿主负责定时调用、
 进程总超时和启动/卸载；capability 执行配置中的采集间隔，不创建模型 heartbeat。
@@ -288,7 +298,11 @@ loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
 
 权限为 0600 的私有 SQLite spool 绑定单个 goal/agent，只保存有界 scan receipt
 和私有回放游标，不保存正文。采集事务串行执行，批次和采集游标一起提交；失败不前移
-游标，容量耗尽报 `backpressure` 而不丢弃待审阅批次。来源绑定变化报
+游标，容量耗尽报 `backpressure` 而不丢弃待审阅批次。每个已登记采集来源现在保留
+`max(1, floor(max_pending_batches / 来源数))` 个活跃批次窗口。单来源窗口用完时，
+只有该来源报 `source_backpressure`，不调用 provider、不推进采集游标或成功读取时间；
+安静来源的空闲份额与整数余数不借给高频来源，保留给后来的独立变化。此项改变多来源
+profile 原先只有全局上限的默认准入，单来源行为不变。来源绑定变化报
 `binding_changed`，需显式 rebase 或启用独立新 spool。数据库及 journal 均不得公开。
 
 每个来源从状态中的 `next_batch_id` 开始回读：
@@ -318,8 +332,9 @@ loopx decision-context prepare-captured --goal-id <goal-id> --agent-id <agent-id
 完成 rebase。采集健康不等于决策覆盖完整。
 
 停用时设置 `automatic_capture=false` 并卸载宿主定时任务，已有私有批次仍可回读。
-回滚到旧版本还需移除新增的三个 automation 字段；保留 spool 作为私有检查点，
-不要删除尚未审阅的工作。验证：
+回滚有界续扫时移除 `max_sources_per_tick`；若回滚到尚未支持引用采集的版本，
+还须移除 `source_ids`、`interval_seconds` 和 `max_pending_batches`。
+保留 spool 作为私有检查点，不要删除尚未审阅的工作。验证：
 
 ```bash
 python3 -m pytest -q tests/capabilities/test_decision_context_capture.py
@@ -357,8 +372,17 @@ python3 -m pytest -q tests/capabilities/test_decision_context_capture.py
 `max_pending_batches=N` 继续限制活跃批次；另最多保留 N 条未解决历史，
 2N 条审计记录后停止新增 hold/restart（每条适用回执最多再 rollback 一次）。
 不会自动删除、压缩或无限扩容。达到上限需保留／导出私有 spool 后明确处理保留策略。
-这是显式来源隔离，不是默认公平调度；若其他来源长期不被审阅，仍可能再次背压。
-行为变化：曾背压的来源在容量释放后的下一 tick 可重试，不再多等一个扫描间隔。
+hold 是显式恢复操作，默认来源窗口则阻止高频来源借走其他来源的未来容量。
+两者都不能代替语义审阅：来源窗口满时须审阅最旧批次；无法回放时先
+`capture-diagnose`，再按授权走受保护恢复。两种背压状态在容量释放后的下一 tick
+都可重试，不再多等一个扫描间隔。
+
+升级前已有的超份额批次完整保留，不自动删除或转 held；它们仍占全局容量，直到显式
+审阅或恢复。若全局容量小于登记来源数，不能保证隔离，状态会明确报告
+`reservation_capacity_sufficient=false`，仍严格遵守全局上限。
+`capture-status.capacity_policy` 给出两层上限，各来源给出 `pending_capacity`、
+`review_required` 和 `recovery_diagnosis_required`。这些是工作提示，不代表已探测到
+回放失败，也不授予恢复或结算权限。已退出采集登记的来源留下的 pending 仍计入全局容量。
 
 `capture-status` 分开报告 active pending、held 历史、每来源 acquisition hold，
 并明确 `semantic_review_completion=not_inferred_from_capture`。`last_checked_at`

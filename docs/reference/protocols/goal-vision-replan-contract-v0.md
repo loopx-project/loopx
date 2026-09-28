@@ -132,6 +132,26 @@ canonical Todo 的可执行性与归属校验，不来自描述或旧创建响�
 原 Goal/Agent/Todo/Turn 身份及既有幂等行为。其他 Vision 验收缺口仍可见；未选定
 该义务的另一 Turn 不能复用这次成功来跳过 Todo 的完成验证。
 
+For a pure autonomous-replan Turn, a same-Turn `quota should-run` immediately
+after the canonical successor transition returns an original-identity,
+settlement-only packet, not a new planning duty or successor selection. The
+full CLI and thin Turn envelope preserve its complete bound commands, including
+long runtime paths. Refresh still validates the current successor and commits
+the semantic writeback; an earlier spend is rejected. After verified writeback,
+the same guard returns only the remaining original spend. Retries debit at most
+once. A fresh Turn still sees open Vision acceptance and the successor's actual
+state. Unscoped, unrelated, deferred, or reassigned successors cannot supply this
+proof. Guidance reuses the current host profile; Todo-bound replans retain their
+existing settlement path.
+
+纯自主重规划 Turn 原子创建 canonical successor 后，立即以同一 Turn 回查
+`quota should-run` 会得到保持原身份的仅结算投影，不重新规划或选择后续任务。
+完整 CLI 与薄版 Turn 均保留完整绑定命令，包括较长的 runtime 路径。refresh
+仍须核验后续任务当前有效并持久写回，提前扣额仍被拒绝；写回核实后，同一
+guard 仅返回原 Turn 尚欠的扣额，重试最多记一笔。新 Turn 仍读取未闭合的
+Vision 验收及后续任务真实状态。未绑定、无关、延期或改派的后续任务不能提供
+这份凭证。执行引导复用当前宿主 profile；Todo 绑定重规划保持原结算路径。
+
 Long-chain review also accepts `fresh_vision_path_outcome` and now projects this
 JSON route. An acceptance summary plus an evidence-linked `continue`, `no_change`
 or `replan` path can retain existing runnable work; no extra planning Todo or

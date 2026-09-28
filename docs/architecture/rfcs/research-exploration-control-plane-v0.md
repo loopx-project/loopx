@@ -142,6 +142,7 @@ milestone status.
 | Semantic replan closure | New typed dimensions, a grounded successor, a concrete blocker, or coverage-backed terminal result can close the current obligation. |
 | Host-delivered context | Quota can project a compact coverage ledger and uncovered frontier without requiring a manual evidence-read ritual. |
 | Explore evidence | Explore owns append-only nodes, edges, findings, and bounded public-safe projections. |
+| Research evidence and cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.md) composes generic progress with typed closure and explicit binary candidates. CLI summary and Lark node summaries share the read-only projection; exact experiment input fingerprints guard stale results. |
 | Explore planning | Optional branch planners are read-only and return execution to quota, Todo, claim, and lease. |
 | Model behavior qualification | Real function-tool conversations can test whether a model reads an actual packet and selects a real semantic writeback. |
 
@@ -149,11 +150,11 @@ milestone status.
 
 | Gap | Consequence |
 |---|---|
-| No typed closure basis | A terminal conclusion cannot explain which constraint made it terminal without prose. |
-| No composition candidate | A relation between individually investigated nodes is not durable. |
-| No composition experiment identity | Replays can schedule duplicate joint probes or mistake a Todo for a result. |
-| No composition gap projection | Goal-frontier cannot distinguish atomic exhaustion from untested interaction. |
-| No research-specific qualification matrix | Tests do not yet prove candidate-to-gap-to-experiment-to-result causality. |
+| No shared research write-time gate | The cold evidence codec cannot discharge or enforce a live composition obligation. |
+| No exact obligation/Todo/result lineage | A research receipt is not proof of an authorized Todo transition or accepted Goal closure. |
+| Cold shadow not adopted by hot status/frontier | The existing #3173 projection remains behavior-compatible; canonical research obligations still need M3 integration. |
+| No dismissal or deferral contract | Evidence invalidation is visible, but typed candidate retirement and resumption remain unimplemented. |
+| Live qualification incomplete | Deterministic and real CLI/file-log tests establish state semantics, not model selection quality or scientific truth; no live Lark sync is qualified by projection tests. |
 | No promotion evidence for inferred combinations | Shared constraints are not known to be precise enough to trigger obligations. |
 
 ## 6. Research State Model
@@ -229,9 +230,10 @@ execution, and result into one ambiguous relation. This RFC rejects that shape.
 
 ## 7. Typed Contract Direction
 
-The following schemas are design targets, not shipped protocols. Their final
-wire form must be introduced with an active caller, protocol reference, and
-focused validation.
+The research envelope and closure basis have an active CLI caller and the
+[versioned evidence protocol](../../reference/protocols/research-observation-v0.md).
+The action signature, shared write gate and model selection below remain design
+targets. The cold shadow does not promote them into current behavior.
 
 ### 7.1 Compose; do not mutate v0 silently
 
@@ -800,8 +802,8 @@ control-plane failures.
 | Milestone | Deliverable | Promotion gate | Status |
 |---|---|---|---|
 | M0 | RFC, current-state inventory, and explicit ownership decision | Maintainer review; no runtime behavior | Accepted design |
-| M1 | Characterization fixtures plus typed research observation and closure contract in Explore | Deterministic normalization, privacy, compatibility, and negative tests | Not started |
-| M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | Partially implemented (#3173: explicit experiment projection and successor binding) |
+| M1 | Characterization fixtures plus typed research observation and closure contract in Explore | Deterministic normalization, privacy, compatibility, and negative tests | Implemented evidence/CLI slice; live research qualification remains separate |
+| M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | Partial: #3173 legacy quota/successor; canonical binary cold shadow in CLI/Lark projection; hot status adoption and live Lark qualification remain |
 | M3 | Goal-frontier obligation, exact Todo/experiment lineage, and shared write-time gate | State/replay matrix and premerge canary pass | Not started |
 | M4 | Bounded multi-candidate cards, `composition_selection_v0`, real model-tool behavior qualification, and repeated live shadow | Model autonomously selects a legal semantic action from the delivered candidate set; selection quality is no worse than the declared fallback; compact receipts only | Not started |
 | M5 | Shared-constraint candidate ranking in shadow mode | Precision and cost evidence; no automatic trigger | Not started |
@@ -810,14 +812,24 @@ control-plane failures.
 
 ### 16.1 Smallest useful implementation slice
 
-M1 and M2 are the first reviewable slice:
+The M1/M2 evidence slice delivers:
 
 - add no new scheduler or executor;
 - keep composition gaps read-only and default-off;
 - accept explicit candidates only;
 - characterize the current Explore projection before changing it;
 - prove public safety, canonical identity, and bounded projection;
-- show the candidate and gap in status, but do not yet block writeback.
+- show candidates and gaps in Explore summary and existing Lark node projections;
+  preserve #3173 quota behavior. Hot status adoption remains part of M3's common
+  frontier integration, with independent qualification before any promotion.
+
+Validation uses `tests/control_plane_ts/explore_research.test.ts`,
+`tests/capabilities/test_explore_research_evidence.py` and the existing
+composition-frontier/result-layer checks. It covers canonical reverse pairs,
+terminal coverage, attribution, replay, invalidated inputs, stale experiment
+lineage and real CLI/file-log readback. Projection tests do not establish live
+remote effects or model-selected research behavior. Delivery is tracked in
+[#5214](https://github.com/loopx-project/loopx/issues/5214); the issue remains open.
 
 M3 is the first behavior-changing slice. It should be a separate PR so the
 obligation and write gate can be reviewed and reverted independently from the

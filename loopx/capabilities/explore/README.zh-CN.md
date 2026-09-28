@@ -243,6 +243,13 @@ planner 把这个边界折叠进 packet 的 `orchestration_gate` 节，行为如
 
 ## Composition Frontier（组合面实验衍生）
 
+可通过 `loopx explore observe --goal-id <goal> --observation-json <file>` 记录
+typed research evidence。[版本化协议](../../../docs/reference/protocols/research-observation-v0.zh-CN.md)
+定义 closure basis、explicit binary candidate、input revision binding，以及
+`explore summary` 中只读 `research_frontier` shadow；既有 Lark 节点 Summary
+显示同一事实。此命令不授予 experiment、Todo、replan、quota 或 Goal acceptance
+权限，M3 enforcement 尚未完成。
+
 Harness 还会投影 **composition gaps**——显式的组合面 todo 衍生。当两个单独已覆盖的面之间存在有证据关联、需要放在一起验证时，LoopX 把这段未测试关系保留为 gap，而不是把每个面当作已完结。
 
 组合实验是一个已存在的 open Explore `experiment` 节点，带有至少两条指向已闭环（`resolved` / `dead_end`）、有证据输入节点的 `depends_on` 出边。只有显式图边才合格；投影绝不推断任意节点对，因此运行时与 reviewer 面保持与已记录图线性相关。
@@ -251,7 +258,7 @@ Harness 还会投影 **composition gaps**——显式的组合面 todo 衍生。
 
 - `gaps[]`（`loopx_explore_composition_gap_v0`）：`gap_id`、`experiment_node_ref`、`input_node_refs`、状态 `pending|scheduled`、`required_outcome=joint_experiment_result`、`successor_summary`（“Run the bounded joint experiment: ...”），以及 `successor_binding`，其 `explore_result_node_refs` 指向实验节点。
 - `selected_gap`：第一个 pending gap（pending 排在 scheduled 之前，再按输入数降序、按稳定 gap id 排序）；最多投影 3 个 gap（`MAX_PROJECTED_GAPS`）。
-- gap 只能被有证据的组合实验或有证据的驳回关闭——不能靠读上下文、acknowledge packet、完成无关 todo 或复述同一结论关闭。
+- Legacy 投影只考虑 open experiment；移除已关闭实验或把所有 gap 标为 scheduled 不证明 research closure。独立 typed research shadow 要求可归属 terminal evidence 与当前 input fingerprint；evidence-backed dismissal 和 shared write-time enforcement 仍为 RFC milestone。
 
 gap 变成正常的可运行后继：一个绑定到实验节点的 todo（`--explore-result-node-ref <experiment-node>`），通过正常 LoopX 生命周期执行。概念契约见 [`research-exploration-control-plane-v0`](../../../docs/architecture/rfcs/research-exploration-control-plane-v0.zh-CN.md)。
 

@@ -1,6 +1,7 @@
 """Receiver recovery through real CLI processes and identity-bound MCP stdio."""
 
 import asyncio
+import hashlib
 import json
 import subprocess
 import sys
@@ -112,6 +113,29 @@ def test_cli_page_boundaries(inbox, count):
     assert page["has_more"] is (count > 20)
     assert bool(page["next_cursor"]) is (count > 20)
     assert read_ids(root) == set(expected[:20])
+
+
+def test_cli_resumes_cursor_issued_before_exact_goal_scoping(inbox):
+    root, registry, seed, _ = inbox
+    expected = seed(45)
+    legacy_scope = hashlib.sha256(
+        json.dumps(
+            [
+                "pending_requests_v1",
+                str(root.resolve()),
+                "delivery",
+                "receiver",
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    cursor = f"1:{legacy_scope}:{expected[19]}"
+
+    resumed = cli(root, registry, "read", "--cursor", cursor)
+
+    assert ids(resumed) == expected[20:40]
+    assert resumed["has_more"]
 
 
 def test_cli_rejects_wrong_scope_and_malformed_cursors_before_receipts(inbox):

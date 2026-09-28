@@ -174,6 +174,7 @@ export interface SettlementStep {
   idempotency_key_ref: string;
   expected_receipt: string;
   command_template?: string;
+  command_condition?: "todo_deliverable_complete";
   conditional?: true;
 }
 
@@ -584,6 +585,7 @@ export function settlementStepPayload(step: SettlementStep): JsonObject {
     expected_receipt: step.expected_receipt,
   };
   if (step.command_template) payload.command_template = step.command_template;
+  if (step.command_condition) payload.command_condition = step.command_condition;
   if (step.conditional) payload.conditional = true;
   return payload;
 }

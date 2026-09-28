@@ -1498,7 +1498,7 @@ def _node_record_values(node: Mapping[str, Any], *, goal_id: str, source_id: str
         "Title": str(node.get("title") or ""),
         "Kind": str(node.get("node_kind") or ""),
         "Status": str(node.get("status") or ""),
-        "Summary": str(node.get("summary") or ""),
+        "Summary": "\n".join(part for part in [str(node.get("summary") or ""), str(node.get("research_summary") or "")] if part),
         "Blocked Reason": str(node.get("blocked_reason") or ""),
         "Parent Node": str(node.get("parent_id") or ""),
         "Findings": node.get("finding_count"),

@@ -165,6 +165,8 @@ def protocol_replan_action_packet_instruction(payload: dict[str, Any]) -> str:
         if isinstance(packet.get("writeback_contract"), dict)
         else {}
     )
+    if packet.get("settlement_only") is True:
+        return protocol_action_text(writeback_contract.get("rule"))
     if uncovered.get("required_any_of") and writeback_contract.get(
         "successor_command"
     ):

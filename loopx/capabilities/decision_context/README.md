@@ -299,13 +299,17 @@ Add these fields to an existing private profile's `automation` object:
   "fail_open": true,
   "source_ids": ["source:authority:baseline"],
   "interval_seconds": 900,
-  "max_pending_batches": 1000
+  "max_pending_batches": 1000,
+  "max_sources_per_tick": 8
 }
 ```
 
 Every listed source must already be enabled, incremental, and exact-readable.
 On-demand sources are never enrolled implicitly. The same goal/agent activation
-checks apply. Preview does not call providers or create the spool:
+checks apply. Capture results include `activation.capture_max_sources_per_tick`
+only after profile, agent and automatic-capture activation. Shared activation,
+`inspect-profile` and evidence assembly do not project this capture budget.
+Preview does not call providers or create the spool:
 
 ```bash
 loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
@@ -313,7 +317,17 @@ loopx decision-context capture --goal-id <goal-id> --agent-id <agent-id> \
   --cursor-state <reviewed-cursors.json> --format json
 ```
 
-Add `--execute` for one tick. Use `capture-status` with the same arguments
+Add `--execute` for one tick.
+
+Each tick attempts at most `automation.max_sources_per_tick` providers (default
+8, integer 1–64), in oldest-attempt-first order. Failed calls count toward this
+budget; held, pressured, and interval-skipped sources do not. Deferred sources
+keep their cursors and freshness timestamps and resume on later host ticks.
+`scan_budget` reports attempts and deferred source IDs. This bounds provider
+calls, not wall time: providers must still honor their timeout and the host
+must enforce its process deadline. Profile-race rollback remains atomic.
+
+Use `capture-status` with the same arguments
 and without `--execute` for readback. Configure a host scheduler to invoke the
 tick; the capability enforces `interval_seconds`, while the host owns process
 startup, an outer process timeout, and stop/uninstall. No model heartbeat is
@@ -325,7 +339,14 @@ The mode-0600 SQLite spool binds to one goal/agent and records bounded public-sa
 scan receipts plus **private replay cursors**. It contains no source bodies.
 Ticks are serialized; batch insertion and capture cursor advancement commit
 together. Failed scans keep their cursor, and capacity exhaustion reports
-`backpressure` without dropping pending batches. A changed source binding reports
+`backpressure` without dropping pending batches. Each enrolled source now has
+a reserved active window of `max(1, floor(max_pending_batches / source_count))`.
+When that window is full, only that source reports `source_backpressure`; it is
+not scanned and its capture cursor and last successful read stay unchanged.
+Quiet sources keep their shares for later changes; idle shares and the integer
+remainder are not lent to busy sources. This changes the previous global-only
+admission default for multi-source profiles. Single-source behavior is unchanged.
+A changed source binding reports
 `binding_changed`, requiring an explicit rebase or a separately scoped new spool.
 Do not store the spool or its journal in a public repository.
 
@@ -364,8 +385,10 @@ replay is impossible. Capture health is not proof of complete decision coverage.
 
 To stop collection, set `automatic_capture=false` and unload the host scheduler.
 Existing reviewable batches remain private and can still be prepared. To roll
-back to an older release, also remove the three new automation fields; retain
-the spool as a private checkpoint rather than deleting unreviewed work.
+back bounded ticks, remove `max_sources_per_tick`. A release that predates
+reference capture also requires removing `source_ids`, `interval_seconds` and
+`max_pending_batches`. Retain the spool as a private checkpoint rather than
+deleting unreviewed work.
 
 #### Recover an unreplayable source without discarding history
 
@@ -416,9 +439,22 @@ has a separate cap of N; new hold/restart operations stop after 2N audit records
 or repeated capacity increase is performed. At that bound, preserve/export the
 private spool and make an explicit retention decision; increasing the limit is
 not evidence consumption. A hold is explicit, not an automatic fairness policy.
-It can isolate a noisy source, but exhaustion can recur if other sources are
-not reviewed. Backpressured sources now retry on the next tick when capacity is
-available instead of waiting an additional scan interval.
+It can isolate a noisy source; reserved source windows additionally prevent a
+busy source from borrowing other sources' future capacity. Neither mechanism
+replaces semantic review: a full source needs oldest-batch review or explicit
+`capture-diagnose` and guarded recovery when replay is unavailable. Both pressure
+statuses retry on the next tick when capacity is available instead of waiting
+an additional scan interval.
+
+Existing over-share batches are retained, never evicted or silently held. On
+upgrade they can still consume shared capacity until explicit review/recovery.
+If the global capacity is smaller than the number of enrolled sources, isolation
+cannot be guaranteed: status reports `reservation_capacity_sufficient=false`
+and the global cap remains authoritative. `capture-status.capacity_policy`
+reports both bounds and each source reports `pending_capacity`, `review_required`
+and `recovery_diagnosis_required`. These are work hints, not proof that replay
+failed, and do not grant recovery or settlement authority. The global cap
+continues to count pending batches from sources no longer enrolled as well.
 
 `capture-status` separates active `pending_batch_count`, unresolved
 `held_batch_count`, per-source `acquisition_held` and

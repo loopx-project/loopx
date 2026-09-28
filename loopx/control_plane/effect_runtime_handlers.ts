@@ -1,5 +1,6 @@
 import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
+import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -17,6 +18,7 @@ import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {resolveConversationTrigger} from "./collaboration/conversation_trigger.ts";
+import {admitGoalDraft} from "./collaboration/goal_draft.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
@@ -79,6 +81,7 @@ import { evaluateDeliveryWorkspaceCausality } from "./quota/settlement_workspace
 import { evaluateQuotaSpendCommit } from "./quota/spend_commit.ts";
 import { evaluateQuotaVoidCommit } from "./quota/void_commit.ts";
 import { readQuotaSettlement } from "./quota/settlement_readback.ts";
+import {turnScopedCliSettlementPlan} from "./quota/settlement_plan.ts";
 import {
   preflightPriorHostTurnCloseout,
   reduceUnsettledHostTurnRecovery,
@@ -106,7 +109,7 @@ import { transitionTodoNextAction } from "./todos/next_action.ts";
 import { planTodoFieldUpdate } from "./todos/field_update.ts";
 import { planPublicTodoUpdate } from "./todos/public_update.ts";
 import { planMonitorMetadata } from "./todos/monitor_metadata.ts";
-import { planTodoAuthoringScope } from "./todos/authoring_scope.ts";
+import { evaluateTodoContractDiagnostics, planTodoAuthoringScope } from "./todos/authoring_scope.ts";
 import {
   evaluateTodoResumeConditions,
   normalizeTodoResumeWhen,
@@ -134,6 +137,7 @@ import {
   decideProjectSessionUnbind,
 } from "./goals/source_session_lifetime.ts";
 import { decideFirstPartyHostRuntime } from "./goals/first_party_host_runtime.ts";
+import { decideChatSessionLifecycle } from "./goals/chat_session_lifecycle.ts";
 import {
   evaluateDeliveryRoute,
 } from "./turn_driver/delivery_continuity.ts";
@@ -227,6 +231,7 @@ import {
   classifyManagerReturnVerification,
   normalizeManagerReturnDeliveryAttempt,
 } from "./collaboration/return_delivery.ts";
+import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
 
 import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
 import {
@@ -371,6 +376,10 @@ function settlementStepInput(value: unknown, label: string): SettlementStep {
         }
       : {}),
     ...(step.conditional === true ? { conditional: true } : {}),
+    ...(step.command_condition === undefined ? {} : {
+      command_condition: requireStringLiteral(step.command_condition,
+        ["todo_deliverable_complete"] as const, `${label}.command_condition`),
+    }),
   };
 }
 
@@ -473,6 +482,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
     ["todo.monitor_metadata.plan", planMonitorMetadata],
     ["todo.authoring_scope.plan", planTodoAuthoringScope],
+    ["todo.contract_diagnostics.evaluate", evaluateTodoContractDiagnostics],
     [
       "todo.claim.decide",
       (params) => evaluateCoordinationTodoClaimDecision(
@@ -542,6 +552,7 @@ export function createEffectRuntimeHandlers(
     ["goal.source_session.unbind.decide", decideProjectSessionUnbind],
     ["goal.source_session.recreate.decide", decideGoalRecreation],
     ["goal.first_party_host_runtime.decide", decideFirstPartyHostRuntime],
+    ["goal.chat_session.lifecycle.decide", decideChatSessionLifecycle],
     ["goal.acceptance.inspect", inspectLocalGoalAcceptance],
     ["goal.acceptance.configure", commitLocalGoalAcceptance],
     ["goal.acceptance.verify.commit", commitLocalGoalAcceptanceVerification],
@@ -727,6 +738,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.delegation.inventory_query", delegationInventoryQuery],
     ["collaboration.delegation.inventory_item", delegationInventoryItem],
     ["collaboration.chat_mode", planChatMode],
+    ["collaboration.goal_draft", (params) => ({draft: admitGoalDraft(params)})],
     ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
     ["chat.turn.accept", planChatTurnAcceptance],
@@ -736,6 +748,10 @@ export function createEffectRuntimeHandlers(
     [
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
+    ],
+    [
+      "collaboration.goal_instance.decide",
+      (params) => decideCollaborationLifecycle(params),
     ],
     ["external_evidence.discover", projectExternalEvidenceDiscovery],
     ["external_evidence.plan", planExternalEvidenceRequest],
@@ -833,6 +849,8 @@ export function createEffectRuntimeHandlers(
       "settlement.plan_payload",
       (params) => settlementPlanPayload(settlementPlanInput(params.plan, "plan")),
     ],
+    ["settlement.turn_scoped_cli_plan", (params) =>
+      settlementPlanPayload(turnScopedCliSettlementPlan(params))],
     [
       "settlement.result_payload",
       (params) => settlementResultPayload(
@@ -843,6 +861,9 @@ export function createEffectRuntimeHandlers(
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     ["work_item.replan_semantics.project", projectReplanSemantics],
+    ["explore.research.normalize", normalizeResearchObservation],
+    ["explore.research.validate_attribution", validateResearchAttribution],
+    ["explore.research.frontier", projectResearchFrontier],
   ["work_item.replan_history.project", projectReplanHistory],
   ["work_item.replan_history.project_snapshot", projectReplanHistorySnapshot],
     [

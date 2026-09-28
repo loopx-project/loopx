@@ -1652,6 +1652,7 @@ def build_goal_frontier_projection_context_from_status(
     # successor frontier obligation derived below. Exact Turn settlement may
     # still owe this receipt even when the next decision has another duty.
     run_replan_transition_ack = replan_transition_ack
+    run_transition_candidate = {"obligation": replan_obligation, "ack": replan_transition_ack}
     obligation_ack = replan_transition_ack or effective_replan_ack
     if (
         autonomous_replan_is_required(replan_obligation)
@@ -1693,6 +1694,7 @@ def build_goal_frontier_projection_context_from_status(
         agent_todo_items=agent_todo_source_items,
     )
     frontier_obligation_ack = frontier_transition_ack or effective_replan_ack
+    frontier_transition_candidate = {"obligation": frontier_replan_obligation, "ack": frontier_transition_ack}
     if (
         frontier_replan_obligation
         and autonomous_replan_ack_satisfies_obligation(
@@ -1771,6 +1773,7 @@ def build_goal_frontier_projection_context_from_status(
         "projected_replan_ack": projected_replan_ack,
         "replan_transition_ack": replan_transition_ack,
         "run_replan_transition_ack": run_replan_transition_ack,
+        "replan_transition_candidates": [run_transition_candidate, frontier_transition_candidate],
     }
 
 

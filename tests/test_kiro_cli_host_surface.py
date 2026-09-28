@@ -470,8 +470,11 @@ def test_agent_type_catalog_and_scheduler_binding() -> None:
     assert normalize_agent_type("kiro") == HOST_SURFACE
     assert normalize_agent_type("kiro-cli") == HOST_SURFACE
     assert normalize_agent_type("Kiro CLI") == HOST_SURFACE
+    # Kiro CLI owns its own typed runtime profile instead of falling through to
+    # generic_cli, so its in-session `/goal` spend settles as a visible-Goal
+    # spend rather than being booked as a heartbeat.
     assert scheduler_command_binding_for_agent_type(HOST_SURFACE) == {
-        "runtime_profile": "generic_cli"
+        "runtime_profile": "kiro_cli"
     }
 
 

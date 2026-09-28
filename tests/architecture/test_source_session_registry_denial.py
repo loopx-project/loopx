@@ -7,9 +7,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIRECT_LOADER_ALLOWLIST = {
     "loopx/authority.py",
+    "loopx/attached_session.py",
     "loopx/bootstrap.py",
+    "loopx/capabilities/manager_context/__init__.py",
+    "loopx/capabilities/manager_context/roundtrip.py",
     "loopx/claude_goal_mode/scripts/connect.py",
+    "loopx/cli.py",
+    "loopx/cli_commands/manager_inbox.py",
     "loopx/configure_goal.py",
+    "loopx/control_plane/collaboration/goal_instance_scope.py",
+    "loopx/control_plane/collaboration/peers.py",
     "loopx/control_plane/goals/first_party_host_admission.py",
     "loopx/control_plane/projects/registry.py",
     "loopx/kunluncode_goal_mode/cli.py",
@@ -33,12 +40,24 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
 
     assert callers == DIRECT_LOADER_ALLOWLIST
     source_session_owners = {
+        "loopx/attached_session.py",
+        "loopx/capabilities/manager_context/__init__.py",
+        "loopx/capabilities/manager_context/roundtrip.py",
+        "loopx/cli.py",
+        "loopx/cli_commands/manager_inbox.py",
+        "loopx/control_plane/collaboration/goal_instance_scope.py",
+        "loopx/control_plane/collaboration/peers.py",
         "loopx/control_plane/goals/first_party_host_admission.py",
         "loopx/control_plane/projects/registry.py",
     }
     for relative in callers - source_session_owners:
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert "require_runtime_compatible_project_registry(" in source, relative
+    attached_owner = (REPO_ROOT / "loopx/attached_session.py").read_text(
+        encoding="utf-8"
+    )
+    assert "SOURCE_SESSION_PROFILE_ID" in attached_owner
+    assert "source_session_goal_lifetime" in attached_owner
 
 
 def test_generic_registry_decoder_enforces_source_session_denial() -> None:

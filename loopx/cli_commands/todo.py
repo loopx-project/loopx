@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
@@ -17,6 +18,8 @@ from ..control_plane.todos.contract import (
 from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.quota.settlement import (
     QuotaSettlementReadback,
+    SettlementIdentity,
+    build_turn_scoped_cli_settlement_plan,
     read_heartbeat_settlement,
     settlement_result_payload,
 )
@@ -83,6 +86,25 @@ PrintPayload = Callable[
 ]
 
 
+def _read_todo_turn_settlement(
+    args: argparse.Namespace, *, runtime_root: Path,
+) -> QuotaSettlementReadback:
+    """Transport the original lifecycle tuple to the TS identity owner."""
+    readback = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+        turn_instance_id=args.turn_instance_id,
+    )
+    if readback is None:
+        raise RuntimeError("exact settlement readback unexpectedly returned not-found")
+    if readback.identity.failure is not None:
+        raise ValueError(readback.identity.failure.reason)
+    if readback.identity.value is None:
+        operation = "completion" if args.todo_command == "complete" else "supersede"
+        raise ValueError(f"turn-scoped Todo {operation} has no identity")
+    return readback
+
+
 def _completion_settlement_error(
     settlement_readback: QuotaSettlementReadback,
     *,
@@ -97,6 +119,33 @@ def _completion_settlement_error(
         "terminal no-follow-up closeout requires matching writeback and quota spend receipts: "
         + settlement_readback.settlement.failure.reason
     )
+
+
+def _completion_settlement_plan(
+    identity: SettlementIdentity, *, args: argparse.Namespace,
+    registry_path: Path, runtime_root: Path,
+) -> dict[str, object]:
+    """Render the native plan with the original route and supplied lease facts."""
+    actor_args = ""
+    path_args = ""
+    for name, option in (
+        ("project", "--project"), ("state_file", "--state-file"),
+        ("task_lease_idempotency_key", "--task-lease-idempotency-key"),
+        ("task_lease_expected_version", "--task-lease-expected-version"),
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            argument = f" {option} {shlex.quote(str(value))}"
+            actor_args += argument
+            if name in {"project", "state_file"}:
+                path_args += argument
+    prefix = (f"loopx --registry {shlex.quote(str(registry_path))}"
+              f" --runtime-root {shlex.quote(str(runtime_root))}")
+    return build_turn_scoped_cli_settlement_plan(
+        goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+        turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
+        scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
+    ).as_dict()
 
 
 def _validated_replan_successor_obligation(
@@ -461,26 +510,12 @@ def handle_todo_command(
             completion_identity_source = None
             completion_delivery_workspace = None
             if getattr(args, "turn_instance_id", None):
-                runtime_root = resolve_runtime_root(
-                    load_registry(registry_path),
-                    runtime_root_arg,
+                runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+                settlement_readback = _read_todo_turn_settlement(
+                    args, runtime_root=runtime_root,
                 )
-                settlement_readback = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    todo_id=args.todo_id,
-                    turn_instance_id=getattr(args, "turn_instance_id", None),
-                )
-                if settlement_readback is None:
-                    raise RuntimeError(
-                        "exact settlement readback unexpectedly returned not-found"
-                    )
                 settlement_result = settlement_readback.identity
-                if settlement_result.failure is not None:
-                    raise ValueError(settlement_result.failure.reason)
-                if settlement_result.value is None:
-                    raise ValueError("turn-scoped Todo completion has no identity")
+                assert settlement_result.value is not None
                 identity = settlement_result.value
                 settlement_identity = identity
                 todo_payload = list_goal_todos(
@@ -521,6 +556,9 @@ def handle_todo_command(
                         "settlement_identity": identity.as_dict(),
                         "settlement_result": settlement_result_payload(
                             settlement_result
+                        ),
+                        "settlement_plan": _completion_settlement_plan(
+                            identity, args=args, registry_path=registry_path, runtime_root=runtime_root,
                         ),
                         "error": completion_error,
                     }
@@ -591,6 +629,11 @@ def handle_todo_command(
                     )
         elif args.todo_command == "supersede":
             validate_todo_supersede_options(args)
+            supersede_readback = (
+                _read_todo_turn_settlement(
+                    args, runtime_root=resolve_runtime_root(load_registry(registry_path), runtime_root_arg),
+                ) if args.turn_instance_id else None
+            )
             payload = supersede_goal_todo(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
@@ -615,6 +658,11 @@ def handle_todo_command(
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
+            if supersede_readback is not None:
+                retirement_identity = supersede_readback.identity.value
+                assert retirement_identity is not None
+                payload["settlement_identity"] = retirement_identity.as_dict()
+                payload["settlement_result"] = settlement_result_payload(supersede_readback.identity)
         elif args.todo_command == "archive-completed":
             validate_todo_archive_completed_options(args)
             payload = archive_completed_todos(

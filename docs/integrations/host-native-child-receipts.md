@@ -33,8 +33,13 @@ was created or deliberately skipped.
 
 ## Lifecycle / 生命周期
 
-1. The admitted Turn guard must already have a settlement binding. `record`
-   rejects unregistered coordinators and disabled policy before writing.
+1. The admitted Turn guard must already have a settlement binding. The existing
+   TS settlement readback verifies its exact original identity and reporting
+   admission. Committed work-admission facts also admit lawful replan Turns;
+   the recorder does not whitelist their status labels. Old ordinary guards
+   without work-projection fields retain bounded compatibility, never a fallback
+   for partial or negative facts. `record` rejects unregistered coordinators and
+   disabled policy before writing.
 2. Use `stage=decision` with a stable `operation-id` for `spawn`, `followup`,
    or a bounded `skip` reason. A host capacity rejection maps to the generic
    `host_capacity_exhausted` reason. Capacity rejection and typed host failure
@@ -50,8 +55,18 @@ was created or deliberately skipped.
    the latest reported Turn only when the capability is enabled and a decision
    exists. The dashboard uses that status projection, and omits the activity
    line for unconfigured or unrelated Goals.
+5. A new decision requires an open, work-admitted Turn and no begun closeout.
+   Once closeout is pending or settled, an already-recorded started operation
+   may still receive its result and parent review. This records late facts; it
+   does not reopen the Turn. An absent decision cannot be backfilled through a
+   closed Turn. Exact duplicates remain reads; conflicts remain errors. For a
+   new append the readback is checked inside the existing event-log lock, with
+   one coarse TS call per report, not a second Python phase rule.
 
-1. Turn 须先有已提交的结算绑定；未注册主 Agent 或未启用策略不能写入。
+1. Turn 须先有已提交的结算绑定；既有 TS 结算读回核验精确原身份及报告准入。
+   已提交的工作准入事实同样覆盖合法重规划，报告入口不按状态名称建立白名单。
+   没有工作投影字段的旧普通 guard 保留有界兼容，不能用来绕过不完整或否定的
+   准入事实。未注册主 Agent 或未启用策略不能写入。
 2. 用稳定 `operation-id` 写 `decision`，区分 `spawn`、`followup` 和有界理由的
    `skip`。宿主容量拒绝映射为通用 `host_capacity_exhausted`；容量拒绝和
    类型化宿主失败都停止同一 Turn 的启动或跟进重试，主 Agent 仍可继续工作。
@@ -61,6 +76,11 @@ was created or deliberately skipped.
 4. 同一身份和内容重放幂等，内容冲突会被拒绝。`read` 与带 Turn ID 的
    `agent-context` 读取同一模型。Goal 状态的 JSON 与 Markdown 只在能力启用且确有决策时投影
    最近一轮；仪表板读取该投影，未配置或无关 Goal 不显示活动行。
+5. 新决策要求 Turn 已准入、仍开放且尚未开始结算。开始结算或结清后，已经登记
+   的 started 操作仍可接收结果及主 Agent 验收；这是迟到事实登记，不会重开 Turn。
+   不能借已关闭的 Turn 首次补建缺失决策。精确重复仍是读取，内容冲突仍拒绝。
+   新写入在既有事件流锁内重新核对读回，每次报告只调用一个粗粒度 TS 边界，
+   不增加第二套 Python 阶段判断。
 
 Example / 示例：
 

@@ -81,6 +81,67 @@ function projectTurnTransition(request: JsonObject): JsonObject {
   return {semantic_delta: delta};
 }
 
+/** A changed frontier cannot rebind work already admitted by a Turn receipt.
+ * Current canonical transition candidates must carry their original source
+ * obligation. After validated writeback the settlement owner's replay phase,
+ * not another frontier proof, is authoritative for the remaining debit.
+ */
+function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
+  const selected = optionalNonEmptyString(request.selected_obligation_id, "selected_obligation_id");
+  const current = request.current_obligation == null ? null
+    : requireJsonObject(request.current_obligation, "current_obligation");
+  if (selected === null) return {obligation: current};
+  if (!/^replan-[a-f0-9]{16}$/.test(selected) || typeof request.guard_scoped !== "boolean" ||
+      !Array.isArray(request.transition_candidates) ||
+      ![null, "open", "settlement_pending"].includes(request.replay_phase as string | null)) {
+    throw new EffectRuntimeRequestError("receipt-bound replan facts are malformed");
+  }
+  let original: JsonObject | null = null;
+  let delta: JsonObject | null = null;
+  for (const value of request.transition_candidates) {
+    const candidate = object(value);
+    const obligation = object(candidate.obligation);
+    if (obligation.obligation_id !== selected || !requiredSemanticOutcomes(obligation).includes("new_runnable_successor")) continue;
+    const result = projectTurnTransition({guard_scoped: request.guard_scoped,
+      selected_obligation_id: selected, transition_acks: [candidate.ack]});
+    if (result.semantic_delta !== null) {
+      original = obligation;
+      delta = result.semantic_delta as JsonObject;
+      break;
+    }
+  }
+  const writebackCommitted = request.replay_phase === "settlement_pending";
+  if (delta !== null || writebackCommitted) {
+    const reason = writebackCommitted
+      ? "The original Turn writeback is verified. Settle its existing quota receipt once; do not repeat work or select its successor."
+      : "The original Turn has a revalidated canonical successor transition. Finish its writeback before any quota debit; do not repeat planning or execute the successor.";
+    return {obligation: {
+      ...(original ?? {}), required: true, obligation_id: selected,
+      selection_binding: "heartbeat_receipt", recommended_action: reason,
+      resolution_mode: "receipt_bound_replan_settlement", todo_actions: [], guidance_actions: [reason],
+      settlement_action_packet: {
+        schema_version: "replan_action_packet_v0", obligation_id: selected,
+        decision: writebackCommitted ? "settlement_pending" : "successor_transition_recorded",
+        required_outcome: writebackCommitted ? "quota_spend_receipt" : "durable_writeback_receipt",
+        successor_todo_id: delta?.successor_todo_id ?? null,
+        semantic_delta: delta, settlement_only: true,
+        writeback_contract: {
+          preferred_input: writebackCommitted ? "verified_replan_writeback" : "canonical_successor_transition",
+          cli_semantic_args: "--vision-unchanged-reason 'The canonical successor changes the path; original acceptance remains open.'",
+          rule: reason,
+        },
+      },
+    }};
+  }
+  if (current?.obligation_id === selected) {
+    return {obligation: {...current, selection_binding: "heartbeat_receipt"}};
+  }
+  throw new EffectRuntimeRequestError(
+    "heartbeat receipt settlement identity conflicts with the current autonomous replan obligation",
+    "heartbeat_receipt_identity_conflict",
+  );
+}
+
 /** One outcome policy for host projection and write-time discharge. */
 export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcome[] {
   const kinds = triggerKinds(obligation);
@@ -141,6 +202,7 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
   if (request.operation === "turn_transition") return projectTurnTransition(request);
+  if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
   const obligation = requireJsonObject(request.obligation, "obligation");
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);

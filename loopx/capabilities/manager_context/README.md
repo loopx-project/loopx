@@ -312,6 +312,13 @@ readback; `manager-context` remains the sole result/delivery writer. The typed
 attempt validation and verification classification; Python retains file-lock,
 persistence and adapter orchestration only.
 
+Unclassified readback exceptions retain the saved attempt and retry with backoff;
+their wording never establishes revoked authority or a missing route. Adapters
+must raise `ReturnResolutionBlocked` with an exact typed resolution reason for
+those permanent failures. This replaces the old exception-substring fallback.
+A successful later readback updates the same App transcript receipt without
+another model turn or external send. Actual live grant checks still precede it.
+
 New handoffs persist their exact original return route. Legacy requests remain
 queryable; a receiver can explicitly report one only when its exact persisted
 Chat receipt uniquely recovers the route. Historical timestamps stay unknown.

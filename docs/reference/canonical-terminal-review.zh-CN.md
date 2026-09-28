@@ -10,7 +10,7 @@ CLI 完成后若响应丢失，重试时保留原完成标识：
 
 ```bash
 loopx todo complete --goal-id example-goal --todo-id todo_work \
-  --agent-id agent-a --completion-identity-key reviewed-result --no-follow-up
+  --agent-id agent-a --completion-identity-key reviewed-result
 loopx todo list --goal-id example-goal --todo-id todo_work
 loopx todo project-markdown --goal-id example-goal --execute
 ```
@@ -43,13 +43,15 @@ TS terminal owner 统一决定准入、来源新鲜度、验证计划、租约�
 
 - `{kind: "explicit", operation_id: "..."}`：执行或恢复指定操作，包括旧 runtime
   已写入的历史回执。
+- `{kind: "completion_turn"}`：完成带 key 的 `turn_settlement` 交付，或终结已经接受的
+  普通完成。TS 推导两个稳定阶段标识；调用者不能另外传 operation id。
 - `{kind: "current_monitor_cycle"}`：完成没有显式 completion turn key 的
   `continuous_monitor` 当前轮次。TS owner 根据 Goal id、Todo id 和权威状态中的
   `material_change_generation` 推导操作标识。
 
 Monitor 重开时 generation 递增，因此旧周期回执不能完成当前 open 周期。
 如果显式操作已完成当前周期，核心写入该 generation 的 no-change 回执，不会猜测
-legacy unscoped 回执属于该周期。两种意图共用同一个终结事务；普通完成和 supersede
+legacy unscoped 回执属于该周期。三种意图共用同一个终结事务；无 scoped Turn 的完成和 supersede
 使用 explicit identity。
 
 同一 terminal method 还接受以下受限字段：
@@ -85,3 +87,44 @@ legacy unscoped 回执属于该周期。两种意图共用同一个终结事务�
 检查打包入口与重试反馈。前端运行时 decoder 与共享 action-review plan 现在为 Agent 完成和 Monitor
 停止识别 terminal basis，打包 Chat 同步包含原操作重试路径，并区分显示待交付与
 已验证完成；无需新增配置项或视觉控件。本次未新增 Lark 命令或传输。
+
+## 受配额约束的 CLI 完成
+
+交付通过原 validator，不等于该 Turn 已结算。共享 TS settlement plan 依次引导普通
+Todo 完成、永久 `refresh-state` 写回、一次 `quota spend-slot` 扣额，以及最终
+`todo complete --no-follow-up`；全部绑定原 Goal、Agent、Todo 和 Turn。普通完成
+保留 `active_goal` continuation，不制造虚假后继。该命令的执行条件是
+`todo_deliverable_complete`，必需的验证不会随条件省略。符合准入的
+`in_flight_continuation` 保留未交付 Todo 为 open，不会伪造通过验证的完成。
+
+若提前终结、缺少写回或扣额，CLI JSON 和 Markdown 返回同一恢复计划；原 registry/runtime、
+project/state 路由和租约证明保留在对应命令支持的参数中。命令模板只是引导，不提供
+租约、验证回执或额外执行权限。
+
+`completion_turn` 意图保留旧普通完成的 operation id，同时为最终关闭推导独立、
+确定的阶段 id，完成 key 不变。`active_goal` 晋级为 `no_followup` 必须恢复精确匹配
+原 actor、租约和声明承诺的普通完成回执，不重跑原 caller validator，也不重新获取
+已退休租约。revision 为零的旧回执通过原请求承诺保持可恢复；新声明版本仍必须有
+匹配的回执摘要。已有终结回执在读取当前 authority 前恢复；当前 Goal Acceptance
+准则仍遵守原新鲜度约束。验证和扣额门禁不放宽。
+
+此补充改变 CLI/managed 引导和 canonical 响应读回，不改变配置。已审核 Chat 操作
+继续使用 explicit operation identity 和已有共享投影；无需新增前端设置、视觉控件
+或 Lark 传输。
+
+## 原 Turn 的替代退役与已有后继
+
+`todo supersede --turn-instance-id <原 Turn>` 现在接受普通完成已有的精确
+Goal/Agent/Todo/Turn guard 身份。先验证原身份，再由已有 terminal authority 决定
+退役；租约、actor 和重试意图不变的门禁仍然保留。若已有真实的未来 Monitor，先用
+`todo update --successor-todo-id` 关联，再 supersede，不制造另一条替代任务。
+
+scoped 退役回执、原永久写回和原一次扣额都齐全后，同 Turn 的 `quota should-run`
+返回 `heartbeat_settled_skip`。退役不代表交付通过 validator，不关闭 Goal，也不消费
+或提前执行未来 Monitor。其到期时间、责任 Agent 和后继关联仍由 canonical 状态保存；
+独立工作在下一条新 Turn 重新判断。
+
+旧无绑定 supersede 回执不会被猜测属于某个 Turn。原 caller 可保留原 supersede
+意图、原 Turn ID 和原租约证明幂等重试，恢复已提交退役并补写 scoped 回执；不重研、
+不重跑验证、不重复扣额。未知或错配的 Turn 身份在 lifecycle 效果前拒绝。新增 CLI
+输入也在 `todo --help` 中说明；原无绑定 CLI、已审核 Chat 和 Lark 语义不变。
