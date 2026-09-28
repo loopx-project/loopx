@@ -59,7 +59,9 @@ raise SystemExit(code)
     "argv",
     [["--version"], [], ["--help"], ["check", "--help"], ["status", "--help"],
      ["diagnose", "--help"], ["review-packet", "--help"], ["quota", "--help"],
-     ["todo", "--help"], ["--registry=fixture", "--format=json", "quota", "--help"]],
+     ["todo", "--help"], ["delegation", "--help"], ["turn", "--help"],
+     ["turn", "run-once", "--help"],
+     ["--registry=fixture", "--format=json", "quota", "--help"]],
 )
 def test_source_help_and_version_do_not_load_unrelated_owners(argv: list[str]) -> None:
     assertions = f"""
@@ -79,6 +81,8 @@ for owner in {UNRELATED_OWNERS!r}:
     "argv",
     [["version", "--format", "json"], ["status", "--unknown-option"],
      ["todo", "list"], ["quota", "unknown-command"], ["--format", "unknown", "status"],
+     ["delegation", "inspect", "--unknown-option"], ["turn", "run-once", "--exec"],
+     ["turn", "unknown-command"],
      ["--reg", "fixture", "status"]],
 )
 def test_source_full_fallback_keeps_canonical_results_and_diagnostics(argv: list[str]) -> None:
@@ -151,6 +155,9 @@ def test_native_scheduler_missing_node_fails_closed_without_python_fallback(entr
 @pytest.mark.parametrize("argv", [native_argv(), [
     "todo", "update", "--goal-id", "fixture-goal", "--todo-id", "todo_fixture",
     "--agent-id", "fixture-agent", "--status", "done",
+], [
+    "turn", "run-once", "--goal-id", "fixture-goal", "--agent-id", "fixture-agent",
+    "--host", "generic-cli", "--project", "fixture-project", "--execute",
 ]])
 def test_outer_controller_write_guard_runs_before_native_or_provider_effects(
     tmp_path: Path, entry: str, argv: list[str],

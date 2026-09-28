@@ -410,6 +410,25 @@ through `turn run-once` without `--execute`. It creates no request or Turn,
 does not invoke the host and spends no quota. Host arguments that enable
 execution or retarget the selected work are rejected before the subprocess.
 
+Inspection and its Turn preview load their existing command registrars, not
+unrelated CLI owners. One inspection reuses only the executable TS source
+revision within that logical request; it does not cache binding, acceptance,
+provider revision or validation-file facts. Those facts are still re-read to
+reject drift, and the next observation resolves its own source revision. The
+preview remains a pinned child process with the real workspace scan; CLI, MCP
+and Team execution consume the same unchanged projection. There is no new
+setting, scheduler or grant. Diagnose cold process/fixture cost separately from
+the useful observation, following the
+[measurement and budget rules](../development/testing-and-quality.md#roadmap-aligned-optimization);
+functional success does not waive an original latency qualification.
+
+中文：预检与其 Turn 预览只加载既有命令注册，不加载无关 CLI owner。同一次逻辑
+观察仅复用可执行 TS 源码版本，不缓存 binding、验收、provider revision 或校验
+文件事实；这些事实仍重读以拒绝漂移，下次观察重新解析源码版本。预览仍在固定
+release 的子进程中扫描真实工作树；CLI、MCP 与团队执行消费不变的共享投影，不
+增加设置、调度器或授权。按上述测量与预算规则区分冷进程／fixture 开销和真实
+观察成本；功能检查通过不能豁免原延迟验收。
+
 The typed result keeps three facts separate: `turn_eligible` is the current
 Turn decision for that exact Todo; `acceptance_ready` is the current pinned
 acceptance binding, not passed output validation; `executor.available` uses

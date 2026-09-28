@@ -204,6 +204,9 @@ assert "loopx.cli" not in sys.modules
 		(["review-packet", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
 		(["quota", "--help"], "loopx.cli_commands.quota_registration", "loopx.cli_commands.quota"),
 		(["todo", "--help"], "loopx.cli_commands.todo_registration", "loopx.cli_commands.todo"),
+		(["delegation", "--help"], "loopx.cli_commands.delegation", "loopx.cli_commands.delegation"),
+		(["turn", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
+		(["turn", "run-once", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 	],
 )
 def test_common_command_help_loads_only_its_owner(
@@ -264,7 +267,13 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		["review-packet", "--help"],
 		["todo", "--help"],
 		["quota", "--help"],
+		["delegation", "--help"],
+		["turn", "--help"],
+		["turn", "run-once", "--help"],
 		["status", "--unknown-option"],
+		["delegation", "inspect", "--unknown-option"],
+		["turn", "run-once", "--exec"],
+		["turn", "unknown-command"],
 		["todo", "list"],
 		["quota", "unknown-command"],
 		["--format", "unknown", "status"],
