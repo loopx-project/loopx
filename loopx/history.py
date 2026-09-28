@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import nullcontext
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from heapq import merge
-from itertools import islice
+from itertools import chain, islice
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,7 @@ from .control_plane.runtime.run_artifacts import (
 )
 from .control_plane.runtime.run_context_retention import (
     goal_semantic_history_from_runs,
+    iter_goal_semantic_history_runs,
     latest_runs_with_agent_context,
 )
 from .control_plane.runtime.run_index_duplicates import (
@@ -229,11 +230,30 @@ def _indexed_artifact_exists(value: Any, *, artifact_root: Path | None) -> bool:
     return path.exists()
 
 
+def _observe_run_artifacts(
+    records: Iterable[dict[str, Any]], *, artifact_root: Path | None,
+) -> None:
+    """Fresh request-local observations, shared by full and selected reads."""
+    observed: dict[str, bool] = {}
+    for record in records:
+        for source, target in (("json_path", "json_exists"), ("markdown_path", "markdown_exists")):
+            path = str(record.get(source) or "").strip()
+            if path not in observed:
+                observed[path] = _indexed_artifact_exists(path, artifact_root=artifact_root)
+            record[target] = observed[path]
+
+
 def load_index_snapshot(
     path: Path,
     *,
     artifact_root: Path | None = None,
+    include_artifact_status: bool = True,
 ) -> RunIndexSnapshot:
+    """Decode the complete index; derived artifact status is optional internally.
+
+    Full readers keep fresh status by default. History collection defers only
+    filesystem observation until its complete semantic selection is known.
+    """
     try:
         stream = path.open("rb")
     except FileNotFoundError:
@@ -241,19 +261,8 @@ def load_index_snapshot(
 
     records: list[dict[str, Any]] = []
     positions: dict[tuple[str, str, str], int] = {}
-    artifact_exists: dict[tuple[str, str], bool] = {}
     raw_count = 0
     digest = hashlib.sha256()
-
-    def artifact_is_present(value: Any) -> bool:
-        text = str(value or "").strip()
-        cache_key = (text, str(artifact_root or ""))
-        if cache_key not in artifact_exists:
-            artifact_exists[cache_key] = _indexed_artifact_exists(
-                value,
-                artifact_root=artifact_root,
-            )
-        return artifact_exists[cache_key]
 
     with stream:
         for encoded_line in stream:
@@ -275,13 +284,16 @@ def load_index_snapshot(
                 str(item.get("markdown_path") or ""),
             )
             item = dict(item)
-            item["json_exists"] = artifact_is_present(item.get("json_path"))
-            item["markdown_exists"] = artifact_is_present(item.get("markdown_path"))
+            # These are observations, never persisted index authority.
+            item.pop("json_exists", None)
+            item.pop("markdown_exists", None)
             if key in positions:
                 records[positions[key]].update(item)
             else:
                 positions[key] = len(records)
                 records.append(item)
+    if include_artifact_status:
+        _observe_run_artifacts(records, artifact_root=artifact_root)
     return RunIndexSnapshot(
         records=records,
         raw_count=raw_count,
@@ -365,7 +377,7 @@ def collect_history(
         index_path = runtime_root / "goals" / current_goal_id / "runs" / "index.jsonl"
         index_snapshot = load_index_snapshot(
             index_path,
-            artifact_root=registry_project_root(registry_path),
+            include_artifact_status=False,
         )
         runs = index_snapshot.records
         raw_count = index_snapshot.raw_count
@@ -433,6 +445,18 @@ def collect_history(
             ),
             "semantic_history": goal_semantic_history_from_runs(runs),
         }
+        # Reduce the full index first. Old semantic evidence and lane windows
+        # may survive outside --limit; every returned Run still needs fresh
+        # flags. These references also cover the global recent_runs window.
+        status_run = goal_record["latest_status_run"]
+        _observe_run_artifacts(
+            chain(
+                goal_record["latest_runs"],
+                [status_run] if status_run is not None else [],
+                iter_goal_semantic_history_runs(goal_record["semantic_history"]),
+            ),
+            artifact_root=registry_project_root(registry_path),
+        )
         if registry_member:
             for field in REGISTRY_STATUS_FIELDS:
                 if meta.get(field):
