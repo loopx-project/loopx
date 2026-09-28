@@ -379,18 +379,18 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   }
   // Like ChatStore, persist completion before serving it and replay after disconnect.
   const completedTurns = runtime.completedTurns ??= new Map();
-  const finishTurn = (sessionId, turnId, answer, protectedAction = null) => {
+  const finishTurn = (sessionId, turnId, answer, protectedAction = null, goalDraft = null) => {
     const key = JSON.stringify([sessionId, turnId]);
     if (completedTurns.has(key)) return completedTurns.get(key);
     const current = sessions.get(sessionId);
     if (!current || current.active_turn_id !== turnId) return "";
     const visible = messages.get(sessionId) ?? [];
     if (!visible.some((message) => message.message_id === `${turnId}-assistant`)) {
-      visible.push({ message_id: `${turnId}-assistant`, turn_id: turnId, role: "assistant", text: answer, created_at: "2026-08-13T01:00:02Z" });
+      visible.push({ message_id: `${turnId}-assistant`, turn_id: turnId, role: "assistant", text: answer, ...(goalDraft ? {goal_draft: goalDraft} : {}), created_at: "2026-08-13T01:00:02Z" });
     }
     messages.set(sessionId, visible);
     const event = (id, kind, payload) => `id: ${id}\nevent: ${kind}\ndata: ${JSON.stringify({ event_id: id, sequence: Number(id), kind, created_at: "2026-08-13T01:00:02Z", payload })}\n\n`;
-    const body = event("1", "assistant.delta", { text: answer }) + event("2", "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, proposals: [], protected_action: protectedAction, gate: null } });
+    const body = event("1", "assistant.delta", { text: answer }) + event("2", "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, ...(goalDraft ? {goal_draft: goalDraft} : {}), proposals: [], protected_action: protectedAction, gate: null } });
     completedTurns.set(key, body);
     sessions.set(sessionId, { ...current, active_turn_id: null, status: "ready", updated_at: "2026-08-13T01:00:02Z" });
     return body;
@@ -1669,7 +1669,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         ? { operation: "merge", target: "PR #999", summary: "模型错误补出了用户没有提供的目标。" }
       : null;
     const scriptedAnswer = typeof state.answerForMessage === "function" ? state.answerForMessage(operatorMessage) : null;
-    const answer = scriptedAnswer || (operatorMessage.startsWith("我现在该做什么？")
+    const answer = (typeof scriptedAnswer === "object" ? scriptedAnswer?.message : scriptedAnswer) || (operatorMessage.startsWith("我现在该做什么？")
       ? "管家已读取当前授权范围的 Goal 证据。"
       : operatorMessage === "请只回复：合并后真实回复已收到"
       ? "合并后真实回复已收到"
@@ -1683,7 +1683,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             ? "我识别到一个明确的合并请求。LoopX 会先展示受保护操作预览，不会直接执行。"
             : "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。");
     await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(operatorMessage) ? 5000 : 1200));
-    await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction), status: 200 });
+    await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft), status: 200 });
   });
   await page.route("**/api/actions?**", async (route) => {
     const url = new URL(route.request().url());

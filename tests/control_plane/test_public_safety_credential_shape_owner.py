@@ -37,7 +37,11 @@ from loopx.control_plane.runtime.public_safety import (
 from loopx.extensions.presentation import _plain_text as presentation_text
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[2]
-OWNER_MODULE = "loopx/control_plane/runtime/public_safety.py"
+# Refs #5136 direction 1: the credential-shape owner moved into the shared
+# text-classification home. public_safety re-exports SECRET_LIKE_SURFACE_PATTERN
+# for its recursive payload validation, so the identity shapes below are still
+# declared literally in exactly one module.
+OWNER_MODULE = "loopx/public_safe_text.py"
 # One consumer decides a different question: it rejects a goal id whose *whole*
 # value is a provider token, so its list is anchored and cannot be reused as a
 # surface scan. Named here so a new surface copy still fails this test.

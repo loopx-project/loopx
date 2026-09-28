@@ -3090,6 +3090,77 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     assert _spend_run_count(runtime) == 1
 
 
+@pytest.mark.parametrize(
+    ("agent_type", "expected_source"),
+    (
+        # Kiro CLI drives an in-session `/goal` loop and settles as a visible Goal.
+        ("kiro-cli", "visible-goal"),
+        # Hosts that stay on generic_cli keep the heartbeat spend unchanged.
+        ("opencode", "heartbeat"),
+    ),
+)
+def test_host_runtime_profile_selects_spend_source_through_real_settlement(
+    tmp_path: Path,
+    agent_type: str,
+    expected_source: str,
+) -> None:
+    from loopx.host_loop_activation import scheduler_command_binding_for_agent_type
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    runtime_profile = scheduler_command_binding_for_agent_type(agent_type)[
+        "runtime_profile"
+    ]
+    prompt = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        runtime_profile=runtime_profile,
+        thin=True,
+    )
+    turn_instance_id = f"{agent_type}-iteration-1"
+    # The thin body tells the agent to mint LOOPX_TURN per iteration.
+    guard_command = (
+        prompt["quota_guard_command"]
+        .replace("$HOME/.codex/loopx/registry.global.json", str(registry_path))
+        .replace('"${LOOPX_TURN:?}"', turn_instance_id)
+    )
+    assert f"--runtime-profile {runtime_profile}" in guard_command
+    guard_rc, guard = _run_generated_cli(guard_command, registry_path=registry_path)
+    assert guard_rc == 0, guard
+    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"]["turn_instance_id"] == turn_instance_id
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "visible_goal_delivery_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    assert refresh_rc == 0, refresh
+    command = refresh["settlement_owed"]["command"]
+    assert f"--source {expected_source}" in command
+    spend_rc, spend = _run_cli(registry_path, runtime, *shlex.split(command)[1:])
+    assert spend_rc == 0, spend
+    assert spend["turn_instance_id"] == turn_instance_id
+    assert spend["settlement_identity"] == plan["identity"]
+    assert _spend_run_count(runtime) == 1
+
+
 def test_todo_guard_defers_replan_obligation_created_after_admission(
     tmp_path: Path,
 ) -> None:

@@ -147,6 +147,7 @@ def register_quota_command(
             "trae_app",
             "generic_cli",
             "claude_code",
+            "kiro_cli",
             "local_scheduler",
         ],
         help="Host surface that will consume this scheduler projection.",

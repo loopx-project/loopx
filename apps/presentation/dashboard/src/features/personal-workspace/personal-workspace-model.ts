@@ -1,3 +1,4 @@
+import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
@@ -285,6 +286,7 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  goalDraft?: GoalDraft | null;
   activity?: string[];
   collaboration?: CollaborationReadback;
   agentLabel?: string;

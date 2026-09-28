@@ -8,8 +8,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DIRECT_LOADER_ALLOWLIST = {
     "loopx/authority.py",
     "loopx/bootstrap.py",
+    "loopx/capabilities/manager_context/__init__.py",
+    "loopx/capabilities/manager_context/roundtrip.py",
     "loopx/claude_goal_mode/scripts/connect.py",
+    "loopx/cli.py",
+    "loopx/cli_commands/manager_inbox.py",
     "loopx/configure_goal.py",
+    "loopx/control_plane/collaboration/goal_instance_scope.py",
+    "loopx/control_plane/collaboration/peers.py",
     "loopx/control_plane/goals/first_party_host_admission.py",
     "loopx/control_plane/projects/registry.py",
     "loopx/kunluncode_goal_mode/cli.py",
@@ -33,6 +39,12 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
 
     assert callers == DIRECT_LOADER_ALLOWLIST
     source_session_owners = {
+        "loopx/capabilities/manager_context/__init__.py",
+        "loopx/capabilities/manager_context/roundtrip.py",
+        "loopx/cli.py",
+        "loopx/cli_commands/manager_inbox.py",
+        "loopx/control_plane/collaboration/goal_instance_scope.py",
+        "loopx/control_plane/collaboration/peers.py",
         "loopx/control_plane/goals/first_party_host_admission.py",
         "loopx/control_plane/projects/registry.py",
     }

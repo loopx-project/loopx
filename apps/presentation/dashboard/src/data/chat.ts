@@ -1,3 +1,4 @@
+import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { z } from "zod";
 
 import {
@@ -225,6 +226,7 @@ export type ProtectedActionProposal = z.infer<typeof protectedActionProposalSche
 export const agentResponseSchema = z.object({
   schema_version: z.literal("loopx_chat_agent_response_v0"),
   message: z.string(),
+  goal_draft: z.unknown().optional().transform(normalizeGoalDraft),
   proposals: z.array(agentProposalSchema),
   protected_action: protectedActionProposalSchema.nullable().optional().default(null),
   gate: z
@@ -694,6 +696,7 @@ export type ManagerRuntimeSessionReadback = {
 };
 
 export type ChatVisibleMessage = {
+  goal_draft?: ReturnType<typeof normalizeGoalDraft>;
   /** Client-side lineage added when messages from several Sessions are merged. */
   session_id?: string;
   collaboration?: CollaborationReadback;

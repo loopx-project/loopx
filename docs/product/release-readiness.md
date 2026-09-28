@@ -160,6 +160,14 @@ Before moving `stable`, maintainers should:
   [release-only native Goal regression](../development/testing-and-quality.md#release-only-native-goal-regression--仅发布前的原生-goal-回归)
   in a supported Codex environment; record an unavailable environment as
   `skipped`, not a live pass. Never enable paid model execution in default PR CI;
+- for conversational intake/routing changes, run the
+  [public intake evaluation](use-cases/steward/golden-queries.md#gq01-conversational-preparation-variant)
+  on the release candidate for the default and newly advertised model profiles,
+  with at least two repeats. Record the exact commit, model/settings, prompt/case
+  hashes, usage, failures and skips. Paid calls belong to release qualification,
+  never routine PR work, per-commit checks or heartbeats; ordinary development
+  uses offline regressions and affected browser scenarios. A skipped profile is
+  not qualified, and provider failures must remain visible;
 - fast-forward `stable` to that tagged commit after the release canary passes;
 - confirm `release.json`, `loopx doctor`, and `loopx update check` report the
   same package version and tag;

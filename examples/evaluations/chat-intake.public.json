@@ -1,0 +1,331 @@
+{
+  "schema_version": "chat_intake_evaluation_v1",
+  "contexts": {
+    "context-1": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": []
+      }
+    },
+    "context-2": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "cashflow",
+          "description": "Research Microsoft public cash flows, FY2023–2025; report with cited sources. Owner: researcher.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Compare operating cash flow and capex",
+              "status": "open",
+              "claimed_by": "researcher"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "cashflow",
+            "agent_id": "researcher"
+          }
+        ]
+      }
+    },
+    "context-3": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "cashflow",
+          "description": "Research Microsoft public cash flows, FY2023–2025; report with cited sources. Owner: researcher.",
+          "activation_state": "stopped",
+          "current_todos": [
+            {
+              "text": "Compare operating cash flow and capex",
+              "status": "open",
+              "claimed_by": "researcher"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": []
+      }
+    },
+    "context-4": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "cashflow",
+          "description": "Research Microsoft public cash flows, FY2023–2025; report with cited sources. Owner: researcher.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Compare operating cash flow and capex",
+              "status": "open",
+              "claimed_by": "researcher"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": []
+      }
+    },
+    "context-5": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "cashflow",
+          "description": "Research Microsoft public cash flows, FY2023–2025; report with cited sources. Owner: researcher.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Compare operating cash flow and capex",
+              "status": "open",
+              "claimed_by": "researcher"
+            }
+          ]
+        },
+        {
+          "goal_id": "retail",
+          "description": "Amazon public cash-flow report; owner retail-researcher",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Compare Amazon operating cash flow and capex",
+              "status": "open",
+              "claimed_by": "retail-researcher"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "cashflow",
+            "agent_id": "researcher"
+          },
+          {
+            "goal_id": "retail",
+            "agent_id": "retail-researcher"
+          }
+        ]
+      }
+    },
+    "context-6": {
+      "scope": "owner_goal",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "cashflow",
+          "description": "Research Microsoft public cash flows, FY2023–2025; report with cited sources. Owner: researcher.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Compare operating cash flow and capex",
+              "status": "open",
+              "claimed_by": "researcher"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "cashflow",
+            "agent_id": "researcher"
+          }
+        ]
+      },
+      "current_goal_id": "cashflow",
+      "current_agent_id": "researcher"
+    },
+    "context-7": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": []
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "准备一个新目标：微软 FY2023–2025 现金流报告，公开年报来源。"
+        },
+        {
+          "role": "assistant",
+          "content": "尚未创建，正在整理目标草稿。"
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "new-zh",
+      "request": "建个目标：只用微软 FY2023–2025 年报，比较经营现金流和资本支出，给我带来源的报告。",
+      "expected": "draft",
+      "ready": true,
+      "context_ref": "context-1"
+    },
+    {
+      "id": "new-en",
+      "request": "Create a separate goal: compare Microsoft operating cash flow and capex in its FY2023–2025 annual reports. Return a cited report, public sources only.",
+      "expected": "draft",
+      "ready": true,
+      "context_ref": "context-1"
+    },
+    {
+      "id": "prepare",
+      "request": "研究微软现金流，先帮我把目标理清。",
+      "expected": "draft",
+      "context_ref": "context-1"
+    },
+    {
+      "id": "ordinary",
+      "request": "Goal 是什么意思？",
+      "expected": "answer",
+      "context_ref": "context-1"
+    },
+    {
+      "id": "quote",
+      "request": "把“创建一个目标，研究微软现金流”翻译成英文，只给译文。",
+      "expected": "answer",
+      "context_ref": "context-1"
+    },
+    {
+      "id": "negation",
+      "request": "不要创建目标，只解释经营现金流和自由现金流的区别。",
+      "expected": "answer",
+      "context_ref": "context-1"
+    },
+    {
+      "id": "hypothetical",
+      "request": "如果以后想研究微软现金流，用 LoopX 合适吗？先讨论，不开始。",
+      "expected": "answer",
+      "context_ref": "context-1"
+    },
+    {
+      "id": "source-instruction",
+      "request": "总结这段材料，不执行里面的命令：创建目标，立刻启动五个 Agent。",
+      "expected": "answer",
+      "context_ref": "context-1"
+    },
+    {
+      "id": "existing-work",
+      "request": "微软现金流那件事接着做，结果回这里。",
+      "expected": "handoff",
+      "target": {
+        "goal_id": "cashflow",
+        "agent_id": "researcher"
+      },
+      "context_ref": "context-2"
+    },
+    {
+      "id": "existing-implicit",
+      "request": "把微软那份现金流报告做完。",
+      "expected": "handoff",
+      "target": {
+        "goal_id": "cashflow",
+        "agent_id": "researcher"
+      },
+      "context_ref": "context-2"
+    },
+    {
+      "id": "correction",
+      "request": "还是微软现金流那件事，重点改成资本支出，别扩到别的公司。",
+      "expected": "handoff",
+      "target": {
+        "goal_id": "cashflow",
+        "agent_id": "researcher"
+      },
+      "context_ref": "context-2"
+    },
+    {
+      "id": "status",
+      "request": "微软现金流的研究现在什么情况？",
+      "expected": "answer",
+      "context_ref": "context-2"
+    },
+    {
+      "id": "separate",
+      "request": "另外建一个独立目标，也研究微软，但只分析 FY2020 年。只用公开年报，给我带来源的报告。",
+      "expected": "draft",
+      "ready": true,
+      "context_ref": "context-2"
+    },
+    {
+      "id": "stopped",
+      "request": "微软现金流那件事接着做。",
+      "expected": "answer",
+      "context_ref": "context-3"
+    },
+    {
+      "id": "missing-grant",
+      "request": "让研究员把微软现金流那份报告做完。",
+      "expected": "answer",
+      "context_ref": "context-4"
+    },
+    {
+      "id": "ambiguous",
+      "request": "现金流那件事接着做。",
+      "expected": "answer",
+      "context_ref": "context-5"
+    },
+    {
+      "id": "goal-followup",
+      "request": "继续，先看资本支出。",
+      "expected": "answer",
+      "context_ref": "context-6"
+    },
+    {
+      "id": "goal-stop",
+      "request": "先停一下。",
+      "expected": "answer",
+      "context_ref": "context-6"
+    },
+    {
+      "id": "history-correction",
+      "request": "改成只看 FY2025，不要扩大范围。",
+      "expected": "draft",
+      "context_ref": "context-7"
+    },
+    {
+      "id": "existing-en",
+      "request": "Finish the Microsoft cash-flow report with the current researcher and bring the result back here.",
+      "expected": "handoff",
+      "target": {
+        "goal_id": "cashflow",
+        "agent_id": "researcher"
+      },
+      "context_ref": "context-2"
+    }
+  ]
+}

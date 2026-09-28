@@ -178,6 +178,7 @@ def test_codex_ide_plugin_is_an_exact_host_type_with_visible_goal_activation() -
         ("codex-ide-plugin", "codex_cli"),
         ("claude-code", "claude_code"),
         ("kunluncode", "kunluncode"),
+        ("kiro-cli", "kiro_cli"),
         ("opencode", "generic_cli"),
         ("traex-cli", "generic_cli"),
         ("pi", "generic_cli"),
@@ -200,6 +201,9 @@ def test_first_class_hosts_bind_one_runtime_profile(
         ("codex_cli", True),
         ("codex_app_heartbeat", False),
         ("claude_code", False),
+        # Kiro settles as a visible Goal but must not render the Codex native
+        # `/goal` task body or its blocked-state rules.
+        ("kiro_cli", False),
     ),
 )
 def test_native_goal_host_family_is_profile_driven(
