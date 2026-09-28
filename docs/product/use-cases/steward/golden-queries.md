@@ -81,6 +81,55 @@ own Topic are negative cases. This admission probe does not qualify autonomous
 execution: the external read-only profile and recipient grants must be evaluated
 separately. Passing transport fixtures is not evidence of a deployed group run.
 
+### GQ01 conversational preparation variant
+
+“研究微软近三年的现金流，先把目标理清。” / “Help me shape a goal to research
+Microsoft's cash flow over the last three years.” The evaluator accepts a partial
+editable goal draft and at most one consequential question with contextual
+suggestions. Unknown requirements stay unspecified. Selecting a suggestion must
+only fill the composer; a free-text correction must remain usable. After a reply,
+reload and recover the corrected draft, optionally open the existing Goal form and edit its
+criteria, preview and explicitly apply once, then inspect the creation receipt.
+Before confirmation there is no Goal/action write or worker launch. A draft is
+neither a created Goal nor completed research. Ask an ordinary explanatory question
+and confirm no draft appears. Reject an attempted permission/Agent-binding field
+inside a draft. Qualify model response quality separately from scripted transport
+and packaged-browser tests; the full GQ01 start-and-return outcome remains open.
+
+A complete draft must reach creation preview directly without re-entering its
+requirements or answering a second confirmation question. Preview is not apply.
+Check duplicate clicks and reopen/cancel preserve one operation. Existing work
+must instead retain its qualified owner; corrections are delegated context, not
+Todo CRUD approval. Two plausible owners require clarification, never selection
+by list order. A stopped or ungranted owner is not replaced by a new Goal.
+
+Run paid model evaluation only when qualifying a release candidate, not during
+routine PR work, per-commit checks or heartbeats. Ordinary development uses the
+offline scorer/contract tests and affected packaged-browser scenarios. Qualify
+the default and any newly advertised execution profiles separately, with at
+least two repeats; retain failures and report unavailable credentials as skipped,
+not passed. Record the exact candidate commit alongside the result.
+
+For the API profile, run from the repository root (machine operator credential;
+no key in arguments):
+
+```sh
+uv run --extra test python examples/evaluations/chat-intake.py --live \
+  --model deepseek-flash --repeats 2 --output /tmp/chat-intake-results.json
+```
+
+It uses the production prompt/parser, 20 public-safe cases, two concurrent calls
+and at most 8,192 output tokens per request. Nothing is dispatched or written to
+an active Goal. Skipping `--live` refuses paid calls. CI tests the evaluator and
+contracts without credentials; real model results include failures, repeats,
+usage and exact prompt/case hashes. To exercise the actual restricted Codex Chat
+adapter with the same fixture, use `--provider codex --model gpt-6-sol`; it uses
+high reasoning, a fresh disposable working directory per case and the current
+host login. API raw-envelope integrity and Codex adapter outcomes are separate
+measurements, not interchangeable provider scores. Fixed contexts do not certify dynamic tool
+discovery or receiver adoption. Compare providers/settings separately.
+
+
 ### App-first execution profiles and ordinary questions
 
 Qualify the installed App first; Lark is independently scored, not required to

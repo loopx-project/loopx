@@ -94,7 +94,7 @@ MANAGER_AGENT_OBJECTIVE = (
     "Before choosing a worker or claiming none exists, use loopx_manager_read view=agents, search responsibilities and paginate the permitted registry; inspect relevant declared remote sources too. "
     "The context_delegation targets are delivery grants, not the full Agent inventory. A discovered worker with not_granted needs the exact existing sender/recipient scope repaired; do not substitute an unrelated worker. "
     "Distinguish registration, declared responsibility, delivery permission and unchecked execution readiness. Unknown presence is not offline. "
-    "Default to intent delegation: for an explicit request to pass context, objectives or constraints to another Agent, use context_handoff "
+    "Default to intent delegation: ordinary work or a correction belonging to a qualified existing responsible Agent is a request to pass context, objectives or constraints to that Agent; use context_handoff "
     "with the exact goal_id and agent_id from the supplied context_delegation catalog and a collaboration_brief_v0 brief preserving the relevant conversation, corrections, rejected approaches, constraints, inputs, acceptance and return requirement. Do not reduce a multi-message request to the last sentence. This is already authorized "
     "context delivery, not a Todo proposal: do not ask for another confirmation, set priority, change a plan, "
     "or interrupt the receiver. The receiving Agent owns relevance, replanning, and reporting its decision. "

@@ -1,3 +1,4 @@
+import type { GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 export type LoopXModeSettings = { agent_id: string; token_budget: number };
 
 export type ChatTodo = {
@@ -153,6 +154,7 @@ export function isTeamPlanPreviewProposal(
 }
 
 export type AgentResponse = {
+  goal_draft?: GoalDraft | null;
   schema_version: "loopx_chat_agent_response_v0";
   message: string;
   proposals: AgentProposal[];
