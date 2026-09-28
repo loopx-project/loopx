@@ -261,29 +261,48 @@ export async function openLocalAuthorityStore(
 }
 
 /** Administrative opt-in for an empty, unpromoted goal; no implicit migration. */
-export async function selectLocalSqliteAuthority(root: string, goalId: string, execute: boolean) {
+export async function selectLocalAuthorityTarget(root: string, goalId: string, provider: "file" | "sqlite", execute: boolean,
+  purpose: "explicit_selection" | "creation_retry" = "explicit_selection") {
   const p = localAuthorityProviderPaths(root, goalId);
   return withFileMutationLock(shadowMaintenanceLockPath(root, goalId), async () => {
+    // Creation defaults stop owning selection once shadow/canonical state exists.
+    // In particular, a reviewed later migration must not be undone on reconnect.
+    const fence = await loadLegacyCoordinationWriterFence(root, goalId);
+    if (fence.status === "failed") throw new Error(fence.reason);
+    if (purpose === "creation_retry" && fence.status === "loaded") {
+      return {ok: true, changed: false, executed: false, selection_preserved: true};
+    }
     if (existsSync(p.marker)) {
       const selected = await openLocalAuthorityStoreHandle(root, goalId);
-      if (selected.provider !== "sqlite") throw new Error("Provider selection cannot replace an existing authority; use a reviewed migration");
-      return {ok: true, provider: "sqlite", changed: false, executed: execute};
+      if (selected.provider !== provider) throw new Error("Provider selection cannot replace an existing authority; use a reviewed migration");
+      return {ok: true, provider, changed: false, executed: execute};
     }
-    const fence = await loadLegacyCoordinationWriterFence(root, goalId);
     if (fence.status !== "missing") throw new Error("Provider selection requires an unpromoted goal without a writer fence");
     const file = new FileAuthorityStore(p.file, goalId, {existingOnly: true});
-    if ((await file.loadAuthority()).status !== "missing") throw new Error("Provider selection cannot replace existing file authority");
+    const existingFile = await file.loadAuthority();
+    if (purpose === "creation_retry" && existingFile.status === "loaded") {
+      return {ok: true, provider: "file", changed: false, executed: false, selection_preserved: true};
+    }
+    if (existingFile.status !== "missing") throw new Error("Provider selection cannot replace existing file authority");
+    // File has no empty database/document to bind. Absence already routes to
+    // File; the creation intent pins this choice without weakening the rule
+    // that an explicit File selector must point to an existing authority.
+    if (provider === "file") return {ok: true, provider, changed: false, executed: execute};
     const store = new SqliteAuthorityStore(p.sqlite, goalId);
     const existing = await store.loadAuthority();
     if (existing.status === "failed" || existing.status === "unavailable") throw new Error(existing.reason);
-    if (existing.status !== "missing") throw new Error("Unselected SQLite authority is not empty");
-    if (!execute) return {ok: true, provider: "sqlite", changed: false, executed: false};
+    if (existing.status !== "missing") throw new Error("Unselected authority is not empty");
+    if (!execute) return {ok: true, provider, changed: false, executed: false};
     const identity = await store.storeIdentity();
     if (identity.status !== "available") throw new Error(JSON.stringify(identity));
-    await durableWriteJson(p.marker, {schema_version: SCHEMA, provider: "sqlite", goal_id: goalId,
+    await durableWriteJson(p.marker, {schema_version: SCHEMA, provider, goal_id: goalId,
       store_identity: identity.store_identity});
-    return {ok: true, provider: "sqlite", changed: true, executed: true};
+    return {ok: true, provider, changed: true, executed: true};
   });
+}
+
+export async function selectLocalSqliteAuthority(root: string, goalId: string, execute: boolean) {
+  return selectLocalAuthorityTarget(root, goalId, "sqlite", execute);
 }
 
 /** One runtime seam owns provider construction for every local command. */

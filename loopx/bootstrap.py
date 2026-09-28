@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .control_plane.coordination.local_authority_defaults import new_goal_storage_target, initialize_goal_storage_target
 from .registry import find_registry_goal
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from .control_plane.coordination.runtime_shadow_writer_adapter import require_runtime_shadow_capture_prepared, begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture
@@ -371,6 +372,12 @@ def bootstrap_project(
         execution_profile=execution_profile,
         display_name=display_name,
     )
+    previous_goal = find_registry_goal(registry, goal_id)
+    storage_target = ((previous_goal or {}).get("coordination") or {}).get("storage_target")
+    if previous_goal is None and not state_file.exists():
+        storage_target = new_goal_storage_target(runtime_root)
+    if storage_target is not None:
+        goal_entry.setdefault("coordination", {})["storage_target"] = storage_target
     registry, registry_goal_action = merge_goal(registry, goal_entry, force=force)
 
     state_exists = state_file.exists()
@@ -496,6 +503,7 @@ def bootstrap_project(
                 "private_boundary_note": "Add .loopx/ and .codex/goals/ to the project .gitignore if the goal state contains private evidence.",
                 "error": str(global_writability.get("error") or "global registry is not writable"),
             }
+    storage_selection = None
     shadow_capture = None
     shadow_evidence: dict[str, Any] = {}
     if not dry_run:
@@ -509,6 +517,13 @@ def bootstrap_project(
         ):
             current_registry = registry_transaction.payload_copy()
             current_goal = find_registry_goal(current_registry, goal_id)
+            # A concurrent creator or reconnect owns its frozen target, including absence.
+            if current_goal is not None or state_file.exists():
+                frozen = ((current_goal or {}).get("coordination") or {}).get("storage_target")
+                goal_entry.setdefault("coordination", {}).pop("storage_target", None)
+                if frozen is not None:
+                    goal_entry["coordination"]["storage_target"] = frozen
+
             previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
             if previous_root != runtime_root:
                 for previous_goal in current_registry.get("goals", []):
@@ -550,6 +565,10 @@ def bootstrap_project(
             current_registry["common_runtime_root"] = str(runtime_root)
             registry, registry_goal_action = merge_goal(current_registry, goal_entry, force=force)
             registry_transaction.commit(registry)
+        # Registry intent survives an interrupted initialization. Reconnect retries
+        # it outside the legacy/registry locks; changing machine defaults cannot
+        # retarget that Goal. The TS owner refuses replacing an existing provider.
+        storage_selection = initialize_goal_storage_target(runtime_root, find_registry_goal(registry, goal_id) or {})
         if shadow_capture is not None:
             shadow_evidence = settle_todo_runtime_shadow_capture({}, registry_path=registry_path,
                 runtime_root=runtime_root, goal_id=goal_id, capture=shadow_capture, emit_disabled=False)
@@ -564,6 +583,8 @@ def bootstrap_project(
 
     return {
         **shadow_evidence,
+        "storage_selection": storage_selection,
+        "storage_target": (find_registry_goal(registry, goal_id) or {}).get("coordination", {}).get("storage_target"),
         "ok": True,
         "dry_run": dry_run,
         "project": str(project),

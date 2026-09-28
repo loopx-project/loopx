@@ -333,6 +333,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
     assert response["status"] == "absent"
     assert response["available_namespaces"] == [
         "change_quality_qualification",
+        "goal_storage",
         "manager_runtime",
         "periodic_report",
         "pull_request_review",
@@ -431,8 +432,8 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
         explore_harness_profiles=(),
     )
     # Machine-only capabilities are the ones a Goal cannot override: the
-    # manager's runtime profile and the steward channel's executor.
-    assert set(machine) - {"manager_runtime", "steward_executor"} == {
+    # manager profile, steward executor and creation-time storage target.
+    assert set(machine) - {"manager_runtime", "steward_executor", "goal_storage"} == {
         feature["feature_id"] for feature in goal["features"]
     }
     assert machine["pull_request_review"]["available_scopes"] == ["machine", "goal"]
@@ -448,7 +449,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     for capability_id, item in machine.items():
         assert "current" not in item
         assert "commands" not in item
-        if capability_id in {"manager_runtime", "steward_executor"}:
+        if capability_id in {"manager_runtime", "steward_executor", "goal_storage"}:
             assert item["available_scopes"] == ["machine"]
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]

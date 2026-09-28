@@ -1,3 +1,4 @@
+import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
@@ -578,6 +579,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow)],
     ["coordination.local_authority.promote", promoteLocalCoordinationAuthority],
     ["coordination.authority_archive.manage", manageLocalAuthorityArchive],
+    ["coordination.local_authority.new_goal_storage", manageNewGoalStorage],
     ["coordination.local_authority.promotion_review", withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion)],
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],
     ["coordination.local_authority.todo_continuation", continueLocalTodo],

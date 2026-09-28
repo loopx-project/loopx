@@ -83,6 +83,12 @@ def capability_configuration_editor(
     # effort the owning namespace would reject.
     steward_endpoints, steward_efforts = _steward_executor_editor_options()
     definitions: dict[str, dict[str, Any]] = {
+        "goal_storage": {
+            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
+            "fields": [_field("new_goal_provider", "New Goal storage target (after promotion)", "select",
+                              options=["file", "sqlite"], required=True,
+                              description="Fixed at creation. Existing Goals need a separate backed-up migration; this setting does not promote them.")],
+        },
         "todo_replan_cadence": {
             "supported_scopes": ["machine", "goal"],
             "writable_scopes": ["machine", "goal"],
