@@ -209,16 +209,24 @@ An isolated public CLI counterexample found that the Todo list reads canonical
 state while contract health still parses Markdown Todos. Adding only a stale
 User Todo without task_class to the display copy makes a healthy File or SQLite
 Goal fail status with exit code 1. The repair routes promoted contract checks
-through the existing TS canonical snapshot/record validator; Python adapts the
-diagnostic. Missing providers and corrupt read models remain Goal-scoped errors,
+through the existing TS canonical snapshot/record validator and shared User Todo
+class/scope rules; Python transports bounded semantic fields and adapts the
+diagnostic. Structural validity alone does not make an open User Todo healthy.
+Missing providers and corrupt read models remain Goal-scoped errors,
 with no Markdown fallback. Unpromoted Goals retain legacy checks; narrative,
 registry, history and public-boundary checks remain. This does not introduce or
-replace Todo authoring validation, nor reauthorize every historical operation.
+replace Todo authoring validation, nor reauthorize completed/deferred history.
+Real File/SQLite controls cover both persisted record shapes, absent display,
+invalid active class/scope, valid implied historical bindings and completed
+records without a class. Narrative text stays outside the diagnostic RPC; large
+collections are transported in bounded batches without changing message limits.
 
 A paired isolated contract-only measurement uses the 1,109-Todo current
 projection from retained history and an approximately 7 MB display file. Three
-warm samples fall from 0.52–0.58 seconds to 0.11–0.12 seconds for File and
-0.14–0.16 seconds for SQLite. The experiment reinitializes the current projection;
+warm samples for the initial structural-only repair fell from 0.52–0.58 seconds
+to 0.11–0.12 seconds for File and 0.14–0.16 seconds for SQLite. These timings
+precede the active User Todo semantic correction and do not qualify its cost.
+The experiment reinitializes the current projection;
 it is not full history replay, whole-status latency or cross-platform capacity
 qualification. Private inputs remain outside Git.
 

@@ -163,14 +163,18 @@ consumer／新建入口及受支持升级验收。
 后续公共 CLI 的隔离反例表明：Todo 列表已读 canonical provider，但合同健康检查
 仍解析旧 Markdown Todo。仅在展示副本增加一条缺少 task_class 的旧 User Todo，
 File 和 SQLite 的正常 Goal 均被判为不健康，status 退出码变成 1。
-修复让晋升后的合同检查复用既有 TS canonical 快照／记录校验；Python 只适配诊断。
+修复让晋升后的合同检查复用既有 TS canonical 快照／记录校验和 User Todo class／scope
+规则；Python 只分批传输必要语义字段并适配诊断。结构有效不等于未完成 User Todo 健康。
 provider 缺失或读模型损坏仍报 Goal 范围的错误，不回退 Markdown。未晋升 Goal
 保留旧格式检查；叙述、registry、历史及公共边界检查不因此取消。此处不新增或替代
-Todo 写入时的业务校验，也不声称读模型校验会重审所有历史操作的授权。
+Todo 写入时的业务校验，也不重审完成／deferred 历史的授权。真实 File／SQLite
+对照覆盖两种持久记录格式、缺失展示副本、非法活跃 class／scope、合法历史隐式绑定和
+缺 class 的完成记录。正文不进入诊断 RPC，大集合使用有界分批，不放宽消息上限。
 
 用保留历史所得的 1,109 个 Todo 当前 projection 和约 7 MB 展示文件，在隔离存储中
-配对测量合同检查。三个热样本由 0.52–0.58 秒降为 File 的 0.11–0.12 秒、SQLite
-的 0.14–0.16 秒。此实验重新初始化当前 projection，不是完整历史重放，也不是
+配对测量初版仅检查结构的合同修复。三个热样本由 0.52–0.58 秒降为 File 的
+0.11–0.12 秒、SQLite 的 0.14–0.16 秒；这些数据早于活跃 User Todo 语义修正，
+不用于证明修正版本的成本。此实验重新初始化当前 projection，不是完整历史重放，也不是
 整个 status 延迟或跨平台容量验收。私有输入不入库。
 
 B 下一步仍是历史 artifact 查找和剩余公共包体／冷路径，保留文件变化 freshness、
