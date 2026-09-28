@@ -1029,14 +1029,21 @@ export function PersonalWorkspacePage({
       return;
     }
     let cancelled = false;
-    void Promise.all([fetchGoalContexts(), fetchLarkConnections()])
-      .then(([contexts, connections]) => {
-        if (cancelled) return;
-        setGoalContexts(Object.fromEntries(contexts.map((row) => [row.goal_id, row.repository])));
-        setLarkConnections(connections);
+    // Goal repositories and Lark connections are independent optional sources:
+    // a missing lark-cli must not also hide every Goal's repository context.
+    void fetchGoalContexts()
+      .then((contexts) => {
+        if (!cancelled) setGoalContexts(Object.fromEntries(contexts.map((row) => [row.goal_id, row.repository])));
       })
       .catch(() => {
         // Local context is optional; the Goal workspace stays usable without it.
+      });
+    void fetchLarkConnections()
+      .then((connections) => {
+        if (!cancelled) setLarkConnections(connections);
+      })
+      .catch(() => {
+        // Lark is optional; Settings reports why it is unavailable.
       });
     return () => { cancelled = true; };
   }, [readOnly]);
