@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,17 @@ from .sources import DecisionSourceProvider, DecisionSourceSpec
 
 _READ_SUCCESS_STATUSES = frozenset({"completed", "no_change"})
 _READ_FAILURE_STATUSES = frozenset({"provider_failed", "failed", "unavailable"})
+
+
+class CapturePressure(str, Enum):
+    GLOBAL = "backpressure"
+    SOURCE = "source_backpressure"
+
+
+def _source_capacity(total: int, source_count: int) -> int:
+    # Do not lend idle shares: a quiet source may change after a busy source
+    # has filled its window. An undersized global cap still takes precedence.
+    return max(1, total // max(1, source_count))
 
 
 class CaptureReplayError(ValueError):
@@ -113,6 +125,7 @@ def _status(
     sources: tuple[DecisionSourceSpec, ...],
     *,
     now: datetime,
+    capacity: int,
 ) -> dict[str, Any]:
     has_recovery = (
         db.execute("SELECT 1 FROM sqlite_master WHERE name='capture_holds'").fetchone()
@@ -121,6 +134,7 @@ def _status(
     columns = _source_columns(db)
     rows = []
     freshness_rows = []
+    source_capacity = _source_capacity(capacity, len(sources))
     for spec in sources:
         source_id = spec.source_id
         source = db.execute(
@@ -163,6 +177,9 @@ def _status(
                 "status": source["status"] if source else "never_checked",
                 "pending_batch_count": pending[0],
                 "next_batch_id": pending[1],
+                "pending_capacity": source_capacity,
+                "review_required": bool(pending[0]),
+                "recovery_diagnosis_required": pending[0] >= source_capacity,
                 "held_batch_count": db.execute(
                     "SELECT count(*) FROM held_batches WHERE source_id=?", (source_id,)
                 ).fetchone()[0]
@@ -184,6 +201,15 @@ def _status(
             observed_at=now, rows=freshness_rows
         ),
         "pending_batch_count": db.execute("SELECT count(*) FROM batches").fetchone()[0],
+        "capacity_policy": {
+            "kind": "reserved_source_windows",
+            "max_pending_batches": capacity,
+            "max_pending_batches_per_source": source_capacity,
+            "enrolled_source_count": len(sources),
+            "reservation_capacity_sufficient": capacity >= len(sources),
+            "existing_batches_evicted": False,
+            "full_source_action": "review_oldest_or_explicit_capture_recovery",
+        },
         "held_batch_count": db.execute("SELECT count(*) FROM held_batches").fetchone()[
             0
         ]
@@ -269,7 +295,9 @@ def capture_profile_sources(
             return {
                 "activation": activation,
                 "executed": False,
-                **_status(db, sources, now=now),
+                **_status(
+                    db, sources, now=now, capacity=profile.capture_max_pending_batches
+                ),
             }
 
     def record_health(tick_status: str, freshness: Mapping[str, Any] | None) -> None:
@@ -330,6 +358,9 @@ def _execute_capture_tick(
     db = _open_spool(spool_path, goal_id=goal_id, agent_id=agent_id)
     try:
         reviewed = load_private_decision_cursors(cursor_path, profile=profile)
+        source_capacity = _source_capacity(
+            profile.capture_max_pending_batches, len(sources)
+        )
         for source in sources:
             if (
                 db.execute(
@@ -377,17 +408,26 @@ def _execute_capture_tick(
             if (
                 row
                 and row["checked_at"]
-                and row["status"] != "backpressure"
+                and row["status"]
+                not in (CapturePressure.GLOBAL, CapturePressure.SOURCE)
                 and (now - datetime.fromisoformat(row["checked_at"])).total_seconds()
                 < profile.capture_interval_seconds
             ):
                 continue
             cursor = row["cursor"] if row else reviewed.get(source.source_id)
-            status = "backpressure"
-            if (
-                db.execute("SELECT count(*) FROM batches").fetchone()[0]
-                < profile.capture_max_pending_batches
-            ):
+            pending_total = db.execute("SELECT count(*) FROM batches").fetchone()[0]
+            pending_source = db.execute(
+                "SELECT count(*) FROM batches WHERE source_id=?", (source.source_id,)
+            ).fetchone()[0]
+            pressure = (
+                CapturePressure.GLOBAL
+                if pending_total >= profile.capture_max_pending_batches
+                else CapturePressure.SOURCE
+                if pending_source >= source_capacity
+                else None
+            )
+            status = pressure.value if pressure else "provider_failed"
+            if pressure is None:
                 try:
                     scan = providers[source.provider_id].scan(
                         source=source,
@@ -460,7 +500,9 @@ def _execute_capture_tick(
         result = {
             "activation": activation,
             "executed": True,
-            **_status(db, sources, now=now),
+            **_status(
+                db, sources, now=now, capacity=profile.capture_max_pending_batches
+            ),
         }
         db.commit()
         return result

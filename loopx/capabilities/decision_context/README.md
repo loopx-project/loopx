@@ -325,7 +325,14 @@ The mode-0600 SQLite spool binds to one goal/agent and records bounded public-sa
 scan receipts plus **private replay cursors**. It contains no source bodies.
 Ticks are serialized; batch insertion and capture cursor advancement commit
 together. Failed scans keep their cursor, and capacity exhaustion reports
-`backpressure` without dropping pending batches. A changed source binding reports
+`backpressure` without dropping pending batches. Each enrolled source now has
+a reserved active window of `max(1, floor(max_pending_batches / source_count))`.
+When that window is full, only that source reports `source_backpressure`; it is
+not scanned and its capture cursor and last successful read stay unchanged.
+Quiet sources keep their shares for later changes; idle shares and the integer
+remainder are not lent to busy sources. This changes the previous global-only
+admission default for multi-source profiles. Single-source behavior is unchanged.
+A changed source binding reports
 `binding_changed`, requiring an explicit rebase or a separately scoped new spool.
 Do not store the spool or its journal in a public repository.
 
@@ -416,9 +423,22 @@ has a separate cap of N; new hold/restart operations stop after 2N audit records
 or repeated capacity increase is performed. At that bound, preserve/export the
 private spool and make an explicit retention decision; increasing the limit is
 not evidence consumption. A hold is explicit, not an automatic fairness policy.
-It can isolate a noisy source, but exhaustion can recur if other sources are
-not reviewed. Backpressured sources now retry on the next tick when capacity is
-available instead of waiting an additional scan interval.
+It can isolate a noisy source; reserved source windows additionally prevent a
+busy source from borrowing other sources' future capacity. Neither mechanism
+replaces semantic review: a full source needs oldest-batch review or explicit
+`capture-diagnose` and guarded recovery when replay is unavailable. Both pressure
+statuses retry on the next tick when capacity is available instead of waiting
+an additional scan interval.
+
+Existing over-share batches are retained, never evicted or silently held. On
+upgrade they can still consume shared capacity until explicit review/recovery.
+If the global capacity is smaller than the number of enrolled sources, isolation
+cannot be guaranteed: status reports `reservation_capacity_sufficient=false`
+and the global cap remains authoritative. `capture-status.capacity_policy`
+reports both bounds and each source reports `pending_capacity`, `review_required`
+and `recovery_diagnosis_required`. These are work hints, not proof that replay
+failed, and do not grant recovery or settlement authority. The global cap
+continues to count pending batches from sources no longer enrolled as well.
 
 `capture-status` separates active `pending_batch_count`, unresolved
 `held_batch_count`, per-source `acquisition_held` and
