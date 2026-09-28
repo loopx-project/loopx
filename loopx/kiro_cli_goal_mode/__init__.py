@@ -72,6 +72,16 @@ KIRO_CLI_GOAL_COMPLETION_TOOL = "goal"
 # thread binding can key on instead of prose.
 KIRO_CLI_SESSION_ID_ENV = "KIRO_SESSION_ID"
 
+# Global MCP config the default agent loads (`kiro-cli mcp list` reports its
+# servers under the default agent), relative to the resolved Kiro home. The
+# LoopX stdio server registered there inherits the session's KIRO_SESSION_ID.
+KIRO_CLI_MCP_CONFIG_SUBPATH = Path("settings") / "mcp.json"
+
+
+def mcp_server_script() -> Path:
+    """The Kiro CLI stdio MCP entrypoint registered by the kiro-cli surface."""
+    return Path(__file__).resolve().with_name("mcp_server.py")
+
 # The host ships a real hook seam, and `preToolUse` can block a tool call by
 # exiting 2. LoopX installs no hook today, so quota pacing stays advisory; the
 # seam is recorded here so the honest claim and the future binding point stay
@@ -173,6 +183,10 @@ def kiro_cli_activation_extras() -> dict[str, Any]:
             ),
             "native_goal_completion_tool": KIRO_CLI_GOAL_COMPLETION_TOOL,
             "host_session_id_env": KIRO_CLI_SESSION_ID_ENV,
+            # The typed control plane the same session reaches without
+            # shelling out; its identity is the session's thread binding.
+            "host_mcp_server": "loopx",
+            "host_mcp_config": f"KIRO_HOME/{KIRO_CLI_MCP_CONFIG_SUBPATH.as_posix()}",
             "host_hook_triggers": list(KIRO_CLI_HOOK_TRIGGERS),
             "missing_host_tool_gate": (
                 "Kiro CLI's /goal loop runs only while the CLI session is "
@@ -196,6 +210,11 @@ def kiro_cli_activation_extras() -> dict[str, Any]:
             "quota slots, not from ambition "
             f"(host default is {KIRO_CLI_GOAL_DEFAULT_MAX_ITERATIONS}); "
             f"`{KIRO_CLI_GOAL_CLEAR_COMMAND}` cancels it.",
+            "When the `loopx` MCP tools are loaded (`/mcp`), use "
+            "`should_run`, `claim_task` and `complete_task` instead of "
+            "hand-typed CLI: they act only for the agent this session's "
+            f"`{KIRO_CLI_SESSION_ID_ENV}` is bound to and settle through the "
+            "shared typed completion path.",
             "Steer a running goal in place instead of expecting a status "
             "readback: the host exposes cancellation and mid-loop steering, "
             "not a goal status subcommand.",
