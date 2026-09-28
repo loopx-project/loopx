@@ -6,7 +6,7 @@
 - **Authors / owners:** LoopX capability, security, and provider maintainers
 - **Created:** 2026-09-28
 - **Last normative revision:** 2026-09-28
-- **Implementation baseline:** `6643f3670e76498b9600638523844876fbfe9b3a`
+- **Implementation baseline:** `6643f367064b9921c864db75a042979fddc4b8c3`
 - **Related contracts:** [overall roadmap](loopx-overall-roadmap-v0.md),
   [effect interpreter](agent-loop-effect-interpreter-v0.md),
   [shared authority](shared-goal-authority-state-provider-v0.md),

@@ -6,7 +6,7 @@
 - **作者 / 负责人：** LoopX capability、安全与 provider 维护者
 - **创建日期：** 2026-09-28
 - **最近规范修订：** 2026-09-28
-- **实现基线：** `6643f3670e76498b9600638523844876fbfe9b3a`
+- **实现基线：** `6643f367064b9921c864db75a042979fddc4b8c3`
 - **相关契约：** [总体路线图](loopx-overall-roadmap-v0.zh-CN.md)、
   [效果解释器](agent-loop-effect-interpreter-v0.zh-CN.md)、
   [共享权威](shared-goal-authority-state-provider-v0.zh-CN.md)、
