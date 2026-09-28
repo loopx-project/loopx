@@ -219,6 +219,17 @@ export const chatRecoveryScenario = {
       await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.locator(".personal-run-row").first().click();
       await page.getByRole("tab", { name: "详情与操作" }).click();
+      // The fixture rejects Session deletion. The failed run action must stay
+      // visible in the drawer and keep the Session usable for the next action.
+      const unhandledRejections = [];
+      const recordRejection = (error) => unhandledRejections.push(error.message);
+      page.on("pageerror", recordRejection);
+      await page.locator(".personal-run-more > summary").click();
+      await page.getByRole("button", { name: "关闭 Session", exact: true }).click();
+      await page.getByRole("alert").filter({ hasText: "关闭 Session失败" }).waitFor({ state: "visible" });
+      page.off("pageerror", recordRejection);
+      if (unhandledRejections.length) throw new Error(`Failed run action escaped as an unhandled rejection: ${unhandledRejections.join(" | ")}`);
+      pass("run-action-feedback", "A rejected Session action is reported in the drawer instead of failing silently");
       await page.getByLabel("输入纠偏信息").fill("保持运行，用于验证刷新恢复。 ");
       await page.getByRole("button", { name: "发送纠偏" }).click();
       let recoveryTurn;
