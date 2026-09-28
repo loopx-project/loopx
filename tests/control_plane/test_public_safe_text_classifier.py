@@ -150,6 +150,22 @@ def test_matches_private_text_policy_mirrors_classify(
     assert (classify_private_text(value, categories=policy) is not None) is expected
 
 
+def test_a_policy_narrows_the_text_owner_patterns_not_only_the_shapes() -> None:
+    # The category filter has to gate the text-owner patterns as well as the
+    # relocated shape detectors. Each value below is matched only by a text
+    # pattern, so a policy that drops that pattern's category must accept it --
+    # and an empty policy must recognize nothing at all.
+    bearer = "the Bearer token expired"
+    ext_data = "/ext_data/run/x"
+    assert classify_private_text(bearer).category == CATEGORY_CREDENTIAL
+    assert classify_private_text(ext_data).category == CATEGORY_ORG_MARKER
+    assert classify_private_text(bearer, categories=frozenset({CATEGORY_LOCAL_PATH})) is None
+    assert classify_private_text(ext_data, categories=frozenset({CATEGORY_CREDENTIAL})) is None
+    assert classify_private_text(bearer, categories=frozenset()) is None
+    assert classify_private_text(ext_data, categories=frozenset()) is None
+    assert classify_private_text(_GITHUB_TOKEN, categories=frozenset()) is None
+
+
 @pytest.mark.parametrize("value", ["~/work/model.bin", "path:/srv/data/train.json"])
 def test_path_gap_recognition_is_opt_in(value: str) -> None:
     # Direction 3 adds recognition of the local-path shapes the legacy surface
