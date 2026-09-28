@@ -675,6 +675,20 @@ def _selection_recovery_command(
     )
 
 
+def _render_replan_successor_closeout_guard(
+    *, settlement_plan: Mapping[str, Any] | None,
+    scheduler_args: str, typed_quota_guard: str, settlement_args: str,
+) -> str | None:
+    """Render this host's guard for an existing TS-owned pure replan identity."""
+    if not scheduler_args or not settlement_plan:
+        return None
+    identity = settlement_plan.get("identity")
+    if not isinstance(identity, Mapping) or identity.get("binding_kind") != "autonomous_replan":
+        # Todo-bound replans retain their distinct closeout path.
+        return None
+    return typed_quota_guard + settlement_args
+
+
 def interaction_next_cli_actions(
     payload: dict[str, Any],
     *,
@@ -958,6 +972,10 @@ def interaction_next_cli_actions(
             command_prefix=command_prefix,
             lifecycle_actor_args=lifecycle_actor_args,
             runtime_root=runtime_root,
+            successor_closeout_guard=_render_replan_successor_closeout_guard(
+                settlement_plan=settlement_plan, scheduler_args=scheduler_args,
+                typed_quota_guard=typed_quota_guard, settlement_args=settlement_args,
+            ),
         )
     return _terminal_cli_actions(
         mode=mode,

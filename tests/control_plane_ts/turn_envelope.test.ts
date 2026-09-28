@@ -73,6 +73,45 @@ const protocolActionFields = {
   agent_action: "advance one bounded segment",
 };
 
+test("settlement-only replans preserve owed commands and do not demand another outcome", () => {
+  const prefix = "loopx --runtime-root /" + "long-path/".repeat(50);
+  for (const commands of [
+    [prefix + " refresh-state --goal-id goal-turn-envelope --turn-instance-id turn-original",
+      prefix + " quota spend-slot --goal-id goal-turn-envelope --turn-instance-id turn-original --execute"],
+    [prefix + " quota spend-slot --goal-id goal-turn-envelope --turn-instance-id turn-original --execute"],
+  ]) {
+    const source = payload();
+    const interaction = source.interaction_contract as JsonObject;
+    (interaction.cli_channel as JsonObject).next_cli_actions = commands;
+    (interaction.agent_channel as JsonObject).primary_action = "Finish only the original Turn settlement; do not execute its successor.";
+    source.replan_action_packet = {schema_version: "replan_action_packet_v0",
+      obligation_id: "replan-1111111111111111", settlement_only: true,
+      successor_todo_id: "todo_independent_successor", decision: "settlement_pending",
+      writeback_contract: {rule: "Finish only the original Turn settlement; do not execute its successor."}};
+    const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+    assert.deepEqual((envelope.writeback as JsonObject).next_cli_actions, commands);
+    assert.equal((envelope.replan_action_packet as JsonObject).settlement_only, true);
+    assert.match(String((envelope.action as JsonObject).recommended_action), /original Turn settlement/);
+    assert.equal((envelope.action as JsonObject).primary_action, (interaction.agent_channel as JsonObject).primary_action);
+    assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+  }
+});
+
+test("a projected successor preserves its original closeout guard in the compact envelope", () => {
+  const source = payload();
+  const successor = "loopx todo add --goal-id goal-turn-envelope --replan-obligation-id replan-1111111111111111";
+  const guard = "loopx --runtime-root /" + "long-path/".repeat(50) +
+    " quota should-run --codex-app --goal-id goal-turn-envelope --turn-instance-id turn-original";
+  const interaction = source.interaction_contract as JsonObject;
+  (interaction.cli_channel as JsonObject).next_cli_actions = ["execute replan_action_packet.writeback_contract.successor_command", guard,
+    "finish only the original Turn before ending; do not execute its successor"];
+  source.replan_action_packet = {schema_version: "replan_action_packet_v0",
+    obligation_id: "replan-1111111111111111", writeback_contract: {successor_command: successor}};
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  assert.deepEqual((envelope.writeback as JsonObject).next_cli_actions, [successor, guard]);
+  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields), turnEnvelopeActionSignatureDocument(envelope));
+});
+
 test("large peer inventories retain scoped gates and signed detail without hiding tasks", () => {
   const source = payload();
   const items = Array.from({ length: 50 }, (_, i) => ({ todo_id: `todo_${i}`,

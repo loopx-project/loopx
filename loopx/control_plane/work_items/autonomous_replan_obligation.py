@@ -120,6 +120,7 @@ def build_autonomous_replan_cli_actions(
     command_prefix: str = "loopx",
     lifecycle_actor_args: str = "",
     runtime_root: str | None = None,
+    successor_closeout_guard: str | None = None,
 ) -> list[str]:
     lifecycle_reentry = project_todo_lifecycle_settlement_reentry(
         payload,
@@ -144,6 +145,13 @@ def build_autonomous_replan_cli_actions(
         writeback_contract.get("successor_command") or ""
     ).strip()
     if successor_command:
+        if settlement_chain_ready and successor_closeout_guard:
+            return [
+                "execute replan_action_packet.writeback_contract.successor_command",
+                successor_closeout_guard,
+                "finish only the original Turn's returned settlement actions before ending the heartbeat; "
+                "do not execute or select its successor",
+            ]
         return [
             "execute replan_action_packet.writeback_contract.successor_command",
             "on host_action=end_current_heartbeat: stop",
@@ -152,7 +160,12 @@ def build_autonomous_replan_cli_actions(
     obligation: Mapping[str, Any] = (
         raw_obligation if isinstance(raw_obligation, Mapping) else payload
     )
-    semantic_delta_args = replan_writeback_requirements(obligation)["cli_semantic_args"]
+    if writeback_contract.get("preferred_input") == "verified_replan_writeback":
+        return [quota_spend_action] if settlement_chain_ready else []
+    semantic_delta_args = (
+        writeback_contract.get("cli_semantic_args")
+        or replan_writeback_requirements(obligation)["cli_semantic_args"]
+    )
     delivery_args = (
         "--delivery-batch-scale single_surface "
         "--delivery-outcome outcome_progress "

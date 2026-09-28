@@ -268,6 +268,7 @@ def build_quota_should_run(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None = None,
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
+    receipt_bound_replan_guard_scoped: bool = False,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -338,6 +339,7 @@ def build_quota_should_run(
             receipt_bound_monitor_phase=receipt_bound_monitor_phase,
             receipt_bound_replay_phase=receipt_bound_replay_phase,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+            receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
         )
         route = _resolve_quota_should_run_route(prepared)
         route = _apply_selected_todo_guards(prepared, route)
