@@ -466,6 +466,8 @@
 .personal-subagent-feedback.is-success { color: var(--pw-green) !important; }
 .personal-subagent-feedback.is-warning { color: #8a6b00 !important; }
 .personal-subagent-feedback.is-error { color: var(--pw-red) !important; }
+.personal-run-action-feedback { display: flex; align-items: flex-start; gap: 7px; margin: 10px 0 0; color: var(--pw-muted); font-size: 12px; overflow-wrap: anywhere; }
+.personal-run-action-feedback.is-error { color: var(--pw-red); }
 .personal-subagent-read-only { margin-bottom: 0; }
 
 .personal-settings-page { --pw-bg: #fbfaf7; --pw-card: #ffffff; --pw-line: #eceae3; --pw-line-strong: #e0ddd4; --pw-muted: #82889a; --pw-faint: #aab0bf; --pw-text: #23262e; --pw-blue: #2f66e9; --pw-blue-ink: #2456c8; --pw-blue-soft: #ebf1fe; --pw-red: #c2402f; --pw-red-bg: #fcecea; --pw-green: #2e7d5b; --pw-green-bg: #e6f3ec; display: grid; grid-template-columns: 268px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100dvh; min-height: 0; overflow: hidden; background: var(--pw-bg); color: var(--pw-text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
