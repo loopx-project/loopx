@@ -19,6 +19,21 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _render_settlement_plan(plan: object) -> list[str]:
+    """Project the TS-owned recovery plan without adding admission decisions."""
+    if not isinstance(plan, dict) or plan.get("schema_version") != "quota_settlement_plan_v1":
+        return []
+    lines = ["", "## Same-Turn settlement plan", ""]
+    for step in plan.get("ordered_steps", []):
+        if not isinstance(step, dict):
+            continue
+        condition = step.get("command_condition") or ("conditional" if step.get("conditional") else "")
+        lines.append(f"- {step.get('kind')}: {step.get('precondition')}")
+        if step.get("command_template"):
+            lines.append(f"  - command{f' ({condition})' if condition else ''}: `{step['command_template']}`")
+    return lines
+
+
 def render_todo_markdown(payload: dict[str, Any]) -> str:
     if payload.get("command") == "project-markdown":
         return "\n".join(
@@ -234,16 +249,7 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
         lines.extend(_render_lease_recovery(payload))
-        plan = payload.get("settlement_plan")
-        if isinstance(plan, dict) and plan.get("schema_version") == "quota_settlement_plan_v1":
-            lines.extend(["", "## Same-Turn settlement plan", ""])
-            for step in plan.get("ordered_steps", []):
-                if not isinstance(step, dict):
-                    continue
-                condition = step.get("command_condition") or ("conditional" if step.get("conditional") else "")
-                lines.append(f"- {step.get('kind')}: {step.get('precondition')}")
-                if step.get("command_template"):
-                    lines.append(f"  - command{f' ({condition})' if condition else ''}: `{step['command_template']}`")
+        lines.extend(_render_settlement_plan(payload.get("settlement_plan")))
         if payload.get("operator_action"):
             action = payload["operator_action"]
             lines.append(f"- error_code: `{payload.get('error_code')}`")
