@@ -2,7 +2,9 @@
 
 - Status: Accepted
 - Supersedes / closes: none
-- Scope baseline: 2026-09-16, `0aa6179de`; steward reproduction baseline is preserved separately in Section 8.
+- Scope baseline: architecture audit at 2026-09-16, `0aa6179de`; RFC inventory
+  updated through 2026-09-28, `6643f3670`; steward reproduction baseline is
+  preserved separately in Section 8.
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
@@ -279,7 +281,12 @@ is not evidence that long-history status and quota admission meet G4 SLOs.
 
 ## 4. Every RFC: Ownership and Next Step
 
-This maps **all 30 primary RFCs** at the scope baseline, counting language mirrors once; this roadmap is the new 31st entry. Accepted, partial, research and Held directions remain visible without making every row active work. Status is based on RFC/reference inspection and selected source checks; full runtime qualification of every subsystem was not performed. Section 8 records the focused audit.
+This maps the primary RFC inventory through the date in the header, counting
+language mirrors once. The architecture status still uses the separately named
+audit baseline. Accepted, partial, research and Held directions remain visible
+without making every row active work. Status is based on RFC/reference
+inspection and selected source checks; full runtime qualification of every
+subsystem was not performed. Section 8 records the focused audit.
 
 | RFC | Stream | Current boundary | Next slice / acceptance |
 | --- | --- | --- | --- |
@@ -307,6 +314,7 @@ This maps **all 30 primary RFCs** at the scope baseline, counting language mirro
 | [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md) | S5 | Accepted; action/attention verticals and local delivery-chain/acceptance review implemented | P1: cross-channel disclosure and governed amendment/settlement review; local visibility does not qualify G2 |
 | [Human Attention Wishlist v0](human-attention-wishlist-v0.md) | S5/S11 | Accepted; Held | P3: reopen only on repeated second real need; sidecar cannot alter gates/quota/scheduling |
 | [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | S8/S9 | Accepted; proposal only | P2: simulated immutable confirmation→effect→reconciliation→return; finance provider separate, no broader coordination grant |
+| [Provider-side authorization at effect acceptance (v0)](provider-effect-acceptance-v0.md) | S8/S9, supporting S2/S4 | Accepted design only; no runtime integration or qualified provider | M1: controlled provider and deterministic revoke/crash/replay conformance; strict production wiring remains gated by exact Goal lifetime, receipt retention and independent provider qualification |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | S11/S3 | Accepted; partial M2 composition/successor | P1: independently verify observation/write-time gate/closure basis; defer inferred triggers and model selection |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | S11/S7 | Accepted; M1 read-only observation | P2: matched shadow stride experiment with costs/events; no direct production cadence change |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.md) | S1/S3/S6/S8/S11 | Accepted; read-only settings/context inspection slice | P1: correction→fresh-session decision across existing owners, then demand-driven composition and measured method evolution; no universal memory database or second opt-in |
