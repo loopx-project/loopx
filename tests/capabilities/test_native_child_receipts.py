@@ -10,6 +10,7 @@ import pytest
 from loopx.capabilities.multi_subagent.native_child_receipts import (
     latest_native_child_activity,
     load_native_child_activity,
+    native_child_activity,
     record_native_child,
 )
 from loopx.rollout_event_log import (
@@ -30,9 +31,9 @@ def _admit(runtime_root: Path) -> None:
         rollout_event_log_path(runtime_root, GOAL),
         build_rollout_event(
             goal_id=GOAL, event_kind="quota_should_run", agent_id=AGENT,
-            run_id=TURN, todo_id="todo-1", status="normal_run",
-            details={"todo_id": "todo-1",
-                     "settlement_effect_id": f"{GOAL}:{AGENT}:todo-1:{TURN}"},
+            run_id=TURN, todo_id="todo_native_1", status="normal_run",
+            details={"todo_id": "todo_native_1",
+                     "settlement_effect_id": f"{GOAL}:{AGENT}:todo_native_1:{TURN}"},
         ),
     )
 
@@ -258,3 +259,105 @@ def test_goal_status_only_attaches_reported_activity_to_enabled_goal(
         contract={}, history={}, global_registry={}, runtime_root=tmp_path,
     )
     assert "native_child_activity" not in disabled["items"][0]["project_asset"]
+
+
+def test_report_phase_is_checked_once_under_the_append_lock(tmp_path: Path, monkeypatch):
+    import loopx.capabilities.multi_subagent.native_child_receipts as native
+
+    _admit(tmp_path)
+    readback, append_once = native.read_heartbeat_settlement, native.append_rollout_event_once
+    calls = []
+
+    def read_once(*args, **kwargs):
+        calls.append(kwargs["turn_instance_id"])
+        return readback(*args, **kwargs)
+
+    monkeypatch.setattr(native, "read_heartbeat_settlement", read_once)
+    first = _record(tmp_path, "op-1", stage="decision", operation="spawn",
+                    outcome="started", entrypoint_id="generic_host")
+    assert calls == [TURN]
+    replay = _record(tmp_path, "op-1", stage="decision", operation="spawn",
+                     outcome="started", entrypoint_id="generic_host")
+    assert replay["receipt"]["event_id"] == first["receipt"]["event_id"]
+    assert calls == [TURN, TURN]
+
+    def close_before_append(*args, **kwargs):
+        append_rollout_event(rollout_event_log_path(tmp_path, GOAL), build_rollout_event(
+            goal_id=GOAL, event_kind="todo_complete", agent_id=AGENT, run_id=TURN,
+            todo_id="todo_native_1", status="done",
+            details={"settlement_effect_id": f"{GOAL}:{AGENT}:todo_native_1:{TURN}"},
+        ))
+        return append_once(*args, **kwargs)
+
+    monkeypatch.setattr(native, "append_rollout_event_once", close_before_append)
+    with pytest.raises(ValueError, match="open, work-admitted"):
+        _record(tmp_path, "op-new", stage="decision", operation="spawn",
+                outcome="started", entrypoint_id="generic_host")
+    assert calls == [TURN, TURN, TURN]
+    assert load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=6)["operation_count"] == 1
+
+
+def test_negative_guard_facts_and_binding_conflicts_do_not_reauthorize_reports(tmp_path: Path):
+    _admit(tmp_path)
+    _record(tmp_path, "op-1", stage="decision", operation="spawn",
+            outcome="started", entrypoint_id="generic_host")
+    log = rollout_event_log_path(tmp_path, GOAL)
+    append_rollout_event(log, build_rollout_event(
+        goal_id=GOAL, event_kind="quota_should_run", agent_id=AGENT, run_id=TURN,
+        status="normal_run", details={"todo_id": "todo_native_1",
+            "settlement_effect_id": f"{GOAL}:{AGENT}:todo_native_1:{TURN}",
+            "must_attempt_work": True, "delivery_allowed": False},
+    ))
+    with pytest.raises(ValueError, match="open, work-admitted"):
+        _record(tmp_path, "op-new", stage="decision", operation="spawn",
+                outcome="started", entrypoint_id="generic_host")
+    # A duplicate is a fact read, not permission to start the operation again.
+    assert _record(tmp_path, "op-1", stage="decision", operation="spawn",
+        outcome="started", entrypoint_id="generic_host")["appended"] is False
+    append_rollout_event(log, build_rollout_event(
+        goal_id=GOAL, event_kind="quota_should_run", agent_id=AGENT, run_id=TURN,
+        status="normal_run", details={"todo_id": "todo_other_binding",
+            "settlement_effect_id": f"{GOAL}:{AGENT}:todo_other_binding:{TURN}"},
+    ))
+    with pytest.raises(ValueError, match="settlement-bound"):
+        _record(tmp_path, "op-1", stage="decision", operation="spawn",
+                outcome="started", entrypoint_id="generic_host")
+    assert sum(row["event_kind"] == "native_child_decision" for row in load_rollout_events(log)) == 1
+
+
+def test_foreign_goal_facts_cannot_supply_a_native_stage_prerequisite(tmp_path: Path):
+    _admit(tmp_path)
+    foreign = build_rollout_event(goal_id="other-goal", event_kind="native_child_decision",
+        agent_id=AGENT, run_id=TURN, case_id="foreign-op", status="started",
+        details={"operation": "spawn", "outcome": "started", "entrypoint_id": "generic_host"})
+    append_rollout_event(rollout_event_log_path(tmp_path, GOAL), foreign)
+    with pytest.raises(ValueError, match="started"):
+        _record(tmp_path, "foreign-op", stage="result", outcome="completed")
+    assert native_child_activity([foreign], goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=6)["operation_count"] == 0
+
+
+def test_cli_runtime_failure_is_visible_and_never_writes_a_report(tmp_path: Path, monkeypatch, capsys):
+    import loopx.capabilities.multi_subagent.native_child_receipts as native
+    from loopx.cli import main
+
+    runtime = tmp_path / "runtime"
+    _admit(runtime)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [{
+        "id": GOAL, "repo": str(tmp_path), "status": "active", "registered_agents": [AGENT],
+        "spawn_policy": {"mode": "multi_subagent", "allowed": True, "max_children": 6},
+    }]}))
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("TypeScript runtime unavailable: synthetic diagnostic")
+
+    monkeypatch.setattr(native, "read_heartbeat_settlement", unavailable)
+    code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "native-child", "record", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+        "--operation-id", "op-1", "--stage", "decision", "--operation", "spawn",
+        "--outcome", "started", "--entrypoint-id", "generic_host", "--execute"])
+    assert code == 1
+    assert "TypeScript runtime unavailable" in json.loads(capsys.readouterr().out)["error"]
+    assert len(load_rollout_events(rollout_event_log_path(runtime, GOAL))) == 1
