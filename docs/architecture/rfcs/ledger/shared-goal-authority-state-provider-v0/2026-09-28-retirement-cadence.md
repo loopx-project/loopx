@@ -210,15 +210,17 @@ state while contract health still parses Markdown Todos. Adding only a stale
 User Todo without task_class to the display copy makes a healthy File or SQLite
 Goal fail status with exit code 1. The repair routes promoted contract checks
 through the existing TS canonical snapshot/record validator and shared User Todo
-class/scope rules; Python transports bounded semantic fields and adapts the
-diagnostic. Structural validity alone does not make an open User Todo healthy.
+class/scope rules and supported Todo metadata health; Python transports bounded
+semantic fields and adapts the diagnostic. Agent routing, claim/exclusion
+conflicts, removed policies and legacy status errors remain unhealthy. Structural validity alone does not make an open User Todo healthy.
 Missing providers and corrupt read models remain Goal-scoped errors,
-with no Markdown fallback. Unpromoted Goals retain legacy checks; narrative,
+with no Markdown fallback. Unpromoted Goals retain legacy checks; invalid UTF-8 yields a structured read
+error while still rejecting the command. Narrative,
 registry, history and public-boundary checks remain. This does not introduce or
 replace Todo authoring validation, nor reauthorize completed/deferred history.
 Real File/SQLite controls cover both persisted record shapes, absent display,
-invalid active class/scope, valid implied historical bindings and completed
-records without a class. Narrative text stays outside the diagnostic RPC; large
+invalid active class/scope and Agent metadata, valid implied historical bindings,
+legal executor exclusions and completed/archived records without a class. Narrative text stays outside the diagnostic RPC; large
 collections are transported in bounded batches without changing message limits.
 
 A paired isolated contract-only measurement uses the 1,109-Todo current
@@ -229,6 +231,11 @@ precede the active User Todo semantic correction and do not qualify its cost.
 The experiment reinitializes the current projection;
 it is not full history replay, whole-status latency or cross-platform capacity
 qualification. Private inputs remain outside Git.
+
+Scale characterization with 4,101 synthetic Agent Todos still hits the existing
+`todo.succession.project` RPC response budget in whole `status` on both base and
+repair for File/SQLite. The repaired contract API can read that collection;
+this does not qualify the remaining whole-command payload boundary.
 
 The next B work remains history artifact lookup and remaining public payload/
 cold-path costs, preserving file-change freshness, full decision inputs and
