@@ -12,6 +12,8 @@ import {
 
 export const TODO_AUTHORING_SCOPE_REQUEST_SCHEMA = "todo_authoring_scope_request_v0";
 export const TODO_AUTHORING_SCOPE_RESULT_SCHEMA = "todo_authoring_scope_result_v0";
+export const TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA = "todo_contract_diagnostics_request_v0";
+export const TODO_CONTRACT_DIAGNOSTICS_RESULT_SCHEMA = "todo_contract_diagnostics_result_v0";
 export const USER_TODO_TASK_CLASSES: ReadonlySet<string> = new Set(["user_action", "user_gate"]);
 export const AGENT_TODO_TASK_CLASSES: ReadonlySet<string> = new Set(["advancement_task", "continuous_monitor", "blocker"]);
 export const TODO_OWNERSHIP_INTENT_FIELDS = ["claimed_by", "clear_claim", "excluded_agents"] as const;
@@ -44,15 +46,26 @@ function string(value: unknown, field: string): string | null {
   return value;
 }
 
-function requireTaskClass(role: string, taskClass: string | null, blocks: unknown, global: unknown): void {
+type TodoClassViolation = "task_class_missing" | "user_action_scope_invalid" | "task_class_role_mismatch";
+
+/** Read-only class rule shared by authoring and canonical diagnostics.
+ * It reports the violation instead of repairing the row or applying defaults. */
+function todoClassViolation(role: string, taskClass: string | null, blocks: unknown, global: unknown): TodoClassViolation | null {
   if (role !== "user") {
-    if (USER_TODO_TASK_CLASSES.has(taskClass ?? "")) fail("user_action and user_gate task_class are only valid for --role user");
-    return;
+    return USER_TODO_TASK_CLASSES.has(taskClass ?? "") ? "task_class_role_mismatch" : null;
   }
   const normalized = stripPythonWhitespace(taskClass ?? "");
-  if (!USER_TODO_TASK_CLASSES.has(normalized)) fail("user todo requires explicit --task-class user_gate or user_action; " +
+  if (!USER_TODO_TASK_CLASSES.has(normalized)) return "task_class_missing";
+  if (normalized === "user_action" && (blocks || global)) return "user_action_scope_invalid";
+  return null;
+}
+
+function requireTaskClass(role: string, taskClass: string | null, blocks: unknown, global: unknown): void {
+  const violation = todoClassViolation(role, taskClass, blocks, global);
+  if (violation === "task_class_role_mismatch") fail("user_action and user_gate task_class are only valid for --role user");
+  if (violation === "task_class_missing") fail("user todo requires explicit --task-class user_gate or user_action; " +
     "use user_gate for blocking owner/controller decisions and user_action for non-blocking user-visible todos");
-  if (normalized === "user_action" && (blocks || global)) fail("user_action is non-blocking and cannot set blocks_agent or global_gate; " +
+  if (violation === "user_action_scope_invalid") fail("user_action is non-blocking and cannot set blocks_agent or global_gate; " +
     "use --task-class user_gate for blocking decisions");
 }
 
@@ -65,6 +78,90 @@ interface Scope {
 
 export type UserTodoScopeConflict = "binding_conflict" | "gate_scope_conflict" |
   "global_binding_conflict" | "agent_binding_conflict" | "gate_scope_missing" | "binding_missing";
+
+export type TodoContractDiagnosticCode = "user_todo_task_class_missing" | "user_action_blocking_scope_invalid" |
+  "user_gate_scope_conflict" | "user_todo_response_scope_conflict" | "goal_user_gate_agent_binding_invalid" |
+  "agent_user_gate_goal_binding_invalid" | "agent_user_gate_response_binding_mismatch" |
+  "user_todo_bound_agent_unregistered" | "multi_agent_user_todo_missing_response_scope" |
+  "user_gate_blocks_unregistered_agent" | "multi_agent_user_gate_missing_scope";
+
+/** Bounded, target-neutral explanations. They never quote row text. */
+const TODO_CONTRACT_DIAGNOSTIC_DETAILS: Record<TodoContractDiagnosticCode, string> = {
+  user_todo_task_class_missing: "open user todo requires task_class=user_gate or task_class=user_action",
+  user_action_blocking_scope_invalid: "open user_action todo is non-blocking and cannot set blocks_agent or global_gate",
+  user_gate_scope_conflict: "open user_gate todo cannot set both blocks_agent and global_gate",
+  user_todo_response_scope_conflict: "open user todo cannot set both bound_agent and goal_bound",
+  goal_user_gate_agent_binding_invalid: "goal-wide user_gate todo cannot bind its continuation to one agent",
+  agent_user_gate_goal_binding_invalid: "agent-scoped user_gate todo cannot set goal_bound",
+  agent_user_gate_response_binding_mismatch: "agent-scoped user_gate todo must bind to the same agent named by blocks_agent",
+  user_todo_bound_agent_unregistered: "open user todo binds an agent that is not registered for this goal",
+  multi_agent_user_todo_missing_response_scope: "open user todo in a multi-agent goal requires bound_agent or goal_bound",
+  user_gate_blocks_unregistered_agent: "open user_gate todo blocks an agent that is not registered for this goal",
+  multi_agent_user_gate_missing_scope: "open user_gate todo in a multi-agent goal requires blocks_agent or global_gate",
+};
+
+function optionalText(value: unknown): string | null {
+  return typeof value === "string" ? stripPythonWhitespace(value) || null : null;
+}
+
+/** Check read-model scope with the same class/scope rules as authoring.
+ * Historical rows retain their existing implied continuation binding. */
+function userTodoContractDiagnostic(row: JsonObject, registeredAgents: readonly string[]): TodoContractDiagnosticCode | null {
+  const taskClass = optionalText(row.task_class);
+  const blocks = optionalText(row.blocks_agent);
+  const global = row.global_gate === true;
+  const bound = optionalText(row.bound_agent);
+  const goalBound = row.goal_bound === true;
+  const classViolation = todoClassViolation("user", taskClass, blocks, global);
+  if (classViolation === "task_class_missing") return "user_todo_task_class_missing";
+  if (classViolation === "user_action_scope_invalid") return "user_action_blocking_scope_invalid";
+  const effectiveBound = bound ?? (taskClass === "user_gate" ? blocks : null) ?? optionalText(row.claimed_by);
+  const effectiveGoalBound = goalBound || (taskClass === "user_gate" && global);
+  const conflict = userTodoScopeConflict(taskClass, {
+    bound_agent: effectiveBound, goal_bound: effectiveGoalBound,
+    blocks_agent: blocks, global_gate: global,
+  }, registeredAgents.length);
+  // Retain existing diagnostic precedence and codes for persisted scope conflicts.
+  if (conflict === "gate_scope_conflict" || (taskClass === "user_gate" && blocks && global)) return "user_gate_scope_conflict";
+  if (bound && goalBound) return "user_todo_response_scope_conflict";
+  if (conflict === "global_binding_conflict" || (conflict === "binding_conflict" && global)) return "goal_user_gate_agent_binding_invalid";
+  if (conflict === "agent_binding_conflict" || (conflict === "binding_conflict" && blocks)) {
+    return goalBound ? "agent_user_gate_goal_binding_invalid" : "agent_user_gate_response_binding_mismatch";
+  }
+  if (bound && registeredAgents.length > 0 && !registeredAgents.includes(bound)) return "user_todo_bound_agent_unregistered";
+  if (conflict === "binding_missing" || (conflict === "gate_scope_missing" && !effectiveBound && !effectiveGoalBound)) {
+    return "multi_agent_user_todo_missing_response_scope";
+  }
+  if (taskClass === "user_gate" && blocks && registeredAgents.length > 0
+    && !registeredAgents.includes(blocks)) return "user_gate_blocks_unregistered_agent";
+  if (conflict === "gate_scope_missing") return "multi_agent_user_gate_missing_scope";
+  return null;
+}
+
+/** Evaluate canonical read-model rows without reading Markdown or writing state. */
+export function evaluateUserTodoContractDiagnostics(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "Todo contract diagnostics request");
+  if (request.schema_version !== TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA) {
+    fail("Todo contract diagnostics schema mismatch");
+  }
+  if (!Array.isArray(request.todos)) fail("todos must be an array");
+  if (!Array.isArray(request.registered_agents)) fail("registered_agents must be an array");
+  if (!Array.isArray(request.terminal_statuses)) fail("terminal_statuses must be an array");
+  const agents = normalizeRegisteredTodoAgents(request.registered_agents);
+  const terminal = new Set(request.terminal_statuses.map(
+    entry => stripPythonWhitespace(String(entry)).toLowerCase()));
+  const diagnostics: JsonObject[] = [];
+  let checked = 0;
+  for (const raw of request.todos) {
+    const row = requireJsonObject(raw, "Todo contract row");
+    const status = stripPythonWhitespace(String(row.status ?? "")).toLowerCase();
+    if (row.role !== "user" || terminal.has(status)) continue;
+    checked += 1;
+    const code = userTodoContractDiagnostic(row, agents);
+    if (code) diagnostics.push({todo_id: optionalText(row.todo_id), code, detail: TODO_CONTRACT_DIAGNOSTIC_DETAILS[code]});
+  }
+  return {schema_version: TODO_CONTRACT_DIAGNOSTICS_RESULT_SCHEMA, checked, diagnostics};
+}
 
 /** Check a fully resolved scope without inventing any authoring defaults.
  * Both public edits and materialized terminal successors consume this rule. */

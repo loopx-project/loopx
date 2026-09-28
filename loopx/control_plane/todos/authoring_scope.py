@@ -43,3 +43,30 @@ def require_user_todo_task_class(
     plan_todo_authoring_scope(command="class", role=role, intent={
         "task_class": task_class, "blocks_agent": blocks_agent, "global_gate": global_gate,
     }, registered_agents=[], goal_id="")
+
+
+def user_todo_contract_diagnostics(
+    *, todos: list[dict[str, Any]], registered_agents: list[str],
+    terminal_statuses: set[str] | frozenset[str],
+) -> dict[str, Any]:
+    """Read-only canonical Todo diagnostics; the shared TS owner keeps the rule."""
+    # Transport only bounded semantic facts, never narrative text or other roles.
+    fields = ("todo_id", "role", "status", "task_class", "blocks_agent",
+              "global_gate", "bound_agent", "goal_bound", "claimed_by")
+    rows = [{field: todo.get(field) for field in fields} for todo in todos if todo.get("role") == "user"]
+    diagnostics: list[dict[str, Any]] = []
+    checked = 0
+    for offset in range(0, len(rows), 512):
+        result = effect_runtime_result("todo.contract_diagnostics.evaluate", {
+            "schema_version": "todo_contract_diagnostics_request_v0",
+            "todos": rows[offset:offset + 512], "registered_agents": registered_agents,
+            "terminal_statuses": sorted(terminal_statuses),
+        })
+        if (not isinstance(result, dict)
+                or result.get("schema_version") != "todo_contract_diagnostics_result_v0"
+                or not isinstance(result.get("diagnostics"), list)
+                or not isinstance(result.get("checked"), int)):
+            raise RuntimeError("TypeScript Todo contract diagnostics result shape mismatch")
+        checked += result["checked"]
+        diagnostics.extend(result["diagnostics"])
+    return {"checked": checked, "diagnostics": diagnostics}
