@@ -8,7 +8,7 @@ import pytest
 
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
 from loopx.capabilities.configuration_ui import build_capability_configuration_catalog
-from loopx.control_plane.coordination.local_authority_defaults import normalize_goal_storage_defaults
+from loopx.capabilities.machine_configuration.goal_storage import normalize_goal_storage_defaults
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -109,6 +109,6 @@ def test_created_target_is_used_by_reviewed_promotion(environment, provider):
     assert ws.cli("todo", "list", "--todo-id", created["todo_id"])["authority_read"]["source_authority"] == f"{provider}_v0"
     # The initializer must not override a promoted selection. The separate legacy
     # bootstrap command still rejects a fenced Goal before reaching this helper.
-    from loopx.control_plane.coordination.local_authority_defaults import initialize_goal_storage_target
+    from loopx.capabilities.machine_configuration.goal_storage import initialize_goal_storage_target
     goal = json.loads(registry.read_text())["goals"][0]
     assert initialize_goal_storage_target(runtime, goal)["status"] == "existing_authority_preserved"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .control_plane.coordination.local_authority_defaults import new_goal_storage_target, initialize_goal_storage_target
+from .capabilities.machine_configuration.goal_storage import new_goal_storage_target, initialize_goal_storage_target
 from .registry import find_registry_goal
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from .control_plane.coordination.runtime_shadow_writer_adapter import require_runtime_shadow_capture_prepared, begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture

@@ -28,7 +28,7 @@ def build_builtin_machine_configuration_registry() -> MachineConfigurationRegist
         todo_replan_cadence_machine_configuration_namespace,
     )
 
-    from ...control_plane.coordination.local_authority_defaults import goal_storage_machine_configuration_namespace
+    from .goal_storage import goal_storage_machine_configuration_namespace
 
     return (
         MachineConfigurationRegistry()
