@@ -79,6 +79,7 @@ import { evaluateDeliveryWorkspaceCausality } from "./quota/settlement_workspace
 import { evaluateQuotaSpendCommit } from "./quota/spend_commit.ts";
 import { evaluateQuotaVoidCommit } from "./quota/void_commit.ts";
 import { readQuotaSettlement } from "./quota/settlement_readback.ts";
+import {turnScopedCliSettlementPlan} from "./quota/settlement_plan.ts";
 import {
   preflightPriorHostTurnCloseout,
   reduceUnsettledHostTurnRecovery,
@@ -373,6 +374,10 @@ function settlementStepInput(value: unknown, label: string): SettlementStep {
         }
       : {}),
     ...(step.conditional === true ? { conditional: true } : {}),
+    ...(step.command_condition === undefined ? {} : {
+      command_condition: requireStringLiteral(step.command_condition,
+        ["todo_deliverable_complete"] as const, `${label}.command_condition`),
+    }),
   };
 }
 
@@ -840,6 +845,8 @@ export function createEffectRuntimeHandlers(
       "settlement.plan_payload",
       (params) => settlementPlanPayload(settlementPlanInput(params.plan, "plan")),
     ],
+    ["settlement.turn_scoped_cli_plan", (params) =>
+      settlementPlanPayload(turnScopedCliSettlementPlan(params))],
     [
       "settlement.result_payload",
       (params) => settlementResultPayload(

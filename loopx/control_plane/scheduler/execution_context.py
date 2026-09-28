@@ -20,6 +20,7 @@ class HostSurface(str, Enum):
     GENERIC_CLI = "generic_cli"
     CLAUDE_CODE = "claude_code"
     KUNLUNCODE = "kunluncode"
+    KIRO_CLI = "kiro_cli"
     LOCAL_SCHEDULER = "local_scheduler"
 
 
@@ -45,6 +46,7 @@ class SchedulerRuntimeProfile(str, Enum):
     TRAE_APP = "trae_app"
     CLAUDE_CODE_VISIBLE = "claude_code"
     KUNLUNCODE_VISIBLE = "kunluncode"
+    KIRO_CLI_VISIBLE = "kiro_cli"
     GENERIC_CLI_AGENT_LOOP = "generic_cli"
     GENERIC_CLI_OUTER_CONTROLLER = "outer_controller"
 
@@ -79,11 +81,16 @@ NATIVE_GOAL_RUNTIME_PROFILES = frozenset(
 # Interactive hosts in this set can carry one explicit Turn identity through
 # accountable writeback and visible-Goal quota settlement. Claude's ordinary
 # Todo delivery remains MCP-owned; this shared contract also permits its
-# Todo-less replan re-entry to finish once a Turn has been supplied.
+# Todo-less replan re-entry to finish once a Turn has been supplied. Kiro CLI
+# drives its own in-session `/goal` loop, so its spend is a visible-Goal spend
+# rather than a heartbeat one. It is deliberately not a native-goal profile:
+# that family renders the Codex `/goal` task body and blocked-state rules,
+# which the Kiro host does not share.
 VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES = frozenset(
     {
         *NATIVE_GOAL_RUNTIME_PROFILES,
         SchedulerRuntimeProfile.CLAUDE_CODE_VISIBLE,
+        SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
     }
 )
 
@@ -141,6 +148,11 @@ _SCHEDULER_RUNTIME_PROFILE_CONTEXTS = {
     ),
     SchedulerRuntimeProfile.KUNLUNCODE_VISIBLE: (
         HostSurface.KUNLUNCODE,
+        SchedulerOwner.AGENT_CLI_LOOP,
+        ExecutionMode.INTERACTIVE,
+    ),
+    SchedulerRuntimeProfile.KIRO_CLI_VISIBLE: (
+        HostSurface.KIRO_CLI,
         SchedulerOwner.AGENT_CLI_LOOP,
         ExecutionMode.INTERACTIVE,
     ),
@@ -247,6 +259,7 @@ def _validation_errors(context: SchedulerExecutionContext) -> list[str]:
         HostSurface.GENERIC_CLI,
         HostSurface.CLAUDE_CODE,
         HostSurface.KUNLUNCODE,
+        HostSurface.KIRO_CLI,
     }
     if context.host_surface in {HostSurface.CODEX_APP, HostSurface.TRAE_APP}:
         host_name = context.host_surface.value

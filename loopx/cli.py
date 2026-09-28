@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+# Source-tree invocations must use the same bounded entrypoint as the console
+# script. Keep the full parser below importable for compatibility callers; the
+# entrypoint can still import this module by name when a full-parser fallback is
+# required, without executing this module-entry branch a second time.
+if __name__ == "__main__":
+    from .entrypoint import main as _entrypoint_main
+
+    raise SystemExit(_entrypoint_main())
+
 from .cli_commands.automation_cadence import (
     register_automation_cadence_command, handle_automation_cadence_command,
 )
@@ -1040,7 +1049,3 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

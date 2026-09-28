@@ -94,6 +94,8 @@ export interface ReceiptBoundReplaySettlementState {
   /** A validated writeback discharges the binding without Todo completion. */
   writeback_completes_binding?: boolean;
   completion_receipt_present: boolean;
+  /** Retirement closes its original Turn, not the replacement or Goal. */
+  supersede_receipt_present?: boolean;
   durable_writeback_present: boolean;
   quota_spend_present: boolean;
   /** Exact typed blocked writeback closes a Turn without a quota debit. */
@@ -106,7 +108,8 @@ export function receiptBoundReplayPhase(
   const bindingComplete = state.binding_kind === "autonomous_replan" ||
       state.writeback_completes_binding === true
     ? state.durable_writeback_present
-    : state.completion_receipt_present;
+    : state.completion_receipt_present ||
+      (state.binding_kind === "todo" && state.supersede_receipt_present === true);
   if (!bindingComplete) return "open";
   return state.durable_writeback_present &&
       (state.quota_spend_present || state.no_spend_closeout_present === true)
