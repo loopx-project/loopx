@@ -9,10 +9,13 @@ no counterpart for this one. Two consequences followed: a fourth caller had to i
 a fifth spelling, and any new object-store scheme had to be found in three places that
 nothing linked together.
 
-The owner now holds the single pattern and each site keeps its own error text and its
-own threshold policy - the sites reject at different lengths and one of them adds
-vendor-specific markers, which is per-surface policy, not a duplicate decision. The
-literal scan below is what stops the copies from growing back.
+The single owner is now the shared text-classification home
+(`loopx/public_safe_text.py`, Refs #5136 direction 1); `public_safety` re-exports the
+compiled pattern for its recursive payload validation, so the scheme list still lives
+in one module. Each site keeps its own error text and its own threshold policy - the
+sites reject at different lengths and one of them adds vendor-specific markers, which
+is per-surface policy, not a duplicate decision. The literal scan below is what stops
+the copies from growing back.
 """
 
 from __future__ import annotations
@@ -65,9 +68,13 @@ def _source_text_spelling_the_scheme_list() -> list[str]:
 
 def test_the_pattern_is_compiled_once_by_the_owner() -> None:
     # The negative control: a spelling that survives in any module other than the
-    # owner is the exact regression this file exists to catch.
+    # owner is the exact regression this file exists to catch. Refs #5136
+    # direction 1: the single owner is now the shared text-classification home
+    # (loopx/public_safe_text.py). public_safety re-exports the compiled pattern
+    # for its recursive payload validation, so the literal scheme list still
+    # lives in exactly one module.
     assert _source_text_spelling_the_scheme_list() == [
-        "loopx/control_plane/runtime/public_safety.py"
+        "loopx/public_safe_text.py"
     ]
 
 

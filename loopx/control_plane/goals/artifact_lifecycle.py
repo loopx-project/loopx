@@ -19,9 +19,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...public_safe_text import find_private_text_match
+from ...public_safe_text import (
+    ARTIFACT_LIFECYCLE_CATEGORIES,
+    classify_private_text,
+)
 from ..runtime.public_safety import (
-    SECRET_LIKE_SURFACE_PATTERN,
     public_safe_compact_text,
     validate_public_safe_value,
 )
@@ -60,9 +62,14 @@ def _compact_text(value: Any, *, limit: int = 240) -> str | None:
         validate_public_safe_value(value)
     except ValueError:
         return None
-    # Preserve the stricter existing private-text/provider-token contract too;
-    # these checks supplement, never replace, the shared public-safety owner.
-    if find_private_text_match(value) or SECRET_LIKE_SURFACE_PATTERN.search(value):
+    # One policy-aware call into the shared classifier replaces OR-ing the
+    # text-owner detector with the credential shape detector. The named policy
+    # (ARTIFACT_LIFECYCLE_CATEGORIES) preserves this projection's historical
+    # verdict exactly: every category but a raw remote location.
+    if (
+        classify_private_text(value, categories=ARTIFACT_LIFECYCLE_CATEGORIES)
+        is not None
+    ):
         return None
     return public_safe_compact_text(value, limit=limit)
 
