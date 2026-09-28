@@ -60,7 +60,7 @@ def scheduler_command_binding_for_agent_type(
         "cursor-agent": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "zcode": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "agy": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
-        "kiro-cli": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "kiro-cli": SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
         "deepseek-harness": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness-native": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
     }.get(canonical)

@@ -901,15 +901,22 @@ def test_turn_bound_native_goal_preserves_visible_goal_settlement(profile) -> No
         assert f"--turn-instance-id {turn_instance_id}" in command
 
 
-def test_claude_visible_goal_reenters_before_exposing_bound_settlement() -> None:
+@pytest.mark.parametrize(
+    "profile",
+    (
+        SchedulerRuntimeProfile.CLAUDE_CODE_VISIBLE,
+        SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
+    ),
+)
+def test_interactive_visible_goal_reenters_before_exposing_bound_settlement(
+    profile: SchedulerRuntimeProfile,
+) -> None:
     payload = {
         "goal_id": GOAL_ID,
         "agent_identity": {"agent_id": AGENT_ID},
         "selected_todo": {"todo_id": TODO_ID},
     }
-    context = scheduler_execution_context_for_runtime_profile(
-        SchedulerRuntimeProfile.CLAUDE_CODE_VISIBLE
-    )
+    context = scheduler_execution_context_for_runtime_profile(profile)
 
     unbound = interaction_next_cli_actions(
         payload,
@@ -919,12 +926,12 @@ def test_claude_visible_goal_reenters_before_exposing_bound_settlement() -> None
 
     assert len(unbound) == 1
     assert unbound[0].startswith("loopx --format json quota should-run")
-    assert "--runtime-profile claude_code" in unbound[0]
+    assert f"--runtime-profile {profile.value}" in unbound[0]
     assert "--turn-instance-id" in unbound[0]
     assert "refresh-state" not in unbound[0]
     assert "spend-slot" not in unbound[0]
 
-    turn_instance_id = "claude-visible-goal-turn-1"
+    turn_instance_id = f"{profile.value}-visible-goal-turn-1"
     bound = interaction_next_cli_actions(
         payload,
         mode="bounded_delivery",

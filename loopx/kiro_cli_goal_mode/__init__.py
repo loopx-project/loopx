@@ -152,12 +152,11 @@ def kiro_cli_activation_extras() -> dict[str, Any]:
     tool, gate text, activation steps) in this package instead of growing
     ``host_loop_activation.py`` past its module metric budget. Kiro CLI ships
     both halves of a goal-mode host: a native goal primitive — ``/goal
-    [description --validate criteria --agent name --max N] | clear`` whose
-    host-side loop re-dispatches turns until the ``goal`` tool proves
-    completion — and a bounded iteration budget the host itself enforces
-    (default 5, ceiling 50). What it does not ship is a cross-session daemon,
-    and LoopX installs no hook, so quota pacing is instructed rather than
-    enforced.
+    [--max N] <description> | clear`` whose host-side loop re-dispatches turns
+    until the ``goal`` tool proves completion — and a bounded iteration budget
+    the host itself enforces (default 5). What it does not ship is a
+    cross-session daemon, and LoopX installs no hook, so quota pacing is
+    instructed rather than enforced.
     """
     return {
         "activation_method": "bind_native_goal_with_advisory_quota_entry",
