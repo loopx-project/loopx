@@ -219,6 +219,13 @@ onboarding time (including prerequisites/login) and the post-readiness interval;
 authentication or environment failures stay in the funnel. A small pilot is
 feedback, not statistical reliability or product-market fit.
 
+The [independent App first-use/repeat-use protocol](../../product/use-cases/steward/first-use-evaluation.md)
+prepares the five-slot freeze sheet, ordinary GQ01 handout, independent oracle
+and separate onboarding/result/attention/cost observations. It reuses existing
+optional first-run/usage-story intake and keeps failed or absent trials in the
+denominator. This is preparation only: execution waits for a qualified pinned
+package and consenting participants; no cohort result or recruitment is claimed.
+
 The critical path is usable evidence presentation → a reproducible real episode →
 packaged first-use repair → independent reproduction. As of 2026-09-21, #4762 and
 #4811 are merged; #4811 records native Codex MCP execution and a real-model
