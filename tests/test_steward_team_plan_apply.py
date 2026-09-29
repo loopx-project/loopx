@@ -13,6 +13,9 @@ from loopx.control_plane.work_items.governed_transition_proposal import (
     settle_governed_transition_proposals,
     validate_governed_transition_receipts,
 )
+from loopx.control_plane.work_items.team_plan_adapter import (
+    team_plan_state_fingerprint,
+)
 
 GOAL_ID = "team-plan-apply-fixture"
 AGENT_ID = "agent-alpha"
@@ -99,16 +102,38 @@ def _proposal(*, agent_id: str = AGENT_ID, extra_lane: dict | None = None) -> di
     }
 
 
-def _settle(registry_path: Path, proposal: dict) -> list[dict]:
+def _basis(registry_path: Path) -> str:
+    """The digest an agent's journal binds before its provider runs."""
+
+    return team_plan_state_fingerprint(
+        registry_path=registry_path, goal_id=GOAL_ID, basis_agent_id=AGENT_ID
+    )
+
+
+def _settle(
+    registry_path: Path,
+    proposal: dict,
+    *,
+    basis: str | None = "bind-now",
+    existing_receipts: list[dict] | None = None,
+    checkpoint=lambda _receipts: None,
+) -> list[dict]:
+    """Settle as the journal would: the basis was bound before the proposal.
+
+    ``basis="bind-now"`` reads it at this moment; a replay passes the stored
+    one, and ``None`` is a journal that bound nothing.
+    """
+
     return settle_governed_transition_proposals(
         registry_path=registry_path,
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         effect_id="effect-team-plan",
         proposals=[proposal],
-        existing_receipts=[],
-        checkpoint=lambda _receipts: None,
+        existing_receipts=list(existing_receipts or []),
+        checkpoint=checkpoint,
         phase=GovernedTransitionSettlementPhase.PRE_SETTLEMENT,
+        team_plan_state_basis=_basis(registry_path) if basis == "bind-now" else basis,
     )
 
 
@@ -154,7 +179,8 @@ def test_a_gap_lane_creates_nothing_and_a_replay_adds_no_second_row(
         },
     }
 
-    first = _settle(registry_path, _proposal(extra_lane=gap_lane))
+    basis = _basis(registry_path)
+    first = _settle(registry_path, _proposal(extra_lane=gap_lane), basis=basis)
 
     assert first[0]["action"] == "created"
     state = _todos(project)
@@ -162,8 +188,9 @@ def test_a_gap_lane_creates_nothing_and_a_replay_adds_no_second_row(
     assert state.count("loopx:todo ") == 1
 
     # The canonical Todo owner decides reuse, so a replayed settlement does not
-    # duplicate the lane it already created.
-    replay = _settle(registry_path, _proposal(extra_lane=gap_lane))
+    # duplicate the lane it already created. The journal replays the basis it
+    # stored; the work it wrote is not a reason to re-bind one.
+    replay = _settle(registry_path, _proposal(extra_lane=gap_lane), basis=basis)
     assert replay[0]["action"] == "reused"
     # The receipt still names the same lane Todo, and the gap lane stays absent.
     assert replay[0]["todo_id"] == first[0]["todo_id"]
@@ -219,6 +246,7 @@ def test_an_unknown_goal_is_refused_before_any_todo(tmp_path: Path) -> None:
             existing_receipts=[],
             checkpoint=lambda _receipts: None,
             phase=GovernedTransitionSettlementPhase.PRE_SETTLEMENT,
+            team_plan_state_basis=_basis(registry_path),
         )
 
     assert "loopx:todo " not in _todos(project)
@@ -257,8 +285,9 @@ def test_the_receipt_names_every_lane_todo_it_created(tmp_path: Path) -> None:
     """One readback has to say what exists now, not only where it started."""
 
     project, registry_path = _fixture(tmp_path, agents=(AGENT_ID, "agent-beta"))
+    basis = _basis(registry_path)
 
-    receipts = _settle(registry_path, _proposal(extra_lane=_second_lane()))
+    receipts = _settle(registry_path, _proposal(extra_lane=_second_lane()), basis=basis)
 
     receipt = receipts[0]
     lane_todo_ids = receipt["lane_todo_ids"]
@@ -272,7 +301,7 @@ def test_the_receipt_names_every_lane_todo_it_created(tmp_path: Path) -> None:
     assert len(validate_governed_transition_receipts(receipts)) == 1
 
     # A replayed settlement reports the same lanes instead of an empty readback.
-    replay = _settle(registry_path, _proposal(extra_lane=_second_lane()))
+    replay = _settle(registry_path, _proposal(extra_lane=_second_lane()), basis=basis)
     assert replay[0]["action"] == "reused"
     assert replay[0]["lane_todo_ids"] == lane_todo_ids
     assert _todos(project).count("loopx:todo ") == 2
@@ -439,16 +468,7 @@ def test_the_receipt_retains_each_lanes_acceptance_beside_its_todo(
     assert validate_governed_transition_receipts(receipts) == receipts
 
 
-def test_a_plan_that_can_staff_no_lane_reports_that_instead_of_reuse(
-    tmp_path: Path,
-) -> None:
-    """A settlement that staffed nothing is not a reuse of existing work.
-
-    A lane Todo only exists here because a lane was staffed, so "reused" for a
-    plan whose every lane is a gap names work that the readback cannot find.
-    """
-
-    project, registry_path = _fixture(tmp_path)
+def _all_gap_plan() -> dict:
     plan = _proposal()
     plan["lanes"] = [
         {
@@ -463,14 +483,146 @@ def test_a_plan_that_can_staff_no_lane_reports_that_instead_of_reuse(
             },
         }
     ]
+    return plan
 
-    receipts = _settle(registry_path, plan)
 
-    assert receipts[0]["action"] == "unstaffed"
-    assert receipts[0]["todo_id"] == ""
-    assert "lane_todo_ids" not in receipts[0]
-    assert "lane_settlements" not in receipts[0]
+def _assert_failed_receipt(receipt: dict, reason_code: str) -> None:
+    """A refused plan records its verdict and names no work."""
+
+    assert receipt["kind"] == "steward_team_plan_preview"
+    assert receipt["status"] == "failed"
+    assert receipt["reason_code"] == reason_code
+    assert receipt["action"] == "failed"
+    assert receipt["todo_id"] is None
+    assert receipt["monitor_key"] is None
+    for lane_field in ("lane_todo_ids", "lane_settlements", "gap_lanes", "gap_count",
+                       "lane_failure", "intent_basis"):
+        assert lane_field not in receipt
+    assert validate_governed_transition_receipts([receipt]) == [receipt]
+
+
+def _assert_replay_reads_the_verdict(
+    registry_path: Path, proposal: dict, receipts: list[dict], basis: str | None
+) -> None:
+    """Feeding the receipt back returns it unchanged and writes nothing."""
+
+    writes: list[list[dict]] = []
+    replay = _settle(registry_path, proposal, basis=basis,
+                     existing_receipts=receipts, checkpoint=writes.append)
+    assert replay == receipts
+    assert writes == []
+
+
+def test_a_plan_that_can_staff_no_lane_fails_instead_of_committing(
+    tmp_path: Path,
+) -> None:
+    """A settlement that can only create nothing is a typed failure.
+
+    A lane Todo only exists because a lane was staffed, so a committed receipt
+    for a plan whose every lane is a gap would name success the readback cannot
+    find. The verdict is durable: replaying the same proposal reads it back.
+    """
+
+    project, registry_path = _fixture(tmp_path)
+    basis = _basis(registry_path)
+    writes: list[list[dict]] = []
+
+    receipts = _settle(registry_path, _all_gap_plan(), basis=basis,
+                       checkpoint=writes.append)
+
+    assert len(receipts) == 1
+    _assert_failed_receipt(receipts[0], "team_plan_no_staffable_lane")
+    assert writes == [receipts]
     assert "loopx:todo " not in _todos(project)
+    _assert_replay_reads_the_verdict(registry_path, _all_gap_plan(), receipts, basis)
+
+
+def test_a_moved_goal_intent_makes_the_bound_plan_stale(tmp_path: Path) -> None:
+    """The basis an agent's journal bound is the state its plan is judged by.
+
+    The provider shapes its plan against the Goal as the agent saw it. When the
+    owner rewrites the objective between that binding and settlement, the plan
+    is about a different intent, so it is refused rather than applied.
+    """
+
+    project, registry_path = _fixture(tmp_path)
+    basis = _basis(registry_path)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "Stand up one digital team.", "Stand up a different team entirely."
+        ),
+        encoding="utf-8",
+    )
+
+    receipts = _settle(registry_path, _proposal(), basis=basis)
+
+    _assert_failed_receipt(receipts[0], "team_plan_preview_stale")
+    assert "loopx:todo " not in _todos(project)
+    _assert_replay_reads_the_verdict(registry_path, _proposal(), receipts, basis)
+    # Binding the current state again is a new review, and that one applies.
+    assert _settle(registry_path, _proposal())[0]["action"] == "created"
+
+
+def test_a_journal_that_bound_no_basis_cannot_settle_a_plan(tmp_path: Path) -> None:
+    """A missing basis is refused, not treated as nothing to compare."""
+
+    project, registry_path = _fixture(tmp_path)
+
+    receipts = _settle(registry_path, _proposal(), basis=None)
+
+    _assert_failed_receipt(receipts[0], "team_plan_basis_missing")
+    assert "loopx:todo " not in _todos(project)
+    _assert_replay_reads_the_verdict(registry_path, _proposal(), receipts, None)
+    for malformed in ("", 7):
+        with pytest.raises(ValueError, match="team plan basis is invalid"):
+            _settle(registry_path, _proposal(), basis=malformed)
+
+
+def test_a_committed_receipt_replays_from_the_journal_without_a_second_write(
+    tmp_path: Path,
+) -> None:
+    project, registry_path = _fixture(tmp_path)
+    basis = _basis(registry_path)
+    receipts = _settle(registry_path, _proposal(), basis=basis)
+    assert receipts[0]["status"] == "committed"
+
+    _assert_replay_reads_the_verdict(registry_path, _proposal(), receipts, basis)
+    assert _todos(project).count("loopx:todo ") == 1
+
+
+def test_a_failed_receipt_carries_a_typed_verdict_and_no_lane_identity() -> None:
+    """Illegal failed shapes are refused: a verdict cannot name work."""
+
+    failed = _receipt(kind="steward_team_plan_preview", monitor_key=None,
+                      status="failed", action="failed", todo_id=None,
+                      reason_code="team_plan_no_staffable_lane")
+    assert validate_governed_transition_receipts([failed]) == [failed]
+    for reason_code in ("team_plan_preview_stale", "team_plan_basis_missing"):
+        assert len(validate_governed_transition_receipts(
+            [{**failed, "reason_code": reason_code}])) == 1
+
+    with pytest.raises(ValueError, match="reason_code is invalid"):
+        validate_governed_transition_receipts([{**failed, "reason_code": "lane_write_failed"}])
+    with pytest.raises(ValueError, match="reason_code is invalid"):
+        validate_governed_transition_receipts([{k: v for k, v in failed.items() if k != "reason_code"}])
+    with pytest.raises(ValueError, match="todo_id is invalid"):
+        validate_governed_transition_receipts([{**failed, "todo_id": "todo_1"}])
+    with pytest.raises(ValueError, match="action is invalid"):
+        validate_governed_transition_receipts([{**failed, "action": "created"}])
+    with pytest.raises(ValueError, match="receipt fields are invalid"):
+        validate_governed_transition_receipts([{**failed, "lane_todo_ids": ["todo_1"]}])
+    with pytest.raises(ValueError, match="receipt fields are invalid"):
+        validate_governed_transition_receipts([{**failed, "gap_count": 1}])
+    # Only a team plan has this verdict vocabulary; a monitor still raises.
+    with pytest.raises(ValueError, match="status is invalid"):
+        validate_governed_transition_receipts(
+            [{**failed, "kind": "continuous_monitor_upsert", "monitor_key": "monitor-key-1"}])
+    # A committed receipt is a different state and may not carry a verdict.
+    with pytest.raises(ValueError, match="reason_code is invalid"):
+        validate_governed_transition_receipts(
+            [_receipt(kind="steward_team_plan_preview", monitor_key=None,
+                      reason_code="team_plan_no_staffable_lane")])
 
 
 def test_batch_write_failure_leaves_every_lane_unwritten(tmp_path: Path, monkeypatch) -> None:

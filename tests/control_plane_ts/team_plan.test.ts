@@ -13,7 +13,7 @@ import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/a
 import {TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {commitTeamPlan} from "../../loopx/control_plane/work_items/team_plan_authority.ts";
-import {previewTeamPlan, teamTransactionIdentity} from "../../loopx/control_plane/work_items/team_plan.ts";
+import {planTeamTransaction, previewTeamPlan, teamTransactionIdentity} from "../../loopx/control_plane/work_items/team_plan.ts";
 
 const goal = "team-plan-test";
 function request(): JsonObject {
@@ -73,7 +73,8 @@ for (const provider of providers) {
     const store = await fixture(t, provider); await seed(store);
     const before = await store.loadAuthority();
     const invalid = request(); ((invalid.plan as JsonObject).lanes as JsonObject[])[1]!.first_todo = {text: "Invalid"};
-    for (const input of [invalid, {...request(), current_state_fingerprint: "changed"}, {...request(), actor_agent_id: "alpha"}]) {
+    for (const input of [invalid, {...request(), current_state_fingerprint: "changed"}, {...request(), actor_agent_id: "alpha"},
+      {...request(), current_state_fingerprint: null}, {...request(), registered_agents: ["gamma"]}]) {
       await assert.rejects(() => commitTeamPlan(store, input));
       assert.deepEqual(await store.loadAuthority(), before);
       assert.equal((await store.readReceipt(String(teamTransactionIdentity(input).operation_id))).status, "missing");
@@ -143,4 +144,48 @@ test("team preview accepts P4 and rejects conflicting legacy priority before con
   assert.doesNotThrow(() => previewTeamPlan(input));
   first.text = "[P0] Conflicting declaration";
   assert.throws(() => previewTeamPlan(input), /conflict/);
+});
+
+function rejectsWith(code: string) {
+  return (error: unknown) => (error as {code?: string}).code === code;
+}
+
+test("a first commit needs the reviewed basis and its readback; replay stays historical", () => {
+  const complete = request();
+  for (const missing of [{expected_state_fingerprint: null}, {current_state_fingerprint: null},
+    {expected_state_fingerprint: ""}, {current_state_fingerprint: 7},
+    {expected_state_fingerprint: undefined, current_state_fingerprint: undefined}]) {
+    assert.throws(() => planTeamTransaction({...complete, ...missing}), rejectsWith("team_plan_basis_missing"));
+  }
+  assert.throws(() => planTeamTransaction({...complete, current_state_fingerprint: "moved"}), rejectsWith("team_plan_preview_stale"));
+  const planned = planTeamTransaction(complete);
+  assert.equal(planned.replayed, false);
+  assert.equal((planned.todos as JsonObject[]).length, 2);
+  // The receipt is read back against the basis the commit bound, however the
+  // state has moved since; a readback is not a second admission.
+  const replay = planTeamTransaction({...complete, current_state_fingerprint: null, previous_receipt: planned.receipt});
+  assert.equal(replay.replayed, true);
+  assert.equal((replay.result as JsonObject).action, "reused");
+  assert.deepEqual((replay.result as JsonObject).lane_todo_ids, (planned.result as JsonObject).lane_todo_ids);
+  // A different bound basis is a different operation, not a replay of this one.
+  assert.throws(() => planTeamTransaction({...complete, expected_state_fingerprint: "other", previous_receipt: planned.receipt}),
+    /operation identity mismatch/u);
+});
+
+test("a plan whose every lane is a gap is refused before any lane is planned", () => {
+  const nobodyRegistered = {...request(), registered_agents: ["gamma"]};
+  assert.throws(() => planTeamTransaction(nobodyRegistered), rejectsWith("team_plan_no_staffable_lane"));
+  const declared = request();
+  for (const lane of (declared.plan as JsonObject).lanes as JsonObject[]) {
+    delete lane.first_todo;
+    lane.staffing_gap = {reason_code: "capability_not_granted", note: "Required admission is unavailable"};
+  }
+  assert.throws(() => planTeamTransaction(declared), rejectsWith("team_plan_no_staffable_lane"));
+  // The preview itself still reports the gaps; only committing them is refused.
+  assert.equal((previewTeamPlan(declared).gaps as JsonObject[]).length, 2);
+  // One ready lane is enough to commit, and the receipt keeps the other as a gap.
+  const partial = {...request(), registered_agents: ["alpha"]};
+  const planned = planTeamTransaction(partial);
+  assert.equal((planned.result as JsonObject).action, "created");
+  assert.deepEqual((planned.result as JsonObject).gap_lanes, [{lane_id: "lane-beta", agent_id: "beta", reason_code: "agent_not_registered"}]);
 });

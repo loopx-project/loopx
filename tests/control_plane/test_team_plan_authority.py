@@ -7,6 +7,10 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority
 from loopx.chat_actions import ChatActionService
 from loopx.chat_action_store import ChatActionStore
+from loopx.control_plane.work_items.governed_transition_proposal import (
+    GovernedTransitionSettlementPhase, settle_governed_transition_proposals,
+)
+from loopx.control_plane.work_items.team_plan_adapter import team_plan_state_fingerprint
 from loopx.control_plane.coordination.coordination_state_contract import (
     TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION, TODO_DOMAIN_RECORD_FIELDS,
 )
@@ -78,3 +82,55 @@ def test_canonical_change_without_markdown_refresh_invalidates_preview(canonical
     result = service.apply(preview["proposal_id"])["proposal"]
     assert result["status"] == "stale", result
     assert len(read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")["todos"]) == 1
+
+
+def _agent_plan() -> dict:
+    """An agent-originated plan may only reserve a lane for its own author."""
+    return {"schema_version": "steward_team_plan_preview_v0", "kind": "steward_team_plan_preview",
+        "goal_id": "goal-a", "proposal_id": "agent-plan", "objective": "Independent lane outcomes",
+        "quota_envelope": {"slots": 2}, "stop_condition": "Owner ends request",
+        "lanes": [{"lane_id": "lane-alpha", "agent_id": "alpha", "acceptance": "Return independent evidence",
+            "first_todo": {"text": "Own work", "priority": "P1", "task_class": "advancement_task", "action_kind": "implement"}}]}
+
+
+def _settle_as_agent(service, basis, writes):
+    return settle_governed_transition_proposals(
+        registry_path=service.registry_path, goal_id="goal-a", agent_id="alpha", effect_id="effect-agent-plan",
+        proposals=[_agent_plan()], existing_receipts=[], checkpoint=writes.append,
+        phase=GovernedTransitionSettlementPhase.PRE_SETTLEMENT, team_plan_state_basis=basis)
+
+
+@pytest.mark.parametrize("basis_state", ["moved", "missing"])
+def test_canonical_agent_settlement_is_refused_without_its_bound_basis(canonical_team, basis_state):
+    """Promoted authority refuses a plan whose journal basis moved or was never bound.
+
+    The provider-revision guard only covers the write race; the basis the agent
+    bound before its provider ran is what ties the plan to the Goal it was
+    shaped against, so the promoted path compares it too and writes nothing.
+    """
+    runtime, state, service, _preview = canonical_team
+    basis = team_plan_state_fingerprint(registry_path=service.registry_path, goal_id="goal-a", basis_agent_id="alpha")
+    if basis_state == "moved":
+        state.write_text(state.read_text() + "\nObjective rewritten by the owner.\n")
+    writes: list = []
+
+    receipts = _settle_as_agent(service, basis if basis_state == "moved" else None, writes)
+
+    assert receipts[0]["status"] == "failed"
+    assert receipts[0]["reason_code"] == ("team_plan_preview_stale" if basis_state == "moved" else "team_plan_basis_missing")
+    assert receipts[0]["todo_id"] is None
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")["todos"] == []
+    assert "Own work" not in state.read_text()
+    assert writes == [receipts]
+
+
+def test_canonical_agent_settlement_applies_against_its_bound_basis(canonical_team):
+    runtime, state, service, _preview = canonical_team
+    basis = team_plan_state_fingerprint(registry_path=service.registry_path, goal_id="goal-a", basis_agent_id="alpha")
+
+    receipts = _settle_as_agent(service, basis, [])
+
+    assert receipts[0]["status"] == "committed"
+    read = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    assert [row["claimed_by"] for row in read["todos"]] == ["alpha"]
+    assert receipts[0]["lane_todo_ids"] == [read["todos"][0]["todo_id"]]
