@@ -138,7 +138,7 @@ def test_partial_reconciliation_preserves_other_pending_entries(tmp_path, monkey
 
 
 @pytest.mark.parametrize("route_source", ["quota_cli_invocation", "loopx_turn_run_once"])
-def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkeypatch, route_source):
+def test_upgrade_read_projection_preserves_work_authority(tmp_path, monkeypatch, route_source):
     home, path, database, registry, root, _, desired, _ = _deferred(tmp_path, monkeypatch)
     monkeypatch.setattr("loopx.control_plane.scheduler.scheduler_hint.now_utc",
         lambda: datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -167,8 +167,18 @@ def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkey
     assert envelope["compaction"]["budget_bytes"] == 8192 + 1536
     assert envelope["compaction"]["hook_prompt_budget_bytes"] == 1536
     assert build_turn_envelope(baseline)["compaction"]["budget_bytes"] == 8192
+    assert baseline.get("turn_start_capability_hook_dispatch") is None
+    dispatch = pending["turn_start_capability_hook_dispatch"]
+    assert set(dispatch) == {"required_reads"}
+    assert len(dispatch["required_reads"]) == 1
+    read = dispatch["required_reads"][0]
+    assert read["kind"] == hint["kind"] == "automation_prompt_upgrade"
+    assert read["command"] == hint["command"]
+    assert read["ordering"] == "before_work"
+    assert read["prompt_budget_bytes"] == 1536
     for key in baseline.keys() | pending.keys():
-        if key not in {"required_reads", "interaction_contract", "protocol_action_packet"}:
+        if key not in {"required_reads", "interaction_contract", "protocol_action_packet",
+            "turn_start_capability_hook_dispatch"}:
             assert pending.get(key) == baseline.get(key), key
     _set_fixture_prompt(path, database, desired)
     assert build_live_quota_should_run_decision(status, **kwargs) == baseline
