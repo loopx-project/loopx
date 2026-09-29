@@ -175,7 +175,7 @@ def _identity(
         # hosts sharing one runtime root can both read the holder, so the record
         # names its own machine and a reader never has to guess which host a pid
         # belongs to. The name is a sanitized label, not a path or a secret.
-        "host": _safe_label(socket.gethostname(), fallback="unknown"),
+        "host": lock_holder_host_label(),
         "agent_id": _safe_label(
             agent_id or os.environ.get("LOOPX_AGENT_ID"),
             fallback="unknown",
@@ -268,14 +268,8 @@ def _mark_released(
         pass
 
 
-def _read_holder_record(lock_path: Path) -> dict[str, object]:
-    try:
-        payload = json.loads(lock_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    allowed = {
+_HOLDER_RECORD_FIELDS = frozenset(
+    {
         "schema_version",
         "lock_id",
         "policy",
@@ -286,7 +280,84 @@ def _read_holder_record(lock_path: Path) -> dict[str, object]:
         "acquired_at",
         "released_at",
     }
-    return {key: payload[key] for key in allowed if key in payload}
+)
+
+
+def _filter_holder_record(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    return {key: payload[key] for key in _HOLDER_RECORD_FIELDS if key in payload}
+
+
+def _read_holder_record(lock_path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return _filter_holder_record(payload)
+
+
+def lock_holder_host_label() -> str:
+    """The machine label a holder record carries; readers compare against it."""
+
+    return _safe_label(socket.gethostname(), fallback="unknown")
+
+
+# Liveness of a lock's last holder, read from its record alone. The kernel lock
+# is never probed: a probe would hold the lock for an instant, and a real
+# single-flight acquisition racing that instant would be refused for nothing.
+LOCK_HOLDER_LIVE = "live"
+LOCK_HOLDER_RELEASED = "released"
+LOCK_HOLDER_DEAD = "dead"
+LOCK_HOLDER_FOREIGN_HOST = "foreign_host"
+LOCK_HOLDER_UNREADABLE = "unreadable"
+LOCK_HOLDER_ABSENT = "absent"
+LOCK_HOLDER_LIVENESS_STATES = (
+    LOCK_HOLDER_LIVE,
+    LOCK_HOLDER_RELEASED,
+    LOCK_HOLDER_DEAD,
+    LOCK_HOLDER_FOREIGN_HOST,
+    LOCK_HOLDER_UNREADABLE,
+    LOCK_HOLDER_ABSENT,
+)
+
+
+def lock_holder_liveness(path: Path) -> tuple[str, dict[str, object]]:
+    """Classify the last holder of one lock without touching the kernel lock.
+
+    Returns the liveness state and the filtered holder record. ``released``
+    means the holder wrote ``released_at`` on a clean exit; ``dead`` means the
+    record names this machine and the pid is gone, which is what a crashed or
+    killed holder leaves behind; ``foreign_host`` means the pid cannot be
+    checked from here; ``unreadable`` means a lock file exists but carries no
+    parseable record, for example mid-acquisition. Only ``live`` is evidence of
+    a running holder, and even that is pid liveness, not the kernel lock: a
+    reused pid can keep a crashed holder looking alive until the next holder
+    overwrites the record.
+    """
+
+    holder_path = lock_holder_path(path)
+    try:
+        text = holder_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return LOCK_HOLDER_ABSENT, {}
+    except OSError:
+        return LOCK_HOLDER_UNREADABLE, {}
+    try:
+        record = _filter_holder_record(json.loads(text))
+    except ValueError:
+        return LOCK_HOLDER_UNREADABLE, {}
+    if not record:
+        return LOCK_HOLDER_UNREADABLE, {}
+    released_at = record.get("released_at")
+    if isinstance(released_at, str) and released_at:
+        return LOCK_HOLDER_RELEASED, record
+    if record.get("host") != lock_holder_host_label():
+        return LOCK_HOLDER_FOREIGN_HOST, record
+    pid = record.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int):
+        return LOCK_HOLDER_UNREADABLE, record
+    return (LOCK_HOLDER_LIVE if process_is_alive(pid) else LOCK_HOLDER_DEAD), record
 
 
 def _operator_action(holder: dict[str, object], *, retry_mode: str) -> dict[str, object]:

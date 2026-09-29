@@ -17,12 +17,20 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from functools import wraps
 import hashlib
-import json
 from pathlib import Path
 import re
 from typing import Any
 
-from ...file_lock import lock_holder_path, try_exclusive_file_lock
+from ...file_lock import (
+    LOCK_HOLDER_ABSENT,
+    LOCK_HOLDER_DEAD,
+    LOCK_HOLDER_FOREIGN_HOST,
+    LOCK_HOLDER_LIVE,
+    LOCK_HOLDER_RELEASED,
+    LOCK_HOLDER_UNREADABLE,
+    lock_holder_liveness,
+    try_exclusive_file_lock,
+)
 
 # Typed refusal for a lane whose single executor is already busy. The reason is
 # a fact about this lane, so a caller can retry it unchanged once it clears.
@@ -103,6 +111,18 @@ def turn_lane_singleflight(
         yield lock_path
 
 
+def _public_holder(record: Mapping[str, Any]) -> dict[str, Any]:
+    projection: dict[str, Any] = {}
+    for field in TURN_LANE_HOLDER_TEXT_FIELDS:
+        value = record.get(field)
+        if isinstance(value, str) and value:
+            projection[field] = value
+    pid = record.get("pid")
+    if isinstance(pid, int):
+        projection["pid"] = pid
+    return projection
+
+
 def turn_lane_holder_readback(target: Path) -> dict[str, Any]:
     """Return the public-safe identity of the Turn holding one lane, else ``{}``.
 
@@ -113,21 +133,34 @@ def turn_lane_holder_readback(target: Path) -> dict[str, Any]:
     hosts share one runtime root.
     """
 
-    try:
-        record = json.loads(lock_holder_path(target).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(record, Mapping):
-        return {}
-    projection: dict[str, Any] = {}
-    for field in TURN_LANE_HOLDER_TEXT_FIELDS:
-        value = record.get(field)
-        if isinstance(value, str) and value:
-            projection[field] = value
-    pid = record.get("pid")
-    if isinstance(pid, int):
-        projection["pid"] = pid
-    return projection
+    _state, record = lock_holder_liveness(target)
+    return _public_holder(record)
+
+
+# Lane liveness vocabulary: the lock owner's holder states, named here so a
+# projection can switch on them without learning the lock record format.
+TURN_LANE_LIVE = LOCK_HOLDER_LIVE
+TURN_LANE_RELEASED = LOCK_HOLDER_RELEASED
+TURN_LANE_DEAD = LOCK_HOLDER_DEAD
+TURN_LANE_FOREIGN_HOST = LOCK_HOLDER_FOREIGN_HOST
+TURN_LANE_UNREADABLE = LOCK_HOLDER_UNREADABLE
+TURN_LANE_ABSENT = LOCK_HOLDER_ABSENT
+
+
+def turn_lane_liveness(target: Path) -> dict[str, Any]:
+    """Say whether one lane's last executing Turn is still running, read-only.
+
+    The answer comes from the holder record alone: ``released_at`` for a clean
+    exit, the machine name for whether the pid can be checked here, and pid
+    liveness for a holder that never released. This never takes the lane lock,
+    not even for an instant: a probe that did would refuse a real Turn racing
+    the same instant with ``turn_lane_in_flight`` for no reason. ``live`` is
+    the only state that is evidence of execution; ``foreign_host`` and
+    ``unreadable`` are unknowns a consumer must fail closed on.
+    """
+
+    state, record = lock_holder_liveness(target)
+    return {"state": state, "holder": _public_holder(record)}
 
 
 def turn_lane_in_flight_record(
