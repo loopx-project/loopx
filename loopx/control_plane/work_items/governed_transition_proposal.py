@@ -514,7 +514,7 @@ def _apply_team_plan(
         if error.code in TEAM_PLAN_FAILURE_REASON_CODES:
             return {"action": _FAILED_RECEIPT_ACTION, "todo_id": None,
                     "target_key": None, "reason_code": error.code}
-        raise ValueError(str(error)) from None
+        raise
     except EffectRuntimeRejected as error:
         raise ValueError(str(error)) from None
 
