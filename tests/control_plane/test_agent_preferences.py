@@ -7,7 +7,9 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 def test_explicit_correction_reaches_fresh_turn_without_changing_authority(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    nested = tmp_path / ("workspace  dir" * 12)
+    nested.mkdir()
+    _, runtime, registry = _write_fixture(nested, required_capability="network")
     before = registry.read_bytes()
     scope = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     def call(action, *args):
@@ -35,7 +37,11 @@ def test_explicit_correction_reaches_fresh_turn_without_changing_authority(tmp_p
     assert quota["capability_gate"]["action"] == off["capability_gate"]["action"]
     rc, plan = _run_cli(registry, runtime, "turn", "plan", *scope)
     assert rc == 0, plan
+    preference_read = next(x for x in reads if x["kind"] == "agent_preferences")
+    assert len(preference_read["command"]) > 360
     assert "semantic-preference agent read" in json.dumps(plan), plan
+    assert any(x["command"] == preference_read["command"]
+               for x in plan["turn_envelope"]["required_reads"]), plan
     rc, corrected = call("remember", "--key", "review.collaboration", "--statement", "Do not delegate review.",
         "--source-ref", "owner-message-2", "--source-quote", "Stop asking a reviewer.",
         "--expected-revision", fresh["current"]["revision"], "--operation-id", "correct-2", "--execute")

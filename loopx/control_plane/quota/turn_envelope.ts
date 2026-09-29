@@ -299,11 +299,13 @@ function requiredReads(interaction: JsonObject, payload: JsonObject): JsonObject
   const raw = interaction.required_reads || payload.required_reads;
   if (!Array.isArray(raw)) return [];
   const result: JsonObject[] = [];
-  for (const value of raw.slice(0, 5)) {
+  for (const value of raw) {
     const item = object(value);
     const promptBudget = item.source === "turn_start_capability_hook"
       ? turnStartPromptBudgetBytes(item.prompt_budget_bytes) : 0;
-    const command = text(item.command, promptBudget || 360);
+    // Required reads are executable obligations, not display summaries. Keep
+    // every admitted command byte-for-byte, including quoted path whitespace.
+    const command = scalarString(item.command, "required read command");
     if (!command) continue;
     const compact: JsonObject = { command };
     if (promptBudget) compact.prompt_budget_bytes = promptBudget;
