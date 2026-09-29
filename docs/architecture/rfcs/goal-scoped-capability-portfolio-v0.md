@@ -526,6 +526,18 @@ settings editor already owns these configurations and their readback. Live
 memory/usage/correction controls and Lark evidence returns remain delivery work,
 not acceptance supplied by CLI tests.
 
+The explicit Agent preference slice now implements a narrow part of the
+correction journey: the existing `semantic-preference` capability owns a
+TS lifecycle backed by the shared transactional storage implementation in an
+isolated private context namespace. Current explicit preferences have stable
+subjects, source references, revisions and retirement/expiry; CLI quota and
+native Turn entry points disclose an exact current read. This is not a universal
+memory database, an authorization grant or proof of learned-experience utility.
+See [operation and boundaries](../../../loopx/capabilities/semantic_preference/README.md#explicit-agent-preferences).
+Remaining acceptance includes authenticated external-message ingestion,
+Dashboard/Lark inspection, cross-host migration and measured decision utility
+for episodic recall. Do not count this slice as completion of all M0–M5.
+
 Next, qualify one **correction → fresh-session decision** journey before adding
 a composition planner: persist an authorized correction, show the affected
 source and superseded assertion, resume a different session, retrieve the

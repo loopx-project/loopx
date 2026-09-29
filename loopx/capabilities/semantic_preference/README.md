@@ -1,7 +1,11 @@
-# Semantic preference hook
+# Semantic preferences
 
 For the built-in OpenViking project-scoped adapter, see
 [OpenViking project peer provider](docs/openviking-project-peer.md).
+
+LoopX supports explicit local Agent preferences and optional provider recall.
+They have different update rules: explicit preferences use the lifecycle below;
+provider-owned experiences keep their existing provider and application contract.
 
 LoopX can optionally recall semantic preferences before a domain action and
 build a compact application receipt afterwards. The hook is deliberately thin:
@@ -9,7 +13,7 @@ the provider owns storage, ranking, and semantic content; the caller owns how a
 preference affects its output and writes the receipt through existing LoopX
 evidence or state surfaces.
 
-The hook is disabled unless a caller supplies an enabled local-private JSON
+The external recall hook is disabled unless a caller supplies an enabled local-private JSON
 config. Config files inside a git project must be ignored; tracked configs are
 rejected. LoopX never copies the provider command, config path, recalled
 semantic content, or raw provider errors into receipts.
@@ -208,3 +212,121 @@ receipt = application_receipt(
 )
 # Write `receipt` through an existing LoopX evidence/state surface.
 ```
+
+## Explicit Agent preferences
+
+Use `semantic-preference agent` for an owner's durable instructions about how
+an Agent should work. This is **advisory context**, not a permission store,
+Goal configuration, capability enablement or an automatic execution engine.
+Existing authorization and exact-head review rules still govern actions.
+The local trusted caller attests the user instruction; a source reference is
+provenance, not cryptographic authentication of the speaker.
+
+The built-in local provider reuses `AuthorityStore` transactions, conditional
+revisions and retained history. TypeScript owns validation, replacement,
+retirement, expiry and replay. Python only resolves the registered Goal and
+adapts CLI/host inputs. This store is private runtime context, separate from
+Goal/Todo authority and its selected File/SQLite/PostgreSQL provider. It needs
+no optional memory service. The lifecycle is also tested against real SQLite;
+this does not introduce a new user-selectable memory backend or claim remote
+memory synchronization.
+
+The exact scope is runtime + resolved Goal state file + Goal instance (when
+present) + Goal id + Agent id. Global/project registry aliases pointing at the
+same Goal share preferences; another Goal or Agent does not inherit them.
+No copying host conversations, cross-home rebinding or implicit global corpus.
+Moving the Goal state file requires an explicit context migration; it is not
+silently treated as the same private scope.
+
+### Read, remember, correct and retire
+
+```bash
+loopx semantic-preference agent read --goal-id demo --agent-id author --format json
+
+# A truly empty store reports revision=null. Otherwise pass the exact revision.
+loopx semantic-preference agent remember --goal-id demo --agent-id author \
+  --key review.collaboration --statement 'Ask the designated reviewer before merging.' \
+  --source-ref owner-message-1 --source-quote 'Use the designated reviewer for my changes.' \
+  --expected-revision none --operation-id preference-1
+# Inspect the preview, then repeat exactly with --execute and read back.
+```
+
+Keys name stable subjects, not individual messages. A correction reuses
+`review.collaboration`, a **new operation id**, and the revision from a fresh
+read. `--expires-at` optionally bounds validity with a UTC ISO timestamp.
+The CLI does not classify natural language or run an LLM. The host interprets
+an explicit user message and calls this typed transition; retrieved documents
+and model-generated lessons are not admissible write sources.
+
+| User intent | Update | Next fresh decision |
+| --- | --- | --- |
+| Use the designated reviewer from now on | Remember the collaboration preference | Read and apply it under current authority |
+| Stop asking a reviewer | Replace the same key with the negative preference | Do not act on the superseded positive preference |
+| This time skip the reviewer | Keep durable preference; use the current task exception | Later tasks still read the durable preference |
+| Forget this preference | Retire the same key | Tombstone invalidates cached guidance; no older value is resurrected |
+| Here is an example: “stop asking a reviewer” | No update | Quotation is not a user correction |
+
+```bash
+loopx semantic-preference agent retire --goal-id demo --agent-id author \
+  --key review.collaboration --source-ref owner-message-2 \
+  --source-quote 'Forget my review preference.' \
+  --expected-revision '<fresh read revision>' --operation-id preference-2 --execute
+loopx semantic-preference agent history --goal-id demo --agent-id author --format json
+```
+
+History is paginated (`--after-cursor`), preserves sources and predecessor
+operation ids, and is not injected into the action context. Retirement is not
+physical erasure: older statements remain in private history/backups. There is
+no automatic upload. Back up the private runtime directory with normal host
+backups; do not publish its journal or include it in public fixtures.
+
+Uncertain writes retry the **same operation id and exact original arguments**.
+Replay returns the old receipt with the **current** view, never rewrites its old
+projection. Stale revisions and changed same-id requests are explicit conflicts;
+read and reconcile before proposing a new operation. Do not blindly retry with
+a newly fetched revision, which would hide a concurrent correction.
+
+### Fresh-turn adoption
+
+After any preference has been committed, CLI quota admission and native Turn
+planning/execution disclose a required owner-local read through the existing
+turn-start hook. Counts and the read command enter the turn envelope; private
+statements and source quotes do not enter generic quota/status or public sinks.
+The command reads all current scoped entries, including retired/expired markers,
+instead of relying on embedding or keyword ranking to find a prohibition.
+
+The managed `/loopx` instructions teach the host to persist explicit corrections,
+read them back, and re-read before a preference-dependent external action.
+A new user instruction overrides old context immediately, including while a
+write is being recovered. An unreadable store is unavailable, not empty: do not
+act on a cached preference; independent work can continue. This is a host
+obligation, **not** a claim that a generic memory engine intercepts every tool
+call atomically. Native hosts must execute the disclosed read, and ordinary
+unmanaged conversations have no automatic hook.
+
+The bounded current view accepts at most 64 subject keys and 32 KiB of records.
+Capacity failure rejects the write; it never silently evicts an old constraint.
+Expired/retired statements are not actionable. A later remember of a retired
+key needs a fresh explicit user source and current revision. Journal retention
+and physical erasure are separate work, not implemented by `retire`.
+
+No frontend configuration editor is added: this slice is owner-local CLI/host
+context, not Goal settings. Dashboard/Lark memory inspection and authenticated
+message ingestion remain outside this slice; external messages must not be
+silently promoted to preferences by a display surface.
+
+### Design evidence
+
+The design deliberately separates explicit instructions from probabilistic
+experience recall. [LangGraph](https://docs.langchain.com/oss/python/concepts/memory)
+distinguishes procedural, semantic and episodic memory and namespaced long-term
+state. [Letta blocks](https://docs.letta.com/v1-sdk/memory/memory-blocks) illustrate
+bounded always-visible working context, separate from archival search.
+[Zep temporal search](https://help.getzep.com/searching-the-graph) distinguishes
+when facts are valid from when the system learned or invalidated them.
+[Mem0 Dream](https://docs.mem0.ai/platform/features/dream) retains superseded
+memories and offers latest-only filtering. These are documented mechanisms,
+not comparative performance evidence. Here explicit correction commits
+synchronously, preserves history, and deterministic current-state reading
+excludes superseded instructions from action guidance; it does not wait for
+background consolidation or a relevant search hit.

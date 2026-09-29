@@ -13,15 +13,25 @@ SEMANTIC_PREFERENCE_CATALOG_ENTRY: dict[str, Any] = {
         "site_root": "capabilities/semantic-preference",
         "canonical": "README.md",
     },
-    "title": "Optional semantic preference hook",
+    "title": "Explicit Agent preferences and optional semantic recall",
     "status": "active-preview",
     "real_world_anchor": "provider-neutral preference recall before domain work",
     "user_value": (
-        "Let any LoopX module recall provider-owned semantic preferences and "
-        "record a compact application receipt without creating a second memory ledger."
+        "Maintain explicit revocable Agent preferences and recall provider-owned "
+        "experiences with separate source, lifecycle and application contracts."
     ),
     "entry_command": "loopx semantic-preference recall --config <ignored-config.json> --surface <module.surface> --format json",
     "commands": [
+        {
+            "command": "loopx semantic-preference agent read --goal-id <goal> --agent-id <agent> --format json",
+            "purpose": "Read the exact current owner-local Agent preferences, including retirement and expiry markers.",
+            "write_boundary": "read-only private context; not action authority or public projection",
+        },
+        {
+            "command": "loopx semantic-preference agent remember --goal-id <goal> --agent-id <agent> --key <subject> --statement <preference> --source-ref <message> --source-quote <quote> --expected-revision <revision> --operation-id <id> --execute",
+            "purpose": "Commit a source-backed explicit user preference or correction with conditional revision and same-operation replay.",
+            "write_boundary": "owner-local Agent context only; no Goal/Todo/grant mutation or external delivery",
+        },
         {
             "command": "loopx semantic-preference doctor --config <ignored-config.json> --execute --format json",
             "purpose": "Check a configured provider entry point and optional read-only probe, then return explicit install/config guidance when unavailable.",
@@ -81,13 +91,13 @@ SEMANTIC_PREFERENCE_CATALOG_ENTRY: dict[str, Any] = {
     ],
     "docs": ["loopx/capabilities/semantic_preference/README.md"],
     "boundaries": [
-        "The hook is disabled until an enabled local-private config is supplied.",
+        "External recall is disabled until configured; explicit local preferences are activated by an owner-authorized remember commit.",
         "Surface ids and queries are domain-owned configuration; the runtime has no issue-fix branch.",
-        "LoopX does not persist recalled semantic content, receipts, provider commands, config paths, or raw errors.",
+        "External recall does not persist provider content; explicit Agent preferences and their source quotes remain in private runtime history.",
         "Provider failures follow explicit fail-open/fail-closed policy and do not become user gates automatically.",
         "Provider setup remains guidance-only: package, service, config, and credential writes require an explicit operator action.",
     ],
     "next_real_step": (
-        "Keep the hook opt-in until a second domain module proves useful recall and existing-state receipt writeback."
+        "Qualify correction-to-fresh-session adoption separately from episodic recall utility and cross-host context migration."
     ),
 }
