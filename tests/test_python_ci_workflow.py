@@ -394,5 +394,20 @@ def test_typescript_core_shards_feed_one_complete_coverage_report() -> None:
     assert "name: typescript-control-plane-coverage" in report
     assert "path: coverage/control-plane/lcov.info" in report
     forward = WORKFLOW.split("  node-forward-compatibility:\n", 1)[1].split("  test-shard:\n", 1)[0]
-    assert "github.event_name != 'pull_request'" in forward
+    assert "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" in forward
     assert "continue-on-error: true" in forward
+
+
+def test_merge_queue_candidates_run_full_qualification() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(WORKFLOW)
+    assert "merge_group" in workflow[True]
+    classify = WORKFLOW.split("name: Classify the exact pull-request change", 1)[1].split("      - uses:", 1)[0]
+    # Only pull_request may classify an exemption; queue candidates take the
+    # non-PR branch, which the classifier always plans as full.
+    assert 'if [[ "$EVENT_NAME" == pull_request ]]; then' in classify
+    assert "--non-pr" in classify.split("else", 1)[1]
+    assert "github.event_name != 'merge_group'" in WORKFLOW.split("  sonar:\n", 1)[1].split("    uses:", 1)[0]
+    # The required check list is unchanged: merge-gate always reports.
+    assert "if: always()" in WORKFLOW.split("  merge-gate:\n", 1)[1]
