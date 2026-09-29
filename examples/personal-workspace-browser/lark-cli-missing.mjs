@@ -9,16 +9,20 @@ const larkCliMissing = {
   ok: false,
 };
 
+const larkReads = /\/api\/chat\/lark\/(apps|connections)(\?.*)?$/u;
+const answerCliMissing = (route) => route.fulfill({ contentType: "application/json", json: larkCliMissing, status: 503 });
+
 export const larkCliMissingScenario = {
   id: "lark-cli-missing",
   async run({ browser, collectCoverage, url }) {
+    const setupRequests = [];
     const context = await openWorkspacePage(browser, url, {
       beforeGoto: async (_api, page) => {
-        await page.route(/\/api\/chat\/lark\/(apps|connections)(\?.*)?$/u, (route) => route.fulfill({
-          contentType: "application/json",
-          json: larkCliMissing,
-          status: 503,
-        }));
+        await page.route(larkReads, answerCliMissing);
+        await page.route(/\/api\/chat\/lark\/app-setups/u, (route) => {
+          setupRequests.push(route.request().method());
+          return route.fulfill({ contentType: "application/json", json: larkCliMissing, status: 503 });
+        });
       },
       collectCoverage,
     });
@@ -28,7 +32,18 @@ export const larkCliMissingScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
       await page.getByRole("button", { name: "Goal 信息", exact: true }).click();
       await page.locator(".personal-goal-repository").getByText("loopx-ai/loopx", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
-      await page.keyboard.press("Escape");
+
+      // The Goal drawer's own entry opens the connection dialog; its
+      // "register another App" option must not reach the setup either.
+      await page.getByRole("dialog").getByRole("button", { name: "连接 Lark App", exact: true }).click();
+      const registerOption = page.locator('select[aria-label="Lark App"] option[value="__register__"]');
+      await registerOption.waitFor({ state: "attached", timeout: 10_000 });
+      // The dialog opens before its Lark read fails; the option must settle disabled.
+      await page.waitForFunction(() => document.querySelector('select[aria-label="Lark App"] option[value="__register__"]')?.disabled === true, null, { timeout: 10_000 })
+        .catch(() => { throw new Error("The connection dialog still offered Lark App setup without lark-cli"); });
+      if (await page.locator("#new-lark-app-title").count()) throw new Error("Lark App setup opened without lark-cli");
+      await page.goto(url, { waitUntil: "networkidle" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
 
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await page.getByRole("button", { name: "Lark", exact: true }).click();
@@ -36,6 +51,18 @@ export const larkCliMissingScenario = {
       await page.locator(".personal-lark-tabs").getByRole("button", { name: /^Lark Apps/u }).click();
       if (!await page.getByRole("button", { name: "新建 Lark App" }).isDisabled()) {
         throw new Error("New Lark App stayed available while lark-cli is missing");
+      }
+      if (setupRequests.length) throw new Error(`Lark App setup was requested without lark-cli: ${setupRequests.join(",")}`);
+
+      // With lark-cli available again the same entries stay usable.
+      await page.unroute(larkReads, answerCliMissing);
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+      await page.getByRole("button", { name: "Lark", exact: true }).click();
+      await page.locator(".personal-lark-tabs").getByRole("button", { name: /^Lark Apps/u }).click();
+      if (await page.getByRole("button", { name: "新建 Lark App" }).isDisabled()) {
+        throw new Error("New Lark App stayed disabled with lark-cli available");
       }
     } finally {
       await context.close();
