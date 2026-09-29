@@ -1527,7 +1527,7 @@
     },
     {
       "site": "loopx/control_plane/status/collection.py::<module>.collect_status::codec_read:load_registry#1",
-      "line": 98,
+      "line": 99,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
