@@ -4,9 +4,13 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
+import pytest
+
 from loopx.capabilities.external_research import cli
+from loopx.control_plane.effect_runtime import restart_effect_runtime
 
 
 def _print_payload(payload, _format, _renderer):
@@ -349,3 +353,80 @@ def test_source_cli_discovers_inventory_without_claiming_readiness(
     assert payload["summary"]["connector_count"] == payload["summary"]["provider_count"]
     assert payload["summary"]["ready_count"] == 0
     assert payload["truth_contract"]["execution_observed"] is False
+
+
+@pytest.mark.parametrize("duplicate", [
+    "https://example.com/original", "  https://example.com/original  ",
+])
+def test_source_cli_rejects_duplicate_admission_and_accepts_corrected_input(
+    tmp_path: Path, monkeypatch, duplicate: str,
+) -> None:
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+
+    def run(*args: str):
+        result = subprocess.run(
+            [sys.executable, "-m", "loopx.entrypoint", "--runtime-root",
+             str(tmp_path / "runtime"), "--registry", str(tmp_path / "registry.json"),
+             "external-evidence", *args, "--format", "json"],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True,
+            text=True, encoding="utf-8", check=False, timeout=30,
+        )
+        return result.returncode, json.loads(result.stdout)
+
+    def save(name: str, payload: dict) -> str:
+        path = tmp_path / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    try:
+        providers = save("providers.json", {"providers": [{
+            "provider_id": "host:external-research", "provider_kind": "method",
+            "protocol": "external_evidence_research_v0", "declared": True,
+            "installed": True, "enabled": True, "ready": True,
+            "unavailable_reason": None,
+        }]})
+        code, plan = run(
+            "plan", "--objective", "Inspect public evidence", "--user-activity",
+            "Choose a provider", "--decision", "Whether to adopt",
+            "--evidence-kind", "current_behavior", "--provider-inventory-json", providers,
+        )
+        assert code == 0, plan
+        source_ref = "https://example.com/original"
+        receipt = {
+            "schema_version": "loopx_external_evidence_receipt_v0",
+            "plan_id": plan["plan_id"], "request_id": plan["request"]["request_id"],
+            "provider_id": "host:external-research", "provider_kind": "method",
+            "status": "succeeded", "summary": "Synthetic public evidence",
+            "completed_at": "2026-09-28T00:01:00Z", "sources": [{
+                "source_ref": source_ref, "source_family": "public-fixture",
+                "basis": "observed", "finding": "The fixture supports the decision.",
+                "accessed_at": "2026-09-28T00:00:00Z",
+                "content_digest": "sha256:" + "a" * 64,
+            }],
+        }
+        admit_args = (
+            "admit", "--plan-json", save("plan.json", plan),
+            "--receipt-json", save("receipt.json", receipt),
+            "--decision", "admit", "--reason", "Direct evidence",
+            "--admit-source", source_ref,
+        )
+        code, rejected = run(*admit_args, "--admit-source", duplicate)
+        assert code == 1, rejected
+        assert rejected["status"] == "invalid_request"
+        assert "decision.admitted_source_refs must be unique" in rejected["error"]
+        assert "admission_id" not in rejected
+
+        code, admission = run(*admit_args)
+        assert code == 0, admission
+        assert admission["admitted_source_refs"] == [source_ref]
+        code, retirement = run(
+            "retire", "--admission-json", save("admission.json", admission),
+            "--downstream-source", source_ref,
+        )
+        assert code == 0, retirement
+        assert retirement["status"] == "retire_ready"
+    finally:
+        restart_effect_runtime()

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from ..coordination.local_authority import CanonicalTodoSnapshot
 from ..goals.acceptance_observation import attach_goal_acceptance_observations
 from ..goals.artifact_lifecycle import attach_goal_artifact_lifecycle_projections
 from ..goals.contract_health import project_contract_health_for_goal
@@ -124,6 +125,7 @@ def collect_status(
     )
     history = history_collection.status_history
     history_read_at = now_utc_iso()
+    todo_snapshot = CanonicalTodoSnapshot()
     contract = context.check_contract(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
@@ -133,11 +135,13 @@ def collect_status(
         include_public_boundary_scan=include_public_boundary_scan,
         activation_state_filter=activation_filter,
         history_audit=history_collection.contract_audit,
+        todo_snapshot=todo_snapshot,
         registry=registry,
     )
     contract_read_at = now_utc_iso()
     contract = project_contract_health_for_goal(contract, goal_id=goal_filter)
     queue = context.build_attention_queue(
+        todo_snapshot=todo_snapshot,
         contract=contract,
         history=history,
         global_registry=global_registry,
@@ -149,6 +153,9 @@ def collect_status(
         ),
         events_for_goal=rollout_events.events_for_goal,
     )
+    # No later projection consumes canonical rows; release retained archive
+    # data before assembling the rest of the display.
+    del todo_snapshot
     runtime_summaries = context.build_runtime_summaries(
         history=history,
         queue=queue,

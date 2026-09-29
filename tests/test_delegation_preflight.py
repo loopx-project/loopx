@@ -685,7 +685,7 @@ def test_preflight_does_not_call_an_invalidated_acceptance_ready(service):
     assert result["state"] in {"turn_blocked", "acceptance_unavailable"}
 
 
-@pytest.mark.parametrize("validation_basis", ["goal_acceptance", "independent", "missing_workspace"])
+@pytest.mark.parametrize("validation_basis", ["goal_acceptance", "independent", "missing_workspace", "independent_missing", "validation_files_unavailable"])
 def test_http_team_readback_uses_original_scope_without_a_new_turn(service, validation_basis):
     import http.client
     import threading
@@ -694,10 +694,10 @@ def test_http_team_readback_uses_original_scope_without_a_new_turn(service, vali
     from loopx.chat_store import ChatSessionStore
 
     root, runner = service
-    if validation_basis == "independent":
+    if validation_basis in {"independent", "independent_missing"}:
         from test_independent_delegation_validation import independent_binding
 
-        independent_binding(service)
+        independent_binding(service, declared=validation_basis == "independent")
     elif validation_basis == "missing_workspace":
         binding_config = json.loads(runner.config.read_text())
         binding_config["bindings"][0]["workspace"] = str(root / "missing-worker")
@@ -706,6 +706,9 @@ def test_http_team_readback_uses_original_scope_without_a_new_turn(service, vali
     from pathlib import Path
 
     workspace = Path(load_goal_from_registry(runner.registry, runner.goal_id)["repo"])
+    if validation_basis == "validation_files_unavailable":
+        pin = workspace / "validation" / "acceptance.py"
+        pin.write_text(pin.read_text() + "\n# revised validator\n")
     config = workspace / ".loopx" / "config" / "delegations.json"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_bytes(runner.config.read_bytes())
@@ -779,11 +782,27 @@ def test_http_team_readback_uses_original_scope_without_a_new_turn(service, vali
             conn.close()
             assert response.status == expected, result
             if body["operation"] == "inspect":
-                assert result["state"] == (
-                    "workspace_unavailable" if validation_basis == "missing_workspace"
-                    else "runtime_unverified"
-                )
+                expected_state = {
+                    "missing_workspace": "workspace_unavailable",
+                    "independent_missing": "acceptance_unavailable",
+                    "validation_files_unavailable": "acceptance_unavailable",
+                }.get(validation_basis, "runtime_unverified")
+                if validation_basis == "validation_files_unavailable":
+                    assert result["state"] in {expected_state, "turn_blocked"}
+                else:
+                    assert result["state"] == expected_state
                 assert not any(result["effects"].values())
+                if validation_basis in {"independent_missing", "validation_files_unavailable"}:
+                    assert result["acceptance_reason_code"] == (
+                        "independent_delegation_validation_required" if validation_basis == "independent_missing"
+                        else "validation_files_unavailable"
+                    )
+                    assert result["acceptance_next_action"] == (
+                        "review_original_todo_validation" if validation_basis == "independent_missing"
+                        else "restore_original_validation_files"
+                    )
+                    assert result["acceptance_ready"] is False
+                    assert str(workspace) not in json.dumps(result)
                 if validation_basis == "missing_workspace":
                     assert result["authority_ready"] is None
                     assert result["workspace_next_action"] == "review_operator_workspace_binding"

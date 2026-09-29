@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.chat import VisibleResponseStreamFilter  # noqa: E402
+from loopx.chat import CHAT_REVIEW_OPEN_TAG, VisibleResponseStreamFilter, redact_local_paths  # noqa: E402
 from loopx.chat_agent import (  # noqa: E402
     CodexChatAgentError,
     CodexChatAgentSession,
@@ -247,7 +247,46 @@ def main() -> None:
     assert chinese_early, "Chinese prose must stream without whitespace or sentence punctuation"
     assert chinese_early + chinese_filter.finish() == long_chinese
 
+    english_filter = VisibleResponseStreamFilter()
+    english_chunks = ["Version 1.2 is ready", ".", " See example.com for notes! Next,", " run the check? Done"]
+    english_visible = [english_filter.feed(chunk) for chunk in english_chunks]
+    assert english_visible[0] == "", "a decimal or version point must not end a sentence"
+    assert english_visible[1] == "", "sentence punctuation waits for the following whitespace"
+    assert english_visible[2] == "Version 1.2 is ready. See example.com for notes! ", english_visible
+    assert english_visible[3] == "Next, run the check? ", english_visible
+    assert "".join(english_visible) + english_filter.finish() == "".join(english_chunks)
+
+    # An early sentence end must not hold back a long tail in the same chunk:
+    # the tail still streams through the length fallback before the provider
+    # sends anything else.
+    tail_filter = VisibleResponseStreamFilter()
+    tail_chunk = "Ready. " + "word " * 100
+    tail_visible = tail_filter.feed(tail_chunk)
+    assert tail_visible.startswith("Ready. word "), tail_visible[:40]
+    assert len(tail_chunk) - len(tail_visible) < 160, len(tail_visible)
+    assert tail_visible + tail_filter.finish() == tail_chunk
+
     protected_path = "/home/example/project"
+    tail_path_filter = VisibleResponseStreamFilter(protected_paths=[protected_path])
+    tail_path_text = "Ready. " + "word " * 40 + f"see {protected_path}/notes.txt " + "word " * 40
+    tail_path_chunks = [tail_path_text, CHAT_REVIEW_OPEN_TAG + '{"hidden": true}']
+    tail_path_early = tail_path_filter.feed(tail_path_chunks[0])
+    assert len(tail_path_text) - len(tail_path_early) < 160, len(tail_path_early)
+    tail_path_visible = tail_path_early + tail_path_filter.feed(tail_path_chunks[1]) + tail_path_filter.finish()
+    assert protected_path not in tail_path_visible, tail_path_visible
+    assert "hidden" not in tail_path_visible, tail_path_visible
+    assert tail_path_visible == redact_local_paths(tail_path_text, protected_paths=[protected_path]), tail_path_visible
+
+    english_path_filter = VisibleResponseStreamFilter(protected_paths=[protected_path])
+    english_path_text = f"The report is in {protected_path}/notes.txt. Review it next. "
+    english_path_visible = "".join(
+        english_path_filter.feed(english_path_text[index : index + 7])
+        for index in range(0, len(english_path_text), 7)
+    ) + english_path_filter.finish()
+    assert protected_path not in english_path_visible, english_path_visible
+    # Splitting at sentences must not change what redaction produces.
+    assert english_path_visible == redact_local_paths(english_path_text, protected_paths=[protected_path]), english_path_visible
+
     path_filter = VisibleResponseStreamFilter(protected_paths=[protected_path])
     path_text = ("前" * 150) + protected_path + "/secret.txt 后续内容"
     path_early = "".join(

@@ -174,8 +174,11 @@ function userTodoContractDiagnostic(row: JsonObject, registeredAgents: readonly 
   const classViolation = todoClassViolation("user", taskClass, blocks, global);
   if (classViolation === "task_class_missing") return "user_todo_task_class_missing";
   if (classViolation === "user_action_scope_invalid") return "user_action_blocking_scope_invalid";
-  const effectiveBound = bound ?? (taskClass === "user_gate" ? blocks : null) ?? optionalAgent(row.claimed_by);
   const effectiveGoalBound = goalBound || (taskClass === "user_gate" && global);
+  // Historical executor claims cannot narrow an explicit whole-Goal response.
+  // Explicit bound_agent and blocks_agent still participate in conflict checks.
+  const effectiveBound = bound ?? (taskClass === "user_gate" ? blocks : null)
+    ?? (effectiveGoalBound ? null : optionalAgent(row.claimed_by));
   const conflict = userTodoScopeConflict(taskClass, {
     bound_agent: effectiveBound, goal_bound: effectiveGoalBound,
     blocks_agent: blocks, global_gate: global,

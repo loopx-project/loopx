@@ -9,6 +9,7 @@ export function WorkspaceShell({
   drawerOpen,
   main,
   mobileSidebarOpen = false,
+  notice,
   onCloseMobileSidebar,
   sidebar,
   theme = "loopx",
@@ -18,6 +19,9 @@ export function WorkspaceShell({
   drawerOpen: boolean;
   main: ReactNode;
   mobileSidebarOpen?: boolean;
+  // A service notice belongs to the main column: rendered outside the shell
+  // it pushed the full-height workspace below the viewport.
+  notice?: ReactNode;
   onCloseMobileSidebar?: () => void;
   sidebar: ReactNode;
   theme?: WorkspaceTheme;
@@ -72,7 +76,7 @@ export function WorkspaceShell({
           {sidebar}
         </div>
       </aside>
-      <main aria-hidden={mobileSidebarOpen || undefined} className="personal-workspace-main" inert={mobileSidebarOpen || undefined}>{main}</main>
+      <main aria-hidden={mobileSidebarOpen || undefined} className={`personal-workspace-main${notice ? " has-notice" : ""}`} inert={mobileSidebarOpen || undefined}>{notice}{main}</main>
       {drawerOpen ? <aside className="personal-workspace-drawer" data-context-drawer data-drawer-mode={drawerMode}>{drawer}</aside> : null}
     </section>
   );

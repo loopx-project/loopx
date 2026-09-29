@@ -448,6 +448,10 @@ export function evaluateExternalEvidenceAdmission(params: JsonObject): JsonObjec
   const admittedRefs = decision.admitted_source_refs === undefined
     ? []
     : boundedStrings(decision.admitted_source_refs, "decision.admitted_source_refs", 64, 2048);
+  requireThat(
+    new Set(admittedRefs).size === admittedRefs.length,
+    "decision.admitted_source_refs must be unique",
+  );
   const availableRefs = new Set(sources.map((source) => source.source_ref as string));
   requireThat(
     admittedRefs.every((sourceRef) => availableRefs.has(sourceRef)),

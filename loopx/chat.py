@@ -106,6 +106,10 @@ class VisibleResponseStreamFilter:
     """Stream safe operator text while withholding the structured review envelope."""
 
     _FLUSH_BOUNDARIES = {"\n", "。", "！", "？"}
+    # Latin sentence punctuation ends a sentence only before whitespace, so
+    # decimals, versions, file names and URLs never split. The split lands on
+    # whitespace, which the length fallback below already treats as safe.
+    _SPACED_SENTENCE_ENDINGS = {".", "!", "?"}
     _MAX_PENDING_CHARS = 160
 
     def __init__(self, *, protected_paths: Iterable[Path | str] = ()) -> None:
@@ -114,19 +118,19 @@ class VisibleResponseStreamFilter:
         self.visible_pending = ""
         self.envelope_started = False
 
-    def _accept_visible(self, text: str, *, final: bool) -> str:
-        self.visible_pending += text
-        if final:
-            ready = self.visible_pending
-            self.visible_pending = ""
-            return redact_local_paths(ready, protected_paths=self.protected_paths)
+    def _next_boundary(self, pending: str) -> int:
         boundary = -1
-        search_limit = min(len(self.visible_pending), self._MAX_PENDING_CHARS)
-        for index, character in enumerate(self.visible_pending[:search_limit]):
+        search_limit = min(len(pending), self._MAX_PENDING_CHARS)
+        for index, character in enumerate(pending[:search_limit]):
             if character in self._FLUSH_BOUNDARIES:
                 boundary = index + 1
-        if boundary < 0 and len(self.visible_pending) >= self._MAX_PENDING_CHARS:
-            prefix = self.visible_pending[: self._MAX_PENDING_CHARS + 1]
+            elif (
+                character in self._SPACED_SENTENCE_ENDINGS
+                and pending[index + 1 : index + 2] in {" ", "\t"}
+            ):
+                boundary = index + 2
+        if boundary < 0 and len(pending) >= self._MAX_PENDING_CHARS:
+            prefix = pending[: self._MAX_PENDING_CHARS + 1]
             whitespace = max(prefix.rfind(" "), prefix.rfind("\t"))
             if whitespace >= 0:
                 boundary = whitespace + 1
@@ -134,16 +138,30 @@ class VisibleResponseStreamFilter:
                 boundary = self._MAX_PENDING_CHARS
             else:
                 for index, character in enumerate(
-                    self.visible_pending[self._MAX_PENDING_CHARS :],
+                    pending[self._MAX_PENDING_CHARS :],
                     start=self._MAX_PENDING_CHARS,
                 ):
                     if character in " \t\r\n`'\"<>":
                         boundary = index + 1
                         break
-        if boundary < 0:
+        return boundary
+
+    def _accept_visible(self, text: str, *, final: bool) -> str:
+        self.visible_pending += text
+        if final:
+            ready = self.visible_pending
+            self.visible_pending = ""
+            return redact_local_paths(ready, protected_paths=self.protected_paths)
+        # One chunk can hold several safe boundaries. Keep cutting until none
+        # is left, so an early sentence never holds back a long tail that the
+        # length fallback would otherwise release.
+        ready_length = 0
+        while (boundary := self._next_boundary(self.visible_pending[ready_length:])) > 0:
+            ready_length += boundary
+        if not ready_length:
             return ""
-        ready = self.visible_pending[:boundary]
-        self.visible_pending = self.visible_pending[boundary:]
+        ready = self.visible_pending[:ready_length]
+        self.visible_pending = self.visible_pending[ready_length:]
         return redact_local_paths(ready, protected_paths=self.protected_paths)
 
     def feed(self, chunk: str) -> str:

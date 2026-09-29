@@ -31,7 +31,6 @@ from ..heartbeat_prompt import (
 )
 from ..kiro_cli_goal_mode import KIRO_CLI_BIN
 from ..paths import default_public_scan_root
-from ..presentation.renderers.status_markdown import render_status_markdown
 from ..registry import (
     inspect_registry,
     inspect_registry_boundary,
@@ -187,6 +186,27 @@ def register_support_control_commands(
         "--verbose", action="store_true", help="Print HTTP request logs."
     )
     register_chat_and_dashboard_commands(subparsers, add_subcommand_format)
+
+
+def _start_failure_markdown(
+    command: str,
+) -> Callable[[dict[str, object]], str]:
+    """Render a local service start failure without the status projection.
+
+    A failed start has no status payload, so the status renderer would print an
+    empty status table and drop the error that tells the operator what to fix.
+    """
+
+    def render(payload: dict[str, object]) -> str:
+        lines = [f"# LoopX {command} could not start", "", f"- error: {payload.get('error')}"]
+        if payload.get("registry"):
+            lines.append(f"- registry: `{payload['registry']}`")
+        gate = payload.get("gate")
+        if isinstance(gate, dict) and gate.get("next_action"):
+            lines.append(f"- next action: {gate['next_action']}")
+        return "\n".join(lines)
+
+    return render
 
 
 def handle_support_control_command(
@@ -534,7 +554,7 @@ def handle_support_control_command(
                 "runtime_root": args.runtime_root,
                 "error": str(exc),
             }
-            print_payload(payload, args.format, render_status_markdown)
+            print_payload(payload, args.format, _start_failure_markdown("serve-status"))
             return 1
         return 0
 
@@ -578,7 +598,7 @@ def handle_support_control_command(
                 "schema_version": "loopx_dashboard_start_v0",
                 "error": str(exc),
             }
-            print_payload(payload, args.format, render_status_markdown)
+            print_payload(payload, args.format, _start_failure_markdown("dashboard"))
             return 1
 
     if args.command == "chat":
@@ -628,7 +648,7 @@ def handle_support_control_command(
                     "next_action": "Resolve the reported local host capability, then retry loopx chat.",
                 },
             }
-            print_payload(payload, args.format, render_status_markdown)
+            print_payload(payload, args.format, _start_failure_markdown("chat"))
             return 1
         return 0
 

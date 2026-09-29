@@ -8,6 +8,7 @@ fails closed instead of consulting the legacy Markdown projection.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -259,6 +260,44 @@ def read_canonical_todos_if_promoted(
                 code="local_authority_projection_confirmation_invalid", payload=payload,
             )
     return payload
+
+
+class CanonicalTodoSnapshot:
+    """One read-only request's complete Todo inputs, isolated from its consumers.
+
+    Only identical no-lease, no-writeback reads participate. This is not a TTL
+    cache or a transaction spanning Goals, registry, Markdown or rollout events.
+    The first validated read (or authority failure) is retained per runtime/Goal;
+    the next request must construct a new instance. Mutation/admission callers
+    keep using fresh reads and the provider's transaction checks.
+    """
+
+    def __init__(self) -> None:
+        self._reads: dict[
+            tuple[Path, str], dict[str, Any] | None | LocalCoordinationAuthorityUnavailable
+        ] = {}
+
+    def read(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any] | None:
+        key = (runtime_root.expanduser().resolve(strict=False), goal_id)
+        if key not in self._reads:
+            try:
+                self._reads[key] = read_canonical_todos_if_promoted(
+                    runtime_root=key[0], goal_id=goal_id,
+                )
+            except LocalCoordinationAuthorityUnavailable as error:
+                # A failed first read cannot become a successful attention view
+                # later in the same request, contradicting contract diagnostics.
+                self._reads[key] = LocalCoordinationAuthorityUnavailable(
+                    str(error), code=error.code, payload=deepcopy(error.payload),
+                )
+        result = self._reads[key]
+        if isinstance(result, LocalCoordinationAuthorityUnavailable):
+            raise LocalCoordinationAuthorityUnavailable(
+                str(result), code=result.code, payload=deepcopy(result.payload),
+            )
+        # Summary enrichment mutates nested records. Never share those mutations
+        # with contract checks, another role, or the retained snapshot itself.
+        return deepcopy(result)
 
 
 def read_canonical_todo_fields_if_promoted(

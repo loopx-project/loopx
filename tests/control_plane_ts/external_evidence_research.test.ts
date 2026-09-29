@@ -245,6 +245,55 @@ test("admits exact source refs and exposes only compact provenance", () => {
   assert.equal(Object.hasOwn(projection, "raw_content"), false);
 });
 
+for (const duplicate of [
+  "https://example.com/original",
+  "  https://example.com/original  ",
+]) {
+  test(`admission rejects duplicate source refs after normalization: ${JSON.stringify(duplicate)}`, () => {
+    const currentPlan = plan();
+    assert.throws(
+      () => evaluateExternalEvidenceAdmission({
+        plan: currentPlan,
+        receipt: receipt(currentPlan),
+        decision: {
+          disposition: "admit",
+          reason: "Direct evidence must yield a readable admission.",
+          admitted_source_refs: ["https://example.com/original", duplicate],
+        },
+      }),
+      /decision\.admitted_source_refs must be unique/,
+    );
+  });
+}
+
+test("distinct source selections remain readable through retirement", () => {
+  const currentPlan = plan();
+  const currentReceipt = receipt(currentPlan);
+  const first = "https://example.com/original";
+  const second = "https://example.com/second";
+  currentReceipt.sources.push({ ...currentReceipt.sources[0], source_ref: second });
+  for (const refs of [[second], [second, first]]) {
+    const admission = evaluateExternalEvidenceAdmission({
+      plan: currentPlan,
+      receipt: currentReceipt,
+      decision: {
+        disposition: "admit",
+        reason: "Selected sources answer the question.",
+        admitted_source_refs: refs,
+      },
+    });
+    assert.deepEqual(admission.admitted_source_refs, refs);
+    assert.equal(
+      projectExternalEvidenceRetirement({ admission, downstream_source_refs: [] }).status,
+      "retained",
+    );
+    assert.equal(
+      projectExternalEvidenceRetirement({ admission, downstream_source_refs: refs }).status,
+      "retire_ready",
+    );
+  }
+});
+
 test("admission fails closed on stale plan identity and local file provenance", () => {
   const currentPlan = plan();
   assert.throws(

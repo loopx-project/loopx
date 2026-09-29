@@ -943,7 +943,7 @@
     },
     {
       "site": "loopx/contract.py::<module>.check_contract::codec_read:load_registry#1",
-      "line": 1063,
+      "line": 1067,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1527,7 +1527,7 @@
     },
     {
       "site": "loopx/control_plane/status/collection.py::<module>.collect_status::codec_read:load_registry#1",
-      "line": 97,
+      "line": 98,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

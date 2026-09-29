@@ -136,6 +136,30 @@ export function delegationRuntimeFacts(executor: JsonObject): JsonObject {
   return facts;
 }
 
+const todoValidationReasons = new Set([
+  "independent_delegation_validation_required", "completion_validation_declaration_unavailable",
+  "completion_validation_declaration_mismatch",
+]);
+
+/** Project the existing validation owner's facts, never its commands or private
+ * errors. Matching identity and file readiness retain the original admission. */
+function delegationAcceptanceFacts(todoId: unknown, acceptance: JsonObject | null, filesCurrent: unknown) {
+  const matching = acceptance?.todo_id === todoId;
+  const ready = matching && acceptance?.state === "ready" && filesCurrent === true;
+  if (ready) return {acceptance_ready: true, acceptance_reason_code: null, acceptance_next_action: "none"};
+  if (matching && acceptance?.state === "unbound" && typeof acceptance.reason === "string"
+      && todoValidationReasons.has(acceptance.reason)) {
+    return {acceptance_ready: false, acceptance_reason_code: acceptance.reason,
+      acceptance_next_action: "review_original_todo_validation"};
+  }
+  if (matching && acceptance?.state === "ready" && filesCurrent === false) {
+    return {acceptance_ready: false, acceptance_reason_code: "validation_files_unavailable",
+      acceptance_next_action: "restore_original_validation_files"};
+  }
+  return {acceptance_ready: false, acceptance_reason_code: "acceptance_binding_unavailable",
+    acceptance_next_action: "review_original_task_acceptance"};
+}
+
 /** Read the actual dry-run route/profile, never infer readiness from assignment. */
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
@@ -157,6 +181,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
         state: "workspace_unavailable", workspace_state: workspace.state,
         workspace_next_action: "review_operator_workspace_binding",
         turn_eligible: false, turn_route: null, acceptance_ready: false,
+        acceptance_reason_code: null, acceptance_next_action: "none",
         authority_ready: null, authority_reason: null, authority_state: "uninspected",
         authority_next_action: "none", promotion_from_surface_allowed: false,
         executor: null,
@@ -189,6 +214,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       schema_version: "loopx_delegation_preflight_v0", binding,
       state: "authority_unavailable", turn_eligible: false, turn_route: null,
       acceptance_ready: false, authority_ready: false,
+      acceptance_reason_code: null, acceptance_next_action: "none",
       authority_reason: boundedReason(authority.reason, "canonical authority unavailable"),
       authority_state: authorityState, authority_next_action: authorityNextAction,
       promotion_from_surface_allowed: false,
@@ -213,8 +239,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     return {
       schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked",
       turn_eligible: false, turn_route: null, turn_blocker: refusal,
-      acceptance_ready: acceptance?.todo_id === binding.todo_id && acceptance?.state === "ready"
-        && params.validation_files_current === true,
+      ...delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current),
       authority_ready: true, authority_reason: null, authority_state: "promoted",
       authority_next_action: "none", promotion_from_surface_allowed: false,
       executor: null, effects,
@@ -230,14 +255,15 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   requireThat(typeof route.would_invoke_host === "boolean", "Turn admission observation required");
   const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id;
   const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
-  const pinned = acceptance?.todo_id === binding.todo_id && acceptance?.state === "ready" && params.validation_files_current === true;
+  const acceptanceFacts = delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current);
+  const pinned = acceptanceFacts.acceptance_ready;
   const state = !eligible ? "turn_blocked" : !pinned ? "acceptance_unavailable"
     : executor.available === false ? "runtime_unavailable"
     : executor.available === null ? "runtime_unverified" : "launchable";
   return {
     schema_version: "loopx_delegation_preflight_v0", binding,
     state, turn_eligible: eligible, turn_route: route.kind,
-    acceptance_ready: pinned, authority_ready: true, authority_reason: null,
+    ...acceptanceFacts, authority_ready: true, authority_reason: null,
     authority_state: "promoted", authority_next_action: "none",
     promotion_from_surface_allowed: false,
     executor: {host: executor.executor, available: executor.available,

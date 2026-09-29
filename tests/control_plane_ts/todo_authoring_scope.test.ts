@@ -142,6 +142,21 @@ test("canonical diagnostics keep metadata and non-terminal user rules without re
   assert.deepEqual(codes([open({task_class: "user_action", excluded_agents: ["agent-a"]})]), ["todo_executor_exclusion_scope_invalid"]);
   assert.deepEqual(codes([open({status: "done", archive_state: "archive", excluded_agents: ["agent-a"]})]), []);
   assert.deepEqual(codes([agent({claimed_by: "agent-a", excluded_agents: ["agent-b"]})], ["agent-a", "agent-b"]), []);
+  // A historical executor claim does not override explicit whole-Goal scope.
+  for (const fields of [
+    {task_class: "user_gate", global_gate: true},
+    {task_class: "user_gate", global_gate: true, goal_bound: true},
+    {task_class: "user_action", goal_bound: true},
+  ]) {
+    const row = open({...fields, claimed_by: "agent-a"});
+    const before = structuredClone(row);
+    assert.deepEqual(codes([row], ["agent-a", "agent-b"]), []);
+    assert.deepEqual(row, before);
+  }
+  // Explicit contradictory bindings remain errors even with historical claims.
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true,
+    bound_agent: "agent-a", claimed_by: "agent-b"})], ["agent-a", "agent-b"]),
+    ["goal_user_gate_agent_binding_invalid"]);
   // Controls: valid open user work, completed history without a class, and agent rows stay healthy.
   assert.deepEqual(codes([open({task_class: "user_action"})]), []);
   assert.deepEqual(codes([{...open({}), status: "done", done: true}]), []);

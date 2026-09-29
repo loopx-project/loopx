@@ -50,4 +50,33 @@ for (const workspace_state of ["missing", "not_directory", "unavailable"] as con
   }
 }
 
-console.log("delegation authority/workspace-unavailable preflight smoke passed");
+for (const [reason, action, en, zhText] of [
+  ["independent_delegation_validation_required", "review_original_todo_validation", "Independent Todo validation is required", "原任务缺少独立验收声明"],
+  ["completion_validation_declaration_unavailable", "review_original_todo_validation", "Declared Todo validation is unavailable", "原任务验收声明不可读取"],
+  ["completion_validation_declaration_mismatch", "review_original_todo_validation", "Todo validation declaration does not match", "原任务验收声明与当前指纹不符"],
+  ["validation_files_unavailable", "restore_original_validation_files", "Pinned validation files are unavailable", "固定验收文件不可用"],
+  ["acceptance_binding_unavailable", "review_original_task_acceptance", "Current task acceptance could not be established", "当前任务验收依据不可确认"],
+] as const) {
+  const check = {...unavailable, state: "acceptance_unavailable",
+    authority_ready: true, authority_reason: null, authority_state: "promoted", authority_next_action: "none",
+    acceptance_reason_code: reason, acceptance_next_action: action,
+    executor: {host: "dsh", available: true, reason: null, profile: null}} as DelegationPreflight;
+  for (const zh of [true, false]) {
+    const html = renderToStaticMarkup(<DelegationPreflightStatus check={check} zh={zh}/>);
+    if (!html.includes(zh ? "任务验收不可用" : "Task validation unavailable")) throw new Error("misleading acceptance label");
+    if (!html.includes(zh ? zhText : en)) throw new Error(`missing bounded validation diagnosis: ${reason}`);
+    if (!html.includes(zh ? "原配置责任人" : "original configuration owner")) throw new Error("missing original-owner recovery hint");
+    if (/晋级|promotion|Runtime unavailable|运行时不可用|缺少有效验收绑定/.test(html)) throw new Error("validation diagnosis suggested a different authority/runtime fault");
+    if (!html.includes(zh ? "不代表正在执行" : "Does not mean executing")) throw new Error("lost inspection boundary");
+  }
+}
+
+const malformed = {...unavailable, state: "acceptance_unavailable",
+  authority_ready: true, authority_reason: null, authority_state: "promoted", authority_next_action: "none",
+  acceptance_reason_code: "__proto__ /private/validator", acceptance_next_action: "PRIVATE_VALUE"} as unknown as DelegationPreflight;
+for (const zh of [true, false]) {
+  const html = renderToStaticMarkup(<DelegationPreflightStatus check={malformed} zh={zh}/>);
+  if (/PRIVATE_VALUE|private\/validator|__proto__/.test(html)) throw new Error("unrecognized validation diagnostic leaked");
+}
+
+console.log("delegation authority/workspace/validation preflight smoke passed");

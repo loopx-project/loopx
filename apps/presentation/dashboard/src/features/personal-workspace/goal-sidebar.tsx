@@ -63,7 +63,7 @@ export function GoalSidebar({
       >
         <GoalIdentityMark goal={goal} />
         <span className="personal-goal-link-copy">
-          <strong>{goal.title}</strong>
+          <strong title={goal.title}>{goal.title}</strong>
           <GoalRowActivity goal={goal} showLoad={!stopped || selectedGoalId === goal.goalId} />
         </span>
         <ChevronRight size={15} />

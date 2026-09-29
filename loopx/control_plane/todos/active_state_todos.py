@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..coordination.local_authority import (
+    CanonicalTodoSnapshot,
     canonical_todo_summary_fields,
     read_canonical_todos_if_promoted,
 )
@@ -49,6 +50,7 @@ def active_state_todo_fields(
     goal: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    todo_snapshot: CanonicalTodoSnapshot | None = None,
     rollout_events: Sequence[Mapping[str, Any]] | None = None,
     resolve_goal_local_path: Callable[..., Path | None],
     active_state_next_action_entries: Callable[..., list[str]],
@@ -67,8 +69,9 @@ def active_state_todo_fields(
     goal_id = str(goal.get("id") or "").strip()
     # Inspect authority before the display file. A missing/stale projection is
     # not an empty Todo collection, and an unavailable provider must fail closed.
+    canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
     canonical = (
-        read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
+        canonical_reader(runtime_root=runtime_root, goal_id=goal_id)
         if runtime_root is not None and goal_id else None
     )
     state_path = resolve_goal_local_path(goal.get("state_file"), goal, fallback_base=Path.cwd())
