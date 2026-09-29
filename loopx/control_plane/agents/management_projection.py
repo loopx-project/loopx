@@ -601,8 +601,6 @@ WORKER_LIFECYCLE_STATE_UNKNOWN = "unknown"
 # cannot vouch for, so the row must not read as idle either.
 EXECUTION_LANE_LIVE = "live"
 EXECUTION_LANE_UNKNOWN_STATES = frozenset({"foreign_host", "unreadable"})
-# What `source_summary.execution_facts.sources` names when facts were collected.
-EXECUTION_FACT_SOURCES = ("turn_lane_holder", "delegation_worker_lock", "task_lease")
 
 
 def _execution_row(facts: Any) -> dict[str, Any] | None:
@@ -837,11 +835,9 @@ def build_agent_management_projection(
     if material_frontiers:
         source_summary["material_frontier_count"] = len(material_frontiers)
     if isinstance(execution_facts, dict):
-        source_summary["execution_facts"] = {
-            "collected": True,
-            "sources": list(EXECUTION_FACT_SOURCES),
-            "agent_count": len(facts_by_agent),
-        }
+        # One flag: readers only need to tell "facts collected, none found"
+        # from "no facts collected"; each row carries its own evidence.
+        source_summary["execution_facts_collected"] = True
 
     projection: dict[str, Any] = {
         "schema_version": AGENT_MANAGEMENT_PROJECTION_SCHEMA_VERSION,

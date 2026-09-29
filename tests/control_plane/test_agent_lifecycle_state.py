@@ -103,13 +103,9 @@ def test_execution_facts_are_projected_as_evidence_not_authority(monkeypatch):
     assert row["state"] == "unknown"
     assert row["execution"] == {"lane": "foreign_host", "lane_holder": facts["lane_holder"],
                                 "lease": {"status": "active", "expired": True}}
-    assert packet["source_summary"]["execution_facts"] == {
-        "collected": True,
-        "sources": ["turn_lane_holder", "delegation_worker_lock", "task_lease"],
-        "agent_count": 1,
-    }
+    assert packet["source_summary"]["execution_facts_collected"] is True
     without, _ = build_projection(monkeypatch, age=0)
-    assert "execution_facts" not in without["source_summary"]
+    assert "execution_facts_collected" not in without["source_summary"]
 
 
 def test_unrelated_blocked_activity_does_not_change_current_work(monkeypatch):

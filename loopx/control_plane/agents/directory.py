@@ -113,8 +113,8 @@ def _projected_execution_facts(payload: Mapping[str, Any]) -> dict[str, Any] | N
     """
 
     projection = _as_mapping(payload.get("agent_management_projection"))
-    summary = _as_mapping(_as_mapping(projection.get("source_summary")).get("execution_facts"))
-    if summary.get("collected") is not True:
+    summary = _as_mapping(projection.get("source_summary"))
+    if summary.get("execution_facts_collected") is not True:
         return None
     facts: dict[str, Any] = {}
     for row in _as_list(projection.get("agents")):
