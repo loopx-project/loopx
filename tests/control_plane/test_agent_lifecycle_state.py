@@ -14,6 +14,7 @@ import pytest
 
 from loopx.control_plane.agents import management_projection as projection
 from loopx.control_plane.agents.execution_facts import collect_agent_execution_facts
+from loopx.control_plane.collaboration.inbox import _hash as manager_context_hash
 from loopx.control_plane.collaboration.inbox import _root as manager_context_root
 from loopx.control_plane.quota.task_orchestration import apply_task_orchestration_contract
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_singleflight, turn_lane_target
@@ -25,7 +26,7 @@ GOAL = "test-goal"
 
 def build_projection(monkeypatch, *, age=None, binding=False, status="open",
                      task_class="advancement_task", has_todo=True, extra_todos=(),
-                     facts=None, runtime_root=None):
+                     facts=None, runtime_root=None, registered=("peer",)):
     monkeypatch.setattr(projection, "now_utc", lambda: NOW)
     todo = {"todo_id": "todo_peer", "goal_id": GOAL, "role": "agent",
             "claimed_by": "peer", "status": status, "task_class": task_class,
@@ -35,7 +36,7 @@ def build_projection(monkeypatch, *, age=None, binding=False, status="open",
     todos = ([todo] if has_todo else []) + list(extra_todos)
     payload = {"goal_filter": GOAL, "run_history": {"goals": [{
         "id": GOAL, "coordination": {
-            "registered_agents": ["peer"],
+            "registered_agents": list(registered),
             "thread_agent_bindings": [{"agent_id": "peer", "thread_id": "thread-peer",
                                         "host_surface": "codex-app"}] if binding else [],
         }}]}, "todo_index": {"items": todos}}
@@ -102,10 +103,13 @@ def test_execution_facts_are_projected_as_evidence_not_authority(monkeypatch):
     assert row["state"] == "unknown"
     assert row["execution"] == {"lane": "foreign_host", "lane_holder": facts["lane_holder"],
                                 "lease": {"status": "active", "expired": True}}
-    assert packet["source_summary"]["execution_fact_agent_count"] == 1
-    assert "execution_fact_source" in packet["source_summary"]
+    assert packet["source_summary"]["execution_facts"] == {
+        "collected": True,
+        "sources": ["turn_lane_holder", "delegation_worker_lock", "task_lease"],
+        "agent_count": 1,
+    }
     without, _ = build_projection(monkeypatch, age=0)
-    assert "execution_fact_agent_count" not in without["source_summary"]
+    assert "execution_facts" not in without["source_summary"]
 
 
 def test_unrelated_blocked_activity_does_not_change_current_work(monkeypatch):
@@ -218,26 +222,54 @@ def test_an_expired_active_lease_with_nothing_live_is_unknown(monkeypatch, tmp_p
     assert released["agents"][0]["execution"]["lease"] == {"status": "released"}
 
 
-def test_a_live_delegation_worker_lock_is_executing(monkeypatch, tmp_path):
-    runtime_root = tmp_path / "runtime"
-    row_path = manager_context_root(runtime_root) / "executions" / ("a" * 64) / ("b" * 64 + ".json")
-    row_path.parent.mkdir(parents=True)
+def _delegation_row(runtime_root: Path, *, goal: str, requester: str) -> tuple[Path, Path]:
+    """A journal row where the delegation service keeps it, plus its execution slot."""
+    store = manager_context_root(runtime_root)
+    row_path = store / "executions" / manager_context_hash([goal, requester]) / ("b" * 64 + ".json")
+    row_path.parent.mkdir(parents=True, exist_ok=True)
     row_path.write_text(json.dumps({"identity": {"binding": {"id": "b1", "agent_id": "peer", "todo_id": "todo_peer"},
                                                  "request_id": "r1", "operation_id": "op-1"},
                                     "status": "running"}), encoding="utf-8")
+    return row_path, store / "execution-slots" / manager_context_hash([goal, "todo_peer"])
+
+
+def _peer_row(packet):
+    return next(row for row in packet["agents"] if row["agent_id"] == "peer")
+
+
+def test_a_live_delegation_worker_is_executing(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "runtime"
+    registered = ("coordinator", "peer")
+    row_path, slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator")
+    with exclusive_file_lock(row_path), exclusive_file_lock(slot):
+        packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=registered)
+    assert _peer_row(packet)["state"] == "executing"
+    assert _peer_row(packet)["execution"] == {"lane": "absent", "delegation_worker_active": True}
+    # The worker exited: its released locks are no evidence of execution.
+    settled, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=registered)
+    assert _peer_row(settled)["state"] == "launchable"
+    assert _peer_row(settled)["execution"] == {"lane": "absent"}
+
+
+def test_an_operation_lock_without_its_execution_slot_is_not_a_worker(monkeypatch, tmp_path):
+    """Readers and result adoption also hold the row lock briefly; only the worker holds the slot."""
+    runtime_root = tmp_path / "runtime"
+    registered = ("coordinator", "peer")
+    row_path, _slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator")
     with exclusive_file_lock(row_path):
-        packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root)
-    assert packet["agents"][0]["state"] == "executing"
-    assert packet["agents"][0]["execution"] == {"lane": "absent", "delegation_worker_active": True}
-    # The worker exited: its released lock is no evidence of execution.
-    settled, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root)
-    assert settled["agents"][0]["state"] == "launchable"
-    assert settled["agents"][0]["execution"] == {"lane": "absent"}
+        packet, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=registered)
+    assert _peer_row(packet)["state"] == "launchable"
+    # A worker executing under another Goal's journal is not this Goal's fact.
+    other_row, other_slot = _delegation_row(runtime_root, goal="other-goal", requester="coordinator")
+    with exclusive_file_lock(other_row), exclusive_file_lock(other_slot):
+        scoped, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=registered)
+    assert _peer_row(scoped)["state"] == "launchable"
 
 
 def test_no_runtime_root_means_no_facts_not_no_execution(monkeypatch):
     payload = {"goal_filter": GOAL, "run_history": {"goals": [{"id": GOAL, "coordination": {"registered_agents": ["peer"]}}]}}
-    assert collect_agent_execution_facts(runtime_root=None, status_payload=payload) == {}
+    assert collect_agent_execution_facts(runtime_root=None, status_payload=payload) is None
+    assert collect_agent_execution_facts(runtime_root="/nonexistent-loopx-runtime", status_payload=payload) is None
     packet, _ = build_projection(monkeypatch, age=0)
     assert "execution" not in packet["agents"][0]
 

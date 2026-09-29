@@ -23,6 +23,9 @@ test("runtime, activation and dependency gates remain independently enforced", (
     { available_capabilities: input.available_capabilities, agents: [], extra: {}, reasons: ["peer_liveness_unavailable"] },
     { available_capabilities: input.available_capabilities, agents: [{ agent_id: "worker", state: "running", stale_claim_hint: true }], extra: {}, reasons: ["peer_runtime_stale"] },
     { available_capabilities: input.available_capabilities, agents: [{ agent_id: "worker", state: "dormant" }], extra: {}, reasons: ["peer_runtime_not_active"] },
+    // Liveness this machine cannot vouch for is not activation evidence.
+    { available_capabilities: input.available_capabilities, agents: [{ agent_id: "worker", state: "unknown" }], extra: {}, reasons: ["peer_runtime_not_active"] },
+    { available_capabilities: input.available_capabilities, agents: [{ agent_id: "worker" }], extra: {}, reasons: ["peer_runtime_not_active"] },
     { available_capabilities: input.available_capabilities, agents: input.agents, extra: { resume_when: "todo_done:dependency", resume_ready: false }, reasons: ["peer_lane_not_resume_ready"] },
   ];
   for (const row of cases) {
@@ -30,6 +33,18 @@ test("runtime, activation and dependency gates remain independently enforced", (
     assert.equal(result.execution_state, "blocked");
     assert.deepEqual(result.eligible_peer_lanes, []);
     assert.deepEqual((result.blocked_peer_lanes as any[])[0].reason_codes, row.reasons);
+  }
+});
+
+test("execution-backed and durable-work states are the only admitted states", () => {
+  for (const state of ["executing", "bound", "launchable", "monitoring", "running"]) {
+    const result = projectPeerOrchestration({ ...input, agents: [{ agent_id: "worker", state }], items: [task("task")] })!;
+    assert.equal(result.execution_state, "ready", state);
+  }
+  for (const state of ["unknown", "registered", "addressable", "blocked", "waiting", "stale", "scope_wait"]) {
+    const result = projectPeerOrchestration({ ...input, agents: [{ agent_id: "worker", state }], items: [task("task")] })!;
+    assert.equal(result.execution_state, "blocked", state);
+    assert.deepEqual((result.blocked_peer_lanes as any[])[0].reason_codes, ["peer_runtime_not_active"]);
   }
 });
 

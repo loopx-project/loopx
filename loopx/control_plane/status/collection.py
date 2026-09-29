@@ -232,13 +232,11 @@ def collect_status(
         }
     payload["runtime_projection_routes"] = runtime_projection_route_health
     # Lane liveness, delegation worker locks and leases are what make a worker
-    # `executing` or `unknown`; they travel with the payload so re-projections
-    # such as the peer directory read the same facts this projection did.
+    # `executing` or `unknown`. Each row carries its facts as `execution`, so a
+    # re-projection such as the peer directory reads them from there.
     execution_facts = collect_agent_execution_facts(
         runtime_root=runtime_root, status_payload=payload
     )
-    if execution_facts:
-        payload["agent_execution_facts"] = execution_facts
     agent_management_projection = context.build_agent_management_projection(
         payload,
         available_capabilities=available_capabilities,

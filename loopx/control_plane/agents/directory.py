@@ -104,6 +104,28 @@ def _publishable_route(route: dict[str, Any]) -> tuple[dict[str, Any], int]:
     return published, withheld
 
 
+def _projected_execution_facts(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Recover the execution facts status collection projected onto agent rows.
+
+    ``None`` when the payload's projection says no facts were collected, so an
+    older or fact-less payload keeps `lease_state_not_projected` instead of
+    reading as "leases projected, none found".
+    """
+
+    projection = _as_mapping(payload.get("agent_management_projection"))
+    summary = _as_mapping(_as_mapping(projection.get("source_summary")).get("execution_facts"))
+    if summary.get("collected") is not True:
+        return None
+    facts: dict[str, Any] = {}
+    for row in _as_list(projection.get("agents")):
+        row = _as_mapping(row)
+        agent_id = str(row.get("agent_id") or "").strip()
+        execution = row.get("execution")
+        if agent_id and isinstance(execution, Mapping):
+            facts[agent_id] = dict(execution)
+    return facts
+
+
 def _work_block(agent_row: Mapping[str, Any]) -> dict[str, Any] | None:
     """Project one Agent's bounded work facts, or nothing when it holds none."""
 
@@ -188,16 +210,16 @@ def build_peer_agent_directory(
     the packet records that the caller identity was not supplied instead of
     inventing one.
 
-    `execution_facts` defaults to the `agent_execution_facts` status collection
-    attached to the payload, so this re-projection reads the same lane, worker
-    and lease facts the management projection did.
+    `execution_facts` defaults to the facts the payload's management projection
+    already carries on its rows, so this re-projection reads the same lane,
+    worker and lease facts status collection did instead of reading them again.
     """
 
     payload = status_payload if isinstance(status_payload, Mapping) else {}
     resolved_goal = _compact(goal_id or payload.get("goal_filter"), limit=120)
     caller = _compact(caller_agent_id, limit=120)
     if execution_facts is None:
-        execution_facts = payload.get("agent_execution_facts")
+        execution_facts = _projected_execution_facts(payload)
     facts = execution_facts if isinstance(execution_facts, Mapping) else None
     projection = build_agent_management_projection(
         dict(payload),

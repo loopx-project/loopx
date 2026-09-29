@@ -190,37 +190,45 @@ def _registered_agents(status_payload: dict[str, Any]) -> dict[str, dict[str, An
 
 def projected_agent_goals(
     status_payload: dict[str, Any],
-) -> dict[str, dict[str, list[str]]]:
-    """Return ``goal_id -> {agent_id -> [spellings]}`` for the agents this view rows.
+) -> dict[str, dict[str, dict[str, list[str]]]]:
+    """Return ``goal_id -> agent_id -> {spellings, open_todo_ids}`` for this view's agents.
 
-    The execution facts collector reads one Turn lane per Goal and agent, so it
-    needs the same agent set this projection rows: the Goal's registered agents
-    and every Todo claimant. Registered ids keep their registry spelling next to
-    the normalized one because the Turn envelope names the lane with the former
-    while Todo claims carry the latter.
+    The execution facts collector reads one Turn lane per Goal and agent and the
+    leases on open Todos, so it needs the same agents this projection rows: each
+    Goal's registered agents and its open-Todo claimants. Registered ids keep
+    their registry spelling next to the normalized one, because the Turn
+    envelope names a lane with the former while Todo claims carry the latter.
     """
 
-    goals: dict[str, dict[str, list[str]]] = {}
+    goals: dict[str, dict[str, dict[str, list[str]]]] = {}
 
-    def add(goal_id: str | None, raw_agent: Any) -> None:
+    def add(goal_id: Any, raw_agent: Any, *, todo_id: str | None = None) -> None:
+        goal = str(goal_id or "").strip()
         agent_id = normalize_todo_claimed_by(raw_agent)
-        if not goal_id or not agent_id:
+        if not goal or not agent_id:
             return
-        spellings = goals.setdefault(goal_id, {}).setdefault(agent_id, [agent_id])
+        work = goals.setdefault(goal, {}).setdefault(
+            agent_id, {"spellings": [agent_id], "open_todo_ids": []}
+        )
         raw = str(raw_agent or "").strip()
-        if raw and raw not in spellings:
-            spellings.append(raw)
+        if raw and raw not in work["spellings"]:
+            work["spellings"].append(raw)
+        if todo_id and todo_id not in work["open_todo_ids"]:
+            work["open_todo_ids"].append(todo_id)
 
     run_history = _as_dict(status_payload.get("run_history"))
     for goal in _as_list(run_history.get("goals")):
         if not isinstance(goal, dict):
             continue
-        goal_id = _compact(goal.get("id"), limit=180)
         for raw_agent in _as_list(_as_dict(goal.get("coordination")).get("registered_agents")):
-            add(goal_id, raw_agent)
+            add(goal.get("id"), raw_agent)
     for todo in _iter_status_todos(status_payload):
         if not _is_done(todo):
-            add(_compact(todo.get("goal_id"), limit=180), _todo_agent_id(todo))
+            add(
+                todo.get("goal_id"),
+                _todo_agent_id(todo),
+                todo_id=normalize_todo_id(todo.get("todo_id")),
+            )
     return goals
 
 
@@ -593,6 +601,8 @@ WORKER_LIFECYCLE_STATE_UNKNOWN = "unknown"
 # cannot vouch for, so the row must not read as idle either.
 EXECUTION_LANE_LIVE = "live"
 EXECUTION_LANE_UNKNOWN_STATES = frozenset({"foreign_host", "unreadable"})
+# What `source_summary.execution_facts.sources` names when facts were collected.
+EXECUTION_FACT_SOURCES = ("turn_lane_holder", "delegation_worker_lock", "task_lease")
 
 
 def _execution_row(facts: Any) -> dict[str, Any] | None:
@@ -827,10 +837,11 @@ def build_agent_management_projection(
     if material_frontiers:
         source_summary["material_frontier_count"] = len(material_frontiers)
     if isinstance(execution_facts, dict):
-        source_summary["execution_fact_source"] = (
-            "turn lane holder records, delegation worker locks, task leases"
-        )
-        source_summary["execution_fact_agent_count"] = len(facts_by_agent)
+        source_summary["execution_facts"] = {
+            "collected": True,
+            "sources": list(EXECUTION_FACT_SOURCES),
+            "agent_count": len(facts_by_agent),
+        }
 
     projection: dict[str, Any] = {
         "schema_version": AGENT_MANAGEMENT_PROJECTION_SCHEMA_VERSION,
