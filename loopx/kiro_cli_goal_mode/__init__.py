@@ -85,10 +85,10 @@ def mcp_server_script() -> Path:
 # The host ships a real hook seam, and `preToolUse` can block a tool call by
 # exiting 2. The default agent gets no LoopX hook, so its quota pacing stays
 # advisory; enforcement is the opt-in `loopx` agent (see gated_agent.py).
-# Checked on 2.24.1: only exit status 2 blocks a preToolUse call, and a hook
-# that outlives its entry's `timeout_ms` is abandoned and the tool runs. The
-# gate's own probe deadline therefore sits well inside the entry timeout.
-KIRO_CLI_HOOK_BLOCK_EXIT_STATUS = 2
+# Checked on 2.24.1: only exit status 2 blocks a preToolUse call (the hook
+# owns that constant), and a hook that outlives its entry's `timeout_ms` is
+# abandoned and the tool runs. The gate's own probe deadline therefore sits
+# well inside the entry timeout.
 KIRO_CLI_HOOK_TIMEOUT_MS = 30_000
 KIRO_CLI_HOOK_PROBE_TIMEOUT_SECONDS = 20
 # The opt-in agent whose preToolUse hook is the enforced gate.

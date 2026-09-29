@@ -525,3 +525,127 @@ def test_unverified_host_major_refuses_to_write_the_agent(tmp_path: Path) -> Non
     assert status == "blocked_unverified_kiro_cli_version"
     assert not gated_agent_path(kiro_home).exists()
     assert sync_gated_agent(kiro_home, uninstall=False, execute=True, host_version=lambda: "2.24.1") == "written"
+
+
+# --- malformed but parseable events (review P1 on 73bdffb92) -----------------
+
+
+def _run_raw_hook(
+    stdin: str,
+    *,
+    kiro_home: Path,
+    python_args: tuple[str, ...] = (),
+    script: Path | None = None,
+    isolate_imports: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "KIRO_HOME": str(kiro_home)}
+    if isolate_imports:
+        env.pop("PYTHONPATH", None)
+    return subprocess.run(
+        [sys.executable, *python_args, str(script or hook_script())],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        cwd="/",
+        env=env,
+        timeout=KIRO_CLI_HOOK_TIMEOUT_MS / 1000,
+    )
+
+
+def _raw_event(**fields: object) -> str:
+    event: dict[str, object] = {
+        "hook_event_name": "preToolUse",
+        "cwd": "/tmp",
+        "session_id": "synthetic-review-session",
+    }
+    event.update(fields)
+    return json.dumps(event)
+
+
+MALFORMED_STATE_CHANGING_EVENTS = (
+    # The reviewer's reproduction: exit 1 before the fix, which Kiro allows.
+    _raw_event(tool_name="shell", tool_input=[1]),
+    _raw_event(tool_name="shell", tool_input="make test"),
+    _raw_event(tool_name="shell", tool_input=5),
+    _raw_event(tool_name="write", tool_input=["a.txt"]),
+    _raw_event(tool_name="@someserver/anything", tool_input=[]),
+    # A write or shell call without its target: "" would resolve to the cwd
+    # and pass the write-scope check.
+    _raw_event(tool_name="write", tool_input={}),
+    _raw_event(tool_name="write", tool_input={"path": ["a.txt"]}),
+    _raw_event(tool_name="shell", tool_input={"command": ["ls"]}),
+    _raw_event(tool_name="shell", tool_input={}),
+    # Envelope fields with the wrong type.
+    _raw_event(tool_name=["shell"], tool_input={"command": "ls"}),
+    _raw_event(tool_input={"command": "ls"}),
+    _raw_event(tool_name="shell", tool_input={"command": "ls"}, cwd=["/tmp"]),
+    _raw_event(tool_name="shell", tool_input={"command": "ls"}, session_id=7),
+    "[1, 2]",
+    '"shell"',
+)
+
+
+@pytest.mark.parametrize("stdin", MALFORMED_STATE_CHANGING_EVENTS)
+def test_malformed_state_changing_events_exit_2_from_the_real_hook(tmp_path: Path, stdin: str) -> None:
+    result = _run_raw_hook(stdin, kiro_home=tmp_path / "kiro-home")
+    assert result.returncode == 2, (stdin, result.returncode, result.stderr)
+    assert result.stderr.startswith("LoopX gate:"), result.stderr
+    assert "failing closed" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("tool_input", ([1], "text", 5))
+def test_malformed_read_only_events_still_pass(tmp_path: Path, tool_input: object) -> None:
+    """Refusing an unreadable read gains nothing; the tool name alone proves
+    the call cannot change state."""
+    result = _run_raw_hook(_raw_event(tool_name="read", tool_input=tool_input), kiro_home=tmp_path / "kiro-home")
+    assert result.returncode == 0, result.stderr
+
+
+def test_null_tool_input_is_an_empty_object_not_an_error(tmp_path: Path) -> None:
+    project = _bound_project(tmp_path, gate_open=True)
+    kiro_home = _kiro_home_for(project)
+    result = _run_raw_hook(
+        _raw_event(tool_name="@someserver/anything", tool_input=None, cwd=str(project), session_id=SESSION_ID),
+        kiro_home=kiro_home,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_hook_that_cannot_import_loopx_still_refuses(tmp_path: Path) -> None:
+    """A broken install must not crash with exit 1: copy the script where no
+    LoopX package sits above it and disable site-packages."""
+    isolated = tmp_path / "a" / "b" / "pretooluse_hook.py"
+    isolated.parent.mkdir(parents=True)
+    isolated.write_text(hook_script().read_text(encoding="utf-8"), encoding="utf-8")
+    kiro_home = tmp_path / "kiro-home"
+    denied = _run_raw_hook(
+        _raw_event(tool_name="shell", tool_input={"command": "ls"}),
+        kiro_home=kiro_home, python_args=("-S", "-P"), script=isolated, isolate_imports=True,
+    )
+    assert denied.returncode == 2, denied.stderr
+    assert "cannot load LoopX" in denied.stderr
+    allowed = _run_raw_hook(
+        _raw_event(tool_name="read", tool_input={}),
+        kiro_home=kiro_home, python_args=("-S", "-P"), script=isolated, isolate_imports=True,
+    )
+    assert allowed.returncode == 0, allowed.stderr
+
+
+def test_undecodable_stdin_exits_2(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(hook_script())],
+        input=b"\xff\xfe\xfa not utf-8",
+        capture_output=True,
+        cwd="/",
+        env={**os.environ, "KIRO_HOME": str(tmp_path / "kiro-home"), "PYTHONIOENCODING": "utf-8:strict"},
+        timeout=KIRO_CLI_HOOK_TIMEOUT_MS / 1000,
+    )
+    assert result.returncode == 2, result.stderr
+
+
+def test_run_never_returns_a_status_the_host_would_read_as_allow_by_accident() -> None:
+    """Every outcome of run() is 0 or 2, whatever the event looks like."""
+    for stdin in (*MALFORMED_STATE_CHANGING_EVENTS, "", "null", "{}", _raw_event(tool_name="read")):
+        status, _message = pretooluse_hook.run(stdin)
+        assert status in (0, 2), (stdin, status)
