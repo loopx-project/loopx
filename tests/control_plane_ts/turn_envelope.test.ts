@@ -579,3 +579,28 @@ test("all required reads survive compaction and later reads affect the signature
   reads[5].command += " --fresh";
   assert.notEqual((render().action_signature as JsonObject).source_hash, (result.action_signature as JsonObject).source_hash);
 });
+
+
+test("unavailable hook context is signed without suppressing independent work", () => {
+  const source = payload();
+  const render = () => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const baseline = render();
+  source.turn_start_capability_hook_dispatch = {results: [], failures: []};
+  assert.deepEqual(turnEnvelopeActionSignatureDocument(render()), turnEnvelopeActionSignatureDocument(baseline));
+  for (const [status, field] of [["unavailable", "results"], ["partial", "results"], ["failed", "failures"]]) {
+    const row = {hook_id: "fixture.context", capability_id: "fixture", status, error_code: "provider_failed", private_detail: "must not leak"};
+    source.turn_start_capability_hook_dispatch = {[field]: [row]};
+    const result = render();
+    const missing = (result.contract_capsule as JsonObject).unavailable_context as JsonObject;
+    assert.deepEqual(missing, {affected_hooks: [{hook_id: "fixture.context", capability_id: "fixture", status, error_code: "provider_failed"}],
+      cache_policy: "invalidate_affected_hook_context", dependent_action_policy: "hold_until_fresh_context",
+      independent_work_policy: "preserve_existing_authority"});
+    for (const key of ["action", "boundary", "execution_policy", "writeback"]) assert.deepEqual(result[key], baseline[key]);
+    assert.equal(JSON.stringify(result).includes("must not leak"), false);
+    assert.equal((result.action_signature as JsonObject).matches, true);
+    assert.notEqual((result.action_signature as JsonObject).source_hash, (baseline.action_signature as JsonObject).source_hash);
+    missing.cache_policy = "reuse_cached_context";
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(result), quotaActionSignatureDocument(source, protocolActionFields));
+  }
+});

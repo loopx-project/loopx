@@ -354,7 +354,15 @@ instead of relying on embedding or keyword ranking to find a prohibition.
 The managed `/loopx` instructions teach the host to persist explicit corrections,
 read them back, and re-read before a preference-dependent external action.
 A new user instruction overrides old context immediately, including while a
-write is being recovered. An unreadable store is unavailable, not empty: do not
+write is being recovered. An unreadable store is unavailable, not empty. The shared Turn capsule signs
+failed/partial/unavailable hook observations and carries them into the execution
+host's authority packet, including producer/contract failures that produced no
+read command. It invalidates the affected hook's cached context and holds only
+actions dependent on missing context; independent work keeps its existing
+permissions. Healthy/disabled hooks do not add this field. This failure-policy
+projection also applies to other turn-start hooks; it does not grant capability
+permissions, make a whole Goal unavailable, or retry failed providers in a loop.
+Do not
 act on a cached preference; independent work can continue. This is a host
 obligation, **not** a claim that a generic memory engine intercepts every tool
 call atomically. Native hosts must execute the disclosed read, and ordinary

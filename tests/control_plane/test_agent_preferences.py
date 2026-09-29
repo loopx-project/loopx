@@ -1,5 +1,9 @@
 """Production CLI -> durable store -> next-turn disclosure; no provider mocks."""
 import json
+from copy import deepcopy
+
+import pytest
+from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, _run_cli, _write_fixture,
@@ -77,6 +81,10 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
         "--expected-revision", "none", "--operation-id", "one", "--source-ref", "user-1",
         "--source-quote", "Use a reviewer.", "--execute")
     assert rc == 0, first
+    rc, healthy_plan = _run_cli(registry, runtime, "turn", "plan", *scope)
+    assert rc == 0, healthy_plan
+    healthy = extract_turn_authority(healthy_plan)
+    assert "unavailable_context" not in healthy
     store = next((runtime / "agent-preferences").glob("*/authority-store-*.json"))
     store.write_text("{broken")
     rc, failed = call("read")
@@ -87,3 +95,28 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
                   if x["hook_id"] == "semantic_preference.agent_context")
     assert result["status"] == "unavailable"
     assert store.read_text() == "{broken"
+
+    rc, failed_plan = _run_cli(registry, runtime, "turn", "plan", *scope)
+    assert rc == 0, failed_plan
+    authority = extract_turn_authority(failed_plan)
+    unavailable = authority["unavailable_context"]
+    assert unavailable["affected_hooks"] == [{
+        "hook_id": "semantic_preference.agent_context", "capability_id": "semantic-preference",
+        "status": "unavailable", "error_code": "agent_preferences_unreadable",
+    }]
+    assert unavailable["cache_policy"] == "invalidate_affected_hook_context"
+    assert unavailable["dependent_action_policy"] == "hold_until_fresh_context"
+    assert unavailable["independent_work_policy"] == "preserve_existing_authority"
+    assert authority["primary_action"] == healthy["primary_action"]
+    assert authority["write_scope"] == healthy["write_scope"]
+    assert authority["required_reads"] == []
+    prompt = render_prompt(authority)
+    assert "discard cached context" in prompt and "Independent work may" in prompt
+    assert "Use a reviewer." not in prompt and "{broken" not in prompt
+    rc, quota_envelope = _run_cli(registry, runtime, "quota", "should-run", *scope, "--turn-envelope")
+    assert rc == 0, quota_envelope
+    assert quota_envelope["contract_capsule"]["unavailable_context"] == unavailable
+    changed = deepcopy(failed_plan)
+    del changed["turn_envelope"]["contract_capsule"]["unavailable_context"]
+    with pytest.raises(ValueError, match="signature"):
+        extract_turn_authority(changed)
