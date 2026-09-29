@@ -339,8 +339,9 @@ TypeScript 的对象写入、赋值及声明返回使用仓库的 TypeScript
 存在允许的生产路径，不表示 Host 实际发出过全部成员或所有 Host 执行都合法。
 `input_producer` 不能从数据任意指定执行代码，验证入口固定在 smoke 中。
 
-`lease_action` 明确分类为 legacy/兼容保留：仓库运行时调用者使用分开的
-acquire/renew/transfer/release command 类。四个成员为旧的类型化
+`lease_action` 明确分类为 legacy/兼容保留：仓库运行时调用者直接使用
+完整的 native acquire／renew／transfer／release 事务。已无调用方的 Python command
+facade 独立退役，不因此丢弃这个已声明的输入契约。四个成员为旧的类型化
 `LeaseModeGateCommand` 输入接口保留到 M4 调用者/迁移评审；不声称存在持久化
 使用。只有每个值都带保留理由及退休里程碑时，生产者列表才能为空。新发现的
 生产者必须让原兼容声明失败。

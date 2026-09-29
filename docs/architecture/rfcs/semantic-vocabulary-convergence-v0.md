@@ -449,8 +449,9 @@ not that a Host has emitted every member or that every host execution is valid.
 `input_producer` cannot select arbitrary code: the verifier is fixed in the smoke.
 
 `lease_action` is explicitly legacy/compatibility-only: in-repository runtime
-callers use separate acquire/renew/transfer/release command classes. Its four
-members remain available to the existing typed `LeaseModeGateCommand` input
+callers use whole native acquire/renew/transfer/release transactions. Unconsumed
+Python command facades are retired independently of this declared input contract.
+Its four members remain available to the existing typed `LeaseModeGateCommand` input
 interface until M4 caller/migration review. No persisted usage is asserted.
 The producer list is empty only because every value carries an explicit reason
 and retirement milestone. A newly observed producer invalidates that declaration. Kernel families without producer metadata are printed as coverage pending; their

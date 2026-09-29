@@ -386,19 +386,19 @@
       "producers": [],
       "compatibility_only": {
         "acquire": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use the separate acquire/renew/transfer/release command classes, not this vocabulary. No persisted use is asserted.",
+          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
           "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
         },
         "renew": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use the separate acquire/renew/transfer/release command classes, not this vocabulary. No persisted use is asserted.",
+          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
           "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
         },
         "transfer": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use the separate acquire/renew/transfer/release command classes, not this vocabulary. No persisted use is asserted.",
+          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
           "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
         },
         "release": {
-          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use the separate acquire/renew/transfer/release command classes, not this vocabulary. No persisted use is asserted.",
+          "reason": "Retained by the legacy typed LeaseModeGateCommand input interface; current in-repository runtime callers use whole native acquire/renew/transfer/release transactions, not this vocabulary. No persisted use is asserted.",
           "retirement": "M4: retire the legacy Python lease-mode input interface after caller and migration review."
         }
       },

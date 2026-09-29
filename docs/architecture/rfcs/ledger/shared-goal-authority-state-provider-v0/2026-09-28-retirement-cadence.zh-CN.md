@@ -44,6 +44,23 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 内部删除必要但不充分，不能忽略公开 CLI/import 和序列化契约。保留公共行为测试，
 只删没有消费者的旧实现专属 characterization。删的是代码，不是用户状态、回执和备份。
 
+### 提议的 T4 切片：已无调用方的 Python lease／handoff facade
+
+在 `649826221` 核对调用方后，下列内部跨界已无生产消费者。原生决策和事务 owner
+保留；这项删除不等待 D2 资格或默认入口接入，也不宣称完成它们。
+
+| 删除边界 | 最后调用方／替代 owner | 兼容与验证 |
+| --- | --- | --- |
+| `authority_core.py` 的 acquire／renew／transfer／release、owner eligibility、handoff transition command facade | 只剩旧 core 测试；真实 lease／handoff adapter 已直接使用完整 native 事务 | 不改持久化命令格式或公共 CLI schema。保留独立的原生 generation、重放、冲突、清理、静止规则测试，并走真实 File／SQLite 入口。 |
+| `task_lease.acquire.decide`、`task_lease.lifecycle.decide`、`coordination.handoff_mode.plan` RPC 注册 | 只剩这些旧 facade／handler 测试；原生事务直接复用同一 TS 规则 | 废弃私有 RPC 明确拒绝；保留仍有 Python 调用方的 `task_lease.owner_eligibility` 和 write-scope overlap。 |
+| `local_snapshot.py` 中仅供 lease 的规范化和错误投影 | 已无调用方；原生执行器拥有 lease 事实与错误 | 保留真实 Todo mutation authorization 使用的 `todo_snapshot_from_mapping`；不删 store、回执、备份或迁移 reader。 |
+
+`authority_core.py` 仍是活跃 Todo bridge。`LeaseAction`、`LeaseModeGateCommand`
+也保留：semantic-vocabulary 注册表明确将该输入契约保留到 M4 评审。本切片不通过
+降低语义覆盖下限丢弃已有兼容义务。仅服务旧 facade 的测试随实现退役，公共／原生
+行为测试保留。回退该切片可恢复内部跨界，无需转换数据。须由维护者评审；这是提议，
+不代表已安装行为。
+
 ## 下一轮交付顺序
 
 | 顺序 | 完整结果／owner | 具体出口与删除机会 |
