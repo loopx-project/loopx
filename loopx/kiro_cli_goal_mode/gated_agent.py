@@ -15,21 +15,29 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from loopx.kiro_cli_goal_mode import (
     KIRO_CLI_GATED_AGENT_LAUNCH as GATED_AGENT_LAUNCH,
     KIRO_CLI_GATED_AGENT_NAME as GATED_AGENT_NAME,
+    KIRO_CLI_BIN,
     KIRO_CLI_HOOK_TIMEOUT_MS,
 )
+from loopx.kiro_cli_goal_mode.gate_arming import arming_root, clear_all
 
 GATED_AGENT_MARKER = "[loopx-managed-kiro-agent:v1]"
 
 __all__ = [
+    "VERIFIED_HOST_MAJORS",
+    "detect_host_version",
+    "host_version_blocks_install",
     "GATED_AGENT_LAUNCH",
     "GATED_AGENT_MARKER",
     "GATED_AGENT_NAME",
@@ -37,6 +45,43 @@ __all__ = [
     "gated_agent_path",
     "sync_gated_agent",
 ]
+
+
+# Host majors on which the embedded `hooks` of this agent file were observed to
+# load and to block with exit 2 (probed on 2.24.1). Kiro CLI 3.0 documents
+# hooks moving to `.kiro/hooks/*.json`; on a host whose embedded hooks are not
+# loaded this agent would run every tool ungated while looking gated, so an
+# unverified major is refused instead of installed.
+VERIFIED_HOST_MAJORS = frozenset({2})
+
+HostVersionProbe = Callable[[], "str | None"]
+
+
+def detect_host_version(bin_name: str = KIRO_CLI_BIN) -> str | None:
+    """``X.Y.Z`` from ``kiro-cli --version``, or None when it cannot be read."""
+    executable = shutil.which(bin_name)
+    if executable is None:
+        return None
+    try:
+        result = subprocess.run(
+            [executable, "--version"], capture_output=True, text=True, timeout=20
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", result.stdout or "")
+    return match.group(0) if match else None
+
+
+def host_version_blocks_install(version: str | None) -> bool:
+    """True when the detected host is a major this gate is not verified on.
+
+    An undetectable version (for example the CLI is not on PATH yet) does not
+    block: the file is inert until the host loads it, and the README states the
+    verified range.
+    """
+    if version is None:
+        return False
+    return int(version.split(".", 1)[0]) not in VERIFIED_HOST_MAJORS
 
 
 def gated_agent_path(kiro_root: Path) -> Path:
@@ -57,9 +102,11 @@ def build_gated_agent(kiro_root: Path, *, interpreter: str | None = None) -> dic
     return {
         "name": GATED_AGENT_NAME,
         "description": (
-            "LoopX-gated Kiro agent: every tool call that can change state must "
-            "pass LoopX `quota should-run` for this session's bound agent, and "
-            f"the gate fails closed. {GATED_AGENT_MARKER}"
+            "LoopX-gated Kiro agent. Until `/loopx` binds this session to a "
+            "LoopX agent, tools run normally. Once bound, a preToolUse hook "
+            "denies every state-changing tool call unless LoopX `quota "
+            "should-run` allows it, and keeps denying if the binding is later "
+            f"lost. {GATED_AGENT_MARKER}"
         ),
         "tools": ["*"],
         # The global/workspace mcp.json, where the kiro-cli surface registers
@@ -103,6 +150,7 @@ def sync_gated_agent(
     uninstall: bool,
     execute: bool,
     interpreter: str | None = None,
+    host_version: HostVersionProbe | None = None,
 ) -> str:
     """Install, refresh or retire the managed agent; returns the row status."""
     path = gated_agent_path(kiro_root)
@@ -115,10 +163,14 @@ def sync_gated_agent(
             return "skipped_user_owned_agent"
         if execute:
             path.unlink()
+            # Arming records only mean something while the agent exists.
+            clear_all(arming_root(kiro_root))
             return "retired"
         return "would_retire"
     if exists and not managed:
         return "skipped_user_owned_agent"
+    if host_version_blocks_install((host_version or detect_host_version)()):
+        return "blocked_unverified_kiro_cli_version"
     text = json.dumps(build_gated_agent(kiro_root, interpreter=interpreter), indent=2) + "\n"
     if exists and path.read_text(encoding="utf-8") == text:
         return "unchanged"

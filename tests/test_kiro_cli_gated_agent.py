@@ -10,6 +10,7 @@ the installed script as a real subprocess against a real registry and CLI.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -30,10 +31,13 @@ from loopx.kiro_cli_goal_mode import (
     KIRO_CLI_HOOK_TIMEOUT_MS,
 )
 from loopx.kiro_cli_goal_mode import pretooluse_hook
+from loopx.kiro_cli_goal_mode.gate_arming import arm, arming_root, is_armed
 from loopx.kiro_cli_goal_mode.gated_agent import (
     GATED_AGENT_MARKER,
     gated_agent_path,
     hook_script,
+    host_version_blocks_install,
+    sync_gated_agent,
 )
 from loopx.slash_command_install import install_slash_commands
 
@@ -189,14 +193,22 @@ def _run_hook(project: Path, tool_name: str, session_id: str = SESSION_ID, **too
         "tool_name": tool_name,
         "tool_input": tool_input,
     }
+    # Arming records live under the Kiro home; keep them beside the fixture so
+    # no test ever writes into the real ~/.kiro.
+    env = {**os.environ, "KIRO_HOME": str(_kiro_home_for(project))}
     return subprocess.run(
         [sys.executable, str(hook_script())],
         input=json.dumps(event),
         capture_output=True,
         text=True,
         cwd="/",
+        env=env,
         timeout=KIRO_CLI_HOOK_TIMEOUT_MS / 1000,
     )
+
+
+def _kiro_home_for(project: Path) -> Path:
+    return project.parent / "kiro-home"
 
 
 def test_installed_hook_enforces_a_real_open_gate(tmp_path: Path) -> None:
@@ -352,3 +364,164 @@ def test_activation_packet_states_both_the_advisory_and_the_enforced_path() -> N
     assert gate["failure_mode"] == "fail_closed"
     steps = " ".join(packet["activation_steps"])
     assert KIRO_CLI_GATED_AGENT_LAUNCH in steps
+
+
+# --- binding lost after the gate engaged (review P1 on #5291) -----------------
+
+
+def _registry_path(project: Path) -> Path:
+    return project / ".loopx" / "registry.json"
+
+
+def _edit_registry(project: Path, edit) -> None:  # type: ignore[no-untyped-def]
+    path = _registry_path(project)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    edit(payload["goals"][0])
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _drop_binding(goal: dict[str, object]) -> None:
+    goal["coordination"]["thread_agent_bindings"] = []  # type: ignore[index]
+
+
+def _restore_binding(goal: dict[str, object]) -> None:
+    goal["coordination"]["thread_agent_bindings"] = [  # type: ignore[index]
+        {"thread_id": SESSION_ID, "host_surface": "kiro-cli", "agent_id": settlement_fixture.AGENT_ID}
+    ]
+
+
+def _assert_denied(result: subprocess.CompletedProcess[str], fragment: str) -> None:
+    assert result.returncode == 2, result.stderr
+    assert result.stderr.startswith("LoopX gate:"), result.stderr
+    assert fragment in result.stderr, result.stderr
+
+
+def test_losing_the_binding_after_engagement_keeps_the_session_gated(tmp_path: Path) -> None:
+    """The reviewer's reproduction: same closed-quota Goal, same session, only
+    the binding record removed. The session must stay denied, not reopen."""
+    project = _bound_project(tmp_path, gate_open=False)
+    _assert_denied(_run_hook(project, "shell", command="make test"), "should_run=false")
+
+    _edit_registry(project, _drop_binding)
+    lost = _run_hook(project, "shell", command="make test")
+    _assert_denied(lost, "can no longer be resolved (unbound)")
+    assert "settlement-cli-fixture" in lost.stderr
+    _assert_denied(_run_hook(project, "write", path="a.txt"), "can no longer be resolved")
+    # A denied session can still inspect why.
+    assert _run_hook(project, "read").returncode == 0
+    assert _run_hook(project, "@loopx/should_run").returncode == 0
+
+
+def test_restored_binding_returns_the_session_to_normal_progress(tmp_path: Path) -> None:
+    project = _bound_project(tmp_path, gate_open=True)
+    assert _run_hook(project, "shell", command="make test").returncode == 0
+    _edit_registry(project, _drop_binding)
+    _assert_denied(_run_hook(project, "shell", command="make test"), "can no longer be resolved")
+    _edit_registry(project, _restore_binding)
+    result = _run_hook(project, "shell", command="make test")
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("break_authority", "status"),
+    (
+        # The project registry disappears entirely.
+        (lambda project: _registry_path(project).unlink(), "no_registry"),
+        # The registry is corrupted.
+        (lambda project: _registry_path(project).write_text("{not json", encoding="utf-8"), "registry_unreadable"),
+        # The bound agent is no longer registered.
+        (
+            lambda project: _edit_registry(
+                project,
+                lambda goal: goal["coordination"].__setitem__("registered_agents", ["someone-else"]),
+            ),
+            "stale",
+        ),
+        # A second binding makes the session ambiguous.
+        (
+            lambda project: _edit_registry(
+                project,
+                lambda goal: goal["coordination"]["thread_agent_bindings"].append(
+                    {"thread_id": SESSION_ID, "host_surface": "kiro-cli", "agent_id": "someone-else"}
+                ),
+            ),
+            "ambiguous",
+        ),
+    ),
+)
+def test_every_way_an_engaged_session_loses_authority_fails_closed(
+    tmp_path: Path, break_authority, status: str  # type: ignore[no-untyped-def]
+) -> None:
+    project = _bound_project(tmp_path, gate_open=True)
+    assert _run_hook(project, "shell", command="make test").returncode == 0
+    break_authority(project)
+    _assert_denied(_run_hook(project, "shell", command="make test"), f"({status})")
+    assert _run_hook(project, "read").returncode == 0
+
+
+def test_binding_faults_deny_even_before_the_session_engaged(tmp_path: Path) -> None:
+    """Only "no registry" and "no binding yet" are pre-binding states. A broken
+    registry is a fault whether or not this session was seen before."""
+    project = _bound_project(tmp_path, gate_open=True)
+    _registry_path(project).write_text("{not json", encoding="utf-8")
+    _assert_denied(_run_hook(project, "shell", command="make test"), "registry_unreadable")
+
+
+def test_pre_binding_states_stay_open_for_bootstrap(tmp_path: Path) -> None:
+    empty = tmp_path / "no-loopx-project"
+    empty.mkdir()
+    assert _run_hook(empty, "shell", command="loopx start-goal").returncode == 0
+    project = _bound_project(tmp_path / "bound", gate_open=False)
+    result = _run_hook(project, "shell", session_id="never-bound", command="loopx start-goal")
+    assert result.returncode == 0, result.stderr
+
+
+def test_event_without_a_session_id_denies_state_changes(tmp_path: Path) -> None:
+    empty = tmp_path / "no-loopx-project"
+    empty.mkdir()
+    _assert_denied(_run_hook(empty, "shell", session_id="", command="ls"), "no session id")
+    assert _run_hook(empty, "read", session_id="").returncode == 0
+
+
+def test_unrecordable_engagement_fails_closed(tmp_path: Path) -> None:
+    project = _bound_project(tmp_path, gate_open=True)
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    event = {"cwd": str(project), "session_id": SESSION_ID, "tool_name": "shell", "tool_input": {"command": "ls"}}
+    decision = pretooluse_hook.decide(event, armed_root=blocker / "armed", probe_for=lambda _c: lambda: True)
+    assert decision is not None and decision.verdict is Verdict.DENY
+    assert "cannot record" in decision.reason
+    read = {**event, "tool_name": "read", "tool_input": {}}
+    read_decision = pretooluse_hook.decide(read, armed_root=blocker / "armed", probe_for=lambda _c: lambda: True)
+    assert read_decision is not None and read_decision.verdict is Verdict.ALLOW
+
+
+def test_retiring_the_agent_clears_engagement_records(tmp_path: Path) -> None:
+    kiro_home = tmp_path / "kiro-home"
+    install_slash_commands(
+        execute=True, with_gated_agent=True, surfaces=["kiro-cli"], kiro_home=str(kiro_home)
+    )
+    records = arming_root(kiro_home)
+    arm(records, SESSION_ID, {"goal_id": "g", "agent_id": "a"})
+    assert is_armed(records, SESSION_ID)
+    install_slash_commands(execute=True, uninstall=True, surfaces=["kiro-cli"], kiro_home=str(kiro_home))
+    assert not is_armed(records, SESSION_ID)
+
+
+# --- supported host versions --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("version", "blocked"),
+    (("2.24.1", False), ("2.0.0", False), ("3.0.0", True), ("1.9.0", True), (None, False)),
+)
+def test_only_verified_host_majors_are_installable(version: str | None, blocked: bool) -> None:
+    assert host_version_blocks_install(version) is blocked
+
+
+def test_unverified_host_major_refuses_to_write_the_agent(tmp_path: Path) -> None:
+    kiro_home = tmp_path / "kiro-home"
+    status = sync_gated_agent(kiro_home, uninstall=False, execute=True, host_version=lambda: "3.0.0")
+    assert status == "blocked_unverified_kiro_cli_version"
+    assert not gated_agent_path(kiro_home).exists()
+    assert sync_gated_agent(kiro_home, uninstall=False, execute=True, host_version=lambda: "2.24.1") == "written"

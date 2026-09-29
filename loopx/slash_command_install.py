@@ -1153,19 +1153,25 @@ def install_slash_commands(
         # retires it: a managed agent left pointing at a removed hook would run
         # every tool ungated, since a failed hook does not block in Kiro.
         if with_gated_agent or uninstall:
-            installed.append(
-                {
-                    "surface": "kiro-cli",
-                    "host_surfaces": ["kiro-cli"],
-                    "mechanism": "kiro_cli_gated_agent",
-                    "command": GATED_AGENT_LAUNCH,
-                    "path": str(gated_agent_path(kiro_root)),
-                    "status": sync_gated_agent(
-                        kiro_root, uninstall=uninstall, execute=execute
-                    ),
-                    "invoke_as": [GATED_AGENT_LAUNCH],
-                }
+            gated_status = sync_gated_agent(
+                kiro_root, uninstall=uninstall, execute=execute
             )
+            gated_row = {
+                "surface": "kiro-cli",
+                "host_surfaces": ["kiro-cli"],
+                "mechanism": "kiro_cli_gated_agent",
+                "command": GATED_AGENT_LAUNCH,
+                "path": str(gated_agent_path(kiro_root)),
+                "status": gated_status,
+                "invoke_as": [GATED_AGENT_LAUNCH],
+            }
+            if gated_status == "blocked_unverified_kiro_cli_version":
+                gated_row["reason"] = (
+                    "The gate's embedded preToolUse hook is verified on Kiro CLI "
+                    "2.x only; this host would load the agent without the hook "
+                    "and run every tool ungated."
+                )
+            installed.append(gated_row)
 
     if "cursor" in effective_surfaces:
         # Cursor reads SKILL.md from CURSOR_HOME/skills (its skill roots also

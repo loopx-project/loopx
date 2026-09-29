@@ -10,9 +10,18 @@ other non-zero status lets the tool run, and a hook that outlives the entry's
 slow control plane is refused here instead of being waved through by the host.
 
 Identity is the session's ``bind-agent-thread`` binding, the same rule the MCP
-server uses. A session with no binding, or a project with no registry, is not
-under goal-mode and the gate stays out of the way; that is also what lets
-``/loopx`` run ``start-goal`` before the binding exists.
+server uses, resolved to a typed state rather than "context or nothing":
+
+- bound: the Goal's ``quota should-run`` decides, and the session is recorded
+  as armed (see ``gate_arming``);
+- never bound, in a project with no registry or no binding yet: the gate stays
+  out of the way, which is what lets ``/loopx`` run ``start-goal``;
+- armed but no longer resolvable (registry gone or unreadable, binding
+  deleted, ambiguous, or naming a removed Goal/agent), or any binding fault in
+  a session that was never armed, or an event with no session id: state-
+  changing calls are denied.
+
+Read-only calls pass in every state, so a denied session can still inspect why.
 
 The per-tool rule is ``loopx.control_plane.goal_mode_tool_policy``; this file only maps
 Kiro's event and exit-code contract onto it.
@@ -46,8 +55,20 @@ from loopx.control_plane.goal_mode_tool_policy import (  # noqa: E402
 from loopx.kiro_cli_goal_mode import (  # noqa: E402
     KIRO_CLI_HOOK_BLOCK_EXIT_STATUS as BLOCK_EXIT_STATUS,
     KIRO_CLI_HOOK_PROBE_TIMEOUT_SECONDS as PROBE_TIMEOUT_SECONDS,
+    kiro_home,
 )
-from loopx.kiro_cli_goal_mode.session_context import session_goal_context  # noqa: E402
+from loopx.kiro_cli_goal_mode.gate_arming import (  # noqa: E402
+    arm,
+    armed_record,
+    arming_root,
+    is_armed,
+)
+from loopx.kiro_cli_goal_mode.session_context import (  # noqa: E402
+    PRE_BINDING_STATUSES,
+    SessionBinding,
+    SessionBindingStatus,
+    resolve_session_binding,
+)
 
 # Same typed owner as the MCP server, so the gate and the settlement path
 # can never disagree on which profile a Kiro session runs under.
@@ -74,7 +95,7 @@ READ_ONLY_TOOLS = frozenset(
 FILE_WRITE_TOOLS = frozenset({"write", "fs_write", "fsWrite"})
 SHELL_TOOLS = frozenset({"shell", "execute_bash", "execute_cmd"})
 
-ContextResolver = Callable[[str | None, str | None], "dict[str, Any] | None"]
+BindingResolver = Callable[[str | None, str | None], SessionBinding]
 ProbeFactory = Callable[[Mapping[str, Any]], Callable[[], "bool | None"]]
 
 
@@ -108,24 +129,63 @@ def _probe_for(context: Mapping[str, Any]) -> Callable[[], bool | None]:
     )
 
 
+REBIND_HINT = (
+    "re-bind this session with `loopx bind-agent-thread --host-surface kiro-cli` "
+    "or start a new Kiro session"
+)
+
+
 def decide(
     event: Mapping[str, Any],
     *,
-    resolve_context: ContextResolver = session_goal_context,
+    resolve_binding: BindingResolver = resolve_session_binding,
     probe_for: ProbeFactory = _probe_for,
+    armed_root: Path | None = None,
 ) -> GateDecision | None:
     """The gate verdict for one Kiro event, or None when goal-mode is off."""
     call = tool_call(str(event.get("tool_name") or ""), event.get("tool_input") or {})
     cwd = event.get("cwd")
-    context = resolve_context(cwd, event.get("session_id"))
-    if not context:
+    session_id = str(event.get("session_id") or "")
+    root = armed_root if armed_root is not None else arming_root(kiro_home())
+    binding = resolve_binding(cwd, session_id)
+
+    if binding.bound and binding.context is not None:
+        context = binding.context
+        try:
+            arm(root, session_id, context)
+        except OSError:
+            if call.kind is not ToolKind.READ_ONLY:
+                return GateDecision(
+                    Verdict.DENY,
+                    "cannot record that this session is gated; failing closed",
+                )
+        return decide_tool_call(
+            call,
+            goal_id=context.get("goal_id"),
+            write_scope=context.get("write_scope") or [],
+            should_run=probe_for(context),
+            cwd=str(cwd) if cwd else None,
+        )
+
+    if call.kind is ToolKind.READ_ONLY:
+        return GateDecision(Verdict.ALLOW, "read-only tool")
+    if binding.status is SessionBindingStatus.NO_SESSION_ID:
+        return GateDecision(
+            Verdict.DENY, "preToolUse event carries no session id; failing closed"
+        )
+    if is_armed(root, session_id):
+        goal = armed_record(root, session_id).get("goal_id") or "unknown"
+        return GateDecision(
+            Verdict.DENY,
+            f"this session is gated for goal '{goal}' but its binding can no "
+            f"longer be resolved ({binding.status.value}); failing closed — "
+            f"{REBIND_HINT}",
+        )
+    if binding.status in PRE_BINDING_STATUSES:
         return None
-    return decide_tool_call(
-        call,
-        goal_id=context.get("goal_id"),
-        write_scope=context.get("write_scope") or [],
-        should_run=probe_for(context),
-        cwd=str(cwd) if cwd else None,
+    return GateDecision(
+        Verdict.DENY,
+        f"session binding is {binding.status.value}; failing closed — {REBIND_HINT}",
     )
 
 
