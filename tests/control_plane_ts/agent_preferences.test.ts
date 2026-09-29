@@ -96,3 +96,16 @@ test("bounded context rejects overflow rather than evicting a constraint; malfor
   await assert.rejects(executeAgentPreferences({...request, ...update, expected_revision: view(before).revision}, store), /capacity/);
   assert.deepEqual(await executeAgentPreferences(request, store), before);
 });
+
+test("read with an irrelevant execute flag cannot recreate missing store identity", async t => {
+  const root = await mkdtemp(join(tmpdir(), "preferences-readonly-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const call = (fields: JsonObject) => agentPreferences({...request, runtime_root: root, ...fields});
+  assert.equal((await call(update)).status, "applied");
+  const namespace = join(root, "agent-preferences");
+  const directory = join(namespace, (await readdir(namespace))[0]!);
+  await rm(join(directory, "store-identity"));
+  const read = await call({execute: true});
+  assert.equal(read.status, "unavailable");
+  assert.equal((await readdir(directory)).includes("store-identity"), false);
+});

@@ -160,6 +160,7 @@ export async function agentPreferences(request: JsonObject): Promise<JsonObject>
   const directory = join(text(request.runtime_root, "runtime_root", 4096), "agent-preferences", hash(scope));
   // Separate private context namespace; never adds semantic prose to Goal/Todo
   // authority or changes its provider. Reuse the existing transactional journal.
-  const store = new FileAuthorityStore(directory, "preferences", {existingOnly: request.execute !== true});
+  const mutating = (request.action === "remember" || request.action === "retire") && request.execute === true;
+  const store = new FileAuthorityStore(directory, "preferences", {existingOnly: !mutating});
   return executeAgentPreferences(request, store);
 }
