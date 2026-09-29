@@ -90,16 +90,16 @@ LOCAL_PATH_SURFACE_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
-# Refs #5136, direction 3: the shared classifier can *recognize* the local-path
-# shapes the legacy surface pattern misses -- a home-relative `~/...` path and a
-# local path behind an explicit `path:` prefix. Recognition is opt-in
-# (`include_path_gaps`) so this consolidation does not silently tighten the 30+
-# consumers of LOCAL_PATH_SURFACE_PATTERN; wiring these into a surface's
-# enforcement policy is the disclosed behavior change tracked separately.
-# `file://` is not added to the gap set here: direction 3 does classify it as a
-# local path, but acting on that means a public projection stops carrying a
-# location it accepts today, which is a disclosed tightening rather than part of
-# this relocation. It is applied with the enforcement policy in the follow-up.
+# Refs #5136, direction 3: the local-path shapes this owner recognizes.
+# `LOCAL_PATH_SURFACE_PATTERN` carries the absolute roots, Windows drive letters
+# and UNC shares; the gap pair adds the home-relative `~/...` form and a local
+# path behind an explicit `path:` prefix. Whether a surface *rejects* what this
+# owner recognizes stays the caller's named policy, so a surface can still opt
+# into the narrower legacy set by asking for `LOCAL_PATH_SURFACE_PATTERN` alone.
+# `file://` is deliberately not in this set: direction 3 does classify it as a
+# local path, but every surface that has to stop carrying one already rejects it
+# here as a raw remote location, and the surfaces that keep ordinary URLs would
+# need a per-surface decision rather than a shared-pattern change.
 HOME_RELATIVE_PATH_PATTERN = re.compile(r"(?<![\w~])~[\\/][^\s`'\"<>]+")
 PATH_PREFIX_LOCAL_PATTERN = re.compile(
     r"(?<![\w:])path:[\\/][^\s`'\"<>]+", re.IGNORECASE
@@ -107,6 +107,21 @@ PATH_PREFIX_LOCAL_PATTERN = re.compile(
 LOCAL_PATH_GAP_PATTERNS: tuple[re.Pattern[str], ...] = (
     HOME_RELATIVE_PATH_PATTERN,
     PATH_PREFIX_LOCAL_PATTERN,
+)
+# The boundary form one pair of migrating surfaces already enforced: a local
+# reference introduced by `:` or `=`. `LOCAL_PATH_SURFACE_PATTERN`'s lookbehind
+# deliberately skips a preceding colon, so without this arm a surface moving
+# onto the shared decision would start accepting `:/Users/...` -- a loosening
+# no migration is allowed to introduce.
+LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN = re.compile(
+    r"(?:^|[\s:=])(?:/Users/|/private/|/tmp/|~[/\\])",
+    re.IGNORECASE,
+)
+PUBLIC_SAFE_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    LOCAL_PATH_SURFACE_PATTERN,
+    HOME_RELATIVE_PATH_PATTERN,
+    PATH_PREFIX_LOCAL_PATTERN,
+    LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,
 )
 # Refs #5136: one definition for "this string carries a raw remote location".
 # Three validators each restated the same scheme list, and the canonical
@@ -260,6 +275,27 @@ _SHAPE_DETECTORS: tuple[tuple[re.Pattern[str], str, str], ...] = (
         "raw remote location URL",
     ),
 )
+
+
+def find_public_safe_local_path(value: str | None) -> re.Pattern[str] | None:
+    """Return the local-path shape ``value`` carries, or None when it carries none.
+
+    This is the single answer to "is there a local path in this text" for
+    surfaces that publish outside the runtime (Refs #5136, direction 3): the
+    absolute roots, the two gap shapes `classify_private_text` reaches only when
+    a caller opts into `include_path_gaps`, and the colon/equals boundary form
+    the migrated surfaces already enforced. Recognition is still not permission:
+    a caller that must keep a narrower historical verdict asks for
+    `LOCAL_PATH_SURFACE_PATTERN` directly, and each surface keeps its own
+    rejection message and length limit.
+    """
+
+    if not value:
+        return None
+    for pattern in PUBLIC_SAFE_LOCAL_PATH_PATTERNS:
+        if pattern.search(value):
+            return pattern
+    return None
 
 
 def classify_private_text(
