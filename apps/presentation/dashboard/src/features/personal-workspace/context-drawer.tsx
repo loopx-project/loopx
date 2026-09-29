@@ -109,6 +109,7 @@ type ContextDrawerSelection = Exclude<WorkspaceDrawerSelection, { kind: "setting
 
 type RunActionKind = "correct" | "close" | "interrupt" | "newSession" | "retry";
 type RunActionState = { message?: string; status: "error" | "pending" };
+type RunActionStates = Partial<Record<RunActionKind, RunActionState>>;
 const RUN_ACTION_LABEL_KEYS = {
   close: "drawer.runCloseSession",
   correct: "drawer.correctionSend",
@@ -137,7 +138,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [repositoryCopyState, setRepositoryCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [runDrawerTab, setRunDrawerTab] = useState<"record" | "details">("record");
-  const [runActions, setRunActions] = useState<Partial<Record<RunActionKind, RunActionState>>>({});
+  const [runActions, setRunActions] = useState<Record<string, RunActionStates>>({});
   const [subagentAllowedDomains, setSubagentAllowedDomains] = useState<string[]>([]);
   const [subagentFeedback, setSubagentFeedback] = useState<string | null>(null);
   const [subagentMaxChildren, setSubagentMaxChildren] = useState(2);
@@ -313,23 +314,35 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const normalizedTodoResumeWhen = parseTodoResumeCondition(todoResumeWhen);
 
   const selectedRunId = selection.kind === "run" ? selection.item.runId : null;
-  useEffect(() => { setRunActions({}); }, [selectedRunId]);
-  const runActionPending = (kind: RunActionKind) => runActions[kind]?.status === "pending";
-  const runActionFeedback = (Object.entries(runActions) as [RunActionKind, RunActionState][])
+  const selectedRunActions: RunActionStates = selectedRunId ? runActions[selectedRunId] ?? {} : {};
+  const runActionPending = (kind: RunActionKind) => selectedRunActions[kind]?.status === "pending";
+  const runActionFeedback = (Object.entries(selectedRunActions) as [RunActionKind, RunActionState][])
     .filter(([kind, state]) => state.status === "error" || kind !== "correct");
+
+  function setRunActionState(runId: string, kind: RunActionKind, state: RunActionState | null) {
+    setRunActions((current) => {
+      const { [kind]: _previous, ...rest } = current[runId] ?? {};
+      const next: RunActionStates = state ? { ...rest, [kind]: state } : rest;
+      const { [runId]: _run, ...others } = current;
+      return Object.keys(next).length > 0 ? { ...others, [runId]: next } : others;
+    });
+  }
 
   // Run actions reach the Chat service. A rejected request must stay visible in
   // the drawer instead of escaping as an unhandled rejection. Each control only
   // guards itself: a correction Turn in flight must never block interrupting it.
-  async function performRunAction(kind: RunActionKind, action: () => void | Promise<void>) {
-    if (runActionPending(kind)) return false;
-    setRunActions((current) => ({ ...current, [kind]: { status: "pending" } }));
+  // State belongs to the Run that issued the request, so a late result can
+  // never report on, or release the guard of, another Run's action, and it is
+  // still there when the user returns to that Run.
+  async function performRunAction(run: WorkspaceRun, kind: RunActionKind, action: () => void | Promise<void>) {
+    if (runActions[run.runId]?.[kind]?.status === "pending") return false;
+    setRunActionState(run.runId, kind, { status: "pending" });
     try {
       await action();
-      setRunActions(({ [kind]: _settled, ...rest }) => rest);
+      setRunActionState(run.runId, kind, null);
       return true;
     } catch (error) {
-      setRunActions((current) => ({ ...current, [kind]: { message: error instanceof Error ? error.message : String(error), status: "error" } }));
+      setRunActionState(run.runId, kind, { message: error instanceof Error ? error.message : String(error), status: "error" });
       return false;
     }
   }
@@ -338,7 +351,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     return () => {
       if (selection.kind !== "run" || !callback) return;
       const run = selection.item;
-      void performRunAction(kind, () => callback(run));
+      void performRunAction(run, kind, () => callback(run));
     };
   }
 
@@ -347,7 +360,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     const run = selection.item;
     const message = correction.trim();
     const onCorrectRun = callbacks.onCorrectRun;
-    if (await performRunAction("correct", () => onCorrectRun(run, message))) setCorrection("");
+    if (await performRunAction(run, "correct", () => onCorrectRun(run, message))) setCorrection("");
   }
 
   async function previewTodoTransition(todo: WorkspaceTodo, operation: TodoOperation, label: string, resumeWhen?: string) {
