@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Any, Iterable
@@ -309,13 +308,3 @@ def render_development_probe(report: dict[str, Any]) -> str:
     lines.append("Scope limitations:")
     lines.extend(f"- {limitation}" for limitation in report["scope_limitations"])
     return "\n".join(lines) + "\n"
-
-
-def load_registry(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise DevelopmentProbeError(f"cannot read semantic registry: {path}") from error
-    if not isinstance(payload, dict) or not isinstance(payload.get("vocabularies"), dict):
-        raise DevelopmentProbeError(f"semantic registry has no vocabularies map: {path}")
-    return payload

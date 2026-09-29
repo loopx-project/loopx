@@ -30,7 +30,6 @@ from loopx.semantics.development_probe import (  # noqa: E402
     DevelopmentProbeError,
     build_development_probe,
     collect_changed_sources,
-    load_registry,
     render_development_probe,
 )
 from loopx.semantics.inventory import (  # noqa: E402
@@ -43,6 +42,16 @@ from loopx.semantics.inventory import (  # noqa: E402
 )
 
 REGISTRY_RELATIVE = "loopx/semantics/vocabulary_v0.json"
+
+
+def load_semantic_registry(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise DevelopmentProbeError(f"cannot read semantic registry: {path}") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("vocabularies"), dict):
+        raise DevelopmentProbeError(f"semantic registry has no vocabularies map: {path}")
+    return payload
 
 
 def print_merge_candidates(inventory: dict) -> None:
@@ -117,7 +126,7 @@ def main() -> int:
             report = build_development_probe(
                 baseline=baseline,
                 changes=changes,
-                registry=load_registry(ROOT / REGISTRY_RELATIVE),
+                registry=load_semantic_registry(ROOT / REGISTRY_RELATIVE),
             )
         except DevelopmentProbeError as error:
             print(f"semantic coinage probe failed: {error}", file=sys.stderr)
