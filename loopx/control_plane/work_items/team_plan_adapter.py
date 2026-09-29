@@ -7,6 +7,7 @@ Neither adapter grants receiver adoption or execution authority.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -43,6 +44,86 @@ class TeamPlanCommitError(ValueError):
         super().__init__(message)
         self.code = code
         self.current_fingerprint = current_fingerprint
+
+
+def team_plan_state_fingerprint(
+    *, registry_path: Path, goal_id: str, basis_agent_id: str | None,
+) -> str:
+    """Bind every fact a team plan is reviewed and settled against.
+
+    Registry bytes are not enough. A plan is reviewed against the Goal's own
+    intent -- the objective its work advances -- and that intent lives in the
+    active-state document and in the canonical source basis the lanes would be
+    created against, neither of which the registry bytes cover. The canonical
+    provider revision is bound too, so a promoted Goal whose display has not
+    caught up cannot admit stale work.
+
+    Every originator binds this same digest before its plan is reviewed (owner
+    confirmation at preview, agent settlement at first journal write) and the
+    settlement re-reads it; the typed owner refuses a commit without both.
+
+    An unreadable fact is bound as its own explicit absence rather than dropped
+    from the digest, so the precondition fails closed in both directions: a Goal
+    whose intent becomes readable after the review asks for a new review
+    instead of silently dropping the check.
+    """
+
+    from .governed_transition_proposal import steward_team_plan_source_basis
+
+    registry_path = Path(registry_path).expanduser()
+    try:
+        registry_digest = hashlib.sha256(registry_path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise ValueError("the active LoopX registry is unavailable") from exc
+    goal = find_registry_goal(load_registry(registry_path), goal_id)
+    if goal is None:
+        raise ValueError("steward team plan names an unknown Goal")
+    project = Path(str(goal.get("repo") or "")).expanduser()
+    state_file = Path(str(goal.get("state_file") or ""))
+    if not state_file.is_absolute():
+        state_file = project / state_file
+    try:
+        state_digest: str | None = hashlib.sha256(state_file.read_bytes()).hexdigest()
+    except OSError:
+        state_digest = None
+    canonical = read_canonical_todos_if_promoted(
+        runtime_root=effective_runtime_root(registry_path, None), goal_id=goal_id)
+    payload = {
+        "registry": registry_digest,
+        "provider_revision": canonical.get("provider_revision") if canonical else None,
+        "goal_id": goal_id,
+        "active_state": state_digest,
+        "intent_basis": steward_team_plan_source_basis(
+            goal_id=goal_id, goal=goal, registry_path=registry_path,
+            agent_id=basis_agent_id),
+    }
+    encoded = json.dumps(payload, allow_nan=False, ensure_ascii=False,
+                         sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def settle_team_plan(
+    *, registry_path: Path, goal_id: str, agent_id: str | None,
+    proposal: Mapping[str, Any], expected_state_fingerprint: str | None,
+    basis_agent_id: str | None = None,
+) -> dict[str, Any]:
+    """Apply one reviewed plan against the basis its reviewer bound.
+
+    ``expected_state_fingerprint`` is the digest the originator stored when the
+    plan was reviewed; the settlement re-reads the same digest through
+    :func:`team_plan_state_fingerprint` and the typed owner compares them. A
+    missing basis is refused there as ``team_plan_basis_missing`` rather than
+    skipping the check. ``basis_agent_id`` defaults to the settling agent.
+    """
+
+    registry_path = Path(registry_path).expanduser()
+    basis_agent = basis_agent_id if basis_agent_id is not None else agent_id
+    return apply_team_plan(
+        registry_path=registry_path, goal_id=goal_id, agent_id=agent_id,
+        proposal=proposal, expected_state_fingerprint=expected_state_fingerprint,
+        read_fingerprint=lambda: team_plan_state_fingerprint(
+            registry_path=registry_path, goal_id=goal_id, basis_agent_id=basis_agent),
+    )
 
 
 def apply_team_plan(
@@ -122,8 +203,6 @@ def apply_team_plan(
         result = dict(planned["result"])
         if planned["replayed"]:
             verify_state_text_durable(state, original)
-            return result
-        if not planned["todos"]:
             return result
         capture = begin_todo_runtime_shadow_capture(registry_path=registry_path,
             runtime_root=runtime, goal_id=goal_id, state_path=state,

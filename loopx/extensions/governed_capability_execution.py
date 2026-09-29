@@ -32,6 +32,7 @@ from ..control_plane.work_items.governed_transition_proposal import (
     settle_governed_transition_proposals,
     validate_governed_transition_receipts,
 )
+from ..control_plane.work_items.team_plan_adapter import team_plan_state_fingerprint
 from ..file_lock import exclusive_file_lock
 from .capability_admission import prepare_external_capability_invocation
 from .runtime import execute_extension_runtime_binding
@@ -353,6 +354,7 @@ def _settle_journal_transition_proposals(
         existing_receipts=journal.get("transition_receipts", []),
         checkpoint=checkpoint,
         phase=phase,
+        team_plan_state_basis=journal.get("team_plan_state_basis"),
     )
 
 
@@ -454,6 +456,7 @@ def start_governed_external_capability(
         "kernel_context_digest": _canonical_digest(kernel_context),
         "completed_phases": [],
         "provider_result": None,
+        "team_plan_state_basis": None,
         "transition_receipts": [],
         "writeback": None,
         "quota_spend": None,
@@ -521,6 +524,17 @@ def start_governed_external_capability(
                 phase="inspect",
                 dry_run=False,
                 admission=admission,
+            )
+            # A team plan the provider proposes is settled against the state
+            # this agent saw before the provider ran, not against whatever the
+            # settlement later finds. The basis is bound once here, stored with
+            # the journal and never recomputed, so a replay keeps the same
+            # operation identity and a plan the provider shaped after the state
+            # moved is refused as stale. The provider never supplies it.
+            journal["team_plan_state_basis"] = team_plan_state_fingerprint(
+                registry_path=Path(registry_path),
+                goal_id=goal_id,
+                basis_agent_id=agent_id,
             )
             _write_journal(path, journal)
         provider_result = execute_extension_runtime_binding(
