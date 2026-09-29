@@ -870,12 +870,6 @@ export function PersonalWorkspacePage({
   function stewardPromptText(id: string) {
     return stewardPrompts.find((item) => item.id === id)?.prompt ?? "";
   }
-  useEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, [composer]);
   const workspaceGoals = useMemo(() => model.goals.map((goal) => {
     const repository = goalContexts[goal.goalId];
     return repository ? {
