@@ -28,6 +28,7 @@ from ..control_plane.turn_driver.transaction import (
     build_loopx_turn_transaction_plan,
 )
 from ..control_plane.work_items.governed_transition_proposal import (
+    STEWARD_TEAM_PLAN_PREVIEW_KIND,
     GovernedTransitionSettlementPhase,
     settle_governed_transition_proposals,
     validate_governed_transition_receipts,
@@ -163,6 +164,18 @@ def _write_journal(path: Path, value: Mapping[str, Any]) -> None:
 def _settlement_identity(transaction_plan: Mapping[str, Any]) -> dict[str, Any]:
     settlement = _mapping(transaction_plan.get("settlement_plan"), "settlement plan")
     return _mapping(settlement.get("identity"), "settlement identity")
+
+
+def _may_propose_team_plan(operation_profile: Mapping[str, Any]) -> bool:
+    """Whether this operation's declared contract admits a team-plan proposal.
+
+    A provider result is validated against the operation's own contract, so a
+    team plan can only arrive for an operation that declares the kind.
+    """
+
+    contract = operation_profile.get("transition_contract")
+    kinds = contract.get("proposal_kinds") if isinstance(contract, Mapping) else None
+    return isinstance(kinds, list) and STEWARD_TEAM_PLAN_PREVIEW_KIND in kinds
 
 
 def _journal_registry_path(journal: Mapping[str, Any]) -> Path | None:
@@ -456,7 +469,6 @@ def start_governed_external_capability(
         "kernel_context_digest": _canonical_digest(kernel_context),
         "completed_phases": [],
         "provider_result": None,
-        "team_plan_state_basis": None,
         "transition_receipts": [],
         "writeback": None,
         "quota_spend": None,
@@ -530,12 +542,15 @@ def start_governed_external_capability(
             # settlement later finds. The basis is bound once here, stored with
             # the journal and never recomputed, so a replay keeps the same
             # operation identity and a plan the provider shaped after the state
-            # moved is refused as stale. The provider never supplies it.
-            journal["team_plan_state_basis"] = team_plan_state_fingerprint(
-                registry_path=Path(registry_path),
-                goal_id=goal_id,
-                basis_agent_id=agent_id,
-            )
+            # moved is refused as stale. The provider never supplies it. Only
+            # an operation whose contract admits a team plan binds one; no
+            # shipped contract does yet, so other starts are unchanged.
+            if _may_propose_team_plan(operation_profile):
+                journal["team_plan_state_basis"] = team_plan_state_fingerprint(
+                    registry_path=Path(registry_path),
+                    goal_id=goal_id,
+                    basis_agent_id=agent_id,
+                )
             _write_journal(path, journal)
         provider_result = execute_extension_runtime_binding(
             binding,

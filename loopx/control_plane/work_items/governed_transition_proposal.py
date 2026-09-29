@@ -98,9 +98,11 @@ STEWARD_TEAM_PLAN_PREVIEW_KIND = "steward_team_plan_preview"
 # This table is the settlement owner for every proposal kind LoopX can
 # materialize. The external-capability result gate (`governed_capability.ts`
 # and the extension manifest's `transition_contract.proposal_kinds`) admits
-# only the monitor kinds today, so a provider result cannot yet carry a team
-# plan; admitting one is a provider-contract change and inherits the journal
-# basis requirement below unchanged.
+# only the monitor kinds, so no provider result carries a team plan yet; the
+# team-plan route is kept so that admitting the kind, a separate provider
+# contract change, inherits the basis requirement: the journal binds a basis
+# for an operation that declares the kind and `_apply_team_plan` settles only
+# against it.
 _SETTLEMENT_PHASE_BY_PROPOSAL_KIND = {
     "continuous_monitor_upsert": GovernedTransitionSettlementPhase.PRE_SETTLEMENT,
     "continuous_monitor_complete": GovernedTransitionSettlementPhase.POST_SETTLEMENT,
