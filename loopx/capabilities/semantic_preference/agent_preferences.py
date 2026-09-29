@@ -30,14 +30,20 @@ def agent_preferences(*, registry_path: Path, runtime_root: Path, goal_id: str,
     return result
 
 
-def turn_start_hook(runtime_root: Path, registry_path: Path, goal_id: str, agent_id: str):
+def extend_turn_start_dispatch(dispatch, *, runtime_root, registry_path, goal_id, agent_id):
+    # Cheap global negative check only; exact scope discovery remains TS-owned.
+    if not agent_id or not (runtime_root / "agent-preferences").exists():
+        return dispatch
+    absent = False
     from ...control_plane.capability_hooks import (
-        TurnStartHookRegistration, TURN_START_HOOK_RESULT_SCHEMA_VERSION,
+        TurnStartHookRegistration, TURN_START_HOOK_RESULT_SCHEMA_VERSION, dispatch_turn_start_hooks,
     )
 
     def produce():
+        nonlocal absent
         state = agent_preferences(registry_path=registry_path, runtime_root=runtime_root,
-                                  goal_id=goal_id, agent_id=agent_id)
+                                  goal_id=goal_id, agent_id=agent_id, action="observe")
+        absent = state.get("ok") is True and state.get("status") == "absent"
         if not state.get("ok"):
             # The dispatcher exposes this failure; never substitute cached prose.
             return {
@@ -49,7 +55,7 @@ def turn_start_hook(runtime_root: Path, registry_path: Path, goal_id: str, agent
                 "private_content_returned": False, "provider_payload_returned": False,
                 "error_code": "agent_preferences_unreadable",
             }
-        count = len(state["current"]["items"])
+        count = state["observation_count"]
         return {
             "schema_version": TURN_START_HOOK_RESULT_SCHEMA_VERSION,
             "hook_id": "semantic_preference.agent_context", "capability_id": "semantic-preference",
@@ -63,7 +69,7 @@ def turn_start_hook(runtime_root: Path, registry_path: Path, goal_id: str, agent
     command = shlex.join(["loopx", "--registry", str(registry_path), "--runtime-root",
         str(runtime_root), "semantic-preference", "agent", "read", "--goal-id", goal_id,
         "--agent-id", agent_id, "--format", "json"])
-    return TurnStartHookRegistration(
+    hook = TurnStartHookRegistration(
         hook_id="semantic_preference.agent_context", capability_id="semantic-preference",
         requested_read_scope=("owner_private_agent_preferences",), requested_write_scope=(),
         producer=produce,
@@ -72,13 +78,11 @@ def turn_start_hook(runtime_root: Path, registry_path: Path, goal_id: str, agent
             "ordering": "before_work"},
     )
 
-
-def extend_turn_start_dispatch(dispatch, *, runtime_root, registry_path, goal_id, agent_id):
-    # Discovery only; the TS owner still verifies exact scope and contents.
-    if not agent_id or not (runtime_root / "agent-preferences").exists():
+    extra = dispatch_turn_start_hooks((hook,))
+    if absent:
+        # Preserve the entire feature-off projection, including counters. An
+        # unreadable store/producer error is not absence and remains visible.
         return dispatch
-    from ...control_plane.capability_hooks import dispatch_turn_start_hooks
-    extra = dispatch_turn_start_hooks((turn_start_hook(runtime_root, registry_path, goal_id, agent_id),))
     result = dict(dispatch or {})
     for key in ("results", "required_reads", "failures"):
         result[key] = list(result.get(key) or []) + list(extra.get(key) or [])

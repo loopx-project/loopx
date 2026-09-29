@@ -90,10 +90,14 @@ export async function executeAgentPreferences(request: JsonObject, store: Author
   if (request.schema_version !== "agent_preferences_request_v1") throw new TypeError("preference request schema mismatch");
   const scope = scopeOf(request);
   const action = request.action;
-  if (!["read", "remember", "retire", "history"].includes(String(action))) throw new TypeError("invalid preference action");
+  if (!["read", "observe", "remember", "retire", "history"].includes(String(action))) throw new TypeError("invalid preference action");
   const loaded = await store.loadAuthority();
   if (loaded.status !== "loaded" && loaded.status !== "missing") return {ok: false, status: "unavailable", error: "preference_store_unreadable"};
   const rows = loaded.status === "loaded" ? recordsOf(loaded.head, scope) : [];
+  // Hook discovery is scoped and content-free. Missing is different from an
+  // existing retirement/expiry: those must still invalidate stale Agent context.
+  if (action === "observe") return {ok: true, status: loaded.status === "missing" ? "absent" : "observed",
+    observation_count: rows.length};
   const actualRevision = loaded.status === "loaded" ? loaded.provider_revision : null;
   const view = current(rows, actualRevision, now);
   if (action === "read") return {ok: true, status: "read", current: view};

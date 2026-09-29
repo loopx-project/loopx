@@ -120,3 +120,43 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
     del changed["turn_envelope"]["contract_capsule"]["unavailable_context"]
     with pytest.raises(ValueError, match="signature"):
         extract_turn_authority(changed)
+
+
+@pytest.mark.parametrize("other_scope", ["goal", "agent"])
+def test_shared_runtime_preserves_unconfigured_scope_projection(tmp_path, other_scope):
+    _, runtime, registry = _write_fixture(tmp_path / "first", required_capability="network")
+    document = json.loads(registry.read_text())
+    peer = "peer-without-preferences"
+    if other_scope == "goal":
+        _, _, other_registry = _write_fixture(tmp_path / "second", required_capability="network")
+        other_goal = json.loads(other_registry.read_text())["goals"][0]
+        other_goal["id"] = "other-goal"
+        document["goals"].append(other_goal)
+        scope = ("--goal-id", "other-goal", "--agent-id", AGENT_ID)
+    else:
+        document["goals"][0]["coordination"]["registered_agents"].append(peer)
+        scope = ("--goal-id", GOAL_ID, "--agent-id", peer)
+    registry.write_text(json.dumps(document))
+
+    def projections():
+        result = []
+        for command in [("quota", "should-run"), ("turn", "plan")]:
+            rc, payload = _run_cli(registry, runtime, *command, *scope)
+            assert rc == 0, payload
+            result.append(payload)
+        return result
+
+    before = projections()
+    rc, written = _run_cli(registry, runtime, "semantic-preference", "agent", "remember",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--key", "review",
+        "--statement", "Consult the assigned reviewer.", "--expected-revision", "none",
+        "--operation-id", "isolation-write", "--source-ref", "owner-message",
+        "--source-quote", "Consult the assigned reviewer.", "--execute")
+    assert rc == 0 and written["status"] == "applied", written
+    after = projections()
+    for old, new in zip(before, after):
+        assert new.get("turn_start_capability_hook_dispatch") == old.get("turn_start_capability_hook_dispatch")
+    assert extract_turn_authority(after[1]) == extract_turn_authority(before[1])
+    rc, empty = _run_cli(registry, runtime, "semantic-preference", "agent", "read", *scope)
+    assert rc == 0 and empty["current"]["items"] == []
+    assert len(list((runtime / "agent-preferences").iterdir())) == 1

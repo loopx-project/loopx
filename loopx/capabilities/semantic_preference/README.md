@@ -348,6 +348,11 @@ Turn compaction, including long quoted paths and more than five hooks; size
 excess remains a diagnostic rather than permission to drop obligations.
 Counts and the read command enter the turn envelope; private
 statements and source quotes do not enter generic quota/status or public sinks.
+Discovery uses a content-free TS observation of the exact Goal/Agent scope.
+A missing store leaves the entire hook projection unchanged even when another
+Goal or Agent has preferences in the same runtime. Retired/expired records still
+require a fresh read; an unreadable store is unavailable, never absence.
+
 The command reads all current scoped entries, including retired/expired markers,
 instead of relying on embedding or keyword ranking to find a prohibition.
 

@@ -22,6 +22,7 @@ for (const [name, Store] of [["file", FileAuthorityStore], ["sqlite", SqliteAuth
     t.after(() => rm(dir, {recursive: true, force: true}));
     const call = (fields: JsonObject = {}) => executeAgentPreferences({...request, ...fields}, new Store(dir, "preferences"));
     assert.deepEqual(items(await call()), []);
+    assert.deepEqual(await call({action: "observe"}), {ok: true, status: "absent", observation_count: 0});
     const added = await call(update);
     assert.equal(added.status, "applied", JSON.stringify(added));
     assert.equal(items(await call())[0]!.statement, update.statement);
@@ -38,6 +39,7 @@ for (const [name, Store] of [["file", FileAuthorityStore], ["sqlite", SqliteAuth
     assert.equal(items(retired)[0]!.state, "retired");
     assert.equal(items(await call(update))[0]!.statement, null);
     assert.equal(items(await call())[0]!.state, "retired");
+    assert.deepEqual(await call({action: "observe"}), {ok: true, status: "observed", observation_count: 1});
     const history = await call({action: "history"});
     assert.equal((history.events as JsonObject[]).length, 3);
     assert.equal((history.events as JsonObject[])[0]!.statement, update.statement);
@@ -71,6 +73,7 @@ test("read/preview are side-effect free; scope isolation, expiry and input bound
   const added = await call(update);
   for (const fields of [{agent_id: "agent-b"}, {goal_id: "goal-b"}, {goal_state_ref: "other"}, {goal_instance_id: "replacement-goal"}]) {
     assert.deepEqual(items(await call(fields)), []);
+    assert.deepEqual(await call({...fields, action: "observe"}), {ok: true, status: "absent", observation_count: 0});
   }
   const store = new FileAuthorityStore(join(root, "expiry"), "preferences");
   await executeAgentPreferences({...request, ...update, expires_at: "2030-01-02T00:00:00Z"}, store, "2030-01-01T00:00:00Z");
