@@ -9,12 +9,9 @@ from ..todos.contract import normalize_todo_id
 from ..quota.effective_action import EffectiveAction
 
 
-def render_cli_command_prefix(*, runtime_root: str | None = None) -> str:
-    return (
-        f"loopx --runtime-root {shlex.quote(str(runtime_root))}"
-        if runtime_root
-        else "loopx"
-    )
+def render_cli_command_prefix(*, runtime_root: str | None = None, registry_path: str | None = None) -> str:
+    return ("loopx" + (f" --registry {shlex.quote(str(registry_path))}" if registry_path else "")
+        + (f" --runtime-root {shlex.quote(str(runtime_root))}" if runtime_root else ""))
 
 
 def action_portfolio_requires_explicit_selection(

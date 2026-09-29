@@ -54,10 +54,16 @@ Run from the checkout root:
 
 ```sh
 uv run --extra test python -m pytest tests/capabilities/test_pr_review_body.py -q
-# Requires the normal process-only provider credentials; no tools or writes.
+# Release qualification only; normal process-only credentials, no tools or writes.
 LOOPX_REVIEW_LIVE_TEST=1 uv run --extra test python -m pytest \
   tests/capabilities/test_pr_review_behavior.py -k historical -q
 ```
+
+The same release-only runner also contains paired synthetic frontend cases for
+redundant confirmation, recent-completion ordering and settings target clarity.
+Run the full `test_pr_review_behavior.py` suite without `-k historical` to include
+them at release qualification. Routine PRs run offline checks with live calls
+disabled. Positive twins prevent a blanket rejection of forms or confirmation.
 
 Live results qualify reasoning over supplied evidence only. They do not
 demonstrate autonomous repository investigation, rerun the old provider

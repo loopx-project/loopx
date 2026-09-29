@@ -191,3 +191,15 @@ test("current leased Monitor atomically observes and creates work without renewi
   assert.equal((await executeCoordinationMonitorPoll(store, {...fenced, operation_id: "fresh-expired",
     now: new Date("2026-09-02T00:00:00Z")})).status, "failed");
 });
+
+
+test("guarded canonical requests require the versioned receiver contract", async () => {
+  const {pollLocalCoordinationMonitor} = await import("../../loopx/control_plane/coordination/local_authority_runtime.ts");
+  const oldSchema = await pollLocalCoordinationMonitor({schema_version: "loopx_coordination_monitor_poll_request_v2",
+    gate_scope_guard: true});
+  assert.equal(oldSchema.status, "failed");
+  assert.match(String(oldSchema.reason), /requires request v3/);
+  const missingGuard = await pollLocalCoordinationMonitor({schema_version: "loopx_coordination_monitor_poll_request_v3"});
+  assert.equal(missingGuard.status, "failed");
+  assert.match(String(missingGuard.reason), /requires gate_scope_guard=true/);
+});

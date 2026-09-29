@@ -21,9 +21,9 @@ from ..work_items.autonomous_candidates import (
     autonomous_backlog_candidates as _autonomous_backlog_candidates,
     autonomous_monitor_candidates as _autonomous_monitor_candidates,
 )
+from .monitor_display_projection import MONITOR_SIGNAL_WAITING_ON
 
 
-MONITOR_SIGNAL_WAITING_ON = "monitor_signal"
 MAX_AUTONOMOUS_BACKLOG_CANDIDATES = MAX_AUTONOMOUS_TODO_CANDIDATES
 
 

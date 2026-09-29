@@ -62,6 +62,7 @@ from .control_plane.status.monitor_display_projection import (
     MONITOR_DISPLAY_SCHEMA_VERSION as MONITOR_DISPLAY_SCHEMA_VERSION,
     MONITOR_DISPLAY_STOP_CONDITION as MONITOR_DISPLAY_STOP_CONDITION,
     MONITOR_SIGNAL_WAITING_ON,
+    build_project_asset,
 )
 from .control_plane.status.registry_health_projection import (
     SOURCE_REGISTRY_SHADOW_FINDINGS,
@@ -106,7 +107,6 @@ from .control_plane.work_items.project_asset import (
     TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION as TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION,
     TODO_PROJECTION_VIEW_SCHEMA_VERSION as TODO_PROJECTION_VIEW_SCHEMA_VERSION,
     attach_active_state_project_asset_fields as _attach_active_state_project_asset_fields,
-    build_project_asset,
     enrich_project_asset as _enrich_project_asset_read_model,
     project_asset_handoff_check_projection,
     project_asset_latest_validation,

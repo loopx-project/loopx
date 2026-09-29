@@ -1,3 +1,4 @@
+import {registerMonitorGateScopeConformance} from "./monitor_gate_scope_conformance.ts";
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/source_projection.ts";
 import {registerCanonicalSnapshotConformance} from "./canonical_snapshot_conformance.ts";
 import {registerClaimAcquisitionProofConformance} from "./claim_acquisition_proof_conformance.ts";
@@ -299,6 +300,7 @@ export function registerAuthorityStoreConformance(
   registerTerminalSourceConformance(providerName, factory);
   registerUserCompletionFollowthroughConformance(providerName, factory);
   registerMonitorConfigurationConformance(providerName, factory);
+  registerMonitorGateScopeConformance(providerName, factory);
   registerLeasedMonitorConformance(providerName, factory);
   registerMonitorObservationUpdateConformance(providerName, factory);
   registerIssueFixMonitorReconciliationConformance(providerName, factory);

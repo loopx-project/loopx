@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {decisionScopeConsistency, decisionScopeCovers, evaluateDecisionScope, todoGateRelation} from "../../loopx/control_plane/todos/decision_scope.ts";
+import {decisionScopeConsistency, decisionScopeCovers, evaluateDecisionScope, projectTodoGateScopes, todoGateRelation} from "../../loopx/control_plane/todos/decision_scope.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
 
 const scope = {kind: "write_scope", granularity: "action", scope_key: "release"};
@@ -69,4 +69,19 @@ test("batched relations preserve pair ordering and fail on unknown protocol oper
   const result = evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0", operation: "relations", gates: [gate], items: [item, {...item, required_decision_scopes: []}]});
   assert.deepEqual(result.result, [[todoGateRelation(gate, item), todoGateRelation(gate, {...item, required_decision_scopes: []})]]);
   assert.throws(() => evaluateDecisionScope({schema_version: "todo_decision_scope_request_v0", operation: "approve"}), /unsupported/);
+});
+
+
+test("gate scope projection qualifies every addressed live dependency without granting authority", () => {
+  const independent = {...gate, decision_scope: undefined, unblocks_todo_id: "todo_other"};
+  const project = (gates: JsonObject[]) => (projectTodoGateScopes({agent_id: "agent-a", gates, items: [item]}).items as JsonObject[])[0];
+  assert.deepEqual(project([independent]), {schema_version: "todo_gate_scope_projection_v0",
+    agent_id: "agent-a", todo_id: "todo_work", gate_count: 1, state: "independent"});
+  for (const patch of [
+    {unblocks_todo_id: "todo_work"}, {unblocks_todo_id: null}, {global_gate: true}, {decision_scope: scope},
+  ]) assert.equal(project([independent, {...independent, ...patch}]).state, "blocked");
+  for (const patch of [
+    {status: "done", done: true}, {archive_state: "archive"}, {is_gate: false}, {blocks_agent: "agent-b"},
+  ]) assert.equal(project([{...independent, ...patch}]).state, "clear");
+  assert.equal(project([{...independent, status: "blocked"}]).state, "independent");
 });

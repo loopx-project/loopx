@@ -63,6 +63,19 @@ continuation, retry/restart, competing work, truthful status, intervention cost
 and correction/recovery. Reuse walkthroughs and validation references rather
 than producing a second report or requiring a soak for every change.
 
+Policy revision 12 makes that journey comparison concrete within the existing
+fields: compare required steps with the shortest valid authorized path, justify
+each mandatory question/confirmation, inspect populated whole-view composition,
+and distinguish fixture, packaged and installed evidence. No new result field,
+UI-only capability or second review authority is added. The checker still
+validates declarations rather than usability; the reviewer must execute and
+inspect the evidence. The paired frontend cases in `test_pr_review_behavior.py`
+challenge unnecessary forms, misleading recency and scope-confused settings,
+with positive controls preserving legitimate consent. These reasoning probes
+run only for release qualification; offline checks do not certify model quality.
+LoopX authors use the [frontend delivery workflow](../../../docs/development/frontend-delivery.md);
+reviews of other repositories follow their own product contracts.
+
 Legitimate safety, budget and dependency waits can be an `accepted_tradeoff`
 with an independent acceptance basis and bounded cost/recovery. Do not weaken
 authority to manufacture progress. A scoped `not_applicable` still names the

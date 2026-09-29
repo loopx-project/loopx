@@ -13,6 +13,7 @@ from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_STUDY_MANIFEST_SCHEMA_VERSION,
     build_benchmark_four_arm_contract,
     build_benchmark_study_dashboard,
+    build_benchmark_runtime_observation,
     build_benchmark_upload_envelope,
     compact_benchmark_four_arm_contract,
     normalize_benchmark_case_insight_projection,
@@ -881,3 +882,81 @@ def test_behavior_findings_do_not_change_study_score_projection():
     before = build_benchmark_study_dashboard(manifest, [run])
     after = build_benchmark_study_dashboard(manifest, [run, finding])
     assert before == after
+
+
+def test_dashboard_projects_runtime_observations_into_the_campaign_block() -> None:
+    """RFC §7: the runtime-observation record kind must reach the campaign block.
+
+    The projection reads these counts straight off observations, so a payload
+    naming a classification outside ``BenchmarkRuntimeClassification``, or a
+    factorial count that disagrees with the list beside it, cannot come from this
+    reducer. Both invariants are pinned here rather than asserted in prose.
+    """
+
+    from loopx.capabilities.benchmark_toolkit.runtime_observation import (
+        BenchmarkRuntimeClassification,
+    )
+
+    baseline = _row(arm_id="goal_plain", arm_role="baseline", feature=6, reward=0)
+    treatment = _row(
+        arm_id="loopx_plain",
+        arm_role="treatment",
+        feature=9,
+        reward=1,
+        anchor="goal_plain-case-1",
+    )
+    observations = [
+        build_benchmark_runtime_observation(
+            admission_active=True,
+            job_receipt_state="resolved",
+            runner_owner_state="alive",
+        ),
+        build_benchmark_runtime_observation(
+            admission_active=True,
+            job_receipt_state="resolved",
+            runner_owner_state="absent_after_grace",
+            terminal_result_present=True,
+        ),
+        build_benchmark_runtime_observation(
+            admission_active=False,
+            job_receipt_state="ambiguous",
+            runner_owner_state="unknown",
+        ),
+    ]
+    dashboard = build_benchmark_study_dashboard(
+        _manifest(),
+        [
+            _envelope(baseline, record_kind="experiment_board_row", key="baseline"),
+            _envelope(treatment, record_kind="experiment_board_row", key="treatment"),
+            _envelope(_insight(), record_kind="case_insight_projection", key="insight"),
+        ]
+        + [
+            _envelope(
+                observation,
+                record_kind="runtime_observation",
+                key=f"observation-{index}",
+            )
+            for index, observation in enumerate(observations)
+        ],
+    )
+    campaign = dashboard["campaign"]
+
+    assert campaign["runtime_observation_count"] == 3
+    counts = campaign["runtime_classification_counts"]
+    assert counts == {
+        "not_admitted": 1,
+        "running_qualified": 1,
+        "terminal_pending_reconcile": 1,
+    }
+    assert set(counts) <= {item.value for item in BenchmarkRuntimeClassification}
+    assert sum(counts.values()) == campaign["runtime_observation_count"]
+    assert campaign["factorial_contrast_count"] == len(dashboard["factorial_contrasts"])
+    assert (
+        campaign["factorial_contrast_countable_count"]
+        <= campaign["factorial_contrast_count"]
+    )
+    assert dashboard["authority"]["factorial_comparison_source"] == (
+        dashboard["factorial_contrasts"][0]["schema_version"]
+        if dashboard["factorial_contrasts"]
+        else None
+    )

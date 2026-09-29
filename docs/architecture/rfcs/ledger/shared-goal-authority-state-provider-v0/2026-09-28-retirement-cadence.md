@@ -260,7 +260,26 @@ retained allocations after return remain about 2.1 MB. This is current-state
 read-cost evidence, not historical replay, CLI cold-start, D2 qualification or
 a provider-default comparison. Python owns the request's transport-input
 lifetime; TS still owns validation, resume, succession, acceptance and selection.
-Next reduce repeated preparation at the existing typed projection owner, then
-coordinate full-Goal frontend summary/list/detail consumers. Agent status
-already has bounded display; final JSON compaction alone does not remove
-full-source computation.
+Resume input preparation now runs only for groups that contain a wait condition;
+succession still receives complete lineage, and waits still see archived and
+cross-role dependencies. On the same 1,117-Todo isolated current projection,
+against the baseline that already shares snapshots, structured-item calls fall
+from 2,687 to 1,570; native reads remain one and TS effect calls remain 16.
+Three warm samples give File medians of 430→425 ms and SQLite 493→481 ms.
+The small latency difference is not cold-start or provider-default evidence.
+Actual agent and full-Goal CLI responses retain their size and semantics apart
+from observation time/age fields. The full-Goal response remains about 2 MB.
+A follow-up on `b9a34c3e7` isolates the shared read-model validator: it
+serialized the full Todo array twice solely to check record order, despite an
+already validated unique-id index. Compare that index's insertion order with
+its existing Unicode-sorted ids instead; retain the full content digest,
+record validation and provider reads. On a detached 1,117-Todo/36-lease current
+projection, ten warm Node samples per provider reduced validator medians from
+42–43 ms to 27 ms. This is a common TS cost, not evidence to rank providers or
+change the default. No cached authority, lease omission, response cap or
+frontend contract change is introduced. Unicode order, duplicates, malformed
+JSON, archived-record tampering and both record formats remain rejection tests.
+Next qualify reuse of the complete validated Todo/lease snapshot across
+ownership and status, then coordinate full-Goal frontend summary/list/detail
+consumers. Agent status already has bounded display; final JSON compaction
+alone does not remove full-source computation.

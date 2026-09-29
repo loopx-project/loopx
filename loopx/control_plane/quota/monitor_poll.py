@@ -171,6 +171,19 @@ def _decision_packet(
         }
         if requested not in due_candidates:
             due_candidates.append(requested)
+    gate_scope = None
+    if (before.get("requires_user_action") is True and registry_path is not None
+        and registry_due.get("todo_id")):
+        from ...todos import list_goal_todos
+        from ..todos.decision_scope import todo_gate_scope_projections
+        snapshot = list_goal_todos(registry_path=registry_path, goal_id=goal_id,
+            runtime_root_arg=str(runtime_root) if runtime_root else None, limit=None)
+        records = snapshot.get("todos") or []
+        targets = [item for item in records if item.get("todo_id") == registry_due["todo_id"]]
+        if len(targets) == 1:
+            gate_scope = todo_gate_scope_projections(
+                [item for item in records if item.get("role") == "user"], targets,
+                agent_id=quota_decision_agent_id(before))[0]
     return {
         **compact_quota_decision(before),
         "goal_id": goal_id,
@@ -188,6 +201,7 @@ def _decision_packet(
         "vision_wait_state": _vision_wait_state(before),
         "due_monitor_candidates": due_candidates,
         "registry_due_monitor": registry_due,
+        **({"auxiliary_gate_scope": gate_scope} if gate_scope is not None else {}),
     }
 
 
@@ -661,6 +675,7 @@ def _provider_writeback(
         agent_id=plan.get("agent_id"),
         task_lease_idempotency_key=(plan.get("lease_proof") or {}).get("idempotency_key"),
         task_lease_expected_version=(plan.get("lease_proof") or {}).get("expected_version"),
+        gate_scope_guard=plan.get("gate_scope_guard") is True,
     )
     if not isinstance(result, dict):
         raise TypeError("monitor Todo provider returned no writeback receipt")

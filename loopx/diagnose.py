@@ -8,6 +8,7 @@ from .control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     render_scheduler_execution_args,
 )
+from .control_plane.status.contract_projection import STATUS_CONTRACT_SIGNAL_LIMIT
 from .control_plane.goals.orphaned_goal_state import (
     ORPHANED_GOAL_STATE_CONNECTION,
     ORPHANED_GOAL_STATE_REASON,
@@ -25,7 +26,6 @@ from .status import collect_status
 
 DIAGNOSIS_SCHEMA_VERSION = "loopx_agent_diagnosis_packet_v0"
 PACKET_KIND = "agent_reasoning_evidence_packet"
-STATUS_CONTRACT_SIGNAL_LIMIT = 3
 ORPHANED_GOAL_STATE_RECOMMENDED_ACTION = (
     "inspect the listed orphaned state and preview its backup; do not bootstrap "
     "until an operator explicitly resolves it"

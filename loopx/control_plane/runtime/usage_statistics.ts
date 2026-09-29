@@ -16,14 +16,15 @@ import type { CycleObservation } from "./usage_statistics_cycles.ts";
 
 export const STATE_SCHEMA = "loopx_usage_ping_state_v1";
 export const DEFAULT_ENDPOINT = "https://loopx-usage-collector.huangrt01.workers.dev/v1/ping";
-export const NOTICE_VERSION = 3;
+export const NOTICE_VERSION = 4;
+const AGGREGATE_INTERVAL_MS = 15 * 60 * 1000;
 export type Env = Record<string, string | undefined>;
 export type Context = { env: Env; version: string; python: string; channel: string; now?: Date };
 type Notice = { version: number; endpoint: string; policy: string };
 type State = {
   schema: typeof STATE_SCHEMA; consent: "default" | "enabled" | "disabled"; generation: string;
   install_id?: string; notice?: Notice; last_attempt_day?: string; last_sent_day?: string;
-  day?: string; counters?: Counter[];
+  day?: string; counters?: Counter[]; aggregate_last_attempt_ms?: number;
 };
 export function endpoint(env: Env): string {
   try {
@@ -76,6 +77,8 @@ async function load(path: string): Promise<State> {
   }
   if (raw.schema !== STATE_SCHEMA || !["default", "enabled", "disabled"].includes(String(raw.consent))
     || !validId(raw.generation) || (raw.install_id !== undefined && !validId(raw.install_id))
+    || (raw.aggregate_last_attempt_ms !== undefined && (typeof raw.aggregate_last_attempt_ms !== "number"
+      || !Number.isSafeInteger(raw.aggregate_last_attempt_ms) || raw.aggregate_last_attempt_ms < 0))
     || (raw.counters !== undefined && (!Array.isArray(raw.counters) || raw.counters.length > MAX_ROWS || !raw.counters.every(validCounter)))) throw new Error("usage_state_invalid");
   return raw as State;
 }
@@ -102,7 +105,7 @@ export async function inspect(path: string, ctx: Context) {
     aggregate_preview: state.consent === "disabled" || !state.counters?.length ? null : { schema: AGGREGATE_SCHEMA, counters: state.counters },
     goal_preview: state.consent === "disabled" ? null : await goalPreview(path + ".goals", state.generation).catch(() => null),
     aggregate_day: state.day ?? null,
-    disclosure: "LoopX basic usage statistics are on by default after this notice. Daily heartbeats send a random installation ID, version, OS, CPU architecture, Python version and install channel to the configured LoopX collector (Cloudflare). Fixed CLI feature/result/duration/error counts are sent separately without an ID. Goal span/duration buckets and fixed Host labels are aggregated without Goal or installation IDs. Common quota-to-spend cycles cover every Host using the quota CLI; bound Codex tasks add local timing-event reads; managed Turns and regular owner Goal chat add direct Host-call timing. These overlapping measurements are separate, partial and not completion or billing evidence. Raw session content is never uploaded. No prompts, code, paths, arguments, Goal contents or raw errors. Disable all with loopx usage-ping disable or LOOPX_USAGE_PING=0; inspect with loopx usage-ping status. Consent-required distributions wait for explicit enable. Recipient: " + (endpoint(ctx.env) || "not configured") };
+    disclosure: "LoopX basic usage statistics are on by default after this notice. Daily heartbeats send a random installation ID, version, OS, CPU architecture, Python version and install channel to the configured LoopX collector (Cloudflare). Fixed CLI feature/result/duration/error counts are sent separately without an ID. The first measured CLI result is sent immediately; later activity sends buffered counts at most once every 15 minutes. More frequent requests can make network timing correlation easier: network services may observe IP addresses and request times even though CLI summaries have no installation ID. Goal span/duration buckets and fixed Host labels are aggregated without Goal or installation IDs. Common quota-to-spend cycles cover every Host using the quota CLI; bound Codex tasks add local timing-event reads; managed Turns and regular owner Goal chat add direct Host-call timing. These overlapping measurements are separate, partial and not completion or billing evidence. Raw session content is never uploaded. No prompts, code, paths, arguments, Goal contents or raw errors. Disable all with loopx usage-ping disable or LOOPX_USAGE_PING=0; inspect with loopx usage-ping status. Consent-required distributions wait for explicit enable. Recipient: " + (endpoint(ctx.env) || "not configured") };
 }
 export async function configure(path: string, ctx: Context, action: "enable" | "disable" | "acknowledge", expectedNotice?: unknown) {
   await withFileMutationLock(path, async () => {
@@ -143,27 +146,26 @@ export async function observe(path: string, ctx: Context, generation: string, co
   let heartbeat: Ping | null = null;
   let heartbeatRequest: Promise<number> | undefined;
   let aggregate: Aggregate | null = null;
+  let aggregateRequest: Promise<number> | undefined;
   let goals: GoalAggregate | null = null;
   const today = day(ctx);
+  const now = (ctx.now ?? new Date()).getTime();
   const allowed = await withFileMutationLock(path, async () => {
     const state = await load(path);
     const blocked = blockedBy(state, ctx);
     if (blocked || !generation || generation !== state.generation) return false;
     if (state.day && state.day > today) return false;
+    if (state.aggregate_last_attempt_ms !== undefined && now < state.aggregate_last_attempt_ms) return false;
     try {
-      const now = (ctx.now ?? new Date()).getTime();
       const intervals = cycle ? await cycleObservations(path + ".cycles", generation, now, cycle) : [];
       goals = await recordGoalUsage(path + ".goals", generation, now, [...(goal ? [goal] : []), ...intervals]);
     }
     catch { /* A damaged optional measurement cannot block other diagnostics. */ }
-    // Flush only a completed day's local aggregate. No event times or per-install key leave this boundary.
-    if (state.day && state.day < today && state.counters?.length) {
-      const age = Date.parse(today) - Date.parse(state.day);
-      if (age <= 7 * 86400000) aggregate = { schema: AGGREGATE_SCHEMA, counters: state.counters };
-      state.counters = [];
-    }
-    state.day = today;
+    // Keep the oldest buffered UTC day for expiry, including across midnight.
+    // Legacy daily buffers remain readable; no event times or join keys leave.
+    if (state.day && Date.parse(today) - Date.parse(state.day) > 7 * 86400000) state.counters = [];
     state.counters ??= [];
+    if (!state.counters.length) state.day = today;
     if (counter) {
       const row = state.counters.find((entry) => counterKey(entry) === counterKey(counter));
       if (row) row.count = Math.min(MAX_COUNT, row.count + 1);
@@ -172,14 +174,26 @@ export async function observe(path: string, ctx: Context, generation: string, co
     if (!state.last_attempt_day || state.last_attempt_day < today) {
       heartbeat = ping(state, ctx);
       state.last_attempt_day = today; // claim before I/O; failures are not retried
-    } else aggregate = null;
+    }
+    // First result is eligible immediately. Later activity flushes deltas at
+    // most once per interval, independently of heartbeat success or UTC rollover.
+    if (state.counters.length && (state.aggregate_last_attempt_ms === undefined
+      || now - state.aggregate_last_attempt_ms >= AGGREGATE_INTERVAL_MS)) {
+      aggregate = { schema: AGGREGATE_SCHEMA, counters: state.counters };
+      state.counters = [];
+      state.aggregate_last_attempt_ms = now; // consume before I/O; never retry a lossy batch
+    }
     await save(path, state);
-    // Persist the daily claim, then initiate its request before releasing this
+    // Persist both claims, then initiate their requests before releasing this
     // lock. A competing observer must not consume a second acquisition between
     // the claim and the request. Network waiting stays outside the lock.
     if (heartbeat) {
       try { heartbeatRequest = send(endpoint(ctx.env), heartbeat).catch(() => 0); }
       catch { heartbeatRequest = Promise.resolve(0); }
+    }
+    if (aggregate && validAggregate(aggregate)) {
+      try { aggregateRequest = send(endpoint(ctx.env).replace(/\/ping$/, "/aggregate"), aggregate).catch(() => 0); }
+      catch { aggregateRequest = Promise.resolve(0); }
     }
     return true;
   }, 0); // Never queue behind business or telemetry work.
@@ -189,10 +203,10 @@ export async function observe(path: string, ctx: Context, generation: string, co
     if (!payload) continue;
     if (!(validPing(payload) || validAggregate(payload) || validGoalAggregate(payload))) continue;
     try {
-      let request = url.endsWith("/ping") ? heartbeatRequest : undefined;
+      let request = url.endsWith("/ping") ? heartbeatRequest : url.endsWith("/aggregate") ? aggregateRequest : undefined;
       // Start under the same short lock as disable, but never hold it while
       // awaiting network I/O. Once disable returns, no new channel can start.
-      if (!url.endsWith("/ping")) {
+      if (url.endsWith("/goals")) {
         await withFileMutationLock(path, async () => {
           const current = await load(path);
           if (!blockedBy(current, ctx) && current.generation === generation) request = send(url, payload).catch(() => 0);

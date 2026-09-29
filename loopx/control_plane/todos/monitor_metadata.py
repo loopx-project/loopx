@@ -51,3 +51,19 @@ def require_monitor_metadata_scope(
         or not isinstance(result.get("metadata"), dict)):
         raise RuntimeError("TypeScript monitor metadata result shape mismatch")
     return result["metadata"]
+
+
+def require_locked_monitor_gate_scope(*, state_text: str, todo: dict[str, Any],
+    observation: dict[str, Any] | None, agent_id: str | None) -> None:
+    """Transport the caller-held complete legacy snapshot to the typed owner."""
+    if observation is None:
+        raise ValueError("gate scope guard requires a Monitor observation")
+    effect = observation.get("monitor_effect_id")
+    if effect and todo.get("monitor_effect_id") == effect:
+        return  # The normal metadata planner still verifies exact replay fields.
+    from .active_state_todo_parser import parse_todo_source
+    from .decision_scope import todo_gate_scope_projections
+    items, _, _ = parse_todo_source(state_text)
+    scope = todo_gate_scope_projections(items["user"], [todo], agent_id=agent_id)[0]
+    if scope["state"] == "blocked":
+        raise ValueError("Monitor observation is blocked by current User gate dependencies")

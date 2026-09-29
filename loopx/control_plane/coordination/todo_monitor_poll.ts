@@ -1,3 +1,4 @@
+import {projectTodoGateScopes} from "../todos/decision_scope.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 /** One canonical transaction for an observation and its independent successors.
@@ -19,6 +20,7 @@ import {decodeTaskLeaseProof, type TaskLeaseProof} from "./task_lease_proof.ts";
 export const COORDINATION_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v0";
 export const COORDINATION_LEASED_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v1";
 export const COORDINATION_WITNESSED_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v2";
+export const COORDINATION_GUARDED_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v3";
 export const COORDINATION_MONITOR_POLL_RESULT_SCHEMA = "loopx_coordination_monitor_poll_result_v0";
 const RECEIPT_SCHEMA = "loopx_coordination_monitor_poll_receipt_v0";
 
@@ -31,11 +33,14 @@ export interface CoordinationMonitorPollInput {
   observation: JsonObject;
   intent: JsonObject;
   lease_proof?: TaskLeaseProof | null;
+  /** New auxiliary effects must qualify dependencies on the commit head. */
+  gate_scope_guard?: boolean;
   /** Authority clock supplied by the runtime, never observation.generated_at. */
   now?: Date;
 }
 
-/** The request identity used by both business receipts and no-effect replies. */
+/** Intended effect identity for receipts/no-effect replies. The commit-time
+ * dependency guard is admission, not a different observation or replay key. */
 export function monitorPollRequestHash(input: Pick<CoordinationMonitorPollInput,
   "goal_id" | "observation" | "intent" | "actor_agent_id" | "dry_run" | "lease_proof">): string {
   return canonicalAuthoritySha256({goal_id: input.goal_id, observation: input.observation,
@@ -78,6 +83,7 @@ function normalize(raw: CoordinationMonitorPollInput): NormalizedMonitorPollInpu
     dry_run: requireBoolean(raw.dry_run, "dry_run"),
     observation: canonicalAuthorityObject(raw.observation, "Monitor observation"),
     intent: canonicalAuthorityObject(raw.intent, "Monitor successor intent"),
+    gate_scope_guard: raw.gate_scope_guard == null ? false : requireBoolean(raw.gate_scope_guard, "gate_scope_guard"),
     lease_proof: decodeTaskLeaseProof(raw.lease_proof), now: raw.now ?? new Date()};
   const allowed = new Set(["todo_id", "target_key", "generated_at", "result_hash", "material_change", "cadence", "next_due_at", "reason_summary"]);
   for (const key of Object.keys(input.observation)) if (!allowed.has(key)) throw new Error(`unsupported Monitor observation field: ${key}`);
@@ -94,6 +100,15 @@ function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
   const monitor = selectMonitorTodo([...indexed.todos.values()],
     optionalNonEmptyString(observation.todo_id, "todo_id"), optionalNonEmptyString(observation.target_key, "target_key"));
   const actor = input.actor_agent_id;
+  if (input.gate_scope_guard) {
+    // The existing projection CAS below fences this exact head, including gates.
+    const scopes = projectTodoGateScopes({agent_id: actor, items: [monitor],
+      gates: [...indexed.todos.values()].filter(todo => todo.role === "user")
+        .map(todo => ({...todo, is_gate: todo.task_class === "user_gate"}))});
+    if ((scopes.items as JsonObject[])[0].state === "blocked") {
+      throw new Error("Monitor observation is blocked by current User gate dependencies");
+    }
+  }
   const rejected = monitorMutationRejection({goal_id: input.goal_id, todo: monitor, lease: indexed.leases.get(String(monitor.todo_id)),
     handoff_mode: head.handoff_mode, actor_agent_id: actor, registered_agents: input.registered_agents,
     operation: "observe", proof: input.lease_proof, now: input.now});

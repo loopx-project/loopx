@@ -343,7 +343,7 @@ def project_chat_return_deliveries(root, session_id, messages):
     ]
 
 
-def project_chat_session_snapshot(root, store, session_id):
+def project_chat_session_snapshot(root, store, session_id, *, registry):
     """Project return delivery state into one existing Chat snapshot."""
 
     snapshot = store.session_snapshot(session_id)
@@ -351,7 +351,7 @@ def project_chat_session_snapshot(root, store, session_id):
         root, session_id, snapshot["messages"]
     )
     from .presentation import project_collaboration
-    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"])
+    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"], registry=registry)
     return snapshot
 
 

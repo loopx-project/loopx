@@ -19,7 +19,10 @@ Aggregate requests merge directly into `usage_counts(day, feature, outcome,
 duration, error, count)` and are retained 30 days. No raw request rows, ID,
 version or per-request timestamps enter that table. Aggregate writes are lossy,
 not idempotent: clients make no retry. The server uses its UTC reception date.
-Counters are estimates, not people, accepted Goal outcomes or billing records.
+Clients may send multiple non-overlapping CLI batches within a day; the collector
+adds each delta without requiring a schema migration. Delivery cadence does not
+add a version or installation join key. Counters are estimates, not people,
+accepted Goal outcomes or billing records.
 
 Neither handler reads/stores IP, user agent or Cloudflare request metadata.
 The template disables Worker observability; Cloudflare still handles network

@@ -481,3 +481,47 @@ for (const native of [false, true]) {
     assert.deepEqual(validateCoordinationTodoReadModel(head, head.goal_id), model);
   });
 }
+
+for (const native of [false, true]) {
+  test(`read-model order uses unique Unicode identities without weakening ${native ? "domain" : "canonical"} content validation`, () => {
+    // U+E000 precedes U+10000 in persisted Unicode code-point order, but not
+    // in JavaScript's default UTF-16 sort order. Include an archived dependency.
+    const ids = ["todo_a", "todo_\uE000", "todo_\u{10000}"];
+    const todos: JsonObject[] = ids.map((todo_id, index) => ({
+      schema_version: native ? TODO_DOMAIN_ITEM_SCHEMA : "todo_item_v0",
+      todo_id, role: "agent", status: index === 0 ? "done" : "open", done: index === 0,
+      text: "Preserve the complete retained record", archive_state: index === 0 ? "archive" : "active",
+      completion_result: {nested: [null, false, {label: "original"}]},
+      ...(native ? {} : {source_section: "Agent Todo"}),
+    }));
+    const schema = native ? TODO_DOMAIN_READ_RECORD_SCHEMA : TODO_CANONICAL_READ_RECORD_SCHEMA;
+    const head = {goal_id: "order-goal", todos, leases: [], todo_read_model: coordinationTodoReadModel(todos, schema)};
+    const before = structuredClone(head);
+    assert.deepEqual(validateCoordinationTodoReadModel(head, head.goal_id), head.todo_read_model);
+    assert.deepEqual(head, before);
+    for (const order of [[1, 0, 2], [0, 2, 1], [2, 1, 0]]) {
+      const reordered = order.map(index => todos[index]!);
+      // Even a matching digest cannot legalize a noncanonical record order.
+      assert.throws(() => validateCoordinationTodoReadModel({...head, todos: reordered,
+        todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256(reordered)}}, head.goal_id),
+      /deterministic todo_id order/);
+    }
+    assert.throws(() => validateCoordinationTodoReadModel({...head, todos: [todos[0]!, todos[0]!, todos[2]!]}, head.goal_id),
+      /duplicate todo ids/);
+    const altered = structuredClone(todos);
+    altered[0]!.completion_result = {nested: [null, false, {label: "tampered archive"}]};
+    assert.throws(() => validateCoordinationTodoReadModel({...head, todos: altered}, head.goal_id), /digest mismatch/);
+    for (const invalid of [undefined, Number.NaN, new Date()]) {
+      const malformed = structuredClone(todos);
+      malformed[1]!.completion_result = {invalid} as unknown as JsonObject;
+      assert.throws(() => validateCoordinationTodoReadModel({...head, todos: malformed}, head.goal_id));
+    }
+    const unknownField = todos.map(todo => ({...todo, metadata: {unversioned: true}}));
+    assert.throws(() => validateCoordinationTodoReadModel({...head, todos: unknownField,
+      todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256(unknownField)}}, head.goal_id),
+    /unversioned fields: metadata/);
+    assert.throws(() => validateCoordinationTodoReadModel(head, "foreign-goal"), /goal mismatch/);
+    assert.deepEqual(validateCoordinationTodoReadModel({...head, todos: [],
+      todo_read_model: coordinationTodoReadModel([], schema)}, head.goal_id), coordinationTodoReadModel([], schema));
+  });
+}

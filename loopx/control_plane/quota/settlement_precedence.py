@@ -1,5 +1,6 @@
 from __future__ import annotations
 from .effective_action import EffectiveAction
+from ..work_items.work_lane import work_lane_contract_is_receipt_bound_monitor_settled
 
 from typing import Any
 
@@ -114,3 +115,24 @@ def deferred_receipt_bound_skip_fields(
             "stop_if_unchanged": True,
         },
     )
+
+
+def apply_settled_monitor_precedence(payload: dict[str, Any]) -> None:
+    """Adapt the typed settled phase after every notification/fallback overlay.
+
+    Receipt-bound monitor identity remains observable; it cannot supply current
+    execution or a second settlement. The next Turn recomputes pending work.
+    """
+    lane = payload.get("work_lane_contract")
+    if not work_lane_contract_is_receipt_bound_monitor_settled(lane):
+        return
+    recorded_action = payload.get("agent_lane_next_action")
+    clear_quota_action_projections(payload)
+    payload.update(settled_replay_fields())
+    if (
+        isinstance(recorded_action, dict)
+        and recorded_action.get("selection_binding") == "heartbeat_receipt"
+        and isinstance(lane, dict)
+        and recorded_action.get("todo_id") == lane.get("selected_todo_id")
+    ):
+        payload["agent_lane_next_action"] = recorded_action

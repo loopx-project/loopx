@@ -19,6 +19,27 @@ advancement work remains active.
   `continuous_monitor` visible to the same Agent. Admission checks the Todo
   authority as well as the bounded decision projection, so a due monitor is
   not rejected merely because it falls outside the compact list.
+- Under a scoped User gate, an auxiliary observation is admitted only when the
+  existing typed dependency owner proves every addressed live gate independent
+  of that exact Monitor. Overlapping, global, conflicting or unknown scopes
+  fail closed. The CLI projection and effect admission use the same rule; the
+  effect rechecks the current complete Todo snapshot, so a cached command cannot
+  bypass a newly blocking gate. New auxiliary provider plans also require a
+  commit-head dependency guard: canonical providers evaluate the same typed rule
+  on the head used by the existing projection revision CAS; legacy observations
+  evaluate it inside the existing Todo mutation lock. A blocking gate committed
+  first prevents observation writeback, including changes after preflight.
+  This dependency result grants no approval or lease. Exact committed receipts
+  remain historical replay. Frozen plans predating the guard retain their
+  intended-effect identity, while any still-uncommitted auxiliary provider
+  dispatch is upgraded to the current guard without rewriting its WAL. A receipt
+  proves a historical outcome, never permission for a new mutation. Guarded canonical
+  requests use `loopx_coordination_monitor_poll_request_v3`: an older receiver
+  rejects that schema instead of silently omitting the required gate check.
+  Unguarded callers retain their existing request and receipt identities.
+- The offered auxiliary command includes its registry/runtime route, exact
+  Monitor target and original Agent/Turn identity. It can be executed as shown
+  from either the source or global registry without reconstructing a route.
 - The monitor receipt records both `settlement_todo_id` and the observed
   monitor `todo_id`. They may differ; this never grants a second delivery or
   quota-spend identity.
@@ -47,12 +68,24 @@ advancement work remains active.
   exact or typed auxiliary binding the response fails closed from claiming the
   Turn settled.
 
+- Replaying `quota should-run` for an exact committed Monitor Turn must preserve
+  its settled phase after user notifications, scoped gate fallback and other
+  projections. Work-lane, execution obligation, interaction commands and
+  scheduler view agree: no new poll, delivery, replan, refresh or spend in that
+  Turn. Pending gates and independent work remain diagnostic facts; the next
+  Turn recomputes them. The automation stays active and quiet between Turns.
+
 ### Acceptance
 
 The CLI path must prove that multiple due monitors can each update their cadence
 and replay idempotently in one settlement Turn without spending quota, while a
 guard replay continues to select the original advancement Todo. Existing
 wrong-Todo tests for receipt-bound monitor Turns must remain passing.
+
+Scoped-gate fallback now permits observations of independently scoped due
+Monitors instead of rejecting all auxiliary polls whenever any User action is
+pending. The blocked primary-Task lifecycle fence remains in force. With no
+User gate, admission and no-spend settlement retain their existing behavior.
 
 This corrects the previous default rejection of first auxiliary observations
 after advancement settlement. Both call orders must retain one primary debit,
@@ -206,6 +239,20 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   `quota monitor-poll --todo-id <monitor>` 才可在同一 Turn 写入辅助、不计费
   的观察回执。准入同时检查 Todo 权威源与有界决策投影，不能仅因到期 monitor
   位于精简列表之外就拒绝它。
+- 存在 scoped User gate 时，仅当既有 typed 依赖 owner 证明所有面向该 Agent
+  的有效 gate 都与该精确 Monitor 独立，才允许辅助观察。重叠、全局、冲突或未知
+  scope 均失败关闭。CLI 投影与 effect 准入复用同一规则；effect 按当前完整 Todo
+  快照重新核验，旧命令不能绕过新出现的阻塞 gate。新的辅助 provider plan 还
+  强制提交时的依赖 guard：canonical provider 在既有 projection revision CAS
+  所使用的同一个 head 上执行 typed 规则；legacy 观察在既有 Todo 写锁内核验。
+  阻塞 gate 先提交时，包括 preflight 后的变更，不得写入观察。依赖结论不授予
+  批准或租约。已提交回执仍按历史结果精确重放；引入 guard 前的冻结 plan 保留
+  原 effect 身份，仍未提交的辅助 provider dispatch 则升级到当前 guard，不改写
+  其 WAL。回执证明历史结果，不授权新 mutation。带 guard 的 canonical 请求使用
+  `loopx_coordination_monitor_poll_request_v3`；旧 receiver 拒绝该 schema，不能静默
+  忽略必要的 gate 校验。不带 guard 的既有 caller 保持原请求与回执身份。
+- 提供的辅助命令包含 registry／runtime 路由、精确 Monitor target 及原
+  Agent／Turn 身份，从 source 或 global registry 均可直接执行，无须重建路由。
 - 监控回执同时记录 `settlement_todo_id` 与被观察的 monitor `todo_id`。
   二者允许不同，但不会因此产生第二个交付或配额结算身份。
 - 每个辅助观察按 monitor Todo 建立操作身份；没有 Todo id 时，按
@@ -226,11 +273,20 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   既非精确匹配、也无 typed auxiliary binding 时，响应
   必须失败关闭，不能宣称 Turn 已结算。
 
+- `quota should-run` 重放精确已提交的 Monitor Turn 时，用户通知、scoped gate
+  fallback 和其他投影都必须保留其 settled 状态。work-lane、执行义务、interaction
+  命令和 scheduler 读回一致：本 Turn 不新增 poll、delivery、replan、refresh 或 spend。
+  未决 gate 和独立工作保留为诊断事实，由新 Turn 重新计算；自动化保持 active quiet。
+
 ### 验收
 
 CLI 端到端测试必须证明：多个到期 monitor 能在同一结算 Turn 中分别更新周期并
 幂等重放、全程不消耗配额；随后重放 guard 仍选择原 advancement Todo。同时，
 receipt-bound monitor Turn 的错误 Todo 替换测试必须继续通过。
+
+scoped-gate fallback 现在允许观察与 gate 独立的到期 Monitor，不再因存在任何
+待处理 User action 就拒绝全部辅助 poll。primary Task 已 blocked 时的生命周期
+拒绝保持有效。不存在 User gate 时，准入与不计费结算沿用既有行为。
 
 这是对原默认行为的修正：不再拒绝 advancement 结算后的首次辅助观察。两种调用
 顺序均须保留一次主任务扣额、每个观察身份一个回执，以及当前到期／actor／租约

@@ -475,6 +475,21 @@ def _deferred_receipt_bound_work_lane(
     return None
 
 
+def _with_auxiliary_gate_scope(
+    work_lane: dict[str, Any] | None, gates: list[dict[str, Any]], *, agent_id: str | None,
+) -> dict[str, Any] | None:
+    if not isinstance(work_lane, dict):
+        return work_lane
+    auxiliary = work_lane.get("auxiliary_monitor_poll")
+    if not isinstance(auxiliary, dict) or not isinstance(auxiliary.get("monitor_due_items"), list):
+        return work_lane
+    from ..todos.decision_scope import todo_gate_scope_projections
+    scopes = todo_gate_scope_projections(gates, auxiliary["monitor_due_items"], agent_id=agent_id)
+    selected_scope = next((scope for scope in scopes
+        if scope.get("todo_id") == auxiliary.get("selected_todo_id")), None)
+    return {**work_lane, "auxiliary_monitor_poll": {**auxiliary, "gate_scope": selected_scope}}
+
+
 def _prepare_quota_should_run_item(
     status_payload: dict[str, Any],
     *,
@@ -897,7 +912,10 @@ def _prepare_quota_should_run_item(
         self_repair_allowed=self_repair_allowed,
         monitor_debt_arbitration=monitor_debt_arbitration,
         agent_monitor_only=agent_monitor_only,
-        work_lane_contract=work_lane_contract,
+        work_lane_contract=(
+            _with_auxiliary_gate_scope(work_lane_contract, task_orchestration_user_blockers,
+                agent_id=boundary_agent_id) if scoped_user_gate_fallback else work_lane_contract
+        ),
         receipt_bound_agent_next_action=receipt_bound_agent_next_action,
         task_orchestration_contract=task_orchestration_contract,
         capability_gate=capability_gate,

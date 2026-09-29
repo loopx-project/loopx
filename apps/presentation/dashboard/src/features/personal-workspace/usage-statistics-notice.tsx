@@ -75,6 +75,9 @@ export function UsageStatisticsNotice({ onDetails }: { onDetails: () => void }) 
       <p>{zh
         ? "用于改进平台支持与使用体验。发送随机安装标识和环境信息，以及另行汇总的 CLI 使用次数、结果、耗时和 Goal 时长区间；不采集对话、代码、路径或命令参数。可随时关闭。"
         : "Helps improve platform support and usage. Sends a random installation ID and environment information, plus separate CLI usage, result, timing and Goal duration summaries. No conversations, code, paths or command arguments. You can turn it off at any time."}</p>
+      <p>{zh
+        ? "首个已测量的 CLI 结果立即上报，后续由使用活动触发，至少间隔 15 分钟发送一批。CLI 汇总不含安装标识；更频繁的请求仍可能让网络服务通过 IP 和请求时间关联活动。"
+        : "The first measured CLI result is sent immediately; later activity sends buffered counts at most once every 15 minutes. CLI summaries contain no installation ID; more frequent requests may still let network services correlate activity using IP addresses and request timing."}</p>
       <p className="personal-usage-recipient">{zh ? "接收方：" : "Recipient: "}{state.endpoint}</p>
       {error ? <p role="alert">{zh ? "设置未能保存，请打开详情重试。" : "Could not save this setting. Open details to retry."}</p> : null}
     </div>

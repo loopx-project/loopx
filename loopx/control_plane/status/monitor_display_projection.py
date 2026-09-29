@@ -16,6 +16,9 @@ from ..todos.todo_summary import (
     open_todo_items,
     todo_item_is_actionable_open,
 )
+from ..work_items.project_asset import (
+    build_project_asset as _build_project_asset,
+)
 
 
 MONITOR_DISPLAY_SCHEMA_VERSION = "monitor_quiet_display_v0"
@@ -27,6 +30,29 @@ MONITOR_DISPLAY_FALLBACK_ACTION = (
     "transition, regression, or concrete blocker appears."
 )
 MONITOR_SIGNAL_WAITING_ON = "monitor_signal"
+
+
+def build_project_asset(
+    *,
+    status: str,
+    waiting_on: str,
+    recommended_action: str,
+    operator_question: str | None,
+    agent_command: str | None,
+    missing_gates: list[str] | None,
+    next_handoff_condition: str | None,
+) -> dict[str, Any]:
+    return _build_project_asset(
+        status=status,
+        waiting_on=waiting_on,
+        recommended_action=recommended_action,
+        operator_question=operator_question,
+        agent_command=agent_command,
+        missing_gates=missing_gates,
+        next_handoff_condition=next_handoff_condition,
+        monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
+        monitor_display_stop_condition=MONITOR_DISPLAY_STOP_CONDITION,
+    )
 
 
 def todo_summary_open_count(summary: dict[str, Any] | None) -> int:

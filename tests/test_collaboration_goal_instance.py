@@ -97,14 +97,14 @@ def _brief(purpose: str) -> dict:
     }
 
 
-def _manager_request(root: Path, registry: Path):
+def _manager_request(root: Path, registry: Path, *, channel="manager"):
     store = ChatSessionStore(root)
     session = store.create_session(
-        goal_id="loopx-manager",
+        goal_id="loopx-manager" if channel == "manager" else "delivery",
         agent_id="codex",
         adapter_kind="codex_app_server",
         upstream_thread_id="fixture",
-        channel_id="manager",
+        channel_id=channel,
     )
     turn, _ = store.create_turn(
         session["session_id"],
@@ -835,3 +835,73 @@ def test_legacy_delivery_keeps_v1_paths_ids_and_json_bytes(
         route,
         ensure_ascii=False,
     ).encode()
+
+
+@pytest.mark.parametrize("channel", ["manager", "goal.delivery"])
+@pytest.mark.parametrize("recreated", [False, True])
+def test_app_snapshot_retains_exact_receiver_disposition(tmp_path, recreated, channel):
+    import http.client
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _manager_request(tmp_path, registry, channel=channel)
+    read_inbox(tmp_path, registry, "delivery", "builder")
+    acknowledge(
+        tmp_path, "delivery", "builder", receipt["request_id"], "defer",
+        "Waiting for the requested public source.",
+        registry=registry, caller_goal_ref=receipt["goal_ref"],
+    )
+    if recreated:
+        _recreate(registry)
+    # Exercise the production HTTP snapshot route, reloading the real file store.
+    # No model, external message or active Goal is involved.
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.verbose = False
+    server.registry_path = registry
+    server.runtime_root = tmp_path
+    server.chat_store = ChatSessionStore(tmp_path)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=10)
+    try:
+        connection.request("GET", f"/api/chat/sessions/{session['session_id']}")
+        response = connection.getresponse()
+        snapshot = json.loads(response.read())
+        assert response.status == 200
+    finally:
+        connection.close()
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+    cards = [m["collaboration"] for m in snapshot["messages"] if m.get("collaboration")]
+    assert len(cards) == 1
+    assert cards[0]["request_id"] == receipt["request_id"]
+    assert cards[0]["read_status"] == "supplied"
+    assert cards[0]["decision"] == "defer"
+    assert cards[0]["decision_reason"] == "Waiting for the requested public source."
+
+
+@pytest.mark.parametrize("damage", ["route_instance", "receipt_instance", "registry_missing"])
+def test_app_readback_never_substitutes_a_different_instance(tmp_path, damage):
+    from loopx.capabilities.manager_context.roundtrip import project_chat_session_snapshot
+
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _manager_request(tmp_path, registry)
+    if damage == "route_instance":
+        route_path = _root(tmp_path) / "roundtrips" / (receipt["request_id"] + ".json")
+        route = json.loads(route_path.read_text())
+        route["goal_ref"]["goal_instance_id"] = INSTANCE_B
+        _write(route_path, route)
+    elif damage == "receipt_instance":
+        turn = store.turn_for_client(session["session_id"], "owner-request")
+        response = turn["response"]
+        response["context_handoff_receipt"]["goal_ref"]["goal_instance_id"] = INSTANCE_B
+        store.update_turn(session["session_id"], turn["turn_id"], response=response)
+    else:
+        registry = tmp_path / "missing-registry.json"
+    before = store.messages(session["session_id"])
+    snapshot = project_chat_session_snapshot(
+        tmp_path, store, session["session_id"], registry=registry,
+    )
+    assert snapshot["messages"] == before
+    assert not any(row.get("collaboration") for row in snapshot["messages"])

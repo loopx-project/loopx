@@ -74,6 +74,9 @@ def test_app_server_environment_keeps_profile_temp_scope_and_nonsecret_sentinel(
         "TMP": str(tmp_path / "home"),
         "TEMP": str(tmp_path / "home"),
         "CODEX_HOME": str(tmp_path / "codex-home"),
+        # Synthetic profiles always opt out of usage collection (#5272), even
+        # when the supervisor's own opt-out flags are not inherited.
+        "LOOPX_USAGE_PING": "0",
         "LOOPX_MODEL_PROVIDER_SENTINEL": "runner-owned-gateway-no-upstream-secret",
     }
 

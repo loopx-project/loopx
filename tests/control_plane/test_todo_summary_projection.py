@@ -84,3 +84,47 @@ def test_long_history_stays_inside_the_runtime_request_budget(monkeypatch):
     request = requests[0]
     encoded = json.dumps(request, separators=(",", ":")).encode()
     assert len(encoded) < MAX_REQUEST_BYTES
+
+
+def test_no_wait_skips_resume_preparation_but_keeps_archived_successor(monkeypatch):
+    from loopx.control_plane.todos import todo_summary
+
+    def unexpected_preparation(*args, **kwargs):
+        raise AssertionError('no wait must not prepare resume history')
+
+    monkeypatch.setattr(todo_summary, '_structured_resume_source_items', unexpected_preparation)
+    completed = row(1, status='done', successor_todo_ids=['todo_summary_2'],
+                    completed_at='2026-01-01T00:00:00Z')
+    archived = row(2, status='done', archive_state='archive', no_followup=True)
+    result = summarize([completed], resume_source_items=[completed, archived])
+    assert result['done_count'] == 1
+    assert not result.get('completed_without_successor_count')
+    assert result['items'][0]['successor_todo_ids'] == ['todo_summary_2']
+
+
+def test_wait_still_normalizes_complete_source_and_uses_archived_completion():
+    waiting = row(1, status='deferred', resume_when='todo_done:todo_summary_999')
+    # The dependency lives beyond the display cap and in another role's archive.
+    source = [row(i) for i in range(2, 40)] + [
+        row(999, role='user', status='done', done=False, archive_state='archive'),
+    ]
+    result = summarize([waiting], resume_source_items=source, item_limit=1)
+    assert result['items'][0]['resume_ready'] is True
+    assert result['items'][0]['resume_condition']['satisfied'] is True
+    assert source[-1]['done'] is False  # Preparation cannot rewrite source facts.
+
+
+def test_unsupported_wait_still_uses_the_typed_fail_closed_evaluator():
+    result = summarize([row(1, status='deferred', resume_when='unknown_wait:target')],
+                       resume_source_items=[row(2, status='done')])
+    item = result['items'][0]
+    assert item['resume_ready'] is False
+    assert item['resume_condition']['unsupported'] is True
+
+
+def test_no_wait_does_not_skip_conflicting_lineage_rejection():
+    import pytest
+    # Resume preparation is optional; TS graph validation is still mandatory.
+    duplicate = row(9, archive_state='archive')
+    with pytest.raises(RuntimeError, match='duplicate succession identity'):
+        summarize([row(1)], resume_source_items=[duplicate, dict(duplicate)])

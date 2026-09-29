@@ -260,6 +260,12 @@ bounded horizontal scrolling.
 
 ## UI Reproduction Workflow
 
+For feature development, carry one user task through the
+[task-first delivery workflow](frontend-delivery.md#task-first-delivery--从用户任务开始).
+A visually consistent composition must also eliminate unnecessary re-entry and
+confirmation, identify the affected target, and show truthful state after action.
+
+
 For UI implementation, migration, or reproduction:
 
 1. Read this file before editing.

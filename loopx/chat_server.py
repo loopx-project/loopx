@@ -766,7 +766,8 @@ class ChatRequestHandler(
     def _session_snapshot(self, session_id: str) -> None:
         try:
             self._send_json(project_chat_session_snapshot(
-                self.server.runtime_root, self.server.chat_store, session_id))
+                self.server.runtime_root, self.server.chat_store, session_id,
+                registry=self.server.registry_path))
         except KeyError:
             self._send_error("chat session was not found", status=404)
 

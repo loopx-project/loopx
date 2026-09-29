@@ -170,6 +170,14 @@ execution, live steering/stop, the packaged App or G1. Release qualification mus
 exercise those remaining boundaries with the selected real executor; ordinary
 test runs require no model credentials or paid calls.
 
+App snapshot readback resolves a delegated request using the Goal instance in
+its original receipt and the existing typed history-inspection decision. This
+keeps receiver disposition visible after alias recreation, so the existing App
+return watcher can retain the original session. A mismatched route/receipt never
+substitutes another instance; unavailable readback preserves the saved message.
+Production HTTP tests cover steward and Goal Chat with real disposable stores.
+This is readback qualification, not native executor or model-routing acceptance.
+
 Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
 recovery, GoalRef and late-return changes. Shared TS refactors accompany the
 affected transaction; full migration, Lark visual parity, scale and promotional

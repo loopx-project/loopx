@@ -165,7 +165,7 @@ def test_correction_and_late_draft_return_to_original_conversation(
 
         assert receipts[0]["request_id"] != receipts[1]["request_id"]
         snapshot = project_chat_session_snapshot(
-            tmp_path, ChatSessionStore(tmp_path), sid
+            tmp_path, ChatSessionStore(tmp_path), sid, registry=registry
         )
         handed_off = [
             row["collaboration"]
@@ -212,7 +212,7 @@ def test_correction_and_late_draft_return_to_original_conversation(
     # Reload the real durable store and repeat delivery: no in-memory dedupe.
     for _ in range(2):
         drain(tmp_path, registry, ChatSessionStore(tmp_path), no_external_write)
-    snapshot = project_chat_session_snapshot(tmp_path, ChatSessionStore(tmp_path), sid)
+    snapshot = project_chat_session_snapshot(tmp_path, ChatSessionStore(tmp_path), sid, registry=registry)
     returned = [
         row for row in snapshot["messages"] if row.get("origin") == "manager_followup"
     ]

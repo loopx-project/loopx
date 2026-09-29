@@ -1211,11 +1211,16 @@ main blocker or keeps following a stale local-only benchmark staging todo.
 **Trigger**
 
 - a typed machine-configuration namespace is about to change; the built-in
-  namespaces are `change_quality_qualification`, `manager_runtime`,
-  `periodic_report`, `pull_request_review`, `steward_executor`, and
-  `todo_replan_cadence`. The public catalog returned by
+  namespaces are `change_quality_qualification`, `goal_storage`,
+  `manager_runtime`, `periodic_report`, `pull_request_review`,
+  `steward_executor`, and `todo_replan_cadence`. The public catalog returned by
   `loopx machine-config describe` is authoritative, so this inventory has to stay
   complete rather than approximate;
+- `goal_storage` carries the storage target a newly created Goal is fixed to
+  (`new_goal_provider`, `file` by default or `sqlite` after reviewed promotion).
+  It does not promote existing Goals or migrate their data, and existing Goals
+  keep the selection they were created with; see
+  `docs/reference/local-authority-provider-selection.md`;
 - `pull_request_review` carries `review_priority`, which defaults to
   `other-developers-first` and accepts `owner-first` as an explicit opt-in that
   changes review ordering only;

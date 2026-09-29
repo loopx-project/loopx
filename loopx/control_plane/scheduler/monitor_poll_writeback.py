@@ -72,6 +72,7 @@ def write_monitor_poll_todo_state(
     agent_id: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    gate_scope_guard: bool = False,
 ) -> dict[str, Any] | None:
     """Apply one monitor poll observation as a complete Todo writeback.
 
@@ -100,7 +101,7 @@ def write_monitor_poll_todo_state(
     canonical = poll_canonical_monitor_if_promoted(
         registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
         execute=execute, monitor_effect_id=monitor_effect_id, agent_id=agent_id,
-        lease_proof=lease_proof,
+        lease_proof=lease_proof, gate_scope_guard=gate_scope_guard,
         observation={"todo_id": todo_id, "target_key": target_key,
             "result_hash": result_hash, "material_change": material_change,
             "generated_at": generated_at, "cadence": cadence,
@@ -178,6 +179,7 @@ def write_monitor_poll_todo_state(
             next_due_at=next_due_at,
         ),
         enforce_monitor_boundedness=False,
+        monitor_gate_scope_guard=gate_scope_guard,
         agent_id=agent_id,
         dry_run=not execute,
     )

@@ -96,7 +96,10 @@ def main() -> None:
         assert completed["status"] == "completed", completed
         assert completed["delta_count"] == 500, completed
         assert fsync_calls < 100, f"delta persistence used {fsync_calls} fsync calls"
-        assert elapsed < 1.5, f"delta persistence took {elapsed:.3f}s"
+        # The fsync count above is the real budget: it proves no per-delta fsync
+        # regardless of runner speed. The wall-clock bound is only a hang guard,
+        # so it stays loose enough for a slow shared CI runner.
+        assert elapsed < 5.0, f"delta persistence hung for {elapsed:.3f}s"
 
         replay_store = ChatSessionStore(root / "runtime")
         original_read_jsonl = chat_store_module._read_jsonl

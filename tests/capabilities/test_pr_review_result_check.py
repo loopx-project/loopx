@@ -220,8 +220,9 @@ def test_local_goal_achievement_cannot_hide_material_outcome_impact(dimension, d
     assert check_review_result(packet, result)["ok"]
 
 
-def test_legitimate_wait_needs_acceptance_basis_and_bounded_recovery():
-    packet, result, impact = _outcome_review("long_horizon")
+@pytest.mark.parametrize("dimension", ["long_horizon", "user_experience"])
+def test_legitimate_wait_needs_acceptance_basis_and_bounded_recovery(dimension):
+    packet, result, impact = _outcome_review(dimension)
     impact["decision"] = "accepted_tradeoff"
     assert not check_review_result(packet, result)["ok"]
     impact.update(

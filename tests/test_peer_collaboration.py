@@ -221,7 +221,7 @@ def test_two_peer_review_rounds_return_to_original_conversation_after_restart(sc
     )
     assert drain(root, registry, ChatSessionStore(root), None) == 1
     assert drain(root, registry, ChatSessionStore(root), None) == 0
-    snapshot = project_chat_session_snapshot(root, store, session["session_id"])
+    snapshot = project_chat_session_snapshot(root, store, session["session_id"], registry=registry)
     assert sum(m.get("origin") == "manager_followup" for m in snapshot["messages"]) == 1
     card = next(
         m["collaboration"] for m in snapshot["messages"] if m.get("collaboration")
@@ -341,7 +341,7 @@ def test_peer_route_never_enters_external_audience_projection(scenario):
     )
     assert not any(
         m.get("collaboration")
-        for m in project_chat_session_snapshot(root, store, external["session_id"])[
+        for m in project_chat_session_snapshot(root, store, external["session_id"], registry=registry)[
             "messages"
         ]
     )

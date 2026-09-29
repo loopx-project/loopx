@@ -181,8 +181,11 @@ export function validateCoordinationTodoReadModel(
 ): JsonObject {
   const index = indexCoordinationProjectionTodos(value, expectedGoalId);
   const records = index.todo_ids.map((todoId) => index.todos.get(todoId)!);
-  if (!Array.isArray(value.todos) ||
-      !canonicalAuthorityBytes(value.todos).equals(canonicalAuthorityBytes(records))) {
+  // Identity indexing already validates/copies every record and rejects duplicate
+  // IDs. The insertion order of those same records proves order; serializing
+  // both full arrays again adds no content validation. The digest below still
+  // covers every field, including nested metadata.
+  if ([...index.todos.keys()].some((todoId, position) => todoId !== index.todo_ids[position])) {
     throw new AuthorityStoreProtocolError(
       "coordination Todo read records must use deterministic todo_id order",
     );

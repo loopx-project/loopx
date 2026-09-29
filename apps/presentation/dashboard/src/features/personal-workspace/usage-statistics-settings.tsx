@@ -23,8 +23,8 @@ export function UsageStatisticsSettings() {
   return <details className="personal-capability-scope-note personal-usage-statistics" data-testid="usage-statistics-settings">
     <summary>{zh ? "基础使用统计 · 告知后默认开启，可关闭" : "Basic usage statistics · on after notice, optional"}</summary>
     <p>{zh
-      ? "用于决定平台支持和改进命令体验。每天向 LoopX 的 Cloudflare 收集服务发送随机安装标识、版本、系统、CPU 架构、Python 版本和安装渠道；固定的 CLI 功能、结果、耗时区间和错误类别在本机按天汇总后另行发送，不带安装标识。"
-      : "Helps prioritize platform support and CLI improvements. A daily heartbeat sends a random installation ID, version, OS, CPU architecture, Python version and install channel to the LoopX Cloudflare collector. Fixed CLI feature, result, duration and error counts are aggregated locally by day and sent separately without the ID."}</p>
+      ? "用于决定平台支持和改进命令体验。每天向 LoopX 的 Cloudflare 收集服务发送随机安装标识、版本、系统、CPU 架构、Python 版本和安装渠道；固定的 CLI 功能、结果、耗时区间和错误类别在本机汇总，不带安装标识。首个可采集的命令结果立即尝试发送，之后有活动时每隔至少 15 分钟发送一批。"
+      : "Helps prioritize platform support and CLI improvements. A daily heartbeat sends a random installation ID, version, OS, CPU architecture, Python version and install channel to the LoopX Cloudflare collector. Fixed CLI feature, result, duration and error counts are aggregated locally without the ID. The first measured result attempts a send immediately; later activity sends batches at least 15 minutes apart."}</p>
     <p>{zh ? "不采集提示词、代码、路径、命令参数、Goal 内容或原始错误。当前功能计数仅覆盖 CLI；命令成功不等于 Goal 完成。" : "No prompts, code, paths, arguments, Goal contents or raw errors. Feature counts currently cover CLI only; command success is not Goal completion."}</p>
     <p>{zh ? "按天分别汇总所有 Host 的 quota→spend 推进周期、已绑定 Codex 任务的本地轮次时间、受管 Turn 与普通 Goal 对话的 Host 调用时间。上传固定 Host 类别及跨度/时长区间，不上传会话内容、Goal 或安装标识。三种口径重叠，不能相加；可能漏计，不代表完成、CPU 用时或计费。" : "Daily, separate span/duration buckets for all Hosts using quota→spend, local timing events from bound Codex tasks, and direct Host calls in managed Turns and regular owner Goal chat. Sends fixed Host categories, never session contents, Goal or installation IDs. The three overlapping populations cannot be added; partial observations are not completion, CPU time or billing."}</p>
     {state ? <>

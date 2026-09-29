@@ -245,6 +245,11 @@ gates.
 
 Apply the whole-viewport attention review in `docs/development/design.md`
 ("Earn The User's Attention") before implementation and in PR visual evidence.
+For production-bound interactive UI changes, carry one ordinary user task through
+`docs/development/frontend-delivery.md`: compare the shortest authorized journey
+before coding, validate the packaged interaction and owning state, and distinguish
+proposed changes from installed behavior. For documentation and prototypes, name
+the simulated boundary without claiming packaged or installed readback.
 
 Before changing or reproducing any LoopX UI, read and follow the repository-root
 `docs/development/design.md`. This includes websites, dashboards, desktop applications,

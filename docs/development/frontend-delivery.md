@@ -6,6 +6,82 @@ validation only; resolving a source merge followed by a build produces one
 coherent HTML/JavaScript/CSS set. Do not concatenate competing HTML entrypoints or
 asset-retention manifests when resolving an older PR.
 
+## Task-first delivery / 从用户任务开始
+
+Use the existing task/PR delivery brief, not a second checklist or approval form.
+Production-bound interactions require packaged task and state readback. For a
+prototype or documentation example, compare the proposed journey but label its
+simulated boundary instead of claiming that the interaction is installed.
+Before implementation, name one ordinary request, its current failure, the
+observable result, affected entrypoints and existing state/effect owner. Derive
+acceptance from that request, a demonstrated failure and the nearest accepted
+product contract, before designing components or copying the current click
+sequence into tests. Reuse a relevant, accepted
+[Golden Query](../product/use-cases/steward/golden-queries.md) when one covers the
+task; proposed or unrelated queries can inform exploration but are not a
+mandatory acceptance source. If none applies, the task, failure and owning
+contract still define acceptance. Inspect current main and related work first.
+A passing implementation-shaped test is not an independent experience oracle.
+
+Carry the same task through these steps:
+
+1. **Compare the journey.** Write the current and proposed user steps in the
+   existing before/after evidence. Count required navigation, information the
+   user must repeat, questions, confirmations and recovery effort. Explain the
+   information, authority or unavoidable prerequisite supplied by each required
+   step; remove a step that supplies none. This is a comparison, not a universal
+   click limit. Keep necessary scoped consent and explicit effect confirmation;
+   make optional refinement optional. A complete conversational draft should not
+   require a second form just to repeat the same facts.
+2. **Choose the owner and composition.** Reuse the existing typed state and
+   action owner and inspect companion App/CLI/messaging paths. Follow
+   [design.md](design.md#earn-the-users-attention) for the whole viewport, not
+   individual cards. Navigation follows user purpose; clearly show the target
+   and source of a setting. Do not expose storage scopes as competing pages or
+   list controls that cannot apply to the selected target.
+3. **Implement and challenge.** Use the smallest meaningful regression derived
+   from the accepted outcome. Select realistic populated data and one negative
+   or recovery path likely to falsify the claim: multiple owners, out-of-order
+   timestamps, stale/disconnected state, duplicate click, cancellation or reload.
+   Select by the touched risk, not all cases for every patch. Reuse shared TS
+   projections; fix the owning selector rather than sorting an already-sorted
+   mock or adding a frontend-only source of truth.
+4. **Walk the actual product.** Start at the affected user entry, use the built
+   packaged surface, inspect the rendered viewport, perform the task and read
+   back the result. Validate affected narrow/keyboard/language behavior. Pair
+   browser fixtures with the real owning backend when they replace the rule
+   being claimed. Use disposable synthetic state; do not alter active Goals.
+   Record source/build identity and fixture boundaries. Source preview, packaged
+   browser, installed App and real model each prove different things.
+5. **Review the task before the diff narrative.** The review capability's
+   `problem_context.outcome_impact.user_experience` references the same journey
+   and validation, then asks what remains wrong even if every test passes.
+   Reused evidence needs its revision and unchanged assumptions. A material
+   unsupported claim remains unproven. A necessary confirmation can be accepted
+   with its authority basis; green CI cannot justify redundant confirmation.
+6. **Deliver and read back.** Report the observable improvement, evidence limits
+   and whether code is proposed, merged, packaged or installed. After an
+   authorized upgrade, reopen the exact installed surface and check the same
+   task; a pushed PR does not repair an already-running App. Use existing
+   install/release owners and retain the previous working version for rollback.
+
+Public PR evidence should fit in the existing summary/validation: one short
+before/after journey, a screenshot or clip for the affected visual composition,
+and the state readback plus tested revision and limits. Keep private messages,
+local paths and raw run logs out. The existing public first-screen preview gate
+still applies; do not add user approvals for routine implementation decisions.
+
+**Evaluation cadence:** ordinary work runs offline regressions and affected
+browser/backend checks. Paid model interpretation and review-decision probes
+belong to release-candidate qualification, with failures/skips retained. A
+scripted browser passing cannot certify model intent recognition; an unrun live
+probe is not a pass. See [release readiness](../product/release-readiness.md).
+
+中文要点：先定义用户想完成的事，再比较最短合法路径；复用已有授权与状态归属，
+减少重填、重复确认和页面跳转。以真实构建页面、代表性数据和状态回读验收，区分
+模拟边界、打包验证和安装生效。评审先挑战交互成本与证据，再解释代码；平时不跑
+付费模型评测，不用测试数量或 PR 合并代替用户任务完成。
+
 ## Source development and updates
 
 Prepare Python with `uv sync --extra test`, then run from the repository root:

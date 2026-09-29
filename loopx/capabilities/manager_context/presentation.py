@@ -5,9 +5,13 @@ from .tracking import _entry, _receipt
 from .roundtrip import reply_status
 from ...chat import redact_local_paths
 from ...control_plane.collaboration import conversation_scope
+from ...control_plane.collaboration.goal_instance_scope import (
+    collaboration_goal_scope,
+    decide_collaboration_lifecycle,
+)
 
 
-def project_collaboration(store, root, session_id, messages):
+def project_collaboration(store, root, session_id, messages, *, registry):
     session = store.load_session(session_id)
     if not session or not conversation_scope(session)["private_conversation"]:
         return messages
@@ -26,13 +30,26 @@ def project_collaboration(store, root, session_id, messages):
             if not receipt:
                 result.append(message)
                 continue
-            row = _entry(
-                root, receipt["goal_id"], receipt["agent_id"], receipt["request_id"]
-            )
+            # History belongs to the receipt's exact Goal instance, including
+            # after the alias is recreated. Reuse the typed history decision;
+            # a current alias alone must never redirect this read.
+            with collaboration_goal_scope(
+                registry,
+                goal_id=receipt["goal_id"],
+                agents=(),
+                caller_goal_ref=receipt.get("goal_ref"),
+            ) as scope:
+                row = _entry(
+                    root, receipt["goal_id"], receipt["agent_id"], receipt["request_id"],
+                    scope=scope,
+                )
+                decide_collaboration_lifecycle(scope, operation="history_inspect", record=row)
             route = _read(_root(root) / "roundtrips" / (row["request_id"] + ".json"))
             if (
                 route.get("session_id") != session_id
                 or route.get("client_turn_id") != turn.get("client_turn_id")
+                or route.get("goal_ref") != row.get("goal_ref")
+                or receipt.get("goal_ref") != row.get("goal_ref")
                 or not row.get("brief")
             ):
                 result.append(message)

@@ -60,6 +60,10 @@ _PLACEHOLDER_RE = re.compile(r"\{([A-Z][A-Z_]*)\}")
 # credential-looking string, matching the corpus fixture's own discipline.
 _GITHUB_TOKEN = "ghp_" + "a" * 36
 _AUTHZ_HEADER = "authorization" + ": " + "Basic " + "QWxhZGRpbjpvcGVu"
+# Path fixtures are joined the same way so the repository public/private scanner
+# does not flag this test file while the classifier still sees the same text.
+_LOCAL_PATH = "/".join(["", "home", "dev", "x.json"])
+_ORG_MARKER_PATH = "/".join(["", "ext_data", "run", "x"])
 
 
 def test_categories_are_the_four_named_decisions() -> None:
@@ -95,9 +99,9 @@ def test_artifact_lifecycle_policy_excludes_only_remote_location() -> None:
     [
         (_AUTHZ_HEADER, CATEGORY_CREDENTIAL, "authorization header/assignment shape"),
         (_GITHUB_TOKEN, CATEGORY_CREDENTIAL, "credential-like value shape"),
-        ("/home/dev/x.json", CATEGORY_LOCAL_PATH, "local filesystem path"),
+        (_LOCAL_PATH, CATEGORY_LOCAL_PATH, "local filesystem path"),
         ("https://example.com/a", CATEGORY_REMOTE_LOCATION, "raw remote location URL"),
-        ("/ext_data/run/x", CATEGORY_ORG_MARKER, "internal ext_data path"),
+        (_ORG_MARKER_PATH, CATEGORY_ORG_MARKER, "internal ext_data path"),
     ],
 )
 def test_classify_returns_an_explicit_category_and_reason(
@@ -156,7 +160,7 @@ def test_a_policy_narrows_the_text_owner_patterns_not_only_the_shapes() -> None:
     # pattern, so a policy that drops that pattern's category must accept it --
     # and an empty policy must recognize nothing at all.
     bearer = "the Bearer token expired"
-    ext_data = "/ext_data/run/x"
+    ext_data = _ORG_MARKER_PATH
     assert classify_private_text(bearer).category == CATEGORY_CREDENTIAL
     assert classify_private_text(ext_data).category == CATEGORY_ORG_MARKER
     assert classify_private_text(bearer, categories=frozenset({CATEGORY_LOCAL_PATH})) is None

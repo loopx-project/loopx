@@ -17,12 +17,12 @@ from ..goals.path_resolution import (
     same_path,
 )
 from ..runtime.time import parse_timestamp
-from ..work_items.project_asset import build_project_asset
 from ..work_items.attention_item import attention_item
 from ..work_items.attention_queue import (
     merge_global_registry_findings as _merge_global_registry_findings,
 )
 from .dreaming_projection import compact_dreaming_lane_badge
+from .monitor_display_projection import build_project_asset
 
 
 SOURCE_REGISTRY_SHADOW_FINDINGS = {

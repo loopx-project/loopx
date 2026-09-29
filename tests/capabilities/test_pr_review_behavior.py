@@ -1,7 +1,7 @@
 """Small no-tools decision probes; oracles are not exposed to the model.
 
 These test review reasoning on supplied evidence, not repository investigation.
-Live execution is opt-in and uses the existing bounded provider transport.
+Live execution is release-only opt-in and uses the existing bounded provider transport.
 """
 
 from __future__ import annotations
@@ -265,6 +265,70 @@ CASES.extend([
         "APPROVE", "none",
     ),
 ])
+
+
+# Product acceptance supplies the oracle; passing the author's click script does not.
+# Synthetic paired cases, not claims that historical UI/backend tests ran here.
+FRONTEND_CASES = [
+    (
+        {"request": "Review conversational goal preparation in the existing App.",
+         "problem": "A complete draft should reach one scoped creation preview and explicit apply; optional editing must remain available.",
+         "proposal": "Every complete draft opens a mandatory form, then another confirmation, then the existing preview and apply. All fields already exist in the draft.",
+         "evidence": "The packaged click script follows that sequence and passes; screenshots are readable. Neither extra step supplies new facts, missing permissions or consent. No test compares the accepted direct-preview journey. Backend validation and duplicate-submit tests pass."},
+        "REQUEST_CHANGES", "architecture",
+    ),
+    (
+        {"request": "Review conversational goal preparation in the existing App.",
+         "problem": "A complete draft should reach one scoped creation preview and explicit apply; optional editing must remain available.",
+         "proposal": "Complete drafts open the existing typed preview directly; edit is optional and incomplete drafts ask for the missing consequential input. Apply remains explicit.",
+         "evidence": "Packaged task walkthrough and real action readback show one preview/apply, no effect before apply, safe cancel, changed-input revalidation and reload without duplicate creation. Source identity is recorded. Tests cover complete and incomplete inputs rather than enforcing one fixed click script; all other evidence is verified."},
+        "APPROVE", "none",
+    ),
+    (
+        {"request": "Review a recent-completions panel.",
+         "problem": "Users should see the most recently completed items across projects, ordered by completion time.",
+         "proposal": "Concatenate project arrays and take the first three items. Show the result as recent completions.",
+         "evidence": "The browser fixture supplies project arrays already ordered with newest completions first; screenshot and click tests pass. With project A completed on March 1 before project B completed on March 3, the actual selector still shows A first. Refresh time is displayed as the completion time. The interface renders clearly but no real selector ordering/readback comparison passes."},
+        "REQUEST_CHANGES", "architecture",
+    ),
+    (
+        {"request": "Review a recent-completions panel.",
+         "problem": "Users should see the most recently completed items across projects, ordered by completion time.",
+         "proposal": "The existing shared projection orders known completion times across projects, uses a stable tie break and labels unknown dates without inventing freshness. UI renders that projection.",
+         "evidence": "Disposable real backend records intentionally invert insertion, project and completion order; projection and packaged page agree before and after reload. Equal timestamps and unknown times preserve explicit semantics. Populated/narrow views show readable titles and dates. No frontend-only ordering owner is added and other required checks pass."},
+        "APPROVE", "none",
+    ),
+    (
+        {"request": "Review a settings catalog exposing machine and per-project options.",
+         "problem": "The accepted settings scope contract requires users to know which project is being changed and see only options applicable to that target. No steward Golden Query covers this task.",
+         "proposal": "Offer two similarly named capability tabs; both list all options. Selecting a machine-only option in a project shows a read-only warning. Preserve the previous preview when switching project.",
+         "evidence": "Components and screenshots pass on an empty single-project fixture. The populated two-project walkthrough shows the old target's preview after switching, and users must open each option to learn its scope. Backend rejects wrong-target writes, but the UI does not identify the actionable target before confirmation."},
+        "REQUEST_CHANGES", "architecture",
+    ),
+    (
+        {"request": "Review a settings catalog exposing machine and per-project options.",
+         "problem": "The accepted settings scope contract requires users to know which project is being changed and see only options applicable to that target. No steward Golden Query covers this task.",
+         "proposal": "Reuse one catalog with an explicit target, visible effective source and purpose-based navigation. Filter by the existing scope contract; target changes clear draft/preview and fetch the selected state.",
+         "evidence": "The packaged two-project walkthrough verifies visible target, keyboard selection, narrow layout and an unavailable target. Real revision-checked preview/apply/readback affects only the selected target. Cancel and reload preserve saved settings, not an abandoned draft. Legitimate effect confirmation remains; other evidence is verified."},
+        "APPROVE", "none",
+    ),
+]
+CASES.extend(FRONTEND_CASES)
+
+
+def test_non_steward_settings_acceptance_does_not_require_a_golden_query():
+    guide = (Path(__file__).parents[2] / "docs/development/frontend-delivery.md").read_text()
+    task_first = " ".join(guide.split("## Task-first delivery", 1)[1]
+                          .split("## Source development", 1)[0].split())
+    assert "nearest accepted product contract" in task_first
+    assert "when one covers the task" in task_first
+    assert "not a mandatory acceptance source" in task_first
+    settings = [(scenario, verdict) for scenario, verdict, _ in FRONTEND_CASES
+                if scenario["request"] == "Review a settings catalog exposing machine and per-project options."]
+    assert [verdict for _, verdict in settings] == ["REQUEST_CHANGES", "APPROVE"]
+    assert all("No steward Golden Query covers this task" in scenario["problem"]
+               and "accepted settings scope contract" in scenario["problem"]
+               for scenario, _ in settings)
 
 
 def test_decision_procedure_is_in_the_real_packet_before_prose():

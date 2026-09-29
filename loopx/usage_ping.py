@@ -15,6 +15,8 @@ from . import __version__
 from .paths import DEFAULT_RUNTIME_ROOT
 
 STATE_FILENAME = "usage-ping.json"
+# Scheduling hint only; keep aligned with the TypeScript notice revision.
+_NOTICE_VERSION = 4
 _ENTRY = Path(__file__).parent / "control_plane/runtime/usage_statistics_cli.ts"
 
 
@@ -71,7 +73,7 @@ def begin(command: str) -> tuple[str, float] | None:
         state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if state.get("consent") == "disabled":
             return None
-        if (state.get("notice") or {}).get("version") != 3:
+        if (state.get("notice") or {}).get("version") != _NOTICE_VERSION:
             # App services defer disclosure to the visible frontend. Ordinary
             # script/Agent calls disclose on stderr too; JSON stdout stays clean.
             stream = sys.stderr

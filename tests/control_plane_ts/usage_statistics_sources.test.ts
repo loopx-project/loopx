@@ -163,7 +163,7 @@ test("scope expansion renews disclosure and fences old observations without undo
   assert.equal((await inspect(path,ctx)).blocked_by,"notice_required");
   await observe(path,ctx,prior.generation,null,async()=>{throw new Error("unexpected send");},undefined,cycle("start",at));
   await assert.rejects(readFile(path+".cycles"),/ENOENT/);
-  const enabled=await configure(path,ctx,"enable"); assert.equal(enabled.notice.version,3);
+  const enabled=await configure(path,ctx,"enable"); assert.equal(enabled.notice.version,4);
   const current=JSON.parse(await readFile(path,"utf8")); assert.notEqual(current.generation,prior.generation);
   await configure(path,ctx,"disable");
   assert.equal((await inspect(path,ctx)).consent,"disabled");

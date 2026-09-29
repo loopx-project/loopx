@@ -123,6 +123,19 @@ Cadence-only updates, reset-to-initial changes, final checks, and self-stop
 decisions do not spend quota. Delivery turns spend only after validation and
 durable writeback.
 
+A host ACK is separate from delivery settlement. Completing or replaying a
+settled delivery does not by itself suppress an uncommitted ACK from its still
+current heartbeat receipt. A newer Turn supersedes the older receipt for host
+writeback: reject the old ACK before writing scheduler state, then use the new
+Turn's emitted command. The `scheduler-ack-current` command returns the native
+`loopx_scheduler_host_followup_result_v0` projection with mode `scheduler-ack`.
+With a current receipt, exact retries replay the scheduler commit without
+another state write or quota debit; they never reconstruct authority from the live work frontier.
+
+Host ACK 与交付结算分开：交付已结算时，仍是最新的 heartbeat receipt 可提交尚未
+写入的 ACK；较新 Turn 会使旧 ACK 失效，必须先拒绝旧写入，再使用新 Turn 的命令。
+精确重试只重放 scheduler commit，不再次写入或扣额，也不从当前工作 frontier 重建权限。
+
 ### Phase 4: Controlled Write Tools
 
 The plugin may expose controlled writes only after the CLI-equivalent command

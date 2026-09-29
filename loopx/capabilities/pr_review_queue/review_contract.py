@@ -7,7 +7,7 @@ from typing import Any
 from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 11
+REVIEW_POLICY_REVISION = 12
 
 # A red check is an observation, not evidence that the reviewed PR caused it.
 # This contract belongs to review judgment; merge readiness still owns whether
@@ -54,6 +54,21 @@ OUTCOME_IMPACT_ASSESSMENT = {
         "For user_experience, compare the real affected CLI, UI or messaging journey: setup and "
         "repeated intervention, truthful state/readback, actionable failure, correction/cancel and "
         "recovery. Inspect existing companion surfaces; a backend success is not a usable journey. "
+        "For an affected user journey, establish the ordinary task and expected result before "
+        "reading the implementation path. In existing before_after and walkthrough evidence, "
+        "compare required navigation, re-entry of known information, clarification, confirmation "
+        "and recovery steps with the shortest valid path through the existing authority boundary. "
+        "Explain what new information or authority each mandatory step supplies; a form that "
+        "works can still be redundant. Optional editing is not a mandatory decision. Do not "
+        "remove necessary scoped consent or correctness checks to minimize clicks. "
+        "For visible changes inspect the rendered whole viewport with representative populated "
+        "data, not only component presence: target/owner, hierarchy, truthful freshness/order "
+        "and the next action must be understandable together. Follow one risk-relevant "
+        "correction, cancel, reload or unavailable path through state readback. Identify source "
+        "revision, built/installed surface and any mocked boundary in existing evidence refs. "
+        "A fixture that supplies fresh sorted data cannot prove production freshness or sorting; "
+        "a screenshot cannot prove persistence or adoption. Reuse unchanged evidence with an "
+        "invalidation check; do not demand every viewport/state or paid model calls per PR. "
         "Reuse concrete walkthrough and validation references; select bounded cases by changed "
         "risk rather than requiring a long soak or every surface for every PR. Derive expected "
         "outcomes from the accepted product contract, not from the patch. A deliberate safety, "

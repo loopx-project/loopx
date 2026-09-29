@@ -141,7 +141,7 @@ def test_absent_stderr_keeps_real_cli_json_pure_until_a_stream_discloses(isolate
     assert main(['version', '--format', 'json']) == 0
     assert 'random installation ID' in stderr.getvalue()
     assert json.loads(capsys.readouterr().out)['ok'] is True
-    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 3
+    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 4
 
 
 @pytest.mark.parametrize('setting,value', [
@@ -204,6 +204,30 @@ def test_real_cli_returns_while_http_response_is_held_and_disable_survives(isola
     assert str(isolated) not in json.dumps(received)
 
 
+def test_real_cli_first_result_reaches_http_without_next_day_return(isolated, collector, monkeypatch):
+    endpoint, received, accepted, release = collector
+    monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
+    release.set()
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
+    first = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert first.returncode == 0 and 'random installation ID' in first.stderr
+    assert received == []
+    second = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert second.returncode == 0 and json.loads(second.stdout) == json.loads(first.stdout)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not any(p['schema'] == 'loopx_usage_aggregate_v1' for p in received):
+        time.sleep(0.02)
+    aggregates = [p for p in received if p['schema'] == 'loopx_usage_aggregate_v1']
+    assert len(aggregates) == 1, 'one completed command must not depend on a next-day invocation'
+    assert set(aggregates[0]) == {'schema', 'counters'}
+    counters = aggregates[0]['counters']
+    assert len(counters) == 1 and counters[0]['feature'] == 'version'
+    assert counters[0]['outcome'] == 'ok' and counters[0]['count'] == 1
+    assert usage_ping.control('status')['aggregate_preview'] is None
+    usage_ping.control('disable')
+
+
 def test_business_failure_and_usage_failure_do_not_replace_original_result(isolated, monkeypatch):
     usage_ping.control('enable')
     import loopx.cli_runtime as cli
@@ -233,7 +257,15 @@ def test_detached_sender_honors_proxy_and_no_proxy(isolated, collector, monkeypa
     release.set()
 
 
-def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated):
+@pytest.mark.parametrize('upgrade', [False, True])
+def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated, upgrade):
+    if upgrade:
+        usage_ping.control('enable')
+        prior = json.loads(usage_ping.state_path().read_text())
+        prior['consent'] = 'default'
+        prior['notice']['version'] = 3
+        usage_ping.state_path().write_text(json.dumps(prior))
+        before = usage_ping.state_path().read_bytes()
     import http.client
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     server = ChatHTTPServer(('127.0.0.1', 0), ChatRequestHandler)
@@ -246,7 +278,11 @@ def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated):
         response = connection.getresponse()
         initial = json.loads(response.read())
         assert response.status == 200 and initial['automatic_notice_required']
-        assert not usage_ping.state_path().exists()
+        if upgrade:
+            assert usage_ping.state_path().read_bytes() == before
+        else:
+            assert not usage_ping.state_path().exists()
+        assert initial['notice']['version'] == 4
         connection.request('POST', path, json.dumps({'notice': initial['notice']}), {'Content-Type': 'application/json'})
         response = connection.getresponse()
         acknowledged = json.loads(response.read())
@@ -296,3 +332,41 @@ def test_goal_observer_does_not_wait_for_unresponsive_collector(isolated, collec
     assert not release.is_set(), 'host returned before collector released HTTP response'
     usage_ping.control('disable')
     release.set()
+
+
+def test_v3_cli_upgrade_requires_visible_renewal_before_real_http(isolated, collector, monkeypatch):
+    endpoint, received, accepted, release = collector
+    release.set()
+    monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
+    usage_ping.control('enable')
+    path = usage_ping.state_path()
+    old = json.loads(path.read_text())
+    old.update(consent='default', day='2026-09-28', counters=[{
+        'feature': 'todo', 'outcome': 'ok', 'duration': 'lt_1s', 'error': 'none', 'count': 7,
+    }])
+    old['notice']['version'] = 3
+    path.write_text(json.dumps(old))
+    before = path.read_bytes()
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
+    hidden = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30)
+    assert hidden.returncode == 0 and json.loads(hidden.stdout)['ok']
+    assert path.read_bytes() == before
+    assert not accepted.wait(0.3) and received == []
+    visible = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert visible.returncode == 0 and json.loads(visible.stdout)['ok']
+    assert 'first measured CLI result' in visible.stderr and '15 minutes' in visible.stderr
+    assert 'network timing' in visible.stderr
+    current = json.loads(path.read_text())
+    assert current['notice']['version'] == 4
+    assert current['generation'] != old['generation']
+    assert current['counters'] == []
+    assert not accepted.wait(0.3) and received == []
+    subsequent = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert subsequent.returncode == 0 and subsequent.stderr == ''
+    assert accepted.wait(5)
+    deadline = time.monotonic() + 5
+    while not any(item.get('schema') == 'loopx_usage_aggregate_v1' for item in received) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    batches = [item for item in received if item.get('schema') == 'loopx_usage_aggregate_v1']
+    assert len(batches) == 1 and sum(row['count'] for row in batches[0]['counters']) == 1

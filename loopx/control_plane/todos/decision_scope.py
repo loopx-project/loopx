@@ -376,3 +376,17 @@ def select_scoped_gate_fallback(gates: list[dict[str, Any]], items: list[dict[st
         schema_versions=frozenset({"scoped_gate_fallback_selection_v0"}),
         nullable=True,
     )
+
+
+def todo_gate_scope_projections(gates: list[dict[str, Any]], items: list[dict[str, Any]], *, agent_id: str | None) -> list[dict[str, Any]]:
+    """Transport one source snapshot to the existing typed dependency owner."""
+    def facts(item: dict[str, Any]) -> dict[str, Any]:
+        return {**_facts(item), "action_kind": item.get("action_kind"),
+                "archive_state": item.get("archive_state")}
+    result = _required_projection("gate_scopes", _evaluate("gate_scopes",
+        gates=[facts(gate) for gate in gates], items=[facts(item) for item in items],
+        agent_id=normalize_todo_claimed_by(agent_id)), schema_version="todo_gate_scope_projections_v0")
+    projections = result.get("items")
+    if not isinstance(projections, list) or len(projections) != len(items):
+        raise TypeError("invalid typed gate scope projection cardinality")
+    return [_required_projection("gate_scope", row, schema_version="todo_gate_scope_projection_v0") for row in projections]

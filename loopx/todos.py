@@ -1065,6 +1065,7 @@ def update_goal_todo(
     no_followup: bool | None = None,
     monitor_metadata: todo_monitor_metadata.MonitorMetadataInput = None,
     enforce_monitor_boundedness: bool = True,
+    monitor_gate_scope_guard: bool = False,
     clear_claim: bool = False,
     claim_only: bool = False,
     claim_operation_id: str | None = None,
@@ -1373,6 +1374,9 @@ def update_goal_todo(
             authority_reason=authority_reason,
             requested_claimed_by=effective_claimed_by,
         )
+        if monitor_gate_scope_guard:
+            todo_monitor_metadata.require_locked_monitor_gate_scope(state_text=original,
+                todo=authority_todo, observation=monitor_intent["observation"], agent_id=effective_agent_id)
         if monitor_intent["observation"] is not None and task_lease_idempotency_key is not None:
             # Explicit observation proof uses the existing native held fence
             # under the Markdown writer lock. Closing this guard does not retire

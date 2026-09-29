@@ -31,15 +31,17 @@ def poll_canonical_monitor_if_promoted(
     *, registry_path: Path, runtime_root: Path, goal_id: str, execute: bool,
     monitor_effect_id: str | None, agent_id: str | None,
     observation: dict[str, Any], intent: dict[str, Any],
-    lease_proof: dict[str, Any] | None = None,
+    lease_proof: dict[str, Any] | None = None, gate_scope_guard: bool = False,
 ) -> dict[str, Any] | None:
     if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
         return None
     with authority_registry_source(registry_path) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
     result = effect_runtime_result("coordination.local_authority.monitor_poll", {
-        "schema_version": "loopx_coordination_monitor_poll_request_v2",
+        "schema_version": ("loopx_coordination_monitor_poll_request_v3" if gate_scope_guard
+            else "loopx_coordination_monitor_poll_request_v2"),
         **({"lease_proof": lease_proof} if lease_proof is not None else {}),
+        **({"gate_scope_guard": True} if gate_scope_guard else {}),
         "runtime_root": str(runtime_root.expanduser().resolve()), "goal_id": goal_id,
         "operation_id": monitor_effect_id or f"monitor-poll:{goal_id}:{uuid4().hex}",
         "actor_agent_id": agent_id,

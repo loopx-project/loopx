@@ -1,4 +1,4 @@
-"""Refs #4447: the status facade stops restating what its own projections own.
+"""Refs #4447: status consumers stop restating what their projections own.
 
 `loopx/status.py` is the public facade over `loopx.control_plane.status`, and it had
 grown its own copy of fifteen module-level carriers that a projection already defined
@@ -6,15 +6,12 @@ with an identical value: the three status-contract schema numbers, the monitor d
 schema version, the goal-attention override set and legacy evidence prefixes, and the
 active-state, autonomous-replan, dead-monitor, backlog-hygiene and agent-lane carriers.
 
-Each of those values feeds an injected parameter of a read model inside the owning
-projection, so the projection is the owner and the facade's job is only to keep
-exporting the established name. Before this change the two copies were free to
-diverge: an edit on one side changed the read model and left `loopx.status` reporting
-the other literal, and the generated inventory counted every such pair as a duplicate
-it had to carry in a budget.
+The same follow-up applies to status consumers outside that facade. Each value feeds
+the same read-model contract as its owning projection, so consumers import the owner
+instead of maintaining an equal-looking declaration.
 
 This test pins three things: the facade declares none of these names itself, every
-facade binding is the owner's object rather than an equal-looking re-typed literal,
+importing binding is the owner's object rather than an equal-looking re-typed literal,
 and the merged values are what the projections shipped with.
 """
 
@@ -25,9 +22,12 @@ import functools
 import inspect
 from pathlib import Path
 
-from loopx import status
+import pytest
+
+from loopx import diagnose, state_projection, status
 from loopx.control_plane.status import (
     active_state_projection,
+    attention_projection,
     autonomous_replan_projection,
     contract_projection,
     goal_attention_projection,
@@ -41,8 +41,7 @@ PACKAGE_ROOT = REPOSITORY_ROOT / "loopx"
 FACADE = "loopx/status.py"
 
 # name -> (module holding the one remaining definition, other modules importing it).
-# These names were shared by the facade and exactly this owner, so after the merge the
-# owner is the only declarer left in the package (twelve of the fifteen).
+# Each name has one owner and any public or internal consumers import that object.
 FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
     "AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD": (
         autonomous_replan_projection,
@@ -63,8 +62,20 @@ FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
         (status,),
     ),
     "MONITOR_DISPLAY_SCHEMA_VERSION": (monitor_display_projection, (status,)),
+    "MONITOR_SIGNAL_WAITING_ON": (
+        monitor_display_projection,
+        (attention_projection, goal_attention_projection, status),
+    ),
     "REGISTRY_WAITING_ON_OVERRIDES": (goal_attention_projection, (status,)),
+    "SECTION_HEADING_PATTERN": (
+        active_state_projection,
+        (state_projection, status),
+    ),
     "STATUS_CONTRACT_SCHEMA_VERSION": (contract_projection, (status,)),
+    "STATUS_CONTRACT_SIGNAL_LIMIT": (
+        contract_projection,
+        (diagnose, status),
+    ),
 }
 
 # The facade copy is gone here too, but these names are still restated by modules
@@ -77,21 +88,11 @@ STILL_FORKED_ELSEWHERE: dict[str, list[str]] = {
         "loopx/history.py",
         "loopx/state_refresh.py",
     ],
-    "SECTION_HEADING_PATTERN": [
-        "loopx/control_plane/status/active_state_projection.py",
-        "loopx/state_projection.py",
-    ],
-    "STATUS_CONTRACT_SIGNAL_LIMIT": [
-        "loopx/control_plane/status/contract_projection.py",
-        "loopx/diagnose.py",
-    ],
 }
 
 OWNERSHIPS: dict[str, tuple[object, tuple[object, ...]]] = {
     **FULLY_MERGED,
     "AGENT_LANE_PROGRESS_SCOPE": (run_projection, (status,)),
-    "SECTION_HEADING_PATTERN": (active_state_projection, (status,)),
-    "STATUS_CONTRACT_SIGNAL_LIMIT": (contract_projection, (status,)),
 }
 
 # The values those carriers already had in the projections before the merge.
@@ -108,6 +109,7 @@ EXPECTED_VALUES: dict[str, object] = {
     ),
     "MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION": 2,
     "MONITOR_DISPLAY_SCHEMA_VERSION": "monitor_quiet_display_v0",
+    "MONITOR_SIGNAL_WAITING_ON": "monitor_signal",
     "REGISTRY_WAITING_ON_OVERRIDES": {
         "user_or_controller",
         "controller",
@@ -202,6 +204,36 @@ def test_merging_the_copies_changed_no_value() -> None:
         assert getattr(OWNERSHIPS[name][0], name) == expected, name
     for name, expected in EXPECTED_PATTERNS.items():
         assert getattr(OWNERSHIPS[name][0], name).pattern == expected, name
+
+
+def test_monitor_project_asset_uses_the_projection_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monitor_signal = "changed_monitor_signal"
+    stop_condition = "stop for the changed monitor signal"
+    monkeypatch.setattr(
+        monitor_display_projection,
+        "MONITOR_SIGNAL_WAITING_ON",
+        monitor_signal,
+    )
+    monkeypatch.setattr(
+        monitor_display_projection,
+        "MONITOR_DISPLAY_STOP_CONDITION",
+        stop_condition,
+    )
+
+    item = goal_attention_projection.attention_item(
+        goal_id="goal-a",
+        status="waiting",
+        waiting_on=monitor_signal,
+        severity="info",
+        recommended_action="wait for monitor evidence",
+        source="monitor",
+        agent_command="loopx monitor poll",
+    )
+
+    assert item["project_asset"]["support_mode"] == "read_only_observer"
+    assert item["project_asset"]["stop_condition"] == stop_condition
 
 
 def test_the_lifecycle_priority_pair_is_left_in_place() -> None:
