@@ -996,8 +996,8 @@ class ChatActionService(
                 # card the owner confirmed.
                 return {"proposal": self.store.mark_failed(proposal_id,
                     error_code="team_plan_no_staffable_lane",
-                    message=("none of the plan's lanes can be staffed by this host, "
-                             "so confirming it created no work")),
+                    message=(f"none of the plan's {len(plan.get('lanes') or [])} lane(s) "
+                             "can be staffed by this host, so confirming it created no work")),
                     "turn": None}
             return {"proposal": self.store.mark_failed(proposal_id,
                 error_code=("team_plan_projection_pending" if error_code == "team_plan_projection_pending" else "team_plan_commit_failed"),
