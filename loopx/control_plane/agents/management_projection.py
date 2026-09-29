@@ -29,7 +29,6 @@ MAX_REFS = 1
 MAX_SESSION_BINDING_CANDIDATES = 3
 MAX_WORKSPACE_SCOPES = 4
 STALE_CLAIM_THRESHOLD_HOURS = 36
-EXECUTING_ACTIVITY_THRESHOLD_HOURS = 8
 MATERIAL_LIFECYCLE_CAPABILITY = "material_lifecycle"
 
 _TODO_GROUP_LIST_KEYS = tuple(
@@ -187,6 +186,42 @@ def _registered_agents(status_payload: dict[str, Any]) -> dict[str, dict[str, An
             if goal_id and goal_id not in row["_goal_ids"]:
                 row["_goal_ids"].append(goal_id)
     return rows
+
+
+def projected_agent_goals(
+    status_payload: dict[str, Any],
+) -> dict[str, dict[str, list[str]]]:
+    """Return ``goal_id -> {agent_id -> [spellings]}`` for the agents this view rows.
+
+    The execution facts collector reads one Turn lane per Goal and agent, so it
+    needs the same agent set this projection rows: the Goal's registered agents
+    and every Todo claimant. Registered ids keep their registry spelling next to
+    the normalized one because the Turn envelope names the lane with the former
+    while Todo claims carry the latter.
+    """
+
+    goals: dict[str, dict[str, list[str]]] = {}
+
+    def add(goal_id: str | None, raw_agent: Any) -> None:
+        agent_id = normalize_todo_claimed_by(raw_agent)
+        if not goal_id or not agent_id:
+            return
+        spellings = goals.setdefault(goal_id, {}).setdefault(agent_id, [agent_id])
+        raw = str(raw_agent or "").strip()
+        if raw and raw not in spellings:
+            spellings.append(raw)
+
+    run_history = _as_dict(status_payload.get("run_history"))
+    for goal in _as_list(run_history.get("goals")):
+        if not isinstance(goal, dict):
+            continue
+        goal_id = _compact(goal.get("id"), limit=180)
+        for raw_agent in _as_list(_as_dict(goal.get("coordination")).get("registered_agents")):
+            add(goal_id, raw_agent)
+    for todo in _iter_status_todos(status_payload):
+        if not _is_done(todo):
+            add(_compact(todo.get("goal_id"), limit=180), _todo_agent_id(todo))
+    return goals
 
 
 def _agent_material_frontiers(
@@ -474,23 +509,29 @@ def _agent_state(
     *,
     current: dict[str, Any] | None = None,
     has_session_binding: bool = False,
-    last_activity_at: str | None = None,
+    execution: dict[str, Any] | None = None,
 ) -> str:
     """Derive the worker lifecycle state from existing facts only.
 
     The state is a projection over registry membership, todo claims,
-    session bindings, and activity timestamps.  It does not introduce a
-    second source of truth: every input is already owned by another
-    contract (registry, todo, session binding, or run history).
+    session bindings and execution facts.  It does not introduce a second
+    source of truth: every input is already owned by another contract
+    (registry, todo, session binding, Turn lane, delegation lock, lease).
 
     State priority (highest first):
     1. blocked      — current todo is blocked or a blocker
     2. monitoring / waiting — monitor-only or non-open current work
-    3. executing    — current open work updated within the activity threshold
-    4. bound        — has session binding and active todo
-    5. launchable   — has active todo, no session binding
-    6. addressable  — has session binding but no active todo
-    7. registered   — registered in registry, no binding or todo
+    3. executing    — the Turn lane is live or a delegation worker holds its lock
+    4. unknown      — the lane holder cannot be checked here (foreign host or
+                      unreadable record), or an active lease has expired while
+                      nothing is live; consumers fail closed on it
+    5. bound        — has session binding and active todo
+    6. launchable   — has active todo, no session binding
+    7. addressable  — has session binding but no active todo
+    8. registered   — registered in registry, no binding or todo
+
+    A Todo timestamp never makes a worker `executing`: activity age stays in
+    `last_activity_at` and `stale_claim_hint`, where it is a hint, not liveness.
     """
     open_todos = [todo for todo in todos if not _is_done(todo)]
 
@@ -508,13 +549,15 @@ def _agent_state(
         if _todo_status(current) != "open":
             return "waiting"
 
-    # Activity describes the selected work, not updates to unrelated todos.
-    if current and not _is_done(current) and last_activity_at:
-        parsed = parse_timestamp(last_activity_at)
-        if parsed:
-            age_hours = (now_utc() - parsed).total_seconds() / 3600
-            if 0 <= age_hours <= EXECUTING_ACTIVITY_THRESHOLD_HOURS:
-                return WORKER_LIFECYCLE_STATE_EXECUTING
+    facts = execution or {}
+    lane = str(facts.get("lane") or "")
+    if lane == EXECUTION_LANE_LIVE or facts.get("delegation_worker_active") is True:
+        return WORKER_LIFECYCLE_STATE_EXECUTING
+    lease = _as_dict(facts.get("lease"))
+    if lane in EXECUTION_LANE_UNKNOWN_STATES or (
+        lease.get("status") == "active" and lease.get("expired") is True
+    ):
+        return WORKER_LIFECYCLE_STATE_UNKNOWN
 
     # Bound: has session binding and active todo.
     if current and not _is_done(current) and has_session_binding:
@@ -535,13 +578,48 @@ def _agent_state(
 # Worker lifecycle state vocabulary for R2 small-team execution qualification.
 # These states are derived from existing facts only; they do not introduce a
 # second source of truth.  The projection reads registry membership, todo
-# claims, session bindings, and activity timestamps — nothing else.
+# claims, session bindings and execution facts (Turn lane liveness, delegation
+# worker locks, task leases) -- nothing else.
 WORKER_LIFECYCLE_STATE_REGISTERED = "registered"
 WORKER_LIFECYCLE_STATE_ADDRESSABLE = "addressable"
 WORKER_LIFECYCLE_STATE_BOUND = "bound"
 WORKER_LIFECYCLE_STATE_LAUNCHABLE = "launchable"
 WORKER_LIFECYCLE_STATE_EXECUTING = "executing"
 WORKER_LIFECYCLE_STATE_BLOCKED = "blocked"
+WORKER_LIFECYCLE_STATE_UNKNOWN = "unknown"
+
+# Execution-fact lane states this projection switches on. `live` is the only
+# evidence of execution; the two unknowns are lanes whose holder this machine
+# cannot vouch for, so the row must not read as idle either.
+EXECUTION_LANE_LIVE = "live"
+EXECUTION_LANE_UNKNOWN_STATES = frozenset({"foreign_host", "unreadable"})
+
+
+def _execution_row(facts: Any) -> dict[str, Any] | None:
+    """Project one agent's execution facts as read-only evidence for its state."""
+
+    if not isinstance(facts, dict):
+        return None
+    row: dict[str, Any] = {}
+    lane = _compact(facts.get("lane"), limit=40)
+    if lane:
+        row["lane"] = lane
+    holder = _as_dict(facts.get("lane_holder"))
+    if holder:
+        row["lane_holder"] = {
+            key: holder[key]
+            for key in ("host", "pid", "acquired_at")
+            if holder.get(key) not in (None, "")
+        }
+    if facts.get("delegation_worker_active") is True:
+        row["delegation_worker_active"] = True
+    lease = _as_dict(facts.get("lease"))
+    lease_status = _compact(lease.get("status"), limit=40)
+    if lease_status:
+        row["lease"] = {"status": lease_status}
+        if isinstance(lease.get("expired"), bool):
+            row["lease"]["expired"] = lease["expired"]
+    return row or None
 
 
 def _last_activity(todos: list[dict[str, Any]]) -> str | None:
@@ -594,12 +672,18 @@ def build_agent_management_projection(
     status_payload: dict[str, Any],
     *,
     available_capabilities: Any = None,
+    execution_facts: Any = None,
 ) -> dict[str, Any]:
     """Build a read-only agent management view from a status payload.
 
     This is a projection over existing LoopX status/todo/history state. It does
     not allocate tasks, dispatch agents, reclaim stale claims, or expose write
     actions.
+
+    ``execution_facts`` maps agent id to the facts `collect_agent_execution_facts`
+    reads (Turn lane liveness, delegation worker lock, task lease). Without them
+    no row can be `executing` or `unknown`: the projection then says what the
+    durable state proves and nothing more.
     """
 
     rows_by_agent = _registered_agents(status_payload)
@@ -619,6 +703,7 @@ def build_agent_management_projection(
     # keep a bounded candidate summary plus the full count, so no consumer can
     # read the surviving row as the only route to that peer.
     session_binding_candidates = _collect_session_binding_candidates(status_payload)
+    facts_by_agent = execution_facts if isinstance(execution_facts, dict) else {}
 
     seen_todos: set[tuple[str, str, str, str]] = set()
     for todo in _iter_status_todos(status_payload):
@@ -667,11 +752,12 @@ def build_agent_management_projection(
                 if ref not in handoff_refs:
                     handoff_refs.append(ref)
         last_activity = _last_activity(todos)
+        execution = _execution_row(facts_by_agent.get(agent_id))
         agent_state = _agent_state(
             all_todos,
             current=current,
             has_session_binding=agent_id in session_binding_candidates,
-            last_activity_at=_last_activity([current]) if current else None,
+            execution=execution,
         )
         agent_row: dict[str, Any] = {
             "agent_id": agent_id,
@@ -680,6 +766,7 @@ def build_agent_management_projection(
             "current_todo": _todo_row(current) if current else None,
             "next_action": _safe_next_action(current),
             "last_activity_at": last_activity,
+            "execution": execution,
             "evidence_refs": evidence_refs[:MAX_REFS],
             "handoff_refs": handoff_refs[:MAX_REFS],
             "goal_ids": _as_list(raw_row.get("_goal_ids"))[:MAX_REFS],
@@ -739,6 +826,11 @@ def build_agent_management_projection(
     }
     if material_frontiers:
         source_summary["material_frontier_count"] = len(material_frontiers)
+    if isinstance(execution_facts, dict):
+        source_summary["execution_fact_source"] = (
+            "turn lane holder records, delegation worker locks, task leases"
+        )
+        source_summary["execution_fact_agent_count"] = len(facts_by_agent)
 
     projection: dict[str, Any] = {
         "schema_version": AGENT_MANAGEMENT_PROJECTION_SCHEMA_VERSION,

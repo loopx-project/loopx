@@ -15,8 +15,9 @@ What it deliberately cannot do:
 - it reports no presence, because no presence provider is registered, and it
   says so in `presence_coverage` instead of leaving a reader to guess between
   "not running" and "this machine cannot see it";
-- it does not project a lease epoch, which the current projection does not own,
-  and it names that gap as a limitation.
+- it projects lease state only when the status payload carries execution
+  facts; a payload without them gets `lease_state_not_projected` instead of
+  a guess.
 """
 
 from __future__ import annotations
@@ -120,9 +121,12 @@ def _work_block(agent_row: Mapping[str, Any]) -> dict[str, Any] | None:
         if claimed_by and _compact(todo.get("updated_at"), limit=60)
         else CLAIM_AGE_UNKNOWN
     )
+    lease = _as_mapping(_as_mapping(agent_row.get("execution")).get("lease"))
     work: dict[str, Any] = {
         "todo_id": normalize_todo_id(todo_id) or todo_id,
         "todo_status": _compact(todo.get("status"), limit=40) or "unknown",
+        "lease_status": _compact(lease.get("status"), limit=40),
+        "lease_expired": lease.get("expired") if isinstance(lease.get("expired"), bool) else None,
         "task_class": _compact(todo.get("task_class"), limit=60),
         "action_kind": _compact(todo.get("action_kind"), limit=60),
         "priority": _compact(todo.get("priority"), limit=20),
@@ -174,6 +178,7 @@ def build_peer_agent_directory(
     goal_id: str | None = None,
     caller_agent_id: str | None = None,
     available_capabilities: Any = None,
+    execution_facts: Any = None,
 ) -> dict[str, Any]:
     """Return a bounded `peer_agent_directory_v0` packet for one Goal.
 
@@ -182,13 +187,22 @@ def build_peer_agent_directory(
     against the registry rather than asserted by the caller; when it is absent
     the packet records that the caller identity was not supplied instead of
     inventing one.
+
+    `execution_facts` defaults to the `agent_execution_facts` status collection
+    attached to the payload, so this re-projection reads the same lane, worker
+    and lease facts the management projection did.
     """
 
     payload = status_payload if isinstance(status_payload, Mapping) else {}
     resolved_goal = _compact(goal_id or payload.get("goal_filter"), limit=120)
     caller = _compact(caller_agent_id, limit=120)
+    if execution_facts is None:
+        execution_facts = payload.get("agent_execution_facts")
+    facts = execution_facts if isinstance(execution_facts, Mapping) else None
     projection = build_agent_management_projection(
-        dict(payload), available_capabilities=available_capabilities
+        dict(payload),
+        available_capabilities=available_capabilities,
+        execution_facts=dict(facts) if facts is not None else None,
     )
     agent_rows = [row for row in _as_list(projection.get("agents")) if isinstance(row, Mapping)]
     registered_agent_ids = [
@@ -200,8 +214,9 @@ def build_peer_agent_directory(
     limitations = [
         LIMITATION_PRESENCE_PROVIDER_UNAVAILABLE,
         LIMITATION_PRESENCE_IS_ADVISORY,
-        LIMITATION_LEASE_STATE_NOT_PROJECTED,
     ]
+    if facts is None:
+        limitations.append(LIMITATION_LEASE_STATE_NOT_PROJECTED)
     gaps: list[dict[str, Any]] = []
     if caller and caller not in registered_agent_ids:
         # An unregistered caller gets a scope gap, never a listing it has no
