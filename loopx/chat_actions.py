@@ -264,58 +264,6 @@ class ChatActionService(
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()
 
-    def _team_plan_state_fingerprint(
-        self, goal_id: str, plan: Mapping[str, Any]
-    ) -> str:
-        """Bind every fact a confirmed team plan was reviewed against.
-
-        Registry bytes are not enough. A plan is reviewed against the Goal's own
-        intent -- the objective its work advances -- and that intent lives in the
-        active-state document and in the canonical source basis the lanes would
-        be created against, neither of which the registry bytes cover. Changing
-        the objective therefore used to leave the confirmed plan applicable,
-        because nothing the preview bound had moved.
-
-        An unreadable fact is bound as its own explicit absence rather than
-        dropped from the digest, so the precondition fails closed in both
-        directions: a Goal whose intent becomes readable after the preview asks
-        the owner to confirm again instead of silently dropping the check.
-        """
-
-        from .control_plane.work_items.governed_transition_proposal import (
-            steward_team_plan_intent_basis,
-        )
-
-        goal = self._goal(goal_id)
-        project = Path(str(goal.get("repo") or "")).expanduser()
-        state_file = Path(str(goal.get("state_file") or ""))
-        if not state_file.is_absolute():
-            state_file = project / state_file
-        try:
-            state_digest: str | None = hashlib.sha256(
-                state_file.read_bytes()
-            ).hexdigest()
-        except OSError:
-            state_digest = None
-        from .control_plane.coordination.local_authority import read_canonical_todos_if_promoted
-        from .control_plane.coordination.local_authority_shadow_adapter import effective_runtime_root
-        canonical = read_canonical_todos_if_promoted(
-            runtime_root=effective_runtime_root(self.registry_path, None), goal_id=goal_id)
-        return _digest(
-            {
-                "registry": self._registry_fingerprint(),
-                "provider_revision": canonical.get("provider_revision") if canonical else None,
-                "goal_id": goal_id,
-                "active_state": state_digest,
-                "intent_basis": steward_team_plan_intent_basis(
-                    goal_id=goal_id,
-                    goal=goal,
-                    registry_path=self.registry_path,
-                    plan=plan,
-                ),
-            }
-        )
-
     def _agent_eligibility(
         self,
         agent_id: str,
@@ -1017,7 +965,10 @@ class ChatActionService(
     ) -> dict[str, Any]:
         """Create each ready lane's first bounded Todo through the Todo owner."""
 
-        from .control_plane.work_items.team_plan_adapter import apply_team_plan
+        from .control_plane.work_items.governed_transition_proposal import (
+            steward_team_plan_basis_agent,
+        )
+        from .control_plane.work_items.team_plan_adapter import settle_team_plan
 
         goal_id = str(parameters["goal_id"])
         plan = parameters.get("plan")
@@ -1025,11 +976,11 @@ class ChatActionService(
             raise ValueError("team plan proposal is malformed")
         expected = str(proposal.get("expected_state_fingerprint") or "")
         try:
-            settlement = apply_team_plan(
+            settlement = settle_team_plan(
                 registry_path=self.registry_path, goal_id=goal_id,
                 agent_id=None, proposal={**dict(plan), "proposal_id": proposal_id},
                 expected_state_fingerprint=expected,
-                read_fingerprint=lambda: self._team_plan_state_fingerprint(goal_id, plan),
+                basis_agent_id=steward_team_plan_basis_agent(plan),
             )
         except (OSError, ValueError, RuntimeError) as error:
             error_code = getattr(error, "diagnostic_code", None) or getattr(error, "code", None)
@@ -1038,6 +989,16 @@ class ChatActionService(
                 stale = self.store.apply(proposal_id,
                     current_state_fingerprint=observed, receipt={})
                 return {"proposal": stale, "turn": None}
+            if error_code == "team_plan_no_staffable_lane":
+                # The typed owner refused a plan whose every lane is a gap:
+                # confirming it could only create nothing, so the outcome is
+                # this failure and the plan's lanes and reasons stay in the
+                # card the owner confirmed.
+                return {"proposal": self.store.mark_failed(proposal_id,
+                    error_code="team_plan_no_staffable_lane",
+                    message=("none of the plan's lanes can be staffed by this host, "
+                             "so confirming it created no work")),
+                    "turn": None}
             return {"proposal": self.store.mark_failed(proposal_id,
                 error_code=("team_plan_projection_pending" if error_code == "team_plan_projection_pending" else "team_plan_commit_failed"),
                 message=("Tasks committed; display readback is pending. Retry this same plan to recover the result."
@@ -1048,25 +1009,6 @@ class ChatActionService(
         lane_todo_ids = [str(item) for item in (settlement.get("lane_todo_ids") or [])]
         intent_basis = str(settlement.get("intent_basis") or "")
         gap_count = int(settlement.get("gap_count") or 0)
-        if not lane_todo_ids:
-            # Every lane stayed a gap, so this confirmation created nothing and
-            # reused nothing. The old path wrote a receipt that reported
-            # "lanes already present" with a verified projection and an empty
-            # Todo id, which reads as success where the readback finds no work.
-            # A confirmation that can only create nothing is recorded as the
-            # typed failure it is, and the plan's lanes and reasons stay in the
-            # card the owner confirmed.
-            return {
-                "proposal": self.store.mark_failed(
-                    proposal_id,
-                    error_code="team_plan_no_staffable_lane",
-                    message=(
-                        f"none of the plan's {gap_count} lane(s) can be staffed by "
-                        "this host, so confirming it created no work"
-                    ),
-                ),
-                "turn": None,
-            }
         # Recovery describes this attempt; original staffing gaps remain in the
         # receipt so readback never implies that retry created the missing work.
         if str(settlement.get("action") or "") == "reused":
@@ -1175,8 +1117,17 @@ class ChatActionService(
             # the intent its lanes would advance, so both are bound here and
             # re-read at apply. Binding only the registry let an owner objective
             # change leave a confirmed plan applicable.
-            fingerprint = self._team_plan_state_fingerprint(
-                str(normalized["goal_id"]), normalized["plan"]
+            from .control_plane.work_items.governed_transition_proposal import (
+                steward_team_plan_basis_agent,
+            )
+            from .control_plane.work_items.team_plan_adapter import (
+                team_plan_state_fingerprint,
+            )
+
+            fingerprint = team_plan_state_fingerprint(
+                registry_path=self.registry_path,
+                goal_id=str(normalized["goal_id"]),
+                basis_agent_id=steward_team_plan_basis_agent(normalized["plan"]),
             )
             evidence = [
                 "The plan was validated against this Goal's registered Agents and the host's advancement action kinds.",
