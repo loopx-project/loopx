@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...control_plane.quota.heartbeat_receipt import find_heartbeat_receipt
+from ...control_plane.quota.settlement import read_heartbeat_settlement
 from ...control_plane.runtime.public_safety import validate_public_safe_value
 from ...rollout_event_log import (
     append_rollout_event_once,
@@ -63,10 +63,11 @@ def _details(event: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _events_for_turn(
-    events: Sequence[Mapping[str, Any]], *, agent_id: str, turn_instance_id: str,
+    events: Sequence[Mapping[str, Any]], *, goal_id: str, agent_id: str, turn_instance_id: str,
 ) -> list[dict[str, Any]]:
     return [dict(event) for event in events
             if event.get("event_kind") in EVENT_KINDS.values()
+            and event.get("goal_id") == goal_id
             and event.get("agent_id") == agent_id
             and event.get("run_id") == turn_instance_id]
 
@@ -76,7 +77,7 @@ def native_child_activity(
     turn_instance_id: str, configured_limit: int,
 ) -> dict[str, Any]:
     """One read model for CLI, agent-context and product projections."""
-    rows = _events_for_turn(events, agent_id=agent_id, turn_instance_id=turn_instance_id)
+    rows = _events_for_turn(events, goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id)
     operations: dict[str, dict[str, Any]] = {}
     for event in rows:
         details = _details(event)
@@ -230,35 +231,50 @@ def record_native_child(
         stage=stage, operation=operation, outcome=outcome, entrypoint_id=entrypoint_id,
         reason_code=reason_code, evidence_ref=evidence_ref, validation_ref=validation_ref,
     )
-    guard = find_heartbeat_receipt(
-        runtime_root, goal_id=goal_id, agent_id=agent_id,
-        turn_instance_id=turn_instance_id,
-    )
-    if not guard or not _details(guard).get("settlement_effect_id"):
-        raise ValueError("native child report requires an admitted, settlement-bound Turn guard")
     log_path = rollout_event_log_path(runtime_root, goal_id)
     events = load_rollout_events(log_path)
-    prior = _events_for_turn(events, agent_id=agent_id, turn_instance_id=turn_instance_id)
+    prior = _events_for_turn(events, goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id)
     existing = next((event for event in prior
                      if event.get("case_id") == operation_id
                      and event.get("event_kind") == EVENT_KINDS[stage]), None)
     if existing is not None and _details(existing) != fields:
         raise ValueError("operation identity already has a conflicting native child report")
 
+    def report_admission() -> Mapping[str, Any]:
+        readback = read_heartbeat_settlement(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=None,
+            turn_instance_id=turn_instance_id, resolve_original_binding=True,
+        )
+        if readback is None or readback.identity.value is None or readback.identity.failure is not None:
+            reason = (readback.identity.failure.reason
+                      if readback is not None and readback.identity.failure is not None else "guard missing")
+            raise ValueError("native child report requires an admitted, settlement-bound Turn guard: " + reason)
+        admission = readback.native_child_admission
+        if (not isinstance(admission, Mapping)
+                or admission.get("schema_version") != "native_child_report_admission_v0"
+                or admission.get("report_permission") not in {
+                    "new_operation", "existing_operation_only", "not_admitted",
+                }):
+            raise ValueError("TypeScript native child report admission missing or invalid")
+        return admission
+
     def validate_transition(observed: Sequence[Mapping[str, Any]]) -> None:
-        current = _events_for_turn(observed, agent_id=agent_id,
+        admission = report_admission()
+        current = _events_for_turn(observed, goal_id=goal_id, agent_id=agent_id,
                                    turn_instance_id=turn_instance_id)
         decisions = {str(item.get("case_id")): item for item in current
                      if item.get("event_kind") == EVENT_KINDS["decision"]}
         if stage == "decision":
-            if str(guard.get("status") or "") not in {"normal_run", "turn_run_once"}:
-                raise ValueError("native child decision requires a runnable Turn guard")
+            if admission["report_permission"] != "new_operation":
+                raise ValueError("native child decision requires an open, work-admitted Turn guard")
             if fields["operation"] in {"spawn", "followup"} and any(
                 _details(item).get("outcome") in {"capacity_rejected", "host_failed"}
                 for item in decisions.values()
             ):
                 raise ValueError("host failure forbids same-Turn spawn/followup retry")
             return
+        if admission["report_permission"] == "not_admitted":
+            raise ValueError("native child report requires a work-admitted Turn guard")
         decision = decisions.get(operation_id)
         if decision is None or _details(decision).get("outcome") != "started":
             raise ValueError("result/review requires a started native child decision")
@@ -268,8 +284,11 @@ def record_native_child(
             if result is None or _details(result).get("outcome") != "completed":
                 raise ValueError("parent review requires a completed native child result")
 
-    if existing is None:
-        validate_transition(prior)
+    if not execute:
+        if existing is None:
+            validate_transition(prior)
+        else:
+            report_admission()
     event = build_rollout_event(
         goal_id=goal_id, event_kind=EVENT_KINDS[stage], agent_id=agent_id,
         run_id=turn_instance_id, case_id=operation_id, status=fields["outcome"],
@@ -284,6 +303,10 @@ def record_native_child(
         )
         if _details(stored) != fields:
             raise ValueError("operation identity already has a conflicting native child report")
+        if not appended:
+            # Append-once skips its precondition for an exact duplicate. Verify
+            # the original identity without re-authorizing work or appending.
+            report_admission()
         events = load_rollout_events(log_path)
     else:
         stored = existing or event

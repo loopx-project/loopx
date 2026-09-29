@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { projectReplanSemantics, requiredSemanticOutcomes } from "../../loopx/control_plane/work_items/replan_semantics.ts";
 import { visionAuthoringContract } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
+import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 
 const obligation = {triggers: [{kind: "required_agent_vision_missing"}]};
 const vision = {vision_patch: {acceptance_summary: "Observed permission boundary"},
@@ -30,6 +31,57 @@ test("a revalidated successor receipt settles only its exact original Turn guard
   const next = {...ack, semantic_delta: {...delta, obligation_id: "replan-2222222222222222"}};
   assert.deepEqual(projectReplanSemantics({...request, transition_acks: [next, ack]}).semantic_delta, delta);
   assert.throws(() => projectReplanSemantics({...request, selected_obligation_id: "malformed"}), /malformed/);
+});
+
+test("receipt-bound reentry keeps original canonical proof separate from the next frontier", () => {
+  const id = "replan-1111111111111111";
+  const original = {required: true, obligation_id: id, triggers: [{kind: "periodic_review_due"}]};
+  const current = {...original, obligation_id: "replan-2222222222222222", triggers: [{kind: "vision_acceptance_gap"}]};
+  const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
+    obligation_id: id, successor_todo_id: "todo_independent_successor",
+    outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
+  const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+    source: "todo_replan_successor_transition", semantic_delta: delta};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: id, current_obligation: current,
+    transition_candidates: [{obligation: original, ack}]};
+  const projected = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(projected.obligation_id, id);
+  assert.deepEqual(projected.triggers, original.triggers);
+  assert.equal(projected.selection_binding, "heartbeat_receipt");
+  assert.equal(projected.resolution_mode, "receipt_bound_replan_settlement");
+  assert.deepEqual(projected.todo_actions, []);
+  const packet = projected.settlement_action_packet as JsonObject;
+  assert.equal(packet.settlement_only, true);
+  assert.equal(packet.successor_todo_id, delta.successor_todo_id);
+  assert.equal((packet.writeback_contract as JsonObject).preferred_input, "canonical_successor_transition");
+  assert.equal(current.obligation_id, "replan-2222222222222222");
+  for (const invalid of [{guard_scoped: false}, {transition_candidates: []},
+    {selected_obligation_id: "replan-3333333333333333"},
+    {transition_candidates: [{obligation: current, ack}]},
+    {transition_candidates: [{obligation: original, ack: {...ack, recorded: false}}]},
+    {transition_candidates: [{obligation: {...original, satisfying_semantic_outcomes: ["fresh_vision_path_outcome"]}, ack}]}]) {
+    assert.throws(() => projectReplanSemantics({...request, ...invalid}), /identity conflicts/);
+  }
+  const unchanged = projectReplanSemantics({...request, current_obligation: original,
+    transition_candidates: []}).obligation as JsonObject;
+  assert.equal(unchanged.selection_binding, "heartbeat_receipt");
+  assert.equal(unchanged.resolution_mode, undefined);
+  assert.equal(projectReplanSemantics({...request, selected_obligation_id: null}).obligation, current);
+});
+
+test("verified original writeback projects only its outstanding debit even after frontier drift", () => {
+  const result = projectReplanSemantics({operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "settlement_pending", selected_obligation_id: "replan-1111111111111111",
+    current_obligation: null, transition_candidates: []}).obligation as JsonObject;
+  assert.equal(result.obligation_id, "replan-1111111111111111");
+  const packet = result.settlement_action_packet as JsonObject;
+  assert.equal(packet.decision, "settlement_pending");
+  assert.equal(packet.semantic_delta, null);
+  assert.equal((packet.writeback_contract as JsonObject).preferred_input, "verified_replan_writeback");
+  assert.throws(() => projectReplanSemantics({operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "settled", selected_obligation_id: "replan-1111111111111111",
+    current_obligation: null, transition_candidates: []}), /malformed/);
 });
 
 test("obligation source governs both authoring projection and semantic discharge", () => {

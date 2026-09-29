@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { goalCreateRequest } from "./goal-create-request.ts";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
 const answerText = source("./answer-text.ts");
@@ -356,7 +357,19 @@ assert.doesNotMatch(sidebar, /野兽主题|默认主题/, "The sidebar keeps one
 for (const key of ["proposal.primary.goalCreate", "proposal.impact.goalCreate"]) {
   assert.match(i18n, new RegExp(`"${key.replaceAll(".", "\\.")}"`), `${key} has a typed locale resource`);
 }
-assert.match(actionForm, /workspace_ref:\s*"current"/, "Create Goal does not leak another Goal id as its execution workspace");
+for (const contextGoalId of [null, "existing-research-goal"]) {
+  const request = goalCreateRequest({
+    objective: "Compare public cash-flow statements",
+    completion: "A sourced comparison", boundary: "Public sources only",
+    agentId: "research-agent", permission: "read_only", contextGoalId,
+    operationId: "new-research",
+  }, (key) => key);
+  assert.equal(request.normalizedParameters.workspace_ref, "current",
+    "Conversation context must not become the new Goal's execution workspace");
+  assert.equal(request.context.goal_id, contextGoalId);
+  assert.equal(request.normalizedParameters.goal_id, "goal-new-research");
+  assert.notEqual(request.normalizedParameters.goal_id, contextGoalId);
+}
 assert.match(page, /t\("proposal\.workspace\.current"\)/, "Create Goal localizes its execution workspace explanation");
 assert.match(i18n, /Current local workspace \(no Repository bound\)/, "English workspace copy explains that no repository is bound");
 assert.match(i18n, /当前本地工作区（未绑定 Repository）/, "Chinese workspace copy explains that no repository is bound");

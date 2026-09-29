@@ -231,6 +231,7 @@ def build_explore_node_event(
     tags: Sequence[str] | None = None,
     supersedes: str | None = None,
     recorded_at: str | None = None,
+    research_observation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _safe_goal_id(goal_id)
     safe_title = _compact_text(title, limit=TITLE_LIMIT, field="title")
@@ -263,6 +264,12 @@ def build_explore_node_event(
         event["blocked_reason"] = safe_blocked_reason
     if parent_id:
         event["parent_id"] = _safe_result_id(parent_id, field="parent_id")
+    if research_observation is not None:
+        from .research_evidence import normalize_research_observation
+        observation = normalize_research_observation(research_observation)
+        if observation["explore_node_id"] != event["result_id"]:
+            raise ValueError("research observation belongs to a different node")
+        event["research_observation"] = observation
     event["event_id"] = _event_id(event)
     return event
 
@@ -443,6 +450,7 @@ def validate_explore_result_event(
             evidence_refs=payload.get("evidence_refs"),
             tags=payload.get("tags"),
             supersedes=payload.get("supersedes"),
+            research_observation=payload.get("research_observation"),
         )
     elif event_kind == EVENT_KIND_EDGE:
         rebuilt = build_explore_edge_event(
@@ -474,6 +482,9 @@ def append_explore_result_event(path: Path, event: Mapping[str, Any]) -> dict[st
     log_path = path.expanduser()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(log_path):
+        if validated.get("research_observation"):
+            from .research_evidence import validate_research_append
+            validate_research_append(load_explore_result_events_strict(log_path, goal_id=str(validated["goal_id"])), validated)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(validated, ensure_ascii=False, sort_keys=True) + "\n")
     return {
@@ -524,6 +535,13 @@ def append_explore_result_events(
                 raise ValueError(f"conflicting Explore result event id: {event_id}")
             reused += 1
         if pending:
+            if any(event.get("research_observation") for event in pending):
+                from .research_evidence import validate_research_append
+                current_events = load_explore_result_events_strict(log_path, goal_id=expected_goal_id)
+                proposal = build_explore_result_projection([*current_events, *pending], goal_id=expected_goal_id)
+                for event in pending:
+                    validate_research_append(current_events, event, proposal=proposal)
+                    current_events.append(event)
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write("".join(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n" for event in pending))
             appended = len(pending)
@@ -619,6 +637,7 @@ def _fold_by_result_id(
 
 def _node_view(event: Mapping[str, Any], *, finding_count: int) -> dict[str, Any]:
     return {
+        **({"research_observation": dict(event["research_observation"])} if event.get("research_observation") else {}),
         "node_id": str(event.get("result_id") or ""),
         "title": str(event.get("title") or ""),
         "node_kind": str(event.get("node_kind") or NODE_KIND_AREA),
@@ -916,7 +935,11 @@ def build_explore_result_projection(
     """Fold result events into the bounded projection display sinks render."""
 
     safe_goal_id = _safe_goal_id(goal_id)
-    scoped = [event for event in events if str(event.get("goal_id") or "") == safe_goal_id]
+    scoped = [
+        validate_explore_result_event(event, expected_goal_id=safe_goal_id)
+        if event.get("research_observation") else event
+        for event in events if str(event.get("goal_id") or "") == safe_goal_id
+    ]
 
     folded_findings = _fold_by_result_id(scoped, event_kind=EVENT_KIND_FINDING)
     finding_counts: dict[str, int] = {}
@@ -950,7 +973,7 @@ def build_explore_result_projection(
         findings_by_status[finding["status"]] = findings_by_status.get(finding["status"], 0) + 1
 
     parents = _parent_map(nodes, edges)
-    return {
+    projection = {
         "ok": True,
         "schema_version": EXPLORE_RESULT_PROJECTION_VERSION,
         "goal_id": safe_goal_id,
@@ -972,3 +995,16 @@ def build_explore_result_projection(
         "mermaid": build_explore_mermaid(nodes, edges, node_limit=max(1, mermaid_node_limit)),
         "boundary": dict(PUBLIC_BOUNDARY),
     }
+    research_events = [event for event in scoped if event.get("research_observation")]
+    if research_events:
+        from .research_evidence import project_research_frontier
+        frontier = project_research_frontier(projection, candidate_sources=[
+            {"node_id": event["result_id"], "research_observation": event["research_observation"]}
+            for event in research_events
+        ])
+        summaries = {item["node_id"]: item["summary"] for item in frontier.pop("node_summaries")}
+        for node in nodes:
+            if node["node_id"] in summaries:
+                node["research_summary"] = summaries[node["node_id"]]
+        projection["research_frontier"] = frontier
+    return projection

@@ -483,6 +483,14 @@ one candidate todo.
 
 ## Composition Frontier
 
+Typed research evidence is available through `loopx explore observe --goal-id
+<goal> --observation-json <file>`. Its
+[versioned contract](../../../docs/reference/protocols/research-observation-v0.md)
+defines closure basis, explicit binary candidates, input-revision binding and
+read-only `research_frontier` shadow in `explore summary`. The existing Lark
+node Summary includes these same facts. This command grants no experiment,
+Todo, replan, quota or Goal-acceptance authority; M3 enforcement is still pending.
+
 The harness also projects **composition gaps** - the explicit combined-surface
 todo derivation. When two individually covered surfaces have an
 evidence-linked reason to be tested together, LoopX preserves that untested
@@ -506,9 +514,11 @@ packets when `spawn_policy.explore_harness.enabled=true`:
 - `selected_gap`: the first pending gap (pending sorts before scheduled, then
   by input count descending, then by stable gap id); at most 3 gaps are
   projected (`MAX_PROJECTED_GAPS`).
-- A gap is closed only by an evidence-backed composition experiment or an
-  evidence-backed dismissal - not by reading context, acknowledging a packet,
-  completing an unrelated todo, or restating the same conclusion.
+- This legacy projection only considers open experiments; dropping a closed
+  experiment or marking all gaps scheduled does not certify research closure.
+  The separate typed research shadow requires attributable terminal evidence
+  and current input fingerprints. Evidence-backed dismissal and shared
+  write-time enforcement remain RFC milestones.
 
 The gap becomes a normal runnable successor: a todo bound to the experiment
 node (`--explore-result-node-ref <experiment-node>`), executed through the

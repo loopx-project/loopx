@@ -21,6 +21,7 @@ from loopx.capabilities.manager_context import (
 )
 from loopx.capabilities.manager_context.roundtrip import (
     EXACT_DELIVERY_ADMISSION_SECONDS,
+    ReturnResolutionBlocked,
     drain,
     report,
 )
@@ -513,8 +514,17 @@ def test_exact_external_return_does_not_resend_after_expired_unknown_admission(
     }
 
 
+@pytest.mark.parametrize("verification_failure, terminal", [
+    (None, False),
+    ("route lookup temporarily unavailable", False),
+    ("authorization service read timed out", False),
+    ("initial reply read interrupted", False),
+    ("original_route_unavailable", True),
+    ("return_authorization_unavailable", True),
+    ("initial_delivery_receipt_unavailable", True),
+])
 def test_exact_external_return_verifies_after_recreation_without_resend(
-    tmp_path: Path,
+    tmp_path: Path, verification_failure: str | None, terminal: bool,
 ) -> None:
     registry = _create_source_registry(tmp_path)
     store, _, receipt = _external_manager_request(tmp_path, registry)
@@ -546,6 +556,10 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
 
         def verify(self, *_args):
             self.verify_calls += 1
+            if self.verify_calls == 1 and verification_failure is not None:
+                if terminal:
+                    raise ReturnResolutionBlocked(verification_failure, "Resolution blocked")
+                raise RuntimeError(verification_failure)
             return {
                 "ok": True,
                 "verification_performed": True,
@@ -590,6 +604,28 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
     )
     assert transport.send_calls == 1
     assert transport.verify_calls == 1
+    state_path = (
+        _root(tmp_path) / "replies" / receipt["request_id"] / "conclusion.delivery.json"
+    )
+    if verification_failure is not None:
+        failed = json.loads(state_path.read_text(encoding="utf-8"))
+        assert failed["goal_ref"] == receipt["goal_ref"]
+        assert failed["status"] == ("explicit_unverified" if terminal else "retry_pending")
+        if terminal:
+            assert failed["error"] == verification_failure
+        else:
+            assert failed["attempt"] == first["attempt"]
+            # Another immediate pump must honor backoff, even after recreation.
+            drain(tmp_path, registry, ChatSessionStore(tmp_path), transport,
+                  now=admitted_at + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1))
+            assert transport.verify_calls == 1
+        drain(tmp_path, registry, ChatSessionStore(tmp_path), transport,
+              now=admitted_at + timedelta(days=1))
+        assert transport.send_calls == 1
+        assert transport.verify_calls == (1 if terminal else 2)
+        if terminal:
+            assert json.loads(state_path.read_text(encoding="utf-8")) == failed
+            return
     state = json.loads(
         (
             _root(tmp_path)

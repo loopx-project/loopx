@@ -17,6 +17,7 @@ from ..capability_hooks import (
 from .effect_program import ReceiptBoundReplayPhase
 from .blocked_retry import overlay_active_turn_retries
 from .settlement import (
+    attach_settlement_progress,
     read_heartbeat_settlement,
 )
 from ..work_items.interaction_contract import build_interaction_contract
@@ -540,6 +541,12 @@ def build_live_quota_should_run_decision(
     receipt_bound_replay_phase = (
         settlement_readback.replay_phase if settlement_readback else None
     )
+    semantic_guard = getattr(settlement_readback, "semantic_replan_guard", None)
+    receipt_bound_replan_guard_scoped = bool(
+        receipt_bound_replan_obligation_id and isinstance(semantic_guard, Mapping)
+        and semantic_guard.get("scope") == "turn_guard"
+        and semantic_guard.get("selected_obligation_id") == receipt_bound_replan_obligation_id
+    )
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )
@@ -595,6 +602,7 @@ def build_live_quota_should_run_decision(
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
     )
@@ -645,7 +653,13 @@ def build_live_quota_should_run_decision(
     # unsettled Turn here can overwrite the settled-skip route with a recovery
     # obligation and then select a successor against the immutable receipt
     # identity.  Leave prior-Turn recovery to the next fresh Turn instead.
-    if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED:
+    original_replan_settlement = (
+        (payload.get("replan_action_packet") or {}).get("settlement_only") is True
+    )
+    if original_replan_settlement and settlement_readback is not None:
+        attach_settlement_progress(payload, settlement_readback,
+            registry_path=registry_path, runtime_root=runtime_root)
+    if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
         apply_unsettled_host_turn_recovery_if_required(
             payload,
             registry_path=registry_path,

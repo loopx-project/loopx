@@ -197,10 +197,50 @@ ten-day soak. No active authority, release default or legacy-writer deletion
 decision changes. B still needs sustained workload/platform/capacity evidence;
 C still needs consumer/onboarding and supported upgrade acceptance.
 
-The next B slice is the remaining whole-command cold path: profile history
-artifact lookup, active-contract validation and public-boundary scanning on
-the same retained inputs before selecting the owning repair. Separate provider
-head-read time from caller work; preserve freshness, full decision inputs and
-corruption rejection. Re-run installed CLI consumers after integration. Do not
-count this read optimization as closing A/C or use a fixed remaining-PR estimate;
-retire a writer only with its last supported caller and recovery acceptance.
+### Contract health follows Todo authority
+
+#5222 is merged and locally adopted after backup, CLI/App/service upgrade and
+actual page readback. Default quota output is about 93 KB versus 1.37 MB with
+full detail, with equal Todo counts; 13 previous-delivery static resources match
+byte for byte. This is adoption evidence, not a new formal release, provider
+default switch or completed D2 soak.
+
+An isolated public CLI counterexample found that the Todo list reads canonical
+state while contract health still parses Markdown Todos. Adding only a stale
+User Todo without task_class to the display copy makes a healthy File or SQLite
+Goal fail status with exit code 1. The repair routes promoted contract checks
+through the existing TS canonical snapshot/record validator and shared User Todo
+class/scope rules and supported Todo metadata health; Python transports bounded
+semantic fields and adapts the diagnostic. Agent routing, claim/exclusion
+conflicts, removed policies and legacy status errors remain unhealthy. Structural validity alone does not make an open User Todo healthy.
+Missing providers and corrupt read models remain Goal-scoped errors,
+with no Markdown fallback. Unpromoted Goals retain legacy checks; invalid UTF-8 yields a structured read
+error while still rejecting the command. Narrative,
+registry, history and public-boundary checks remain. This does not introduce or
+replace Todo authoring validation, nor reauthorize completed/deferred history.
+Real File/SQLite controls cover both persisted record shapes, absent display,
+invalid active class/scope and Agent metadata, valid implied historical bindings,
+legal executor exclusions and completed/archived records without a class. Narrative text stays outside the diagnostic RPC; large
+collections are transported in bounded batches without changing message limits.
+
+A paired isolated contract-only measurement uses the 1,109-Todo current
+projection from retained history and an approximately 7 MB display file. Three
+warm samples for the initial structural-only repair fell from 0.52–0.58 seconds
+to 0.11–0.12 seconds for File and 0.14–0.16 seconds for SQLite. These timings
+precede the active User Todo semantic correction and do not qualify its cost.
+The experiment reinitializes the current projection;
+it is not full history replay, whole-status latency or cross-platform capacity
+qualification. Private inputs remain outside Git.
+
+Scale characterization with 4,101 synthetic Agent Todos still hits the existing
+`todo.succession.project` RPC response budget in whole `status` on both base and
+repair for File/SQLite. The repaired contract API can read that collection;
+this does not qualify the remaining whole-command payload boundary.
+
+The next B work remains history artifact lookup and remaining public payload/
+cold-path costs, preserving file-change freshness, full decision inputs and
+corruption rejection. Contract checks and attention still read canonical state
+separately; this repair adds no cross-request cache and claims no command-wide
+consistent snapshot. Recheck installed consumers after integration; A/C and D2
+retain their own open acceptance. Retire each writer only after its last
+supported caller and recovery acceptance are qualified.

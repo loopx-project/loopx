@@ -58,3 +58,54 @@ and PostgreSQL continue to share the provider-neutral transaction conformance
 contract; PostgreSQL's real-server qualification remains a separate gate.
 
 See [reviewed promotion and recovery](reviewed-coordination-promotion.md) for the explicit saved-plan CLI journey.
+
+## New Goal storage target (machine setting)
+
+The **New Goal storage target** setting fixes a File or SQLite target at
+creation. It is not live inheritance, automatic promotion, or an existing-Goal
+migration. Until separately reviewed promotion, the existing legacy source is
+still authoritative. After promotion the selected provider serves canonical
+Todo/lease state; Run artifacts and other independently owned stores are not
+moved by this preference.
+
+Use **Settings → Capability Center → Device defaults → New Goal storage target**
+or the revision-checked CLI:
+
+```sh
+# goal-storage.json:
+# {"schema_version":"loopx_goal_storage_defaults_v0","new_goal_provider":"sqlite"}
+loopx machine-config preview --namespace goal_storage --config-json goal-storage.json
+loopx machine-config apply --namespace goal_storage --config-json goal-storage.json \
+  --expected-plan-revision PLAN_REVISION --execute
+loopx machine-config inspect
+loopx bootstrap --project ./new-project --goal-id new-project --dry-run
+```
+
+The preview reports `storage_target`; creation reports `storage_selection` with
+`promotion_performed=false`. CLI and App creation share the same bootstrap
+owner. Creation stores its intent before provider initialization, so retry after
+interruption uses the same target even if the machine preference changed.
+Reconnecting an existing Goal, including an implicit File Goal, does not adopt
+a newer machine default. Importing existing Markdown does not count as a new
+empty Goal. Explicit provider selection never falls back on failure.
+
+Without this namespace, existing behavior remains unchanged. To stop applying
+the preference to future Goals, preview `loopx machine-config remove
+--namespace goal_storage`, then use its returned plan revision with `--execute`.
+Configuration rollback also affects future creation only. Neither operation
+switches existing storage or removes data. A File target keeps implicit File
+routing until a committed authority exists; it does not create a dangling
+identity-bound selector for an empty File document.
+
+For already-promoted Goals use the [reviewed File/SQLite cutover](file-authority-state-log.md#reviewed-filesqlite-cutover):
+stop writers, settle leases, review the saved plan, retain verified backups,
+then migrate. Reverse migration must preserve newer writes. New-Goal defaults
+and current-provider selection are separate facts. This opt-in setting does
+not change the release default or complete D2/D3 qualification.
+
+### 新 Goal 的目标存储
+
+这是创建时固定的目标，审核晋升后才接管 canonical Todo/lease；不是“所有数据
+已经存入 SQLite”。更改默认值只影响此后创建的空 Goal，既有 Goal、重新连接或
+导入已有 Markdown 均不自动切换。创建中断后重试沿用已记录的选择。关闭或回滚
+设置不迁回数据；已有 Goal 需停止写入、结算租约，走独立的备份和审核迁移流程。

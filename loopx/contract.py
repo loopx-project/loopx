@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.coordination.local_authority import (
+    LocalCoordinationAuthorityUnavailable,
+    read_canonical_todos_if_promoted,
+)
 from .control_plane.goals.contract_health import (
     contract_error_diagnostic,
     contract_error_views,
@@ -26,6 +30,7 @@ from .control_plane.runtime.run_index_duplicates import (
 )
 from .control_plane.runtime.file_text_reads import iter_utf8_file_reads
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
+from .control_plane.todos.authoring_scope import todo_contract_diagnostics
 from .history import (
     RunHistoryAudit,
     build_run_history_audit,
@@ -430,9 +435,10 @@ def _index_duplicate_warning(
     return f"{safe_goal_id}: duplicate index rows raw={raw} unique={unique}{detail}; {action}"
 
 
-def _active_state_todo_contract_diagnostics(
+def _todo_contract_diagnostics(
     registry: dict[str, Any],
     *,
+    runtime_root: Path,
     goal_id_filter: str | None = None,
     activation_state_filter: GoalActivationState | str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -458,6 +464,36 @@ def _active_state_todo_contract_diagnostics(
                 )
             )
 
+        # The durable fence selects the authority for diagnostics as well as
+        # Todo display. Reuse the TS read-model/record validator: the Markdown
+        # copy cannot invalidate or rescue a promoted collection.
+        try:
+            canonical = read_canonical_todos_if_promoted(
+                runtime_root=runtime_root, goal_id=goal_id,
+            )
+        except LocalCoordinationAuthorityUnavailable as exc:
+            add_error(exc.code, f"{goal_id}: canonical Todo contract unavailable: {exc}")
+            continue
+        if canonical is not None:
+            # Structural validity does not replace the shared Todo metadata
+            # and non-terminal User class/scope rules. Evaluate provider rows without reading display.
+            try:
+                canonical_diagnostics = todo_contract_diagnostics(
+                    todos=canonical["todos"],
+                    registered_agents=registered_agent_ids_for_goal(goal),
+                    terminal_statuses=TERMINAL_TODO_STATUSES,
+                )
+            except RuntimeError as exc:
+                add_error(
+                    "canonical_todo_contract_diagnostics_unavailable",
+                    f"{goal_id}: canonical Todo contract diagnostics unavailable: {exc}",
+                )
+                continue
+            checked += canonical_diagnostics["checked"]
+            for row in canonical_diagnostics["diagnostics"]:
+                add_error(row["code"], f"{goal_id}: canonical todo {row['todo_id']} {row['detail']}")
+            continue
+
         registered_agents = registered_agent_ids_for_goal(goal)
         repo_text = str(goal.get("repo") or "").strip()
         if not repo_text:
@@ -467,7 +503,7 @@ def _active_state_todo_contract_diagnostics(
             continue
         try:
             lines = state_file.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             add_error(
                 "active_state_read_failed",
                 f"{goal_id}: cannot read active state for todo contract check: {exc}",
@@ -753,7 +789,7 @@ def _active_state_projection_gap_warnings(
             continue
         try:
             state_text = state_file.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeError):
             continue
         projection_gap = state_projection_gap_warning(state_text)
         if not projection_gap:
@@ -1025,9 +1061,15 @@ def check_contract(
 
     if registry is None:
         registry = load_registry(registry_path)
+    runtime_root = resolve_runtime_root(
+        registry,
+        runtime_root_override,
+        registry_path=registry_path,
+    )
     todo_contract_diagnostics, checked_user_gates = (
-        _active_state_todo_contract_diagnostics(
+        _todo_contract_diagnostics(
             registry,
+            runtime_root=runtime_root,
             goal_id_filter=goal_id_filter,
             activation_state_filter=activation_state_filter,
         )
@@ -1043,11 +1085,6 @@ def check_contract(
         )
     )
 
-    runtime_root = resolve_runtime_root(
-        registry,
-        runtime_root_override,
-        registry_path=registry_path,
-    )
     if runtime_root == DEFAULT_RUNTIME_ROOT or runtime_root.exists():
         checks.append(f"runtime root resolved: {runtime_root}")
     else:

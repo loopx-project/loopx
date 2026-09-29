@@ -59,6 +59,7 @@ _AUTOMATION_FIELDS = {
     "source_ids",
     "interval_seconds",
     "max_pending_batches",
+    "max_sources_per_tick",
 }
 
 
@@ -172,6 +173,7 @@ class DecisionContextProfile:
     capture_source_ids: tuple[str, ...] = ()
     capture_interval_seconds: int = 900
     capture_max_pending_batches: int = 1000
+    capture_max_sources_per_tick: int = 8
 
     def provider_binding_map(self) -> dict[str, Mapping[str, Any]]:
         return {
@@ -367,6 +369,11 @@ def normalize_decision_context_profile(
         field_name="max_pending_batches",
         maximum=10000,
     )
+    capture_scan_limit = _positive_int(
+        automation.get("max_sources_per_tick", 8),
+        field_name="max_sources_per_tick",
+        maximum=MAX_DECISION_SOURCES,
+    )
     if not fail_open:
         raise ValueError("decision-context providers must fail open")
 
@@ -382,6 +389,7 @@ def normalize_decision_context_profile(
         capture_source_ids=tuple(capture_ids),
         capture_interval_seconds=capture_interval,
         capture_max_pending_batches=capture_capacity,
+        capture_max_sources_per_tick=capture_scan_limit,
     )
 
 
