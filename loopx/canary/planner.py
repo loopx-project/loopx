@@ -388,7 +388,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
                 "tier": "default",
                 "reason": (
                     "fails on an unregistered vocabulary value, a forked owner symbol, "
-                    "a stale semantic inventory, or a raised collision or retirement budget"
+                    "a stale project-registry I/O census, or a raised collision or retirement budget"
                 ),
             },
         ],

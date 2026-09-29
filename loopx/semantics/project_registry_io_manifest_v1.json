@@ -487,7 +487,7 @@
     },
     {
       "site": "loopx/cli.py::<module>.main::codec_read:load_project_registry#1",
-      "line": 846,
+      "line": 835,
       "column": 17,
       "kind": "codec_read",
       "api": "load_project_registry",
