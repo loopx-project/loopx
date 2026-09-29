@@ -63,6 +63,15 @@ The default agent gets no LoopX hook. Enforcement is the opt-in agent below.
 
 ## Enforced gate: the `loopx` agent
 
+**Supported host versions: Kiro CLI 2.x** (verified on 2.24.1). The gate relies
+on the agent config's embedded `hooks`, which 2.24.1 loads and which Kiro CLI
+3.0 documents as moving to `.kiro/hooks/*.json`. On a host that did not load
+the embedded hook, the agent would run every tool ungated while looking gated,
+so the installer reads `kiro-cli --version` and refuses a major it has not
+verified (`blocked_unverified_kiro_cli_version`, no file written). When the
+version cannot be read (the CLI is not on `PATH` yet) the file is written, and
+this range is the contract.
+
 ```bash
 loopx slash-commands --install --surface kiro-cli --with-gated-agent
 kiro-cli chat --agent loopx
@@ -92,8 +101,26 @@ the entry's `timeout_ms` (30000); a slow control plane is refused by the hook
 rather than waved through by Kiro. A gated call costs about one `quota
 should-run` (≈1 s on a local fixture); read-only calls skip the probe.
 
-A session with no binding is not under goal-mode and is not gated, which is
-what lets `/loopx` run `start-goal` before the binding exists. This is a
+The session binding resolves to a typed state, and the gate treats the states
+differently:
+
+- **bound** — the Goal's `quota should-run` decides as above, and the gate
+  records the session as engaged under `<KIRO_HOME>/loopx-gate/armed-sessions/`
+  (outside the project, so the record survives the project registry going
+  away);
+- **pre-binding** — no LoopX registry in the project, or a registry with no
+  binding for this session yet, in a session the gate has never engaged: the
+  gate stays out of the way, which is what lets `/loopx` run `start-goal`;
+- **lost or faulty** — an engaged session whose binding can no longer be
+  resolved (registry removed or unreadable, binding deleted, ambiguous, or
+  naming a Goal or agent the registry no longer holds), any of those faults in
+  a session that was never engaged except the two pre-binding states, an event
+  without a session id, or an engagement record that cannot be written: every
+  state-changing call is denied. Re-binding the session with
+  `bind-agent-thread`, or starting a new Kiro session, restores progress;
+  retiring the agent clears the records.
+
+Read-only calls pass in every state. This is a
 deterministic policy layer, not a sandbox: `shell` inside an open gate can
 still write outside the scope or reach the network, so run untrusted work in a
 container or VM. The agent file carries a managed marker in `description`; a
