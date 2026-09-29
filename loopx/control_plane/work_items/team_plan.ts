@@ -139,8 +139,23 @@ export function planTeamTransaction(value: unknown): JsonObject {
   const identity = teamTransactionIdentity(request);
   if (request.previous_receipt != null) return {replayed: true,
     result: replayTeamTransaction(request, requireJsonObject(request.previous_receipt, "previous receipt")), todos: []};
-  if (request.expected_state_fingerprint != null && request.expected_state_fingerprint !== request.current_state_fingerprint) throw new EffectRuntimeRequestError("team plan state changed after preview", "team_plan_preview_stale");
+  // A first commit is admitted only against the state basis its reviewer bound.
+  // Every originator (owner confirmation or agent settlement) has to bind one
+  // and the settlement has to re-read the same one; a missing side is refused
+  // rather than skipping the check. Replay above stays historical readback.
+  if (typeof request.expected_state_fingerprint !== "string" || !request.expected_state_fingerprint ||
+      typeof request.current_state_fingerprint !== "string" || !request.current_state_fingerprint) {
+    throw new EffectRuntimeRequestError("team plan commit requires the reviewed state basis and its current readback", "team_plan_basis_missing");
+  }
+  if (request.expected_state_fingerprint !== request.current_state_fingerprint) throw new EffectRuntimeRequestError("team plan state changed after preview", "team_plan_preview_stale");
   const preview = previewTeamPlan(request);
+  const lanes = preview.lanes as JsonObject[];
+  // A plan whose every lane is a gap can only create nothing. Committing it
+  // would record success where the readback finds no work, so it is a typed
+  // failure and the plan's lanes and gap reasons stay with the proposal.
+  if (!lanes.some(lane => lane.staffing === "ready")) {
+    throw new EffectRuntimeRequestError(`none of the plan's ${lanes.length} lane(s) can be staffed by this host, so committing it would create no work`, "team_plan_no_staffable_lane");
+  }
   const records = request.todos == null ? [] : request.todos;
   if (!Array.isArray(records)) throw new EffectRuntimeRequestError("todos must be an array");
   const current = new Map(records.map(raw => {const row = requireJsonObject(raw, "Todo"); return [String(row.todo_id), row];}));
@@ -150,7 +165,7 @@ export function planTeamTransaction(value: unknown): JsonObject {
   if (actor && !registered.includes(actor)) throw new EffectRuntimeRequestError("team plan author is not registered");
   const todos: JsonObject[] = [];
   const settlements: JsonObject[] = [];
-  for (const lane of preview.lanes as JsonObject[]) {
+  for (const lane of lanes) {
     if (lane.staffing !== "ready") continue;
     const first = requireJsonObject(lane.first_todo, "first Todo");
     const id = laneTodoId(identity.operation_id, lane.lane_id);
@@ -174,10 +189,10 @@ export function planTeamTransaction(value: unknown): JsonObject {
   }
   const ids = todos.map(row => row.todo_id);
   const gaps = preview.gaps as JsonObject[];
-  const result: JsonObject = {action: ids.length ? "created" : "unstaffed", todo_id: ids[0] ?? "",
+  const result: JsonObject = {action: "created", todo_id: ids[0]!,
     target_key: null, created_todo_ids: ids, lane_todo_ids: ids, lane_settlements: settlements,
     gap_count: gaps.length, gap_lanes: gaps.map(gap => ({...gap,
-      agent_id: (preview.lanes as JsonObject[]).find(lane => lane.lane_id === gap.lane_id)!.agent_id})), reused_lane_count: 0,
+      agent_id: lanes.find(lane => lane.lane_id === gap.lane_id)!.agent_id})), reused_lane_count: 0,
     intent_basis: request.intent_basis ?? null, lane_failure: null};
   return {replayed: false, todos, result, receipt: {...identity, result}};
 }
