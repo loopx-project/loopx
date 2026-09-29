@@ -8,7 +8,7 @@ import {
 } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import { refreshAttention } from "./attention-details";
 import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
 import { AlertCircle, Bot, CalendarClock, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X } from "lucide-react";
 
 import {
@@ -739,6 +739,7 @@ export function PersonalWorkspacePage({
   selectedAgentId: controlledAgentId,
   selectedGoalId: controlledGoalId,
   statusSourceControl,
+  serviceNotice,
 }: {
   conversationSessionId?: string;
   agents?: WorkspaceAgentOption[];
@@ -753,6 +754,7 @@ export function PersonalWorkspacePage({
   selectedAgentId?: string;
   selectedGoalId?: string | null;
   statusSourceControl?: StatusSourceControl;
+  serviceNotice?: ReactNode;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [localGoalId, setLocalGoalId] = useState<string | null>(controlledGoalId ?? null);
@@ -1687,6 +1689,7 @@ export function PersonalWorkspacePage({
     <>
     <div hidden={settingsOpen}>
     <WorkspaceShell
+      notice={serviceNotice}
       drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)

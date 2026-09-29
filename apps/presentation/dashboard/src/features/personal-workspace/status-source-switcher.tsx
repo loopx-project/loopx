@@ -10,7 +10,9 @@ import {
 import { useWorkspaceI18n } from "./i18n";
 import { WorkspaceSelect } from "./workspace-select";
 
-export type StatusSourceConnectionState = "connected" | "error" | "loading";
+// "degraded": the status source answers but the Chat execution service does
+// not, so state stays readable while Agent runs cannot be listed or started.
+export type StatusSourceConnectionState = "connected" | "degraded" | "error" | "loading";
 
 export type StatusSourceControl = {
   activeSource: StatusSource;
@@ -186,7 +188,7 @@ export function StatusSourceSwitcher({
         value={activeSource.id}
       />
       <div className="personal-status-source-meta">
-        <span className={`is-${connectionState}`}><i />{connectionState === "loading" ? t("source.connecting") : connectionState === "error" ? t("source.notAvailable") : t("source.connected")}</span>
+        <span className={`is-${connectionState}`}><i />{connectionState === "loading" ? t("source.connecting") : connectionState === "error" ? t("source.notAvailable") : connectionState === "degraded" ? t("source.executionUnavailable") : t("source.connected")}</span>
         <small>{activeSource.readOnly ? t("source.readOnly") : t("source.localInteractive")}</small>
         {activeSource.kind === "ssh_tunnel" ? (
           <button aria-label={t("source.remove", { source: activeSource.label })} onClick={() => onRemove(activeSource.id)} title={t("source.removeCurrent")} type="button"><Trash2 size={12} /></button>
