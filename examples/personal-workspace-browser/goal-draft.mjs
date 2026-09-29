@@ -15,7 +15,7 @@ export const goalDraftScenario = {
       async function send(text) {
         await composer.fill(text);
         await page.getByRole("button", {name: "发送", exact: true}).click();
-        await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+        await page.locator(".personal-message-pending").waitFor({state: "hidden"});
       }
       await send("解释一下 Goal 是什么");
       assert.equal(await page.locator(".personal-goal-draft").count(), 0);

@@ -26,7 +26,7 @@ export const conversationInputScenario = {
         await page.getByRole("button", { name: "发送", exact: true }).click();
         const deadline = Date.now() + 10_000;
         while (api.turnRequests.length === count && Date.now() < deadline) await page.waitForTimeout(25);
-        await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+        await page.locator(".personal-message-pending").waitFor({state: "hidden"});
         assert.equal(api.turnRequests.length, count + 1, `Request did not reach Chat exactly once: ${text}`);
         assert.equal(api.turnRequests.at(-1).message, text);
         assert.equal(api.actionPreviews.length, previews, `Browser manufactured a preview: ${text}`);
