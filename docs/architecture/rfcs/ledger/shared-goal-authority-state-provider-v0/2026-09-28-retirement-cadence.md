@@ -237,9 +237,25 @@ Scale characterization with 4,101 synthetic Agent Todos still hits the existing
 repair for File/SQLite. The repaired contract API can read that collection;
 this does not qualify the remaining whole-command payload boundary.
 
-The next B work remains history artifact lookup and remaining public payload/
-cold-path costs, preserving file-change freshness, full decision inputs and
-corruption rejection. Contract checks and attention now share one request-local, validated canonical
+The next B work is SQLite admission on a frozen source/runtime profile: rerun
+the existing reference capacity axes, reconcile concurrency/recovery/consumer-lag
+evidence, and verify the applicability of retained natural-time soak results.
+The comparison runner's former conflict expectation contradicted merged #5169:
+an identical historical intent must return its original applied revision/cursor.
+The runner now checks that result, independently rejects projection/event/receipt
+drift, and walks the complete history before and after retries without retaining
+all expected snapshots. A failing invariant prevents report publication; checks
+stay outside the unchanged timing windows. This repairs the qualification tool,
+not a provider defect or a D2/default pass. #4224 already reports a soak started
+on September 14 at `e98191faa`; its final result and applicability to the current
+candidate still need evidence. Do not call it unstarted or restart its clock
+solely because an unrelated source revision changed.
+
+Last-caller Python decision retirement can proceed independently where the TS
+replacement and affected real callers are proven. Whole Markdown writer removal
+still requires C's new-Goal/upgrade/recovery exits. Complete consumer metadata,
+freshness and decision inputs remain acceptance requirements. Contract checks
+and attention now share one request-local, validated canonical
 Todo snapshot per runtime/Goal. Standalone checks and subsequent requests read
 afresh; lease and projection-writeback reads do not participate. Consumer edits
 cannot mutate retained input, and a failed first read cannot recover midway

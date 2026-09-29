@@ -85,9 +85,15 @@ node --experimental-sqlite --experimental-strip-types \
 ```
 
 The runner creates and removes its own temporary store, checks complete
-projections (including Todo metadata), original receipts and reopened state,
-and records the source revision, runtime, runner hash and tracked source diff
-hash. It does not open a selected live Goal. RSS includes fixture/checking
+projections (including Todo metadata), events, original receipts and reopened
+state, and records the source revision, runtime, runner hash and tracked source
+diff hash. After timing, it verifies that an exact historical retry returns the
+original applied revision/cursor, even after later commits; projection-, event-
+or receipt-only drift must conflict. The later head, original receipt and entire
+paged history must remain unchanged. `historical_replay_and_conflict_checks`
+is reported only after these checks pass; a failed check prevents a successful
+report. These are storage guarantees, not Goal-instance isolation or permission
+to repeat external effects. It does not open a selected live Goal. RSS includes fixture/checking
 allocations; File publication bytes are application bytes, not physical disk
 writes. Use the existing SQLite capacity runner for WAL traffic and D2 history
 sizes. Keep performance experiments separate from concurrent test suites.
