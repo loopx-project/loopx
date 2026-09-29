@@ -5,6 +5,8 @@ from collections.abc import Callable
 import importlib
 from pathlib import Path
 
+from ...control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+
 from .contract import (
     application_receipt,
     maintenance_receipt,
@@ -65,6 +67,8 @@ def register_semantic_preference_commands(
         help="Recall optional provider-owned preferences and build compact receipts.",
     )
     commands = parser.add_subparsers(dest="semantic_preference_command", required=True)
+    from .agent_preferences import register_agent_preference_commands
+    register_agent_preference_commands(commands, add_subcommand_format)
     recall_parser = commands.add_parser("recall")
     add_subcommand_format(recall_parser)
     recall_parser.add_argument("--config", required=True)
@@ -135,6 +139,7 @@ def handle_semantic_preference_command(
     args: argparse.Namespace,
     *,
     runtime_root_arg: str | None,
+    registry_path: Path,
     output_format: Callable[..., str],
     print_payload: Callable[[dict[str, object], str, Callable], None],
 ) -> int | None:
@@ -144,6 +149,11 @@ def handle_semantic_preference_command(
         provider = importlib.import_module(_LEGACY_OPENVIKING_PROVIDER_MODULE)
         return provider.handle_openviking_provider(args)
     try:
+        if args.semantic_preference_command == "agent":
+            from .agent_preferences import handle_agent_preferences, render_agent_preferences
+            payload = handle_agent_preferences(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
+            print_payload(payload, output_format(args), render_agent_preferences)
+            return 0 if payload.get("ok") else 2
         if args.semantic_preference_command == "recall":
             payload = recall(
                 args.config,
@@ -176,7 +186,7 @@ def handle_semantic_preference_command(
                 scope_refs=args.scope_ref,
                 evidence_ref=args.evidence_ref,
             )
-    except ValueError as exc:
+    except (ValueError, TypeError, OSError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         payload = {
             "ok": False,
             "schema_version": "semantic_preference_error_v0",

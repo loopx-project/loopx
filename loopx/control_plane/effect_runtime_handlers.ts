@@ -202,6 +202,7 @@ import {
 import { evaluateCoordinationTodoArchiveSelection } from "./coordination/todo_archive_selection.ts";
 import {evaluateStandingDecisionProjection} from "./todos/standing_decision.ts";
 import {evaluateDecisionScope} from "./todos/decision_scope.ts";
+import {agentPreferences} from "./capabilities/agent_preferences.ts";
 import {agentCapabilityMemory} from "./agents/capability_memory.ts";
 import {evaluateCapabilityGate} from "./agents/capability_gate.ts";
 import {projectCoordinationSource} from "./coordination/source_projection.ts";
@@ -477,6 +478,7 @@ export function createEffectRuntimeHandlers(
     ["todo.user_completion.plan", evaluateUserCompletion],
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],
     ["agent.capability_memory", agentCapabilityMemory],
+    ["agent.preferences", agentPreferences],
     ["todo.archive.capture_dependencies", withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies)],
     ["agent.supervisor.plan_append", planSupervisorEventAppend],
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
