@@ -56,6 +56,26 @@ large or behavior-changing work whose outcome is not yet agreed.
 
 Small docs typo fixes and obviously safe cleanups can go straight to a PR.
 
+### Check New Semantic Vocabulary While Developing
+
+If a change adds or extends an Enum, `Literal`, named closed set, TypeScript
+`as const` array, or another state/protocol vocabulary, run the diff-scoped
+advisory before the full-tree semantic check:
+
+```bash
+uv run python scripts/generate_semantic_inventory.py --changed-from HEAD
+```
+
+The command compares the named Git baseline with committed, staged, and working
+tree source changes. It does not discover untracked files; include each intended
+new source explicitly, for example
+`--include-untracked loopx/control_plane/new_contract.ts`. It reports supported
+candidate carriers, registered-vocabulary reuse hints, and the disposition
+question to answer in review. Findings exit successfully because this is an
+advisory prompt, while invalid revisions, unreadable inputs, and tool failures
+exit non-zero. An empty report is not evidence that dynamic or unsupported
+semantic forms were analyzed.
+
 
 ## Public And Private Boundaries
 
