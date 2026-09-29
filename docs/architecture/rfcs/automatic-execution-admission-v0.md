@@ -99,6 +99,13 @@ zero removes only that scope's constraint, preserving starts. The local CLI
 records caller-asserted owner intent; it is **not** an authenticated boundary
 against another process running as the same OS user.
 
+In the App interval editor, selecting the target and explicitly saving the
+visible before/after change supplies that intent. A free-text reason is an
+optional note, not a prerequisite to saving. The editor records Save provenance
+automatically, carries reduction authorization only for the displayed reduction,
+and performs exact-revision preview and apply behind the single Save action.
+It must not approve a different target/value or retry a conflict automatically.
+
 Admission records retain start time, request identity and trigger time. They
 are independent of scheduler reset keys, Todo identity and model identity.
 Readback exposes effective floor, contributing scopes/revisions, next eligible
@@ -233,12 +240,15 @@ that. A store record written without the phase field is read as an attempted
 start, so an older or hand-edited file fails closed rather than resuming.
 
 The M3 settings companion presents the quota-owned Goal/agent/automation policy
-through a revision-locked local preview, apply and readback, and reports stale
-configuration intent as a typed conflict instead of parsing error text. Settings
-start with an explicit Agent choice from the Goal’s projected Agent list, rather
-than preselecting an arbitrary Agent or filtering suggestions by its current ID.
-Switching the target invalidates the preview; the preview names its Goal and
-Agent. Per-Agent overrides preserve peer and Goal defaults. It does
+through one explicit Save backed by revision-locked preview, apply and readback,
+and reports stale configuration intent as a typed conflict instead of parsing
+error text. A single target selector lists the Goal and its projected Agents;
+automation-specific targeting and optional notes stay in disclosure controls.
+Switching the target discards the draft. Save records target/value provenance
+without requiring a free-text reason or a second reduction checkbox. The editor
+shows effective inheritance before saving; stale intent and unverified readback
+require refresh instead of silently retrying or reporting verified success.
+Per-Agent overrides preserve peer and Goal defaults. It does
 not edit existing Codex App timers, and next-eligible time plus Lark/CLI wait
 parity remain open. The App timer-to-hook path, non-Turn launchers and live
 model-host promotion remain unqualified; M4 remains a design option. No existing
