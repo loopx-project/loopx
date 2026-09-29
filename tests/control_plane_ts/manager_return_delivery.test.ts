@@ -74,3 +74,26 @@ test("classifies verification without exposing provider prose", () => {
     },
   );
 });
+
+test("only typed resolution blockers stop an unavailable verification", () => {
+  for (const blocker of [
+    "return_authorization_unavailable",
+    "original_route_unavailable",
+    "initial_delivery_receipt_unavailable",
+  ]) {
+    assert.deepEqual(classifyManagerReturnVerification({
+      verification_performed: false, reply_verified: false, blocker,
+    }), { status: "explicit_unverified", error: blocker, verification: null });
+  }
+  for (const blocker of [null, "route lookup temporarily unavailable",
+    "authorization service read timed out", "initial reply read interrupted",
+    "original_route_unavailable: timeout", { reason: "original_route_unavailable" }]) {
+    assert.deepEqual(classifyManagerReturnVerification({
+      verification_performed: false, reply_verified: false, blocker,
+    }), {
+      status: "verification_required",
+      error: "provider_verification_unavailable",
+      verification: null,
+    });
+  }
+});

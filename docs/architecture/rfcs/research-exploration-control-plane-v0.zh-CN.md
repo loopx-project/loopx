@@ -123,6 +123,7 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 | Semantic replan closure | 新类型化维度、grounded successor、concrete blocker 或 coverage-backed terminal result 可以关闭当前 obligation。 |
 | Host-delivered context | Quota 可以投影 compact coverage ledger 与 uncovered frontier，不要求手动 evidence-read 仪式。 |
 | Explore evidence | Explore 拥有 append-only node、edge、finding 与有界 public-safe projection。 |
+| Research evidence 与 cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.zh-CN.md) 组合 generic progress、typed closure 和 explicit binary candidate。CLI summary 与 Lark node summary 共用只读投影，精确 experiment input fingerprint 防止过期结果继续有效。 |
 | Explore planning | 可选 branch planner 保持只读，并把执行交还 quota、Todo、claim 和 lease。 |
 | Model behavior qualification | 真实 function-tool 对话可以验证模型是否读取真实 packet 并选择真实 semantic writeback。 |
 
@@ -130,11 +131,11 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 
 | 缺口 | 后果 |
 |---|---|
-| 没有 typed closure basis | Terminal 结论无法脱离 prose 说明究竟是哪项 constraint 使其成立。 |
-| 没有 composition candidate | 分别研究过的节点之间的关系无法持久化。 |
-| 没有 composition experiment identity | Replay 可能重复调度 joint probe，或把 Todo 错当成实验结果。 |
-| 没有 composition gap projection | Goal-frontier 无法区分 atomic exhaustion 和未验证 interaction。 |
-| 没有研究专用 qualification matrix | 测试尚未证明 candidate→gap→experiment→result 的因果链。 |
+| 没有 shared research write-time gate | Cold evidence codec 不能解除或强制 live composition obligation。 |
+| 没有精确 obligation/Todo/result lineage | Research receipt 不证明已授权 Todo transition 或已接受 Goal closure。 |
+| Cold shadow 未接入 hot status/frontier | 既有 #3173 投影保持行为兼容；canonical research obligation 仍需 M3 集成。 |
+| 没有 dismissal/deferral contract | Evidence invalidation 可见，但类型化 candidate retirement/resumption 尚未实现。 |
+| Live qualification 不完整 | Deterministic 与真实 CLI/file-log 测试证明状态语义，不证明 model selection 质量或科学结论；projection 测试不构成 live Lark sync 资格。 |
 | inferred combination 没有 promotion evidence | 共享 constraint 的精度还不足以直接触发 obligation。 |
 
 ## 6. 研究状态模型
@@ -206,8 +207,10 @@ A、B 之间的 `joint_probe` 直连边会把 candidate、execution 和 result �
 
 ## 7. Typed contract 方向
 
-以下 schema 是设计目标，而非已经发布的 protocol。最终 wire form 必须连同
-active caller、protocol reference 和 focused validation 一起引入。
+Research envelope 与 closure basis 已有真实 CLI caller 和
+[版本化证据协议](../../reference/protocols/research-observation-v0.zh-CN.md)。
+下文 action signature、shared write gate 和 model selection 仍为设计目标；
+cold shadow 不会将其 promotion 为当前行为。
 
 ### 7.1 组合，而不是静默修改 v0
 
@@ -737,8 +740,8 @@ rule，以及 model variance 与 control-plane failure 的分离。
 | Milestone | 交付物 | Promotion gate | 状态 |
 |---|---|---|---|
 | M0 | RFC、current-state inventory 与显式 ownership decision | Maintainer review；无 runtime behavior | 已接受的设计 |
-| M1 | Characterization fixture，以及 Explore 中的 typed research observation 与 closure contract | Deterministic normalization、privacy、compatibility 与 negative test | 未开始 |
-| M2 | Explicit-only composition candidate、canonical gap projection 与 read-only status shadow | 不做 pairwise inference；packet 有界；projection parity | 部分实现（#3173：显式 experiment 投影与 successor binding） |
+| M1 | Characterization fixture，以及 Explore 中的 typed research observation 与 closure contract | Deterministic normalization、privacy、compatibility 与 negative test | Evidence/CLI 切片已实现；真实研究 qualification 独立保留 |
+| M2 | Explicit-only composition candidate、canonical gap projection 与 read-only status shadow | 不做 pairwise inference；packet 有界；projection parity | 部分实现：#3173 legacy quota/successor；CLI/Lark projection 的 canonical binary cold shadow；hot status adoption 与 live Lark qualification 仍未完成 |
 | M3 | Goal-frontier obligation、精确 Todo/experiment lineage 与共享 write-time gate | State/replay matrix 与 premerge canary 通过 | 未开始 |
 | M4 | 有界 multi-candidate card、`composition_selection_v0`、真实 model-tool behavior qualification 与重复 live shadow | 模型从交付 candidate set 中自主选择合法 semantic action；选择质量不劣于 declared fallback；只保留 compact receipt | 未开始 |
 | M5 | Shared-constraint candidate 在 shadow mode 中排序 | 有 precision/cost evidence；不自动触发 | 未开始 |
@@ -747,14 +750,23 @@ rule，以及 model variance 与 control-plane failure 的分离。
 
 ### 16.1 最小有用实现切片
 
-M1 与 M2 是第一组可评审切片：
+M1/M2 evidence 切片交付：
 
 - 不增加 scheduler 或 executor；
 - composition gap 保持 read-only、default-off；
 - 只接受显式 candidate；
 - 修改 Explore projection 前先 characterization；
 - 证明 public safety、canonical identity 与 bounded projection；
-- 在 status 中展示 candidate 与 gap，但暂不阻止 writeback。
+- 在 Explore summary 与既有 Lark node projection 展示 candidate/gap，保持 #3173
+  quota 行为。Hot status adoption 留在 M3 common frontier 集成，任何 promotion
+  之前仍需独立 qualification。
+
+验证入口为 `tests/control_plane_ts/explore_research.test.ts`、
+`tests/capabilities/test_explore_research_evidence.py` 与既有 composition-frontier/
+result-layer 检查。覆盖反向配对 canonical identity、terminal coverage、attribution、
+replay、input invalidation、stale experiment lineage 和真实 CLI/file-log 读回。
+Projection 测试不证明 live remote effect 或模型自主研究行为。交付继续由
+[#5214](https://github.com/loopx-project/loopx/issues/5214) 跟踪，该 issue 保持打开。
 
 M3 是第一个 behavior-changing slice。它应单独成 PR，使 obligation 与 write gate
 能够独立于 evidence schema 评审和回滚。

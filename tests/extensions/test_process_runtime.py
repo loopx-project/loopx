@@ -3,12 +3,52 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import time
+from unittest.mock import Mock
 
 import pytest
 
-from loopx.extensions.process_runtime import run_capped_process
+from loopx.extensions.process_runtime import run_capped_process, terminate_process_tree
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+def test_zero_grace_sends_one_force_kill_and_reaps_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+    process.poll.return_value = None
+    signals: list[tuple[int, int]] = []
+
+    def killpg(pid: int, sig: int) -> None:
+        signals.append((pid, sig))
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    terminate_process_tree(process, grace_seconds=0)
+
+    assert signals == [(process.pid, signal.SIGKILL)]
+    process.kill.assert_called_once_with()
+    process.wait.assert_called_once_with()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+def test_zero_grace_reaps_leader_when_owned_group_is_already_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = Mock(spec=subprocess.Popen)
+    process.pid = 12345
+
+    def missing_group(_pid: int, _sig: int) -> None:
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "killpg", missing_group)
+    terminate_process_tree(process, grace_seconds=0)
+
+    process.wait.assert_called_once_with()
+    process.kill.assert_not_called()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")

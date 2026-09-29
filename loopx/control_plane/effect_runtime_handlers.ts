@@ -1,4 +1,6 @@
+import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
+import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -107,7 +109,7 @@ import { transitionTodoNextAction } from "./todos/next_action.ts";
 import { planTodoFieldUpdate } from "./todos/field_update.ts";
 import { planPublicTodoUpdate } from "./todos/public_update.ts";
 import { planMonitorMetadata } from "./todos/monitor_metadata.ts";
-import { planTodoAuthoringScope } from "./todos/authoring_scope.ts";
+import { evaluateTodoContractDiagnostics, planTodoAuthoringScope } from "./todos/authoring_scope.ts";
 import {
   evaluateTodoResumeConditions,
   normalizeTodoResumeWhen,
@@ -135,6 +137,7 @@ import {
   decideProjectSessionUnbind,
 } from "./goals/source_session_lifetime.ts";
 import { decideFirstPartyHostRuntime } from "./goals/first_party_host_runtime.ts";
+import { decideChatSessionLifecycle } from "./goals/chat_session_lifecycle.ts";
 import {
   evaluateDeliveryRoute,
 } from "./turn_driver/delivery_continuity.ts";
@@ -479,6 +482,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
     ["todo.monitor_metadata.plan", planMonitorMetadata],
     ["todo.authoring_scope.plan", planTodoAuthoringScope],
+    ["todo.contract_diagnostics.evaluate", evaluateTodoContractDiagnostics],
     [
       "todo.claim.decide",
       (params) => evaluateCoordinationTodoClaimDecision(
@@ -548,6 +552,7 @@ export function createEffectRuntimeHandlers(
     ["goal.source_session.unbind.decide", decideProjectSessionUnbind],
     ["goal.source_session.recreate.decide", decideGoalRecreation],
     ["goal.first_party_host_runtime.decide", decideFirstPartyHostRuntime],
+    ["goal.chat_session.lifecycle.decide", decideChatSessionLifecycle],
     ["goal.acceptance.inspect", inspectLocalGoalAcceptance],
     ["goal.acceptance.configure", commitLocalGoalAcceptance],
     ["goal.acceptance.verify.commit", commitLocalGoalAcceptanceVerification],
@@ -585,6 +590,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow)],
     ["coordination.local_authority.promote", promoteLocalCoordinationAuthority],
     ["coordination.authority_archive.manage", manageLocalAuthorityArchive],
+    ["coordination.local_authority.new_goal_storage", manageNewGoalStorage],
     ["coordination.local_authority.promotion_review", withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion)],
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],
     ["coordination.local_authority.todo_continuation", continueLocalTodo],
@@ -855,6 +861,9 @@ export function createEffectRuntimeHandlers(
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     ["work_item.replan_semantics.project", projectReplanSemantics],
+    ["explore.research.normalize", normalizeResearchObservation],
+    ["explore.research.validate_attribution", validateResearchAttribution],
+    ["explore.research.frontier", projectResearchFrontier],
   ["work_item.replan_history.project", projectReplanHistory],
   ["work_item.replan_history.project_snapshot", projectReplanHistorySnapshot],
     [

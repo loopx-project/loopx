@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validateLegacyContinuationPolicyRepair } from "../../loopx/control_plane/todos/legacy_continuation_policy_migration.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA,
+  evaluateTodoContractDiagnostics, TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA,
   userTodoScopeConflict } from "../../loopx/control_plane/todos/authoring_scope.ts";
 
 function plan(intent: JsonObject, overrides: JsonObject = {}): JsonObject {
@@ -105,4 +107,58 @@ test("malformed intent cannot turn a truthy string or an unknown field into scop
   for (const intent of [{global_gate: "true"}, {goal_bound: 1}, {global_gat: true}]) {
     assert.throws(() => plan({task_class: "user_gate", actor_agent_id: "agent-a", ...intent}), /boolean|does not own/);
   }
+});
+
+test("canonical diagnostics keep metadata and non-terminal user rules without repairing rows", () => {
+  const evaluate = (todos: JsonObject[], agents = ["agent-a"], terminal = ["done", "deferred", "archived"]) =>
+    evaluateTodoContractDiagnostics({schema_version: TODO_CONTRACT_DIAGNOSTICS_REQUEST_SCHEMA,
+      todos, registered_agents: agents, terminal_statuses: terminal});
+  const open = (extra: JsonObject): JsonObject => ({schema_version: "todo_item_v0", todo_id: "todo_x",
+    role: "user", status: "open", done: false, text: "raw text that must not surface", ...extra});
+  const codes = (todos: JsonObject[], agents = ["agent-a"], terminal = ["done", "deferred", "archived"]) =>
+    (evaluate(todos, agents, terminal).diagnostics as JsonObject[]).map(row => row.code);
+  assert.deepEqual(codes([open({})]), ["user_todo_task_class_missing"]);
+  assert.deepEqual(codes([open({done: true})]), ["user_todo_task_class_missing"]);
+  assert.deepEqual(codes([open({task_class: "user_action", global_gate: true})]), ["user_action_blocking_scope_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true, blocks_agent: "agent-a"})]),
+    ["user_gate_scope_conflict"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", goal_bound: true, bound_agent: "agent-a"})]),
+    ["user_todo_response_scope_conflict"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", global_gate: true, bound_agent: "agent-a"})]),
+    ["goal_user_gate_agent_binding_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", blocks_agent: "agent-a", goal_bound: true})]),
+    ["agent_user_gate_goal_binding_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_gate", goal_bound: true})], ["agent-a", "agent-b"]),
+    ["multi_agent_user_gate_missing_scope"]);
+  assert.deepEqual(codes([open({task_class: "user_action"})], ["agent-a", "agent-b"]),
+    ["multi_agent_user_todo_missing_response_scope"]);
+  const agent = (extra: JsonObject): JsonObject => ({...open({}), role: "agent", ...extra});
+  assert.deepEqual(codes([agent({blocks_agent: "agent-a"})]), ["agent_todo_blocks_agent_invalid"]);
+  assert.deepEqual(codes([agent({claimed_by: "agent-a", excluded_agents: ["agent-a"]})]), ["todo_claimed_by_excluded_agent"]);
+  assert.deepEqual(codes([agent({excluded_agents: ["agent-other"]})]), ["todo_excludes_unregistered_agent"]);
+  assert.deepEqual(codes([agent({removed_continuation_policy: "review_handoff"})]), ["agent_todo_removed_continuation_policy"]);
+  assert.deepEqual(codes([agent({excluded_agents: ["!"]})]), ["todo_excluded_agents_invalid"]);
+  assert.deepEqual(codes([agent({status: "bogus"})]), ["todo_status_invalid"]);
+  assert.deepEqual(codes([open({task_class: "user_action", excluded_agents: ["agent-a"]})]), ["todo_executor_exclusion_scope_invalid"]);
+  assert.deepEqual(codes([open({status: "done", archive_state: "archive", excluded_agents: ["agent-a"]})]), []);
+  assert.deepEqual(codes([agent({claimed_by: "agent-a", excluded_agents: ["agent-b"]})], ["agent-a", "agent-b"]), []);
+  // Controls: valid open user work, completed history without a class, and agent rows stay healthy.
+  assert.deepEqual(codes([open({task_class: "user_action"})]), []);
+  assert.deepEqual(codes([{...open({}), status: "done", done: true}]), []);
+  assert.deepEqual(codes([{schema_version: "todo_item_v0", todo_id: "todo_a", role: "agent",
+    status: "open", done: false}]), []);
+  const observed = evaluate([open({}), {...open({}), status: "done", done: true}]);
+  assert.equal(observed.checked, 1);
+  assert.equal(JSON.stringify(observed).includes("raw text"), false);
+});
+
+test("shared removed-policy classification preserves explicit migration authority", () => {
+  for (const policy of ["primary_review", " review_handoff "]) {
+    const source = {removed_continuation_policy: policy};
+    assert.throws(() => validateLegacyContinuationPolicyRepair(source, {claim_only: true}, "todo_x"), /repair it before claiming/);
+    assert.throws(() => validateLegacyContinuationPolicyRepair(source, {}, "todo_x"), /repair it explicitly/);
+    assert.doesNotThrow(() => validateLegacyContinuationPolicyRepair(source,
+      {continuation_policy: "independent_handoff", excluded_agents: ["agent-a"]}, "todo_x"));
+  }
+  assert.doesNotThrow(() => validateLegacyContinuationPolicyRepair({}, {claim_only: true}, "todo_x"));
 });

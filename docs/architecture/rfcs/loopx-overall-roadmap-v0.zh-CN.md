@@ -2,7 +2,8 @@
 
 - 状态：已接受
 - 替代 / 关闭：无
-- 范围基线：2026-09-16，`0aa6179de`；管家故障复现基线单独保留在第 8 节。
+- 范围基线：架构审计使用 2026-09-16 的 `0aa6179de`；RFC inventory 更新至
+  2026-09-28 的 `6643f3670`；管家故障复现基线单独保留在第 8 节。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
@@ -226,7 +227,10 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 
 ## 4. 全部 RFC 的落位与下一步
 
-下表覆盖范围基线目录内的 **30 个主 RFC**，中英镜像合并计数；本总纲是新增的第 31 项。它同时记录已接受、局部实现、研究和 Held 方向，不表示全部立即开工。状态来自 RFC/现有 reference 与重点源码核对；除第 8 节外，未做每个子系统的完整运行资格。
+下表覆盖 header 日期所示的主 RFC inventory，中英镜像合并计数。架构状态仍使用
+另行标注的审计基线。它同时记录已接受、局部实现、研究和 Held 方向，不表示全部
+立即开工。状态来自 RFC、现有 reference 与重点源码核对；除第 8 节外，未做每个
+子系统的完整运行资格。
 
 | RFC | 工作流 | 当前边界 | 下一切片 / 验收要求 |
 | --- | --- | --- | --- |
@@ -254,6 +258,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | S5 | 已接受；action/attention 纵切及本地交付链/验收复盘已实现 | P1：跨渠道披露和受治理的修订/结算复盘；本地可见性不代表 G2 通过 |
 | [Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | S5/S11 | 已接受；Held | P3：第二个重复真实需求出现才重开；sidecar 不改变 gate/quota/调度 |
 | [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.zh-CN.md) | S8/S9 | 已接受；proposal only | P2：模拟 adapter 的一次不可变确认→effect→对账→原路回报；金融 provider 独立包，不扩普通协调权限 |
+| [Provider 在效果接受点执行授权（v0）](provider-effect-acceptance-v0.zh-CN.md) | S8/S9，S2/S4 支撑 | 已接受设计；尚未接入 runtime，也未准入 provider | M1：controlled provider 与 deterministic revoke/crash/replay conformance；strict production 接线仍需精确 Goal 生命周期、receipt retention 与独立 provider 资格 |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现 | P1：observation/write-time gate/closure basis 独立验证；自选模型和推断触发继续 defer |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 只读观测 | P2：matched shadow stride 实验，定义代价与事件；不直接改变生产节奏 |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.zh-CN.md) | S1/S3/S6/S8/S11 | 已接受；只读配置/上下文检查切片 | P1：复用既有 owner 验收纠正→新会话决策，再做按需组合与可测方法演化；不建万能记忆库或第二个启用开关 |

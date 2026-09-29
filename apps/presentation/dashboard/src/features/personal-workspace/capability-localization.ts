@@ -12,6 +12,7 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string }
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
+    goal_storage: { displayName: "New Goal storage target", description: "Fixed at creation and used after reviewed promotion. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
       displayName: "Runtime",
       description: "Selects the persistent host-tool profile used by owner manager conversations.",
@@ -77,6 +78,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
   },
   "zh-CN": {
+    goal_storage: { displayName: "新 Goal 的目标存储", description: "创建时固定，审核晋升后生效。已有 Goal 需要单独备份、迁移；更改这里不会迁移数据。" },
     manager_runtime: {
       displayName: "运行环境",
       description: "选择管家会话持续生效的宿主工具模式。",
@@ -145,6 +147,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
 
 const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
   en: {
+    new_goal_provider: { label: "New Goal storage target (after promotion)", description: "File or SQLite; this setting does not perform promotion or migration." },
     runtime_profile: { label: "Runtime profile", description: "Restricted keeps scoped LoopX reads only. Trusted owner enables normal host tools while protected operations retain separate checks." },
     selection_policy: { label: "Selection policy", description: "Preferred allows an explicit user choice; pinned rejects another executor; flexible permits fallback only inside the eligible pool." },
     executor_endpoint: { label: "Primary steward executor", description: "The preferred or pinned executor for this machine. In a flexible pool it is tried first when available." },
@@ -171,6 +174,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     enabled_agents: { label: "Enabled Goal Agents", description: "Enter one registered Goal-local Agent id per line. A private binding currently accepts exactly one Agent." },
   },
   "zh-CN": {
+    new_goal_provider: { label: "新 Goal 的目标存储（晋升后生效）", description: "选择 File 或 SQLite；保存设置不会自动晋升，也不会迁移已有 Goal。" },
     runtime_profile: { label: "运行模式", description: "restricted 仅使用受限 LoopX 读取；trusted_owner 开放常规宿主工具，但受保护操作仍单独校验。" },
     selection_policy: { label: "选择策略", description: "preferred 允许用户显式改选；pinned 拒绝其他执行器；flexible 只在已授权资源池内回退。" },
     executor_endpoint: { label: "首选管家执行器", description: "本机首选或锁定的执行器；灵活池模式下优先尝试它。" },

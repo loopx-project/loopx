@@ -63,7 +63,7 @@ def handle_native_child_command(args, registry_path, runtime_root, print_payload
                 evidence_ref=args.evidence_ref, validation_ref=args.validation_ref,
                 execute=args.execute,
             )
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
         payload = {"ok": False, "error": str(exc)}
     print_payload(payload, output_format(args), render_native_child)
     return 0 if payload["ok"] else 1

@@ -546,6 +546,9 @@ def build_replan_action_packet(
     agent_id: str | None = None,
     bounded_research_frontier: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    settlement_packet = obligation.get("settlement_action_packet")
+    if isinstance(settlement_packet, Mapping):
+        return dict(settlement_packet)
     context = obligation.get("replan_context")
     if not isinstance(context, Mapping):
         raise TypeError("replan obligation is missing host-projected context")

@@ -232,6 +232,7 @@ class ChatSessionStore(ChatIngressStore):
         self,
         *,
         goal_id: str,
+        goal_instance_id: str | None = None,
         agent_id: str,
         adapter_kind: str,
         upstream_thread_id: str,
@@ -288,6 +289,16 @@ class ChatSessionStore(ChatIngressStore):
             "schema_version": CHAT_SESSION_SCHEMA_VERSION,
             "session_id": token,
             "goal_id": normalized_goal_id,
+            **(
+                {
+                    "goal_instance_id": _opaque_id(
+                        goal_instance_id,
+                        field="goal_instance_id",
+                    )
+                }
+                if goal_instance_id is not None
+                else {}
+            ),
             "agent_id": normalized_agent_id,
             "executor_endpoint_id": normalized_executor_endpoint_id,
             "adapter_kind": normalized_adapter_kind,
@@ -549,6 +560,41 @@ class ChatSessionStore(ChatIngressStore):
         agent_id: str,
         channel_id: str | None = None,
     ) -> dict[str, Any] | None:
+        candidates = self.resumable_session_candidates(
+            goal_id=goal_id,
+            agent_id=agent_id,
+            channel_id=channel_id,
+        )
+        return max(candidates, key=lambda item: str(item.get("updated_at") or ""), default=None)
+
+    def resumable_session_candidates(
+        self,
+        *,
+        goal_id: str | None,
+        agent_id: str,
+        channel_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return matching storage facts without deciding Goal identity."""
+
+        return [
+            candidate
+            for candidate in self.session_candidates(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                channel_id=channel_id,
+            )
+            if candidate.get("status") in RESUMABLE_SESSION_STATES
+        ]
+
+    def session_candidates(
+        self,
+        *,
+        goal_id: str | None,
+        agent_id: str,
+        channel_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return matching Session records without lifecycle filtering."""
+
         if goal_id is None and channel_id is None:
             raise ValueError("channel_id is required when goal_id is omitted")
         selected_channel = channel_id or f"goal.{goal_id}"
@@ -559,11 +605,10 @@ class ChatSessionStore(ChatIngressStore):
                 payload.get("schema_version") == CHAT_SESSION_SCHEMA_VERSION
                 and (goal_id is None or payload.get("goal_id") == goal_id)
                 and payload.get("agent_id") == agent_id
-                and payload.get("status") in RESUMABLE_SESSION_STATES
                 and _session_channel(payload) == selected_channel
             ):
                 candidates.append(payload)
-        return max(candidates, key=lambda item: str(item.get("updated_at") or ""), default=None)
+        return candidates
 
     def list_sessions(
         self,
@@ -958,6 +1003,7 @@ class ChatSessionStore(ChatIngressStore):
         *,
         client_turn_id: str,
         message: str,
+        goal_instance_id: str | None = None,
         ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
         origin: str = "external",
     ) -> tuple[dict[str, Any], bool]:
@@ -999,6 +1045,16 @@ class ChatSessionStore(ChatIngressStore):
                     "schema_version": CHAT_TURN_SCHEMA_VERSION,
                     "turn_id": turn_id,
                     "session_id": session_id,
+                    **(
+                        {
+                            "goal_instance_id": _opaque_id(
+                                goal_instance_id,
+                                field="goal_instance_id",
+                            )
+                        }
+                        if goal_instance_id is not None
+                        else {}
+                    ),
                     "client_turn_id": client_id,
                     "status": "queued",
                     "message": str(message),
@@ -1111,6 +1167,7 @@ class ChatSessionStore(ChatIngressStore):
         session_id: str,
         *,
         host_claim_id: str | None = None,
+        admitted_goal_instance_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Atomically make the oldest live queued Turn active for its Session."""
 
@@ -1135,6 +1192,14 @@ class ChatSessionStore(ChatIngressStore):
                         and active.get("host_claim_id") == host_claim_id
                         and active.get("status") in {"starting", "running"}
                     ):
+                        if admitted_goal_instance_id is not None and (
+                            active.get("goal_instance_id") != admitted_goal_instance_id
+                            or active.get("admitted_goal_instance_id")
+                            != admitted_goal_instance_id
+                        ):
+                            raise ValueError(
+                                "active Turn Goal instance admission is invalid"
+                            )
                         return active
                     return None
                 for turn in self._settle_expired_queued_turns(
@@ -1142,6 +1207,12 @@ class ChatSessionStore(ChatIngressStore):
                     now=datetime.now(timezone.utc),
                 ):
                     turn_id = str(turn["turn_id"])
+                    if admitted_goal_instance_id is not None and (
+                        turn.get("goal_instance_id") != admitted_goal_instance_id
+                    ):
+                        raise ValueError(
+                            "queued Turn Goal instance does not match its Session"
+                        )
                     if host_claim_id:
                         now_text = utc_now()
                         turn.update(
@@ -1150,6 +1221,16 @@ class ChatSessionStore(ChatIngressStore):
                                 "host_claim_id": _opaque_id(
                                     host_claim_id,
                                     field="host_claim_id",
+                                ),
+                                **(
+                                    {
+                                        "admitted_goal_instance_id": _opaque_id(
+                                            admitted_goal_instance_id,
+                                            field="admitted_goal_instance_id",
+                                        )
+                                    }
+                                    if admitted_goal_instance_id is not None
+                                    else {}
                                 ),
                                 "started_at": turn.get("started_at") or now_text,
                                 "last_activity_at": now_text,

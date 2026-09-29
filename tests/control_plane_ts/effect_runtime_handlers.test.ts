@@ -201,6 +201,19 @@ test("runtime exposes the source-session lifetime decisions", async () => {
     ).kind,
     "commit",
   );
+  assert.deepEqual(
+    await dispatchEffectRuntimeMethod(
+      handlers,
+      "goal.chat_session.lifecycle.decide",
+      {
+        operation: "select",
+        profile_id: "source_session_v1",
+        current_goal_ref: goalRef,
+        candidates: [],
+      },
+    ),
+    { kind: "create", goal_ref: goalRef },
+  );
 });
 
 test("runtime boundary registers the quota monitor-poll transaction", async () => {

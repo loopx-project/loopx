@@ -163,6 +163,7 @@ class QuotaSettlementReadback:
     refresh_recovery: dict[str, Any] | None = None
     external_delivery: dict[str, Any] | None = None
     progress: dict[str, Any] | None = None
+    native_child_admission: dict[str, Any] | None = None
 
 
 def attach_settlement_progress(
@@ -308,6 +309,7 @@ def read_heartbeat_settlement(
     replan_obligation_id: str | None = None,
     infer_turn_instance_id: bool = False,
     allow_unbound_binding: bool = False,
+    resolve_original_binding: bool = False,
     refresh_retry: dict[str, Any] | None = None,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
@@ -325,6 +327,7 @@ def read_heartbeat_settlement(
                 "replan_obligation_id": replan_obligation_id,
                 "infer_turn_instance_id": infer_turn_instance_id,
                 "allow_unbound_binding": allow_unbound_binding,
+                **({"resolve_original_binding": True} if resolve_original_binding else {}),
                 **(
                     {"refresh_retry": refresh_retry}
                     if refresh_retry is not None
@@ -376,6 +379,7 @@ def read_heartbeat_settlement(
         refresh_recovery=_optional_readback_record(payload.get("refresh_recovery")),
         external_delivery=_optional_readback_record(payload.get("external_delivery")),
         progress=_optional_readback_record(payload.get("progress")),
+        native_child_admission=_optional_readback_record(payload.get("native_child_admission")),
         spend_run=_optional_readback_record(payload.get("spend_run")),
         heartbeat_receipt=_optional_readback_record(payload.get("heartbeat_receipt")),
         writeback_event=_optional_readback_record(payload.get("writeback_event")),

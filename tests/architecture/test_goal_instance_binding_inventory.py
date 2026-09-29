@@ -53,6 +53,7 @@ OBSERVED_OWNER_IDS = {
 PARTIALLY_ENFORCED_OWNER_IDS = {
     "first_party_host_runtime",
 }
+QUALIFIED_OWNER_IDS = {"attached_host_chat_session"}
 TYPESCRIPT_DECLARATION = re.compile(
     r"^(?:export\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
     re.MULTILINE,
@@ -162,6 +163,9 @@ def test_m1_observation_claims_are_bounded_to_the_selected_lifecycle() -> None:
         elif owner["owner_id"] in PARTIALLY_ENFORCED_OWNER_IDS:
             assert owner["m1_disposition"] == "source_exact_partial_enforcement"
             assert owner["current_identity_strength"] == "source_exact_partial"
+        elif owner["owner_id"] in QUALIFIED_OWNER_IDS:
+            assert owner["m1_disposition"] == "m3_qualified"
+            assert owner["current_identity_strength"] == "exact_goal_ref_enforced"
             assert owner["target_milestone"] == "M3"
         else:
             assert owner["m1_disposition"] == "alias_only_inventory"
