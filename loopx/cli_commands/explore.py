@@ -21,6 +21,7 @@ from ..capabilities.explore.result_log import (
     explore_result_log_path,
     load_explore_result_events,
 )
+from ..capabilities.explore.research_evidence import append_research_observation
 from ..capabilities.explore.harness_gate import GATE_STATE_DISABLED
 from ..capabilities.explore.resource_portfolio import parse_resource_counts
 from ..capabilities.explore.source_history_reconcile import (
@@ -132,6 +133,12 @@ def register_explore_commands(
     add_subcommand_format(summary)
     summary.add_argument("--goal-id", required=True)
     _add_projection_limit_args(summary)
+
+    observe = sub.add_parser("observe", help="Record typed research evidence on an existing Explore node; grants no execution or closure authority.")
+    add_subcommand_format(observe)
+    observe.add_argument("--goal-id", required=True)
+    observe.add_argument("--observation-json", required=True, help="File containing a typed_research_observation_v0 envelope.")
+    observe.add_argument("--agent-id")
 
     presentation = sub.add_parser(
         "presentation",
@@ -320,6 +327,18 @@ def render_explore_markdown(payload: dict[str, object]) -> str:
         if payload.get(key) not in (None, ""):
             lines.append(f"- {key}: `{payload.get(key)}`")
     counts = payload.get("counts")
+    research = payload.get("research_frontier")
+    if isinstance(research, dict):
+        lines.append(f"- research composition (read-only): {research['pending_count']} pending, "
+                     f"{research['observed_count']} observed, {research['ineligible_count']} ineligible")
+        for gap in research["gaps"]:
+            lines.append(f"  - {gap['gap_id']}: {gap['state']} ({gap['reason']})")
+        if research["omitted_count"]:
+            lines.append(f"  - {research['omitted_count']} additional candidates omitted from this bounded view")
+    observation = payload.get("observation")
+    if isinstance(observation, dict):
+        lines.append(f"- research observation: `{observation['explore_node_id']}`; "
+                     f"replayed={payload.get('replayed')}; written={payload.get('written')}")
     if isinstance(counts, dict):
         lines.append(
             f"- map: `{counts.get('node_count')} nodes, {counts.get('edge_count')} edges, "
@@ -520,6 +539,14 @@ def handle_explore_command(
                 supersedes=args.supersedes,
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
+        elif args.explore_command == "observe":
+            observation = json.loads(Path(args.observation_json).read_text(encoding="utf-8"))
+            if not isinstance(observation, dict):
+                raise ValueError("research observation must be an object")
+            payload = append_research_observation(
+                explore_result_log_path(runtime_root, args.goal_id), goal_id=args.goal_id,
+                observation=observation, agent_id=args.agent_id,
+            )
         elif args.explore_command == "summary":
             payload = _projection_for(args, runtime_root=runtime_root)
         elif args.explore_command == "presentation":

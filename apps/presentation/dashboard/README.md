@@ -33,10 +33,9 @@ run in the full development and packaged personal-workspace browser smokes.
 
 ## Fresh Clone Public Preview
 
-No private LoopX state is required for the first dashboard preview. The
-app bundles `examples/status.example.json` as its public-safe example source,
-so a fresh checkout can validate and open the UI before starting any local
-status server:
+No private LoopX state is required to validate the dashboard. The app bundles
+`examples/status.example.json` as its public-safe example source, and
+`smoke:demo-readiness` checks it without a local status server:
 
 ```bash
 cd apps/presentation/dashboard
@@ -45,15 +44,14 @@ npm run smoke:demo-readiness -- --skip-browser
 npm run dev:web
 ```
 
-Then open `http://127.0.0.1:5173/`. Use the bundled example source for a public
-demo, or switch to a loopback status URL only after you have started
-`loopx serve-status` locally. Do not commit `status.local.json` or live
-status exports; they can contain local registry/runtime paths and private
-project summaries.
-
-`npm run dev:web` starts only the Vite UI with the bundled example. `npm run dev`
-also starts the loopback status and Chat services and therefore requires a
-Python 3.11+ interpreter; see the development section below.
+`npm run dev:web` starts only the Vite UI at `http://127.0.0.1:5173/`. The
+workspace reads `/status.json` through the Vite proxy from `loopx serve-status`
+on port 8766 and the Chat APIs from `loopx chat` on port 8767, so without those
+services it opens on a status-load error. Start them locally, or use
+`npm run dev`, which also starts the loopback status and Chat services and
+therefore requires a Python 3.11+ interpreter; see the development section
+below. Do not commit `status.local.json` or live status exports; they can
+contain local registry/runtime paths and private project summaries.
 
 Personal Workspace owns Goal, Task, Chat, output, and report workflows. Run
 `loopx dashboard` for the installed local workspace; see the

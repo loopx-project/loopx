@@ -364,6 +364,15 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
           <CapabilityEditorStatus available={editorAvailable} t={t} description={!selected.available_scopes.includes("machine") ? t("machine.goalOnly")
               : t("machine.editorUnavailableDescription")} />
 
+          {selected.capability_id === "goal_storage" ? (
+            <section className="personal-capability-behavior-note">
+              <ShieldCheck aria-hidden size={18} />
+              <div><strong>{locale === "zh-CN" ? "仅影响此后创建的 Goal" : "Future Goals only"}</strong><p>{locale === "zh-CN"
+                ? "创建时固定选择，审核晋升后生效。已有 Goal 不变；迁移需单独备份、停止写入并结算租约。"
+                : "Fixed at creation and used after reviewed promotion. Existing Goals are unchanged; migration requires a separate backup, stopped writers and settled leases."}</p></div>
+            </section>
+          ) : null}
+
           {selected.capability_id === "periodic_report" ? (
             <section className="personal-capability-behavior-note">
               <ShieldCheck aria-hidden size={18} />

@@ -11,6 +11,7 @@ import {legacyCoordinationWriterFencePath, LEGACY_COORDINATION_WRITER_FENCE_SCHE
 import {withCanonicalWriter} from "../../loopx/control_plane/coordination/local_authority_write.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
+import {manageNewGoalStorage} from "../../loopx/control_plane/coordination/local_authority_defaults.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {inspectAuthorityFormat} from "../../loopx/control_plane/coordination/authority_format_inspection.ts";
 
@@ -54,6 +55,10 @@ test("real providers: File → SQLite → File preserves history, receipts and l
   assert.equal((await selected(root, goal)).provider, "file");
   assert.equal((await manage(request(root, first))).status, "migrated");
   assert.equal((await selected(root, goal)).provider, "sqlite");
+  const retryCreation = (provider: string) => manageNewGoalStorage({action: "initialize", runtime_root: root, goal_id: goal,
+    target: {schema_version: "loopx_new_goal_storage_target_v0", provider}});
+  assert.equal((await retryCreation("file")).status, "existing_authority_preserved");
+  assert.equal((await selected(root, goal)).provider, "sqlite");
   await append(root, 3);
   const resumed = await manage(request(root, first));
   assert.equal(resumed.status, "already_applied", JSON.stringify(resumed));
@@ -62,6 +67,8 @@ test("real providers: File → SQLite → File preserves history, receipts and l
   assert.equal((await manage(request(root, back))).status, "migrated");
   const active = await selected(root, goal);
   assert.equal(active.provider, "file");
+  assert.equal((await retryCreation("sqlite")).status, "existing_authority_preserved");
+  assert.equal((await selected(root, goal)).provider, "file");
   assert.equal((await inspectAuthorityFormat(localAuthorityProviderPaths(root, goal).marker)).provider, "file");
   const copy = await active.store.scanCommitted(null, 10);
   assert.equal(copy.status, "page");

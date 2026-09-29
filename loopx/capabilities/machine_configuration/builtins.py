@@ -28,8 +28,11 @@ def build_builtin_machine_configuration_registry() -> MachineConfigurationRegist
         todo_replan_cadence_machine_configuration_namespace,
     )
 
+    from .goal_storage import goal_storage_machine_configuration_namespace
+
     return (
         MachineConfigurationRegistry()
+        .register(goal_storage_machine_configuration_namespace())
         .register(manager_runtime_machine_configuration_namespace())
         .register(periodic_report_machine_configuration_namespace())
         .register(todo_replan_cadence_machine_configuration_namespace())

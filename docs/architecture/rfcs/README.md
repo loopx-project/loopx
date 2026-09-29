@@ -137,6 +137,14 @@ failure leaves the generated files untouched.
   - **Current boundary:** Separates generic authenticated interaction, optional
     financial execution and venue adapters. Defines shared frontend/Lark
     confirmation and automatic outcomes; no runtime or trading permission added.
+- [Provider-side authorization at effect acceptance v0](provider-effect-acceptance-v0.md)
+  ([中文版](provider-effect-acceptance-v0.zh-CN.md))
+  - **Delivery on `main`:** Design only; no runtime integration or qualified provider.
+  - **Current boundary:** Defines an opt-in provider-owned transaction that
+    orders current policy and revocation with one-use authorization, effect
+    commit, and an immutable result. Strict operations also require a current
+    source-owned Goal admission witness and an independent LoopX qualification
+    receipt. Existing behavior is unchanged.
 - [Agent Loop Effect Interpreter v0](agent-loop-effect-interpreter-v0.md)
   ([中文版](agent-loop-effect-interpreter-v0.zh-CN.md))
   - **Delivery on `main`:** Core implemented; bounded adoption continues.

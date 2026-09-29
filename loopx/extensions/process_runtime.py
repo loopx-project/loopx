@@ -35,15 +35,19 @@ def _terminate_posix_process_group(
 ) -> None:
     process_group_id = process.pid
     try:
-        os.killpg(process_group_id, signal.SIGTERM)
+        os.killpg(
+            process_group_id,
+            signal.SIGKILL if grace_seconds <= 0 else signal.SIGTERM,
+        )
     except ProcessLookupError:
         process.wait()
         return
-    _wait_for_process(process, grace_seconds)
-    try:
-        os.killpg(process_group_id, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    if grace_seconds > 0:
+        _wait_for_process(process, grace_seconds)
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     if process.poll() is None:
         process.kill()
         process.wait()
@@ -71,9 +75,15 @@ def _terminate_windows_process_tree(
     process.wait()
 
 
-def _terminate_process_tree(
+def terminate_process_tree(
     process: subprocess.Popen[bytes], grace_seconds: float
 ) -> None:
+    """Stop an owned, previously isolated process tree and reap its leader.
+
+    POSIX callers must launch with ``start_new_session=True``. Zero grace sends
+    one force-kill signal, not TERM followed by KILL against an exiting group.
+    This is OS transport only; callers own deadlines and failure decisions.
+    """
     if os.name == "posix":
         _terminate_posix_process_group(process, grace_seconds)
         return
@@ -100,11 +110,6 @@ def run_capped_process(
 ) -> CappedProcessResult:
     """Run a provider while bounding both output streams during execution."""
 
-    process_options: dict[str, object] = {}
-    if os.name == "posix":
-        process_options["start_new_session"] = True
-    elif os.name == "nt":  # pragma: no cover - exercised on Windows hosts.
-        process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     process = subprocess.Popen(
         list(argv),
         stdin=subprocess.PIPE,
@@ -113,9 +118,14 @@ def run_capped_process(
         bufsize=0,
         env=dict(env) if env is not None else None,
         cwd=cwd,
-        **process_options,
+        start_new_session=os.name == "posix",
+        creationflags=(
+            int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"))
+            if os.name == "nt" else 0
+        ),
     )
-    assert process.stdin is not None
+    stdin_stream = process.stdin
+    assert stdin_stream is not None
     assert process.stdout is not None
     assert process.stderr is not None
 
@@ -151,12 +161,12 @@ def run_capped_process(
 
     def write_stdin() -> None:
         try:
-            process.stdin.write(stdin)
+            stdin_stream.write(stdin)
         except (BrokenPipeError, OSError, ValueError):
             pass
         finally:
             try:
-                process.stdin.close()
+                stdin_stream.close()
             except (OSError, ValueError):
                 pass
 
@@ -191,13 +201,13 @@ def run_capped_process(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
-                _terminate_process_tree(process, termination_grace_seconds)
+                terminate_process_tree(process, termination_grace_seconds)
                 break
             if limit_event.wait(timeout=min(0.05, remaining)):
-                _terminate_process_tree(process, termination_grace_seconds)
+                terminate_process_tree(process, termination_grace_seconds)
                 break
     except BaseException:
-        _terminate_process_tree(process, termination_grace_seconds)
+        terminate_process_tree(process, termination_grace_seconds)
         raise
     finally:
         for thread in threads:
