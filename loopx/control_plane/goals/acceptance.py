@@ -112,16 +112,20 @@ def goal_task_validation_files_current(
 
 def validation_effect_files_current(
     *, effects: list[dict[str, Any]], registry_path: Path, goal_id: str,
+    delivery_workspace: Mapping[str, Any] | None = None,
+    validation_workspace_path: Path | None = None,
 ) -> bool:
-    """Observe declared verifier assets for an existing typed validation plan."""
+    """Observe verifier assets and explicit repository workspaces for a typed plan."""
     for effect in effects:
         pins = effect.get("validation_files", [])
         workspace = None
-        if pins:
+        if pins or effect.get("task_repository"):
             workspace, failure = _resolve_completion_validation_workspace(
                 registry_path=registry_path, goal_id=goal_id,
-                task_repository=effect.get("task_repository"), delivery_workspace=None,
-                validation_workspace_path=None, label=effect["validation_label"],
+                task_repository=effect.get("task_repository"),
+                delivery_workspace=delivery_workspace,
+                validation_workspace_path=validation_workspace_path,
+                label=effect["validation_label"],
             )
             if failure is not None:
                 return False
