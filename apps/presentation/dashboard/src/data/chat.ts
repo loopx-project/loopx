@@ -874,6 +874,9 @@ export const CHAT_STREAM_STALL_TIMEOUT_MS = 45_000;
 // Resolves early when the caller aborts, so the next attempt sees the abort
 // instead of opening a connection the caller no longer wants.
 function waitForRetry(ms: number, signal?: AbortSignal) {
+  // A callback may abort while handling the reconnect phase, before this wait
+  // starts listening; that abort must not sit out the backoff.
+  if (signal?.aborted) return Promise.resolve();
   return new Promise<void>((resolve) => {
     const done = () => {
       globalThis.clearTimeout(timer);

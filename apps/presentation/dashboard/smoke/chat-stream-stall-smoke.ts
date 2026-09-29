@@ -84,6 +84,21 @@ try {
   assert.deepEqual(requests, [""], "no connection opens after the caller aborts during backoff");
   assert.deepEqual(backoffEvents.map((event) => event.payload.method), ["client/reconnect"]);
 
+  // An abort from the reconnect phase's own callback ends the stream without
+  // sitting out the backoff.
+  requests.length = 0;
+  serve = () => new Response("unavailable", { status: 503 });
+  const onPhase = new AbortController();
+  let phaseAt = 0;
+  const onPhaseRun = streamChatTurn(eventsUrl, (event) => {
+    if (event.payload.method !== "client/reconnect") return;
+    phaseAt = Date.now();
+    onPhase.abort();
+  }, onPhase.signal);
+  await assert.rejects(onPhaseRun, isAbort);
+  assert.ok(phaseAt > 0 && Date.now() - phaseAt < 200, "an abort from the reconnect callback skips the backoff");
+  assert.deepEqual(requests, [""], "no connection opens after the reconnect callback aborts");
+
   // An abort while a read waits ends that read without reconnecting.
   requests.length = 0;
   serve = (_url, signal) => new Response(silentAfter(null, signal), { status: 200 });
