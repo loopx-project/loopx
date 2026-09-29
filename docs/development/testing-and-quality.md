@@ -402,6 +402,18 @@ Use `--output .local/semantic-inventory.json` only when an exported report is us
 `--output <path> --check` checks that explicit report without repairing it.
 词表、owner 与预算继续入库并受检查；结构清单按需计算，无须为普通 PR 补生成文件。
 
+The same premerge semantic smoke validates the tracked project-registry I/O
+census, including call-site coordinates and direct-I/O classifications, using
+its existing tracked-product source policy. After moving a registered call, run
+`uv run python scripts/generate_project_registry_io_manifest.py` and review the
+diff; new direct I/O still requires classification. This is a source-checkout
+check requiring Git and Node development dependencies, not an installed-App
+health check. No model calls are involved.
+
+同一 premerge 语义检查也会校验项目注册表 I/O 清单，复用已有产品源码扫描规则，检查调用
+位置与直接 I/O 分类。移动调用后重新生成并审阅清单；新增直接 I/O 仍需分类。
+这属于需要 Git 和 Node 开发依赖的源码检查，不是安装版 App 健康检查，也不调用模型。
+
 Confirm the interpreter and imported checkout when diagnosing a mismatch:
 
 ```bash

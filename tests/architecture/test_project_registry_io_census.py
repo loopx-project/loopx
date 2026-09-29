@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import copy
 import json
+import runpy
 from pathlib import Path
+
+import pytest
 
 from loopx.semantics.inventory import SourceFile
 from loopx.semantics.project_registry_io import (
@@ -168,3 +171,18 @@ def test_checked_in_project_registry_io_manifest_is_current() -> None:
         (REPO_ROOT / PROJECT_REGISTRY_IO_MANIFEST).read_text(encoding="utf-8")
     )
     assert validate_project_registry_io_manifest(REPO_ROOT, manifest) == []
+
+
+def test_premerge_semantic_smoke_rejects_moved_registry_site(tmp_path: Path) -> None:
+    # Moving a call must fail the same smoke selected by canary premerge,
+    # even when the site's identity and classification are unchanged.
+    manifest = json.loads(
+        (REPO_ROOT / PROJECT_REGISTRY_IO_MANIFEST).read_text(encoding="utf-8")
+    )
+    manifest["sites"][0]["line"] += 1
+    stale_manifest = tmp_path / "stale-census.json"
+    stale_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+    smoke = runpy.run_path(str(REPO_ROOT / "examples/semantic-vocabulary-drift-smoke.py"))
+    smoke["main"].__globals__["PROJECT_REGISTRY_IO_MANIFEST"] = stale_manifest
+    with pytest.raises(smoke["Drift"], match="project registry I/O site metadata changed"):
+        smoke["main"]()
