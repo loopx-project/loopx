@@ -10,6 +10,13 @@ supersede semantics. OpenViking owns those behaviors. LoopX only derives the
 project peer, performs bounded `find` calls, and returns the existing semantic
 preference provider protocol for a function-owned application and receipt.
 
+The separate [explicit Agent preference lifecycle](../README.md#explicit-agent-preferences)
+uses a narrower Goal/Agent scope and supports immediate current-state correction.
+This project-peer recall adapter is not yet a replacement for that lifecycle.
+See the [memory-service qualification requirements](../README.md#memory-service-providers-and-the-next-integration-boundary)
+before adding Agent-scoped writes, retirement or provider migration; optional
+recall activation does not export the local explicit-preference journal.
+
 ## Scope contract
 
 - Identity comes from the normalized Git `origin`, never the checkout path.

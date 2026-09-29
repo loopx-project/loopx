@@ -535,8 +535,16 @@ native Turn entry points disclose an exact current read. This is not a universal
 memory database, an authorization grant or proof of learned-experience utility.
 See [operation and boundaries](../../../loopx/capabilities/semantic_preference/README.md#explicit-agent-preferences).
 Remaining acceptance includes authenticated external-message ingestion,
-Dashboard/Lark inspection, cross-host migration and measured decision utility
-for episodic recall. Do not count this slice as completion of all M0–M5.
+Dashboard/Lark inspection, cross-host migration, memory-service provider
+qualification (including OpenViking, beyond interchangeable storage drivers),
+and measured decision utility
+for episodic recall. Reuse the existing semantic-preference extension lifecycle:
+project-scoped recall is already available, while explicit Goal/Agent correction,
+retirement and provider cutover need their own real-service readback. A top-k
+recall response does not qualify as a complete current preference view; service
+outages or delayed indexing must not resurrect revoked advice. The
+[memory-service acceptance boundary](../../../loopx/capabilities/semantic_preference/README.md#memory-service-providers-and-the-next-integration-boundary)
+defines the next independent slice. Do not count this slice as completion of all M0–M5.
 
 Next, qualify one **correction → fresh-session decision** journey before adding
 a composition planner: persist an authorized correction, show the affected

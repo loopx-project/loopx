@@ -238,6 +238,59 @@ No copying host conversations, cross-home rebinding or implicit global corpus.
 Moving the Goal state file requires an explicit context migration; it is not
 silently treated as the same private scope.
 
+### Memory service providers and the next integration boundary
+
+The extension boundary is a **memory service**, not just a File/SQLite driver.
+A provider such as OpenViking may own extraction, semantic organization,
+retrieval and corpus maintenance. The existing
+[OpenViking extension](docs/openviking-project-peer.md) already implements
+optional project-peer recall. Keep its extension installation, permission,
+doctor and configuration lifecycle; do not create another provider registry.
+The built-in preference journal is one zero-service implementation of explicit
+current context, not the mandatory backend for every future memory service.
+
+Distinguish the operations callers actually need:
+
+| Caller outcome | Provider obligation |
+| --- | --- |
+| Recall relevant experience | Scoped ranked candidates, source references and bounded context; a missing hit does not prove deletion. |
+| Read current explicit preferences | Complete current subjects and retirement/expiry markers for the exact scope, with a freshness/revision result; top-k search alone cannot implement this. |
+| Correct or retire a preference | Acknowledge the identified subject and new revision, preserve source/lineage, reject stale writes and make uncertain retries observable. |
+| Change the memory service | Preserve scope and stable subjects, verify current state and retirements, and cut over one binding after readback; do not silently create an empty corpus. |
+
+These are acceptance requirements for extending the existing service protocol,
+not newly shipped operations of the current OpenViking recall adapter. A
+service adapter must not be forced to implement LoopX's entire `AuthorityStore`:
+that interface is the built-in journal's persistence implementation. Provider
+integration belongs at the caller's memory operation boundary. The common TS
+layer owns response validation, exact scope and application of current user
+corrections; provider-specific code owns transport, URI mapping, extraction and
+index readiness. No hard-coded OpenViking URI belongs in the host prompt.
+
+OpenViking's [memory API](https://docs.openviking.ai/en/api/16-memory) separates
+extraction from retrieval; its current documentation directs context recall to
+`search(mode="context")`. The LoopX adapter currently uses `find`, so version
+negotiation and deployment-specific qualification remain necessary. Its
+[session API](https://docs.openviking.ai/en/api/05-sessions) and
+[file-system API](https://docs.openviking.ai/en/api/03-filesystem) provide useful
+update/deletion surfaces, but those docs alone do not establish LoopX's
+concurrent correction or fresh-session contract.
+
+Before qualifying it for explicit Agent preferences, bind the authenticated
+provider namespace to the selected Goal/Agent (the existing project peer is
+broader), then prove correction → extraction/index completion → direct read →
+scoped recall → fresh-session use on a real isolated service. Include a stale
+index returning the old statement, delayed/failed deletion, concurrent updates,
+uncertain write retry and provider unavailability. Retirement must suppress old
+advice immediately at the application boundary; an adapter that cannot attest
+fresh current state remains recall-only. It must not become the current-state
+owner merely because it can answer a search query.
+
+A later binding change needs an explicit, backed-up migration with retirement
+and revision readback. Do not send existing private preferences to a service
+just because its extension is installed. This PR does not activate OpenViking,
+export private memory, or claim interchangeable memory services are delivered.
+
 ### Read, remember, correct and retire
 
 ```bash
@@ -290,7 +343,10 @@ a newly fetched revision, which would hide a concurrent correction.
 
 After any preference has been committed, CLI quota admission and native Turn
 planning/execution disclose a required owner-local read through the existing
-turn-start hook. Counts and the read command enter the turn envelope; private
+turn-start hook. Every required read and its exact executable command survive
+Turn compaction, including long quoted paths and more than five hooks; size
+excess remains a diagnostic rather than permission to drop obligations.
+Counts and the read command enter the turn envelope; private
 statements and source quotes do not enter generic quota/status or public sinks.
 The command reads all current scoped entries, including retired/expired markers,
 instead of relying on embedding or keyword ranking to find a prohibition.
