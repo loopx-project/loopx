@@ -95,6 +95,46 @@ return context. First-screen changes still require the repository's preview gate
 No external screenshot, private incident transcript or proprietary asset is
 redistributed by this proposal.
 
+### Waiting is part of the conversation
+
+One shared TypeScript activity surface serves manager and Goal conversations,
+including the compact overview receipt. It appears when the user sends, before
+executor session preparation can block. The shortest journey is send → visible
+receipt → observed work or actionable failure → readable answer in the same place.
+
+- Show the latest reported activity and request elapsed time on one quiet line.
+  Time measures waiting, not percent complete or proof of active computation.
+  View changes retain the request timestamp; recovery uses the recorded turn
+  timestamp when available, and omits duration when it is unknown.
+- Keep tool/phase events in an expandable recent-activity list. Render only
+  upstream observations; never simulate phases, expose hidden reasoning, or
+  infer progress from elapsed time. A period without new events has an explicit
+  waiting caption, not an invented failure or continually changing animation.
+- Before dispatch, cancel only session preparation and state that the request
+  was not submitted. After acceptance, existing exact-turn steering/interrupt
+  controls own effects; stopping observation is not stopping the worker.
+- The compact receipt and full conversation offer the same controls. Failure
+  ends the live indicator, preserves the request/partial answer and names the
+  next supported action. A completed delegation still shows receiver adoption
+  separately; finishing the manager turn does not complete the delegated work.
+
+Primary-source research (2026-09-29), not hands-on certification of other apps:
+[Perplexity Pro Search](https://www.perplexity.ai/help-center/en/articles/10352903-what-is-pro-search)
+documents research decomposition and source links;
+[Cursor Agent](https://cursor.com/docs/agent/overview) distinguishes queued
+follow-ups from steering an active run;
+[Gemini Deep Research](https://support.google.com/gemini/answer/15719111?hl=en)
+documents a reviewable plan and completion notification. Borrow observability,
+control and clear completion boundaries, not provider-specific activity names.
+Notifications and durable cross-restart timing remain separate acceptance;
+a browser timer does not implement either.
+
+Decisive regression: delay executor connection, cancel before dispatch, retry
+through startup failure, then observe a streamed turn while switching between
+overview and conversation. Verify stable elapsed time, quiet waiting, exact-turn
+controls, preserved partial output and no duplicate submission. Exercise the
+packaged UI with synthetic fixtures and qualify the chosen real query separately.
+
 ## Current owners and gaps
 
 | Boundary inspected | Existing implementation | Gap to address through that owner |
@@ -381,3 +421,8 @@ prompt/case hashes, request settings, token usage and repeat count. This layer
 qualifies model interpretation of supplied evidence, not live discovery, actual
 dispatch, stop enforcement or full GQ01/GQ02 completion. Packaged browser and
 real collaboration transport tests qualify those separate boundaries.
+
+The same conversation surface preserves reading position during streaming: output
+follows only while the reader stays near the bottom, and a latest-message action
+restores following. Multiline drafts expand within a bounded composer; suggestions
+remain on overview/empty entry states rather than displacing an active conversation.

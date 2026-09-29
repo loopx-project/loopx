@@ -1914,3 +1914,6 @@
 .personal-action-form-limit { margin: 0; color: var(--pw-amber); font-size: 13px; }
 
 .personal-capability-supported-scopes { margin: 6px 0; color: var(--pw-muted); font-size: 12px; line-height: 1.5; }
+
+.personal-conversation-latest { display: block; margin: 0 auto 10px; padding: 7px 14px; border: 1px solid var(--pw-line); border-radius: 20px; background: var(--pw-bg); color: var(--pw-text); font: inherit; font-size: 12px; cursor: pointer; }
+.personal-composer-hint { padding-top: 7px; color: var(--pw-muted); font-size: 11px; text-align: center; }

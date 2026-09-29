@@ -37,6 +37,7 @@ import { GoalLoopXMode } from "./goal-loopx-mode";
 import { GoalTeamResults } from "./goal-team-results";
 import { GoalManagedResults } from "./goal-managed-results";
 import { sendLoopXMessage, type LoopXModeSnapshot } from "../../data/chat";
+import { MessageActivity } from "./message-activity";
 import { ChannelTimeline } from "./channel-timeline";
 import { ContextDrawer } from "./context-drawer";
 import { GoalSidebar } from "./goal-sidebar";
@@ -263,6 +264,9 @@ function ManagerConversationTray({
   onReviewGoalDraft,
   onSuggestReply,
   onOpenConversation,
+  onInterruptTurn,
+  onSteerTurn,
+  onCancelPreparation,
   title,
 }: {
   agentLabel?: string;
@@ -272,6 +276,9 @@ function ManagerConversationTray({
   onReviewGoalDraft?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<void>;
   onSuggestReply?: (text: string) => void;
   onOpenConversation: () => void;
+  onInterruptTurn?: (turnId: string) => Promise<void>;
+  onSteerTurn?: (turnId: string, text: string, ingressId: string) => Promise<void>;
+  onCancelPreparation?: () => void;
   title?: string;
 }) {
   const { t } = useWorkspaceI18n();
@@ -329,7 +336,7 @@ function ManagerConversationTray({
             <strong>{message.role === "user" ? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
             <div className="personal-manager-conversation-bubble">
               {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
-              {message.pending ? <small>{t("conversation.agentPending")}</small> : null}
+              {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn} onCancelPreparation={onCancelPreparation} /> : null}
               {message.role === "assistant" && !message.pending && message.goalDraft ? <GoalDraftCard draftId={`${message.sourceSessionId ?? ""}:${message.id}`} draft={message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
               <CollaborationCard request={message.collaboration} />
               <ReturnDeliveryStatus delivery={message.returnDelivery} />
@@ -799,6 +806,8 @@ export function PersonalWorkspacePage({
   const digestSinceRef = useRef(Number.NaN);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const channelScrollRef = useRef<HTMLDivElement>(null);
+  const followConversationRef = useRef(true);
+  const [showLatestMessage, setShowLatestMessage] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const lifecyclePendingGoalIdsRef = useRef(new Set<string>());
@@ -812,6 +821,12 @@ export function PersonalWorkspacePage({
     setImageAttachments([]);
     setImageAttachmentError(null);
   }, [composerDraftKey]);
+  useEffect(() => {
+    const input = composerRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+  }, [composer, selectedGoalId, managerChatOpen]);
   function setComposerDraft(key: string, value: string) {
     setDrafts((current) => {
       const next = { ...current };
@@ -1001,15 +1016,26 @@ export function PersonalWorkspacePage({
         || managerChannelProposalIds.includes(item.proposal.previewId)))),
     [items, sessionProposalIds, managerChannelProposalIds],
   );
-  const lastChatItem = managerChatItems[managerChatItems.length - 1];
-  const latestMessageTextLength = lastChatItem?.kind === "message" ? lastChatItem.message.text.length : 0;
+  const conversationOpen = selectedGoal ? selectedGoalTab === "chat" : managerChatOpen;
+  const conversationMessages = selectedGoal ? goalMessages : managerMessages;
+  const latestMessage = conversationMessages.at(-1);
+  const latestMessageTextLength = latestMessage?.text.length ?? 0;
+  function scrollToLatestMessage() {
+    followConversationRef.current = true;
+    setShowLatestMessage(false);
+    const scroller = channelScrollRef.current;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
   useEffect(() => {
-    if (!managerChatOpen || !channelScrollRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (channelScrollRef.current) channelScrollRef.current.scrollTop = channelScrollRef.current.scrollHeight;
-    });
+    followConversationRef.current = true;
+    setShowLatestMessage(false);
+  }, [selectedGoalId, selectedAgentId, conversationOpen]);
+  useEffect(() => {
+    if (!conversationOpen || !followConversationRef.current) return;
+    const frame = window.requestAnimationFrame(scrollToLatestMessage);
     return () => window.cancelAnimationFrame(frame);
-  }, [managerChatItems.length, managerChatOpen, latestMessageTextLength]);
+  }, [conversationOpen, selectedGoalId, selectedAgentId, conversationMessages.length,
+    latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length]);
   const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {
     if (selection?.kind === "settings") return null;
     if (selection?.kind === "attention") return { kind: "attention", item: refreshAttention(selection.item, model.attentionHistory ?? model.userTodos) };
@@ -1572,6 +1598,8 @@ export function PersonalWorkspacePage({
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
     if (!message || sending) return;
+    followConversationRef.current = true;
+    setShowLatestMessage(false);
     if (loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id && conversationSessionId) {
       if (pendingImages.length) {
         setImageAttachmentError(locale === "zh-CN" ? "运行中的消息投递暂不支持图片，请暂停后发送。" : "Pause execution before sending images.");
@@ -1754,7 +1782,14 @@ export function PersonalWorkspacePage({
               key={`${selectedGoalId}:${selectedAgentId}`} sessionId={conversationSessionId} onChange={setLoopxMode}
               onExecute={(operation, settings) => callbacks.onStartLoopX?.(operation, selectedAgentId, selectedGoalId, settings)}
             /> : null}
-          <div className="personal-channel-scroll" data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}>
+          <div className="personal-channel-scroll" data-active-goal-view={selectedGoal ? selectedGoalTab : undefined} ref={channelScrollRef}
+            onScroll={(event) => {
+              if (!conversationOpen) return;
+              const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+              const nearBottom = scrollHeight - scrollTop - clientHeight < 64;
+              followConversationRef.current = nearBottom;
+              setShowLatestMessage(!nearBottom);
+            }}>
             {selectedGoalId && selectedGoalTab === "chat" && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
               sessionId={conversationSessionId} zh={locale === "zh-CN"}
@@ -1822,6 +1857,8 @@ export function PersonalWorkspacePage({
                       onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
                         ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId)
                         : undefined}
+                      onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
+                        ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
                       onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
                         ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId)
                         : undefined} />
@@ -1834,6 +1871,8 @@ export function PersonalWorkspacePage({
                 onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
                   ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!("manager", turnId, text, ingressId)
                   : undefined}
+                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
+                  ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
                   ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId)
                   : undefined}
@@ -1847,6 +1886,9 @@ export function PersonalWorkspacePage({
             ) : <>
             {!selectedGoal && !managerChatOpen && managerConversationReceiptVisible && managerMessages.length ? (
               <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
+                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!("manager") : undefined}
+                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId) : undefined}
+                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!("manager", turnId, text, ingressId) : undefined}
                 messages={managerMessages}
                 onClose={() => setManagerConversationReceiptVisible(false)}
                 onOpenConversation={() => {
@@ -1857,6 +1899,9 @@ export function PersonalWorkspacePage({
             {selectedGoal && selectedGoalTab !== "chat" && goalConversationReceiptVisible && goalMessages.length ? (
               <ManagerConversationTray onReviewGoalDraft={reviewGoalDraft} onSuggestReply={suggestReply}
                 agentLabel={selectedAgentLabel}
+                onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
+                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId) : undefined}
+                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId) : undefined}
                 messages={goalMessages}
                 onClose={() => setGoalConversationReceiptVisible(false)}
                 onDraftTask={selectedGoalTab === "tasks" ? (reply) => {
@@ -1873,7 +1918,10 @@ export function PersonalWorkspacePage({
                 <button aria-label={t("common.closeActionReceipt")} onClick={() => setActionFeedback(null)} type="button"><X size={14} /></button>
               </div>
             ) : null}
-            <details className="personal-composer-tools" key={selectedGoalId ?? "manager"}>
+            {conversationOpen && showLatestMessage ? <button className="personal-conversation-latest" type="button" onClick={scrollToLatestMessage}>
+              {locale === "zh-CN" ? "回到最新消息 ↓" : "Latest message ↓"}
+            </button> : null}
+            {(!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={selectedGoalId ?? "manager"}>
               <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
             {selectedGoal ? (
               <div className="personal-quick-prompts">
@@ -1890,7 +1938,7 @@ export function PersonalWorkspacePage({
                 <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
               </div>
             )}
-            </details>
+            </details> : null}
             {actionDraft ? <WorkspaceActionForm draft={actionDraft} onClose={() => setActionDraft(null)} onPreview={(request) => createPreview(request)} /> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
@@ -1934,13 +1982,16 @@ export function PersonalWorkspacePage({
                   }
                 }}
                 onPaste={handleComposerPaste}
-                placeholder={selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : t("composer.managerPlaceholder")}
+                placeholder={sending ? (locale === "zh-CN" ? "可以先写下后续问题…" : "Draft your next message…") : selectedGoal ? t("composer.goalPlaceholder", { goal: selectedGoal.title }) : t("composer.managerPlaceholder")}
                 ref={composerRef}
                 rows={1}
                 value={composer}
               />
               <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || sending} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
+            {conversationOpen ? <div className="personal-composer-hint">{sending
+              ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")
+              : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </>}
           </div>
         </div>

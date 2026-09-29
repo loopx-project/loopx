@@ -11,6 +11,13 @@ export const conversationInputScenario = {
     const { page, api, errors, close } = context;
     try {
       const composer = page.getByLabel("向 LoopX 发送消息");
+      const singleLineHeight = (await composer.boundingBox()).height;
+      await composer.fill("第一行\n第二行\n第三行\n第四行");
+      await page.waitForFunction(() => document.querySelector('textarea[aria-label="向 LoopX 发送消息"]').clientHeight > 70);
+      assert.ok((await composer.boundingBox()).height > singleLineHeight, "multiline draft grows without hiding text");
+      await composer.press("Shift+Enter");
+      assert.equal(api.turnRequests.length, 0, "newline does not submit the draft");
+      await composer.fill("");
       async function send(text) {
         const count = api.turnRequests.length;
         const previews = api.actionPreviews.length;
@@ -41,6 +48,7 @@ export const conversationInputScenario = {
       const previews = api.actionPreviews.length;
       const writes = api.durableWriteCount;
       await composer.fill("这段话还没发，不要丢。");
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Overview|概览)$/ }).click();
       await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "配置定时检查", exact: true }).click();
       const schedule = page.getByRole("dialog", { name: "配置定时检查", exact: true });
