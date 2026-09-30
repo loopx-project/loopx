@@ -23,13 +23,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
-import re
 from typing import Any
 
 from ...file_lock import LOCK_HOLDER_LIVE, lock_holder_liveness
 from ..collaboration.inbox import _hash as manager_context_hash
 from ..collaboration.inbox import _read as read_manager_context_record
 from ..collaboration.inbox import _root as manager_context_root
+from ..content_digest import BARE_SHA256_PATTERN
 from ..coordination.local_authority import read_canonical_todos_if_promoted
 from ..runtime.time import now_utc, parse_timestamp
 from ..todos.contract import normalize_todo_claimed_by
@@ -60,7 +60,6 @@ _LANE_PRECEDENCE = (
 LEASE_STATUS_ACTIVE = "active"
 LEASE_STATUS_UNAVAILABLE = "unavailable"
 _LANE_HOLDER_FIELDS = ("host", "pid", "acquired_at")
-_JOURNAL_ADDRESS = re.compile(r"[a-f0-9]{64}")
 # Observations that still have a transition in the delegation owner
 # (`loopx/control_plane/collaboration/delegation.ts`); `accepted` and `rejected`
 # are final, and an unlisted status is not evidence of a running worker.
@@ -130,7 +129,7 @@ def _delegation_worker_agents(
         except OSError:
             continue
         for path in rows:
-            if not _JOURNAL_ADDRESS.fullmatch(path.stem) or path.is_symlink() or not path.is_file():
+            if not BARE_SHA256_PATTERN.fullmatch(path.stem) or path.is_symlink() or not path.is_file():
                 continue
             liveness, holder = lock_holder_liveness(path)
             acquired_at = parse_timestamp(holder.get("acquired_at"))
