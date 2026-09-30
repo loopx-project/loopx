@@ -67,7 +67,9 @@ uv run python scripts/generate_semantic_inventory.py --changed-from HEAD
 ```
 
 The command compares the named Git baseline with committed, staged, and working
-tree source changes. It does not discover untracked files; include each intended
+tree source changes, and reads the Git index and the working tree as separate
+snapshots so a staged addition survives a restored working file. It does not
+discover untracked files; include each intended
 new source explicitly, for example
 `--include-untracked loopx/control_plane/new_contract.ts`. It reports supported
 candidate carriers, registered-vocabulary reuse hints, and the disposition

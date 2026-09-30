@@ -90,6 +90,25 @@ def _read_source(repo_root: Path, relative: str) -> SourceFile:
     return SourceFile(path=relative, suffix=path.suffix, text=text)
 
 
+def _worktree_source(repo_root: Path, relative: str) -> SourceFile | None:
+    """Read the working-tree copy, or report its absence when only staged."""
+    if not (repo_root / relative).is_file():
+        return None
+    return _read_source(repo_root, relative)
+
+
+def _index_source(repo_root: Path, relative: str) -> SourceFile | None:
+    """Read the staged blob so an index-only addition is never overwritten."""
+    payload = _run_git(repo_root, ["show", f":{relative}"], allow_missing=True)
+    if payload is None:
+        return None
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeError as error:
+        raise DevelopmentProbeError(f"index source is not UTF-8: {relative}") from error
+    return SourceFile(path=relative, suffix=Path(relative).suffix, text=text)
+
+
 def _baseline_source(
     repo_root: Path, baseline: str, relative: str
 ) -> SourceFile | None:
@@ -116,7 +135,12 @@ def collect_changed_sources(
     explicit_untracked: Iterable[str] = (),
     root: str = DEFAULT_ROOT,
 ) -> tuple[str, list[ChangedSource]]:
-    """Read changed tracked sources and explicitly named untracked sources."""
+    """Read every changed source from the Git snapshot that owns its content.
+
+    The index and the working tree are enumerated and read independently, so a
+    staged addition survives a restored worktree file, and disjoint staged and
+    worktree values are both inspected instead of the latter hiding the former.
+    """
     resolved_payload = _run_git(
         repo_root,
         ["rev-parse", "--verify", "--end-of-options", f"{baseline}^{{commit}}"],
@@ -124,17 +148,32 @@ def collect_changed_sources(
     assert resolved_payload is not None
     resolved = resolved_payload.decode("ascii").strip()
 
-    changed = _nul_paths(
+    committed = _nul_paths(
         _run_git(
             repo_root,
-            ["diff", "--name-only", "-z", "--diff-filter=ACMR", resolved, "--", root],
+            [
+                "diff",
+                "--name-only",
+                "-z",
+                "--diff-filter=ACMR",
+                resolved,
+                "HEAD",
+                "--",
+                root,
+            ],
         )
     )
     staged = _nul_paths(
-        _run_git(repo_root, ["diff", "--name-only", "-z", "--cached", "--", root])
+        _run_git(
+            repo_root,
+            ["diff", "--name-only", "-z", "--cached", "--diff-filter=ACMR", "--", root],
+        )
     )
     working = _nul_paths(
-        _run_git(repo_root, ["diff", "--name-only", "-z", "--", root])
+        _run_git(
+            repo_root,
+            ["diff", "--name-only", "-z", "--diff-filter=ACMR", "--", root],
+        )
     )
 
     requested_untracked: set[str] = set()
@@ -162,32 +201,47 @@ def collect_changed_sources(
         requested_untracked.add(relative)
 
     results: list[ChangedSource] = []
-    for relative in sorted(changed | requested_untracked):
+    for relative in sorted(committed | staged | working | requested_untracked):
         if relative in requested_untracked:
-            scope = "explicit_untracked"
-            before = None
-        else:
-            try:
-                relative = _validated_source_path(relative, root=root)
-            except DevelopmentProbeError:
-                continue
-            if relative in staged and relative in working:
-                scope = "staged_and_working_tree"
-            elif relative in staged:
-                scope = "staged"
-            elif relative in working:
-                scope = "working_tree"
-            else:
-                scope = "committed_since_baseline"
-            before = _baseline_source(repo_root, resolved, relative)
-        results.append(
-            ChangedSource(
-                path=relative,
-                scope=scope,
-                before=before,
-                after=_read_source(repo_root, relative),
+            results.append(
+                ChangedSource(
+                    path=relative,
+                    scope="explicit_untracked",
+                    before=None,
+                    after=_read_source(repo_root, relative),
+                )
             )
-        )
+            continue
+        try:
+            relative = _validated_source_path(relative, root=root)
+        except DevelopmentProbeError:
+            continue
+        before = _baseline_source(repo_root, resolved, relative)
+        baseline_text = before.text if before is not None else None
+        index = _index_source(repo_root, relative)
+        worktree = _worktree_source(repo_root, relative)
+        if index is not None and index.text != baseline_text:
+            results.append(
+                ChangedSource(
+                    path=relative,
+                    scope="staged" if relative in staged else "committed_since_baseline",
+                    before=before,
+                    after=index,
+                )
+            )
+        if (
+            worktree is not None
+            and worktree.text != baseline_text
+            and (index is None or worktree.text != index.text)
+        ):
+            results.append(
+                ChangedSource(
+                    path=relative,
+                    scope="working_tree",
+                    before=before,
+                    after=worktree,
+                )
+            )
     return resolved, results
 
 
@@ -272,6 +326,7 @@ def build_development_probe(
         "advisory": True,
         "baseline": baseline,
         "changed_source_count": len(changes),
+        "changed_path_count": len({change.path for change in changes}),
         "candidate_count": len(candidates),
         "candidates": candidates,
         "scope_limitations": list(_SCOPE_LIMITATIONS),
@@ -283,7 +338,8 @@ def render_development_probe(report: dict[str, Any]) -> str:
         "semantic coinage probe (advisory; findings do not fail the command)",
         f"baseline: {report['baseline']}",
         (
-            f"changed sources: {report['changed_source_count']}; "
+            f"changed sources: {report['changed_path_count']} paths, "
+            f"{report['changed_source_count']} snapshots; "
             f"supported candidates: {report['candidate_count']}"
         ),
     ]
