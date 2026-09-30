@@ -506,6 +506,14 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
                     text,
                     output_format=output_format,
                 )
+                if (surface_id, scenario.name, output_format) == (
+                    "loopx_turn_plan", "crowded", "json"
+                ):
+                    # Budget compaction must not discard the writeback target.
+                    action = measurement["payload"]["turn_envelope"]["writeback"]["next_cli_actions"][0]
+                    argv = shlex.split(action)
+                    assert argv[argv.index("--registry") + 1] == str(registry_path)
+                    assert argv[argv.index("--runtime-root") + 1] == str(runtime)
                 spec = CLI_OUTPUT_BUDGET_BY_ID[surface_id]
                 assert_cli_output_baseline(
                     spec,
