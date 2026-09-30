@@ -594,7 +594,6 @@ def execute_native_task_lease_lifecycle(
     fence_expected_lease_epoch: int | None = None,
     fence_operation_id: str | None = None,
     owner_pid: int | None = None,
-    write_worktree: str | None = None,
     _legacy_provider_projection: bool = False,
     _now: datetime | None = None,
 ) -> dict[str, Any]:

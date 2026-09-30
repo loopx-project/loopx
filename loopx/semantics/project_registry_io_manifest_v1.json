@@ -1623,7 +1623,7 @@
     },
     {
       "site": "loopx/control_plane/work_items/task_lease_acquire_adapter.py::<module>.execute_native_task_lease_lifecycle::codec_read:load_registry#1",
-      "line": 719,
+      "line": 718,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
