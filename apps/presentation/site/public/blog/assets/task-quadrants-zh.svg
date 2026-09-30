@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="920" viewBox="0 0 1040 920" role="img" aria-labelledby="title desc">
+  <title id="title">目标明确度与过程明确度：三类长程工作的关系</title>
+  <desc id="desc">目标明确度向右增加，过程明确度向上增加。左上先澄清目标，右上常规执行，左下是开放探索，右下是复杂任务。持续交付的数字员工是一层跨越象限的职责，不属于单独一个象限。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#171717"/></marker>
+    <clipPath id="plot"><rect x="154" y="138" width="830" height="512" rx="12"/></clipPath>
+  </defs>
+  <style>
+    text{font-family:Geist,Inter,"Helvetica Neue","PingFang SC","Microsoft YaHei",Arial,sans-serif;fill:#171717;font-weight:400}
+    .title{font-size:30px;font-weight:600}.axis{font-size:26px;font-weight:500}.end{font-size:22px;fill:#4d4d4d}
+    .label{font-size:20px;font-weight:500;letter-spacing:1px;fill:#4d4d4d}.key{fill:#0070f3}
+    .heading{font-size:34px;font-weight:600}.example{font-size:24px;fill:#4d4d4d}.detail{font-size:22px;fill:#4d4d4d}
+    .band-title{font-size:28px;font-weight:600;fill:#fff}.band-detail{font-size:22px;fill:#fff}.footnote{font-size:20px;fill:#4d4d4d}
+  </style>
+  <rect width="1040" height="920" fill="#fff"/>
+  <text class="title" x="56" y="58">两种不确定性，三类长程工作</text>
+  <g clip-path="url(#plot)">
+    <rect x="154" y="138" width="830" height="512" fill="#fff"/>
+    <rect x="154" y="394" width="830" height="256" fill="#fafafa"/>
+  </g>
+  <rect x="154" y="138" width="830" height="512" rx="12" fill="none" stroke="#d9d9d9"/>
+  <path d="M569 138V650M154 394H984" fill="none" stroke="#d9d9d9" stroke-dasharray="5 5"/>
+  <path d="M126 650V138" fill="none" stroke="#171717" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M154 680H984" fill="none" stroke="#171717" stroke-width="2" marker-end="url(#arrow)"/>
+  <text class="axis" text-anchor="middle" transform="translate(62 394) rotate(-90)">过程明确度</text>
+  <text class="end" x="126" y="118" text-anchor="end">明确</text>
+  <text class="end" x="126" y="674" text-anchor="end">模糊</text>
+  <text class="axis" x="569" y="718" text-anchor="middle">目标明确度</text>
+  <text class="end" x="154" y="718">模糊</text>
+  <text class="end" x="984" y="718" text-anchor="end">明确</text>
+  <g>
+    <text class="label" x="184" y="187">ALIGNMENT</text>
+    <text class="heading" x="184" y="231">先澄清目标</text>
+    <text class="example" x="184" y="280">流程熟悉，结果标准未定</text>
+    <text class="detail" x="184" y="324">如：周报应帮助谁做什么决策？</text>
+    <text class="label" x="599" y="187">ROUTINE</text>
+    <text class="heading" x="599" y="231">常规执行</text>
+    <text class="example" x="599" y="280">格式转换 · 已验证的流程</text>
+    <text class="detail" x="599" y="324">重点：可靠执行</text>
+    <text class="label key" x="184" y="438">02 / DISCOVERY</text>
+    <text class="heading" x="184" y="482">开放探索</text>
+    <text class="example" x="184" y="531">选方向 · 提问题 · 探索机会</text>
+    <text class="detail" x="184" y="575">保留：假设、反证与候选路线</text>
+    <text class="label key" x="599" y="438">01 / COMPLETION</text>
+    <text class="heading" x="599" y="482">复杂任务</text>
+    <text class="example" x="599" y="531">修复 · 重构 · 迁移</text>
+    <text class="detail" x="599" y="575">保留：验收缺口与版本证据</text>
+  </g>
+  <rect x="154" y="760" width="830" height="104" rx="12" fill="#171717"/>
+  <text class="band-title" x="184" y="802">03 / 持续交付的数字员工</text>
+  <text class="band-detail" x="184" y="839">跨越象限：澄清 → 探索 → 实现 → 跟进</text>
+  <text class="footnote" x="154" y="902">LoopX · 01、02 是求解方式；03 是持续职责。</text>
+</svg>
