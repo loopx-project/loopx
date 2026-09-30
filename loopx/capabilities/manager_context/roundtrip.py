@@ -362,16 +362,20 @@ def project_chat_session_snapshot(root, store, session_id, *, registry):
     return snapshot
 
 
-def _initial_delivery_proved(row, route, turn):
-    receipt = (turn.get("response") or {}).get("context_handoff_receipt") or {}
-    return (
-        turn.get("status") == "completed"
-        and receipt.get("request_id") == row["request_id"]
-        and receipt.get("goal_id") == row["goal_id"]
-        and receipt.get("agent_id") == row["agent_id"]
-        and receipt.get("goal_ref") == row["goal_ref"]
-        and route.get("goal_ref") == row["goal_ref"]
-    )
+def _original_delivery_facts(row, route, turn, *, source_id):
+    # Adapt trusted store/authority facts only. The common typed owner decides
+    # whether a committed handoff survived a lost caller response.
+    identity = {key: row[key] for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref") if key in row}
+    return {
+        "request": identity,
+        "route": route,
+        "authorized_source_id": source_id,
+        "turn": {
+            "client_turn_id": turn.get("client_turn_id"),
+            "status": turn.get("status"),
+            "context_handoff_receipt": (turn.get("response") or {}).get("context_handoff_receipt"),
+        },
+    }
 
 
 def _exact_return_scope(registry, reply):
@@ -423,13 +427,12 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             or grant.get("source_id") != row["source_id"]
         ):
             raise ValueError("return_authorization_unavailable")
-        initial_delivery_proved = _initial_delivery_proved(row, route, turn)
         decide_collaboration_lifecycle(
             scope,
             operation="original_return_admit",
             record=row,
             route=route,
-            initial_delivery_proved=initial_delivery_proved,
+            initial_delivery=_original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
         )
         with _request_lock(
             root,
@@ -514,6 +517,7 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             "state_path": state_path,
             "state": admitted,
             "token": token,
+            "source_id": grant["source_id"],
         }
 
 
@@ -544,9 +548,9 @@ def _write_exact_return_state(
             operation="original_return_settle",
             record=row,
             route=route,
-            initial_delivery_proved=(
-                isinstance(turn, dict)
-                and _initial_delivery_proved(row, route, turn)
+            initial_delivery=(
+                _original_delivery_facts(row, route, turn, source_id=context["source_id"])
+                if isinstance(turn, dict) else None
             ),
         )
         with _request_lock(
@@ -936,8 +940,11 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     or grant.get("source_id") != row["source_id"]
                 ):
                     raise ReturnResolutionBlocked("return_authorization_unavailable", "return_authorization_unavailable")
-                if turn.get("status") != "completed":
-                    raise ReturnResolutionBlocked("initial_delivery_receipt_unavailable", "initial_receipt_not_completed")
+                with collaboration_goal_scope(registry, goal_id=row["goal_id"], agents=()) as scope:
+                    decide_collaboration_lifecycle(
+                        scope, operation="original_return_admit", record=row, route=route,
+                        initial_delivery=_original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
+                    )
                 if (
                     path.stem == "decision"
                     and (path.parent / "conclusion.json").exists()

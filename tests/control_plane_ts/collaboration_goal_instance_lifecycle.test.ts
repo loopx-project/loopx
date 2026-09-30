@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decideCollaborationLifecycle } from "../../loopx/control_plane/collaboration/goal_instance_lifecycle.ts";
+import { decideCollaborationLifecycle, proveOriginalRequestDelivery } from "../../loopx/control_plane/collaboration/goal_instance_lifecycle.ts";
 
 const INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -19,7 +19,7 @@ function facts(
     current_goal_ref: GOAL_A,
     record_goal_ref: GOAL_A,
     route_goal_ref: GOAL_A,
-    initial_delivery_proved: true,
+    initial_delivery: committedDelivery("completed"),
     ...patch,
   };
 }
@@ -124,7 +124,7 @@ test("original return admission requires trusted initial delivery evidence", () 
     decideCollaborationLifecycle(
       facts("original_return_admit", {
         current_goal_ref: GOAL_B,
-        initial_delivery_proved: false,
+        initial_delivery: null,
       }),
     ),
     { kind: "reject", code: "initial_delivery_unproved" },
@@ -177,4 +177,51 @@ test("malformed strict facts fail closed", () => {
       operation: "unknown",
     })
   );
+});
+
+function committedDelivery(status: string, exact = true) {
+  const request = {
+    request_id: "a".repeat(64), goal_id: "delivery", agent_id: "builder", source_id: "web:source",
+    ...(exact ? { goal_ref: GOAL_A } : {}),
+  };
+  return {
+    request,
+    route: { ...request, client_turn_id: "question" },
+    turn: { status, client_turn_id: "question", context_handoff_receipt: null as unknown },
+    authorized_source_id: request.source_id,
+  };
+}
+
+test("a committed handoff survives a lost answer on a settled originating Turn", () => {
+  for (const exact of [true, false]) {
+    for (const status of ["completed", "failed", "timed_out", "interrupted"]) {
+      assert.deepEqual(proveOriginalRequestDelivery(committedDelivery(status, exact)), {
+        kind: "proved", basis: "committed_request",
+      });
+    }
+    for (const status of ["queued", "starting", "running", "completing", "interrupting", "unknown"]) {
+      assert.deepEqual(proveOriginalRequestDelivery(committedDelivery(status, exact)), {
+        kind: "unproved", reason: "originating_turn_unsettled",
+      });
+    }
+  }
+});
+
+test("lost-answer recovery cannot substitute a source, request, instance or conflicting receipt", () => {
+  const base = committedDelivery("failed");
+  for (const mutation of [
+    { ...base, authorized_source_id: "web:other" },
+    { ...base, route: { ...base.route, source_id: "web:other" } },
+    { ...base, route: { ...base.route, request_id: "b".repeat(64) } },
+    { ...base, route: { ...base.route, goal_ref: GOAL_B } },
+    { ...base, route: { ...base.route, client_turn_id: "another-question" } },
+    { ...base, turn: { ...base.turn, context_handoff_receipt: {} } },
+    { ...base, turn: { ...base.turn, context_handoff_receipt: { ...base.request, goal_ref: GOAL_B } } },
+    { ...base, request: { ...base.request, goal_ref: null } },
+    null,
+  ]) assert.equal(proveOriginalRequestDelivery(mutation).kind, "unproved");
+  const withReceipt = { ...base, turn: { ...base.turn, context_handoff_receipt: base.request } };
+  assert.deepEqual(proveOriginalRequestDelivery(withReceipt), {
+    kind: "proved", basis: "committed_request_and_receipt",
+  });
 });

@@ -1,6 +1,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { assertNever, jsonObject } from "../runtime_decode.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {
   parseExactGoalRef,
   type ExactGoalRef,
@@ -100,6 +101,55 @@ function wireGoalRef(value: ExactGoalRef): WireGoalRef {
   };
 }
 
+/** Prove a persisted Inbox request, independently of the caller's answer.
+ * IO adapters supply the committed entry, trusted route and current source
+ * authority. A caller failure does not cancel separately delegated work.
+ */
+export function proveOriginalRequestDelivery(value: unknown): JsonObject {
+  const facts = jsonObject(value);
+  const request = jsonObject(facts?.request);
+  const route = jsonObject(facts?.route);
+  const turn = jsonObject(facts?.turn);
+  if (!request || !route || !turn
+      || typeof request.request_id !== "string"
+      || !BARE_SHA256_PATTERN.test(request.request_id)
+      || ["request_id", "goal_id", "agent_id", "source_id"].some((key) =>
+        typeof request[key] !== "string" || !request[key]
+        || request[key] !== route[key])) {
+    return { kind: "unproved", reason: "request_route_mismatch" };
+  }
+  // Exact instances must agree; legacy requests remain explicitly unbound.
+  const requestRef = optionalGoalRef(request.goal_ref);
+  const routeRef = optionalGoalRef(route.goal_ref);
+  if (request.goal_ref === undefined && route.goal_ref === undefined) {
+    // The legacy route is still bound to this committed request and source.
+  } else if (!requestRef || !routeRef || !goalRefsEqual(requestRef, routeRef)
+      || requestRef.goalId.value !== request.goal_id) {
+    return { kind: "unproved", reason: "request_route_mismatch" };
+  }
+  if (typeof route.client_turn_id !== "string" || !route.client_turn_id
+      || route.client_turn_id !== turn.client_turn_id
+      || facts?.authorized_source_id !== request.source_id) {
+    return { kind: "unproved", reason: "source_mismatch" };
+  }
+  switch (turn.status) {
+    case "completed": case "failed": case "timed_out": case "interrupted": break;
+    default: return { kind: "unproved", reason: "originating_turn_unsettled" };
+  }
+  const receiptValue = turn.context_handoff_receipt;
+  if (receiptValue !== null && receiptValue !== undefined) {
+    const receipt = jsonObject(receiptValue);
+    const receiptRef = optionalGoalRef(receipt?.goal_ref);
+    if (!receipt || ["request_id", "goal_id", "agent_id"].some((key) => receipt[key] !== request[key])
+        || (requestRef ? !receiptRef || !goalRefsEqual(requestRef, receiptRef)
+          : receipt.goal_ref !== undefined)) {
+      return { kind: "unproved", reason: "handoff_receipt_conflict" };
+    }
+    return { kind: "proved", basis: "committed_request_and_receipt" };
+  }
+  return { kind: "proved", basis: "committed_request" };
+}
+
 function isObservation(operation: CollaborationOperation): boolean {
   return operation === "inbox_observe"
     || operation === "peer_return_observe";
@@ -137,7 +187,7 @@ function lifecycleFacts(
     currentGoalRef,
     recordGoalRef,
     routeGoalRef,
-    initialDeliveryProved: value.initial_delivery_proved === true,
+    initialDeliveryProved: proveOriginalRequestDelivery(value.initial_delivery).kind === "proved",
   };
 }
 
@@ -241,7 +291,13 @@ export function decideCollaborationLifecycle(
     );
   }
   const selectedOperation = operation(raw.operation);
-  if (raw.profile_id === null) return { kind: "legacy" };
+  if (raw.profile_id === null) {
+    if ((selectedOperation === "original_return_admit" || selectedOperation === "original_return_settle")
+        && proveOriginalRequestDelivery(raw.initial_delivery).kind !== "proved") {
+      return { kind: "reject", code: "initial_delivery_unproved" };
+    }
+    return { kind: "legacy" };
+  }
   if (raw.profile_id !== SOURCE_SESSION_PROFILE_ID) {
     return { kind: "reject", code: "unsupported_profile" };
   }
