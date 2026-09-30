@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import io
 import os
+import runpy
 import select
 import socket
 import subprocess
@@ -11,6 +12,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -174,6 +176,49 @@ def test_real_agent_cli_keeps_json_clean_and_sends_only_after_disclosure(isolate
     third = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert third.returncode == 0 and 'random installation ID' not in third.stderr
     assert usage_ping.control('status')['consent'] == 'disabled'
+
+
+@pytest.mark.parametrize('parent_opt_out', [None, '0', '1'])
+def test_claude_smoke_environment_disables_real_cli_and_sender(
+    isolated, collector, monkeypatch, parent_opt_out,
+):
+    endpoint, received, accepted, release = collector
+    release.set()
+    monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
+    # An already acknowledged installation must still obey synthetic isolation.
+    usage_ping.control('enable')
+    path = usage_ping.state_path()
+    before = path.read_bytes()
+    generation = json.loads(before)['generation']
+    if parent_opt_out is None:
+        monkeypatch.delenv('LOOPX_USAGE_PING', raising=False)
+    else:
+        monkeypatch.setenv('LOOPX_USAGE_PING', parent_opt_out)
+    smoke = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'examples/claude-install-optin-smoke.py'))
+    env = smoke['_isolated_host_env'](isolated / 'home')
+    # Even a regression may only reach this disposable collector.
+    env['LOOPX_USAGE_PING_ENDPOINT'] = endpoint
+    setup = (
+        'import json,sys; from pathlib import Path; from loopx import usage_ping; '
+        'usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); '
+    )
+    cli = subprocess.run(
+        [sys.executable, '-c', setup + 'from loopx.cli_runtime import main; '
+         'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert cli.returncode == 0 and json.loads(cli.stdout)['ok'], cli.stderr
+    assert cli.stderr == ''
+    sender = subprocess.run(
+        [sys.executable, '-c', setup +
+         'print(json.dumps(usage_ping.control("start", generation=sys.argv[2])))',
+         str(isolated), generation],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert sender.returncode == 0, sender.stderr
+    assert json.loads(sender.stdout) == {'sent': False, 'reason': 'blocked'}
+    assert not accepted.wait(0.3) and received == []
+    assert path.read_bytes() == before
 
 
 def test_real_cli_returns_while_http_response_is_held_and_disable_survives(isolated, collector, monkeypatch):
