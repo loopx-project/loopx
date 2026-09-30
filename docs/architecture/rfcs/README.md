@@ -188,7 +188,7 @@ failure leaves the generated files untouched.
 - [Shared Goal Alignment and Governed Amendment Protocol v0](shared-goal-alignment-and-governed-amendment-v0.md)
   ([中文版](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md))
   - **Delivery on `main`:** Stage 1/2 read-only alignment and proposal-admission
-    foundations implemented; the RFC remains a draft.
+    foundations implemented; Stage 3+ remains unshipped.
   - **Current boundary:** Current Todo/lease source-basis projection and retained
     amendment admission have no canonical effect. Full Goal-intent versioning,
     governed commit policy/verifier, lease-impact handling and Stage 3+

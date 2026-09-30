@@ -12,6 +12,8 @@ export type DelegationPreflight = {
   authority_state: "promotion_required" | "unavailable" | "promoted" | "uninspected";
   authority_next_action: "preview_reviewed_goal_authority_promotion" | "repair_canonical_authority" | "none";
   promotion_from_surface_allowed: false;
-  executor: {host: string; available: boolean | null; reason: string | null; profile: string | null} | null;
+  executor: {host: string; available: boolean | null; reason: string | null; profile: string | null;
+    operation_transport?: {schema_version: "loopx_operation_transport_v0";
+      configuration_valid: boolean; runtime_qualified: false}} | null;
   effects: {host_invoked: boolean; state_written: boolean; quota_spent: boolean; scheduler_acknowledged: boolean};
 };

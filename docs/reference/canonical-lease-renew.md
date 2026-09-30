@@ -31,7 +31,7 @@ New canonical acquisitions freeze the canonical Todo's normalized
 `task_repository` as `lease.write_repository`. There is no caller repository
 override and no inference from the CLI working directory. Within one Goal,
 overlapping relative paths conflict unless **both** execution grants have known,
-different repository identities. Host/path case aliases remain overlapping.
+different repository identities, or the explicit code-edit worktree mode below proves sibling checkout isolation. Host/path case aliases remain overlapping.
 The existing complete-head scan, owner eligibility, TTL, generations, CAS and
 receipt identities are unchanged; an empty scope set still does not conflict.
 
@@ -52,7 +52,42 @@ provider promotion or automatic cross-agent dispatch is added. CLI and native
 provider inspection cover this boundary; broader frontend/Lark collaboration
 delivery remains separate work, not an end-to-end completion claim.
 
-### 仓库相对路径的冲突边界
+### Independent worktree code edits
+
+For edits in an independent Git worktree on a promoted File/SQLite Goal, add
+`--write-worktree` to standalone acquisition:
+
+```bash
+loopx --registry registry.json task-lease acquire \
+  --goal-id example-goal --todo-id todo_work --owner agent-a \
+  --idempotency-key worktree-edit-a --ttl-seconds 600 \
+  --write-scope 'src/**' --write-worktree "$PWD"
+```
+
+The TypeScript entrypoint verifies the Git root, origin against the Todo's
+repository, machine identity and filesystem identity. Two grants in distinct
+sibling worktrees on the same machine may overlap: acquisition returns
+`integration_overlap_advisories` identifying the other Todo and paths, so their
+owners can coordinate and validate the combined changes before merge. This is
+cooperative code-edit coordination, not a filesystem access-control mechanism.
+It does not authorize changing shared runtime data, Git administration, remote
+branches, or merging. Use ordinary exclusive leases for those operations.
+
+Same-worktree aliases, the same Todo, other machines or clones, and grants
+without a verified workspace retain existing exclusion. Repository mismatch,
+redirected paths and a non-worktree root fail closed. Verified machine discovery
+currently supports macOS and Linux; other hosts retain ordinary leases. No
+workspace path or machine identifier is stored directly: only opaque digests
+and the existing public repository identity enter the private authority record.
+
+Renewal preserves this identity. Acquire retries must use the same worktree,
+scopes and execution key; an alias resolving to the same worktree is valid.
+To change directories or return to ordinary exclusion, release the current
+lease with its version and acquire a new execution key. Existing leases are
+never retroactively reclassified; their holders can release and reacquire
+explicitly. No automatic migration or grant expansion occurs.
+
+## 仓库相对路径的冲突边界
 
 新的 canonical 租约从权威 Todo 的 `task_repository` 冻结
 `lease.write_repository`，不接受调用者覆盖，也不从 CLI 当前目录猜测。同一 Goal

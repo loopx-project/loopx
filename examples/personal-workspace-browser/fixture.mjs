@@ -1468,6 +1468,24 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       }, status: 200 });
       return;
     }
+    if (url.pathname === "/api/chat/projection-messages" && request.method() === "POST") {
+      const body = request.postDataJSON();
+      const channel_id = body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`;
+      const session_id = `session-projection-${channel_id}`;
+      if (!sessions.has(session_id)) sessions.set(session_id, {
+        session_id, goal_id: body.goal_id || "loopx-manager", agent_id: "status-only", adapter_kind: "status_projection",
+        channel_id, status: "ready", active_turn_id: null, resumable: true,
+        created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", last_error_code: null,
+      });
+      const rows = messages.get(session_id) ?? [];
+      const user_message_id = `${session_id}-${rows.length}`;
+      const answer_message_id = `${session_id}-${rows.length + 1}`;
+      rows.push({ message_id: user_message_id, role: "user", text: body.question, created_at: "2026-08-13T01:00:01Z" },
+        { message_id: answer_message_id, role: "agent", text: body.answer, created_at: "2026-08-13T01:00:02Z" });
+      messages.set(session_id, rows);
+      await route.fulfill({ status: 201, json: { ok: true, schema_version: "loopx_chat_projection_exchange_v1", session_id, user_message_id, answer_message_id } });
+      return;
+    }
     if (url.pathname === "/api/chat/sessions" && request.method() === "GET") {
       const requestedGoal = url.searchParams.get("goal_id");
       const requestedAgent = url.searchParams.get("agent_id");
@@ -1484,12 +1502,14 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const body = request.postDataJSON();
       if (body.context_kind === "manager" && body.goal_id) throw new Error("Global manager request still carries a project anchor");
       const resolvedGoalId = body.context_kind === "manager" ? "loopx-manager" : body.goal_id;
-      const session_id = `session-${body.context_kind}-${resolvedGoalId}-${body.agent_id}`;
+      // Like the real runtime, an omitted steward endpoint resolves on the host.
+      const resolvedAgentId = body.agent_id ?? managerChannelBinding?.executor_endpoint ?? state.machineNamespaces?.steward_executor?.executor_endpoint ?? "codex";
+      const session_id = `session-${body.context_kind}-${resolvedGoalId}-${resolvedAgentId}`;
       const existing = body.mode === "resume_latest" ? sessions.get(session_id) : null;
-      const session = existing ?? { session_id, goal_id: resolvedGoalId, agent_id: body.agent_id, adapter_kind: body.agent_id, channel_id: body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`, status: "ready", active_turn_id: null, last_error_code: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true, ...(body.context_kind === "manager" ? { manager_runtime: { schema_version: "manager_runtime_session_readback_v0", runtime_profile: "restricted", configuration_revision: "absent", status: "ready", sandbox: "read-only", standing_grant: "none", tool_classes: ["loopx_core"] } } : {}) };
+      const session = existing ?? { session_id, goal_id: resolvedGoalId, agent_id: resolvedAgentId, adapter_kind: resolvedAgentId === "codex" ? "codex_app_server" : resolvedAgentId === "claude-code" ? "claude_code_cli" : "acp", channel_id: body.context_kind === "manager" ? "manager" : `goal.${body.goal_id}`, status: "ready", active_turn_id: null, last_error_code: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true, ...(body.context_kind === "manager" ? { manager_runtime: { schema_version: "manager_runtime_session_readback_v0", runtime_profile: "restricted", configuration_revision: "absent", status: "ready", sandbox: "read-only", standing_grant: "none", tool_classes: ["loopx_core"] } } : {}) };
       sessions.set(session_id, session);
       messages.set(session_id, messages.get(session_id) ?? []);
-      await route.fulfill({ contentType: "application/json", json: { ok: true, agent_id: body.agent_id, goal_id: body.goal_id, resumed: body.mode === "resume_latest", session_id, session }, status: 201 });
+      await route.fulfill({ contentType: "application/json", json: { ok: true, agent_id: resolvedAgentId, goal_id: body.goal_id, resumed: body.mode === "resume_latest", session_id, session }, status: 201 });
       return;
     }
     const loopxMode = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)\/loopx$/);
@@ -1808,7 +1828,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           session_id: sessionId,
           goal_id: preview.normalized_parameters.goal_id,
           agent_id: "codex",
-          adapter_kind: "codex",
+          adapter_kind: "codex_app_server",
           channel_id: `goal.${preview.normalized_parameters.goal_id}`,
           active_turn_id: null,
           status: "ready",

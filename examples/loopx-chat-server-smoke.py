@@ -664,6 +664,10 @@ def main() -> None:
                 "现在该做什么？",
                 "当前没有阻塞。",
             ], projection_snapshot
+            assert [message["message_id"] for message in projection_snapshot["messages"]] == [
+                projection_exchange["user_message_id"],
+                projection_exchange["answer_message_id"],
+            ], projection_snapshot
 
             code, turn = request_json(
                 f"{base_url}/api/chat/sessions/{session_id}/turns",

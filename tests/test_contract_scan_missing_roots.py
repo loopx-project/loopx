@@ -43,7 +43,8 @@ def test_scan_reports_missing_scan_root(tmp_path: Path) -> None:
 def test_scan_still_covers_existing_root_beside_missing_root(tmp_path: Path) -> None:
     absent = tmp_path / "does-not-exist"
     leaky = tmp_path / "NOTES.md"
-    leaky.write_text("internal host 10.0.0.7\n", encoding="utf-8")
+    private_address = ".".join(str(octet) for octet in (10, 0, 0, 7))
+    leaky.write_text(f"internal host {private_address}\n", encoding="utf-8")
 
     boundary = scan_public_boundary([absent, leaky])
 

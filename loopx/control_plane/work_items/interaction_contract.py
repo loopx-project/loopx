@@ -708,6 +708,7 @@ def interaction_next_cli_actions(
     settlement_plan: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
+    registry_path: str | None = None,
 ) -> list[str]:
     if unadmitted_action_selection(payload):
         return [_selection_recovery_command(
@@ -716,7 +717,7 @@ def interaction_next_cli_actions(
             turn_instance_id=turn_instance_id, runtime_root=runtime_root,
         )]
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
-    command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root)
+    command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path)
     agent_identity = payload.get("agent_identity") if isinstance(payload.get("agent_identity"), dict) else {}
     scoped_cli_args = _scoped_cli_args(
         agent_identity,
@@ -1311,6 +1312,7 @@ def _build_interaction_cli_channel(
             settlement_plan=settlement_plan,
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
+            registry_path=registry_path,
         ),
         "spend_allowed_now": False,
         "spend_after_validation": spend_after_selection,
@@ -1375,6 +1377,11 @@ def _build_interaction_cli_channel(
                     },
                 },
             }
+            replan_binding = (
+                replan_settlement_contract.get("settlement_binding")
+                if isinstance(replan_settlement_contract, Mapping)
+                else None
+            )
             if _auxiliary_monitor_receipt_binding_required(payload):
                 auxiliary_projection.update(
                     {
@@ -1393,6 +1400,17 @@ def _build_interaction_cli_channel(
                     {
                         "availability": "turn_binding_required",
                         "reason_code": "auxiliary_monitor_turn_instance_id_missing",
+                    }
+                )
+            elif isinstance(replan_binding, Mapping) and replan_binding.get("kind") == "autonomous_replan":
+                auxiliary_projection.update(
+                    {
+                        "availability": "receipt_binding_required",
+                        "reason_code": "auxiliary_monitor_replan_receipt_binding",
+                        "next_step": (
+                            "settle the current autonomous replan Turn, then "
+                            "observe the due monitor from a Todo-bound Turn"
+                        ),
                     }
                 )
             elif (payload.get("requires_user_action") is True and

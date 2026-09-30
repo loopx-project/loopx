@@ -50,6 +50,11 @@ _FIELDS = frozenset(
         "reasoning_effort",
     }
 )
+# These are the machine inputs accepted with this allocation, not new defaults.
+# A namespace revision also changes for policy edits; its hash cannot recover
+# whether an unset model/effort later became an explicit selection or was cleared.
+# Older persisted allocations lack this historical fact and remain readable.
+_CONFIGURED_FIELDS = frozenset({"configured_model", "configured_reasoning_effort"})
 _NONEMPTY_TEXT_FIELDS = (
     "allocation_reason",
     "executor_endpoint",
@@ -65,7 +70,7 @@ def normalize_manager_executor_allocation(
 ) -> dict[str, Any]:
     """Validate the safe, restart-stable allocation stored on a Session."""
 
-    unknown = sorted(set(raw) - _FIELDS)
+    unknown = sorted(set(raw) - _FIELDS - _CONFIGURED_FIELDS)
     missing = sorted(_FIELDS - set(raw))
     if unknown:
         raise ValueError(
@@ -82,6 +87,17 @@ def normalize_manager_executor_allocation(
         )
 
     normalized = dict(raw)
+    configured_fields = set(raw) & _CONFIGURED_FIELDS
+    if configured_fields and configured_fields != _CONFIGURED_FIELDS:
+        raise ValueError("manager_executor_allocation must capture both configured model fields")
+    for field in configured_fields:
+        value = raw[field]
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"manager_executor_allocation.{field} must be null or non-empty")
+        normalized[field] = value.strip() if isinstance(value, str) else None
+    if (normalized.get("configured_reasoning_effort") is not None
+            and normalized["configured_reasoning_effort"] not in REASONING_EFFORTS):
+        raise ValueError("manager_executor_allocation.configured_reasoning_effort is unsupported")
     for field in _NONEMPTY_TEXT_FIELDS:
         value = raw.get(field)
         if not isinstance(value, str) or not value.strip():

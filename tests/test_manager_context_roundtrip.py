@@ -760,7 +760,9 @@ def test_public_delivery_projection_normalizes_unknown_private_state(flow):
     assert "private" not in str(state)
 
 
-def test_background_service_delivers_without_another_agent_or_query(flow):
+def test_background_service_delivers_without_another_agent_or_query(flow, monkeypatch):
+    observations = []
+    monkeypatch.setattr('loopx.usage_ping.observe_verified_return', lambda: observations.append('verified'))
     root, registry, store, create = flow
     _, _, receipt = create(True)
     rid = receipt["request_id"]
@@ -791,6 +793,8 @@ def test_background_service_delivers_without_another_agent_or_query(flow):
     assert state["status"] == "delivered"
     assert state["provider_receipt"] == "sha256:provider-proof"
     assert not service.thread.is_alive()
+    drain(root, registry, store, transport)
+    assert observations == []  # Legacy delivery is outside the exact-source telemetry contract.
 
 
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])

@@ -560,6 +560,7 @@ def read_inbox(
     *,
     workspace=None,
     cursor=None,
+    operation_cursor=None,
     caller_goal_ref=None,
 ):
     from .inbox import pending
@@ -576,6 +577,7 @@ def read_inbox(
             goal_id,
             agent_id,
             cursor=cursor,
+            operation_cursor=operation_cursor,
             scope=goal_scope,
         )
         peer_returns = returns(

@@ -1,4 +1,5 @@
 import { goalCreateRequest } from "./goal-create-request";
+import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { CollaborationCard } from "./collaboration-card";
@@ -554,7 +555,11 @@ function operationProposalFields(
     {
       key: "operation_state",
       label: t("proposal.field.operationState"),
-      value: frame?.lifecycleState ?? proposal.status,
+      value: frame?.kind === "pending" && frame.executionState
+        ? t(`proposal.operationState.${frame.executionState}`)
+        : frame?.kind === "result" && frame.resultKind === "unknown"
+        ? t("proposal.operationState.submission_unknown")
+        : frame?.lifecycleState ?? proposal.status,
     },
     ...(frame?.kind === "result" ? [{
       key: "result_delivery",
@@ -651,7 +656,12 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposalFields(proposal.normalized_parameters, t),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
     impact: reviewPlan.retryOriginal ? t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
-      ? t("proposal.impact.operation")
+      ? operationFrame?.kind === "pending" && operationFrame.executionState
+        ? t(operationFrame.executionState === "consumed_outcome_pending"
+          ? "proposal.impact.operationConsumed" : operationFrame.executionState === "managed_turn_pending"
+          ? "proposal.impact.operationManagedPending" : "proposal.impact.operationAuthorized")
+        : operationFrame?.kind === "result" && operationFrame.resultKind === "unknown"
+        ? t("proposal.impact.operationUnknown") : t("proposal.impact.operation")
       : proposal.action_kind === "team.plan"
       ? proposal.status === "applied" ? t("proposal.teamPlan.assignedHint") : t("proposal.impact.teamPlan")
       : proposal.action_kind === "goal.create"
@@ -681,7 +691,11 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
     } : undefined,
     workspaceCandidates,
     primaryLabel: reviewPlan.retryOriginal ? t("drawer.retryOriginal") : proposal.action_kind === "operation.execute"
-      ? operationFrame?.kind === "result"
+      ? operationFrame?.kind === "pending" && operationFrame.executionState
+        ? t(`proposal.operationState.${operationFrame.executionState}`)
+        : operationFrame?.kind === "result" && operationFrame.resultKind === "unknown"
+        ? t("proposal.operationState.submission_unknown")
+        : operationFrame?.kind === "result"
         ? operationFrame.resultDeliveryVerified
           ? t("proposal.primary.operationResultVerified")
           : t("proposal.primary.operationResultPending")
@@ -697,7 +711,8 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true
         ? t("proposal.primary.todoStart")
         : t("proposal.primary.apply"),
-    status: reviewPlan.retryOriginal ? "error" : proposal.status === "applied"
+    status: reviewPlan.retryOriginal || (operationFrame?.kind === "result" && operationFrame.resultKind === "unknown")
+      ? "error" : proposal.status === "applied"
       && proposal.action_kind !== "operation.execute"
       && reviewPlan.interaction !== "completed"
       ? "error"
@@ -734,7 +749,10 @@ function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<Workspa
 }
 
 export function PersonalWorkspacePage({
+  conversationQueuesFollowUps = false,
+  conversationSupportsSteering = false,
   conversationSessionId,
+  conversationHistoryState,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
@@ -748,7 +766,12 @@ export function PersonalWorkspacePage({
   statusSourceControl,
   serviceNotice,
 }: {
+  /** The bound Session's mode queues a message sent while its Turn runs. */
+  conversationQueuesFollowUps?: boolean;
+  /** The bound managed executor offers native exact-turn steering. */
+  conversationSupportsSteering?: boolean;
   conversationSessionId?: string;
+  conversationHistoryState?: ConversationHistoryStatus;
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
@@ -786,6 +809,8 @@ export function PersonalWorkspacePage({
     }
   });
   const [sending, setSending] = useState(false);
+  const [steering, setSteering] = useState(false);
+  const steeringRequests = useRef(new Map<string, { sessionId: string; turnId: string; text: string; id: string }>());
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -796,6 +821,7 @@ export function PersonalWorkspacePage({
   const [lifecycleBusyGoalIds, setLifecycleBusyGoalIds] = useState<ReadonlySet<string>>(() => new Set());
   const [quickCompletingTodoIds, setQuickCompletingTodoIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshState, setRefreshState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -827,8 +853,9 @@ export function PersonalWorkspacePage({
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
   }, [composer, selectedGoalId, managerChatOpen]);
-  function setComposerDraft(key: string, value: string) {
+  function setComposerDraft(key: string, value: string, expectedValue?: string) {
     setDrafts((current) => {
+      if (expectedValue !== undefined && current[key] !== expectedValue) return current;
       const next = { ...current };
       if (value) {
         next[key] = value;
@@ -942,6 +969,8 @@ export function PersonalWorkspacePage({
       .filter((item) => item.kind !== "proposal"
         || !["stale", "error"].includes(item.proposal.status)
         || item.proposal.reviewPlan?.retryOriginal === true
+        || (item.proposal.reviewPlan?.operationFrame?.kind === "result"
+          && item.proposal.reviewPlan.operationFrame.resultKind === "unknown")
         || sessionProposalIds.includes(item.proposal.previewId));
     return projected.filter((item) => {
       if (!selectedGoalId) return true;
@@ -1004,6 +1033,17 @@ export function PersonalWorkspacePage({
       setGoalConversationReceiptVisible(true);
     }
   }, [goalMessages, selectedGoal, selectedGoalTab]);
+  // One composer for both conversations. Running managed Codex work receives
+  // exact-turn instructions; attached hosts and LoopX mode keep their queues.
+  const loopxDeliveryOpen = Boolean(conversationSessionId && loopxMode?.session_id === conversationSessionId
+    && loopxMode?.enabled && loopxMode.active_turn_id);
+  const runningMessage = managerMessages.find((message) => message.pending && Boolean(message.sourceTurnId)
+    && message.sourceSessionId === conversationSessionId);
+  const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
+  const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
+    && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
+  const composerBlocked = steering || (!steeringTurnId && (sending || conversationTurnRunning));
+  const quickPromptBlocked = steering || sending || conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
       || (item.kind === "proposal" && (sessionProposalIds.includes(item.proposal.previewId)
@@ -1591,7 +1631,36 @@ export function PersonalWorkspacePage({
   async function sendMessage(messageOverride?: string) {
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
-    if (!message || sending) return;
+    if (!message || composerBlocked || conversationHistoryState?.sendBlocked) return;
+    const previousSteering = steeringRequests.current.get(composerDraftKey);
+    const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text === message
+      ? previousSteering : undefined;
+    if ((retry || steeringTurnId) && conversationSessionId && callbacks.onSteerConversationTurn) {
+      if (pendingImages.length) {
+        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
+        return;
+      }
+      const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
+      steeringRequests.current.set(composerDraftKey, request);
+      setSteering(true);
+      setActionFeedback(null);
+      setImageAttachmentError(null);
+      try {
+        await callbacks.onSteerConversationTurn(selectedGoalId ?? "manager", request.turnId, message, request.id);
+        steeringRequests.current.delete(composerDraftKey);
+        if (!messageOverride) setComposerDraft(composerDraftKey, "", composer);
+        setActionFeedback(locale === "zh-CN" ? "执行器已接收本轮追加指令。" : "The executor accepted instructions for this turn.");
+      } catch (error) {
+        // Unknown delivery retries the original Turn even after it completes.
+        // A confirmed non-delivery may use a new ingress after recovery.
+        if (error instanceof ChatApiError && error.payload.delivery_state === "not_delivered") {
+          steeringRequests.current.delete(composerDraftKey);
+        }
+        setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
+      } finally { setSteering(false); }
+      return;
+    }
+    if (sending) return;
     followConversationRef.current = true;
     setShowLatestMessage(false);
     if (loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id && conversationSessionId) {
@@ -1608,6 +1677,7 @@ export function PersonalWorkspacePage({
       finally {setSending(false);}
       return;
     }
+    if (conversationTurnRunning) return;
     if (!messageOverride) {
       setComposer("");
       setImageAttachments([]);
@@ -1692,6 +1762,7 @@ export function PersonalWorkspacePage({
     setRefreshState("loading");
     try {
       await callbacks.onRefresh();
+      setHistoryRefreshRevision((revision) => revision + 1);
       setRefreshState("done");
     } catch {
       setRefreshState("error");
@@ -1747,6 +1818,7 @@ export function PersonalWorkspacePage({
             managerRuntime={managerRuntime}
             mobileNavigationOpen={mobileSidebarOpen}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
+            onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
             onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
@@ -1808,7 +1880,7 @@ export function PersonalWorkspacePage({
               <section className="personal-manager-greeting" role="status" data-testid="goal-status-loading">
                 <div><strong>{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</strong>
                 <p>{t(selectedGoal.loadError ? `startup.error.${selectedGoal.loadError}` : "startup.independent")}</p>
-                {selectedGoal.loadState === "error" ? <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => void callbacks.onRefresh?.()}>{t("startup.retry")}</button> : null}</div>
+                {selectedGoal.loadState === "error" ? <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => void callbacks.onRefresh?.("missing")}>{t("startup.retry")}</button> : null}</div>
               </section>
             ) : selectedGoal ? (
               <GoalWorkspacePanels key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
@@ -1817,6 +1889,7 @@ export function PersonalWorkspacePage({
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab} />,
                   tasks: (<GoalTasksView
                     historyEnabled={!readOnly}
+                    historyRefreshRevision={historyRefreshRevision}
                     goal={selectedGoal}
                     items={items}
                     onDraftTaskFromMessage={readOnly ? undefined : (reply) => {
@@ -1859,7 +1932,7 @@ export function PersonalWorkspacePage({
                   </>),
                 }} />
             ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.()} onSelectGoal={selectGoal} systemHealth={model.systemHealth} />
+              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onSelectGoal={selectGoal} systemHealth={model.systemHealth} />
             ) : (
               <ChannelTimeline onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={managerChatItems} onSelect={setSelection} selectedGoal={null} showManagerTeamResults
                 onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
@@ -1874,6 +1947,17 @@ export function PersonalWorkspacePage({
             )}
           </div>
           <div className="personal-composer-wrap">
+            {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
+              <div className="personal-history-notice" role="status">
+                <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
+                  {conversationHistoryState.sendBlocked && conversationHistoryState.phase !== "loading"
+                    ? <span>{t("history.currentSessionRecovering")}</span> : null}</div>
+                {conversationHistoryState.phase !== "loading" ? <button type="button"
+                  disabled={conversationHistoryState.reading} onClick={conversationHistoryState.retry}>
+                  {t(conversationHistoryState.reading ? "history.retrying" : "history.retry")}
+                </button> : null}
+              </div>
+            ) : null}
             {loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id ? <label className="goal-loopx-message-mode">{locale === "zh-CN" ? "消息处理" : "Message delivery"}<select aria-label={locale === "zh-CN" ? "消息处理方式" : "Message delivery mode"} value={loopxDelivery} onChange={event => setLoopxDelivery(event.target.value as typeof loopxDelivery)}><option value="queue">{locale === "zh-CN" ? "下一轮处理" : "Next turn"}</option><option value="inbox">{locale === "zh-CN" ? "放入收件箱" : "Inbox"}</option><option value="steer">{locale === "zh-CN" ? "立即纠偏" : "Steer now"}</option></select><span role="status">{loopxMessageReceipt}</span></label> : null}
             {readOnly ? (
               <div className="personal-read-only-notice"><strong>{t("source.readOnlyNoticeTitle")}</strong><span>{t("source.readOnlyNoticeDescription")}</span></div>
@@ -1919,16 +2003,16 @@ export function PersonalWorkspacePage({
               <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
             {selectedGoal ? (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.nextAction")} disabled={sending} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
-                <button aria-label={t("composer.agentProgress")} disabled={sending} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
+                <button aria-label={t("composer.nextAction")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
+                <button aria-label={t("composer.agentProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
                 <button aria-label={t("composer.monitor")} disabled={sending} onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title={t("composer.sendMessageHint")} type="button"><CalendarClock size={13} /><span>{t("composer.monitor")}</span></button>
-                <button aria-label={t("composer.blockers")} disabled={sending || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
-                <button aria-label={t("composer.evidence")} disabled={sending || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
+                <button aria-label={t("composer.blockers")} disabled={quickPromptBlocked || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
+                <button aria-label={t("composer.evidence")} disabled={quickPromptBlocked || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
               </div>
             ) : (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.globalTasks")} disabled={sending} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
-                <button aria-label={t("composer.globalProgress")} disabled={sending} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
+                <button aria-label={t("composer.globalTasks")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
+                <button aria-label={t("composer.globalProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
                 <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
               </div>
             )}
@@ -1941,6 +2025,9 @@ export function PersonalWorkspacePage({
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
+            {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
+              ? (locale === "zh-CN" ? "本轮进行中 · 发消息可调整当前工作" : "Turn in progress · send instructions to adjust this work")
+              : t("composer.turnRunning")}</p> : null}
             <div
               className="personal-channel-composer"
               onDragOver={(event) => {
@@ -1981,9 +2068,11 @@ export function PersonalWorkspacePage({
                 rows={1}
                 value={composer}
               />
-              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || sending} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
+              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
-            {conversationOpen ? <div className="personal-composer-hint">{sending
+            {conversationOpen ? <div className="personal-composer-hint">{steering
+              ? (locale === "zh-CN" ? "正在发送本轮追加指令…" : "Sending instructions for this turn…")
+              : sending && !steeringTurnId
               ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")
               : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </>}

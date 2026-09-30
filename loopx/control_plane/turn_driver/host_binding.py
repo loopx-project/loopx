@@ -177,6 +177,31 @@ def dsh_output_token_budget(max_tokens: int | None = None) -> dict[str, Any]:
     }
 
 
+def _with_operation_transport(
+    binding: dict[str, Any],
+    *,
+    enabled: bool,
+    host: str,
+    sandbox: str,
+    model: str | None,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    if enabled:
+        from ..effect_runtime import effect_runtime_result
+
+        observed = effect_runtime_result(
+            "operation.managed_transport.project",
+            {"host": host, "sandbox": sandbox,
+             "model": model, "reasoning_effort": reasoning_effort},
+        )
+        binding["operation_transport"] = observed["transport"]
+        if observed["reason"]:
+            binding["available"] = False
+            binding["unavailable_reason"] = observed["reason"]
+            binding["unavailable_remediation"] = [REMEDY_CORRECT_EXECUTION_PROFILE]
+    return binding
+
+
 def managed_executor_binding(
     host: str,
     *,
@@ -187,6 +212,8 @@ def managed_executor_binding(
     model: str | None = None,
     reasoning_effort: str | None = None,
     max_tokens: int | None = None,
+    codex_operation_tools: bool = False,
+    codex_sandbox: str = "read-only",
 ) -> dict[str, Any]:
     """Project the executor one planned Turn would run on.
 
@@ -228,7 +255,7 @@ def managed_executor_binding(
             unavailable_reason = INVALID_OUTPUT_TOKEN_LIMIT
         else:
             unavailable_reason = profile_reason
-        return {
+        binding = {
             "schema_version": MANAGED_EXECUTOR_BINDING_SCHEMA_VERSION,
             "executor": host,
             "executor_kind": EXECUTOR_KIND_MANAGED,
@@ -252,12 +279,16 @@ def managed_executor_binding(
                 "available": runtime_available,
             },
         }
+        return _with_operation_transport(
+            binding, enabled=codex_operation_tools, host=host,
+            sandbox=codex_sandbox, model=model, reasoning_effort=reasoning_effort,
+        )
     individual_profile: str | None = None
     if host == INDIVIDUAL_TURN_HOST and (model or reasoning_effort):
         individual_profile = (
             f"{model or 'host-default'}@{reasoning_effort or 'host-default'}"
         )
-    return {
+    binding = {
         "schema_version": MANAGED_EXECUTOR_BINDING_SCHEMA_VERSION,
         "executor": host,
         "executor_kind": (
@@ -276,6 +307,10 @@ def managed_executor_binding(
         # branches on its presence; only a managed executor probes a runtime.
         "runtime_probe": None,
     }
+    return _with_operation_transport(
+        binding, enabled=codex_operation_tools, host=host,
+        sandbox=codex_sandbox, model=model, reasoning_effort=reasoning_effort,
+    )
 
 
 def turn_host_arg_option(host_args: Sequence[str], name: str) -> str | None:
@@ -338,6 +373,8 @@ def managed_executor_binding_from_host_args(
             if host == INDIVIDUAL_TURN_HOST
             else None
         ),
+        codex_operation_tools="--codex-operation-tools" in host_args,
+        codex_sandbox=turn_host_arg_option(host_args, "--codex-sandbox") or "read-only",
     )
 
 

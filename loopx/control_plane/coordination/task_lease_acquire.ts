@@ -1,3 +1,4 @@
+import {leaseWorkspace, sameLeaseWorkspace, type LeaseWorkspace} from "../work_items/task_lease_workspace.ts";
 /** A lease acquisition is one full-head admission/CAS with a retained receipt.
  * Unlike historical maintenance replay, success here must supply current proof. */
 import type {JsonObject} from "../effect_program.ts";
@@ -16,6 +17,7 @@ import {normalizeGoalId, normalizeTodoId, normalizeOwner, normalizeIdempotencyKe
 export interface CanonicalTaskLeaseAcquireInput {
   goal_id: string; todo_id: string; owner: string; idempotency_key: string;
   expected_version: number | null; ttl_seconds: number | null;
+  write_workspace?: LeaseWorkspace | null;
   write_scopes: readonly string[]; registered_agents: readonly string[]; now: Date;
 }
 
@@ -28,6 +30,7 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
   try {
     input = {...raw, goal_id: normalizeGoalId(raw.goal_id), todo_id: normalizeTodoId(raw.todo_id),
       owner: normalizeOwner(raw.owner), idempotency_key: normalizeIdempotencyKey(raw.idempotency_key),
+      write_workspace: leaseWorkspace(raw.write_workspace),
       write_scopes: normalizeWriteScopes(raw.write_scopes), ttl_seconds: normalizeTtl(raw.ttl_seconds),
       registered_agents: raw.registered_agents.map(normalizeOwner)};
     if (input.expected_version !== null && (!Number.isSafeInteger(input.expected_version) || input.expected_version < 0)) {
@@ -42,13 +45,14 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
   const identity = {schema_version: "loopx_canonical_task_lease_acquire_receipt_v0",
     operation_id: `lease-acquire:${canonicalAuthoritySha256(identityFields)}`, goal_id: input.goal_id,
     request_sha256: canonicalAuthoritySha256({...identityFields, expected_version: input.expected_version,
+      ...(input.write_workspace ? {write_workspace: input.write_workspace} : {}),
       ttl_seconds: input.ttl_seconds, write_scopes: [...input.write_scopes].sort()})};
   const receipt = new CoordinationCommandReceipt({result_schema: schema, identity, failure: failed,
     decode(original) {
       const payload = commandReceiptResult(original);
       const lease = canonicalTaskLease(canonicalAuthorityObject(payload.fields.lease, "acquire receipt lease"), input.goal_id, input.todo_id);
       const scopes = [...(lease.write_scopes ?? []) as string[]].sort();
-      if (JSON.stringify(scopes) !== JSON.stringify([...input.write_scopes].sort()) ||
+      if (!sameLeaseWorkspace(lease.write_workspace, input.write_workspace) || JSON.stringify(scopes) !== JSON.stringify([...input.write_scopes].sort()) ||
           (lease.acquire_ttl_seconds != null && lease.acquire_ttl_seconds !== input.ttl_seconds) ||
           (payload.changed && input.expected_version !== null && leaseVersion(lease) !== input.expected_version + 1)) {
         throw new AuthorityStoreProtocolError("acquire receipt does not match its original parameters");
@@ -76,6 +80,8 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
       ...facts, command: input});
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
       return failed(decision.code, `canonical task lease acquire rejected: ${decision.code}`, {
+        ...(decision.code === "write_scope_conflict" ? {recommended_action:
+          "Coordinate with the listed holders to narrow scopes. For isolated code edits, both holders may release and reacquire with --write-worktree; existing grants remain exclusive. Never take over a foreign lease or use this mode for shared runtime state."} : {}),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(facts.current),
         ...(facts.todo ? {todo_status: facts.todo.status, claimed_by: facts.todo.claimed_by, excluded_agents: [...facts.todo.excluded_agents]} : {}),
         ...(decision.conflict_indexes.length ? {conflicts: decision.conflict_indexes.map(i => facts.other_leases[i])} : {})});
@@ -92,7 +98,10 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
       operation_id: identity.operation_id, expected_provider_revision: head.provider_revision, projection: head.head,
       mutations: [{kind: "lease_upsert", lease}]}) : {operation_id: identity.operation_id,
         expected_provider_revision: head.provider_revision, next_projection: head.head, events: [], receipts: []};
-    commit.receipts = [{...identity, result: {changed, lease, handoff_mode: mode}}];
+    const overlaps = (decision.overlap_advisory_indexes ?? []).map(i => ({todo_id: facts.other_leases[i].todo_id, owner: facts.other_leases[i].owner ?? null,
+      write_scopes: facts.other_leases[i].write_scopes, reason: "independent_worktree_integration_overlap"}));
+    commit.receipts = [{...identity, result: {changed, lease, handoff_mode: mode,
+      ...(overlaps.length ? {integration_overlap_advisories: overlaps} : {})}}];
     await beforeCommit?.(lease);
     committed = true;
     const result = await receipt.commit(store, commit);

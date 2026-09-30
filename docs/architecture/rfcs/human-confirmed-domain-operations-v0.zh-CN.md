@@ -5,7 +5,7 @@
 - **交付成熟度：** 提案
 - **作者 / 负责人：** LoopX 维护者与可选垂域 provider 维护者
 - **创建日期：** 2026-09-12
-- **最近规范修订：** 2026-09-12
+- **最近规范修订：** 2026-09-30
 - **实现基线：** `72e557586`
 - **相关契约：** [扩展](../../reference/extensions.md)、
   [Effect interpreter](agent-loop-effect-interpreter-v0.md)
@@ -15,6 +15,7 @@
 
 第 1–11 节定义拟议契约，并非已发布的命令。第 12 节记录尚未解决的实现选择。
 本文不修改运行时、默认权限、配置或用户入口。
+第 13 节记录来源上下文/已准入执行者续接的实现切片；部署与真实验收独立于本地验证。
 
 ## 1. 决策摘要
 
@@ -232,3 +233,123 @@ M1 同时涵盖 UI 与后端，不要拆成“后端 PR 已完成”而遗忘前
    不把签名加入现有行情采集器。由 adapter 维护者在 M2 决定。
 4. **部署资格：** 核实真实飞书应用回调和 Web owner 身份认证机制。
    事件进程健康本身不能证明任一用户路径可用。M1 验收前必须完成。
+
+## 13. 用户确认后的 Agent 执行：来源与执行者分离
+
+原对话提供上下文及结果返回的受众，不必同时成为执行进程。长期契约是
+**用户批准 → 受管执行准入 → 单次消费 → 原系统证据 → 核验回传**，不是“Desktop
+线程 ID 就是执行令牌”。已有垂域 Agent 可复用其已授权工作流，显式配置的 delegation
+也可由 LoopX 自有受管 Turn 执行；两条路径都不增加账户访问、交易或宽泛写权限。
+
+### 单一权威与不可变执行主体
+
+- `chat/actions/actions.json` 中原始 `operation.execute` 仍是确认、claim、
+  消费、结果和对账的唯一存储。
+- 原外接主体保持
+  `{kind: "agent_session", host_surface, thread_id, revision: "agent-session-handoff-v0"}`；
+  其公开 CLI 认证门禁仍关闭。
+- 新增显式 opt-in 主体为
+  `{kind: "managed_turn", todo_id, session_id, profile_digest, model, reasoning_effort, revision: "managed-turn-handoff-v0"}`。
+  它指向既有 Codex Turn session owner，不另建运行时目录。准备时核对已注册
+  Goal/Agent、精确 Todo/session、适用的 Goal instance、传输与固定 profile。
+- `source_route` 仅从既有登记对话绑定投影，可为空；它是不可变的上下文/返回信息，
+  不是调用者身份、执行许可或消息已送达证明。
+- TypeScript 管理执行器归一化、绑定判断、传输配置读回、单次准入、恢复和展示；
+  Python 只承载原生进程、session/存储锁及 Lark IO。不新增平行 Python 审批或通用决策源。
+- 旧外接批准不转换为受管批准。session、Todo、模型、思考深度、sandbox、workspace、
+  home、可执行文件或 invocation-scoped MCP 配置改变时，必须显式开启 fresh
+  iteration 并重新批准。不复制轨迹、SQLite 行或凭据。
+
+生命周期专用 `source_session_v1` registry 仍拒绝业务操作准备；本切片不启用替换
+Goal instance，不改变 provider 权威，也不把旧操作移植到另一运行时。
+
+### 既有 delegation 与 Turn 入口
+
+启动许可仍归原 operator-owned delegation 配置。Codex binding 通过既有
+`host_args` 显式启用：
+
+```text
+--host codex-cli --codex-operation-tools
+--codex-model MODEL --codex-reasoning-effort EFFORT
+--codex-sandbox read-only
+```
+
+相同选项可用于 `turn run-once`。复用既有 delegation inspect/preflight、start、
+准入、租约、session 续接、结果验证和验收。原 host owner 读回 profile；
+不新增前端配置存储或隐藏默认。不固定或不受支持的配置在预检中标为 unavailable；
+有效 argv 仍是 runtime-unverified，不能证明宿主或操作已运行。仅在现有工作授权
+确需时使用 `workspace-write`；此传输不接受 `danger-full-access`。
+
+已准入宿主复用 `CodexChatAgentSession` app-server adapter，将不透明线程保存于
+既有 Goal/Agent/Todo session owner，安装不可导出的 `loopx_operation` dynamic tool。
+自有 stdio 连接在分发前核对原生 thread 与活跃 Turn 元数据；工具参数不能传 actor、
+verified、信任密钥、签名或 bearer token。回执返回同一原生连接，不恢复或冒充
+登记的来源 Desktop 线程。
+
+`context` 读回精确受管主体但不给执行许可；`prepare` 在规范 action store 预览
+不可变条款；`pending` 读取有界 Inbox；`inspect/consume/report` 复用锁定操作接缝。
+保留 invocation-scoped collaboration MCP 的普通委派能力，它不是操作身份签发端。
+宿主结果沿用 typed Turn result 及验证；最终答复文字不能冒充操作结果回执。
+
+首个传输是 Codex 专用 IO，不是 Codex 专用审批模型。其他受管宿主只有在原生身份
+来源、实际 profile 读回、撤销和响应路由通过验收后才能实现同一契约。外接 Desktop
+仍是独立可选 adapter，**不是受管路径的前置依赖**。未来远端边界可能需要 owner
+登记的认证 invocation 核验，但不应让无人消费的签名器或本地伪造凭据成为自有进程
+分发的前置条件。
+
+### 确认、单次消费与恢复
+
+既有经认证 Lark 回调记录精确用户确认并 claim 原提案，不启动浏览器或垂域 adapter。
+重放、模拟及卡片投递恢复都不产生垂域效果；Dashboard 对用户操作确认仍只读。
+
+只有首次成功原子消费返回 `execution_allowed: true`，核对经认证的确认、不可变
+条款、当前执行绑定、有效 Goal 和到期时间，在 Agent 垂域执行前持久记录消费。
+所有重试，包括丢失响应或重启后的同一 attempt，都不再授予执行。
+它约束的是**授权消费**，不宣称能禁止可信 Agent 的所有工具调用，也不承诺平台恰好执行一次。
+
+锁序是 Goal 生命周期 → registry → 既有 Turn session（仅受管路径）→ action store。
+session 替换/丢弃与消费共用锁。先提交的撤销阻止消费，之后的撤销不能抹去已提交回执；
+外部执行期间不持锁。
+
+绑定宿主回写 `loopx_operation_outcome_v0`：精确 operation/载荷/确认摘要、claim、
+executor revision、consumption ID、核验投影、`simulation: false`、
+有界原系统证据引用及单独的 `external_write_performed`。结果为 `executed`、
+`not_executed` 或 `submission_unknown`；未知保守披露可能的外部副作用。
+原生传输成功不等于平台证据；Core 不解释价格、平台、费用、持仓或保护单。
+
+已消费/未知义务在到期或原绑定撤销后仍保留。同 Goal/Agent 当前接手者只有在原绑定
+撤销后才能检查/回写历史证据，不能消费未用票据或重写执行器。原 outcome 不可变，
+对账以 `reconciles_outcome_digest` 绑定并追加实际报告者/路由来源，读回保留原始与
+对账证据。已停止/历史 Goal 沿用证据专用生命周期保护，不因此获得新的执行许可。
+
+### 共享 Inbox、前端、Lark 与真实回传
+
+既有 Inbox 直接投影规范定位信息：恢复优先、每页 20 条、总数/类型化 overflow
+及独立 operation cursor。`loopx_operation pending` 接受绑定游标；CLI 投影用
+`manager-inbox read --operation-cursor CURSOR`。新增/改变工作应无游标重读，
+读完一页或遍历结束不代表义务已解决。
+
+共享 TS 操作 frame 展示执行者、固定模型/思考深度、Goal/Agent/Todo 范围、可选来源
+上下文，并区分：已确认但外接认证不可用、已确认待绑定受管回合、已消费待证据、未知须
+对账，以及独立核验的结果投递。CLI、Dashboard 和原 Lark 卡消费同一 frame。
+结果读回必须匹配当前 `initial/reconciled` 阶段；旧未知结果的投递不能证明新对账结果。
+现有投递恢复更新原卡，不重提操作。delegation 结果验收及 requester 采用仍是独立
+回执，不新增自动 chat 回传协议。
+
+### 资格化与剩余交付
+
+本切片验证自有进程原生工具分发（含新 Turn 与同线程恢复 Turn 的有界真实 Codex
+context 调用，结果均由既有 typed result validator 接受）、规范
+批准/消费/结果夹具、profile/session 撤销、原路由隔离、delegation 预检和打包展示。
+真实 context 探针只在当前拥有的 home 创建新的受管 GPT session，不建提案、
+不造群确认、不执行金融副作用；合成批准夹具不是真实用户批准。
+
+公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
+私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
+意外返回 actor 成功，也没有 proof-import 捷径。
+
+本切片不实现确认后的即时宿主唤醒，`host_delivery: "not_attempted"` 保持真实。
+沿既有已准入 Turn/delegation 续接；后续持久唤醒复用其调度/session owner，
+不启动平行 resumed 执行者。宣称投研最小闭环前，仍须证明安装、真实用户批准、
+绑定原生消费、垂域提交前检查与原系统证据、结果验收及原卡/受众读回。
+Core PR 仍须 owner review，不在合并前自行安装。

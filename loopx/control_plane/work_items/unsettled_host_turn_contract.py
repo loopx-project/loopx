@@ -26,6 +26,18 @@ def recovery_cli_actions(
     )
     # The repair lane is a typed fact from the recovery transaction; this
     # renderer only turns it into operator commands.
+    if recovery.get("repair") == "blocked_writeback":
+        bound_turn = shlex.quote(str(recovery["turn_instance_id"]))
+        return [
+            "Verify the recorded dependency wait and inspect existing effects. This projection is not a closeout receipt.",
+            (f"{command_prefix} refresh-state --goal-id {goal_id}{lifecycle_actor_args}"
+             f" --todo-id {shlex.quote(prior_todo_id)} --turn-instance-id {bound_turn}"
+             " --classification blocked_dependency --delivery-batch-scale single_surface"
+             " --delivery-outcome outcome_gap --progress-result-class blocked"
+             " --progress-blocker-id '<verified-blocker-id>'"
+             " --progress-evidence-id '<verified-evidence-ref>'"),
+            "Read back the settled blocked closeout. Do not spend a slot or rebind this Turn; the next real host Turn selects independent work.",
+        ]
     if recovery.get("repair") == "resume_prior_turn":
         prior_turn_id = str(recovery["prior_turn_instance_id"])
         return [

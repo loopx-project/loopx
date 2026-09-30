@@ -1,0 +1,286 @@
+"""Non-financial managed transport qualification; no live user/account effects."""
+
+from __future__ import annotations
+
+import os
+import time
+import contextlib
+import io
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from loopx.control_plane.turn_driver.codex_cli import (
+    _lineage,
+    load_codex_cli_session,
+    run_codex_cli_host,
+)
+from loopx.control_plane.turn_driver.codex_operation_host import (
+    run_codex_operation_host,
+)
+from loopx.control_plane.turn_driver.host_failure import BuiltInHostError
+from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
+from test_loopx_turn_codex_cli import _request
+from test_loopx_turn_driver import _write_live_fixture
+
+
+FAKE_SERVER = """#!/usr/bin/env python3
+import json, sys
+thread = "owned-app-server-thread"
+turn = "native-app-server-turn"
+key = None
+def emit(value):
+    print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    row = json.loads(line)
+    method = row.get("method")
+    if method == "initialize":
+        emit({"id": row["id"], "result": {}})
+    elif method in {"thread/start", "thread/resume"}:
+        assert row["params"]["sandbox"] == "read-only"
+        if method == "thread/start":
+            assert row["params"]["dynamicTools"][0]["name"] == "loopx_operation"
+        emit({"id": row["id"], "result": {"thread": {"id": thread}, "model": "test-model", "reasoningEffort": "xhigh"}})
+    elif method == "turn/start":
+        assert row["params"]["outputSchema"]["type"] == "object"
+        properties = row["params"]["outputSchema"]["properties"]
+        import os, pathlib, subprocess, time
+        marker = os.environ.get("FAKE_OPERATION_CHILD_MARKER")
+        if marker:
+            child = subprocess.Popen([sys.executable, "-c",
+                "import pathlib,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+                "p=pathlib.Path(" + repr(marker) + ");n=0\\n"
+                "while True:\\n p.write_text(str(n));n+=1;time.sleep(.01)"])
+            pathlib.Path(marker + ".pid").write_text(str(child.pid))
+            while not pathlib.Path(marker).exists(): time.sleep(.01)
+        if os.environ.get("FAKE_OPERATION_HANG") == "1":
+            while True: time.sleep(.1)
+        text = row["params"]["input"][0]["text"]
+        import re
+        key = re.search(r'"turn_key":"([^"]+)"', text).group(1)
+        emit({"id": row["id"], "result": {"turn": {"id": turn}}})
+        emit({"id": 50, "method": "item/tool/call", "params": {"threadId": "forged-thread", "turnId": turn, "tool": "loopx_operation", "arguments": {"action": "context"}}})
+    elif row.get("id") == 50:
+        assert row["result"]["success"] is False
+        emit({"id": 51, "method": "item/tool/call", "params": {"threadId": thread, "turnId": turn, "tool": "loopx_operation", "arguments": {"action": "context"}}})
+    elif row.get("id") == 51:
+        result = json.loads(row["result"]["contentItems"][0]["text"])
+        assert result["executor"]["session_id"] == thread
+        assert result["authority"] == "approval_and_first_consumption_required"
+        assert row["result"]["success"] is True
+        answer = {name: "" for name, schema in properties.items() if schema["type"] == "string"}
+        answer.update({"schema_version": "loopx_turn_result_v0", "turn_key": key, "result_kind": "wait", "completed_phases": ["host_execute", "typed_result"], "classification": "awaiting_operation_confirmation", "recommended_action": "Wait for actual human approval", "summary": "Owned native context retrieved; no approval or effect"})
+        emit({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": json.dumps(answer)}})
+        emit({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+"""
+
+
+def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same_profile(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "fake-codex-operation"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+    options = {
+        "runtime_root": tmp_path / "runtime",
+        "registry_path": tmp_path / "registry.json",
+        "project": tmp_path,
+        "codex_bin": str(executable),
+        "model": "test-model",
+        "reasoning_effort": "xhigh",
+        "timeout_seconds": 5,
+    }
+    first = run_codex_operation_host(_request(), **options)
+    assert first["result_kind"] == "wait"
+    validation = validate_loopx_turn_host_result(
+        {"transaction": {"turn_key": _request()["turn_key"]}}, first
+    )
+    assert validation["ok"], validation["errors"]
+    binding = load_codex_cli_session(
+        options["runtime_root"], lineage=_lineage(_request())
+    )
+    assert binding["operation_transport"] == "app-server-operation-tools-v0"
+    second = run_codex_operation_host(
+        _request(session_action="resume", turn_key="sha256:" + "b" * 64), **options
+    )
+    assert second["turn_key"] == "sha256:" + "b" * 64
+    assert (
+        load_codex_cli_session(options["runtime_root"], lineage=_lineage(_request()))
+        == binding
+    )
+    with pytest.raises(ValueError, match="profile changed"):
+        run_codex_operation_host(
+            _request(session_action="resume"), **{**options, "reasoning_effort": "high"}
+        )
+    with pytest.raises(ValueError, match="original managed transport"):
+        run_codex_cli_host(
+            _request(session_action="resume"),
+            **{key: value for key, value in options.items() if key != "registry_path"},
+        )
+
+
+def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loopx.cli import main as cli_main
+
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    executable = tmp_path / "fake-codex-operation"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+
+    def forbidden_plain_cli(*args, **kwargs):
+        pytest.fail("Operation opt-in must not downgrade to plain Codex exec")
+
+    monkeypatch.setattr("loopx.cli_commands.turn.run_codex_cli_host", forbidden_plain_cli)
+    arguments = [
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--no-global-sync", "--codex-operation-tools", "--codex-bin", str(executable),
+        "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
+        "--codex-sandbox", "read-only", "--timeout-seconds", "5",
+        "--validation-command-json", json.dumps([sys.executable, "-c", "import json,sys; json.load(sys.stdin)"]),
+    ]
+    lineage = {"goal_id": "loopx-turn-fixture", "agent_id": "codex-fixture", "todo_id": "todo_fixture0001"}
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        dry_exit = cli_main(arguments)
+    dry = json.loads(output.getvalue())
+    assert dry_exit == 0, dry
+    assert load_codex_cli_session(runtime, lineage=lineage) is None
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([*arguments, "--execute"])
+    payload = json.loads(output.getvalue())
+    assert exit_code == 0, json.dumps(payload, indent=2)
+    assert payload["host"] == {"executable": "built-in", "kind": "codex-cli"}
+    binding = load_codex_cli_session(runtime, lineage=lineage)
+    assert binding["operation_transport"] == "app-server-operation-tools-v0"
+    assert binding["session_id"] == "owned-app-server-thread"
+    assert payload["effects"]["quota_spent"] is False
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"model": None}, {"reasoning_effort": None}, {"sandbox": "danger-full-access"}],
+)
+def test_operation_host_refuses_unpinned_or_widened_profile_before_launch(
+    tmp_path: Path, change: dict
+) -> None:
+    with pytest.raises(ValueError):
+        run_codex_operation_host(
+            _request(),
+            runtime_root=tmp_path / "runtime",
+            registry_path=tmp_path / "registry.json",
+            project=tmp_path,
+            **{"model": "test-model", "reasoning_effort": "xhigh", **change},
+        )
+    assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group qualification")
+@pytest.mark.parametrize("hang", [False, True])
+def test_owned_operation_host_reaps_descendants_on_success_and_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hang: bool
+) -> None:
+    executable = tmp_path / "fake-codex-operation"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+    marker = tmp_path / "owned-child"
+    monkeypatch.setenv("FAKE_OPERATION_CHILD_MARKER", str(marker))
+    if hang:
+        monkeypatch.setenv("FAKE_OPERATION_HANG", "1")
+    options = dict(
+        runtime_root=tmp_path / "runtime",
+        registry_path=tmp_path / "registry.json",
+        project=tmp_path,
+        codex_bin=str(executable),
+        model="test-model",
+        reasoning_effort="xhigh",
+        timeout_seconds=1 if hang else 5,
+    )
+    if hang:
+        with pytest.raises(BuiltInHostError, match="timeout"):
+            run_codex_operation_host(_request(), **options)
+    else:
+        assert run_codex_operation_host(_request(), **options)["result_kind"] == "wait"
+    assert marker.exists()
+    modified = marker.stat().st_mtime_ns
+    time.sleep(0.1)
+    assert marker.stat().st_mtime_ns == modified
+
+
+@pytest.mark.skipif(
+    not os.environ.get("LOOPX_QUALIFY_CODEX_OPERATION_HOST"),
+    reason="explicit live-host release qualification only",
+)
+@pytest.mark.parametrize(
+    ("model", "effort"), [("gpt-6-sol", "xhigh"), ("gpt-6-luna", "max")]
+)
+def test_live_owned_app_server_native_tool_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str, effort: str
+) -> None:
+    from loopx.control_plane.turn_driver import codex_operation_host
+
+    original = codex_operation_host.operation_tool_handler
+    calls = []
+
+    def observe(**options):
+        handler = original(**options)
+
+        def record(tool, arguments, native):
+            result = handler(tool, arguments, native)
+            calls.append((arguments.get("action"), native, result.get("ok")))
+            return result
+
+        return record
+
+    monkeypatch.setattr(codex_operation_host, "operation_tool_handler", observe)
+    request = _request()
+    request["turn_envelope"]["action"]["selected_todo"]["text"] = (
+        "Non-financial transport qualification only. Call loopx_operation context once. "
+        "Do not use shell, create proposals, send messages or perform any external effect. "
+        "Return result_kind wait with the exact supplied Turn key, using only the existing result schema. "
+        "Report the context retrieval in summary; leave non-applicable material-work fields empty."
+    )
+    options = dict(
+        runtime_root=tmp_path / "runtime",
+        registry_path=tmp_path / "registry.json",
+        project=tmp_path,
+        model=model,
+        reasoning_effort=effort,
+        timeout_seconds=120,
+    )
+    result = run_codex_operation_host(request, **options)
+    validation = validate_loopx_turn_host_result(
+        {"transaction": {"turn_key": request["turn_key"]}}, result
+    )
+    assert validation["ok"], validation["errors"]
+    assert result["turn_key"] == request["turn_key"]
+    assert result["result_kind"] == "wait"
+    assert calls and all(
+        action == "context" and ok and native["host_turn_id"]
+        for action, native, ok in calls
+    )
+    first_thread = calls[0][1]["thread_id"]
+    first_turn = calls[0][1]["host_turn_id"]
+    calls.clear()
+    request["session"]["action"] = "resume"
+    request["turn_key"] = "sha256:" + "b" * 64
+    continued = run_codex_operation_host(request, **options)
+    validation = validate_loopx_turn_host_result(
+        {"transaction": {"turn_key": request["turn_key"]}}, continued
+    )
+    assert validation["ok"], validation["errors"]
+    assert (
+        continued["result_kind"] == "wait"
+        and continued["turn_key"] == request["turn_key"]
+    )
+    assert calls and all(
+        action == "context" and ok and native["thread_id"] == first_thread
+        and native["host_turn_id"] != first_turn
+        for action, native, ok in calls
+    )

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,56 @@ from .paths import DEFAULT_RUNTIME_ROOT
 
 STATE_FILENAME = "usage-ping.json"
 # Scheduling hint only; keep aligned with the TypeScript notice revision.
-_NOTICE_VERSION = 4
+_NOTICE_VERSION = 5
 _ENTRY = Path(__file__).parent / "control_plane/runtime/usage_statistics_cli.ts"
+_observation: ContextVar[dict[str, Any] | None] = ContextVar("usage_observation", default=None)
+
+
+def select_operation(args: Any) -> None:
+    """Parser-owned operation names only; never scan argument values."""
+    state = _observation.get()
+    if state is None:
+        return
+    command = getattr(args, "command", "")
+    operation = getattr(args, f"{command.replace('-', '_')}_command", "default")
+    if command == "pr-review":
+        operation = ("merge-readiness" if getattr(args, "check_merge_readiness", None)
+                     else "check-result" if getattr(args, "check_result", None) else "default")
+    state["operation"] = operation
+
+
+def capture_result(payload: dict[str, Any]) -> None:
+    """Project booleans from existing receipts, not output text or business content."""
+    state = _observation.get()
+    if state is None:
+        return
+    try:
+        facts = {key: payload[key] for key in ('ok', 'ready', 'completed', 'changed', 'dry_run')
+                 if isinstance(payload.get(key), bool)}
+        if payload.get('schema_version') == 'loopx_turn_execution_v0':
+            from .control_plane.turn_driver import loopx_turn_execution_committed
+            facts['turn_committed'] = loopx_turn_execution_committed(payload)
+        validation = payload.get('validation_receipt')
+        if isinstance(validation, dict) and validation.get('passed') is True:
+            facts['validation_passed'] = True
+        state['result_facts'] = facts
+    except Exception:
+        state.pop('result_facts', None)  # Optional diagnostics cannot break output.
+
+
+def capture_failure(error: BaseException) -> None:
+    state = _observation.get()
+    if state is None:
+        return
+    category = ('interrupted' if isinstance(error, KeyboardInterrupt)
+                else 'invalid_input' if isinstance(error, SystemExit) and error.code == 2
+                else 'timeout' if isinstance(error, (TimeoutError, subprocess.TimeoutExpired))
+                else 'connection' if isinstance(error, ConnectionError)
+                else 'permission' if isinstance(error, PermissionError)
+                else 'not_found' if isinstance(error, FileNotFoundError)
+                else 'invalid_input' if isinstance(error, ValueError)
+                else 'command_failed')
+    state['failure'] = category
 
 
 def state_path(runtime_root: Path | None = None) -> Path:
@@ -62,6 +111,7 @@ def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, A
 
 def begin(command: str) -> tuple[str, float] | None:
     """Read a small host hint; do not start a synchronous Node process on warm commands."""
+    _observation.set({})
     # Negative-only scheduling hints for common unattended environments. These
     # cannot authorize collection; TS still checks every supported switch value.
     if os.environ.get("LOOPX_USAGE_PING") == "0" or os.environ.get("DO_NOT_TRACK") == "1" or os.environ.get("CI") == "true":
@@ -109,21 +159,35 @@ def begin(command: str) -> tuple[str, float] | None:
 
 def finish(ticket: tuple[str, float] | None, command: str, code: int, error: BaseException | None = None) -> None:
     """Detach bounded local observation; never read args, output or error text."""
+    if error is not None:
+        capture_failure(error)
+    observation = _observation.get() or {}
+    _observation.set(None)
     if ticket is None:
         return
     try:
-        outcome, category = ("ok", "none") if code == 0 else ("failed", "command_failed")
-        if isinstance(error, KeyboardInterrupt):
-            outcome, category = "cancelled", "interrupted"
-        elif isinstance(error, TimeoutError):
-            outcome, category = "failed", "timeout"
-        elif isinstance(error, ConnectionError):
-            outcome, category = "failed", "connection"
         request = _request("observe", state_path(), generation=ticket[0], feature=command if len(command) <= 64 else "other",
-                           outcome=outcome, error=category, elapsed_ms=max(0, (time.monotonic() - ticket[1]) * 1000))
+                           exit_code=code, activity_day=datetime.now(timezone.utc).date().isoformat(),
+                           **observation, elapsed_ms=max(0, (time.monotonic() - ticket[1]) * 1000))
         _detach(request)
     except Exception:
         pass  # Telemetry cannot replace the command's result.
+
+
+def observe_verified_return() -> None:
+    """An existing provider verified and durably settled a new result return."""
+    try:
+        state = json.loads(state_path().read_text(encoding='utf-8'))
+        if state.get('consent') == 'disabled' or (state.get('notice') or {}).get('version') != _NOTICE_VERSION:
+            return
+        generation = state.get('generation')
+        if not isinstance(generation, str) or not generation:
+            return
+        _detach(_request('observe', state_path(), generation=generation, feature='other', operation='result-return',
+                         exit_code=0, activity_day=datetime.now(timezone.utc).date().isoformat(),
+                         result_facts={'ok': True, 'changed': True, 'reply_verified': True}, elapsed_ms=0))
+    except Exception:
+        pass
 
 
 def _detach(request: dict[str, Any], *, command: list[str] | None = None) -> None:

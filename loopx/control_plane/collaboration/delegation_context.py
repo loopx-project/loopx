@@ -67,7 +67,7 @@ def _route(binding: dict[str, Any]) -> dict[str, Any]:
         row["reason_code"] = reason
     # Transport the existing host owner's public observations unchanged. The
     # Python adapter neither reprobes nor derives another admission decision.
-    for key in ("runtime_probe", "unavailable_remediation"):
+    for key in ("runtime_probe", "unavailable_remediation", "operation_transport"):
         if key in executor:
             row[key] = executor[key]
     return row

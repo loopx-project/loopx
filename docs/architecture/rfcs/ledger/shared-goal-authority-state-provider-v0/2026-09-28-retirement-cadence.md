@@ -257,9 +257,25 @@ Scale characterization with 4,101 synthetic Agent Todos still hits the existing
 repair for File/SQLite. The repaired contract API can read that collection;
 this does not qualify the remaining whole-command payload boundary.
 
-The next B work remains history artifact lookup and remaining public payload/
-cold-path costs, preserving file-change freshness, full decision inputs and
-corruption rejection. Contract checks and attention now share one request-local, validated canonical
+The next B work is SQLite admission on a frozen source/runtime profile: rerun
+the existing reference capacity axes, reconcile concurrency/recovery/consumer-lag
+evidence, and verify the applicability of retained natural-time soak results.
+The comparison runner's former conflict expectation contradicted merged #5169:
+an identical historical intent must return its original applied revision/cursor.
+The runner now checks that result, independently rejects projection/event/receipt
+drift, and walks the complete history before and after retries without retaining
+all expected snapshots. A failing invariant prevents report publication; checks
+stay outside the unchanged timing windows. This repairs the qualification tool,
+not a provider defect or a D2/default pass. #4224 already reports a soak started
+on September 14 at `e98191faa`; its final result and applicability to the current
+candidate still need evidence. Do not call it unstarted or restart its clock
+solely because an unrelated source revision changed.
+
+Last-caller Python decision retirement can proceed independently where the TS
+replacement and affected real callers are proven. Whole Markdown writer removal
+still requires C's new-Goal/upgrade/recovery exits. Complete consumer metadata,
+freshness and decision inputs remain acceptance requirements. Contract checks
+and attention now share one request-local, validated canonical
 Todo snapshot per runtime/Goal. Standalone checks and subsequent requests read
 afresh; lease and projection-writeback reads do not participate. Consumer edits
 cannot mutate retained input, and a failed first read cannot recover midway
@@ -331,3 +347,29 @@ metadata preservation and unchanged provider state. This is a bounded capacity
 repair, not unlimited graph capacity, stable latency evidence, D2 qualification
 or permission to change the default provider. Full-Goal summary/list/detail
 adoption and sustained observation remain separate work.
+
+### Packaged-source fingerprint cost
+
+The B-lane increment overlaps source-byte reads through the existing bounded,
+ordered file reader. It preserves relative names, raw bytes, metadata
+invalidation, request-scoped memoization and failure/retry behavior. The Python
+filesystem adapter gains no state-policy owner or persistent cache.
+
+Current validation compared baseline `0538bf1631a7` with this implementation on
+macOS arm64, Python 3.13.13 and Node 24.21.0. Each arm ran nine alternating fresh
+CLI processes after one startup warm-up, against the same disposable synthetic
+File/SQLite fixtures. Effect processes were isolated; OS caches were not flushed.
+The source snapshot contained 249 TS/JSON files (3,065,799 bytes). Fingerprint
+stage medians were 123.5→53.8 ms for File and 111.3→48.0 ms for SQLite.
+Whole `status` medians were 1.032→1.054 s and 1.019→1.010 s; sampled p95 values
+were 1.745→1.104 s and 1.114→1.086 s (with nine samples, p95 is the maximum).
+Twenty full-response pairs differed only at explicitly enumerated observation
+timestamps; malformed-registry rejection was unchanged.
+
+This supports a bounded cold-caller cost improvement, not a general status
+speedup, provider throughput or D2/default qualification. A warm same-process
+microbenchmark with fingerprint memoization explicitly cleared regressed from
+6.7 to 12.8 ms; normal unchanged requests retain memoization. Thread scheduling
+costs more when all bytes are already hot. Neither workload establishes a fleet
+latency guarantee. Whole-Goal payload/consumer work and sustained operation
+remain open; this increment authorizes no legacy-writer deletion or UI truncation.

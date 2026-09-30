@@ -56,12 +56,20 @@ LoopX 还必须核验综合结果返回原请求。这些是文档陈述，非�
 - 活跃会话和结果获得最大的有效阅读空间。简洁的委派记录说明谁负责什么并链接实际工作；
   返回记录指向当前结果。不要让用户到另一会话寻找已请求的答案。
 - 把一个有用的下一步放在对应失败或决定旁。折叠常规活动，保留缺失授权、过期信息和失败。
+  管家与 Goal 详情复用一份可读事项说明：正文、原因/建议和证据链接优先，标识与声明范围放入键盘可达的折叠区；
+  不把列表摘要重复成另一张详情卡。来源只有摘要时明确标注，不能冒充完整请求。
+  操作继续由既有新预览、只读和生命周期约束决定，Markdown 展示不能推断授权。
 - 使用现有设计系统的字体、间距和克制的状态强调。动效解释已核验的转换，不虚构忙碌 worker。
 - 保持创建、连接、直接与 owner 对话以及团队工作可发现。更简洁的界面不能隐藏未解决工作或减少授权范围内的 owner 发现。
 
 预览使用公开或合成数据。检查有内容、安静、阻塞、不可用的桌面和窄屏视图。
 保留键盘访问、阅读位置和返回上下文。首屏改动仍须遵循仓库预览门禁。
 本设计不重新分发外部截图、私有事故记录或专有素材。
+
+事项详情这一切片验证打包渲染器及合成的桌面中文、窄屏英文和只读来源：可读 Markdown、
+完整正文、证据链接、折叠区/返回焦点、一次准确作用域的预览、失败/缺失/被替代来源约束，以及不可执行的来源 HTML。
+这是待交付的 App 展示改进，不代表已安装回读或完整 GQ10 排序能力。
+跨项目选择、最多两项建议与真实的范围内采用，仍归既有 P1 注意力工作。
 
 ### 等待也是对话的一部分
 
@@ -100,6 +108,15 @@ LoopX 还必须核验综合结果返回原请求。这些是文档陈述，非�
 | Lark transport | `extensions/lark/event_inbox.py`、`routed_inbox.py`、`inbox_reply.py` 与 reaction adapter | Provider 归一化、幂等 capture、read/processed 记录、reply recovery 与 Lark id/policy 共存。只提取已有证据的可复用语义；认证、寻址、provider id、reaction 和消息限制留在 adapter |
 | 执行与控制 | 现有 managed Turn、attached-session/host binding、Chat steering/interrupt | 验收精确受支持的 profile。已注册或 inbox acknowledged 都不等于正在运行；原生 steering、next-Turn queue 和 unsupported 必须分别表达 |
 | 结果 | Answer-report、artifact/revision、review/adoption 与 return owners | 读取已存版本，保留来源与独立审阅。report 读取失败重试读取，不重新运行模型 |
+
+Lark 可读回复的出口还要检查实际强调呈现，不能把 Markdown 原文读回一致当成视觉验收。
+依照 [CommonMark 分隔符规则](https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis)，
+共享 inbox 回复适配器对“加粗内的末尾标点紧接下一单词”做格式规范化：
+`**完成。**下一句` 转为 `**完成**。下一句`。显示文字不变，末尾标点移到强调之外；
+行内/围栏代码、转义标记和链接地址不参与改写。用真实 post 的已渲染 bold 样式与保留的行内代码
+语法验收，同时保留原上下文/线程位置及幂等读回。此项属于 TS 重构 RFC 允许保留的
+Python Lark provider 格式适配，不新增会话状态或决策 owner。
+App 格式和其他 Lark Markdown 结构仍有各自的验收边界。
 
 首个修复不需要新 capability：它属于现有 App 会话与 action 边界，内置 Chat/runtime provider 不变。
 共享 inbox 工作属于现有 coordination/collaboration owners；Lark 仍是 extension 提供的 provider。
@@ -239,6 +256,16 @@ Adapter 按数量和编码字节分批，不提高 bridge 上限；不新增 sto
 当前会话入口修复移除 App 中所有浏览器自由文本 action 分类，检查普通 Chat 路径及显式调度控件。
 不改变权限或已存 message schema。Managed/attached 会话连续性、通用 TS inbox 提取和真实运行的两周期小队验收，
 在各自证据记录前仍属计划。该入口修复可按 App routing 改动回滚；后续持久合同迁移需要各自兼容计划。
+
+群聊直接输入的伴随修复保留共享 TS admission 的具体原因，经 provider 传到 App。
+界面分别说明上次观察到的消息与当前触发设置：开启免 @ 不证明旧消息执行，也不会扫描并补跑已采集历史。
+连续的简短请求及纠偏应保留各自对象、约束和原入口回传关系；传输 fixture 不认证接收方采用或实际修复合并。
+
+通用会话先理解目标、核验影响决策的事实，再判断是否委派。当前证据证明目标已达成时，直接带依据返回，
+不重复派工或生成受保护操作提案；历史记录和不可用读取不构成当前事实。直接分析、复用已有工作与有界 peer 核验
+都是有效结果。这是跨领域的推理指引，不新增关键词 classifier 或权限 owner；Core 类型化授权与 effect 仍拥有最终决定。
+外部事实复用正常、已授权的 host 工具，受限 audience 保留明确缺口。GQ03/GQ07 同时验收已达成和确需继续的请求，
+并以报告类任务验证通用性；真实查询工具与模型质量留在 release qualification。
 
 ### 入口行为兼容
 

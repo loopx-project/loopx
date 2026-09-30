@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="920" viewBox="0 0 1040 920" role="img" aria-labelledby="title desc">
+  <title id="title">Goal and process clarity: three kinds of long-running work</title>
+  <desc id="desc">Goal clarity increases to the right and process clarity upward. Top left: clarify the goal. Top right: routine execution. Bottom left: open exploration. Bottom right: complex tasks. Continuous-delivery digital workers have an ongoing responsibility across quadrants, rather than occupying a separate quadrant.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#171717"/></marker>
+    <clipPath id="plot"><rect x="154" y="138" width="830" height="512" rx="12"/></clipPath>
+  </defs>
+  <style>
+    text{font-family:Geist,Inter,"Helvetica Neue",Arial,sans-serif;fill:#171717;font-weight:400}
+    .title{font-size:30px;font-weight:600}.axis{font-size:26px;font-weight:500}.end{font-size:22px;fill:#4d4d4d}
+    .label{font-size:20px;font-weight:500;letter-spacing:1px;fill:#4d4d4d}.key{fill:#0070f3}
+    .heading{font-size:34px;font-weight:600}.example{font-size:24px;fill:#4d4d4d}.detail{font-size:22px;fill:#4d4d4d}
+    .band-title{font-size:28px;font-weight:600;fill:#fff}.band-detail{font-size:22px;fill:#fff}.footnote{font-size:20px;fill:#4d4d4d}
+  </style>
+  <rect width="1040" height="920" fill="#fff"/>
+  <text class="title" x="56" y="58">Two uncertainties. Three kinds of long-running work.</text>
+  <g clip-path="url(#plot)">
+    <rect x="154" y="138" width="830" height="512" fill="#fff"/>
+    <rect x="154" y="394" width="830" height="256" fill="#fafafa"/>
+  </g>
+  <rect x="154" y="138" width="830" height="512" rx="12" fill="none" stroke="#d9d9d9"/>
+  <path d="M569 138V650M154 394H984" fill="none" stroke="#d9d9d9" stroke-dasharray="5 5"/>
+  <path d="M126 650V138" fill="none" stroke="#171717" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M154 680H984" fill="none" stroke="#171717" stroke-width="2" marker-end="url(#arrow)"/>
+  <text class="axis" text-anchor="middle" transform="translate(62 394) rotate(-90)">Process clarity</text>
+  <text class="end" x="126" y="118" text-anchor="end">Clear</text>
+  <text class="end" x="126" y="674" text-anchor="end">Unclear</text>
+  <text class="axis" x="569" y="718" text-anchor="middle">Goal clarity</text>
+  <text class="end" x="154" y="718">Unclear</text>
+  <text class="end" x="984" y="718" text-anchor="end">Clear</text>
+  <g>
+    <text class="label" x="184" y="187">ALIGNMENT</text>
+    <text class="heading" x="184" y="231">Clarify the goal</text>
+    <text class="example" x="184" y="280">Known workflow;</text>
+    <text class="example" x="184" y="313">unclear success criteria</text>
+    <text class="detail" x="184" y="355">Which decisions should it inform?</text>
+    <text class="label" x="599" y="187">ROUTINE</text>
+    <text class="heading" x="599" y="231">Routine execution</text>
+    <text class="example" x="599" y="280">Format conversion;</text>
+    <text class="example" x="599" y="313">a validated workflow</text>
+    <text class="detail" x="599" y="355">Focus: reliable execution</text>
+    <text class="label key" x="184" y="438">02 / DISCOVERY</text>
+    <text class="heading" x="184" y="482">Open exploration</text>
+    <text class="example" x="184" y="531">Find directions and opportunities</text>
+    <text class="detail" x="184" y="575">Keep hypotheses + counterevidence</text>
+    <text class="label key" x="599" y="438">01 / COMPLETION</text>
+    <text class="heading" x="599" y="482">Complex tasks</text>
+    <text class="example" x="599" y="531">Repair · refactor · migrate</text>
+    <text class="detail" x="599" y="575">Keep acceptance gaps and versions</text>
+  </g>
+  <rect x="154" y="760" width="830" height="104" rx="12" fill="#171717"/>
+  <text class="band-title" x="184" y="802">03 / Continuous-delivery digital workers</text>
+  <text class="band-detail" x="184" y="839">Across quadrants: clarify → explore → deliver → follow up</text>
+  <text class="footnote" x="154" y="902">LoopX · 01 and 02: solving work. 03: continuing responsibility.</text>
+</svg>

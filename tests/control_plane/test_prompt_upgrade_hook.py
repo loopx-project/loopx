@@ -176,9 +176,18 @@ def test_upgrade_read_projection_preserves_work_authority(tmp_path, monkeypatch,
     assert read["command"] == hint["command"]
     assert read["ordering"] == "before_work"
     assert read["prompt_budget_bytes"] == 1536
+    # The dispatch names the hook that produced the read, and the projected hint
+    # must still carry every field of that read unchanged.
+    assert read["hook_id"] == "heartbeat.prompt_upgrade"
+    assert read["capability_id"] == "automation-prompt-upgrade"
+    assert {key: read[key] for key in hint} == hint
     for key in baseline.keys() | pending.keys():
-        if key not in {"required_reads", "interaction_contract", "protocol_action_packet",
-            "turn_start_capability_hook_dispatch"}:
+        if key not in {
+            "required_reads",
+            "interaction_contract",
+            "protocol_action_packet",
+            "turn_start_capability_hook_dispatch",
+        }:
             assert pending.get(key) == baseline.get(key), key
     _set_fixture_prompt(path, database, desired)
     assert build_live_quota_should_run_decision(status, **kwargs) == baseline

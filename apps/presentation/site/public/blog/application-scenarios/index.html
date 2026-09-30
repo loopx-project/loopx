@@ -25,10 +25,8 @@
     button:focus-visible{outline:2px solid var(--blue);outline-offset:3px}button[aria-pressed=true]{background:var(--ink);color:#fff}
     .site-header{padding:0 24px}.article-heading{padding-top:64px}.article-heading .eyebrow{margin-top:0}
     .chapter-line{display:flex;flex-wrap:wrap;gap:16px;align-items:center;color:var(--body);font-size:12px;margin-top:28px}
-    .scenario-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:32px 0}
-    .scenario{padding:24px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
-    .scenario .number{font:500 12px var(--font-mono);color:var(--blue)}.scenario h3{margin:16px 0 12px;font-size:20px}.scenario p{font-size:14px;margin:0}.scenario small{display:block;border-top:1px solid var(--border);padding-top:16px;margin-top:20px;font-size:12px}
     .takeaway{font-size:22px!important;line-height:1.65;color:var(--ink);letter-spacing:-.02em}
+    .quadrant-figure .architecture-viewport a{min-width:640px}.quadrant-figure figcaption{font-size:13px}
     .loop-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:24px 0}.loop-row>div{padding:16px;border:1px solid var(--border);background:var(--surface);border-radius:6px;font-size:14px}.loop-row b{display:block;color:var(--ink)}.loop-row span{display:block;font-size:12px;margin-top:8px}
     .comparison{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:24px 0}.comparison>div{border:1px solid var(--border);border-radius:12px;padding:24px;background:var(--surface)}.comparison strong{display:block;font-size:32px;letter-spacing:-.04em;margin:12px 0}.comparison p{font-size:14px;margin:0}
     .study-signal{margin:32px 0;padding:28px 0 4px;border-top:1px solid var(--border);scroll-margin-top:24px}.study-signal h3{margin:0 0 12px}.study-signal .study-setting{font-size:12px;margin-bottom:16px}.study-signal p{margin-bottom:16px}.study-signal .signal-boundary{font-size:14px}.study-signal .study-link{font-size:14px;margin-bottom:0}.presenting .study-signal .study-setting{font-size:14px}.presenting .study-signal .signal-boundary,.presenting .study-signal .study-link{font-size:17px}
@@ -36,10 +34,10 @@
     .small-note{font-size:12px!important;color:var(--body)}.layers{margin:24px 0;border-top:1px solid var(--border)}.layer{display:grid;grid-template-columns:150px 1fr;gap:24px;border-bottom:1px solid var(--border);padding:18px 0;font-size:14px}.layer b{color:var(--ink)}
     .evolution{counter-reset:step;list-style:none!important;padding:0!important}.evolution li{counter-increment:step;display:grid;grid-template-columns:40px 1fr;gap:16px;padding:20px 0;border-bottom:1px solid var(--border);margin:0}.evolution li::before{content:"0" counter(step);font:500 14px var(--font-mono);color:var(--blue);padding-top:4px}.evolution b{display:block}.evolution span{display:block;font-size:14px;margin-top:6px}
     .source-list{font-size:13px}.site-footer{padding:32px 24px;border-top:1px solid var(--border);font-size:12px}.site-footer a{margin-left:auto}
-    .presenting .article-layout{max-width:1200px;grid-template-columns:180px minmax(0,960px);gap:40px}.presenting .prose{font-size:21px}.presenting .prose h2{font-size:36px}.presenting .takeaway{font-size:28px!important}.presenting .prose section{padding-bottom:40px;scroll-margin-top:24px}.presenting table{font-size:17px}.presenting .scenario p,.presenting .loop-row>div,.presenting .layer,.presenting .state-demo dd{font-size:17px}.presenting .toc{font-size:13px}.presenting .toc details{top:20px}
+    .presenting .article-layout{max-width:1200px;grid-template-columns:180px minmax(0,960px);gap:40px}.presenting .prose{font-size:21px}.presenting .prose h2{font-size:36px}.presenting .takeaway{font-size:28px!important}.presenting .prose section{padding-bottom:40px;scroll-margin-top:24px}.presenting table{font-size:17px}.presenting .loop-row>div,.presenting .layer,.presenting .state-demo dd{font-size:17px}.presenting .toc{font-size:13px}.presenting .toc details{top:20px}
     @media(max-width:1100px){.article-heading,.article-layout{margin-left:24px;margin-right:24px}.presenting .article-layout{grid-template-columns:160px minmax(0,1fr)}}
-    @media(max-width:760px){.scenario-grid,.comparison{grid-template-columns:1fr}.loop-row{grid-template-columns:1fr 1fr}.article-layout,.presenting .article-layout{display:block}.toc{margin-bottom:40px}.toc details{position:static}.site-header{gap:12px;flex-wrap:wrap;padding:12px 20px}.site-header nav{gap:16px}.header-actions{gap:8px}.article-heading{padding-top:40px}.state-demo dl,.layer{grid-template-columns:1fr;gap:8px}.state-demo dd{margin-bottom:16px}.scenario small{margin-top:12px;padding-top:12px}.presenting .prose{font-size:18px}}
-    @media print{.site-header,.toc,.stage-buttons,.chapter-line,.site-footer{display:none!important}.article-layout,.presenting .article-layout{display:block;max-width:none;padding:24px 0}.article-heading{padding:0 0 24px}.prose h2{break-after:avoid}.diagram,.comparison,.state-demo,.scenario{break-inside:avoid}body{background:#fff}}
+    @media(max-width:760px){.comparison{grid-template-columns:1fr}.loop-row{grid-template-columns:1fr 1fr}.article-layout,.presenting .article-layout{display:block}.toc{margin-bottom:40px}.toc details{position:static}.site-header{gap:12px;flex-wrap:wrap;padding:12px 20px}.site-header nav{gap:16px}.header-actions{gap:8px}.article-heading{padding-top:40px}.state-demo dl,.layer{grid-template-columns:1fr;gap:8px}.state-demo dd{margin-bottom:16px}.presenting .prose{font-size:18px}}
+    @media print{.site-header,.toc,.stage-buttons,.chapter-line,.site-footer{display:none!important}.article-layout,.presenting .article-layout{display:block;max-width:none;padding:24px 0}.article-heading{padding:0 0 24px}.prose h2{break-after:avoid}.diagram,.comparison,.state-demo{break-inside:avoid}body{background:#fff}}
   </style>
 </head>
 <body>
@@ -58,18 +56,24 @@
   </div>
   <div class="article-layout">
     <aside class="toc"><details open><summary>In this article</summary><nav aria-label="Article contents">
-      <a href="#map">Three kinds of work</a><a href="#complex">01 Finish a complex task</a><a href="#benchmark">Signals from benchmarks</a><a href="#exploration">02 Find a path through exploration</a><a href="#employee">03 Own continuous delivery</a><a href="#layers">How state and capabilities divide responsibility</a><a href="#evolution">How to evolve from here</a><a href="#sources">Public sources</a>
+      <a href="#map">Two axes, three kinds of work</a><a href="#complex">01 Finish a complex task</a><a href="#exploration">02 Find a path through exploration</a><a href="#employee">03 Own continuous delivery</a><a href="#movement">How work moves between quadrants</a><a href="#layers">How state and capabilities divide responsibility</a><a href="#fit">When a long-horizon control plane helps</a><a href="#benchmark">Signals from benchmarks</a><a href="#evolution">How to evolve from here</a><a href="#sources">Public sources</a>
     </nav></details></aside>
     <article class="prose">
       <section id="map">
-        <h2>Start with the work, then choose the abstraction</h2>
-        <div class="scenario-grid">
-          <div class="scenario"><span class="number">01 / COMPLETION</span><h3>Complex tasks with clear acceptance</h3><p>Refactors, migrations, and protocol implementations. The destination is fairly clear even when the execution path is not.</p><small>Preserve: acceptance gaps, versions, repair evidence<br>Measure: completion rate and cost</small></div>
-          <div class="scenario"><span class="number">02 / DISCOVERY</span><h3>Open-ended exploration</h3><p>Research, algorithm experiments, and system optimization. New evidence continuously changes the next route.</p><small>Preserve: hypotheses, counterevidence, candidate directions<br>Measure: useful discoveries and validation</small></div>
-          <div class="scenario"><span class="number">03 / DELIVERY</span><h3>Digital workers for continuous delivery</h3><p>Take an issue, fix it, follow review, handle new feedback, and remain accountable for the result.</p><small>Preserve: responsibility, external state, waiting conditions<br>Measure: delivery quality and human effort</small></div>
-        </div>
-        <p>These categories can nest. An agent maintaining a repository over time may first explore a performance problem, then complete a fix with clear acceptance, and finally follow the pull request through review. The first two categories mainly describe how work is solved; the third adds an ongoing responsibility and a stream of newly arriving work.</p>
-        <p class="takeaway">What should persist is the work—and the reasoning behind its decisions.</p>
+        <h2>Ask two questions: what counts as done, and how do we get there?</h2>
+        <p>For work handed to an agent, I first separate two uncertainties: <strong>clarity of the goal and clarity of the process.</strong> Knowing what you want and knowing how to achieve it are different things.</p>
+        <p><strong>A clear goal</strong> names the outcome, constraints, and acceptance criteria. <strong>A clear process</strong> has a reusable method. A workflow with many steps can be well understood; “make the system better” may leave both the outcome and the route unresolved.</p>
+        <figure class="quadrant-figure">
+          <div class="architecture-viewport" tabindex="0" role="region" aria-label="Goal and process clarity quadrant diagram; horizontally scrollable">
+            <a href="../assets/task-quadrants-en.svg" aria-label="Open the full-size work quadrant diagram"><img src="../assets/task-quadrants-en.svg" width="1040" height="920" alt="Goal clarity increases to the right; process clarity increases upward. Top left: clarify the goal. Top right: routine execution. Bottom left: 02 open exploration. Bottom right: 01 complex tasks. 03 continuous-delivery digital workers operate across these quadrants."></a>
+          </div>
+          <figcaption>Clarity changes with evidence and human feedback. 01 and 02 describe how work is solved; 03 describes how responsibility continues. Scroll horizontally on narrow screens, or open the image at full size.</figcaption>
+        </figure>
+        <p><strong>Top right: clear goal, known process.</strong> Convert data to a specified format or run a validated release workflow. Reliable execution matters here. A script or workflow can be enough for short work; waiting across days, recovering from interruption, or owning downstream results creates an additional continuity need.</p>
+        <p><strong>Top left: known process, unclear goal.</strong> A team may know how to produce a weekly report without having agreed whose decisions it should inform. Clarify the audience, value criteria, and tradeoffs first. Speeding up a familiar process does not automatically make its output useful.</p>
+        <p><strong>Bottom right maps to 01; bottom left maps to 02.</strong> The former knows the destination and must find a route. The latter also uses exploration to discover what is worth pursuing. An exploratory round can still define its question, evidence requirements, and stopping conditions; an unclear goal is not a mandate to run indefinitely.</p>
+        <p><strong>03 is a continuing responsibility across quadrants.</strong> An agent maintaining a repository may clarify performance needs, investigate a bottleneck, complete a fix, and follow its pull request. It takes on both complex tasks and exploration, while remaining responsible when new feedback arrives.</p>
+        <p class="takeaway">Uncertainty determines what must persist.<br>Continuing responsibility determines for how long.</p>
       </section>
 
       <section id="complex">
@@ -79,11 +83,85 @@
           <div><b>Define acceptance</b><span>Specification, baseline, budget</span></div><div><b>Implement and validate</b><span>Bind artifacts to a specific version</span></div><div><b>Find the gaps</b><span>What remains beyond the tests?</span></div><div><b>Continue or stop</b><span>Close gaps, or close out explicitly</span></div>
         </div>
         <p>LoopX keeps the goal and its acceptance gaps continuous across turns, then carries new evidence into the next decision. The model implements and judges; domain validators check the result; the control plane records which results were accepted and which work remains.</p>
+        <p>Preserve more than completed steps: <strong>the current acceptance version, unresolved gaps, attempted repairs, and the artifact version each check evaluated.</strong> If the task list is exhausted but acceptance is unmet, replan. If a person changes compatibility requirements, a pass on the old version cannot establish acceptance under the new criteria.</p>
         <p>The best-fitting tasks usually span repeated validation, waiting, or handoffs. Existing agents may already be enough for small work that can be accepted in one session; an added control plane must justify its overhead.</p>
+      </section>
+
+      <section id="exploration">
+        <h2>02 / Find a path through open-ended exploration</h2>
+        <p>“Find a better algorithm” does not come with a fully specified task chain. Real progress may validate a hypothesis—or eliminate a promising-looking route. If only successful conclusions survive, the next run can easily repeat ideas that were already disproved.</p>
+        <div class="loop-row" aria-label="Evidence loop for exploration">
+          <div><b>Frame the question</b><span>Constraints and hypotheses to test</span></div><div><b>Try several routes</b><span>Isolate experiments and bound cost</span></div><div><b>Record positive and negative evidence</b><span>Support, refute, or raise a new question</span></div><div><b>Update the direction</b><span>Continue, combine, retire, or pause</span></div>
+        </div>
+        <p><strong>Explore</strong> provides an optional evidence graph and bounded branch planning: nodes represent questions and findings, while relationships express <code>supports</code>, <code>refutes</code>, and <code>leads_to</code>. Planning suggestions still pass through normal execution boundaries; the graph neither launches workers nor grants spending authority.</p>
+        <p><strong>Auto Research</strong> organizes this pattern as research work: select a topic, propose hypotheses, run experiments, evaluate independently, and produce a report. Existing protocols and commands provide a foundation, while the public showcase still contains blueprints and items awaiting validation. Real effectiveness must be demonstrated on specific tasks.</p>
+        <p>Exploration can be accepted by the uncertainty it removes: compare candidate routes, produce a reproducible experiment, rule out a hypothesis, or identify the evidence still missing. <strong>A well-supported negative conclusion can complete a bounded research round.</strong> A finite research deliverable can close out while a longer-term direction continues in another round.</p>
+
+        <h3>Place RSI here, but keep the claim precise</h3>
+        <p>When the object of improvement is the agent’s own tools, strategies, or harness, the work becomes self-improvement research. <strong>Changing its own code only creates a candidate; sustained improvement still requires independent evaluation, cross-task generalization, regression checks, and rollback.</strong></p>
+        <p>Applying past experience to a later decision, automatically generating experiments, and modifying the harness are different levels. We can discuss an experimental path toward recursive self-improvement (RSI) here; we cannot equate “automatic iteration” with open-ended self-improvement already achieved.</p>
+      </section>
+
+      <section id="employee">
+        <h2>03 / Own continuous delivery</h2>
+        <p>For a pull-request or issue-fix digital worker, the job begins by deciding whether the issue is worth fixing. After delivery, CI, review feedback, branch changes, and the merge result still remain. New tasks keep arriving, and external facts keep changing.</p>
+        <p class="takeaway">Responsibility does not end when the patch is generated.</p>
+        <p>This synthetic scenario starts after a fix has been submitted while CI and review are still running. Choose an external state to see how the next step changes.</p>
+        <div class="stage-buttons" hidden role="group" aria-label="Choose the pull request's external state">
+          <button type="button" data-state="pending" aria-pressed="true">CI pending</button><button type="button" data-state="failed" aria-pressed="false">CI failed</button><button type="button" data-state="changed" aria-pressed="false">Revision changed</button><button type="button" data-state="merged" aria-pressed="false">PR merged</button>
+        </div>
+        <div class="state-demo" aria-live="polite" aria-atomic="true"><dl>
+          <dt>External fact</dt><dd id="fact">GitHub reports that checks are pending for the current revision.</dd>
+          <dt>Domain state</dt><dd id="domain">Record the pull request, revision, and check state; an unchanged observation does not create progress.</dd>
+          <dt>Capability proposal</dt><dd id="proposal">Preserve the monitor and recovery condition, then wait for the result.</dd>
+          <dt>Control-plane check</dt><dd id="kernel">Admit work by authority, budget, and eligibility; work outside the wait scope can still proceed.</dd>
+          <dt>Meaning for people</dt><dd id="meaning">Stay quiet when nothing material changed, so polling does not become nagging.</dd>
+        </dl></div>
+        <noscript><p class="small-note">The static example shows CI pending. Enable JavaScript to switch states.</p></noscript>
+        <p class="small-note">This interactive diagram is a design explanation. It is not connected to a real repository and performs no GitHub operations.</p>
+        <p>Here, a “digital worker” means continuing responsibility, boundaries, memory, and a feedback loop. Its value should be judged by accepted fixes, reopenings and regressions, handling latency, delivery cost, and how often a person must repeatedly supervise it. Pull-request count and uptime are only process signals.</p>
+        <p>A continuing responsibility also needs rules for <strong>when to wake, when to stay quiet, and when to involve a person.</strong> New review feedback can become work input; unchanged pending CI does not need repeated interruptions. Missing authority, goal tradeoffs, or exhausted budgets need explicit stopping points. One repair can finish while the maintenance role continues; that role must also be pausable, revocable, and transferable.</p>
+      </section>
+
+      <section id="movement">
+        <h2>Work moves between quadrants. State must follow.</h2>
+        <p>Consider maintaining a service’s performance. “Make it faster” first requires agreement on workload, metrics, and compatibility constraints. Once the outcome is clear, the bottleneck still needs investigation. Finding a repair route turns the work into implementation and acceptance; submission brings review, feedback, and regression follow-up.</p>
+        <div class="loop-row" aria-label="Illustrative journey from an unclear request to continuous delivery">
+          <div><b>Clarify expectations</b><span>Workload, metrics, constraints</span></div><div><b>Explore bottlenecks</b><span>Baselines, hypotheses, counterevidence</span></div><div><b>Deliver the fix</b><span>Implement and verify a specific version</span></div><div><b>Keep following up</b><span>Review, regressions, new feedback</span></div>
+        </div>
+        <p>This is not a one-way progression. Feedback can change the goal; a counterexample can invalidate the route. A stable method discovered through exploration can become a routine workflow, while new conditions can send a workflow back into exploration. An agent must recognize whether the remaining issue is disagreement about the goal, uncertainty about the route, or simply waiting.</p>
+        <p>A task’s name does not determine its position; the information currently available does. Research with an agreed question, deliverable, and scoring rule can be managed as a task with clear acceptance. A refactor with a mature method can rely more on an established workflow. Both axes are continuous; the quadrants mark common work patterns.</p>
+        <p>Useful handoff state includes <strong>the current goal and constraints, why this route was chosen, rejected approaches, artifact and acceptance versions, and conditions for continuing or stopping.</strong> A chat summary or “step three completed” alone cannot carry these changes.</p>
+        <p>The same work may change models, sessions, or executors. Revisions to its goal, evidence of failure, and outstanding responsibilities should remain continuous. This is the shared place of a long-horizon control plane in all three scenarios.</p>
+      </section>
+
+      <section id="layers">
+        <h2>The richer the domain, the clearer the division of responsibility must be</h2>
+        <div class="layers">
+          <div class="layer"><b>Kernel<br>Authority and common lifecycle</b><span>Which goals and work items are valid, who may act, which authority and budgets apply, and how work is handed off, paused, and committed.</span></div>
+          <div class="layer"><b>Domain State<br>Domain continuity</b><span>Whether this issue is actionable, which revision the pull request names, where CI and review stand, and which conclusions remain valid.</span></div>
+          <div class="layer"><b>Capability<br>Outcome contract and judgment</b><span>Translate domain facts into a verifiable next step: repair, wait, ask a person, or close out—and define acceptance for the scenario.</span></div>
+          <div class="layer"><b>Provider / Runtime<br>External I/O and execution</b><span>Call repositories, tests, and tools; perform authorized actions; and read back the result. GitHub still owns the external facts about code, CI, and review.</span></div>
+        </div>
+        <p>For <code>checks failing</code>, a domain capability can propose a successor task to repair CI. The fact that a repair is needed does not itself grant repository write or merge authority. In an experiment, check state becomes metrics and held-out conclusions; the common claim, authority, and recovery rules should remain consistent.</p>
+        <p>That is the value of a capability: it captures recurring judgments and outcome contracts for a scenario without forcing every business stage into the Kernel.</p>
+      </section>
+
+      <section id="fit">
+        <h2>When does a long-horizon control plane help?</h2>
+        <p>The quadrants describe uncertainty. <strong>The need for continuity across turns</strong> determines whether additional state management helps. Exploration that can be accepted within an hour may not need a long-horizon system. A fully understood release process may need one because it spans days, handoffs, and external feedback.</p>
+        <ul>
+          <li><strong>Complex tasks:</strong> changing sessions means explaining acceptance again, recovering repair progress, or rediscovering known gaps.</li>
+          <li><strong>Open exploration:</strong> several routes run in parallel, negative results disappear, and the next round needs evidence-based allocation rather than recollection.</li>
+          <li><strong>Continuing responsibility:</strong> tasks, reviews, or external outcomes keep arriving, leaving a person to act as dispatcher and follow-up manager.</li>
+        </ul>
+        <p>These are concrete reasons to externalize state. After adding LoopX, check whether verified output increases, regressions and duplicated work decrease, and people spend less attention managing it. Count the additional execution and maintenance costs too.</p>
+        <p>My goal remains to have agents do more work while people spend less attention managing them. Separating exploration, execution, and continuing responsibility helps give each kind of work the right management—and reserve human judgment for decisions worth making.</p>
       </section>
 
       <section id="benchmark">
         <h2>Benchmarks: start with LHTB, then three supporting signals</h2>
+        <p>Most benchmarks provide acceptance criteria, testing problem solving with a clear goal and an unknown route. Even a task that requires algorithm exploration has a specified deliverable and scoring rule. Choosing an open-ended research direction or maintaining an ongoing responsibility is a different level of work.</p>
         <p>Start with recovery and regression across long-horizon domains, then use three software-engineering studies to examine continuation, delivery, and validation. The four studies differ in tasks, model settings, and measurement rules. Each needs to be read on its own terms; the current evidence does not establish a universal LoopX gain.</p>
 
         <div class="study-signal" id="benchmark-lhtb">
@@ -134,52 +212,6 @@
         <p class="takeaway">Recover progress, preserve working results, and check whether continuation closes acceptance gaps.</p>
         <p>The four studies offer local positive observations while exposing regressions, cost, and attribution problems. Matched budgets and repeated experiments should examine recovery, rollback, delivery, and counterexample-driven repair separately.</p>
         <p class="small-note">Withdrawn SSH Goal and Codex CLI scores and conclusions from SWE-Marathon and DeepSWE × Sol are not used in these comparisons.</p>
-      </section>
-
-      <section id="exploration">
-        <h2>02 / Find a path through open-ended exploration</h2>
-        <p>“Find a better algorithm” does not come with a fully specified task chain. Real progress may validate a hypothesis—or eliminate a promising-looking route. If only successful conclusions survive, the next run can easily repeat ideas that were already disproved.</p>
-        <div class="loop-row" aria-label="Evidence loop for exploration">
-          <div><b>Frame the question</b><span>Constraints and hypotheses to test</span></div><div><b>Try several routes</b><span>Isolate experiments and bound cost</span></div><div><b>Record positive and negative evidence</b><span>Support, refute, or raise a new question</span></div><div><b>Update the direction</b><span>Continue, combine, retire, or pause</span></div>
-        </div>
-        <p><strong>Explore</strong> provides an optional evidence graph and bounded branch planning: nodes represent questions and findings, while relationships express <code>supports</code>, <code>refutes</code>, and <code>leads_to</code>. Planning suggestions still pass through normal execution boundaries; the graph neither launches workers nor grants spending authority.</p>
-        <p><strong>Auto Research</strong> organizes this pattern as research work: select a topic, propose hypotheses, run experiments, evaluate independently, and produce a report. Existing protocols and commands provide a foundation, while the public showcase still contains blueprints and items awaiting validation. Real effectiveness must be demonstrated on specific tasks.</p>
-
-        <h3>Place RSI here, but keep the claim precise</h3>
-        <p>When the object of improvement is the agent’s own tools, strategies, or harness, the work becomes self-improvement research. <strong>Changing its own code only creates a candidate; sustained improvement still requires independent evaluation, cross-task generalization, regression checks, and rollback.</strong></p>
-        <p>Applying past experience to a later decision, automatically generating experiments, and modifying the harness are different levels. We can discuss an experimental path toward recursive self-improvement (RSI) here; we cannot equate “automatic iteration” with open-ended self-improvement already achieved.</p>
-      </section>
-
-      <section id="employee">
-        <h2>03 / Own continuous delivery</h2>
-        <p>For a pull-request or issue-fix digital worker, the job begins by deciding whether the issue is worth fixing. After delivery, CI, review feedback, branch changes, and the merge result still remain. New tasks keep arriving, and external facts keep changing.</p>
-        <p class="takeaway">Responsibility does not end when the patch is generated.</p>
-        <p>This synthetic scenario starts after a fix has been submitted while CI and review are still running. Choose an external state to see how the next step changes.</p>
-        <div class="stage-buttons" hidden role="group" aria-label="Choose the pull request's external state">
-          <button type="button" data-state="pending" aria-pressed="true">CI pending</button><button type="button" data-state="failed" aria-pressed="false">CI failed</button><button type="button" data-state="changed" aria-pressed="false">Revision changed</button><button type="button" data-state="merged" aria-pressed="false">PR merged</button>
-        </div>
-        <div class="state-demo" aria-live="polite" aria-atomic="true"><dl>
-          <dt>External fact</dt><dd id="fact">GitHub reports that checks are pending for the current revision.</dd>
-          <dt>Domain state</dt><dd id="domain">Record the pull request, revision, and check state; an unchanged observation does not create progress.</dd>
-          <dt>Capability proposal</dt><dd id="proposal">Preserve the monitor and recovery condition, then wait for the result.</dd>
-          <dt>Control-plane check</dt><dd id="kernel">Admit work by authority, budget, and eligibility; work outside the wait scope can still proceed.</dd>
-          <dt>Meaning for people</dt><dd id="meaning">Stay quiet when nothing material changed, so polling does not become nagging.</dd>
-        </dl></div>
-        <noscript><p class="small-note">The static example shows CI pending. Enable JavaScript to switch states.</p></noscript>
-        <p class="small-note">This interactive diagram is a design explanation. It is not connected to a real repository and performs no GitHub operations.</p>
-        <p>Here, a “digital worker” means continuing responsibility, boundaries, memory, and a feedback loop. Its value should be judged by accepted fixes, reopenings and regressions, handling latency, delivery cost, and how often a person must repeatedly supervise it. Pull-request count and uptime are only process signals.</p>
-      </section>
-
-      <section id="layers">
-        <h2>The richer the domain, the clearer the division of responsibility must be</h2>
-        <div class="layers">
-          <div class="layer"><b>Kernel<br>Authority and common lifecycle</b><span>Which goals and work items are valid, who may act, which authority and budgets apply, and how work is handed off, paused, and committed.</span></div>
-          <div class="layer"><b>Domain State<br>Domain continuity</b><span>Whether this issue is actionable, which revision the pull request names, where CI and review stand, and which conclusions remain valid.</span></div>
-          <div class="layer"><b>Capability<br>Outcome contract and judgment</b><span>Translate domain facts into a verifiable next step: repair, wait, ask a person, or close out—and define acceptance for the scenario.</span></div>
-          <div class="layer"><b>Provider / Runtime<br>External I/O and execution</b><span>Call repositories, tests, and tools; perform authorized actions; and read back the result. GitHub still owns the external facts about code, CI, and review.</span></div>
-        </div>
-        <p>For <code>checks failing</code>, a domain capability can propose a successor task to repair CI. The fact that a repair is needed does not itself grant repository write or merge authority. In an experiment, check state becomes metrics and held-out conclusions; the common claim, authority, and recovery rules should remain consistent.</p>
-        <p>That is the value of a capability: it captures recurring judgments and outcome contracts for a scenario without forcing every business stage into the Kernel.</p>
       </section>
 
       <section id="evolution">

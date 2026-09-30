@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -97,14 +97,27 @@ def collaboration_goal_scope(
     agents: tuple[str, ...],
     caller_goal_ref: dict[str, str] | None = None,
     require_active: bool = False,
+    lock_registry: bool = False,
 ) -> Iterator[CollaborationGoalScope]:
     """Hold the alias lifetime guard while one collaboration operation commits."""
 
     registry_path = Path(registry_path).expanduser().resolve()
-    with exclusive_cross_runtime_file_lock(
-        guard_path(registry_path, goal_id),
-        operation="collaboration_goal_lifetime",
-    ):
+    with ExitStack() as guards:
+        guards.enter_context(
+            exclusive_cross_runtime_file_lock(
+                guard_path(registry_path, goal_id),
+                operation="collaboration_goal_lifetime",
+            )
+        )
+        if lock_registry:
+            # Same lock as thread binding transactions, held through the
+            # downstream commit. Order: Goal lifetime -> registry -> work store.
+            guards.enter_context(
+                exclusive_cross_runtime_file_lock(
+                    registry_path,
+                    operation="collaboration_registry_snapshot",
+                )
+            )
         registry = load_project_registry(registry_path)
         goal = _registered_goal(
             registry,

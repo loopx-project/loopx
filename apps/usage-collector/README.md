@@ -2,7 +2,8 @@
 
 Cloudflare Worker + D1 for [basic usage statistics](../../docs/reference/usage-ping.md).
 The TypeScript client/collector allowlist lives in
-`loopx/control_plane/runtime/usage_statistics_contract.ts`.
+`loopx/control_plane/runtime/usage_statistics_contract.ts` and
+`usage_statistics_diagnostics.ts`.
 
 | Endpoint | Contract |
 |---|---|
@@ -12,6 +13,8 @@ The TypeScript client/collector allowlist lives in
 | `GET /v1/goal-stats` | Independent 30-day duration histograms; cells below 5 omitted |
 | `GET /v0/stats` | Deduplicated active/new installations, including retained v0 clients; version/OS/CPU/channel breakdown |
 | `GET /v1/aggregate-stats` | Independent 30-day feature/result/duration/error totals; cells below 5 omitted |
+| `GET /v1/diagnostic-stats` | Independent versioned CLI/lifecycle marginals; cells below 5 omitted |
+| `GET /v1/adoption-stats` | Mature 1/7/30-day installation return cohorts and 30-day activity-day buckets |
 | `POST /v0/ping` | Retained six-field opt-in client contract; no new default-on clients use this route |
 
 Heartbeats are deduplicated by installation/day and retained 400 days.
@@ -23,6 +26,16 @@ Clients may send multiple non-overlapping CLI batches within a day; the collecto
 adds each delta without requiring a schema migration. Delivery cadence does not
 add a version or installation join key. Counters are estimates, not people,
 accepted Goal outcomes or billing records.
+
+The aggregate endpoint also accepts `loopx_usage_diagnostics_v1`.
+`diagnostic_counts` stores fixed feature/sub-operation/result/reason/duration,
+numeric version, UTC activity date, receipt date, voluntary deployment context
+and receipt-backed lifecycle signal. It has no installation join key or raw
+request rows. Activity dates older than seven days or in the future are rejected.
+Keep 30 receipt days; legacy counters are never backfilled or reattributed.
+Public endpoints expose independent marginals, not multi-dimensional histories.
+Return cohorts count installation state, not people; `within_Nd` means any later
+heartbeat within a mature N-day window, not exact day-N retention.
 
 Neither handler reads/stores IP, user agent or Cloudflare request metadata.
 The template disables Worker observability; Cloudflare still handles network
@@ -61,6 +74,12 @@ must never be summed. The unreleased Goal payload requires measurement/Host
 labels and uses `duration` instead of `execution`.
 A Worker rollback can leave that additive table intact.
 
+Before releasing notice-v5 clients, apply `0004-diagnostics.sql` with D1
+migrations and deploy the updated Worker. It preserves existing installs,
+pings and legacy counters. An older Worker rejects new diagnostics; loss is
+not retried. Roll back the Worker/client without dropping the additive table.
+Merging this code does not deploy the collector.
+
 Qualify `/v1/ping`, `/v1/aggregate`, `/v1/goals`, all stats endpoints, and invalid-field/size
 rejections on a separate database first. Deploy the collector before releasing
 the new client default: the v0-only Worker does not accept v1 requests. Server
@@ -83,4 +102,4 @@ node --no-warnings --experimental-strip-types --test tests/control_plane_ts/usag
 ```
 
 Run from repository root. The collector suite executes actual SQL in SQLite,
-including both additive migrations; no production telemetry is needed for these tests.
+including additive migrations and mature/suppressed cohorts; no production telemetry is needed for these tests.

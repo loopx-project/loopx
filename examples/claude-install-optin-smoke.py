@@ -42,6 +42,8 @@ def _isolated_host_env(home: Path) -> dict[str, str]:
         "HOME": str(home),
         "PATH": os.environ.get("PATH", os.defpath),
         "SHELL": "/bin/zsh",
+        # Rebuilding the environment must not restore telemetry in synthetic runs.
+        "LOOPX_USAGE_PING": "0",
         "CODEX_HOME": str(home / ".codex"),
         "CLAUDE_HOME": str(home / ".claude"),
         "OPENCODE_CONFIG_DIR": str(home / ".config" / "opencode"),

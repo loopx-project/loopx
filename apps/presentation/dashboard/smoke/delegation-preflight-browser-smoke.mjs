@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {mkdir} from "node:fs/promises";
 import {resolve} from "node:path";
 import {delegationPreflight} from "../../../../loopx/control_plane/collaboration/delegation.ts";
+import {projectManagedOperationTransport} from "../../../../loopx/control_plane/work_items/operation_agent_handoff.ts";
 import {launchBrowser, loadPlaywright, waitForHttp} from "../../../../examples/dashboard-browser-smoke-support.mjs";
 import {outputDir, packaged, port, startServer} from "../../../../examples/personal-workspace-browser/fixture.mjs";
 import {openWorkspacePage} from "../../../../examples/personal-workspace-browser/scenario-context.mjs";
@@ -35,7 +36,16 @@ try {
           acceptance_declaration_mismatch: "completion_validation_declaration_mismatch",
           acceptance_unknown: "/private/validator PRIVATE_VALUE",
         };
-        const check = state.startsWith("acceptance_")
+        const operation = projectManagedOperationTransport({host: "codex-cli", sandbox: "read-only",
+          model: state === "operation_invalid" ? null : "test-model", reasoning_effort: "xhigh"});
+        const check = state.startsWith("operation_")
+          ? delegationPreflight({binding, acceptance: {todo_id: binding.todo_id, state: "ready"},
+            validation_files_current: true, preview: {dry_run: true, status: "preview",
+              effects: {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+              route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: binding.todo_id},
+              managed_executor: {executor: "codex-cli", available: operation.reason ? false : null,
+                unavailable_reason: operation.reason, execution_profile: "test-model@xhigh", operation_transport: operation.transport}}})
+          : state.startsWith("acceptance_")
           ? delegationPreflight({binding,
             acceptance: {todo_id: binding.todo_id, state: state === "acceptance_files" ? "ready" : "unbound",
               reason: acceptanceReasons[state]}, validation_files_current: false,
@@ -111,6 +121,19 @@ try {
             assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), "Validation recovery copy must not overflow the dialog");
             await page.screenshot({path: resolve(outputDir, `acceptance-preflight-${zh ? "zh" : "en"}-${size}.png`), animations: "disabled"});
           }
+        }
+      }
+      for (const valid of [true, false]) {
+        state = valid ? "operation_valid" : "operation_invalid";
+        await team.getByRole("button", {name: zh ? "检查整个团队" : "Check whole team", exact: true}).click();
+        const observations = team.locator(".goal-team-bindings > li > p[role=status]");
+        const expected = valid ? (zh ? "运行未核验" : "runtime unqualified")
+          : (zh ? "操作传输配置未获准" : "Operation transport configuration not admitted");
+        await observations.filter({hasText: expected}).nth(2).waitFor();
+        for (const [size, viewport] of [["desktop", {width: 1512, height: 982}], ["mobile", {width: 390, height: 844}]]) {
+          await page.setViewportSize(viewport);
+          assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), "Operation transport readback must not overflow");
+          if (valid) await page.screenshot({path: resolve(outputDir, `operation-preflight-${zh ? "zh" : "en"}-${size}.png`), animations: "disabled"});
         }
       }
       const member = team.locator(".goal-team-bindings > li").filter({hasText: "local-analyst"});

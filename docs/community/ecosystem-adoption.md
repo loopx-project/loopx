@@ -21,6 +21,23 @@ owner submitting a directory entry.
 
 ## 1. Workflows and Integrations
 
+- **CGC 2046** (CodingGirlsClub) — merged
+  [PR #838](https://github.com/CodingGirlsClub/cgc_2046/pull/838) records a move
+  to LoopX with Codex CLI for development orchestration; merged
+  [PR #841](https://github.com/CodingGirlsClub/cgc_2046/pull/841) adds conditional
+  merging to `develop` while retaining human control for specified sensitive
+  changes, `main`, and releases. **Status: development-workflow configuration
+  merged**; this is not a dependency in the application's production runtime.
+  Checked September 30, 2026.
+- **NoKV** — merged [PR #518](https://github.com/NoKV-Lab/NoKV/pull/518)
+  adds a single-node test stack for LoopX's NoKV authority qualification.
+  The author reports live conformance checks; the tool explicitly does not
+  establish production availability, failover, or multi-owner operation.
+  The separate metadata-runtime promotion gate
+  [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) remains open.
+  **Status: qualification tooling merged, with separate acceptance still open**.
+  This is concrete integration work beyond the README relationship below,
+  not proof that NoKV runs LoopX in production. Checked September 30, 2026.
 - **GoTry** (Danceiny) — uses LoopX goals, Codex task bindings and heartbeats
   for multiple development lanes. [Issue #18](https://github.com/Danceiny/gotry/issues/18)
   records setup; [PR #187](https://github.com/Danceiny/gotry/pull/187), merged,
@@ -90,6 +107,24 @@ accepted design documents are distinct from depending on the LoopX runtime.
 
 ## 3. Proposals and Deferred Adoption
 
+- **OpenViking / VikingBot** — open
+  [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) proposes
+  optional, default-off LoopX-backed background long tasks. LoopX owns
+  Goal/Todo state and execution gates; the Bot supplies the worker, model
+  and tools. The author reports real CLI tests with a model substitute;
+  real-model end-to-end acceptance and Docker build validation remain open.
+  **Status: runtime integration proposed, not merged or released**.
+  Checked September 30, 2026.
+- **Opensiro VSM harness index** — merged
+  [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) records
+  a feasibility stop for a frozen LoopX comparison; a subsequent
+  [registered-peer harness](https://github.com/opensiro/vsm-harness-index/pull/614)
+  was built without live model execution. Merged
+  [PR #618](https://github.com/opensiro/vsm-harness-index/pull/618) then retires
+  that operated experiment under a public-evidence-only research policy.
+  **Status: historical research artifacts, live execution not performed or
+  planned for that study**; neither a new benchmark result nor runtime adoption.
+  Checked September 30, 2026.
 - **OpenBitFun** (GCWing) — built-in console [PR #2836](https://github.com/GCWing/OpenBitFun/pull/2836)
   is open and replaces closed, unmerged #2382. The maintainer
   [prioritizes beta stability before evaluating the larger feature](https://github.com/GCWing/OpenBitFun/pull/2836#issuecomment-5613986161).
@@ -186,3 +221,6 @@ accepted design documents are distinct from depending on the LoopX runtime.
   their behalf from this inventory.
 - Last reviewed: **2026-09-19**. Public-source research: September 18;
   linked PR/issue statuses refreshed September 19.
+- Scoped update: **2026-09-30**, covering CGC 2046, NoKV qualification tooling,
+  the VikingBot proposal and the retired Opensiro study above. Other entries
+  retain their earlier review boundary; this is not a full-table revalidation.

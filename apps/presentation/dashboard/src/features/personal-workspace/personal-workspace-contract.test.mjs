@@ -109,10 +109,13 @@ for (const state of ["delivered", "verification_required", "explicit_unverified"
   assert.match(returnDelivery, new RegExp(state), `Return delivery renders ${state}`);
 }
 assert.doesNotMatch(returnDelivery, /message_ref|provider_receipt|intent_digest/, "Provider-private locator facts never enter the return status badge");
-assert.match(actionReview, /proposal\.action_kind !== "operation\.execute" \|\| objectValue\(objectValue\(proposal\.operation\)\?\.result_delivery\) !== null/, "An operation is not complete in the Dashboard until result delivery is verified");
+assert.match(actionReview, /proposal\.action_kind !== "operation\.execute" \|\| \(operationFrame\?\.kind === "result" && operationFrame\.resultDeliveryVerified\)/, "An operation is not complete in the Dashboard until the current result delivery is verified");
 assert.match(page, /reviewPlan\.operationFrame/, "Dashboard operation details consume the shared TS review frame");
 assert.match(page, /operation\.execute" && proposal\.status === "applied"/, "Dashboard restores terminal operation receipts from the canonical action store");
 assert.match(page, /proposal\.action_kind !== "operation\.execute"[\s\S]*reviewPlan\.interaction !== "completed"/, "Pending operation result-card readback remains visible instead of becoming a generic apply error");
+assert.match(page, /operationFrame\?\.kind === "result"[\s\S]*operationFrame\.resultKind === "unknown"/, "Unknown operations survive workspace restoration and generic error-card filtering");
+assert.match(styles, /\.personal-proposal-row\[data-action-kind="operation\.execute"\]\s*\{\s*grid-template-columns:\s*36px minmax\(0, 1fr\);/, "Operation safety labels cannot take an unbounded third column from the request terms");
+assert.match(styles, /\.personal-proposal-row\[data-action-kind="operation\.execute"\] > b\s*\{\s*grid-column:\s*2;\s*overflow-wrap:\s*anywhere;/, "Long operation status remains fully visible on its own wrapping row");
 assert.match(drawer, /selection\.item\.actionKind !== "operation\.execute"/, "Dashboard hides generic local controls for authenticated group operations");
 assert.match(dashboard, /response\.protected_action/, "Agent semantic protected intent is projected only after the Chat response");
 assert.match(dashboard, /normalizedMessage\.includes\(normalizedTarget\)/, "A model-invented protected target cannot reach typed preview");
@@ -191,7 +194,7 @@ assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\
 assert.match(page, /model\.goals\.find\(\(goal\) => goal\.goalId === proposal\.goalId\)\?\.activationState/, "Goal lifecycle rollback captures the rendered state instead of assuming the operation inverse");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.previous\)/, "Rejected Goal lifecycle apply rolls back the optimistic projection");
 assert.match(page, /if \(applied\.actionKind === "goal\.lifecycle"\) \{\s*void reconcileStatus\(applied\.goalId \? \[applied\.goalId\] : undefined\)/, "Successful Goal lifecycle apply reconciles the affected Goal without blocking the sidebar");
-assert.match(dashboard, /onReconcileStatus=\{\(options\) => loadFromUrl\([\s\S]*\{ background: true, invalidateGoalIds: options\?\.invalidateGoalIds, reuseSnapshots: true \}/, "Lifecycle reconciliation uses the non-fatal background status path");
+assert.match(dashboard, /onReconcileStatus=\{\(options\) => loadFromUrl\([\s\S]*\{ background: true, invalidateGoalIds: options\?\.invalidateGoalIds, readScope: "missing" \}/, "Lifecycle reconciliation uses the non-fatal background status path");
 assert.match(dashboard, /statusRequestCanCommit\(statusRequestFenceRef\.current, request\)/, "A stale background response cannot overwrite a newer optimistic transition");
 assert.match(sidebar, /Trash2/, "Stopped Goals expose a delete icon");
 assert.match(sidebar, /onRequestGoalLifecycle\(goal, "delete"\)/, "Goal deletion stays behind the lifecycle request boundary");

@@ -279,7 +279,11 @@ def turn_start_hook(
                     agent_id,
                     scope=goal_scope,
                 )
-            count = len(inbox["items"]) + len(inbox.get("peer_returns", {}).get("items", []))
+            count = (
+                len(inbox["items"])
+                + len(inbox.get("peer_returns", {}).get("items", []))
+                + len(inbox.get("operation_handoffs", []))
+            )
             status, error = ("observed" if count else "empty"), None
         except (OSError, ValueError):
             count, status, error = 0, "unavailable", "manager_context_unreadable"

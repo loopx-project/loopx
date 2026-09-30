@@ -54,7 +54,7 @@ import {
 } from "./heartbeat_receipt_identity.ts";
 
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
-import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait } from "./blocked_wait.ts";
+import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait } from "./blocked_wait.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 
 export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
@@ -1118,6 +1118,9 @@ export function readQuotaSettlementFromSnapshot(
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
+  if (jsonObject(value)?.schema_version === RECEIPT_BOUND_WAIT_REQUEST_SCHEMA) {
+    return projectReceiptBoundWait(value);
+  }
   if (jsonObject(value)?.schema_version === BLOCKED_WAIT_REQUEST_SCHEMA) {
     return prepareBlockedWait(value);
   }

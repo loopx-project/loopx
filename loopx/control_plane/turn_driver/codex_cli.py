@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ...runtime import validate_goal_id_path_segment
+from ...file_lock import exclusive_file_lock
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
@@ -305,6 +306,31 @@ def _store_codex_cli_session(
     lineage: Mapping[str, str],
     session_id: str,
     goal_ref: Mapping[str, Any] | None = None,
+    operation_profile_digest: str | None = None,
+    operation_model: str | None = None,
+    operation_reasoning_effort: str | None = None,
+) -> None:
+    with exclusive_file_lock(_session_path(runtime_root, lineage)):
+        _write_codex_cli_session(
+            runtime_root,
+            lineage=lineage,
+            session_id=session_id,
+            goal_ref=goal_ref,
+            operation_profile_digest=operation_profile_digest,
+            operation_model=operation_model,
+            operation_reasoning_effort=operation_reasoning_effort,
+        )
+
+
+def _write_codex_cli_session(
+    runtime_root: Path,
+    *,
+    lineage: Mapping[str, str],
+    session_id: str,
+    goal_ref: Mapping[str, Any] | None = None,
+    operation_profile_digest: str | None = None,
+    operation_model: str | None = None,
+    operation_reasoning_effort: str | None = None,
 ) -> None:
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
@@ -329,6 +355,11 @@ def _store_codex_cli_session(
             }
             if goal_ref is not None:
                 payload["goal_ref"] = dict(goal_ref)
+            if operation_profile_digest is not None:
+                payload["operation_transport"] = "app-server-operation-tools-v0"
+                payload["operation_profile_digest"] = operation_profile_digest
+                payload["operation_model"] = operation_model
+                payload["operation_reasoning_effort"] = operation_reasoning_effort
             json.dump(
                 payload,
                 handle,
@@ -350,7 +381,9 @@ def _discard_codex_cli_session(
     *,
     lineage: Mapping[str, str],
 ) -> None:
-    _session_path(runtime_root, lineage).unlink(missing_ok=True)
+    path = _session_path(runtime_root, lineage)
+    with exclusive_file_lock(path):
+        path.unlink(missing_ok=True)
 
 
 def _has_subagent_topology(request: Mapping[str, Any] | None) -> bool:
@@ -864,6 +897,10 @@ def run_codex_cli_host(
     if planned_action not in {"resume", "start_new"}:
         raise ValueError("Codex CLI host request has no executable session action")
     session_id = str(binding.get("session_id")) if binding else None
+    if binding and binding.get("operation_transport"):
+        raise ValueError(
+            "operation-equipped session requires its original managed transport; select a fresh iteration explicitly to change it"
+        )
     goal_ref = request.get("goal_ref")
     exact_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
 

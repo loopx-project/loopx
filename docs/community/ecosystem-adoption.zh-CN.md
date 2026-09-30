@@ -15,6 +15,20 @@
 
 ## 1. 工作流与集成
 
+- **CGC 2046**（CodingGirlsClub）——已合并的
+  [PR #838](https://github.com/CodingGirlsClub/cgc_2046/pull/838) 记录改用
+  LoopX 与 Codex CLI 组织开发；已合并的
+  [PR #841](https://github.com/CodingGirlsClub/cgc_2046/pull/841) 增加满足条件后
+  合入 `develop` 的流程，指定敏感变更、`main` 与发布仍由人控制。
+  **状态：开发工作流配置已合并**；不代表应用生产运行时依赖 LoopX。
+  核对日期：2026-09-30。
+- **NoKV**——已合并的 [PR #518](https://github.com/NoKV-Lab/NoKV/pull/518)
+  增加用于 LoopX NoKV authority 资格验证的单节点测试环境。作者报告真实一致性
+  检查通过；工具明确不证明生产可用性、故障转移或多 owner 运行。
+  独立的 metadata-runtime 升级验收门禁
+  [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) 仍开放。
+  **状态：资格验证工具已合并，独立验收尚未关闭**。这比下文 README 中的合作声明
+  多了具体集成产物，不代表 NoKV 在生产中运行 LoopX。核对日期：2026-09-30。
 - **GoTry**（Danceiny）——用 LoopX goals、Codex 任务绑定和心跳管理多条开发路线。
   [issue #18](https://github.com/Danceiny/gotry/issues/18) 记录接入，已合并的
   [PR #187](https://github.com/Danceiny/gotry/pull/187) 记录交付验证。
@@ -80,6 +94,21 @@
 
 ## 3. 提案与暂缓采用
 
+- **OpenViking / VikingBot**——开放的
+  [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) 提议增加可选、
+  默认关闭的 LoopX 后台长任务。LoopX 管 Goal/Todo 状态与执行门禁，Bot 提供
+  worker、模型与工具。作者报告以模型替身完成真实 CLI 测试；真实模型端到端
+  验收和 Docker 构建仍未完成。**状态：运行时集成提案，尚未合并或发布**。
+  核对日期：2026-09-30。
+- **Opensiro VSM harness index**——已合并的
+  [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) 记录固定
+  LoopX 对比实验的可辨识性阻塞；后续
+  [registered-peer harness](https://github.com/opensiro/vsm-harness-index/pull/614)
+  仅完成实验执行框架，未运行真实模型。已合并的
+  [PR #618](https://github.com/opensiro/vsm-harness-index/pull/618) 随后按仅使用
+  公开证据的研究政策停止该自行执行的实验。
+  **状态：保留历史研究产物，该研究未进行且不再计划实跑**；不是新增 benchmark
+  结果或运行时采用。核对日期：2026-09-30。
 - **OpenBitFun**（GCWing）——内置控制台
   [PR #2836](https://github.com/GCWing/OpenBitFun/pull/2836) 仍开放，替代已关闭未合并的
   #2382。维护者[表示优先保障 beta 稳定性，之后再评估大特性](https://github.com/GCWing/OpenBitFun/pull/2836#issuecomment-5613986161)。
@@ -161,3 +190,5 @@
   不根据本清单代替项目提交自报条目。
 - 最近复核：**2026-09-19**。公开来源调研于 9 月 18 日完成；链接中的 PR/Issue 状态于
   9 月 19 日刷新。
+- 局部更新：**2026-09-30**，覆盖上述 CGC 2046、NoKV 资格验证工具、VikingBot
+  提案及已停止的 Opensiro 研究。其余条目沿用此前的核对边界，不代表全表重新验真。

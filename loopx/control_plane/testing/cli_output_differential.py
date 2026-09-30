@@ -163,11 +163,11 @@ _TODO_WORK_COUNTS_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
     "compact_payload_chars": 192,
 }
 
-# Explicit runtime-root command routing repeats one bounded command prefix per
+# Explicit registry/runtime-root routing repeats one bounded command argument per
 # executable action. The allowance covers the prefix and its JSON projection;
 # it is per newly observed route, not per row, so unrelated output growth still
 # fails under the normal hot-path policy.
-_RUNTIME_ROOT_COMMAND_ROUTE_GROWTH_PER_ROUTE: dict[Metric, int] = {
+_COMMAND_ROUTE_GROWTH_PER_ROUTE: dict[Metric, int] = {
     "chars": 160,
     "utf8_bytes": 160,
     "lines": 0,
@@ -309,19 +309,21 @@ _GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
 }
 
 
-def _runtime_root_route_growth_allowances(
+def _command_route_growth_allowances(
     base: dict[str, Any], candidate: dict[str, Any]
-) -> tuple[int, dict[Metric, int]]:
-    base_routes = base.get("runtime_root_command_route_count")
-    candidate_routes = candidate.get("runtime_root_command_route_count")
-    if type(base_routes) is not int or type(candidate_routes) is not int:
-        return 0, {}
-    added_routes = max(0, candidate_routes - base_routes)
-    if not added_routes:
-        return 0, {}
-    return added_routes, {
-        metric: added_routes * allowance
-        for metric, allowance in _RUNTIME_ROOT_COMMAND_ROUTE_GROWTH_PER_ROUTE.items()
+) -> tuple[dict[str, int], dict[Metric, int]]:
+    additions: dict[str, int] = {}
+    for option in ("runtime_root", "registry"):
+        field = f"{option}_command_route_count"
+        before, after = base.get(field), candidate.get(field)
+        # Missing, malformed or negative observations never grant an allowance.
+        if type(before) is int and type(after) is int and 0 <= before < after:
+            additions[option] = after - before
+    if not additions:
+        return {}, {}
+    return additions, {
+        metric: sum(additions.values()) * allowance
+        for metric, allowance in _COMMAND_ROUTE_GROWTH_PER_ROUTE.items()
     }
 
 
@@ -679,8 +681,8 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         candidate,
         output_format=output_format,
     )
-    added_runtime_root_routes, runtime_root_route_allowances = (
-        _runtime_root_route_growth_allowances(base, candidate)
+    added_command_routes, command_route_allowances = (
+        _command_route_growth_allowances(base, candidate)
     )
 
     projection_allowance, projection_failures, projection_signals = _projection_envelope_migration(
@@ -759,10 +761,10 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                     "compact_payload_chars": 512,
                 }[metric],
             )
-        if runtime_root_route_allowances:
+        if command_route_allowances:
             allowance = max(
                 allowance,
-                runtime_root_route_allowances[metric],
+                command_route_allowances[metric],
             )
         deltas[metric] = delta
         allowances[metric] = allowance
@@ -826,10 +828,10 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 "planning inventory detail schema migrated: "
                 f"{migration.inventory_detail_schema_migration}"
             )
-    if runtime_root_route_allowances:
+    for option, count in added_command_routes.items():
         review_signals.append(
-            "runtime-root command route coverage added: "
-            f"{added_runtime_root_routes} executable route(s)"
+            f"{option.replace('_', '-')} command route coverage added: "
+            f"{count} executable route(s)"
         )
     if migration.guided_todo_delta_schema_changed:
         if migration.guided_todo_delta_schema_migration is None:

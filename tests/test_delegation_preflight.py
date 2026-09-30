@@ -125,6 +125,169 @@ def test_workspace_fault_cannot_hide_denied_caller_or_changed_binding(service, m
         runner.inspect("analysis")
 
 
+def test_workspace_removed_during_acceptance_is_typed_before_turn_preview(
+    service, monkeypatch
+):
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_capture = delegation.delegation_validation.capture
+
+    def capture_then_remove(*args, **kwargs):
+        result = original_capture(*args, **kwargs)
+        workspace.rename(root / "relocated-worker")
+        return result
+
+    def no_turn(*args, **kwargs):
+        raise AssertionError("a changed workspace must not reach Turn preview")
+
+    monkeypatch.setattr(delegation.delegation_validation, "capture", capture_then_remove)
+    monkeypatch.setattr(runner, "_cli", no_turn)
+    result = runner.inspect("analysis")
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == "missing"
+    assert result["authority_ready"] is None
+    assert not any(result["effects"].values())
+    assert str(workspace) not in json.dumps(result)
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+
+
+def test_workspace_symlink_retargeted_during_acceptance_is_typed(
+    service, monkeypatch
+):
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    original_workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    replacement_workspace = root / "replacement-worker"
+    replacement_workspace.mkdir()
+    workspace_link = root / "bound-worker-link"
+    workspace_link.symlink_to(original_workspace, target_is_directory=True)
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["workspace"] = str(workspace_link)
+    runner.config.write_text(json.dumps(config))
+    original_capture = delegation.delegation_validation.capture
+
+    def capture_then_retarget(*args, **kwargs):
+        result = original_capture(*args, **kwargs)
+        workspace_link.unlink()
+        workspace_link.symlink_to(replacement_workspace, target_is_directory=True)
+        return result
+
+    def no_turn(*args, **kwargs):
+        raise AssertionError("a retargeted workspace must not reach Turn preview")
+
+    monkeypatch.setattr(delegation.delegation_validation, "capture", capture_then_retarget)
+    monkeypatch.setattr(runner, "_cli", no_turn)
+    result = runner.inspect("analysis")
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == "unavailable"
+    assert result["authority_ready"] is None
+    assert not result["turn_eligible"] and not any(result["effects"].values())
+    assert str(workspace_link) not in json.dumps(result)
+    assert str(replacement_workspace) not in json.dumps(result)
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_workspace_changed_during_real_turn_preview_is_not_reported_ready(
+    service, monkeypatch, replacement
+):
+    root, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_cli = runner._cli
+
+    def preview_then_change(*args, **kwargs):
+        preview = original_cli(*args, **kwargs)
+        workspace.rename(root / "relocated-worker")
+        if replacement:
+            workspace.mkdir()
+        return preview
+
+    monkeypatch.setattr(runner, "_cli", preview_then_change)
+    result = runner.inspect("analysis")
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == ("unavailable" if replacement else "missing")
+    assert result["workspace_next_action"] == "review_operator_workspace_binding"
+    assert result["authority_ready"] is None
+    assert not result["turn_eligible"] and not any(result["effects"].values())
+    assert str(workspace) not in json.dumps(result)
+    assert not (root / "host-started").exists()
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+
+
+@pytest.mark.parametrize("failure_type", [ValueError, subprocess.TimeoutExpired, OSError])
+@pytest.mark.parametrize("workspace_change", ["missing", "replacement", "unchanged"])
+def test_preview_failure_rechecks_workspace_and_preserves_unrelated_errors(
+    service, monkeypatch, failure_type, workspace_change
+):
+    root, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_cli = runner._cli
+    failure = (
+        subprocess.TimeoutExpired(["turn-preview"], 1, stderr="private child details")
+        if failure_type is subprocess.TimeoutExpired
+        else failure_type("private child details")
+    )
+    before = runner.registry.read_bytes(), runner.config.read_bytes()
+
+    def preview_then_fail(*args, **kwargs):
+        original_cli(*args, **kwargs)
+        if workspace_change != "unchanged":
+            workspace.rename(root / "relocated-worker")
+            if workspace_change == "replacement":
+                workspace.mkdir()
+        raise failure
+
+    monkeypatch.setattr(runner, "_cli", preview_then_fail)
+    if workspace_change == "unchanged":
+        with pytest.raises(failure_type) as caught:
+            runner.inspect("analysis")
+        assert caught.value is failure
+    else:
+        result = runner.inspect("analysis")
+        assert result["state"] == "workspace_unavailable"
+        assert result["workspace_state"] == (
+            "missing" if workspace_change == "missing" else "unavailable"
+        )
+        assert result["workspace_next_action"] == "review_operator_workspace_binding"
+        assert result["authority_ready"] is None
+        assert not result["turn_eligible"] and not any(result["effects"].values())
+        assert "private child details" not in json.dumps(result)
+        assert str(workspace) not in json.dumps(result)
+    assert (runner.registry.read_bytes(), runner.config.read_bytes()) == before
+    assert not (root / "host-started").exists()
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+
+
+def test_workspace_removed_during_final_acceptance_recheck_is_typed(
+    service, monkeypatch
+):
+    from loopx import collaboration_mcp as delegation
+
+    root, runner = service
+    workspace = Path(runner.binding("analysis", require_active=True)["workspace"])
+    original_capture = delegation.delegation_validation.capture
+    calls = 0
+
+    def capture_then_remove(*args, **kwargs):
+        nonlocal calls
+        result = original_capture(*args, **kwargs)
+        calls += 1
+        if calls == 2:
+            workspace.rename(root / "relocated-worker")
+        return result
+
+    monkeypatch.setattr(delegation.delegation_validation, "capture", capture_then_remove)
+    result = runner.inspect("analysis")
+    assert calls == 2
+    assert result["state"] == "workspace_unavailable"
+    assert result["workspace_state"] == "missing"
+    assert result["authority_ready"] is None
+    assert not any(result["effects"].values())
+    assert not (root / "host-started").exists()
+
+
 def test_mcp_workspace_fault_is_a_read_only_observation(service):
     root, runner = service
     config = json.loads(runner.config.read_text())
@@ -583,7 +746,8 @@ def test_selected_dsh_profile_is_not_replaced_by_the_default(service):
     assert not (root / "host-started").exists()
 
 
-def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
+@pytest.mark.parametrize("operation_tools", [False, True])
+def test_selected_codex_managed_agent_profile_is_projected_exactly(service, operation_tools):
     root, runner = service
     config = json.loads(runner.config.read_text())
     config["bindings"][0]["host_args"] = [
@@ -594,12 +758,14 @@ def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
         "--codex-reasoning-effort",
         "xhigh",
     ]
+    if operation_tools:
+        config["bindings"][0]["host_args"].append("--codex-operation-tools")
     runner.config.write_text(json.dumps(config))
 
     status, result = cli(runner, "inspect", "--binding-id", "analysis")
 
     assert status == 0, result
-    assert result["executor"] == {
+    expected = {
         "host": "codex-cli",
         "available": None,
         "reason": None,
@@ -607,12 +773,19 @@ def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
         "runtime_probe": None,
         "unavailable_remediation": [],
     }
+    if operation_tools:
+        from loopx.control_plane.turn_driver.host_binding import managed_executor_binding_from_host_args
+        expected["operation_transport"] = managed_executor_binding_from_host_args(
+            config["bindings"][0]["host_args"]
+        )["operation_transport"]
+    assert result["executor"] == expected
     assert result["state"] == "runtime_unverified"
     assert not any(result["effects"].values())
     assert not (root / "host-started").exists()
 
     binding = runner.binding("analysis", require_active=True)
     execution = runner._execution_arguments(binding, "native-tool-inspection")
+    assert ("--codex-operation-tools" in execution) is operation_tools
     encoded = execution[execution.index("--codex-mcp-server-json") + 1]
     native = json.loads(encoded)
     assert native["schema_version"] == "codex_stdio_mcp_server_v0"

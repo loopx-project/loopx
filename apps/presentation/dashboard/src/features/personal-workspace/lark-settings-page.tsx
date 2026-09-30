@@ -30,7 +30,7 @@ import {
   type LarkIngressMode,
   type LarkReplyMode,
 } from "../../data/chat";
-import { useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
+import { useWorkspaceI18n, type WorkspaceMessageKey, type WorkspaceTranslate } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
 type Tab = "apps" | "connections";
@@ -95,16 +95,25 @@ function larkConnectionHealth(connection: LarkGoalConnection, t: WorkspaceTransl
     connection.last_event_status === "context_only_captured"
     || connection.last_event_status === "context_only_already_captured"
   ) {
+    const reason = connection.last_event_reason;
+    let detail: WorkspaceMessageKey = connection.turn_trigger === "human_messages"
+      ? "lark.health.directMessageEnabledDetail" : "lark.health.contextCapturedDetail";
+    switch (reason) {
+      case "historical_context_only": detail = "lark.health.historicalContextDetail"; break;
+      case "bot_message":
+      case "self_message": detail = "lark.health.botContextDetail"; break;
+      case "human_identity_unverified": detail = "lark.health.senderUnverifiedDetail"; break;
+    }
     return {
-      label: t("lark.health.contextCaptured"),
-      detail: t("lark.health.contextCapturedDetail"),
-      state: "ready",
+      label: t(reason === "human_identity_unverified" ? "lark.health.senderUnverified" : "lark.health.contextCaptured"),
+      detail: t(detail),
+      state: reason === "human_identity_unverified" ? "not_ready" : "ready",
     };
   }
   if (connection.last_event_status === "ignored" && connection.last_event_reason === "not_addressed") {
     return {
       label: t("lark.health.notAddressed"),
-      detail: t("lark.health.notAddressedDetail"),
+      detail: t(connection.turn_trigger === "human_messages" ? "lark.health.directMessageEnabledDetail" : "lark.health.notAddressedDetail"),
       state: "ready",
     };
   }
@@ -138,7 +147,8 @@ function larkConnectionHealth(connection: LarkGoalConnection, t: WorkspaceTransl
   if (connection.health_error_code === "lark_event_delivery_unverified" || connection.event_count === 0) {
     return {
       label: t("lark.health.eventUnverified"),
-      detail: t("lark.health.eventUnverifiedDetail"),
+      detail: t(connection.conversation_kind === "manager" && connection.turn_trigger === "human_messages"
+        ? "lark.health.directEventUnverifiedDetail" : "lark.health.eventUnverifiedDetail"),
       state: "unverified",
     };
   }
@@ -563,7 +573,7 @@ export function LarkSettingsPage({
                 <span>
                   <strong>{connection.chat_name}</strong>
                   <small>{connection.app_label} · {health.label}</small>
-                  <small>{health.detail}</small>
+                  <small className="personal-lark-health-detail">{health.detail}</small>
                   {health.state === "unverified" ? (
                     <a href="https://open.feishu.cn/document/server-docs/im-v1/message/events/receive?lang=zh-CN" rel="noreferrer" target="_blank"><ExternalLink size={12} />{t("lark.openEventSettings")}</a>
                   ) : null}
