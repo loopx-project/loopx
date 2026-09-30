@@ -400,7 +400,10 @@ def test_task_validation_stage_reads_result_kind_through_effect_turn(
         task_validator=None,
         completed_phases=list(TRANSACTION_PHASES[:2]),
         journal=journal,
-        journal_path=journal_path,
+        persist_journal=lambda snapshot: turn_executor._write_journal(
+            journal_path,
+            snapshot,
+        ),
         effects={},
     )
 
@@ -645,18 +648,28 @@ def test_cached_host_result_cannot_resume_after_goal_recreation(
         "completed_phases": [],
         "plan": plan,
     }
-    turn_executor._write_journal(path, journal)
-    journal.update(
-        completed_phases=list(TRANSACTION_PHASES[:2]),
-        host_result=_host_result(plan),
-        result_kind="validated_progress",
-    )
-    turn_executor._write_journal(path, journal)
     admission = FirstPartyHostGoalAdmission.for_plan(
         registry_path=registry,
         goal_id="fixture-goal",
         planned_goal_ref=plan["goal_ref"],
     )
+
+    def write_source_journal() -> None:
+        with admission.source_journal_admission() as source_admission:
+            assert source_admission is not None
+            turn_executor._write_journal(
+                path,
+                journal,
+                source_admission=source_admission,
+            )
+
+    write_source_journal()
+    journal.update(
+        completed_phases=list(TRANSACTION_PHASES[:2]),
+        host_result=_host_result(plan),
+        result_kind="validated_progress",
+    )
+    write_source_journal()
     _replace_source_goal(registry, INSTANCE_B)
     calls = {"writeback": 0, "spend": 0, "scheduler": 0}
     writeback, spend, scheduler = _callbacks(calls)

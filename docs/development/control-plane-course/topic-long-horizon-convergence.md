@@ -841,7 +841,7 @@ Detect
 ### 核心代码四之一：先从多个 Read Model 归一化 Facts
 
 入口
-`loopx/control_plane/goals/goal_frontier.py::derive_goal_frontier_replan_obligation_from_summaries`
+`loopx/control_plane/goals/goal_frontier/__init__.py::derive_goal_frontier_replan_obligation_from_summaries`
 并不直接对原始 Markdown 或聊天做判断。它先消费已经归一化的 user/agent Todo summary、
 work lane、Vision/Acceptance gap、既有 obligation 与最新 ACK：
 

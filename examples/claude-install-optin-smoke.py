@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "scripts" / "install-local.sh"
@@ -36,30 +37,58 @@ def _install_py(args, **kw):
     return _run([sys.executable, str(INSTALLER), *args], **kw)
 
 
+def _isolated_host_env(home: Path) -> dict[str, str]:
+    return {
+        "HOME": str(home),
+        "PATH": os.environ.get("PATH", os.defpath),
+        "SHELL": "/bin/zsh",
+        "CODEX_HOME": str(home / ".codex"),
+        "CLAUDE_HOME": str(home / ".claude"),
+        "OPENCODE_CONFIG_DIR": str(home / ".config" / "opencode"),
+    }
+
+
 def main() -> int:
     # --- 1) default install only writes lightweight slash skills --------------
     with tempfile.TemporaryDirectory(prefix="loopx-claude-optin-smoke-") as tmp:
         home = Path(tmp) / "home"
         bin_dir = home / ".local" / "bin"
         bin_dir.mkdir(parents=True)
-        env = {
-            **os.environ,
-            "HOME": str(home),
-            "LOOPX_BIN_DIR": str(bin_dir),
-            "LOOPX_SHELL_PROFILE": str(home / ".zshrc"),
-            "LOOPX_INSTALL_CANARY": "0",
-            "LOOPX_INSTALL_SKILL": "0",
-            "LOOPX_PROMOTE_DEFAULT": "1",
-            "LOOPX_PYTHON": sys.executable,
-            "PATH": os.environ.get("PATH", ""),
-            "SHELL": "/bin/zsh",
+        outside_host_root = Path(tmp) / "outside-host-root"
+        outside_host_root.mkdir()
+        sentinel = outside_host_root / "keep.txt"
+        sentinel.write_text("outside fixture must stay unchanged\n", encoding="utf-8")
+        inherited_roots = {
+            "CODEX_HOME": str(outside_host_root / "codex"),
+            "CLAUDE_HOME": str(outside_host_root / "claude"),
+            "OPENCODE_CONFIG_DIR": str(outside_host_root / "opencode"),
+            "LOOPX_SKILLS_DIR": str(outside_host_root / "skills"),
+            "LOOPX_RELEASES_DIR": str(outside_host_root / "releases"),
+            "LOOPX_MAN_DIR": str(outside_host_root / "man"),
+            "LOOPX_RUNTIME_ROOT": str(outside_host_root / "runtime"),
         }
-        env.pop("LOOPX_INSTALL_CLAUDE", None)  # default = off
-        r = _run(["bash", str(INSTALL_SH)], env=env, cwd=str(REPO_ROOT), timeout=240)
+        with patch.dict(os.environ, inherited_roots):
+            env = {
+                **_isolated_host_env(home),
+                "LOOPX_BIN_DIR": str(bin_dir),
+                "LOOPX_SHELL_PROFILE": str(home / ".zshrc"),
+                "LOOPX_INSTALL_CANARY": "0",
+                "LOOPX_INSTALL_SKILL": "0",
+                "LOOPX_PROMOTE_DEFAULT": "1",
+                "LOOPX_PYTHON": sys.executable,
+            }
+            r = _run(["bash", str(INSTALL_SH)], env=env, cwd=str(REPO_ROOT), timeout=240)
         assert r.returncode == 0, f"install-local.sh failed:\n{r.stdout}\n{r.stderr}"
+        assert (home / ".codex" / "skills" / "loopx" / "SKILL.md").is_file(), (
+            "default install should register the lightweight Codex /loopx skill inside the fixture"
+        )
         assert (home / ".claude" / "skills" / "loopx" / "SKILL.md").is_file(), (
             "default install should register the lightweight /loopx slash skill"
         )
+        assert [path.name for path in outside_host_root.iterdir()] == [sentinel.name], (
+            "default install must not write to inherited host roots outside the fixture"
+        )
+        assert sentinel.read_text(encoding="utf-8") == "outside fixture must stay unchanged\n"
         assert not (home / ".claude" / "commands" / "loopx.md").exists(), (
             "default install must not install the Claude adapter command"
         )
@@ -76,7 +105,7 @@ def main() -> int:
         proj, other_home = Path(d) / "proj", Path(d) / "home"
         proj.mkdir()
         other_home.mkdir()
-        env = {**os.environ, "HOME": str(other_home)}  # prove it doesn't touch ~/.claude
+        env = _isolated_host_env(other_home)  # prove it doesn't touch ~/.claude
         # dry-run writes nothing
         r = _install_py(["--scope", "project", "--project", str(proj), "--skip-mcp", "--dry-run"], env=env)
         assert r.returncode == 0, f"dry-run failed:\n{r.stdout}\n{r.stderr}"
@@ -108,7 +137,7 @@ def main() -> int:
                 {"type": "command", "command": "echo user-owned-hook"}]}]},
         }
         settings.write_text(json.dumps(seed), encoding="utf-8")
-        env = {**os.environ, "HOME": str(home)}
+        env = _isolated_host_env(home)
         # default (no --harden): does not touch settings.json, prints a suggestion
         r = _install_py(["--scope", "user", "--skip-mcp"], env=env)
         assert r.returncode == 0, f"user install failed:\n{r.stdout}\n{r.stderr}"

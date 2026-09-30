@@ -37,7 +37,11 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     assert "python -m mypy" not in dashboard
 
     assert "if: always() && needs.changes.outputs.core_tests == 'true'" in aggregate
-    assert "needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance]" in aggregate
+    assert (
+        "needs: [changes, kernel-static-checks, typescript-coverage, "
+        "dashboard-acceptance, chat-bundle-browser]"
+    ) in aggregate
+    assert "needs.chat-bundle-browser.result" in aggregate
     assert "needs.kernel-static-checks.result" in aggregate
     assert "needs.typescript-coverage.result" in aggregate
     assert "needs.dashboard-acceptance.result" in aggregate
@@ -46,8 +50,9 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
 @pytest.mark.parametrize("kernel", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("typescript", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("dashboard", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize("browser", ["success", "failure", "cancelled", "skipped"])
 def test_checks_aggregate_requires_every_parallel_lane(
-    kernel: str, typescript: str, dashboard: str,
+    kernel: str, typescript: str, dashboard: str, browser: str,
 ) -> None:
     gate = WORKFLOW.split("name: Require kernel and Dashboard qualification", 1)[1]
     script = gate.split("run: |", 1)[1].split("\n\n  node-minimum-compatibility:", 1)[0]
@@ -55,6 +60,7 @@ def test_checks_aggregate_requires_every_parallel_lane(
         ["bash", "-e", "-c", script],
         env={
             **os.environ,
+            "BROWSER_RESULT": browser,
             "DASHBOARD_RESULT": dashboard,
             "KERNEL_RESULT": kernel,
             "TYPESCRIPT_RESULT": typescript,
@@ -62,7 +68,9 @@ def test_checks_aggregate_requires_every_parallel_lane(
         capture_output=True,
         check=False,
     )
-    assert (result.returncode == 0) == (kernel == typescript == dashboard == "success")
+    assert (result.returncode == 0) == (
+        kernel == typescript == dashboard == browser == "success"
+    )
 
 
 def test_minimum_node_lane_exercises_sqlite_without_a_skip_list() -> None:
@@ -197,7 +205,10 @@ def test_merge_gate_runs_on_all_prs_and_checks_every_core_aggregate() -> None:
     for name, output in (("checks", "core_tests"), ("test-shard", "python_tests"), ("stage2c-suite", "stage2c_tests"), ("windows-powershell", "python_tests"), ("presentation", "presentation_tests")):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         if name == "checks":
-            assert "needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance]" in job
+            assert (
+                "needs: [changes, kernel-static-checks, typescript-coverage, "
+                "dashboard-acceptance, chat-bundle-browser]"
+            ) in job
             assert "if: always() && needs.changes.outputs.core_tests == 'true'" in job
         else:
             assert "needs: [changes, chat-bundle]" in job
@@ -207,15 +218,23 @@ def test_merge_gate_runs_on_all_prs_and_checks_every_core_aggregate() -> None:
 def test_presentation_exemption_retains_real_frontend_checks_and_force_full() -> None:
     job = WORKFLOW.split("  presentation:\n", 1)[1].split("  merge-gate:\n", 1)[0]
     assert "name: chat-bundle-${{ github.sha }}" in job
-    producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
-    assert "npm run smoke:personal-workspace-packaged" in producer
-    assert "npm run smoke:chat-turn-acceptance-retry" in producer
-    assert "npm run smoke:chat-upgrade" in producer
+    producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  chat-bundle-browser:\n", 1)[0]
+    browser = WORKFLOW.split("  chat-bundle-browser:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
+    # The producer publishes a built, verified bundle; the browser lane
+    # qualifies that same artifact in parallel and `checks` requires it.
+    assert producer.index("chat_bundle.py verify --source") < producer.index("actions/upload-artifact")
+    assert "smoke:" not in producer
+    assert "needs: [changes, chat-bundle]" in browser
+    assert "if: needs.changes.outputs.core_tests == 'true'" in browser
+    assert "name: chat-bundle-${{ github.sha }}" in browser
+    assert "chat_bundle.py build" not in browser
     assert (
-        producer.index("npm run smoke:personal-workspace-packaged")
-        < producer.index("npm run smoke:chat-turn-acceptance-retry")
-        < producer.index("actions/upload-artifact")
+        browser.index("actions/download-artifact")
+        < browser.index("npm run smoke:personal-workspace-packaged")
+        < browser.index("npm run smoke:chat-turn-acceptance-retry")
+        < browser.index("npm run smoke:chat-upgrade")
     )
+    assert "continue-on-error" not in browser
     assert "scripts/chat_bundle.py verify --source" in job
     assert "status --short --untracked-files=all -- loopx/web/chat" not in job
     assert "continue-on-error" not in job
@@ -348,9 +367,11 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
 
 
 def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:
-    producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
+    producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  chat-bundle-browser:\n", 1)[0]
     assert "needs.changes.outputs.core_tests == 'true'" in producer
-    for name in ("kernel-static-checks", "typescript-core", "dashboard-acceptance", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
+    aggregate = WORKFLOW.split("  checks:\n", 1)[1].split("    steps:", 1)[0]
+    assert "chat-bundle-browser" in aggregate
+    for name in ("chat-bundle-browser", "kernel-static-checks", "typescript-core", "dashboard-acceptance", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("      - uses: actions/setup-", 1)[0]
         assert "needs: [changes, chat-bundle]" in job
         assert "name: chat-bundle-${{ github.sha }}" in job
@@ -394,5 +415,20 @@ def test_typescript_core_shards_feed_one_complete_coverage_report() -> None:
     assert "name: typescript-control-plane-coverage" in report
     assert "path: coverage/control-plane/lcov.info" in report
     forward = WORKFLOW.split("  node-forward-compatibility:\n", 1)[1].split("  test-shard:\n", 1)[0]
-    assert "github.event_name != 'pull_request'" in forward
+    assert "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" in forward
     assert "continue-on-error: true" in forward
+
+
+def test_merge_queue_candidates_run_full_qualification() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(WORKFLOW)
+    assert "merge_group" in workflow[True]
+    classify = WORKFLOW.split("name: Classify the exact pull-request change", 1)[1].split("      - uses:", 1)[0]
+    # Only pull_request may classify an exemption; queue candidates take the
+    # non-PR branch, which the classifier always plans as full.
+    assert 'if [[ "$EVENT_NAME" == pull_request ]]; then' in classify
+    assert "--non-pr" in classify.split("else", 1)[1]
+    assert "github.event_name != 'merge_group'" in WORKFLOW.split("  sonar:\n", 1)[1].split("    uses:", 1)[0]
+    # The required check list is unchanged: merge-gate always reports.
+    assert "if: always()" in WORKFLOW.split("  merge-gate:\n", 1)[1]

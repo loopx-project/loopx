@@ -391,3 +391,12 @@ Attach case-level evidence to the existing implementation PR and canonical Todo;
 only extract a durable regression into product tests after reproducing it.
 No speculative benchmark runner, public transcript corpus or additional polling
 automation is required to begin.
+
+After the installed journey is qualified, use the
+[independent first-use and repeat-use protocol](first-use-evaluation.md) for the
+roadmap's frozen five-person cohort. It supplies a short GQ01 participant request,
+an independent report oracle, setup/result/attention/cost observations and an
+unrun ledger. Preparation is allowed before a candidate is ready; participant
+execution waits for the qualified pinned package and consent. Its 4/5 first-use
+and 3/5 later-day repeat targets are not results and do not replace the P0
+routing, safety or small-team checks above.

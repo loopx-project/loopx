@@ -231,6 +231,13 @@ local text, and does not invent workspace or handoff fields when the live
 projection does not have them. The synthetic smoke still covers workspace,
 handoff, and stale-claim rendering as a contract fixture.
 
+Todo rows that exist only in the rollout event log have no task text, so the
+index titles them by `todo_id` with
+`title_source: "event_audit"` and keeps the rollout audit sentence in
+`latest_event_summary`. An audit line is never rendered as a task title; rows
+that also exist in the attention queue keep their queue text and have no
+`title_source`.
+
 ## Next Slice
 
 Add filters for agent state, claim freshness, and workspace kind after the panel

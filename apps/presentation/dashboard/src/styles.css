@@ -2328,3 +2328,7 @@ select {
     display: none;
   }
 }
+
+.personal-message-work-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.personal-message-elapsed { color: var(--color-muted, #8f8f8f); font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.personal-message-quiet { margin: 0.5rem 0 0; font-size: 0.75rem; color: var(--color-muted, #8f8f8f); }

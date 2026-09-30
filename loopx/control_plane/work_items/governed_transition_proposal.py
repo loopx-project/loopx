@@ -55,7 +55,18 @@ _OPTIONAL_RECEIPT_FIELDS = {
     "gap_count",
     "lane_failure",
     "gap_lanes",
+    "reason_code",
 }
+# A team plan the typed owner refused before any lane write. The receipt keeps
+# the settlement's verdict so a replay returns the same answer instead of
+# retrying; it names no lane identity because none was created. Any other
+# commit error still raises: it is not a verdict about the plan.
+TEAM_PLAN_FAILURE_REASON_CODES = (
+    "team_plan_no_staffable_lane",
+    "team_plan_preview_stale",
+    "team_plan_basis_missing",
+)
+_FAILED_RECEIPT_ACTION = "failed"
 _LANE_TODO_ID_LIMIT = 8
 _LANE_TODO_ID = re.compile(r"^todo_[A-Za-z0-9]{1,40}$")
 _LANE_SETTLEMENT_FIELDS = {
@@ -84,6 +95,14 @@ class GovernedTransitionSettlementPhase(StrEnum):
 
 STEWARD_TEAM_PLAN_PREVIEW_KIND = "steward_team_plan_preview"
 
+# This table is the settlement owner for every proposal kind LoopX can
+# materialize. The external-capability result gate (`governed_capability.ts`
+# and the extension manifest's `transition_contract.proposal_kinds`) admits
+# only the monitor kinds, so no provider result carries a team plan yet; the
+# team-plan route is kept so that admitting the kind, a separate provider
+# contract change, inherits the basis requirement: the journal binds a basis
+# for an operation that declares the kind and `_apply_team_plan` settles only
+# against it.
 _SETTLEMENT_PHASE_BY_PROPOSAL_KIND = {
     "continuous_monitor_upsert": GovernedTransitionSettlementPhase.PRE_SETTLEMENT,
     "continuous_monitor_complete": GovernedTransitionSettlementPhase.POST_SETTLEMENT,
@@ -136,13 +155,24 @@ def validate_governed_transition_receipts(
             STEWARD_TEAM_PLAN_PREVIEW_KIND,
         }:
             raise ValueError("governed transition proposal receipt kind is invalid")
-        if receipt.get("status") != "committed":
-            raise ValueError("governed transition proposal receipt status is invalid")
-        for field in ("proposal_digest", "action", "todo_id"):
-            if not isinstance(receipt.get(field), str) or not receipt[field]:
+        if not isinstance(receipt.get("proposal_digest"), str) or not receipt["proposal_digest"]:
+            raise ValueError(
+                "governed transition proposal receipt proposal_digest is invalid"
+            )
+        if receipt.get("status") == "failed":
+            _validate_failed_receipt(receipt)
+        elif receipt.get("status") == "committed":
+            if "reason_code" in receipt:
                 raise ValueError(
-                    f"governed transition proposal receipt {field} is invalid"
+                    "governed transition proposal receipt reason_code is invalid"
                 )
+            for field in ("action", "todo_id"):
+                if not isinstance(receipt.get(field), str) or not receipt[field]:
+                    raise ValueError(
+                        f"governed transition proposal receipt {field} is invalid"
+                    )
+        else:
+            raise ValueError("governed transition proposal receipt status is invalid")
         # A monitor transition is identified by its monitor key, so that key is
         # required there. A team plan is not a monitor and must not invent one,
         # so its key is explicitly absent rather than an empty string.
@@ -218,6 +248,21 @@ def validate_governed_transition_receipts(
         validate_public_safe_value(receipt, path=f"transition_receipts[{index}]")
         receipts.append(receipt)
     return receipts
+
+
+def _validate_failed_receipt(receipt: Mapping[str, Any]) -> None:
+    """A refused team plan records its typed verdict and no lane identity."""
+
+    if receipt.get("kind") != STEWARD_TEAM_PLAN_PREVIEW_KIND:
+        raise ValueError("governed transition proposal receipt status is invalid")
+    if receipt.get("reason_code") not in TEAM_PLAN_FAILURE_REASON_CODES:
+        raise ValueError("governed transition proposal receipt reason_code is invalid")
+    if receipt.get("action") != _FAILED_RECEIPT_ACTION:
+        raise ValueError("governed transition proposal receipt action is invalid")
+    if receipt.get("todo_id") is not None or receipt.get("target_key") is not None:
+        raise ValueError("governed transition proposal receipt todo_id is invalid")
+    if set(receipt) - _RECEIPT_FIELDS != {"reason_code"}:
+        raise ValueError("governed transition proposal receipt fields are invalid")
 
 
 def normalize_lane_settlements(value: object) -> list[dict[str, str]]:
@@ -371,21 +416,15 @@ def _upsert_monitor(
     }
 
 
-def _intent_basis_for(
-    *,
-    goal_id: str,
-    goal: Mapping[str, Any],
-    registry_path: Path,
-    preview: Mapping[str, Any],
-) -> str | None:
-    """Read the canonical source basis one work-graph edit is applied against.
+def steward_team_plan_basis_agent(plan: Mapping[str, Any]) -> str | None:
+    """The Agent an owner-reviewed plan reads its source basis as.
 
     The source basis is a Goal-level fact, so any of the Goal's Agents reads the
     same one; a ready lane is preferred because that is where the work will live.
-    A Goal whose basis cannot be read omits the field rather than inventing one.
+    An agent-originated settlement reads it as the settling agent instead.
     """
 
-    lanes = preview.get("lanes") or []
+    lanes = plan.get("lanes") or []
     basis_agent = next(
         (
             str(lane.get("agent_id"))
@@ -394,7 +433,22 @@ def _intent_basis_for(
         ),
         str(lanes[0].get("agent_id")) if lanes else "",
     )
-    if not basis_agent:
+    return basis_agent or None
+
+
+def steward_team_plan_source_basis(
+    *,
+    goal_id: str,
+    goal: Mapping[str, Any],
+    registry_path: Path,
+    agent_id: str | None,
+) -> str | None:
+    """Read the canonical source basis one work-graph edit is applied against.
+
+    A Goal whose basis cannot be read omits the field rather than inventing one.
+    """
+
+    if not agent_id:
         return None
     try:
         from ...control_plane.goals.shared_goal_alignment import (
@@ -403,7 +457,7 @@ def _intent_basis_for(
 
         alignment = project_shared_goal_alignment(
             goal_id=goal_id,
-            agent_id=basis_agent,
+            agent_id=agent_id,
             project=Path(str(goal.get("repo") or ".")).expanduser(),
             registry_path=Path(registry_path),
         )
@@ -429,24 +483,40 @@ def steward_team_plan_intent_basis(
     the preview can bind it instead of re-deriving a second basis.
     """
 
-    return _intent_basis_for(
+    return steward_team_plan_source_basis(
         goal_id=goal_id,
         goal=goal,
         registry_path=Path(registry_path),
-        preview=plan,
+        agent_id=steward_team_plan_basis_agent(plan),
     )
 
 
 def _apply_team_plan(
     *, registry_path: Path, goal_id: str, agent_id: str,
-    proposal: Mapping[str, Any],
+    proposal: Mapping[str, Any], expected_state_fingerprint: str | None,
 ) -> dict[str, Any]:
-    from .team_plan_adapter import apply_team_plan
+    """Settle one agent-originated plan against the basis its journal bound.
+
+    The basis was read as this agent before the provider ran and is never
+    recomputed here: the typed owner re-reads the current digest and refuses a
+    moved or missing basis. A refusal about the plan becomes a typed failure
+    result; any other commit error still raises.
+    """
+
+    from .team_plan_adapter import TeamPlanCommitError, settle_team_plan
     from ..effect_runtime import EffectRuntimeRejected
 
     try:
-        return apply_team_plan(registry_path=registry_path, goal_id=goal_id,
-                               agent_id=agent_id, proposal=proposal)
+        return settle_team_plan(
+            registry_path=registry_path, goal_id=goal_id, agent_id=agent_id,
+            proposal=proposal,
+            expected_state_fingerprint=expected_state_fingerprint,
+        )
+    except TeamPlanCommitError as error:
+        if error.code in TEAM_PLAN_FAILURE_REASON_CODES:
+            return {"action": _FAILED_RECEIPT_ACTION, "todo_id": None,
+                    "target_key": None, "reason_code": error.code}
+        raise
     except EffectRuntimeRejected as error:
         raise ValueError(str(error)) from None
 
@@ -504,9 +574,19 @@ def settle_governed_transition_proposals(
     existing_receipts: object,
     checkpoint: TransitionCheckpoint,
     phase: GovernedTransitionSettlementPhase,
+    team_plan_state_basis: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Apply admitted proposals for one settlement phase and checkpoint receipts."""
+    """Apply admitted proposals for one settlement phase and checkpoint receipts.
 
+    ``team_plan_state_basis`` is the state digest the caller bound as this
+    agent before any proposal existed (the journal's first write). A team plan
+    is settled only against it; without one the typed owner refuses the plan.
+    """
+
+    if team_plan_state_basis is not None and (
+        not isinstance(team_plan_state_basis, str) or not team_plan_state_basis
+    ):
+        raise ValueError("governed transition team plan basis is invalid")
     receipts = validate_governed_transition_receipts(existing_receipts)
     by_proposal_id = {str(item["proposal_id"]): item for item in receipts}
     for raw in proposals:
@@ -543,6 +623,7 @@ def settle_governed_transition_proposals(
                 goal_id=goal_id,
                 agent_id=agent_id,
                 proposal=proposal,
+                expected_state_fingerprint=team_plan_state_basis,
             )
         elif kind == "continuous_monitor_complete":
             result = _complete_monitor(
@@ -565,10 +646,21 @@ def settle_governed_transition_proposals(
                 else None
             ),
             "action": str(result["action"]),
-            "todo_id": str(result["todo_id"]),
+            "todo_id": None if result.get("todo_id") is None else str(result["todo_id"]),
             "status": "committed",
             "target_key": result.get("target_key"),
         }
+        if result.get("reason_code") is not None:
+            # The owner refused the plan before any lane write. The verdict is
+            # the settlement's durable answer: a replay reads it back instead
+            # of retrying, and it names no work because none exists.
+            receipt["status"] = "failed"
+            receipt["reason_code"] = str(result["reason_code"])
+            validate_public_safe_value(receipt, path="transition_receipt")
+            receipts.append(receipt)
+            by_proposal_id[proposal_id] = receipt
+            checkpoint(receipts)
+            continue
         lane_todo_ids = result.get("lane_todo_ids")
         if lane_todo_ids:
             # The apply ensured every ready lane's first Todo; a receipt that

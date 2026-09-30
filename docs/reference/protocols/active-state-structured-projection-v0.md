@@ -216,6 +216,44 @@ checks: the former compares untouched source slices, while the latter reads only
 the generated regions. Neither marker is provider authority or a current-head
 freshness guarantee.
 
+### Lossless source text / 无损源文本
+
+Source decoding and parse/render parity retain the complete accepted Todo text
+and priority-derived title, including multi-line continuations and archived
+records. They normalize whitespace using the existing Markdown codec; they do
+not apply the 500-character attention-summary limit. An explicitly conflicting
+title still fails parity, even when its first 500 characters match. This is not
+permission to accept malformed records or to shorten an already committed Todo
+to repair its display.
+
+Status, `todo list` (including an exact ID), dashboard and chat attention views
+keep their existing bounded summaries. The canonical provider and regenerated
+active state retain the complete source; a display summary is not an input to
+source serialization. No new frontend setting, Lark command or parallel state
+store is introduced. This change stays in the permanent Python Markdown/legacy
+I/O adapter; the TypeScript authority, admission and delivery-confirmation
+owners are unchanged.
+
+If a committed mutation reports `projection_delivery=pending` because a long
+Todo previously failed parity, read the current provider revision and use the
+existing `todo project-markdown --provider-revision <revision> --execute` path.
+Do not repeat the business mutation, change the Todo text, or reuse a stale
+revision. Rebuilding and an idempotent second rendering do not alter canonical
+records, business receipts or the provider revision. Other pending causes
+(ownership, malformed metadata, missing validation or provider failure) retain
+their existing closed diagnostics.
+
+源解码与读写一致性校验保留已接受 Todo 的完整文本和优先级派生标题，包括多行续文
+和归档记录；沿用 Markdown 编解码器的空白规范化，不套用 500 字符的注意力摘要
+上限。显式标题冲突仍拒绝，即使前 500 字符相同；不能靠缩短已提交任务来修显示。
+`todo list`（含精确 ID）、状态、前端及聊天继续使用原有有界摘要，canonical provider
+及重建后的活动状态保留完整源文本，不新增设置、Lark 命令或第二状态库。本次仅修
+既有 Python Markdown／兼容 I/O，TS 的权威、准入和交付确认 owner 不变。
+
+若业务已提交、长文本一致性失败导致显示 pending，先读取当前 provider revision，
+再用原有 `project-markdown` 恢复；不重复业务、不改短任务、不复用旧版本。恢复与
+幂等复读不改变 canonical 记录、业务回执或 provider 版本；其他失败原因仍封闭拒绝。
+
 Each section includes a compact `loopx:todo-section-projection-v0` marker with
 the canonical provider revision and a SHA-256 digest of the complete canonical
 records for that role. The marker is lineage evidence, not a write API.

@@ -37,7 +37,7 @@ export const chatRecoveryScenario = {
         await new Promise((resolveWait) => setTimeout(resolveWait, 50));
       }
       if (!api.turnRequests.some((turn) => turn.message.includes("汇总所有活跃 Goal 的最新进展与阻塞"))) throw new Error("Progress report shortcut did not send a useful scoped request");
-      while (await page.getByRole("button", { name: "汇总所有 Goal 进展" }).isDisabled()) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
       await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
       if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
@@ -88,7 +88,7 @@ export const chatRecoveryScenario = {
       await page.screenshot({ path: resolve(outputDir, "manager-chat.png"), fullPage: false, animations: "disabled" });
       await page.getByLabel("向 LoopX 发送消息").fill("请把库存方案交给 worker，保留预留两件的修订，并请同伴独立复核后回报。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      while (await page.getByRole("button", { name: "汇总所有 Goal 进展" }).isDisabled()) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
       await page.screenshot({ path: resolve(outputDir, "collaboration-before.png"), fullPage: false, animations: "disabled" });
       const returnSessionId = api.turnRequests.at(-1).sessionId;
       const turnsBeforeReturn = api.turnRequests.length;
@@ -131,8 +131,17 @@ export const chatRecoveryScenario = {
       if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Deferred explanation overflows on mobile");
       await page.screenshot({ path: resolve(outputDir, "collaboration-deferred-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
-      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "explicit_unverified" }];
+      // Match the production readback when a stored reply/delivery record is
+      // unreadable. Native-file + real HTTP tests qualify the recovery itself;
+      // this scripted API fixture qualifies only the packaged presentation.
+      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "explicit_unverified", error: "delivery_state_unreadable" }];
       await collaboration.getByText("回复送达尚未核验", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+      await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-desktop.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Unreadable return status overflows on mobile");
+      await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-mobile.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
       if (api.turnRequests.length !== turnsBeforeReturn) throw new Error("Disposition readback started another model turn");
       pass("collaboration-brief", "Original conversation preserves context, constraints, inputs and receiver decision without a new turn");
 
@@ -219,6 +228,17 @@ export const chatRecoveryScenario = {
       await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.locator(".personal-run-row").first().click();
       await page.getByRole("tab", { name: "详情与操作" }).click();
+      // The fixture rejects Session deletion. The failed run action must stay
+      // visible in the drawer and keep the Session usable for the next action.
+      const unhandledRejections = [];
+      const recordRejection = (error) => unhandledRejections.push(error.message);
+      page.on("pageerror", recordRejection);
+      await page.locator(".personal-run-more > summary").click();
+      await page.getByRole("button", { name: "关闭 Session", exact: true }).click();
+      await page.getByRole("alert").filter({ hasText: "关闭 Session失败" }).waitFor({ state: "visible" });
+      page.off("pageerror", recordRejection);
+      if (unhandledRejections.length) throw new Error(`Failed run action escaped as an unhandled rejection: ${unhandledRejections.join(" | ")}`);
+      pass("run-action-feedback", "A rejected Session action is reported in the drawer instead of failing silently");
       await page.getByLabel("输入纠偏信息").fill("保持运行，用于验证刷新恢复。 ");
       await page.getByRole("button", { name: "发送纠偏" }).click();
       let recoveryTurn;
@@ -259,6 +279,78 @@ export const chatRecoveryScenario = {
         await page.screenshot({ path: resolve(outputDir, "refresh-recovery-failed.png"), fullPage: true, animations: "disabled" });
         observations.push(`Refresh recovery failure: ${error.message}`);
       }
+
+      // Run action state belongs to the Run that issued it. Session A's late
+      // close result must neither report on Session B nor release B's pending
+      // guard, and A's own failure must still be there when the user returns.
+      const actionGoalId = new URL(page.url()).searchParams.get("goalId");
+      const heldDeletes = new Map();
+      await page.route("**/api/chat/sessions/session-run-action-*", async (route) => {
+        if (route.request().method() !== "DELETE") return route.fallback();
+        heldDeletes.set(new URL(route.request().url()).pathname.split("/").at(-1), route);
+      });
+      for (const suffix of ["a", "b"]) {
+        const sessionId = `session-run-action-${suffix}`;
+        page.__loopxRuntime.sessions.set(sessionId, {
+          session_id: sessionId, goal_id: actionGoalId, agent_id: "codex", adapter_kind: "codex",
+          channel_id: `task.run-action-${suffix}`, status: "ready", active_turn_id: null, last_error_code: null,
+          created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true,
+        });
+        page.__loopxRuntime.messages.set(sessionId, []);
+      }
+      const actionRows = page.locator(".personal-run-row", { hasText: "Agent 执行任务" });
+      await actionRows.nth(1).waitFor({ state: "visible", timeout: 15_000 });
+      const closeButton = page.getByRole("button", { name: "关闭 Session", exact: true });
+      const waitForHeld = async (count) => {
+        for (let attempt = 0; attempt < 100 && heldDeletes.size < count; attempt += 1) await page.waitForTimeout(50);
+        if (heldDeletes.size < count) throw new Error("A Session close request never reached the service");
+        return [...heldDeletes.keys()].at(-1);
+      };
+      const selectRun = async (row) => {
+        await row.click();
+        await page.getByRole("tab", { name: "详情与操作" }).click();
+        if (!(await page.locator(".personal-run-more").evaluate((menu) => menu.open))) await page.locator(".personal-run-more > summary").click();
+      };
+      const closeRun = async (row, heldCount) => {
+        await selectRun(row);
+        await closeButton.click();
+        return waitForHeld(heldCount);
+      };
+      const settle = (sessionId, response) => {
+        const route = heldDeletes.get(sessionId);
+        heldDeletes.delete(sessionId);
+        return route.fulfill(response);
+      };
+      const failure = (reason) => ({ contentType: "application/json", json: { ok: false, error: reason }, status: 503 });
+      const success = (sessionId) => ({ contentType: "application/json", json: { ok: true, closed: true, session_id: sessionId }, status: 200 });
+      const alertWith = (text) => page.getByRole("alert").filter({ hasText: text });
+
+      const sessionA = await closeRun(actionRows.nth(0), 1);
+      if (!(await closeButton.isDisabled())) throw new Error("A pending Session close did not guard its own button");
+      const sessionB = await closeRun(actionRows.nth(1), 2);
+      await settle(sessionA, failure("run-action-a-failed"));
+      await page.waitForTimeout(300);
+      if (await alertWith("run-action-a-failed").count()) throw new Error("Session A's late close failure was reported on Session B");
+      if (!(await closeButton.isDisabled())) throw new Error("Session A's late close failure released Session B's pending guard");
+      await settle(sessionB, failure("run-action-b-failed"));
+      await alertWith("run-action-b-failed").waitFor({ state: "visible" });
+      if (await closeButton.isDisabled()) throw new Error("Session B's own close failure left its button disabled");
+      await selectRun(actionRows.nth(0));
+      await alertWith("run-action-a-failed").waitFor({ state: "visible" });
+      if (await alertWith("run-action-b-failed").count()) throw new Error("Session B's close failure was reported on Session A");
+
+      // A late success from A must not release B's guard either.
+      await closeButton.click();
+      await waitForHeld(1);
+      if (await alertWith("run-action-a-failed").count()) throw new Error("Retrying a Session close kept its previous failure visible");
+      await closeRun(actionRows.nth(1), 2);
+      await settle(sessionA, success(sessionA));
+      await page.waitForTimeout(300);
+      if (!(await closeButton.isDisabled())) throw new Error("Session A's late close success released Session B's pending guard");
+      await settle(sessionB, success(sessionB));
+      await page.waitForFunction(() => !document.querySelector(".personal-run-action-feedback"));
+      if (await closeButton.isDisabled()) throw new Error("Session B's own close success left its button disabled");
+      pass("run-action-ownership", "Late Session close results report on, and release the guard of, only the Run that issued them");
 
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {

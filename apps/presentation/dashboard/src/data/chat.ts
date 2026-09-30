@@ -642,6 +642,7 @@ export async function createChatSession(
   agentId?: string,
   mode: "resume_latest" | "new" = "resume_latest",
   contextKind: "goal" | "manager" = "goal",
+  signal?: AbortSignal,
 ) {
   return requestJson<{
     agent_id: string;
@@ -651,7 +652,7 @@ export async function createChatSession(
     session_id: string;
     session: ChatSessionSummary;
   }>("/api/chat/sessions", {
-    method: "POST",
+    method: "POST", signal,
     // An omitted ``agent_id`` means "no explicit executor pick": the channel
     // owner resolves its own default. Sending this client's own default would
     // silently re-point the steward channel away from its configured executor.

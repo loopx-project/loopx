@@ -290,7 +290,7 @@ python -m pytest -q \
   tests/control_plane/test_effect_program_adapter_conformance.py \
   tests/control_plane/test_effect_program_fault_replay_matrix.py \
   tests/control_plane/test_effect_program_incident_replay.py \
-  tests/control_plane/test_task_lease_cli_settlement.py
+  tests/control_plane/test_quota_settlement_cli.py
 ```
 
 阅读失败用例时，先定位 failure step，再检查后续 effect 是否为零；不要只看最终

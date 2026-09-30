@@ -378,3 +378,125 @@ def test_collect_status_scans_effect_runtime_sources_once_per_request(
         Path(effect_runtime.__file__).resolve().parent,
         Path(effect_runtime.__file__).resolve().parent,
     ]
+
+
+def _event_only_todo_event(
+    todo_id: str,
+    *,
+    recorded_at: str,
+    event_kind: str = "todo_add",
+    summary: str | None = None,
+) -> dict[str, Any]:
+    return build_rollout_event(
+        goal_id=GOAL_ID,
+        event_kind=event_kind,
+        todo_id=todo_id,
+        status="open",
+        summary=summary
+        or f"todo {event_kind.removeprefix('todo_')} recorded for {todo_id}",
+        details={"role": "agent"},
+        recorded_at=recorded_at,
+    )
+
+
+def _build_event_only_index(runtime_root: Path) -> dict[str, Any]:
+    return build_todo_index(
+        queue={"items": []},
+        history={"goals": [{"id": GOAL_ID}]},
+        runtime_root=runtime_root,
+        public_safe_compact_text=status_module.public_safe_compact_text,
+        limit=20,
+    )
+
+
+@pytest.mark.parametrize(
+    "audit_summary",
+    [
+        "todo add recorded for todo_event_only",
+        "Ship the narrower fix.",
+    ],
+)
+def test_event_only_todo_rows_never_use_the_event_summary_as_a_title(
+    tmp_path: Path,
+    audit_summary: str,
+) -> None:
+    _registry_path, runtime_root, _goal = _write_fixture(tmp_path)
+    _append_event(
+        runtime_root,
+        _event_only_todo_event(
+            "todo_event_only",
+            recorded_at="2026-09-30T01:00:00Z",
+            summary=audit_summary,
+        ),
+    )
+
+    index = _build_event_only_index(runtime_root)
+
+    assert index["rollout_event_count"] == 1
+    row = index["items"][0]
+    assert row["todo_id"] == "todo_event_only"
+    assert row["source"] == "rollout_event_log"
+    assert row["title_source"] == "event_audit"
+    assert row["text"] == "todo todo_event_only"
+    assert row["title"] == row["text"]
+    assert row["latest_event_summary"] == audit_summary
+    assert audit_summary not in json.dumps(
+        {"text": row["text"], "title": row["title"]},
+        sort_keys=True,
+    )
+
+
+def test_event_only_todo_rows_follow_the_newest_event_summary(
+    tmp_path: Path,
+) -> None:
+    _registry_path, runtime_root, _goal = _write_fixture(tmp_path)
+    for event in (
+        _event_only_todo_event("todo_event_only", recorded_at="2026-09-30T01:00:00Z"),
+        _event_only_todo_event(
+            "todo_event_only",
+            recorded_at="2026-09-30T02:00:00Z",
+            event_kind="todo_update",
+        ),
+    ):
+        _append_event(runtime_root, event)
+
+    index = _build_event_only_index(runtime_root)
+
+    row = index["items"][0]
+    assert row["event_count"] == 2
+    assert row["latest_event_kind"] == "todo_update"
+    assert row["latest_event_summary"] == "todo update recorded for todo_event_only"
+    assert row["text"] == "todo todo_event_only"
+
+
+def test_attention_queue_todo_text_stays_authoritative_over_events(
+    tmp_path: Path,
+) -> None:
+    registry_path, runtime_root, _goal = _write_fixture(tmp_path)
+    _append_event(
+        runtime_root,
+        _event_only_todo_event(
+            "todo_wait_pr_41",
+            recorded_at="2026-09-30T03:00:00Z",
+            event_kind="todo_update",
+        ),
+    )
+
+    payload = status_module.collect_status(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        scan_roots=[tmp_path],
+        limit=20,
+        goal_id=GOAL_ID,
+        include_public_boundary_scan=False,
+    )
+
+    row = next(
+        item
+        for item in payload["todo_index"]["items"]
+        if item.get("todo_id") == "todo_wait_pr_41"
+    )
+    assert row["source"] == "attention_queue"
+    assert "title_source" not in row
+    assert row["text"] == "Resume after PR 41."
+    assert row["latest_event_summary"] == "todo update recorded for todo_wait_pr_41"

@@ -723,7 +723,7 @@ outcome baseline 可以消费 readiness receipt，但不能反过来用一个分
 9. `tests/control_plane/test_goal_frontier_replan_rules.py`
 10. `examples/control_plane/quota-agent-scoped-user-gate-smoke.py`
 11. `tests/control_plane/test_goal_vision_blocked_successor.py`
-12. `tests/test_skillsbench_turn_runtime.py`
+12. `deprecate/benchmark-legacy/tests/test_skillsbench_turn_runtime.py` (retired)
 
 ## 代表性实验
 

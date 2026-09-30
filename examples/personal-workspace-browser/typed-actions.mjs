@@ -1563,7 +1563,7 @@ export const typedActionsScenario = {
       const naturalTodoRequest = "添加一个「补充回归测试」普通 Todo，并交给 Codex。不要设置 Heartbeat，也不要创建定时检查";
       await composer.fill(naturalTodoRequest);
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+      await page.locator(".personal-message-pending").waitFor({state: "hidden"});
       if (api.actionPreviews.length !== beforeNaturalTodo || api.turnRequests.at(-1)?.message !== naturalTodoRequest) throw new Error("Natural Todo request was intercepted before Chat");
 
       const previewCountBeforeAnalysis = api.actionPreviews.length;
@@ -1602,7 +1602,7 @@ export const typedActionsScenario = {
       const beforeNaturalBinding = api.actionPreviews.length;
       await composer.fill("让 Claude Code 负责管理这个 Goal");
       await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.waitForFunction(() => !document.querySelector('.personal-quick-prompts button')?.disabled);
+      await page.locator(".personal-message-pending").waitFor({state: "hidden"});
       if (api.actionPreviews.length !== beforeNaturalBinding || api.turnRequests.at(-1)?.message !== "让 Claude Code 负责管理这个 Goal") throw new Error("Assignment was interpreted by browser rules");
 
       const selectedGoalId = new URL(page.url()).searchParams.get("goalId");
@@ -1770,6 +1770,8 @@ export const typedActionsScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.getByRole("dialog").filter({ hasText: "确认执行" }).waitFor({ state: "hidden" });
 
+      // Configuration shortcuts live in the overview, outside an active conversation.
+      await goalNavigation.getByRole("button", { name: /^(Overview|概览)$/ }).click();
       const writesBeforeMonitorShortcut = api.durableWriteCount;
       if (await page.locator(".personal-composer-tools").getAttribute("open") === null) await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "配置定时检查" }).click();
