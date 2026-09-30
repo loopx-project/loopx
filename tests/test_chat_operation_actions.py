@@ -182,6 +182,16 @@ def test_owned_managed_tool_uses_canonical_approval_once_without_desktop_binding
     assert recovered["ok"] is True and recovered["needs_reconciliation"] is False
 
 
+@pytest.mark.parametrize("selector", [None, {"host_surface": "codex-app", "thread_id": "source"}])
+def test_non_managed_prepare_rejects_source_selector_even_when_null(tmp_path: Path, selector) -> None:
+    service, store = _service(tmp_path)
+    request = _request()
+    request["normalized_parameters"]["source_route"] = selector
+    with pytest.raises(ValueError, match="source route selection requires a managed executor"):
+        service.preview(request)
+    assert store.list() == []
+
+
 def test_managed_prepare_selects_registered_return_audience_without_rebinding_executor(tmp_path: Path) -> None:
     from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
 

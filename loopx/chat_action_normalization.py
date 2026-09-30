@@ -235,7 +235,7 @@ class ChatActionNormalizationMixin:
                     for field in ("extension_id", "protocol", "permission", "revision")
                 }
             managed_source = executor.get("kind") == "managed_turn"
-            if not managed_source and values.get("source_route") is not None:
+            if not managed_source and "source_route" in values:
                 raise ValueError("source route selection requires a managed executor")
             from .control_plane.effect_runtime import effect_runtime_result
 
