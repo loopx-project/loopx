@@ -121,6 +121,8 @@ try {
     const counts = { ready: 0, access: 0 };
     let denied = true;
     let readyText = "Review public evidence";
+    let historyText = "Completed public evidence";
+    let historyRequests = 0;
     await accessPage.route("**/status.json*", (route) => {
       const url = new URL(route.request().url());
       if (url.searchParams.has("view")) return route.fulfill({ json: accessDirectory });
@@ -132,7 +134,14 @@ try {
         : { json: snapshot(id, readyText) });
     });
     await accessPage.route("**/api/**", (route) => route.fulfill({ status: 503, json: { ok: false } }));
-    await accessPage.goto(`${origin}/chat/?statusUrl=${encodeURIComponent(origin + "/status.json")}`);
+    await accessPage.route("**/api/chat/completed-todos?*", (route) => {
+      historyRequests++;
+      return route.fulfill({ json: { ok: true, total: 1, next_cursor: null, items: [{
+        todo_id: "todo_native_done", text: historyText, claimed_by: null,
+        evidence: "Verified public evidence", priority: "P2", task_class: "advancement_task",
+      }] } });
+    });
+    await accessPage.goto(`${origin}/chat/`);
     await accessPage.locator(".personal-goal-link").filter({ hasText: "ready project" }).click();
     await accessPage.getByTestId("goal-status-loading").waitFor({ state: "hidden" });
     await accessPage.locator(".personal-goal-link").filter({ hasText: "access project" }).click();
@@ -151,9 +160,21 @@ try {
     await accessPage.locator(".personal-goal-link").filter({ hasText: "ready project" }).click();
     await accessPage.locator(".personal-goal-tabs").getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true }).click();
     await accessPage.getByText(readyText, { exact: true }).waitFor();
+    const history = accessPage.getByTestId("completed-task-lane");
+    await history.getByText(historyText, { exact: true }).waitFor();
+    await accessPage.getByRole("button", { name: locale === "en" ? "List" : "列表", exact: true }).click();
+    const expandHistory = history.getByRole("button", { name: locale === "en" ? /Completed/ : /已完成/ }).first();
+    await expandHistory.click();
+    assert.equal(await expandHistory.getAttribute("aria-expanded"), "true");
+    const beforeHistoryRefresh = historyRequests;
     readyText = "Review updated public evidence";
+    historyText = "Updated completed public evidence";
     await accessPage.getByRole("button", { name: locale === "en" ? "Refresh status" : "刷新状态", exact: true }).click();
     await accessPage.getByText(readyText, { exact: true }).waitFor({ timeout: 5_000 });
+    await history.getByText(historyText, { exact: true }).waitFor();
+    assert.equal(await history.getByText("Completed public evidence", { exact: true }).count(), 0);
+    assert.equal(await expandHistory.getAttribute("aria-expanded"), "true", "refresh preserves list expansion");
+    assert.ok(historyRequests > beforeHistoryRefresh, "full refresh opens a fresh history cursor even at equal count");
     assert.deepEqual(counts, { ready: 2, access: 2 }, "workspace refresh re-reads successful peers despite a failed Goal");
     await accessPage.locator(".personal-goal-link").filter({ hasText: "access project" }).click();
     denied = false;
@@ -167,7 +188,7 @@ try {
     await accessPage.close();
   }
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "failed-reread-replaces-stale-snapshot", "bilingual-access", "mobile", "no-render-errors"] }));
+  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "full-refresh-invalidates-completed-history", "failed-reread-replaces-stale-snapshot", "bilingual-access", "mobile", "no-render-errors"] }));
 } finally {
   releaseSlow();
   await cleanupBrowserSmoke({ browser, server, fixturePaths: [] });

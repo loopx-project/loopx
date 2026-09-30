@@ -106,6 +106,7 @@ function TaskLane({
  */
 export function GoalTasksView({
   historyEnabled = false,
+  historyRefreshRevision = 0,
   goal,
   items,
   onDraftTaskFromMessage,
@@ -117,6 +118,7 @@ export function GoalTasksView({
   userTodos,
 }: {
   historyEnabled?: boolean;
+  historyRefreshRevision?: number;
   goal: WorkspaceGoal;
   items: WorkspaceTimelineItem[];
   onDraftTaskFromMessage?: (message: string) => void;
@@ -283,7 +285,7 @@ export function GoalTasksView({
         ))}
         {!scheduleItems.length ? <p className="personal-task-empty">{t("tasks.emptySchedules")}</p> : null}
       </TaskLane>
-      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}:${historyEnabled}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
+      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}:${historyEnabled}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled} listView={listView} onSelect={onSelect} />
       </div>
       {isEmpty ? (
         <p className="personal-task-empty">

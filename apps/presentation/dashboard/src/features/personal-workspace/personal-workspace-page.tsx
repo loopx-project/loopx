@@ -816,6 +816,7 @@ export function PersonalWorkspacePage({
   const [lifecycleBusyGoalIds, setLifecycleBusyGoalIds] = useState<ReadonlySet<string>>(() => new Set());
   const [quickCompletingTodoIds, setQuickCompletingTodoIds] = useState<ReadonlySet<string>>(() => new Set());
   const [refreshState, setRefreshState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -1727,6 +1728,7 @@ export function PersonalWorkspacePage({
     setRefreshState("loading");
     try {
       await callbacks.onRefresh();
+      setHistoryRefreshRevision((revision) => revision + 1);
       setRefreshState("done");
     } catch {
       setRefreshState("error");
@@ -1853,6 +1855,7 @@ export function PersonalWorkspacePage({
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab} />,
                   tasks: (<GoalTasksView
                     historyEnabled={!readOnly}
+                    historyRefreshRevision={historyRefreshRevision}
                     goal={selectedGoal}
                     items={items}
                     onDraftTaskFromMessage={readOnly ? undefined : (reply) => {
