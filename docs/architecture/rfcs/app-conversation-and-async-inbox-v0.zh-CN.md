@@ -174,6 +174,14 @@ Provider 认证、签名、外部事件解码、寻址、chat membership、rate 
 Notification/attention、Todo/lease、model admission 和 artifact acceptance 保留现有 owners。
 Dispatch 事件在准入范围内唤醒现有 driver，polling 修补缺口。Inbox 不授权启动另一个 automation。
 
+Pending 回执检查点把“文件存在即结束”的分类迁入共享 `collaboration/inbox_receipts.ts` read model。
+Decision/result 缺失、不可读与身份冲突分别表达；损坏的结论不能静默清除接收方请求，
+也不能让原 App 对话的协作卡片消失。恢复原始记录后只回传一次，不重跑工作或更换受众。
+真实一次性 private-file/CLI 与生产 HTTP 测试覆盖此边界；打包浏览器检查覆盖既有的送达未核验展示。
+Adapter 按数量和编码字节分批，不提高 bridge 上限；不新增 store 或持久 schema。
+这不代表 accept/consume/cancel 全生命周期迁移完成，也不验收原生负责人选择、steering、
+团队采用或真实 Lark transport。
+
 每次提取前报告 base/head 的真实调用 latency、边界穿越次数、bytes、删除或保留的 owners 与兼容调用者。
 产品交付无需等待 Python 完全退役。Python 可保留 IO，TS 对已迁移 transition 和 effect 拥有唯一责任。
 适用时复用现有 TS receipt 和 CAS 机制，不把 Chat 记录伪装成 Todo command。

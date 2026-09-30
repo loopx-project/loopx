@@ -14,6 +14,7 @@ manager's conversation return adapter.
 | Discover collaborators | `control_plane/agents/directory.py`, `agent-directory` | Existing same-Goal directory remains the discovery contract; registration is not presence |
 | Validate semantic requests | `semantic_request.ts` | One typed validator for manager and peer callers |
 | Retain requests, decisions and results | `inbox.py`, `peers.py` | Immutable identity, parent lineage, artifact versions, explicit result consumption |
+| Classify pending receiver receipts | `inbox_receipts.ts` | One bounded read model for CLI/MCP callers; missing, unreadable and conflicting results remain distinct |
 | Sandboxed Agent access | `loopx/collaboration_mcp.py` | Same tools and identity binding at every coordination level |
 | Owner conversation and external audience | `capabilities/manager_context` | Intent extraction, ingress grants, Chat/Lark routing and display; no peer scheduling |
 
@@ -44,3 +45,19 @@ unreadable entry directories fail before request read receipts are written.
 No scan index, receipt migration or additional authority store is required.
 See [receiver pagination](../../capabilities/manager_context/README.md#a-delegation-returns-automatically)
 for restart and concurrent-arrival behavior.
+
+An ACK and a result file's existence do not clear an owed return. The shared
+typed read model checks request/Goal/Agent identity, exact Goal instance when
+present, source, phase, nonempty bounded text and receiver disposition. A
+damaged or conflicting receipt remains visible as `receipt_unavailable` with
+warnings; observing it never rewrites the record or repeats receiver work.
+Recover the original receipt before continuing. Valid terminal receipts keep
+the existing pagination behavior. File observations travel in bounded batches
+of at most 128 requests, split by encoded bytes within the existing bridge limit.
+
+App readback retains the collaboration card when a reply or delivery record
+cannot be read, displaying delivery as unverified. Restoring the original
+record lets the existing pump return once to the original conversation; it does
+not grant permission to reassign work or send to a different audience. Native
+file/CLI and real HTTP tests qualify this recovery boundary. Model routing,
+receiver adoption and live external-provider delivery require their own evidence.

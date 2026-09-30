@@ -249,6 +249,18 @@ backs off without resending, and typed terminal blockers stay stopped. This
 qualifies the persisted recovery boundary, not live provider availability or
 the complete GQ09 journey.
 
+The pending-receipt checkpoint moves file-existence classification into the
+shared `collaboration/inbox_receipts.ts` read model. Missing, unreadable and
+identity-conflicting decisions/results are explicit; a damaged conclusion cannot
+silently clear the receiver's request or remove the original App collaboration
+card. Original-byte recovery returns once without rerunning work or changing
+audience. Native private-file/CLI and production HTTP tests cover this boundary;
+packaged browser checks cover its existing unverified-delivery presentation.
+The adapter batches by count and encoded bytes rather than raising the bridge
+limit. No new store or persisted schema is introduced. This does not complete
+the accept/consume/cancel lifecycle migration or qualify native owner selection,
+steering, team adoption or live Lark transport.
+
 Before each extraction report base/head real-call latency, boundary crossings,
 bytes, owners deleted/retained and compatibility callers. Product delivery must
 not wait for full Python retirement. Python may retain IO; TS owns migrated
