@@ -11,7 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority
+from loopx.chat_manager_details import read_manager_goal_details
+from canonical_authority_fixture import (
+    initialize_canonical_authority, isolate_sqlite_runtime, promoted_create_fixture,
+)
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.coordination_state_contract import (
@@ -19,13 +22,14 @@ from loopx.control_plane.coordination.coordination_state_contract import (
 )
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
 from loopx.control_plane.todos import provider_projection, active_state_editing
+from loopx.control_plane.todos.todo_summary import normalize_todo_text, todo_priority_parts
 from loopx.control_plane.todos.completion_validation_store import (
     persist_completion_validation_declaration,
 )
 
 
 @pytest.fixture
-def canonical_display(tmp_path):
+def canonical_display(tmp_path, request):
     state = tmp_path / "state.md"
     state.write_text("# Goal\n\nAgent-generated acceptance is not in the Todo store.\n\n## Agent Todo\n")
     runtime = tmp_path / "runtime"
@@ -50,6 +54,12 @@ def canonical_display(tmp_path):
         record["schema_version"] = "todo_domain_record_v0"
         record.pop("index")
         record.pop("source_section")
+    if getattr(request, "param", None) == "conflicting_long_title":
+        title = "Same prefix " * 60 + "original tail"
+        projection["todos"][0].update(
+            text="[P0] " + title, priority="P0",
+            title=title[:-13] + "different tail",
+        )
     projection["todo_read_model"] = {
         "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
         "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
@@ -76,6 +86,67 @@ def _cli(registry: Path, *options: str):
 def _run(registry: Path, revision: str, *options: str):
     return _cli(registry, "project-markdown", "--goal-id", "goal-a",
                 "--provider-revision", revision, *options)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_create(
+    tmp_path, monkeypatch, provider,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
+    title = "Independent evidence 审阅🙂 " * 50 + "retain the final obligation"
+    text = "[P0] " + title
+    create = (
+        "add", "--goal-id", "goal-a", "--role", "agent", "--claimed-by", "agent-a",
+        "--text", text, "--operation-id", "long-text-create",
+    )
+    code, committed = _cli(registry, *create)
+    assert code == 0 and committed["status"] == "applied", committed.get("error")
+    assert committed["projection_delivery"] == "delivered", committed
+    before = _read(runtime)
+    record = before["todos"][0]
+    assert record["text"] == text and record["title"] == title
+    assert text in state.read_text()
+
+    # A stale compatibility view must be repaired from the canonical head,
+    # not by editing the accepted Todo or repeating its committed mutation.
+    state.write_text("# Goal\n\nKeep this narrative.\n\n## Agent Todo\n\n- [ ] stale view\n")
+    code, delivered = _run(registry, before["provider_revision"], "--execute")
+    assert code == 0 and delivered["status"] == "delivered", delivered
+    rendered = state.read_text()
+    assert text in rendered and "Keep this narrative." in rendered
+    assert delivered["parse_render_parity"] is True
+    assert _read(runtime) == before
+    code, replay = _run(registry, before["provider_revision"], "--execute")
+    assert code == 0 and replay["status"] == "current", replay
+    assert state.read_text() == rendered and _read(runtime) == before
+
+    code, listed = _cli(registry, "list", "--goal-id", "goal-a", "--todo-id", record["todo_id"])
+    # The CLI remains a bounded attention view, not source serialization.
+    summary_text = normalize_todo_text(text)
+    assert code == 0 and listed["todo"]["text"] == summary_text, listed
+    assert listed["todo"]["title"] == todo_priority_parts(summary_text)[1]
+    assert listed["authority_read"]["provider_revision"] == before["provider_revision"]
+    manager = read_manager_goal_details(registry, runtime, "goal-a", owner_scope=True)
+    assert manager["status"] == "read" and manager["coverage"]["active"] == 1
+    assert manager["authority_revision"] == before["provider_revision"]
+    assert manager["todos"][0]["todo_id"] == record["todo_id"]
+    assert manager["todos"][0]["title"].startswith("Independent evidence")
+    # The existing safe formatter appends its marker outside the text budget.
+    assert manager["todos"][0]["title"] == listed["todo"]["title"][:419].rstrip() + "..."
+    code, create_replay = _cli(registry, *create)
+    assert code == 0 and create_replay["status"] == "replayed", create_replay
+    assert _read(runtime) == before  # No new Todo, provider revision or business receipt.
+
+
+@pytest.mark.parametrize("canonical_display", ["conflicting_long_title"], indirect=True)
+def test_public_rebuild_rejects_title_conflict_after_the_summary_prefix(canonical_display):
+    registry, runtime, state = canonical_display
+    before = _read(runtime)
+    original = state.read_bytes()
+    code, rejected = _run(registry, before["provider_revision"], "--execute")
+    assert code == 1 and "parity mismatch" in rejected["error"], rejected
+    assert state.read_bytes() == original and _read(runtime) == before
 
 
 def test_public_rebuild_missing_preview_execute_and_replay(canonical_display):

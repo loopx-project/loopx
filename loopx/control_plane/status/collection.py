@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from ..agents.execution_facts import collect_agent_execution_facts
 from ..coordination.local_authority import CanonicalTodoSnapshot
 from ..goals.acceptance_observation import attach_goal_acceptance_observations
 from ..goals.artifact_lifecycle import attach_goal_artifact_lifecycle_projections
@@ -230,9 +231,16 @@ def collect_status(
             "registry_revision": registry_activation_revision(registry),
         }
     payload["runtime_projection_routes"] = runtime_projection_route_health
+    # Lane liveness, delegation worker locks and leases are what make a worker
+    # `executing` or `unknown`. Each row carries its facts as `execution`, so a
+    # re-projection such as the peer directory reads them from there.
+    execution_facts = collect_agent_execution_facts(
+        runtime_root=runtime_root, status_payload=payload
+    )
     agent_management_projection = context.build_agent_management_projection(
         payload,
         available_capabilities=available_capabilities,
+        execution_facts=execution_facts,
     )
     if agent_management_projection.get("agents"):
         payload["agent_management_projection"] = agent_management_projection

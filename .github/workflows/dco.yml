@@ -2,6 +2,8 @@ name: DCO
 
 on:
   pull_request:
+  # A required check must also report on merge-queue candidates.
+  merge_group:
 
 permissions:
   contents: read
@@ -19,12 +21,15 @@ jobs:
 
       - name: Require DCO trailers on contribution commits
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.merge_group.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          # merge_group reports the base as a full ref (refs/heads/main).
+          BASE_REF="${BASE_REF#refs/heads/}"
+          test -n "${BASE_REF}" && test -n "${HEAD_SHA}"
 
           # The event's base SHA can predate upstream commits already in the PR.
           # Refresh the exact target branch before selecting PR-only commits.

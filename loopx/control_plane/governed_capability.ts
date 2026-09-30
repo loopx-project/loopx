@@ -70,6 +70,13 @@ const MONITOR_COMPLETE_FIELDS = new Set([
   "monitor_key",
   "evidence",
 ]);
+// Provider results may propose monitor transitions only. A team plan
+// (`steward_team_plan_preview`) is deliberately not admitted: no provider
+// emits one, and admitting it would let an external provider create lane
+// Todos. That needs its own contract (a proposal schema without monitor
+// fields, lane action limits, how a refused plan reads in the lifecycle
+// receipt). The Python settlement owner keeps the route and already requires
+// the state basis the journal binds for an operation declaring the kind.
 const TRANSITION_PROPOSAL_KINDS = [
   "continuous_monitor_upsert",
   "continuous_monitor_complete",

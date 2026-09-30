@@ -170,14 +170,20 @@ async function waitForPickerLabel(page, settled, timeoutMs = 15_000) {
   throw new Error(`Chat runtime picker never settled: ${resolution}`);
 }
 
-async function assertHairlineRow(page, maxHeight = 26) {
+async function assertHairlineRow(page, maxHeight) {
   const headerBox = await page.locator(".personal-channel-header").boundingBox();
-  const chipBox = await page.locator(".personal-execution-chip").boundingBox();
+  const chip = page.locator(".personal-execution-chip");
+  const chipBox = await chip.boundingBox();
+  // The model editor turns the read-only label into a desktop button with a
+  // 28px target. Keep the original 26px label budget and the explicit mobile
+  // budget; do not derive the limit from the observed height or its CSS.
+  const desktopBudget = await chip.evaluate((element) => element.tagName === "BUTTON" ? 28 : 26);
+  const heightBudget = maxHeight ?? desktopBudget;
   if (!headerBox || !chipBox) throw new Error("Execution chip has no layout box");
   if (chipBox.y < headerBox.y || chipBox.y + chipBox.height > headerBox.y + headerBox.height) {
     throw new Error("Execution chip escaped the channel header row");
   }
-  if (chipBox.height > maxHeight) {
+  if (chipBox.height > heightBudget) {
     throw new Error(`Execution chip is not a compact hairline row: ${chipBox.height}px tall`);
   }
 }

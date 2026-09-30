@@ -740,6 +740,27 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
   Todo/lease mutation admission、quota、automation、Goal Channel 与 M3 总
   activation hold 仍分别验收。
 
+### 2026-09-30：M3 Turn journal 精确提交候选
+
+- **基线：** `350f0f326`。
+- **候选实现：** 保持 `loopx_turn_journal_v0` 和既有路径。Source profile
+  plan 在 plan 与 transaction 中携带一致的精确 GoalRef。Executor 的每次
+  journal mutation 都通过同一个持久化回调，把 alias-scoped lifecycle guard
+  从 Python 交接给 TypeScript。TypeScript claim 并复核 witness，复用
+  `decideFirstPartyHostRuntime(require_current)`，再取得既有 journal mutation
+  lock 并提交，最后释放 source guard。
+- **证据：** TypeScript owner 测试证明缺失、畸形、副本不一致、失效和 stale
+  source admission 均在 journal mutation 前拒绝。真实 Python-to-TypeScript
+  集成先提交并重放 Goal A，再发布同名 Goal B，证明迟到的 A checkpoint
+  不改变 A/B 文件，随后 B 可独立提交。
+- **兼容性：** 只读 inspection 和 recovery 仍可读取 legacy journal。非 source
+  写入保留旧 RPC shape 与持久化字节。Source admission facts 和 lock token
+  只用于 transport，不落盘。
+- **剩余 hold：** 本切片只资格化 `turn_journal` inventory 行，不代表
+  `first_party_host_runtime`、downstream external-effect drain、不支持的旧／常驻
+  binary 或其他 M3 行已完成。`execution_authority: false` 和总 activation hold
+  保持不变。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | Owner／批准 | 替代方案 | 变更的规范章节 |

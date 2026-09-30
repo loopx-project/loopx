@@ -123,6 +123,7 @@ def pending(
     agent_id: str,
     *,
     cursor: str | None = None,
+    operation_cursor: str | None = None,
     scope: CollaborationGoalScope | None = None,
 ) -> dict:
     cursor_scope = _hash(
@@ -159,50 +160,79 @@ def pending(
         paths = sorted(folder.iterdir())
     except FileNotFoundError:
         paths = []
-    items = []
+    items, batch = [], []
+
+    def append_batch():
+        classified = iter(_pending_receipt_states(runtime_root, batch))
+        for row in batch:
+            if isinstance(row, Exception):
+                raise row
+            state = next(classified)
+            if state["kind"] == "settled":
+                continue
+            if scope is not None:
+                from .goal_instance_scope import decide_collaboration_lifecycle
+
+                lifecycle = decide_collaboration_lifecycle(
+                    scope, operation="inbox_observe", record=row,
+                )
+                if lifecycle.get("kind") == "omit":
+                    continue
+            item = {**row, "inbox_state": state["kind"]}
+            if state["recorded_decision"] is not None:
+                item["receiver_decision_recorded"] = True
+                item["next_action"] = "Return the original audience a conclusion with manager-inbox report; do not repeat the recorded decision or reprioritize unrelated work."
+            if state["warnings"]:
+                item["warnings"] = state["warnings"]
+                item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."
+            items.append(item)
+            if len(items) == 21:
+                break
+        batch.clear()
+
     for path in paths:
         if path.suffix != ".json":
             continue
-        if not BARE_SHA256_PATTERN.fullmatch(path.stem):
-            raise ValueError("invalid context request filename")
-        if path.stem <= after:
+        if BARE_SHA256_PATTERN.fullmatch(path.stem) and path.stem <= after:
             continue
-        decided = (_root(runtime_root) / "decisions" / path.name).exists()
-        if decided and not needs_conclusion(runtime_root, path.stem):
-            continue
-        item = _read(path)
-        if (
-            item.get("schema_version")
-            != (EXACT_ENTRY_SCHEMA if scope is not None and scope.exact else ENTRY_SCHEMA)
-            or item.get("goal_id") != goal_id
-            or item.get("agent_id") != agent_id
-            or item.get("request_id") != path.stem
-        ):
-            raise ValueError("context inbox scope mismatch")
-        if scope is not None:
-            from .goal_instance_scope import decide_collaboration_lifecycle
-
-            lifecycle = decide_collaboration_lifecycle(
-                scope,
-                operation="inbox_observe",
-                record=item,
-            )
-            if lifecycle.get("kind") == "omit":
-                continue
-        if decided:
-            item = {
-                **item,
-                "receiver_decision_recorded": True,
-                "next_action": "Return the original audience a conclusion with manager-inbox report; do not repeat the recorded decision or reprioritize unrelated work.",
-            }
-        items.append(item)
-        if len(items) == 21:
-            break
+        try:
+            batch.append(_pending_entry(path, goal_id, agent_id, scope))
+        except (OSError, ValueError) as exc:
+            # Evaluate errors in scan order; batch lookahead cannot let a later
+            # page's damaged entry block an already complete current page.
+            batch.append(exc)
+        if len(batch) == 128:
+            append_batch()
+            if len(items) == 21:
+                break
+    if batch:
+        append_batch()
     from .peers import returns
 
     peer_returns = returns(runtime_root, goal_id, agent_id, scope=scope)
+    from .operation_handoff import pending_operation_handoffs
+
+    operation_handoffs = pending_operation_handoffs(
+        runtime_root,
+        goal_id,
+        agent_id,
+        registry_path=scope.registry_path if scope is not None else None,
+        scope=scope,
+        cursor=operation_cursor,
+        cursor_scope=cursor_scope,
+    )
     return {
         "ok": True,
+        **(
+            {
+                "operation_handoffs": operation_handoffs["items"],
+                "operation_handoff_pending_count": operation_handoffs["pending_count"],
+                "operation_handoff_overflow": operation_handoffs["overflow"],
+                "operation_handoff_next_cursor": operation_handoffs["next_cursor"],
+            }
+            if operation_handoffs["items"] or operation_cursor is not None
+            else {}
+        ),
         **({"peer_returns": peer_returns} if peer_returns["items"] else {}),
         "items": items[:20],
         "has_more": len(items) > 20,
@@ -217,6 +247,57 @@ def pending(
             "to discover new requests before it. The end of a page sequence is not work completion."
         ),
     }
+
+
+def _pending_entry(path, goal_id, agent_id, scope):
+    if not BARE_SHA256_PATTERN.fullmatch(path.stem):
+        raise ValueError("invalid context request filename")
+    item = _read(path)
+    if (
+        item.get("schema_version")
+        != (EXACT_ENTRY_SCHEMA if scope is not None and scope.exact else ENTRY_SCHEMA)
+        or item.get("goal_id") != goal_id
+        or item.get("agent_id") != agent_id
+        or item.get("request_id") != path.stem
+    ):
+        raise ValueError("context inbox scope mismatch")
+    return item
+
+
+def _pending_receipt_states(runtime_root, rows):
+    """Observe private files, then batch the typed read model by wire bytes."""
+    from ..effect_runtime import effect_runtime_result
+
+    root = _root(runtime_root)
+    observations, states, encoded_bytes = [], [], 0
+    for row in rows:
+        if isinstance(row, Exception):
+            continue
+        request_id = row["request_id"]
+        observation = {
+            "request": {key: row[key] for key in (
+                "request_id", "goal_id", "agent_id", "source_id", "goal_ref"
+            ) if key in row},
+            "route_present": (root / "roundtrips" / (request_id + ".json")).exists(),
+            "decision": _observe_receipt(root / "decisions" / (request_id + ".json")),
+            "conclusion": _observe_receipt(root / "replies" / request_id / "conclusion.json"),
+        }
+        size = len(json.dumps(observation, separators=(",", ":")).encode())
+        # The existing bridge serializes ASCII-escaped JSON and admits 2 MiB.
+        # Leave room for its envelope; legal Unicode replies must not turn
+        # a bounded page into another oversized history request.
+        if observations and encoded_bytes + size > 1_000_000:
+            states.extend(effect_runtime_result(
+                "collaboration.inbox.inspect_receipts", {"observations": observations}
+            )["items"])
+            observations, encoded_bytes = [], 0
+        observations.append(observation)
+        encoded_bytes += size
+    if observations:
+        states.extend(effect_runtime_result(
+            "collaboration.inbox.inspect_receipts", {"observations": observations}
+        )["items"])
+    return states
 
 
 def acknowledge(
@@ -391,10 +472,17 @@ def _receipt(root, lane, row):
         return {}, lane + "_unreadable_or_conflicting"
 
 
-def needs_conclusion(root, request_id):
-    return (_root(root) / "roundtrips" / (request_id + ".json")).exists() and not (
-        _root(root) / "replies" / request_id / "conclusion.json"
-    ).exists()
+def _observe_receipt(path: Path) -> dict:
+    try:
+        value = _read(path)
+        # Python's JSON reader accepts non-finite numbers; the typed bridge
+        # does not. Keep a damaged record local to its request, not its batch.
+        json.dumps(value, allow_nan=False)
+        return {"state": "read", "value": value}
+    except FileNotFoundError:
+        return {"state": "absent"}
+    except (OSError, ValueError):
+        return {"state": "unavailable"}
 
 
 def record_result(

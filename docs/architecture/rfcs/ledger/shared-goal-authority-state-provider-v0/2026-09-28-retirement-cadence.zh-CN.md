@@ -183,8 +183,18 @@ Todo 写入时的业务校验，也不重审完成／deferred 历史的授权。
 仍触及既有 `todo.succession.project` RPC 响应预算；修复后的合同 API 能读取该集合，
 不代表剩余整命令包体边界已完成验收。
 
-B 下一步仍是历史 artifact 查找和剩余公共包体／冷路径，保留文件变化 freshness、
-完整决策输入及损坏拒绝。合同检查与 attention 现在按 runtime／Goal 共享请求内已校验的完整
+B 下一步聚焦冻结 source／runtime profile 下的 SQLite 准入：重新跑已有 reference
+容量轴，对齐并发／恢复／consumer lag 证据，并核对保留的自然时间 soak 适用性。
+比较 runner 原先要求历史重试返回 conflict，与已合并 #5169 矛盾：相同完整意图应
+返回原 applied revision／cursor。现在核对原结果，分别拒绝 projection／event／receipt
+漂移，在重试前后分页验证全部历史，不保留所有预期快照。不变量失败就不发布成功
+报告；这些检查放在既有计时窗口之外。这修复的是验证工具，不代表 provider 故障、
+D2 通过或默认切换。#4224 已报告在 `e98191faa` 上于 9 月 14 日开始 soak，仍需最终
+结果及对当前候选的适用性证据，不能称为未开始，也不能仅因无关 source 修订就重启计时。
+
+已有 TS 替代且真实受影响调用方验证完成的 Python 重复决策，可以按最后调用方独立
+退役；整条 Markdown writer 删除仍需 C 的新 Goal／升级／恢复出口。消费者完整
+metadata、freshness 和决策输入继续验收。合同检查与 attention 现在按 runtime／Goal 共享请求内已校验的完整
 canonical Todo 快照。独立检查和下一次请求重新读取；租约与投影写回读取不参与。消费者修改
 不会污染保留输入，首次读取失败不会在请求中途恢复成功。这不代表 registry、Markdown、
 历史或多个 Goal 之间的原子快照。集成后继续核对安装态消费者，A/C 与 D2

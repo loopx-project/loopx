@@ -166,16 +166,20 @@ def write_turn_journal(
     journal: Mapping[str, Any],
     *,
     expected_effect_id: str | None = None,
+    source_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     """Commit a Turn-journal transition through the TS semantic owner."""
 
+    request: dict[str, Any] = {
+        "path": path,
+        "journal": dict(journal),
+        "expected_effect_id": expected_effect_id,
+    }
+    if source_admission is not None:
+        request["source_admission"] = dict(source_admission)
     payload = effect_runtime_result(
         "turn_journal.write",
-        {
-            "path": path,
-            "journal": dict(journal),
-            "expected_effect_id": expected_effect_id,
-        },
+        request,
         retry_safe=True,
     )
     if (

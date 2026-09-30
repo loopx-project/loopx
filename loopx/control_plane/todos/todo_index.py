@@ -113,6 +113,11 @@ def _indexed_rollout_todo_event(
     )
     if not summary:
         summary = f"todo event recorded for {todo_id}"
+    # The rollout summary is an audit sentence ("todo add recorded for <id>"),
+    # not the Todo's own text. A row that exists only in the rollout event log
+    # is therefore labelled by id, and the audit sentence stays available as
+    # event metadata instead of being rendered as the task title.
+    row_text = f"todo {todo_id}"
     item = {
         "schema_version": TODO_INDEX_ITEM_SCHEMA_VERSION,
         "goal_id": goal_id,
@@ -121,14 +126,16 @@ def _indexed_rollout_todo_event(
         "status": status,
         "done": todo_done_for_status(status),
         "index": 0,
-        "text": summary,
-        "title": summary,
+        "text": row_text,
+        "title": row_text,
+        "title_source": "event_audit",
         "source": "rollout_event_log",
         "event_count": 1,
         "event_kinds": [str(event.get("event_kind") or "todo_event")],
         "latest_event_kind": str(event.get("event_kind") or "todo_event"),
         "latest_event_at": public_safe_compact_text(event.get("recorded_at"), limit=80),
         "latest_event_status": status,
+        "latest_event_summary": summary,
         "agent_id": public_safe_compact_text(event.get("agent_id"), limit=120),
     }
     handoff = event.get("handoff") or details.get("handoff")
@@ -228,6 +235,14 @@ def build_todo_index(
                     existing["done"] = bool(event_item.get("done"))
                 if event_item.get("agent_id"):
                     existing["agent_id"] = event_item.get("agent_id")
+                # The audit sentence describes the newest event for every row
+                # kind; only event-only rows also carry `title_source`, and the
+                # text of an attention-queue row stays authoritative because
+                # it is never overwritten here.
+                existing["latest_event_summary"] = (
+                    event_item.get("latest_event_summary")
+                    or existing.get("latest_event_summary")
+                )
                 continue
             indexed[key] = event_item
 

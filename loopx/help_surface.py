@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import argparse
 import re
 from typing import Any
 
 from . import __version__
-from .cli_runtime import GLOBAL_OPTIONS_WITH_EQUALS, GLOBAL_OPTIONS_WITH_VALUE
+from .cli_runtime import (
+    GLOBAL_OPTIONS_WITH_EQUALS, GLOBAL_OPTIONS_WITH_VALUE, add_subcommand_format,
+)
 
 HELP_FLAGS = {"-h", "--help"}
+
+
+def register_command_reference(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "commands",
+        help="Show grouped LoopX command reference for operators and contributors.",
+    )
+    add_subcommand_format(parser)
 
 
 COMMAND_GROUPS: list[dict[str, object]] = [

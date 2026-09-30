@@ -60,6 +60,10 @@
 .personal-status-source-meta > span.is-error i { background: #dd5b47; }
 .personal-status-source-meta > span.is-degraded i { background: #e5a33d; }
 .personal-service-notice { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--pw-line); background: var(--pw-amber-bg); color: var(--pw-amber); font-size: 13px; line-height: 20px; }
+.personal-history-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--pw-muted); font-size: 13px; line-height: 1.5; }
+.personal-history-notice > div { display: grid; gap: 2px; }
+.personal-history-notice button { flex-shrink: 0; padding: 6px 10px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; }
+.personal-history-notice button:disabled { opacity: .6; cursor: wait; }
 .personal-status-source-meta small { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .personal-status-source-meta button { margin-left: auto; width: 22px; height: 22px; color: var(--pw-faint); }
 .personal-status-source-error { margin: 0 3px; color: var(--pw-red); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
@@ -208,6 +212,9 @@
 .personal-channel-title p { margin: 3px 0 0; color: var(--pw-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .personal-channel-title p.personal-manager-execution { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .personal-execution-chip { display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--pw-line); border-radius: 999px; background: var(--pw-card); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 18px; }
+button.personal-execution-chip { min-height: 28px; border-radius: 6px; cursor: pointer; }
+button.personal-execution-chip:hover { border-color: var(--pw-line-strong); }
+button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; }
 .personal-execution-chip-endpoint { color: var(--pw-text); font-weight: 650; }
 .personal-execution-chip-kind { color: var(--pw-faint); }
 .personal-execution-chip-model { color: var(--pw-muted); }
@@ -218,11 +225,13 @@
 .personal-execution-chip.is-unavailable .personal-execution-chip-model { color: var(--pw-amber); }
 .personal-execution-chip.is-unavailable .personal-execution-chip-budget { color: var(--pw-amber); }
 @media (max-width: 640px) {
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-title { display: contents; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-title h1 { grid-row: 1; grid-column: 2; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-actions { grid-row: 1; grid-column: 3; }
-  .personal-channel-header:has(.personal-execution-chip-budget) p.personal-manager-execution { grid-row: 2; grid-column: 1 / -1; overflow: visible; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-execution-chip { max-width: 100%; flex-wrap: wrap; gap: 0 6px; border-radius: 6px; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-title { display: contents; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-title h1 { grid-row: 1; grid-column: 2; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-actions { grid-row: 1; grid-column: 3; }
+  .personal-channel-header:has(.personal-execution-chip) p.personal-manager-execution { grid-row: 2; grid-column: 1 / -1; overflow: visible; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-runtime-details { grid-row: 3; grid-column: 1 / -1; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-execution-chip { max-width: 100%; flex-wrap: wrap; gap: 0 6px; border-radius: 6px; }
+  button.personal-execution-chip { min-height: 44px; }
 }
 .personal-execution-note { overflow: hidden; color: var(--pw-muted); font-size: 11px; text-overflow: ellipsis; }
 /* Why the conditional steward default resolved this way: same hairline row, no
@@ -472,6 +481,8 @@
 .personal-subagent-feedback.is-success { color: var(--pw-green) !important; }
 .personal-subagent-feedback.is-warning { color: #8a6b00 !important; }
 .personal-subagent-feedback.is-error { color: var(--pw-red) !important; }
+.personal-run-action-feedback { display: flex; align-items: flex-start; gap: 7px; margin: 10px 0 0; color: var(--pw-muted); font-size: 12px; overflow-wrap: anywhere; }
+.personal-run-action-feedback.is-error { color: var(--pw-red); }
 .personal-subagent-read-only { margin-bottom: 0; }
 
 .personal-settings-page { --pw-bg: #fbfaf7; --pw-card: #ffffff; --pw-line: #eceae3; --pw-line-strong: #e0ddd4; --pw-muted: #82889a; --pw-faint: #aab0bf; --pw-text: #23262e; --pw-blue: #2f66e9; --pw-blue-ink: #2456c8; --pw-blue-soft: #ebf1fe; --pw-red: #c2402f; --pw-red-bg: #fcecea; --pw-green: #2e7d5b; --pw-green-bg: #e6f3ec; display: grid; grid-template-columns: 268px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100dvh; min-height: 0; overflow: hidden; background: var(--pw-bg); color: var(--pw-text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
@@ -552,13 +563,9 @@
 .personal-language-options strong { font-size: 13px; }
 .personal-settings-card > footer { padding: 13px 20px; border-top: 1px solid var(--pw-line); background: #faf9f6; color: var(--pw-faint); font-size: 11px; }
 .personal-cadence-settings { display: grid; gap: 22px; width: min(100%, 760px); padding: 28px; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); }
-.personal-cadence-intro p { margin: 0; color: var(--pw-muted); font-size: 13px; line-height: 1.55; }
-.personal-cadence-scopes { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; }
-.personal-cadence-scopes legend { width: 100%; margin-bottom: 10px; font-size: 12px; font-weight: 700; }
-.personal-cadence-scopes label { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 0 14px; border: 1px solid var(--pw-line-strong); border-radius: 6px; cursor: pointer; font-size: 13px; }
-.personal-cadence-scopes label:has(input:checked) { border-color: var(--pw-blue); color: var(--pw-blue-ink); background: var(--pw-blue-soft); }
-.personal-cadence-scopes input { accent-color: var(--pw-blue); }
+.personal-cadence-form { display: grid; gap: 20px; }
 .personal-cadence-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.personal-cadence-target { grid-template-columns: 1fr; }
 .personal-cadence-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; font-size: 12px; font-weight: 700; }
 .personal-cadence-fields input, .personal-cadence-fields select { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: #fff; color: var(--pw-text); font: inherit; font-size: 13px; }
 .personal-cadence-fields small { color: var(--pw-muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
@@ -569,10 +576,13 @@
 .personal-cadence-readback p { margin: 0; color: var(--pw-muted); font-size: 11px; line-height: 1.5; }
 .personal-cadence-boundary { display: flex; align-items: flex-start; gap: 9px; margin: 0; color: var(--pw-muted); font-size: 12px; line-height: 1.55; }
 .personal-cadence-boundary svg { flex: 0 0 auto; margin-top: 1px; }
-.personal-cadence-reduction { display: flex; align-items: center; gap: 10px; font-size: 12px; line-height: 1.5; }
-.personal-cadence-reduction input { accent-color: var(--pw-blue); }
-.personal-cadence-preview { display: grid; gap: 5px; padding: 14px; border: 1px solid var(--pw-blue); border-radius: 8px; background: var(--pw-blue-soft); font-size: 13px; }
-.personal-cadence-preview small { color: var(--pw-muted); line-height: 1.5; }
+.personal-cadence-change { display: grid; gap: 4px; margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.personal-cadence-change small { color: var(--pw-muted); font-size: 12px; }
+.personal-cadence-details { color: var(--pw-muted); font-size: 12px; }
+.personal-cadence-details summary { width: fit-content; min-height: 44px; padding-block: 10px; cursor: pointer; }
+.personal-cadence-details[open] > .personal-cadence-fields { margin-top: 8px; }
+.personal-cadence-automation { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.personal-cadence-automation input { accent-color: var(--pw-blue); }
 .personal-cadence-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 16px; border-top: 1px solid var(--pw-line); }
 .personal-cadence-actions button, .personal-cadence-settings button { min-height: 44px; padding: 0 14px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: #fff; color: var(--pw-text); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
 .personal-cadence-actions button.is-primary { border-color: var(--pw-text); background: var(--pw-text); color: #fff; }
@@ -677,6 +687,7 @@
 .personal-lark-table-row > span { display: grid; gap: 3px; min-width: 0; }
 .personal-lark-table-row strong, .personal-lark-table-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-lark-table-row small { color: var(--pw-muted); font-size: 10px; }
+.personal-lark-table-row .personal-lark-health-detail { overflow: visible; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
 .personal-lark-row-actions { display: flex !important; justify-content: flex-end; }
 .personal-lark-row-actions button, .personal-lark-modal header button { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 8px; border: 1px solid var(--pw-line); border-radius: 8px; background: #fff; color: var(--pw-muted); cursor: pointer; font-size: 10px; }
 .personal-lark-row-actions button.is-confirm { border-color: #e6b0aa; background: var(--pw-red-bg); color: var(--pw-red); }
@@ -749,6 +760,8 @@
 .personal-proposal-row strong { font-size: 13px; }
 .personal-proposal-row p { margin: 0; color: #686f7c; font-size: 11px; }
 .personal-proposal-row > b { color: #315fc8; font-size: 11px; }
+.personal-proposal-row[data-action-kind="operation.execute"] { grid-template-columns: 36px minmax(0, 1fr); }
+.personal-proposal-row[data-action-kind="operation.execute"] > b { grid-column: 2; overflow-wrap: anywhere; }
 .personal-proposal-row.is-applied { border-color: #b5ddcc; background: #f3fbf7; }
 .personal-proposal-row.is-error, .personal-proposal-row.is-stale { border-color: #efc3c3; background: #fff7f7; }
 .personal-proposal-row.is-gated { border-color: #ead39c; background: #fffaf0; }
@@ -1084,6 +1097,7 @@
 .personal-composer-images img { width: 100%; height: 100%; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; }
 .personal-composer-images button { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid var(--pw-line-strong); border-radius: 50%; background: #fff; color: var(--pw-text); cursor: pointer; box-shadow: 0 1px 4px rgb(30 28 20 / 18%); }
 .personal-composer-error { margin: 0 0 7px; color: var(--pw-red); font-size: 11.5px; }
+.personal-composer-status { margin: 0 0 7px; color: var(--pw-muted); font-size: 12px; }
 
 .personal-context-drawer { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
 .personal-drawer-header { display: flex; align-items: flex-start; justify-content: space-between; min-height: 84px; padding: 20px 18px 16px; border-bottom: 1px solid var(--pw-line); }
@@ -1165,6 +1179,18 @@
 .personal-detail-card dl div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; font-size: 12px; }
 .personal-detail-card dt { color: var(--pw-faint); }
 .personal-detail-card dd { margin: 0; overflow-wrap: anywhere; }
+.personal-attention-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--pw-muted); font-size: 12px; }
+.personal-attention-brief h3 { margin: 20px 0 12px; font-size: 16px; }
+.personal-attention-brief h4 { margin: 24px 0 8px; font-size: 13px; font-weight: 600; }
+.personal-attention-brief .personal-md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.personal-attention-brief .personal-md p { color: var(--pw-text); font-size: inherit; line-height: inherit; }
+.personal-attention-brief .personal-attention-missing { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--pw-amber-bg); color: var(--pw-amber); }
+.personal-attention-identifiers { margin-top: 24px; border-top: 1px solid var(--pw-line); padding-top: 16px; }
+.personal-attention-identifiers summary { color: var(--pw-muted); cursor: pointer; font-size: 12px; min-height: 44px; display: flex; align-items: center; gap: 8px; list-style: none; }
+.personal-attention-identifiers summary::-webkit-details-marker { display: none; }
+.personal-attention-identifiers summary::before { content: "▸"; }
+.personal-attention-identifiers[open] summary::before { content: "▾"; }
+.personal-attention-identifiers dl { margin: 0 0 16px; }
 .personal-run-drawer-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 11px; background: #efefec; }
 .personal-run-drawer-tabs button { min-height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--pw-muted); cursor: pointer; font-size: 12px; font-weight: 650; }
 .personal-run-drawer-tabs button[aria-selected="true"] { background: #fff; color: var(--pw-text); box-shadow: 0 1px 4px rgb(30 28 20 / 12%); }
@@ -1914,3 +1940,6 @@
 .personal-action-form-limit { margin: 0; color: var(--pw-amber); font-size: 13px; }
 
 .personal-capability-supported-scopes { margin: 6px 0; color: var(--pw-muted); font-size: 12px; line-height: 1.5; }
+
+.personal-conversation-latest { display: block; margin: 0 auto 10px; padding: 7px 14px; border: 1px solid var(--pw-line); border-radius: 20px; background: var(--pw-bg); color: var(--pw-text); font: inherit; font-size: 12px; cursor: pointer; }
+.personal-composer-hint { padding-top: 7px; color: var(--pw-muted); font-size: 11px; text-align: center; }

@@ -18,3 +18,15 @@ test("explicit human-message admission preserves origin and replay boundaries", 
     assert.throws(() => trigger({mode}), /conversation trigger/);
   }
 });
+
+test("non-admission reasons explain the actual cause without changing authority", () => {
+  for (const [evidence, reason] of [
+    [{mode: "addressed", human: true}, "not_addressed"],
+    [{mode: "human_messages", historical: true}, "historical_context_only"],
+    [{mode: "human_messages", self_message: true}, "self_message"],
+    [{mode: "human_messages", bot_message: true}, "bot_message"],
+    [{mode: "human_messages"}, "human_identity_unverified"],
+  ] as const) {
+    assert.deepEqual(trigger(evidence), {mode: evidence.mode, authorized: false, reason});
+  }
+});

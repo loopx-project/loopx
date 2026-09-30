@@ -2,7 +2,7 @@
 """Smoke test for worker lifecycle state projection.
 
 Verifies that the agent management projection correctly derives lifecycle
-states from existing facts (registry, todo, session binding, activity).
+states from existing facts (registry, todo, session binding, execution facts).
 
 Run from the repository root:
     uv run --extra test python examples/worker-lifecycle-state-smoke.py
@@ -19,8 +19,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def _recent_activity() -> str:
-    """Activity timestamp within the activity threshold (8 hours)."""
+    """A fresh Todo update: activity, which on its own never means execution."""
     return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+
+# Execution facts are what make a worker `executing`: here the worker's Turn
+# lane is live. The projection reads them; it never infers them from age.
+EXECUTION_FACTS = {"worker-executing": {"lane": "live"}}
 
 from loopx.control_plane.agents.management_projection import (  # noqa: E402
     WORKER_LIFECYCLE_STATE_ADDRESSABLE,
@@ -112,7 +117,19 @@ def build_status_payload() -> dict:
 
 def main() -> int:
     payload = build_status_payload()
-    projection = build_agent_management_projection(payload)
+    projection = build_agent_management_projection(
+        payload, execution_facts=EXECUTION_FACTS
+    )
+    without_facts = build_agent_management_projection(payload)
+    timestamp_only = {
+        a["agent_id"]: a["state"] for a in without_facts.get("agents", [])
+    }.get("worker-executing")
+    if timestamp_only == WORKER_LIFECYCLE_STATE_EXECUTING:
+        print(
+            "FAIL: a fresh Todo timestamp without execution facts must not "
+            "read as executing"
+        )
+        return 1
 
     agents = {a["agent_id"]: a for a in projection.get("agents", [])}
 

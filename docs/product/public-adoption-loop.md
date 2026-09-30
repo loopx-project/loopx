@@ -145,6 +145,19 @@ files that preserve the same public/private boundary.
 
 Until that approval exists, this document is the canonical adoption-loop copy.
 
+## Independent App trials
+
+The generic workflow templates above remain proposed copy. The repository
+already provides optional [First run](../../.github/ISSUE_TEMPLATE/first_run.yml)
+and [Usage story](../../.github/ISSUE_TEMPLATE/usage_story.yml) feedback forms.
+For the App's first-use cohort, reuse those forms with the
+[frozen first-use and repeat-use protocol](use-cases/steward/first-use-evaluation.md).
+Keep detailed timing, failures and evidence in a private study note; public
+submission and anonymous citation remain separate opt-ins, never success gates.
+The protocol is prepared, with no participant results. It requires a qualified
+pinned package and consenting users before execution; it sends no invitations
+and adds no telemetry or parallel issue intake.
+
 ## Related Docs
 
 - [Release readiness](release-readiness.md)

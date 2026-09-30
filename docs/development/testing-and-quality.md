@@ -113,11 +113,24 @@ is authoritative for activation. The lead maintainer alone retains the
 existing bypass exception; record the exact head, reason, validation and known
 failures whenever using it. A bypass does not turn failed tests into a pass.
 
+Both required workflows also run on `merge_group`, so a GitHub merge queue can
+qualify the exact candidate that would land on `main`. Queue candidates never
+receive a job exemption: the classifier plans them as full, exactly like
+`main`. `Sign-off` checks the same contribution range and exempts only
+verified GitHub-generated two-parent merges, so configure the queue with the
+merge method `merge`. The trigger is inert until the live ruleset enables a
+merge queue. Enabling the queue, and then relaxing the up-to-date-branch
+requirement, is a ruleset decision for the lead maintainer.
+
 每个 PR 都会收到 `merge-gate` 结果。代码、工作流、治理规则和未知路径必须通过
 原有核心测试；失败、取消、缺失或意外跳过均不能通过。仅白名单根目录 Markdown
 或 `docs/**/*.md` 的修改可显式跳过昂贵测试；运行时 prompt、可执行文档、代码删除
 及代码移入文档均不享受豁免。实际启用状态以在线规则为准，使用 owner bypass
 必须留下版本、原因、验证和已知失败的记录。
+两个必需工作流同样响应 `merge_group`，合并队列可在合入 `main` 前验证确切候选；
+队列候选一律全量验证、不享受豁免。队列合并方式应设为 `merge`，因为 `Sign-off`
+只豁免已验证的 GitHub 双父合并提交。在线规则启用合并队列前该触发不生效；启用
+队列并放宽“分支必须最新”要求由首席维护者决定。
 
 To validate or change the classifier locally:
 

@@ -48,6 +48,14 @@ export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflig
     ? acceptanceActions[check.acceptance_next_action] : null;
   const executorDetail = check.executor
     ? [check.executor.host, check.executor.reason].filter(Boolean).join(" · ") : check.authority_reason;
+  const operationTransport = check.executor?.operation_transport;
+  const operationDetail = operationTransport?.schema_version === "loopx_operation_transport_v0"
+    ? operationTransport.configuration_valid === true && operationTransport.runtime_qualified === false
+      ? (zh ? "自有原生工具传输已配置，运行未核验；执行仍需精确批准与首次消费"
+        : "Owned native tool transport configured, runtime unqualified; exact approval and first consumption still required")
+      : (zh ? "操作传输配置未获准；请原配置责任人核对宿主、固定模型/思考深度和 sandbox"
+        : "Operation transport configuration not admitted; ask its original owner to review host, pinned model/effort and sandbox")
+    : null;
   const detail = check.state === "workspace_unavailable"
     ? (workspaceDetail ? (zh ? workspaceDetail.zh : workspaceDetail.en) : null)
     : [acceptanceDetail ? (zh ? acceptanceDetail.zh : acceptanceDetail.en) : null, executorDetail].filter(Boolean).join(" · ");
@@ -66,6 +74,7 @@ export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflig
   return <p role="status">
     {zh ? labels[check.state].zh : labels[check.state].en}
     {detail ? ` · ${detail}` : ""}
+    {operationDetail ? ` · ${operationDetail}` : ""}
     {nextAction ? ` · ${nextAction}` : ""}
     {` · ${disclaimer}`}
   </p>;

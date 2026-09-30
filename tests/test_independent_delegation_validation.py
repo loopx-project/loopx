@@ -1,18 +1,24 @@
 """Independent delegation uses the canonical Todo's own validation contract."""
 
+from hashlib import sha256
 import json
+import subprocess
 import sys
 
 import pytest
 
-from loopx.control_plane.goals.acceptance import configure_goal_acceptance, inspect_goal_acceptance
+from loopx.control_plane.goals.acceptance import (
+    configure_goal_acceptance,
+    inspect_goal_acceptance,
+    validation_effect_files_current,
+)
 from test_delegation_cli import cli
 from test_local_delegation import brief, demo, service as delegation_service, wait
 
 service = delegation_service
 
 
-def independent_binding(service, *, declared=True):
+def independent_binding(service, *, declared=True, task_repository=None, validation_argv=None):
     root, runner = service
     basis = inspect_goal_acceptance(registry_path=runner.registry, goal_id=runner.goal_id,
                                     runtime_root=str(runner.root))
@@ -26,8 +32,10 @@ def independent_binding(service, *, declared=True):
     assert configured["status"] == "applied"
     args = ["todo", "add", "--goal-id", runner.goal_id, "--role", "agent",
             "--text", "Independently validate the assigned artifact", "--claimed-by", "analyst"]
+    if task_repository is not None:
+        args += ["--task-repository", task_repository]
     if declared:
-        args += ["--validation-command-json", json.dumps([
+        args += ["--validation-command-json", json.dumps(validation_argv or [
             sys.executable, "validation/acceptance.py", str(root), "analyst", "initial"])]
     created = demo.cli(root, *args)
     todo_id = created["todo_id"]
@@ -45,6 +53,64 @@ def test_independent_validator_qualifies_preflight_without_owner_rebinding(servi
     assert check["acceptance_ready"] and check["turn_eligible"]
     assert check["binding"]["todo_id"] == todo_id
     assert not any(check["effects"].values())
+
+
+def test_cross_repository_validator_uses_verified_binding_worktree(service):
+    root, runner = service
+    repository = root / "separate-repository"
+    repository.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(repository), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", *args],
+                       check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    (repository / "validator.marker").write_text("ok")
+    (repository / ".gitignore").write_text(".local/\n")
+    git("add", "validator.marker", ".gitignore")
+    git("commit", "-m", "Fixture validator")
+    task_repository = "https://example.invalid/synthetic/worker.git"
+    git("remote", "add", "origin", task_repository)
+    workspace = root / "separate-worker"
+    git("worktree", "add", "--detach", str(workspace), "HEAD")
+    todo_id = independent_binding(
+        service, task_repository=task_repository,
+        validation_argv=[sys.executable, "-c",
+                         "from pathlib import Path; p = Path('validator.marker'); "
+                         "assert p.read_text() == 'ok'; "
+                         "p.write_text('changed') if Path('.local/mutate').exists() else None"],
+    )
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["workspace"] = str(workspace)
+    runner.config.write_text(json.dumps(config))
+
+    binding = runner.binding("analysis", require_active=True)
+    result = runner._validate(binding)
+    assert result["plan"]["source"] == "todo_validation"
+    assert result["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
+    assert result["basis"]["todo"]["todo_id"] == todo_id
+    pinned = [{"task_repository": result["basis"]["todo"]["task_repository"],
+               "validation_label": "worker marker", "validation_files": [{
+                   "path": "validator.marker",
+                   "sha256": sha256((workspace / "validator.marker").read_bytes()).hexdigest(),
+               }]}]
+    assert not validation_effect_files_current(
+        effects=pinned, registry_path=runner.registry, goal_id=runner.goal_id)
+    assert validation_effect_files_current(
+        effects=pinned, registry_path=runner.registry, goal_id=runner.goal_id,
+        delivery_workspace=result["delivery_workspace"], validation_workspace_path=workspace)
+
+    (workspace / ".local").mkdir()
+    (workspace / ".local" / "mutate").touch()
+    with pytest.raises(ValueError, match="changed during validation"):
+        runner._validate(binding)
+    (workspace / "validator.marker").write_text("ok")
+    (workspace / ".local" / "mutate").unlink()
+
+    (workspace / "validator.marker").write_text("changed")
+    with pytest.raises(ValueError, match="acceptance rejected"):
+        runner._validate(binding)
 
 
 @pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])

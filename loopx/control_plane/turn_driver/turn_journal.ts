@@ -11,6 +11,7 @@ import {
   type EffectTurn,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import { recordedTurnEffects, type RecordedTurnEffects } from "./turn_journal_effect_readback.ts";
 
@@ -18,6 +19,22 @@ export const TURN_JOURNAL_INSPECTION_SCHEMA_VERSION =
   "loopx_turn_journal_inspection_v1";
 
 type JsonObject = Record<string, unknown>;
+
+type WireGoalRef = Readonly<{
+  goal_id: string;
+  goal_instance_id: string;
+}>;
+
+export type TurnJournalGoalBinding =
+  | Readonly<{ kind: "legacy" }>
+  | Readonly<{ kind: "exact"; goal_ref: WireGoalRef }>
+  | Readonly<{
+    kind: "invalid";
+    violation:
+      | "goal_ref_binding_incomplete"
+      | "goal_ref_binding_invalid"
+      | "goal_ref_binding_mismatch";
+  }>;
 
 export interface TurnJournalInspectionRequest {
   schema_version: "loopx_turn_journal_interpretation_request_v0";
@@ -143,6 +160,36 @@ function asObject(value: unknown): JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonObject)
     : {};
+}
+
+export function parseTurnJournalGoalBinding(
+  journal: JsonObject,
+): TurnJournalGoalBinding {
+  const plan = asObject(journal.plan);
+  const transaction = asObject(plan.transaction);
+  const hasPlanRef = Object.hasOwn(plan, "goal_ref");
+  const hasTransactionRef = Object.hasOwn(transaction, "goal_ref");
+  if (!hasPlanRef && !hasTransactionRef) return { kind: "legacy" };
+  if (!hasPlanRef || !hasTransactionRef) {
+    return { kind: "invalid", violation: "goal_ref_binding_incomplete" };
+  }
+  const planned = parseExactGoalRef(plan.goal_ref);
+  const transactionPlanned = parseExactGoalRef(transaction.goal_ref);
+  if (planned.kind === "invalid" || transactionPlanned.kind === "invalid") {
+    return { kind: "invalid", violation: "goal_ref_binding_invalid" };
+  }
+  const goalRef = {
+    goal_id: planned.value.goalId.value,
+    goal_instance_id: planned.value.goalInstanceId.value,
+  };
+  if (
+    goalRef.goal_id !== transactionPlanned.value.goalId.value
+    || goalRef.goal_instance_id !==
+      transactionPlanned.value.goalInstanceId.value
+  ) {
+    return { kind: "invalid", violation: "goal_ref_binding_mismatch" };
+  }
+  return { kind: "exact", goal_ref: goalRef };
 }
 
 function isValidIdentity(value: unknown): value is string {
@@ -559,6 +606,7 @@ export function interpretTurnJournalEffect(
   const identity = asObject(settlement.identity);
   const hostResult = asObject(journal.host_result);
   const receipt = asObject(journal.receipt);
+  const goalBinding = parseTurnJournalGoalBinding(journal);
 
   const [goalComplete, goalMatches] = identityState(
     [journal.goal_id, envelope.goal_id, identity.goal_id],
@@ -587,6 +635,14 @@ export function interpretTurnJournalEffect(
   const violations: string[] = [];
   if (!goalComplete) violations.push("goal_identity_missing");
   else if (!goalMatches) violations.push("goal_mismatch");
+  if (goalBinding.kind === "invalid") {
+    violations.push(goalBinding.violation);
+  } else if (
+    goalBinding.kind === "exact"
+    && goalBinding.goal_ref.goal_id !== request.goal_id
+  ) {
+    violations.push("goal_ref_binding_mismatch");
+  }
   if (!ownerComplete) violations.push("owner_identity_missing");
   else if (!ownerMatches) violations.push("owner_mismatch");
   if (!settlementIdentityValid) violations.push("settlement_identity_invalid");
@@ -625,6 +681,11 @@ export function interpretTurnJournalEffect(
 
   const lineageConsistent =
     goalMatches &&
+    goalBinding.kind !== "invalid" &&
+    (
+      goalBinding.kind !== "exact"
+      || goalBinding.goal_ref.goal_id === request.goal_id
+    ) &&
     ownerMatches &&
     settlementIdentityValid &&
     settlementTurnInstanceMatches &&

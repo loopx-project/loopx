@@ -27,8 +27,6 @@ from ..coordination.coordination_state_contract import (
 from .active_state_editing import (
     COMPLETED_WORK_ARCHIVE_HEADING,
     TODO_SECTION_HEADINGS,
-    archive_section_bounds,
-    todo_blocks,
 )
 from .machine_region import todo_region_marker
 from .projection_document import TodoProjectionDocument
@@ -38,7 +36,7 @@ from .completion_validation_projection import (
     completion_validation_declaration_sha256,
     project_completion_validation_authority,
 )
-from .active_state_todo_parser import parse_active_state_todos
+from .active_state_todo_parser import parse_todo_source
 from .contract import (
     TODO_DECISION_SCOPE_SCHEMA_VERSION,
     TODO_METADATA_FIELDS,
@@ -50,7 +48,10 @@ from .contract import (
     require_todo_decision_scope,
     todo_marker_for_status,
 )
-from .todo_summary import canonical_todo_read_record, todo_priority_parts, normalize_todo_text
+from .todo_summary import (
+    canonical_todo_read_record, todo_priority_parts, normalize_todo_text,
+    structured_todo_item,
+)
 from ..content_digest import BARE_SHA256_PATTERN
 
 
@@ -262,29 +263,23 @@ def _render_section(
 
 
 def _parsed_active_records(markdown: str) -> list[dict[str, Any]]:
-    fields = parse_active_state_todos(markdown, item_limit=None)
+    items_by_role, _, source_sections = parse_todo_source(markdown)
     records: list[dict[str, Any]] = []
     for role in TODO_SECTION_HEADINGS:
-        summary = fields.get(f"{role}_todos")
-        items = summary.get("items") if isinstance(summary, dict) else []
-        for item in sorted(items or [], key=_record_sort_key):
-            if isinstance(item, dict) and item.get("archive_state") == "active":
-                records.append(canonical_todo_read_record(item, reject_unknown=False))
+        for item in sorted(items_by_role[role], key=_record_sort_key):
+            # Display selection/resume evaluation is not source serialization.
+            # Preserve all text and skip attention-policy RPCs during parity.
+            normalized = structured_todo_item(
+                item, role=role, source_section=source_sections[role], text_limit=None,
+            )
+            records.append(canonical_todo_read_record(normalized, reject_unknown=False))
     return records
 
 
 def _parsed_archive_records(markdown: str) -> list[dict[str, Any]]:
-    lines = markdown.splitlines()
-    bounds = archive_section_bounds(lines)
-    if bounds is None:
-        return []
+    _, archived, _ = parse_todo_source(markdown)
     records: list[dict[str, Any]] = []
-    for item in todo_blocks(
-        lines,
-        bounds[0],
-        bounds[1],
-        source_section=COMPLETED_WORK_ARCHIVE_HEADING,
-    ):
+    for item in archived:
         if item.get("role") not in TODO_SECTION_HEADINGS:
             raise TodoSectionProjectionError(
                 f"archived Todo {item.get('todo_id')!r} omits its source role"
@@ -298,7 +293,7 @@ def _parsed_archive_records(markdown: str) -> list[dict[str, Any]]:
             item["material_change_generation"] = generation
         priority, title = todo_priority_parts(str(item.get("text") or ""))
         if priority:
-            item.update(priority=priority, title=normalize_todo_text(title))
+            item.update(priority=priority, title=normalize_todo_text(title, limit=None))
         records.append(
             canonical_todo_read_record(
                 project_completion_validation_authority({
@@ -343,7 +338,7 @@ def _projection_record(
     priority, title = todo_priority_parts(str(projected.get("text") or ""))
     if priority:
         projected.setdefault("priority", priority)
-        projected.setdefault("title", normalize_todo_text(title))
+        projected.setdefault("title", normalize_todo_text(title, limit=None))
     return projected
 
 

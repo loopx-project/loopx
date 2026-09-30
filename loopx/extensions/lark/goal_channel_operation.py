@@ -111,6 +111,29 @@ def _operation_review_frame(proposal: Mapping[str, Any]) -> dict[str, Any]:
     return dict(frame)
 
 
+def _result_delivery_stage(proposal: Mapping[str, Any]) -> dict[str, str]:
+    parameters, operation = _proposal_operation(proposal)
+    if (parameters.get("executor") or {}).get("kind") not in {
+        "agent_session",
+        "managed_turn",
+    }:
+        return {}
+    return {
+        "outcome_stage": "reconciled"
+        if operation.get("reconciliation") is not None
+        else "initial"
+    }
+
+
+def _result_delivery_current(proposal: Mapping[str, Any]) -> bool:
+    _parameters, operation = _proposal_operation(proposal)
+    delivery = operation.get("result_delivery")
+    return isinstance(delivery, Mapping) and all(
+        delivery.get(key) == value
+        for key, value in _result_delivery_stage(proposal).items()
+    )
+
+
 def build_goal_channel_operation_card(
     proposal: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -324,16 +347,41 @@ def build_goal_channel_operation_result_card(
     proposal: Mapping[str, Any],
 ) -> dict[str, Any]:
     frame = _operation_review_frame(proposal)
-    if frame.get("kind") != "result":
+    if frame.get("kind") not in {"result", "pending"}:
         raise ActionConflictError("operation outcome is not available")
     projection = frame.get("content")
     if not isinstance(projection, Mapping):
         raise ValueError("operation result projection is unavailable")
     result_kind = frame.get("resultKind")
+    pending = frame.get("kind") == "pending"
+    unknown = result_kind == "unknown"
+    not_executed = result_kind == "not_executed"
     rejected = result_kind == "rejected"
     simulated = result_kind == "simulation_completed"
-    template = "red" if rejected else "green"
-    result_label = "已拒绝" if rejected else "模拟完成" if simulated else "已完成"
+    template = (
+        "orange"
+        if pending or unknown or not_executed
+        else "red"
+        if rejected
+        else "green"
+    )
+    result_label = (
+        "已确认，原宿主身份认证尚未接通"
+        if pending
+        else "结果未知，须核对原操作，不可重复提交"
+        if unknown
+        else "已结束，未执行"
+        if not_executed
+        else "已拒绝"
+        if rejected
+        else "模拟完成"
+        if simulated
+        else "已完成"
+    )
+    if pending and frame.get("executionState") == "consumed_outcome_pending":
+        result_label = "执行授权已消费，等待真实结果"
+    elif pending and frame.get("executionState") == "managed_turn_pending":
+        result_label = "已确认，等待绑定的受管回合；尚未执行"
     summary = str(frame.get("summary") or result_label)
     return {
         "schema": "2.0",
@@ -355,7 +403,11 @@ def build_goal_channel_operation_result_card(
                 {
                     "tag": "text_tag",
                     "text": {"tag": "plain_text", "content": result_label},
-                    "color": "red" if rejected else "green",
+                    "color": "orange"
+                    if pending or unknown or not_executed
+                    else "red"
+                    if rejected
+                    else "green",
                 }
             ],
         },
@@ -626,6 +678,15 @@ def _resolve_operation_executor_binding(
     parameters: Mapping[str, Any], *, runtime_root: Path
 ) -> dict[str, Any]:
     executor = parameters.get("executor")
+    if isinstance(executor, Mapping) and executor.get("kind") in {
+        "agent_session",
+        "managed_turn",
+    }:
+        return dict(
+            effect_runtime_result(
+                "operation.agent_executor.normalize", {"executor": dict(executor)}
+            )
+        )
     if not isinstance(executor, Mapping):
         raise ValueError("operation executor binding is unavailable")
     return resolve_extension_binding(
@@ -782,7 +843,7 @@ def recover_goal_channel_operation_results(
         delivery = operation.get("delivery")
         if (
             operation.get("lifecycle_state") != "outcome_observed"
-            or isinstance(operation.get("result_delivery"), Mapping)
+            or _result_delivery_current(proposal)
             or not isinstance(delivery, Mapping)
             or delivery.get("provider") != "lark"
             or delivery.get("app_id") != profile_app_id
@@ -801,7 +862,7 @@ def recover_goal_channel_operation_results(
                 failed += 1
                 continue
             _current_parameters, current_operation = _proposal_operation(current)
-            if isinstance(current_operation.get("result_delivery"), Mapping):
+            if _result_delivery_current(current):
                 continue
             current_delivery = current_operation.get("delivery")
             if not isinstance(current_delivery, Mapping):
@@ -830,6 +891,7 @@ def recover_goal_channel_operation_results(
                     "card_digest": _digest(result_card),
                     "transport": "message_patch",
                     "delivered_at": datetime.now(timezone.utc).isoformat(),
+                    **_result_delivery_stage(current),
                 },
             )
             delivered += 1
@@ -1002,7 +1064,14 @@ def handle_goal_channel_operation_callback(
         if current is None:
             raise ValueError("claimed operation disappeared before dispatch")
         _parameters, current_operation = _proposal_operation(current)
-        if current_operation.get("lifecycle_state") == "claimed":
+        if current_operation.get("lifecycle_state") == "claimed" and (
+            _parameters.get("executor") or {}
+        ).get("kind") in {"agent_session", "managed_turn"}:
+            # Confirmation exposes an exact canonical continuation in the
+            # existing Inbox. No simulator, host resume or financial effect is
+            # run in the callback process, and no outcome is manufactured.
+            store._agent_operation_plan(current, action="project")
+        elif current_operation.get("lifecycle_state") == "claimed":
             outcome = dict(
                 executor(current)
                 if executor is not None
@@ -1023,7 +1092,7 @@ def handle_goal_channel_operation_callback(
             raise ValueError("operation disappeared before result delivery")
         decided = current
         result_card = build_goal_channel_operation_result_card(decided)
-        if isinstance(decided["operation"].get("result_delivery"), Mapping):
+        if _result_delivery_current(decided):
             update = {"external_write_performed": False, "readback_verified": True}
         else:
             update = _update_callback_card(
@@ -1036,7 +1105,10 @@ def handle_goal_channel_operation_callback(
                 chat_id=str(delivery["chat_id"]),
                 app_id=str(delivery["app_id"]),
             )
-            if update["readback_verified"] is True:
+            if (
+                update["readback_verified"] is True
+                and decided["operation"]["lifecycle_state"] == "outcome_observed"
+            ):
                 decided = store.record_operation_result_delivery(
                     action["operation_id"],
                     delivery={
@@ -1047,16 +1119,22 @@ def handle_goal_channel_operation_callback(
                         "card_digest": _digest(result_card),
                         "transport": "callback_update",
                         "delivered_at": datetime.now(timezone.utc).isoformat(),
+                        **_result_delivery_stage(decided),
                     },
                 )
     update_verified = update["readback_verified"]
+    observed_outcome = (
+        decided["operation"].get("reconciliation")
+        or decided["operation"].get("outcome")
+        or {}
+    )
     return {
         "ok": update_verified,
         "schema_version": OPERATION_CALLBACK_RECEIPT_SCHEMA_VERSION,
         "operation_id": action["operation_id"],
         "decision": action["decision"],
         "lifecycle_state": decided["operation"]["lifecycle_state"],
-        "outcome": decided["operation"]["outcome"]["outcome"],
+        "outcome": observed_outcome.get("outcome"),
         "claim_id": (
             decided["operation"]["claim"]["claim_id"]
             if isinstance(decided["operation"].get("claim"), Mapping)
@@ -1064,9 +1142,18 @@ def handle_goal_channel_operation_callback(
         ),
         "callback_ack_is_execution_receipt": False,
         "card_update_verified": update_verified,
-        "status": "outcome_observed" if update_verified else "result_delivery_pending",
+        "status": (
+            "authorization_pending"
+            if decided["operation"]["lifecycle_state"] == "claimed"
+            else "submission_unknown"
+            if observed_outcome.get("outcome") == "submission_unknown"
+            else "outcome_observed"
+        )
+        if update_verified
+        else "result_delivery_pending",
+        "needs_reconciliation": observed_outcome.get("outcome") == "submission_unknown",
         "domain_external_write_performed": bool(
-            decided["operation"]["outcome"].get("external_write_performed") is True
+            observed_outcome.get("external_write_performed") is True
         ),
         "external_write_performed": update["external_write_performed"],
     }

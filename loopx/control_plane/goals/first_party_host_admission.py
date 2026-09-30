@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from ...file_lock import exclusive_cross_runtime_file_lock
+from ...file_lock import (
+    cross_runtime_lock_witness,
+    exclusive_cross_runtime_file_lock,
+)
 from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
@@ -196,6 +200,32 @@ class FirstPartyHostGoalAdmission:
             operation="first_party_host_current_check",
         ):
             self._decision("require_current")
+
+    @contextmanager
+    def source_journal_admission(
+        self,
+    ) -> Iterator[dict[str, Any] | None]:
+        """Hand one journal mutation to the TS owner under the source guard."""
+
+        if not self.source_profile:
+            yield None
+            return
+        target = guard_path(self.registry_path, self.goal_id)
+        with exclusive_cross_runtime_file_lock(
+            target,
+            operation="first_party_host_journal_commit",
+        ):
+            yield {
+                "schema_version": "loopx_turn_journal_source_admission_v0",
+                "profile_id": SOURCE_SESSION_PROFILE_ID,
+                "registry_path": str(self.registry_path),
+                "planned_goal_ref": self.planned_goal_ref,
+                "authority": _source_authority(
+                    self.registry_path,
+                    self.goal_id,
+                ),
+                "lock": cross_runtime_lock_witness(target),
+            }
 
     def accept_result(self, commit_result: Callable[[], T]) -> T:
         if not self.source_profile:

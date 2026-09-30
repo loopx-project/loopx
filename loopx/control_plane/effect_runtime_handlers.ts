@@ -1,4 +1,5 @@
 import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
+import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgentOperationExecutor, planAgentOperationHandoff, projectAgentOperationInbox, projectManagedOperationTransport} from "./work_items/operation_agent_handoff.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
@@ -233,6 +234,7 @@ import {
   normalizeManagerReturnDeliveryAttempt,
 } from "./collaboration/return_delivery.ts";
 import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
+import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
 
 import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
 import {
@@ -629,6 +631,12 @@ export function createEffectRuntimeHandlers(
     ["presentation.decision_notice.project", projectDecisionNotice],
     ["presentation.action_review_plan.compile", (params) =>
       compileActionReviewPlan(params.proposal)],
+    ["operation.agent_executor.normalize", normalizeAgentOperationExecutor],
+    ["operation.managed_binding.current", managedOperationBindingCurrent],
+    ["operation.managed_transport.project", projectManagedOperationTransport],
+    ["operation.agent_handoff.actor", deriveAgentOperationActor],
+    ["operation.agent_handoff.plan", planAgentOperationHandoff],
+    ["operation.agent_handoff.inbox", projectAgentOperationInbox],
     ["scheduler.monitor_successor.plan", planMonitorSuccessor],
     ["scheduler.monitor_target.select", selectMonitorTodoRequest],
     ["capabilities.issue_fix.monitor_reconciliation.plan", planIssueFixMonitorReconciliation],
@@ -751,6 +759,7 @@ export function createEffectRuntimeHandlers(
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
     ],
+    ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
     [
       "collaboration.goal_instance.decide",
       (params) => decideCollaborationLifecycle(params),

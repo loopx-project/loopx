@@ -67,20 +67,37 @@ def history(tmp_path: Path, git_env: dict[str, str]):
     return runner, old_base, upstream
 
 
+def expression(value: str, context: dict[str, str]) -> str:
+    """Evaluate the workflow's `${{ a || b }}` env expressions over one event."""
+    inner = value.removeprefix("${{").removesuffix("}}")
+    assert value != inner, value
+    return next((context[name] for name in (part.strip() for part in inner.split("||"))
+                 if context.get(name)), "")
+
+
 def check_dco(
     repo: Path, env: dict[str, str], old_base: str, head: str,
-    *, base_ref: str = "release/next",
+    *, base_ref: str = "release/next", event: str = "pull_request",
 ) -> subprocess.CompletedProcess[str]:
     workflow = yaml.safe_load((ROOT / ".github/workflows/dco.yml").read_text(encoding="utf-8"))
-    event_values = {
-        "${{ github.event.pull_request.base.sha }}": old_base,
-        "${{ github.event.pull_request.base.ref }}": base_ref,
-        "${{ github.event.pull_request.head.sha }}": head,
-        "${{ github.token }}": "synthetic-read-only-token",
-    }
+    assert event in workflow[True]
+    if event == "pull_request":
+        context = {
+            "github.event.pull_request.base.sha": old_base,
+            "github.event.pull_request.base.ref": base_ref,
+            "github.event.pull_request.head.sha": head,
+        }
+    else:
+        # A merge-queue event carries a full base ref and no pull_request.
+        context = {
+            "github.event.merge_group.base_sha": old_base,
+            "github.event.merge_group.base_ref": f"refs/heads/{base_ref}",
+            "github.event.merge_group.head_sha": head,
+        }
+    context["github.token"] = "synthetic-read-only-token"
     steps = [step for step in workflow["jobs"]["signoff"]["steps"] if "run" in step]
     for step in steps:
-        step_env = {key: event_values[value] for key, value in step.get("env", {}).items()}
+        step_env = {key: expression(value, context) for key, value in step.get("env", {}).items()}
         result = subprocess.run(
             ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
             cwd=repo, env={**env, **step_env}, check=False,
@@ -270,3 +287,33 @@ def test_signed_pr_with_current_event_base_passes(history, git_env):
     head = commit(runner, git_env, "Signed contribution")
     result = check_dco(runner, git_env, upstream, head)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("signed", [False, True])
+def test_merge_queue_candidate_checks_the_same_contribution_range(history, git_env, signed):
+    runner, old_base, upstream = history
+    head = commit(runner, git_env, "Queued contribution", signed=signed)
+    result = check_dco(runner, git_env, old_base, head, event="merge_group")
+    assert (result.returncode == 0) == signed, result.stdout + result.stderr
+    assert (f"Commit {head} is missing" in result.stdout) == (not signed)
+    assert f"Commit {upstream} is missing" not in result.stdout
+
+
+def test_merge_queue_platform_merge_is_exempt_only_with_verified_provenance(history, github_api):
+    runner, old_base, _ = history
+    env, calls = github_api
+    head = github_merge(runner, env)
+    metadata = verified_merge_record(runner, env, head)
+    result = check_dco(runner, {**env, "DCO_TEST_METADATA": json.dumps(metadata)}, old_base, head,
+                       event="merge_group")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Verified GitHub-generated merge {head}" in result.stdout
+    assert calls.read_text().strip() == f"api repos/qualification/dco/commits/{head}"
+
+
+def test_missing_event_coordinates_fail_closed(history, git_env):
+    runner, old_base, _ = history
+    head = commit(runner, git_env, "Signed contribution")
+    for base_ref, head_sha in (("", head), ("release/next", "")):
+        result = check_dco(runner, git_env, old_base, head_sha, base_ref=base_ref)
+        assert result.returncode != 0, (base_ref, head_sha)

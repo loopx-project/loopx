@@ -134,9 +134,10 @@ TASK_ORCHESTRATION_USER_BLOCKER_FIELDS = (
 )
 
 
-def normalize_todo_text(text: str, *, limit: int = 500) -> str:
+def normalize_todo_text(text: str, *, limit: int | None = 500) -> str:
+    """Normalize whitespace; source codecs explicitly opt out of display limits."""
     compact = " ".join(str(text or "").strip().split())
-    if len(compact) <= limit:
+    if limit is None or len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
 
@@ -301,8 +302,9 @@ def structured_todo_item(
     role: str | None,
     source_section: str | None,
     archive_state: str = "active",
+    text_limit: int | None = 500,
 ) -> dict[str, Any]:
-    text = normalize_todo_text(str(item.get("text") or ""))
+    text = normalize_todo_text(str(item.get("text") or ""), limit=text_limit)
     priority, title = todo_priority_parts(text)
     index = item.get("index")
     explicit_status = normalize_todo_status(item.get("status"))
@@ -425,7 +427,7 @@ def structured_todo_item(
         normalized["no_followup"] = no_followup
     if priority:
         normalized["priority"] = priority
-        normalized["title"] = normalize_todo_text(title)
+        normalized["title"] = normalize_todo_text(title, limit=text_limit)
     return normalized
 
 

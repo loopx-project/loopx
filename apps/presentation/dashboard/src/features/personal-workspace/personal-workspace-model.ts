@@ -293,6 +293,11 @@ export type WorkspaceMessage = {
   attachments?: WorkspaceImageAttachment[];
   id: string;
   pending?: boolean;
+  preparing?: boolean;
+  /** Observed request/turn times, independent of component mount or view changes. */
+  startedAt?: number;
+  updatedAt?: number;
+  endedAt?: number;
   returnDelivery?: WorkspaceReturnDelivery;
   role: "assistant" | "user" | "system";
   sourceTurnId?: string;
@@ -420,6 +425,7 @@ export type PersonalWorkspaceCallbacks = {
   onExplainDecision?: (attention: WorkspaceAttention) => void | Promise<void>;
   onExportOutput?: (output: WorkspaceOutput) => void | Promise<void>;
   onInterruptRun?: (run: WorkspaceRun) => void | Promise<void>;
+  onCancelConversationPreparation?: (contextId: string) => void;
   onInterruptConversationTurn?: (contextId: string, turnId: string) => Promise<void>;
   onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
   onOpenGoal?: (goalId: string) => void | Promise<void>;

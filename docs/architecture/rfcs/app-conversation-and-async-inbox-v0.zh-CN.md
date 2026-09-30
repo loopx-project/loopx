@@ -56,12 +56,46 @@ LoopX 还必须核验综合结果返回原请求。这些是文档陈述，非�
 - 活跃会话和结果获得最大的有效阅读空间。简洁的委派记录说明谁负责什么并链接实际工作；
   返回记录指向当前结果。不要让用户到另一会话寻找已请求的答案。
 - 把一个有用的下一步放在对应失败或决定旁。折叠常规活动，保留缺失授权、过期信息和失败。
+  管家与 Goal 详情复用一份可读事项说明：正文、原因/建议和证据链接优先，标识与声明范围放入键盘可达的折叠区；
+  不把列表摘要重复成另一张详情卡。来源只有摘要时明确标注，不能冒充完整请求。
+  操作继续由既有新预览、只读和生命周期约束决定，Markdown 展示不能推断授权。
 - 使用现有设计系统的字体、间距和克制的状态强调。动效解释已核验的转换，不虚构忙碌 worker。
 - 保持创建、连接、直接与 owner 对话以及团队工作可发现。更简洁的界面不能隐藏未解决工作或减少授权范围内的 owner 发现。
 
 预览使用公开或合成数据。检查有内容、安静、阻塞、不可用的桌面和窄屏视图。
 保留键盘访问、阅读位置和返回上下文。首屏改动仍须遵循仓库预览门禁。
 本设计不重新分发外部截图、私有事故记录或专有素材。
+
+事项详情这一切片验证打包渲染器及合成的桌面中文、窄屏英文和只读来源：可读 Markdown、
+完整正文、证据链接、折叠区/返回焦点、一次准确作用域的预览、失败/缺失/被替代来源约束，以及不可执行的来源 HTML。
+这是待交付的 App 展示改进，不代表已安装回读或完整 GQ10 排序能力。
+跨项目选择、最多两项建议与真实的范围内采用，仍归既有 P1 注意力工作。
+
+### 等待也是对话的一部分
+
+管家、Goal 对话和总览里的紧凑回执共用一个 TypeScript 活动组件。
+用户发送后立即显示接收反馈，不等执行器会话准备完毕才出现。最短路径是：
+发送 → 看见接收 → 真实活动或可处理的失败 → 在原处读到答案。
+
+- 用一行显示最近报告的活动和已用时间。时间表示等待时长，不表示完成比例或
+  持续计算的证明。切换视图保留起始时间；恢复时使用已记录的回合时间，未知则不编造。
+- 工具和阶段记录可展开，只显示上游报告的信息，不模拟阶段或暴露隐藏推理。
+  一段时间没有新事件时明确说明仍在等待，不推断失败，也不靠动画假装有进展。
+- 提交前只能取消准备，并说明请求尚未提交；接收后复用精确回合的纠偏与中断。
+  停止观察不等于停止执行器。总览回执和完整对话提供相同的操作。
+- 失败停止实时状态，保留原请求和部分答案，并说明下一步。管家回合结束与
+  接收方采用、完成委派分别显示，不能把“已交办”算作任务完成。
+
+2026-09-29 核对的一手资料（并非对其他产品的实机验收）：
+[Perplexity Pro Search](https://www.perplexity.ai/help-center/en/articles/10352903-what-is-pro-search)
+说明问题拆解和来源链接；[Cursor Agent](https://cursor.com/docs/agent/overview)
+区分排队追问与执行中纠偏；[Gemini Deep Research](https://support.google.com/gemini/answer/15719111?hl=en)
+提供计划审阅与完成通知。借鉴可见性、可控性和完成边界，不照搬特定场景的阶段文案。
+通知与跨重启的持久计时仍需独立验收，浏览器计时器不代表已实现这些能力。
+
+决定性回归：延迟连接，提交前取消，重试并遇到启动失败，再在实际流式回合中切换
+总览与完整对话；验证时间连续、静默等待、精确回合操作、部分答案保留且不重复提交。
+打包 UI 使用合成数据验证，选中的真实查询另行验收。
 
 ## 当前归属与缺口
 
@@ -74,6 +108,15 @@ LoopX 还必须核验综合结果返回原请求。这些是文档陈述，非�
 | Lark transport | `extensions/lark/event_inbox.py`、`routed_inbox.py`、`inbox_reply.py` 与 reaction adapter | Provider 归一化、幂等 capture、read/processed 记录、reply recovery 与 Lark id/policy 共存。只提取已有证据的可复用语义；认证、寻址、provider id、reaction 和消息限制留在 adapter |
 | 执行与控制 | 现有 managed Turn、attached-session/host binding、Chat steering/interrupt | 验收精确受支持的 profile。已注册或 inbox acknowledged 都不等于正在运行；原生 steering、next-Turn queue 和 unsupported 必须分别表达 |
 | 结果 | Answer-report、artifact/revision、review/adoption 与 return owners | 读取已存版本，保留来源与独立审阅。report 读取失败重试读取，不重新运行模型 |
+
+Lark 可读回复的出口还要检查实际强调呈现，不能把 Markdown 原文读回一致当成视觉验收。
+依照 [CommonMark 分隔符规则](https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis)，
+共享 inbox 回复适配器对“加粗内的末尾标点紧接下一单词”做格式规范化：
+`**完成。**下一句` 转为 `**完成**。下一句`。显示文字不变，末尾标点移到强调之外；
+行内/围栏代码、转义标记和链接地址不参与改写。用真实 post 的已渲染 bold 样式与保留的行内代码
+语法验收，同时保留原上下文/线程位置及幂等读回。此项属于 TS 重构 RFC 允许保留的
+Python Lark provider 格式适配，不新增会话状态或决策 owner。
+App 格式和其他 Lark Markdown 结构仍有各自的验收边界。
 
 首个修复不需要新 capability：它属于现有 App 会话与 action 边界，内置 Chat/runtime provider 不变。
 共享 inbox 工作属于现有 coordination/collaboration owners；Lark 仍是 extension 提供的 provider。
@@ -174,6 +217,14 @@ Provider 认证、签名、外部事件解码、寻址、chat membership、rate 
 Notification/attention、Todo/lease、model admission 和 artifact acceptance 保留现有 owners。
 Dispatch 事件在准入范围内唤醒现有 driver，polling 修补缺口。Inbox 不授权启动另一个 automation。
 
+Pending 回执检查点把“文件存在即结束”的分类迁入共享 `collaboration/inbox_receipts.ts` read model。
+Decision/result 缺失、不可读与身份冲突分别表达；损坏的结论不能静默清除接收方请求，
+也不能让原 App 对话的协作卡片消失。恢复原始记录后只回传一次，不重跑工作或更换受众。
+真实一次性 private-file/CLI 与生产 HTTP 测试覆盖此边界；打包浏览器检查覆盖既有的送达未核验展示。
+Adapter 按数量和编码字节分批，不提高 bridge 上限；不新增 store 或持久 schema。
+这不代表 accept/consume/cancel 全生命周期迁移完成，也不验收原生负责人选择、steering、
+团队采用或真实 Lark transport。
+
 每次提取前报告 base/head 的真实调用 latency、边界穿越次数、bytes、删除或保留的 owners 与兼容调用者。
 产品交付无需等待 Python 完全退役。Python 可保留 IO，TS 对已迁移 transition 和 effect 拥有唯一责任。
 适用时复用现有 TS receipt 和 CAS 机制，不把 Chat 记录伪装成 Todo command。
@@ -205,6 +256,16 @@ Dispatch 事件在准入范围内唤醒现有 driver，polling 修补缺口。In
 当前会话入口修复移除 App 中所有浏览器自由文本 action 分类，检查普通 Chat 路径及显式调度控件。
 不改变权限或已存 message schema。Managed/attached 会话连续性、通用 TS inbox 提取和真实运行的两周期小队验收，
 在各自证据记录前仍属计划。该入口修复可按 App routing 改动回滚；后续持久合同迁移需要各自兼容计划。
+
+群聊直接输入的伴随修复保留共享 TS admission 的具体原因，经 provider 传到 App。
+界面分别说明上次观察到的消息与当前触发设置：开启免 @ 不证明旧消息执行，也不会扫描并补跑已采集历史。
+连续的简短请求及纠偏应保留各自对象、约束和原入口回传关系；传输 fixture 不认证接收方采用或实际修复合并。
+
+通用会话先理解目标、核验影响决策的事实，再判断是否委派。当前证据证明目标已达成时，直接带依据返回，
+不重复派工或生成受保护操作提案；历史记录和不可用读取不构成当前事实。直接分析、复用已有工作与有界 peer 核验
+都是有效结果。这是跨领域的推理指引，不新增关键词 classifier 或权限 owner；Core 类型化授权与 effect 仍拥有最终决定。
+外部事实复用正常、已授权的 host 工具，受限 audience 保留明确缺口。GQ03/GQ07 同时验收已达成和确需继续的请求，
+并以报告类任务验证通用性；真实查询工具与模型质量留在 release qualification。
 
 ### 入口行为兼容
 
@@ -242,3 +303,6 @@ App 历史与重连读取同一条消息；managed 和 attached 完成存储均�
 完整草稿直接进入类型化 `goal.create` 预览，只需一次显式应用；修改是可选入口，复用同一请求构造器和既有表单。信息不全的草稿可继续补充。同一来源消息与草稿重开预览保持操作身份，另一条消息则是另一请求。草稿默认只读且不启用 heartbeat，原显式创建入口保持默认行为。工作区、负责人、权限检查继续生效；创建不代表执行或交付。Lark 共享语义回答与委派行为，草稿卡片和直接预览仅在 App 提供，不增加 capability、provider 或调度器。
 
 [公开模型评测](../../../examples/evaluations/chat-intake.py) 仅在 release 候选版本验收时显式启用付费调用，默认及新增宣传的模型配置分别至少重复两次。平时 PR、每次提交和 heartbeat 只跑离线回归及受影响的浏览器场景，不运行付费评测。记录候选版本，保留失败；凭证不可用记为跳过，不视为通过。评测使用生产 prompt/parser 和固定公开上下文，覆盖新建、已有负责人、多候选、停止/无授权、纠偏、当前 Goal 追问、引用、否定、普通问答与中英文表达。冲突操作、协议缺失、生成截断均记录为失败。记录模型、prompt/用例哈希、请求参数、token 用量和重复次数，不泄露凭证。该层只验证模型解释已提供证据，不证明真实发现、派发、停止执行或完整 GQ01/GQ02；打包浏览器和实际委派传输测试分别覆盖其边界。
+
+同一对话界面在用户停留底部时跟随输出，上翻阅读后保持位置，并提供回到最新消息的入口。
+多行草稿在有界输入框中展开；快捷提问留在总览或空对话入口，避免挤占当前对话。

@@ -220,6 +220,11 @@ def register_turn_commands(
     )
     run_once.add_argument("--codex-model")
     run_once.add_argument(
+        "--codex-operation-tools",
+        action="store_true",
+        help="Opt in to the owned app-server operation transport for this admitted codex-cli Turn. Reuses the original Todo/session; does not authenticate an attached Desktop or grant domain effects.",
+    )
+    run_once.add_argument(
         "--codex-reasoning-effort",
         choices=list(REASONING_EFFORTS),
         help=(
@@ -232,9 +237,11 @@ def register_turn_commands(
         "--codex-sandbox",
         choices=["read-only", "workspace-write", "danger-full-access"],
         default="read-only",
-        help=("Codex CLI sandbox (default: read-only). danger-full-access explicitly "
-              "disables the inner sandbox; callers must provide their own isolation. "
-              "The setting is passed explicitly for both new and resumed sessions."),
+        help=(
+            "Codex CLI sandbox (default: read-only). danger-full-access explicitly "
+            "disables the inner sandbox; callers must provide their own isolation. "
+            "The setting is passed explicitly for both new and resumed sessions."
+        ),
     )
     run_once.add_argument(
         "--codex-mcp-server-json",

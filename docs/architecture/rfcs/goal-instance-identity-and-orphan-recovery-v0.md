@@ -817,6 +817,29 @@ promotion retain their own acceptance. No new paid cohort or soak is authorized.
   row. Todo/lease mutation admission, quota, automation, Goal Channel, and the
   overall M3 activation hold remain separate.
 
+### 2026-09-30: M3 Turn-journal exact commit candidate
+
+- **Baseline:** `350f0f326`.
+- **Proposed:** Keep `loopx_turn_journal_v0` and its existing path. Source-profile
+  plans carry matching exact GoalRef copies in the plan and transaction. Every
+  executor journal mutation uses one persistence callback that hands the
+  alias-scoped lifecycle guard from Python to TypeScript. TypeScript claims and
+  verifies that witness, reuses `decideFirstPartyHostRuntime(require_current)`,
+  then takes the existing journal mutation lock and commits before releasing
+  the source guard.
+- **Evidence:** TypeScript owner tests reject missing, malformed, mismatched,
+  expired and stale source admission before journal mutation. A real
+  Python-to-TypeScript integration commits and replays Goal A, publishes
+  same-alias Goal B, proves a later A checkpoint leaves both files unchanged,
+  and commits B independently.
+- **Compatibility:** Read-only inspection and recovery still read legacy
+  journals. Non-source writes retain the old RPC shape and persisted bytes.
+  Source admission facts and lock tokens are transport-only and never persist.
+- **Remaining hold:** This qualifies only the `turn_journal` inventory row. It
+  does not complete `first_party_host_runtime`, downstream external-effect
+  drain, unsupported/warm binary coverage, or any other M3 row.
+  `execution_authority: false` and the overall activation hold remain.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

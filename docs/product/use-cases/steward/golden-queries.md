@@ -81,6 +81,54 @@ own Topic are negative cases. This admission probe does not qualify autonomous
 execution: the external read-only profile and recipient grants must be evaluated
 separately. Passing transport fixtures is not evidence of a deployed group run.
 
+#### Repair and merge / 修复并合并
+
+GQ03/GQ07 include “修复并合并这个 PR。” / “Fix and merge this PR,” with
+an ordinary repository link. Send three distinct requests, then “第二个先别合并” /
+“Don't merge the second one yet.” Preserve each object's identity, the original
+request, current constraints and original return audience. A qualified owner
+investigates, repairs and validates the exact proposed head, respects the current
+merge contract, and returns the concrete result. A merge request is not bypass
+authority. The user need not find an Agent ID or move the result between chats.
+Collection, delegation, receiver adoption, repair, merge and reply are separately
+observed; receipt fixtures cannot certify all six. Replay creates no second work
+or answer. A trigger-setting change alone does not scan and execute old captured
+context. App feedback distinguishes historical input, bot input, unverified
+sender and an older unaddressed input under the currently enabled direct mode.
+
+#### Understand and verify before assigning / 先理解、核验，再决定
+
+The same request may need different behavior depending on current evidence.
+Use the general steward's reasoning, not a PR-specific keyword classifier:
+
+- “合并这个 PR。” / “Merge this PR”: an authoritative current merged result
+  returns the source and merge facts, with **zero new delegation, Todo, worker
+  launch or merge attempt**. An old open “merge” Todo cannot override it.
+- Closed but unmerged is not merged; unreadable, stale or wrong-repository
+  evidence cannot establish completion. Make an authorized relevant read, or
+  name the exact gap and obtain bounded verification where permitted.
+- “修复并合并42。” / “Fix and merge 42”: the established repository resolves
+  the shorthand, but the current provider state is unavailable and no exact
+  Todo exists. A registered, permitted product owner can receive the bounded
+  verification/repair request through its declared responsibility. Do not claim
+  historical ownership, invent readiness or ask the user to find an Agent ID.
+  A genuinely competing repository or recipient requires clarification.
+- “把那份报告做完，给我。” / “Finish that report and bring it here”: if the
+  current accepted artifact already covers the request, return it instead of
+  assigning duplicate work. A new correction still needs adoption by the owner.
+- “比较这两个方案。” / “Compare these options”: direct analysis is a useful
+  result. Choose peer help when needed; do not automatically turn discussion
+  into execution or require the user to repeat available context.
+
+Apply this to any domain and both App and group entrypoints. Evidence access,
+action authority, delivery grants and model reasoning remain distinct. The
+restricted group profile cannot invent a host-tool grant. If actual work remains,
+reuse relevant qualified existing work before establishing a new path. Score
+factual quality, unnecessary delegation/effects and manual coordination separately.
+Fixed public observation fixtures in the intake evaluator check intake effects
+and source pointers; independent review judges conclusions, and release-only live
+qualification must also prove actual read tools and original-conversation return.
+
 ### GQ01 conversational preparation variant
 
 “研究微软近三年的现金流，先把目标理清。” / “Help me shape a goal to research
@@ -118,7 +166,7 @@ uv run --extra test python examples/evaluations/chat-intake.py --live \
   --model deepseek-flash --repeats 2 --output /tmp/chat-intake-results.json
 ```
 
-It uses the production prompt/parser, 20 public-safe cases, two concurrent calls
+It uses the production prompt/parser, 28 public-safe cases, two concurrent calls
 and at most 8,192 output tokens per request. Nothing is dispatched or written to
 an active Goal. Skipping `--live` refuses paid calls. CI tests the evaluator and
 contracts without credentials; real model results include failures, repeats,
@@ -391,3 +439,12 @@ Attach case-level evidence to the existing implementation PR and canonical Todo;
 only extract a durable regression into product tests after reproducing it.
 No speculative benchmark runner, public transcript corpus or additional polling
 automation is required to begin.
+
+After the installed journey is qualified, use the
+[independent first-use and repeat-use protocol](first-use-evaluation.md) for the
+roadmap's frozen five-person cohort. It supplies a short GQ01 participant request,
+an independent report oracle, setup/result/attention/cost observations and an
+unrun ledger. Preparation is allowed before a candidate is ready; participant
+execution waits for the qualified pinned package and consent. Its 4/5 first-use
+and 3/5 later-day repeat targets are not results and do not replace the P0
+routing, safety or small-team checks above.

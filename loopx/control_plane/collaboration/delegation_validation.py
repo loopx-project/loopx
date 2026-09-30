@@ -5,8 +5,11 @@ Python resolves private declarations and executes only those authorized effects.
 No validator output or successful declaration read completes a canonical Todo.
 """
 
+from pathlib import Path
+
 from ...agent_registry import load_goal_from_registry
 from ...materials import goal_state_path
+from ..agents.workspace_guard import capture_delivery_workspace
 from ..effect_runtime import effect_runtime_result
 from ..goals.acceptance import (
     inspect_goal_acceptance,
@@ -37,10 +40,21 @@ def capture(service, binding: dict) -> dict:
         "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
         "basis": basis, "declaration": declaration,
     })
+    # The configured worker worktree is the host-owned execution context. The
+    # typed plan still owns which validators run; a path-free snapshot lets the
+    # ordinary completion runner verify cross-repository Todo validators.
+    workspace = Path(binding["workspace"])
+    delivery_workspace = (
+        capture_delivery_workspace(workspace, peer_independent_worktree_required=True)
+        if any(effect.get("task_repository") for effect in plan["effects"])
+        else None
+    )
     files_current = plan["state"] == "ready" and validation_effect_files_current(
         effects=plan["effects"], registry_path=service.registry, goal_id=service.goal_id,
+        delivery_workspace=delivery_workspace, validation_workspace_path=workspace,
     )
-    return {"basis": basis, "plan": plan, "files_current": files_current}
+    return {"basis": basis, "plan": plan, "files_current": files_current,
+            "delivery_workspace": delivery_workspace}
 
 
 def validate(service, binding: dict) -> dict:
@@ -49,6 +63,8 @@ def validate(service, binding: dict) -> dict:
         raise ValueError("delegation task acceptance rejected")
     results = [run_goal_acceptance_validation_effect(
         effect=effect, registry_path=service.registry, goal_id=service.goal_id,
+        delivery_workspace=before["delivery_workspace"],
+        validation_workspace_path=Path(binding["workspace"]),
     ) for effect in before["plan"]["effects"]]
     after = capture(service, binding)
     if after != before:

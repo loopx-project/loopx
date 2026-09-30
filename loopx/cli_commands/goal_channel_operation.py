@@ -11,8 +11,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
-from ..chat_action_store import ChatActionStore
+from ..chat_action_store import ActionConflictError, ChatActionStore
 from ..chat_actions import ChatActionService
+from ..control_plane.effect_runtime import (
+    EffectRuntimeConflict,
+    EffectRuntimeRejected,
+    effect_runtime_result,
+)
 from ..extensions.lark.goal_channel import (
     default_goal_channel_target_path,
     deliver_goal_channel_operation_card,
@@ -41,6 +46,9 @@ class GoalChannelOperationContext:
 class _GoalChannelOperationCommand(str, Enum):
     PREPARE = "prepare-operation"
     DELIVER = "deliver-operation"
+    INSPECT = "inspect-operation"
+    CONSUME = "consume-operation"
+    REPORT = "report-operation"
 
     @classmethod
     def parse(cls, value: object) -> Self | None:
@@ -75,7 +83,21 @@ class _DeliverOperation:
     )
 
 
-_OperationRequest = _PrepareOperation | _DeliverOperation
+@dataclass(frozen=True, slots=True)
+class _AgentOperation:
+    command: _GoalChannelOperationCommand
+    goal_id: str
+    agent_id: str
+    proposal_id: str
+    host_surface: str
+    thread_id: str
+    execute: bool
+    consumption_id: str | None = None
+    outcome_path: Path | None = None
+    target_path_override: Path | None = None
+
+
+_OperationRequest = _PrepareOperation | _DeliverOperation | _AgentOperation
 
 
 def register_goal_channel_operation_commands(
@@ -110,6 +132,34 @@ def register_goal_channel_operation_commands(
     deliver.add_argument("--proposal-id", required=True)
     deliver.add_argument("--execute", action="store_true")
 
+    for name, help_text in (
+        (
+            "inspect-operation",
+            "Read the original confirmed operation; never grants execution.",
+        ),
+        (
+            "consume-operation",
+            "Atomically consume the original Agent's authorization once. Requires --execute.",
+        ),
+        (
+            "report-operation",
+            "Record original external outcome evidence. Does not execute the operation.",
+        ),
+    ):
+        parser = subparsers.add_parser(name, help=help_text)
+        add_subcommand_format(parser)
+        add_common_args(parser)
+        parser.add_argument("--agent-id", required=True)
+        parser.add_argument("--proposal-id", required=True)
+        parser.add_argument("--host-surface", required=True)
+        parser.add_argument("--thread-id", required=True)
+        if name != "inspect-operation":
+            parser.add_argument("--execute", action="store_true")
+        if name == "consume-operation":
+            parser.add_argument("--consumption-id", required=True)
+        if name == "report-operation":
+            parser.add_argument("--outcome-json", required=True)
+
 
 def _parse_operation_request(args: argparse.Namespace) -> _OperationRequest | None:
     command = _GoalChannelOperationCommand.parse(
@@ -121,6 +171,23 @@ def _parse_operation_request(args: argparse.Namespace) -> _OperationRequest | No
     target_path_override = (
         Path(str(target_path_arg)).expanduser() if target_path_arg else None
     )
+    if command in {
+        _GoalChannelOperationCommand.INSPECT,
+        _GoalChannelOperationCommand.CONSUME,
+        _GoalChannelOperationCommand.REPORT,
+    }:
+        outcome_path = getattr(args, "outcome_json", None)
+        return _AgentOperation(
+            command=command,
+            goal_id=str(args.goal_id),
+            agent_id=str(args.agent_id),
+            proposal_id=str(args.proposal_id),
+            host_surface=str(args.host_surface),
+            thread_id=str(args.thread_id),
+            execute=bool(getattr(args, "execute", False)),
+            consumption_id=getattr(args, "consumption_id", None),
+            outcome_path=Path(str(outcome_path)).expanduser() if outcome_path else None,
+        )
     if command is _GoalChannelOperationCommand.PREPARE:
         return _PrepareOperation(
             goal_id=str(args.goal_id),
@@ -187,6 +254,33 @@ def run_goal_channel_operation(
     if request is None:
         return None
     try:
+        if isinstance(request, _AgentOperation):
+            # No independent host identity producer is connected here. Ask the
+            # TS owner for the explicit gate before reading private parameters,
+            # outcome files or canonical operation state. Never promote an
+            # environment id, --thread-id or a local "verified" flag to identity.
+            try:
+                effect_runtime_result(
+                    "operation.agent_handoff.actor",
+                    {
+                        "requested": {
+                            "goal_id": request.goal_id,
+                            "agent_id": request.agent_id,
+                            "host_surface": request.host_surface,
+                            "thread_id": request.thread_id,
+                        },
+                    },
+                )
+            except (EffectRuntimeConflict, EffectRuntimeRejected) as exc:
+                return _operation_error_packet(
+                    request=request,
+                    blocker=exc.diagnostic_code,
+                    summary=str(exc),
+                    details={"execution_allowed": False},
+                )
+            # An unexpected success from a mismatched/older runtime still may
+            # not bypass this adapter's missing authenticated transport.
+            raise ActionConflictError("no authenticated host transport is connected")
         target_path = _operation_target_path(request, context)
         binding = (
             binding_for_goal(
@@ -251,6 +345,12 @@ def run_goal_channel_operation(
             details=(
                 {"external_write_outcome": "unknown"} if outcome is None else None
             ),
+        )
+    except ActionConflictError as exc:
+        return _operation_error_packet(
+            request=request,
+            blocker="operation_handoff_conflict",
+            summary=str(exc),
         )
     except ValueError:
         return _operation_error_packet(

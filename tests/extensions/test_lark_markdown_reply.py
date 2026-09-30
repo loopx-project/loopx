@@ -3,10 +3,14 @@ import json
 import pytest
 
 from loopx.extensions.lark.outbound import (
-    lark_markdown_post_content, lark_markdown_preview_matches,
-    lark_markdown_readback_matches, normalize_lark_outbound_text,
+    normalize_lark_outbound_text,
     safe_lark_plain_text_fallback,
 )
+from loopx.extensions.lark.presentation.markdown_post import (
+    lark_markdown_post_content, lark_markdown_preview_matches,
+    lark_markdown_readback_matches, normalize_lark_markdown_emphasis,
+)
+
 from loopx.extensions.lark.inbox_reply import (
     reply_lark_event_inbox,
     verify_lark_inbox_reply,
@@ -177,3 +181,64 @@ def test_markdown_request_with_mentions_keeps_verified_text_transport(tmp_path):
     assert result["reply_verified"]
     assert result["content_format"] == "text"
     assert all("--content" not in args for args in runner.calls)
+
+
+@pytest.mark.parametrize(("source", "expected"), [
+    ("**委派已完成。**回执可查", "**委派已完成**。回执可查"),
+    ("**交给了 `research-agent`。**回执 `example-01` 确认", "**交给了 `research-agent`**。回执 `example-01` 确认"),
+    ("**Done.**Next", "**Done**.Next"),
+    ("**一。**后面 **二！**还有", "**一**。后面 **二**！还有"),
+])
+def test_provider_strong_boundary_preserves_visible_text(source, expected):
+    assert normalize_lark_markdown_emphasis(source) == expected
+    assert expected.replace("**", "") == source.replace("**", "")
+    assert normalize_lark_markdown_emphasis(expected) == expected
+    post = json.loads(lark_markdown_post_content(source))
+    assert post["zh_cn"]["content"][0][0]["text"] == expected
+    assert lark_markdown_preview_matches(text=source, payload={"api": [{"body": {
+        "msg_type": "post", "content": post,
+    }}]})
+    assert lark_markdown_readback_matches(text=source, message={
+        "msg_type": "post", "content": expected,
+    })
+    assert not lark_markdown_readback_matches(text=source, message={
+        "msg_type": "post", "content": source,
+    })
+
+
+@pytest.mark.parametrize("source", [
+    "**已完成。** 回执确认", "**已完成**。回执确认",
+    "`**literal。**Next`", "``**literal。**Next``",
+    "**带 `**literal。**Next` 的代码。** 已确认",
+    r"\*\*literal。\*\*Next", "**unmatched。Next",
+    "***nested。***Next", "[link](https://example.org/**path。**Next)",
+    "[link](https://example.org/(nested)/**path。**Next)",
+    "**[link](https://example.org)**Next", "**`code`**Next",
+    "```python\n**literal。**Next\n```", "````md\n**literal。**Next\n````",
+    "~~~md\n**literal。**Next\n~~~", "```md\n**literal。**Next",
+])
+def test_provider_repair_keeps_valid_or_opaque_markdown(source):
+    assert normalize_lark_markdown_emphasis(source) == source
+
+
+def test_reply_transport_uses_the_provider_repair_and_checks_normalized_readback(tmp_path):
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    source = "**交给了 `research-agent`。**回执已确认"
+    expected = "**交给了 `research-agent`**。回执已确认"
+    fallback = ReplyRunner()
+    def runner(args):
+        if "+messages-send" in args or "+messages-reply" in args:
+            content = args[args.index("--content") + 1]
+            assert json.loads(content)["zh_cn"]["content"][0][0]["text"] == expected
+            result = {"api": [{"body": {"msg_type": "post", "content": content}}]} if "--dry-run" in args else {"message_id": "om_reply_fixture"}
+            return {"returncode": 0, "stdout": json.dumps(result)}
+        if "+messages-mget" in args:
+            return {"returncode": 0, "stdout": json.dumps({"items": [{
+                "message_id": "om_reply_fixture", "msg_type": "post", "content": expected,
+            }]})}
+        return fallback(args)
+    result = reply_lark_event_inbox(project=project, config_path=config,
+        message_id="om_reaction_fixture", text=source, content_format="markdown",
+        execute=True, runner=runner)
+    assert result["reply_verified"] is True
+    assert result["content_format"] == "markdown"

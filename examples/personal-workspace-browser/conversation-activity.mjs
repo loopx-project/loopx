@@ -34,6 +34,19 @@ export const conversationActivityScenario = {
       };
       const turn = await send("请检查当前任务状态，并说明下一步。");
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
+      await page.clock.install();
+      await page.clock.fastForward(25000);
+      await pending.locator(".personal-message-quiet").waitFor();
+      const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
+      const tray = page.locator(".personal-manager-conversation-tray");
+      await tray.getByRole("button", { name: "中断本轮", exact: true }).waitFor();
+      assert.equal(await tray.locator(".personal-message-elapsed").textContent(), elapsedBefore, "view switch keeps request elapsed time");
+      await tray.locator(".personal-message-quiet").waitFor();
+      await page.screenshot({ path: resolve(outputDir, "conversation-waiting-overview.png"), animations: "disabled" });
+      await tray.getByRole("button", { name: "查看完整对话", exact: true }).click();
+      assert.equal(await pending.locator(".personal-message-elapsed").textContent(), elapsedBefore);
+      await page.clock.resume();
       const adjustments = [];
       await page.route("**/steer", async route => {
         const body = route.request().postDataJSON();
@@ -68,13 +81,27 @@ export const conversationActivityScenario = {
       assert.equal(streams.size, 1, "steering keeps the original output stream");
       assert.equal(await page.locator(".personal-message.is-user").filter({ hasText: "先核对依赖" }).count(), 1);
       await pending.locator("summary").filter({ hasText: "最近活动" }).click();
-      assert.deepEqual(await pending.locator(".personal-message-activity li").allTextContents(), ["正在连接管家", "Agent 正在执行命令", "Agent 正在检索", "Agent 正在执行命令"]);
+      assert.deepEqual((await pending.locator(".personal-message-activity li").allTextContents()).slice(-3), ["Agent 正在执行命令", "Agent 正在检索", "Agent 正在执行命令"]);
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-desktop.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
       await pending.scrollIntoViewIfNeeded();
       assert.ok(await pending.evaluate(node => node.scrollWidth <= node.clientWidth + 1), "activity must fit mobile width");
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-mobile.png"), animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
+
+      // Streaming must not take the reading position away from the user.
+      const live = streams.get(`/events/${turn.sessionId}/${turn.turnId}`);
+      live.write(event(5, "answer.delta", { text: "\n\n" + "公开资料与待核实事项。\n\n".repeat(80) }));
+      await page.getByText("公开资料与待核实事项。", { exact: true }).first().waitFor();
+      const scroller = page.locator(".personal-channel-scroll");
+      await scroller.evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event("scroll")); });
+      await page.getByRole("button", { name: "回到最新消息 ↓", exact: true }).waitFor();
+      live.write(event(6, "answer.delta", { text: "新增证据已经到达。" }));
+      await page.getByText("新增证据已经到达。", { exact: true }).waitFor({ state: "attached" });
+      assert.ok(await scroller.evaluate(node => node.scrollTop < 10), "new output preserves upward reading position");
+      await page.getByRole("button", { name: "回到最新消息 ↓", exact: true }).click();
+      assert.ok(await scroller.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 64));
+      assert.equal(await page.locator(".personal-composer-tools").count(), 0, "conversation removes redundant suggestion strip");
 
       let interrupts = 0;
       const rejectThenMismatch = async route => {

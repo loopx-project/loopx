@@ -172,6 +172,18 @@ def test_persisted_allocation_uses_the_same_closed_typed_contract() -> None:
         "reasoning_effort": "high",
     }
     assert normalize_manager_executor_allocation(allocation) == allocation
+    captured = {
+        **allocation,
+        "configured_model": None,
+        "configured_reasoning_effort": "high",
+    }
+    assert normalize_manager_executor_allocation(captured) == captured
+    with pytest.raises(ValueError, match="both configured"):
+        normalize_manager_executor_allocation({**allocation, "configured_model": None})
+    with pytest.raises(ValueError, match="configured_model"):
+        normalize_manager_executor_allocation({**captured, "configured_model": ""})
+    with pytest.raises(ValueError, match="configured_reasoning_effort"):
+        normalize_manager_executor_allocation({**captured, "configured_reasoning_effort": "maximum"})
 
     with pytest.raises(ValueError, match="allocation_reason"):
         normalize_manager_executor_allocation(

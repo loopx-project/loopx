@@ -175,6 +175,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.progress_review.receipt",
     "loopx.chat_action_normalization",
     "loopx.configuration_transaction",
+    "loopx.control_plane.agents.execution_facts",
     "loopx.control_plane.collaboration.delegation_inventory",
     "loopx.control_plane.collaboration.inbox",
     "loopx.control_plane.collaboration.peers",

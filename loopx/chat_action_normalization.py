@@ -147,22 +147,112 @@ class ChatActionNormalizationMixin:
             normalized_projection["fields"] = normalized_fields
 
             raw_executor = values.get("executor")
-            if not isinstance(raw_executor, Mapping) or set(raw_executor) != {
+            origin_goal_ref = None
+            if isinstance(raw_executor, Mapping) and raw_executor.get("kind") in {
+                "agent_session",
+                "managed_turn",
+            }:
+                from .control_plane.collaboration.goal_instance_scope import (
+                    collaboration_goal_scope,
+                )
+                from .control_plane.effect_runtime import (
+                    EffectRuntimeRejected,
+                    effect_runtime_result,
+                )
+                from .control_plane.goals.activation import goal_is_stopped
+                from .thread_agent_binding import resolve_registry_thread_agent_binding
+
+                try:
+                    executor = dict(
+                        effect_runtime_result(
+                            "operation.agent_executor.normalize",
+                            {"executor": dict(raw_executor)},
+                        )
+                    )
+                except EffectRuntimeRejected as exc:
+                    raise ValueError(str(exc)) from exc
+                binding = (
+                    resolve_registry_thread_agent_binding(
+                        registry_path=self.registry_path,
+                        host_surface=str(executor.get("host_surface", "")),
+                        thread_id=str(executor.get("thread_id", "")),
+                    )
+                    if executor["kind"] == "agent_session"
+                    else None
+                )
+                if executor["kind"] == "agent_session" and (
+                    binding.get("status") != "bound"
+                    or (
+                        binding.get("goal_id"),
+                        binding.get("agent_id"),
+                    )
+                    != (goal_id, agent_id)
+                ):
+                    raise ValueError(
+                        "agent operation requires the original registered session"
+                    )
+                if normalized_projection["simulated"] is not False:
+                    raise ValueError(
+                        "agent execution handoff cannot masquerade as simulation"
+                    )
+                with collaboration_goal_scope(
+                    self.registry_path,
+                    goal_id=goal_id,
+                    agents=(agent_id,),
+                    require_active=True,
+                ) as scope:
+                    if goal_is_stopped(scope.goal):
+                        raise ValueError("agent operation Goal is stopped")
+                    origin_goal_ref = scope.current_goal_ref
+                    if executor["kind"] == "managed_turn":
+                        from .control_plane.collaboration.operation_handoff import (
+                            managed_operation_binding_current,
+                        )
+
+                        if not managed_operation_binding_current(
+                            self.store.root.parent.parent,
+                            {
+                                "goal_id": goal_id,
+                                "agent_id": agent_id,
+                                "executor": executor,
+                                "origin_goal_ref": origin_goal_ref,
+                            },
+                        ):
+                            raise ValueError(
+                                "managed operation requires its current Turn session and profile"
+                            )
+            elif not isinstance(raw_executor, Mapping) or set(raw_executor) != {
                 "extension_id",
                 "protocol",
                 "permission",
                 "revision",
             }:
                 raise ValueError("operation executor binding is invalid")
-            executor = {
-                field: _opaque(raw_executor.get(field), field=f"executor.{field}")
-                for field in (
-                    "extension_id",
-                    "protocol",
-                    "permission",
-                    "revision",
+            else:
+                executor = {
+                    field: _opaque(raw_executor.get(field), field=f"executor.{field}")
+                    for field in ("extension_id", "protocol", "permission", "revision")
+                }
+            source_routes = [
+                route
+                for route in (goal.get("coordination") or {}).get(
+                    "thread_agent_bindings", []
                 )
-            }
+                if isinstance(route, Mapping) and route.get("agent_id") == agent_id
+                and all(isinstance(route.get(key), str) and route[key]
+                        for key in ("host_surface", "thread_id"))
+            ]
+            source_route = (
+                {
+                    "goal_id": goal_id,
+                    **{
+                        key: source_routes[0][key]
+                        for key in ("agent_id", "host_surface", "thread_id")
+                    },
+                }
+                if len(source_routes) == 1
+                else None
+            )
             expires_at = parse_timestamp(
                 _text(values.get("expires_at"), field="expires_at", limit=80)
             )
@@ -211,6 +301,16 @@ class ChatActionNormalizationMixin:
                 "expires_at": utc_isoformat(expires_at),
                 "authorized_principals": principals,
                 "executor": executor,
+                **(
+                    {"source_route": source_route}
+                    if executor.get("kind") == "managed_turn"
+                    else {}
+                ),
+                **(
+                    {"origin_goal_ref": origin_goal_ref}
+                    if origin_goal_ref is not None
+                    else {}
+                ),
             }
         if action_kind == "todo.create":
             values = self._allowed_parameters(

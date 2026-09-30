@@ -152,6 +152,37 @@ def main() -> int:
         assert "without mutating state" in claude_risks_text
         assert "This command is read-only" in claude_risks_text
         assert "global-summary" not in claude_risks_text
+        assert not (claude_home / "skills" / "loop-global-risks").exists()
+
+        # A deprecated alias skill republished by an older install (or copied
+        # back in by a cross-host import) is retired on the next install, while
+        # a user-owned same-name skill survives untouched.
+        managed_alias = claude_home / "skills" / "loop-global-summary" / "SKILL.md"
+        managed_alias.parent.mkdir(parents=True)
+        managed_alias.write_text(
+            "<!-- loopx-managed-slash-command:v1 command=/loop-global-summary surface=Codex-skills -->\n"
+            "# LoopX /loop-global-summary\n",
+            encoding="utf-8",
+        )
+        user_alias = claude_home / "skills" / "loop-global-risks" / "SKILL.md"
+        user_alias.parent.mkdir(parents=True)
+        user_alias.write_text("# user-owned alias skill\n", encoding="utf-8")
+        alias_retire = json.loads(
+            run_cli(
+                "--format",
+                "json",
+                "slash-commands",
+                "--install",
+                "--codex-home",
+                str(codex_home),
+                "--claude-home",
+                str(claude_home),
+            ).stdout
+        )
+        assert statuses_for(alias_retire, managed_alias) == ["retired_managed_file"], alias_retire
+        assert not managed_alias.exists()
+        assert statuses_for(alias_retire, user_alias) == ["skipped_user_file"], alias_retire
+        assert user_alias.read_text(encoding="utf-8") == "# user-owned alias skill\n"
 
         rerun = json.loads(
             run_cli(

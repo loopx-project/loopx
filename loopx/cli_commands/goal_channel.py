@@ -458,6 +458,27 @@ def handle_goal_channel_command(
         )
         print_payload(payload, output_format(args), render_goal_channel_markdown)
         return 0 if payload.get("ok") else 1
+    if command in {"inspect-operation", "consume-operation", "report-operation"}:
+        # Original-Agent continuations do not call Lark. They must remain
+        # readable/settleable even if that transport extension is unavailable.
+        assert goal_id is not None
+        _, source_path, source_binding, source_root = _source_context(
+            registry=registry,
+            registry_path=registry_path,
+            goal_id=goal_id,
+        )
+        payload = run_goal_channel_operation(
+            args,
+            context=GoalChannelOperationContext(
+                invoked_runtime_root=runtime_root,
+                source_registry_path=source_path,
+                source_runtime_root=source_root,
+                binding_path=source_binding,
+            ),
+        )
+        assert payload is not None
+        print_payload(payload, output_format(args), render_goal_channel_markdown)
+        return 0 if payload.get("ok") else 1
     if command == "configure" and bool(args.auto_notify_human_gates):
         assert goal_id is not None
         _, source_registry_path, binding_path, _ = _source_context(

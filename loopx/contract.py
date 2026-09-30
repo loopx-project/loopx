@@ -894,10 +894,16 @@ def scan_public_boundary(
     skipped_private_state_files: list[str] = []
     credential_reference_hits: list[str] = []
     unreadable_files: list[str] = []
+    missing_scan_roots: list[str] = []
     files: list[Path] = []
     file_roots: dict[Path, Path] = {}
     for scan_root in scan_roots:
         resolved_scan_root = scan_root.resolve()
+        if not resolved_scan_root.exists():
+            # A scan root that is not there contributes no files, so a typo in
+            # the caller's path would otherwise report a clean empty boundary.
+            missing_scan_roots.append(str(scan_root))
+            continue
         display_root = resolved_scan_root.parent if resolved_scan_root.is_file() else resolved_scan_root
         for file_path in iter_scan_files(resolved_scan_root):
             files.append(file_path)
@@ -996,6 +1002,7 @@ def scan_public_boundary(
         "skipped_private_state_files": skipped_private_state_files,
         "credential_reference_hits": credential_reference_hits,
         "unreadable_files": unreadable_files,
+        "missing_scan_roots": missing_scan_roots,
         "allowed_hits": allowed_hits,
         "private_state_git_warnings": private_state_git_warnings,
         "policy": policy,
@@ -1162,12 +1169,19 @@ def check_contract(
 
     if include_public_boundary_scan:
         boundary = scan_public_boundary(scan_roots, registry=registry)
+        missing_scan_roots = [str(item) for item in boundary.get("missing_scan_roots") or []]
         public_boundary_scan = {
             "state": "completed",
-            "ok": bool(boundary.get("ok")),
+            "ok": bool(boundary.get("ok")) and not missing_scan_roots,
             "scanned_files": int(boundary.get("scanned_files") or 0),
+            "missing_scan_roots": missing_scan_roots,
         }
-        if boundary.get("ok"):
+        for missing_root in missing_scan_roots:
+            add_global_error(
+                "public_boundary_scan_root_missing",
+                f"scan root does not exist: {missing_root}",
+            )
+        if boundary.get("ok") and not missing_scan_roots:
             checks.append(f"public boundary scan clean: {boundary.get('scanned_files')} files")
         else:
             for hit in boundary.get("hits") or []:

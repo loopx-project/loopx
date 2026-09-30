@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Any
-
-from .journal_store import write_turn_journal_checkpoint
 
 
 PostSettlement = Callable[
@@ -21,7 +18,7 @@ def run_post_settlement_callback(
     result: Mapping[str, Any],
     post_settlement: PostSettlement | None,
     journal: dict[str, Any],
-    journal_path: Path,
+    persist_journal: Callable[[Mapping[str, Any]], None],
 ) -> None:
     if post_settlement is None:
         return
@@ -56,4 +53,4 @@ def run_post_settlement_callback(
             "fail_open": True,
             "external_writes_performed": False,
         }
-    write_turn_journal_checkpoint(journal_path, journal)
+    persist_journal(journal)

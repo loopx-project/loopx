@@ -3,6 +3,10 @@ import type { JsonObject } from "../effect_program.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
 
 type ActivationState = "ready" | "blocked";
+// Admission is an allow-list. `executing` is backed by a live Turn lane or
+// delegation worker; `bound`/`launchable` are durable work without a process.
+// `unknown` (holder on another host, unreadable record, expired lease with
+// nothing live) and every unlisted or missing state fail closed as not active.
 const activeStates = new Set(["running", "monitoring", "executing", "bound", "launchable"]);
 const rows = (value: unknown): JsonObject[] => Array.isArray(value)
   ? value.flatMap(item => { const row = jsonObject(item); return row ? [row] : []; }) : [];

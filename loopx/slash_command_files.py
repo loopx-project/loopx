@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 MANAGED_MARKER_PREFIX = "<!-- loopx-managed-slash-command:v1"
 LEGACY_UPGRADABLE_SIGNATURES = (
@@ -13,6 +13,16 @@ EXISTING_LOOPX_CAPABILITY_SKILL_SIGNATURES = (
     "# LoopX PR Review",
     "Run `loopx pr-review` first",
 )
+
+
+class CommandFacadeSpec(TypedDict):
+    command: str
+    name: str
+    description: str
+    argument_hint: str
+    instructions: list[str]
+    title: NotRequired[str]
+    alias_for: NotRequired[str]
 
 
 def managed_marker(*, command: str, surface: str) -> str:
@@ -131,7 +141,7 @@ def retire_status(path: Path, *, execute: bool) -> str:
 
 def install_skill_facade(
     *,
-    specs: list[dict[str, Any]],
+    specs: list[CommandFacadeSpec],
     installed: list[dict[str, Any]],
     skills_dir: Path,
     surface: str,
@@ -142,13 +152,27 @@ def install_skill_facade(
     invoke_prefix: str = "",
     flat: bool = False,
 ) -> None:
-    """Write managed command facades in directory or flat host layouts."""
+    """Install canonical skills and retire catalog aliases in every layout."""
     for spec in specs:
         path = (
             skills_dir / f"{spec['name']}.md"
             if flat
             else skills_dir / str(spec["name"]) / "SKILL.md"
         )
+        if "alias_for" in spec:
+            status = retire_managed_file(path, execute=execute)
+            if status:
+                installed.append({
+                    "surface": surface,
+                    "host_surfaces": list(host_surfaces),
+                    "mechanism": f"retired_{surface.replace('-', '_')}_legacy_alias",
+                    "command": spec["command"],
+                    "path": str(path),
+                    "status": status,
+                    "invoke_as": [],
+                    "replacement_command": spec["alias_for"],
+                })
+            continue
         if uninstall:
             installed.append(
                 {

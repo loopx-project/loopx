@@ -37,7 +37,6 @@ export async function commitTeamPlan(store: AuthorityStore, request: JsonObject)
   const plan = planTeamTransaction({...request, todos: [...projection.todos.values()],
     read_model_schema: canonicalAuthorityObject(head.head.todo_read_model, "Todo read model").schema_version});
   const todos = plan.todos as JsonObject[];
-  if (!todos.length) return {status: "no_change", result: plan.result};
   const commit = prepareCoordinationProjectionCommit({goal_id: String(identity.goal_id), operation_id: String(identity.operation_id),
     expected_provider_revision: head.provider_revision, projection: head.head,
     mutations: todos.map(todo => ({kind: "todo_upsert" as const, todo}))});

@@ -583,7 +583,8 @@ def test_selected_dsh_profile_is_not_replaced_by_the_default(service):
     assert not (root / "host-started").exists()
 
 
-def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
+@pytest.mark.parametrize("operation_tools", [False, True])
+def test_selected_codex_managed_agent_profile_is_projected_exactly(service, operation_tools):
     root, runner = service
     config = json.loads(runner.config.read_text())
     config["bindings"][0]["host_args"] = [
@@ -594,12 +595,14 @@ def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
         "--codex-reasoning-effort",
         "xhigh",
     ]
+    if operation_tools:
+        config["bindings"][0]["host_args"].append("--codex-operation-tools")
     runner.config.write_text(json.dumps(config))
 
     status, result = cli(runner, "inspect", "--binding-id", "analysis")
 
     assert status == 0, result
-    assert result["executor"] == {
+    expected = {
         "host": "codex-cli",
         "available": None,
         "reason": None,
@@ -607,12 +610,19 @@ def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
         "runtime_probe": None,
         "unavailable_remediation": [],
     }
+    if operation_tools:
+        from loopx.control_plane.turn_driver.host_binding import managed_executor_binding_from_host_args
+        expected["operation_transport"] = managed_executor_binding_from_host_args(
+            config["bindings"][0]["host_args"]
+        )["operation_transport"]
+    assert result["executor"] == expected
     assert result["state"] == "runtime_unverified"
     assert not any(result["effects"].values())
     assert not (root / "host-started").exists()
 
     binding = runner.binding("analysis", require_active=True)
     execution = runner._execution_arguments(binding, "native-tool-inspection")
+    assert ("--codex-operation-tools" in execution) is operation_tools
     encoded = execution[execution.index("--codex-mcp-server-json") + 1]
     native = json.loads(encoded)
     assert native["schema_version"] == "codex_stdio_mcp_server_v0"

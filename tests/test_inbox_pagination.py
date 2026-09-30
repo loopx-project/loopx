@@ -169,6 +169,17 @@ def test_new_arrivals_before_cursor_are_found_by_fresh_scan(inbox):
     assert expected[0] in ids(cli(root, registry))
 
 
+def test_receipt_batch_lookahead_cannot_make_a_later_page_block_the_current_page(inbox):
+    root, registry, seed, _ = inbox
+    expected = seed(45)
+    entry = next((root / ".local/manager-context/entries").glob(f"*/{expected[25]}.json"))
+    entry.write_text("{damaged")
+    first = cli(root, registry)
+    assert ids(first) == expected[:20] and first["has_more"]
+    assert not cli(root, registry, "read", "--cursor", first["next_cursor"], ok=False)["ok"]
+    assert read_ids(root) == set(expected[:20])
+
+
 @pytest.mark.parametrize("damage", ["directory", "identity", "schema", "filename"])
 def test_unreadable_or_conflicting_entries_fail_without_read_receipts(inbox, damage):
     root, registry, seed, _ = inbox

@@ -58,11 +58,17 @@ def journal_committed_effect_id(journal: Mapping[str, Any]) -> str | None:
     return effect_id or None
 
 
-def write_turn_journal_checkpoint(path: Path, journal: Mapping[str, Any]) -> None:
+def write_turn_journal_checkpoint(
+    path: Path,
+    journal: Mapping[str, Any],
+    *,
+    source_admission: Mapping[str, Any] | None = None,
+) -> None:
     write_turn_journal(
         str(path),
         journal,
         expected_effect_id=journal_committed_effect_id(journal),
+        source_admission=source_admission,
     )
 
 

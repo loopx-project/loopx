@@ -206,8 +206,8 @@ export function WorkspaceSettingsPage({
           </div>
         ) : null}
 
-        {tab === "steward" ? <MachineConfigurationSettings section="steward" /> : null}
-        {tab === "capabilities" && capabilityScope === "machine" ? <MachineConfigurationSettings section="other" /> : null}
+        {tab === "steward" ? <MachineConfigurationSettings onChanged={onChanged} section="steward" /> : null}
+        {tab === "capabilities" && capabilityScope === "machine" ? <MachineConfigurationSettings onChanged={onChanged} section="other" /> : null}
         {tab === "capabilities" && capabilityScope === "goal" ? (
           <GoalCapabilitySettings
             key={capabilityGoalId}

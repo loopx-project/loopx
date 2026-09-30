@@ -36,7 +36,11 @@ from .event_inbox import (
     ingest_lark_event_inbox,
     inspect_lark_event_inbox,
 )
-from .goal_channel_contracts import LarkTopicEventDecisionReason, bindings_for_goal
+from .goal_channel_contracts import (
+    LarkTopicEventDecisionReason,
+    bindings_for_goal,
+    normalize_lark_topic_event_rejection_reason,
+)
 from .goal_channel_targets import goal_channel_target_for_name
 from .goal_topic_connections import decide_lark_topic_event
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
@@ -1015,7 +1019,10 @@ def _process_lark_goal_topic_event(
                 if int(ingest.get("accepted_count") or 0)
                 else "context_only_already_captured"
             ),
-            "reason": "not_addressed",
+            "reason": (
+                normalize_lark_topic_event_rejection_reason(route.get("trigger_reason"))
+                or LarkTopicEventDecisionReason.NOT_ADDRESSED.value
+            ),
             "goal_id": route["goal_id"],
             "inbox_config_ref": config_ref,
             "turn_authorized": False,

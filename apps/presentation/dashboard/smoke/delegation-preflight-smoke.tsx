@@ -80,3 +80,20 @@ for (const zh of [true, false]) {
 }
 
 console.log("delegation authority/workspace/validation preflight smoke passed");
+
+for (const valid of [true, false]) {
+  const check = {...unavailable, state: "runtime_unverified", authority_ready: true,
+    authority_reason: null, authority_state: "promoted", authority_next_action: "none",
+    executor: {host: "codex-cli", available: valid, reason: valid ? null : "operation_transport_profile_required",
+      profile: "test-model@xhigh", operation_transport: {schema_version: "loopx_operation_transport_v0",
+        configuration_valid: valid, runtime_qualified: false}}} as DelegationPreflight;
+  for (const zh of [false, true]) {
+    const html = renderToStaticMarkup(<DelegationPreflightStatus check={check} zh={zh}/>);
+    if (!html.includes(valid ? (zh ? "运行未核验" : "runtime unqualified")
+      : (zh ? "操作传输配置未获准" : "Operation transport configuration not admitted"))) {
+      throw new Error("Shared transport projection lost truthful configuration readback");
+    }
+    if (/Runtime qualified|运行已核验/.test(html)) throw new Error("Preflight invented transport qualification");
+  }
+}
+console.log("managed operation transport remains configuration-only in delegation preflight");

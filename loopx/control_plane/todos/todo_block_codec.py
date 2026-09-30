@@ -7,6 +7,7 @@ from .todo_summary import normalize_todo_text
 
 def decode_todo_blocks(
     lines: list[str], start: int, end: int, *, visible: frozenset[int],
+    text_limit: int | None = 500,
 ) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
@@ -24,12 +25,14 @@ def decode_todo_blocks(
             status = todo_status_from_marker(marker)
             current = {"start": index, "end": end, "index": len(blocks) + 1,
                        "done": todo_done_for_status(status), "status": status,
-                       "text": normalize_todo_text(text)}
+                       "text": normalize_todo_text(text, limit=text_limit)}
             blocks.append(current)
         elif current is not None and lines[index].startswith((" ", "\t")):
             metadata = parse_todo_metadata_line(lines[index])
             if metadata:
                 current.update(metadata)
             elif continuation := lines[index].strip():
-                current["text"] = normalize_todo_text(f"{current['text']} {continuation}")
+                current["text"] = normalize_todo_text(
+                    f"{current['text']} {continuation}", limit=text_limit,
+                )
     return blocks

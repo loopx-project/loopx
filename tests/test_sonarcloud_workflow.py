@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "sonarcloud.yml"
 
@@ -71,6 +72,12 @@ def test_sonar_reuses_same_run_coverage_without_a_privileged_trigger() -> None:
     assert "name: python-coverage-xml" in workflow
     assert "run-id:" not in workflow
     assert "github-token:" not in workflow
-    assert "needs: pytest\n    uses: ./.github/workflows/sonarcloud.yml" in caller
+    sonar = yaml.safe_load(caller)["jobs"]["sonar"]
+    # Coverage comes from this run's pytest job, handed to the local reusable
+    # workflow. The only condition may skip merge-queue refs; a status function
+    # such as always() would let analysis run without that coverage.
+    assert sonar["needs"] == "pytest"
+    assert sonar["uses"] == "./.github/workflows/sonarcloud.yml"
+    assert sonar.get("if") == "github.event_name != 'merge_group'"
     assert '"apps/**"' in caller
     assert '"sonar-project.properties"' in caller

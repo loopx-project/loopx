@@ -952,6 +952,9 @@ class ChatActionStore:
         proposal_id: str,
         *,
         outcome: Mapping[str, Any],
+        agent_actor: Mapping[str, Any] | None = None,
+        agent_binding_current: bool = False,
+        agent_actor_binding_current: bool = False,
     ) -> dict[str, Any]:
         """Persist the domain result without making it a retryable submission."""
 
@@ -976,6 +979,32 @@ class ChatActionStore:
             )
             if not isinstance(operation, dict):
                 raise KeyError("typed operation was not found")
+            parameters = proposal.get("normalized_parameters") or {}
+            report_provenance = None
+            if (parameters.get("executor") or {}).get("kind") in {"agent_session", "managed_turn"}:
+                plan = self._agent_operation_plan(
+                    proposal,
+                    action="report",
+                    actor=agent_actor,
+                    binding_current=agent_binding_current,
+                    actor_binding_current=agent_actor_binding_current,
+                    outcome=safe_outcome,
+                )
+                report_provenance = plan["report_provenance"]
+                if plan.get("write_reconciliation") is True:
+                    existing = operation.get("reconciliation")
+                    if existing is not None:
+                        if existing != safe_outcome:
+                            raise ActionConflictError(
+                                "operation reconciliation is already immutable"
+                            )
+                        return proposal
+                    operation["reconciliation"] = safe_outcome
+                    operation["reconciliation_report"] = report_provenance
+                    proposal["receipt"] = safe_outcome
+                    proposal["updated_at"] = _utc_now()
+                    self._write(payload)
+                    return proposal
             if operation.get("lifecycle_state") == "outcome_observed":
                 if operation.get("outcome") != safe_outcome:
                     raise ActionConflictError("operation outcome is already immutable")
@@ -990,12 +1019,86 @@ class ChatActionStore:
             now = _utc_now()
             operation["lifecycle_state"] = "outcome_observed"
             operation["outcome"] = safe_outcome
+            if report_provenance is not None:
+                operation["outcome_report"] = report_provenance
             proposal["status"] = "applied"
             proposal["receipt"] = safe_outcome
             proposal["applied_at"] = now
             proposal["updated_at"] = now
             self._write(payload)
             return proposal
+
+    @staticmethod
+    def _agent_operation_plan(
+        proposal: Mapping[str, Any], **request: Any
+    ) -> dict[str, Any]:
+        """One typed decision, using the existing canonical JSON byte format."""
+        from .control_plane.effect_runtime import (
+            EffectRuntimeRemoteError,
+            effect_runtime_result,
+        )
+
+        parameters = proposal.get("normalized_parameters") or {}
+        digests = {
+            "payload_digest": _canonical_digest(parameters.get("payload") or {}),
+            "projection_digest": _canonical_digest(parameters.get("projection") or {}),
+            "confirmation_digest": _canonical_digest(
+                {
+                    "action_kind": "operation.execute",
+                    "normalized_parameters": parameters,
+                    "request_digest": proposal.get("request_digest"),
+                }
+            ),
+            "outcome_digest": _canonical_digest(proposal["operation"]["outcome"])
+            if isinstance((proposal.get("operation") or {}).get("outcome"), dict)
+            else None,
+        }
+        try:
+            return dict(
+                effect_runtime_result(
+                    "operation.agent_handoff.plan",
+                    {
+                        "proposal": dict(proposal),
+                        "digests": digests,
+                        "now": _utc_now(),
+                        **request,
+                    },
+                )
+            )
+        except EffectRuntimeRemoteError as exc:
+            raise ActionConflictError(str(exc)) from exc
+
+    def consume_agent_operation(
+        self,
+        proposal_id: str,
+        *,
+        actor: Mapping[str, Any],
+        binding_current: bool,
+        consumption_id: str,
+    ) -> dict[str, Any]:
+        """Commit before external execution. Even an exact replay grants no retry."""
+        token = _opaque_id(proposal_id, field="proposal_id")
+        with exclusive_file_lock(
+            self.path, agent_id="loopx-chat", operation="consume_agent_operation"
+        ):
+            payload = self._read()
+            proposal = payload["proposals"].get(token)
+            if not isinstance(proposal, dict):
+                raise KeyError("typed operation was not found")
+            plan = self._agent_operation_plan(
+                proposal,
+                action="consume",
+                actor=dict(actor),
+                binding_current=binding_current,
+                consumption_id=consumption_id,
+            )
+            handoff = plan.pop("write_handoff", None)
+            if handoff is not None:
+                proposal["operation"]["agent_handoff"] = handoff
+                proposal["updated_at"] = _utc_now()
+                self._write(payload)
+                plan["consumption_id"] = handoff["consumption_id"]
+            return plan
 
     def record_operation_result_delivery(
         self,
@@ -1019,7 +1122,7 @@ class ChatActionStore:
             "transport",
             "delivered_at",
         }
-        if set(safe_delivery) != required:
+        if set(safe_delivery) not in (required, required | {"outcome_stage"}):
             raise ValueError(
                 "operation result delivery has unsupported or missing fields"
             )
@@ -1046,6 +1149,22 @@ class ChatActionStore:
                 raise ActionConflictError(
                     "operation outcome is unavailable for result delivery"
                 )
+            is_agent = (
+                (proposal.get("normalized_parameters") or {}).get("executor") or {}
+            ).get("kind") in {"agent_session", "managed_turn"}
+            expected_stage = (
+                "reconciled"
+                if operation.get("reconciliation") is not None
+                else "initial"
+            )
+            if is_agent and safe_delivery.get("outcome_stage") != expected_stage:
+                raise ActionConflictError(
+                    "result delivery is not for the current operation outcome"
+                )
+            if not is_agent and "outcome_stage" in safe_delivery:
+                raise ValueError(
+                    "result outcome stage is only supported for Agent handoff"
+                )
             source_delivery = operation.get("delivery")
             if not isinstance(source_delivery, dict) or any(
                 safe_delivery.get(field) != source_delivery.get(field)
@@ -1057,10 +1176,16 @@ class ChatActionStore:
             existing = operation.get("result_delivery")
             if isinstance(existing, dict):
                 if existing != safe_delivery:
-                    raise ActionConflictError(
-                        "operation result delivery is already immutable"
-                    )
-                return proposal
+                    if not (
+                        is_agent
+                        and existing.get("outcome_stage") == "initial"
+                        and expected_stage == "reconciled"
+                    ):
+                        raise ActionConflictError(
+                            "operation result delivery is already immutable"
+                        )
+                else:
+                    return proposal
             operation["result_delivery"] = safe_delivery
             proposal["updated_at"] = _utc_now()
             self._write(payload)

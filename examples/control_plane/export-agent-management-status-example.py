@@ -134,6 +134,7 @@ def sanitize_todo(row: dict[str, Any]) -> dict[str, Any]:
             "status",
             "priority",
             "title",
+            "title_source",
             "archive_state",
             "source_section",
             "source",
@@ -147,6 +148,7 @@ def sanitize_todo(row: dict[str, Any]) -> dict[str, Any]:
             "latest_event_kind",
             "latest_event_at",
             "latest_event_status",
+            "latest_event_summary",
             "event_count",
             "event_kinds",
             "required_write_scopes",
@@ -154,7 +156,10 @@ def sanitize_todo(row: dict[str, Any]) -> dict[str, Any]:
             "workspace_ref",
         ),
     )
-    todo = sanitize_string_fields(todo, ("text", "title", "evidence", "note", "action_kind"))
+    todo = sanitize_string_fields(
+        todo,
+        ("text", "title", "latest_event_summary", "evidence", "note", "action_kind"),
+    )
     if "workspace_ref" in todo and isinstance(todo["workspace_ref"], dict):
         todo["workspace_ref"] = sanitize_workspace(todo["workspace_ref"])
     return todo

@@ -60,7 +60,8 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
 _SELECTED_COMMANDS = _STATUS_COMMANDS | {
-	"todo", "quota", "change-window", "delegation", "turn",
+	"todo", "quota", "change-window", "delegation", "turn", "doctor", "commands",
+	"authority-archive", "extension", "slash-commands",
 }
 
 
@@ -228,6 +229,26 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.turn_registration import register_turn_commands
 
 		register_turn_commands(subparsers, add_subcommand_format)
+	elif command == "authority-archive":
+		from .cli_commands.authority_archive import register_authority_archive_command
+
+		register_authority_archive_command(subparsers, add_subcommand_format)
+	elif command == "extension":
+		from .cli_commands.extension import register_extension_commands
+
+		register_extension_commands(subparsers, add_subcommand_format)
+	elif command == "slash-commands":
+		from .cli_commands.slash_commands import register_slash_commands_command
+
+		register_slash_commands_command(subparsers, add_subcommand_format)
+	elif command == "doctor":
+		from .cli_commands.doctor import register_doctor_command
+
+		register_doctor_command(subparsers, add_subcommand_format)
+	elif command == "commands":
+		from .help_surface import register_command_reference
+
+		register_command_reference(subparsers)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -239,6 +260,40 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "authority-archive":
+		from .cli_commands.authority_archive import handle_authority_archive_command
+
+		return handle_authority_archive_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "extension":
+		from .cli_commands.extension import handle_extension_command
+
+		return handle_extension_command(
+			args, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "slash-commands":
+		from .cli_commands.slash_commands import handle_slash_commands_command
+
+		return handle_slash_commands_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "doctor":
+		from .cli_commands.doctor import handle_doctor_command
+
+		return handle_doctor_command(args, print_payload)
+	if args.command == "commands":
+		from .help_surface import (
+			build_command_reference_payload, render_command_reference_markdown,
+		)
+
+		print_payload(
+			build_command_reference_payload(), output_format(args),
+			render_command_reference_markdown,
+		)
+		return 0
 	if args.command == "delegation":
 		from .cli_commands.delegation import handle_delegation
 		from .control_plane.coordination.local_authority_shadow_adapter import (

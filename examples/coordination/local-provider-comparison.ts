@@ -9,7 +9,8 @@ import {performance} from "node:perf_hooks";
 import {parseArgs} from "node:util";
 import {fileURLToPath} from "node:url";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import type {AuthorityStore, AuthorityStoreCommit} from "../../loopx/control_plane/coordination/authority_store.ts";
+import type {AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult} from "../../loopx/control_plane/coordination/authority_store.ts";
+import {canonicalAuthorityBytes} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
@@ -84,6 +85,9 @@ async function measure(root: string) {
   const finalProjection = projectionAt(count - 1);
   let revision: string | null = null;
   let first: AuthorityStoreCommit | undefined;
+  let firstResult: Extract<AuthorityStoreCommitResult, {status: "applied"}> | undefined;
+  const receiptsAt = (index: number) => [{operation_id: `op-${index}`, index,
+    metadata: {checked: true, labels: ["synthetic", "保留"]}}];
   let filePublicationBytes = 0;
   const fileBytes = (): number => readdirSync(root).reduce((sum, name) => sum + statSync(join(root, name)).size, 0);
   const timed = async <T>(action: () => Promise<T>, into: number[]): Promise<T> => {
@@ -93,11 +97,11 @@ async function measure(root: string) {
   for (let index = 0; index < count; index++) {
     const input: AuthorityStoreCommit = {expected_provider_revision: revision, operation_id: `op-${index}`,
       next_projection: projectionAt(index), events: [{kind: "observation", index}],
-      receipts: [{operation_id: `op-${index}`, index, metadata: {checked: true, labels: ["synthetic", "保留"]}}]};
+      receipts: receiptsAt(index)};
     const result = await timed(() => store.commitAuthority(input), commits);
     assert.equal(result.status, "applied"); if (result.status !== "applied") throw new Error("commit rejected");
     revision = result.provider_revision;
-    if (index === 0) first = input;
+    if (index === 0) { first = input; firstResult = result; }
     if (values.provider === "file") filePublicationBytes += statSync((store as FileAuthorityStore).path).size;
     if ((index + 1) % 128 === 0) process.stderr.write(`${values.provider} ${values.workload}: ${index + 1}/${count}\n`);
   }
@@ -109,6 +113,10 @@ async function measure(root: string) {
     const receiptIndex = Math.floor(index * (count - 1) / (samples - 1));
     const receipt = await timed(() => store.readReceipt(`op-${receiptIndex}`), reads);
     assert.equal(receipt.status, "found");
+    if (receipt.status === "found") {
+      assert.equal(receipt.cursor, String(receiptIndex + 1));
+      assert.deepEqual(receipt.receipts, receiptsAt(receiptIndex));
+    }
     const page = await timed(() => store.scanCommitted(String(count - 100), 100), scans);
     assert.equal(page.status, "page");
     if (page.status === "page") {
@@ -117,8 +125,8 @@ async function measure(root: string) {
         const ordinal = count - 100 + offset;
         assert.equal(row.operation_id, `op-${ordinal}`);
         assert.deepEqual(row.projection, projectionAt(ordinal));
-        assert.deepEqual(row.receipts, [{operation_id: `op-${ordinal}`, index: ordinal,
-          metadata: {checked: true, labels: ["synthetic", "保留"]}}]);
+        assert.deepEqual(row.events, [{kind: "observation", index: ordinal}]);
+        assert.deepEqual(row.receipts, receiptsAt(ordinal));
       }
     }
   }
@@ -132,13 +140,62 @@ async function measure(root: string) {
     cold.push(performance.now() - started); assert.equal(child.status, 0, child.stderr);
     assert.deepEqual(JSON.parse(child.stdout).head, finalProjection);
   }
-  const reopened = openStore(root), replay = await reopened.commitAuthority(first!);
-  assert.equal(replay.status, "conflict"); // Current store contract reconciles via readReceipt.
-  const original = await reopened.readReceipt(first!.operation_id);
+  // Qualification is outside the timings. Walk bounded pages without retaining
+  // N full projections, checking independently generated input and exact history.
+  const reopened = openStore(root);
+  const historyDigest = async () => {
+    const digest = createHash("sha256");
+    let cursor: string | null = null, checked = 0;
+    for (;;) {
+      const page = await reopened.scanCommitted(cursor, 100);
+      assert.equal(page.status, "page"); if (page.status !== "page") throw new Error("history read rejected");
+      assert(page.transactions.length > 0);
+      for (const row of page.transactions) {
+        assert(checked < count, "history includes an unexpected transaction");
+        assert.equal(row.operation_id, `op-${checked}`);
+        assert.equal(row.cursor, String(checked + 1));
+        assert.deepEqual(row.projection, projectionAt(checked));
+        assert.deepEqual(row.events, [{kind: "observation", index: checked}]);
+        assert.deepEqual(row.receipts, receiptsAt(checked));
+        digest.update(canonicalAuthorityBytes(row)); digest.update("\n"); checked++;
+      }
+      if (!page.has_more) break;
+      assert.equal(page.next_cursor, String(checked));
+      cursor = page.next_cursor;
+    }
+    assert.equal(checked, count);
+    return digest.digest("hex");
+  };
+  assert(first && firstResult);
+  const before = await reopened.loadAuthority(), original = await reopened.readReceipt(first.operation_id);
+  assert.equal(before.status, "loaded");
+  if (before.status === "loaded") {
+    assert.equal(before.provider_revision, revision); assert.equal(before.cursor, String(count));
+    assert.deepEqual(before.head, finalProjection);
+  }
   assert.equal(original.status, "found");
-  if (original.status === "found") assert.deepEqual(original.receipts, first!.receipts);
-  const after = await reopened.loadAuthority();
-  assert.equal(after.status, "loaded"); if (after.status === "loaded") assert.equal(after.provider_revision, revision);
+  if (original.status === "found") {
+    assert.equal(original.provider_revision, firstResult.provider_revision);
+    assert.equal(original.cursor, firstResult.cursor); assert.deepEqual(original.receipts, first.receipts);
+  }
+  const retainedHistory = await historyDigest();
+  // An identical historical intent returns its original result despite a stale
+  // basis. Projection-, event- and receipt-only drift must conflict, not append.
+  for (const change of ["none", "projection", "events", "receipts"] as const) {
+    const input = structuredClone(first);
+    if (change === "projection") input.next_projection.replay_marker = "different";
+    if (change === "events") input.events = [{kind: "observation", index: -1}];
+    if (change === "receipts") input.receipts = [{...receiptsAt(0)[0], replay_marker: "different"}];
+    const replay = await reopened.commitAuthority(input);
+    if (change === "none") assert.deepEqual(replay, firstResult);
+    else {
+      assert.equal(replay.status, "conflict", `${change}-only drift was accepted`);
+      if (replay.status === "conflict") assert.equal(replay.conflict_kind, "operation_id_exists");
+    }
+    assert.deepEqual(await reopened.loadAuthority(), before, `${change} changed the later head`);
+    assert.deepEqual(await reopened.readReceipt(first.operation_id), original, `${change} changed the original receipt`);
+  }
+  assert.equal(await historyDigest(), retainedHistory, "replay attempts changed retained history");
   assert.deepEqual(sourceIdentity(), source, "measurement source changed while running");
   return {schema_version: "loopx_local_provider_comparison_v0", provider: values.provider, workload: values.workload,
     source, node: process.version, sqlite: sqliteRuntimeIdentity(), platform: process.platform, arch: process.arch,
@@ -148,5 +205,6 @@ async function measure(root: string) {
     post_fill_rss_bytes: postFillRss,
     final_store_bytes: fileBytes(), file_document_publication_bytes: values.provider === "file" ? filePublicationBytes : null,
     complete_record_and_receipt_checks: "passed", original_receipt_recovery_after_reopen: "passed",
+    historical_replay_and_conflict_checks: "passed",
     limits: "bounded sequential store experiment; cold process includes module loading, not cold OS cache; RSS includes fixture and verification allocations, not a steady-state qualification; no CLI, concurrent writers, crash, soak or formal D2 qualification; File publication bytes are application bytes, not physical writes; SQLite WAL traffic is measured by the separate capacity runner"};
 }
