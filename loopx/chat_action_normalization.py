@@ -237,15 +237,16 @@ class ChatActionNormalizationMixin:
             managed_source = executor.get("kind") == "managed_turn"
             if not managed_source and "source_route" in values:
                 raise ValueError("source route selection requires a managed executor")
-            from .control_plane.effect_runtime import effect_runtime_result
+            source_route = None
+            if managed_source:
+                from .control_plane.effect_runtime import effect_runtime_result
 
-            source_route = effect_runtime_result(
-                "operation.source_route.resolve",
-                {"goal_id": goal_id, "agent_id": agent_id,
-                 "bindings": (goal.get("coordination") or {}).get("thread_agent_bindings", []),
-                 "selected_route": values.get("source_route"),
-                 "ambiguity_policy": "reject" if managed_source else "legacy_null"},
-            )["source_route"]
+                source_route = effect_runtime_result(
+                    "operation.source_route.resolve",
+                    {"goal_id": goal_id, "agent_id": agent_id,
+                     "bindings": (goal.get("coordination") or {}).get("thread_agent_bindings", []),
+                     "selected_route": values.get("source_route")},
+                )["source_route"]
             expires_at = parse_timestamp(
                 _text(values.get("expires_at"), field="expires_at", limit=80)
             )

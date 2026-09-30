@@ -34,14 +34,12 @@ export function resolveOperationSourceRoute(input: JsonObject): JsonObject {
   const agent = id(input.agent_id, "agent_id");
   const bindings = Array.isArray(input.bindings) ? input.bindings : [];
   const routes = new Map<string, JsonObject>();
-  let registeredCount = 0;
   for (const raw of bindings) {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
     const route = raw as JsonObject;
     if (route.agent_id !== agent || typeof route.host_surface !== "string"
       || typeof route.thread_id !== "string" || !ID.test(route.host_surface) || !ID.test(route.thread_id)) continue;
     const audience = {goal_id: goal, agent_id: agent, host_surface: route.host_surface, thread_id: route.thread_id};
-    registeredCount += 1;
     routes.set(JSON.stringify(audience), audience);
   }
   if (input.selected_route != null) {
@@ -54,11 +52,6 @@ export function resolveOperationSourceRoute(input: JsonObject): JsonObject {
       host_surface: id(selected.host_surface, "source host_surface"), thread_id: id(selected.thread_id, "source thread_id")};
     requireThat(routes.has(JSON.stringify(audience)), "operation source route is not registered for this Goal and Agent");
     return {source_route: audience};
-  }
-  if (input.ambiguity_policy === "legacy_null") {
-    // Preserve the old non-managed count-based behavior, including duplicated
-    // registry rows. Distinct-audience de-duplication is managed opt-in only.
-    return {source_route: registeredCount === 1 ? routes.values().next().value : null};
   }
   if (routes.size > 1) throw new EffectRuntimeRequestError(
     "operation source route is ambiguous; select a registered return audience in the host invocation",

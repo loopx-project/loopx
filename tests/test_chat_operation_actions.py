@@ -192,6 +192,23 @@ def test_non_managed_prepare_rejects_source_selector_even_when_null(tmp_path: Pa
     assert store.list() == []
 
 
+def test_non_managed_prepare_does_not_mount_managed_source_resolution(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane import effect_runtime
+
+    original = effect_runtime.effect_runtime_result
+    calls = []
+
+    def record(method, *args, **kwargs):
+        calls.append(method)
+        return original(method, *args, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", record)
+    service, store = _service(tmp_path)
+    proposal = service.preview(_request())
+    assert "source_route" not in store.load(proposal["proposal_id"])["normalized_parameters"]
+    assert "operation.source_route.resolve" not in calls
+
+
 def test_managed_prepare_selects_registered_return_audience_without_rebinding_executor(tmp_path: Path) -> None:
     from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
 
