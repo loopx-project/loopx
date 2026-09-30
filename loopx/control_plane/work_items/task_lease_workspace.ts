@@ -5,6 +5,7 @@ import {realpath, stat, readFile, lstat, opendir} from "node:fs/promises";
 import {platform} from "node:os";
 import {createHash} from "node:crypto";
 import {isAbsolute, resolve} from "node:path";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
@@ -23,7 +24,7 @@ export function leaseWorkspace(value: unknown): LeaseWorkspace | null {
   if (value == null) return null;
   const row = requireJsonObject(value, "lease worktree identity");
   if (Object.keys(row).sort().join(",") !== "common_directory,host,repository,worktree" ||
-      [row.host, row.common_directory, row.worktree].some(v => typeof v !== "string" || !/^[a-f0-9]{64}$/u.test(v))) {
+      [row.host, row.common_directory, row.worktree].some(v => typeof v !== "string" || !BARE_SHA256_PATTERN.test(v))) {
     throw new EffectRuntimeRequestError("invalid lease worktree identity");
   }
   const repository = leaseWriteRepository(row.repository);
