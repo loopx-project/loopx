@@ -542,9 +542,16 @@ channel readback adds `executor_endpoint_source: machine_configuration` plus the
 document's `status` and `configuration_revision`, so a machine decision can be
 told from a service-environment value without reading the store. The resolved
 endpoint, model, effort, policy, allocation reason, eligible pool and source
-revision are also persisted on the manager Session. A live Session therefore
-keeps the allocation under which it started instead of being reinterpreted
-after a configuration edit or process restart. `loopx chat-endpoint
+revision are also persisted on the manager Session. A running Turn keeps its
+allocation. An owner edit to the same endpoint's model/effort takes effect at
+the next idle or accepted-queued Turn boundary: open the upstream adapter with
+the new model, retain local conversation history and the same permission scope,
+then persist and project the new allocation only after successful startup.
+Environment-only changes and another endpoint's defaults do not reinterpret an
+existing binding after restart. The App's model/effort badge opens the existing
+Steward settings and refreshes authoritative channel readback after a setting
+transaction or conversation Turn; it never projects a saved default as proof
+that a running Turn changed model. `loopx chat-endpoint
 inspect-steward` reads the effective configuration and current Session binding
 through the same public projection.
 

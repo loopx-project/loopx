@@ -356,6 +356,24 @@ follow product evidence. Reuse pending acceptance-recovery and GoalRef work
 rather than implement a competing session or inbox lifecycle. Generic TS inbox
 extraction remains incremental within those journeys, not their prerequisite.
 
+The direct-group companion retains typed non-admission causes through the
+provider and App. Feedback describes the last observed event and current trigger
+separately: enabling direct messages does not prove an old message ran, and does
+not scan and dispatch captured history. Consecutive concise requests and a
+correction must retain their own object, constraints and return lineage. Transport
+fixtures do not qualify receiver adoption or actual repair and merge.
+
+The shared conversation intake resolves intent and verifies decision-relevant
+facts before delegation. A currently satisfied outcome returns its evidence
+without duplicate work or another protected-action proposal; a historical record
+or unavailable read is not current proof. Direct analysis, existing-work reuse
+and bounded peer verification are valid outcomes. This is general reasoning
+guidance for every domain, not another classifier or authority owner. Core's
+typed grants/effects remain authoritative; normal authorized host tools resolve
+external facts, and restricted audiences retain explicit gaps. GQ03/GQ07 include
+both already-satisfied and genuinely unfinished requests, alongside the equivalent
+report cases. Actual lookup and model quality remain release qualification.
+
 ### Entry behavior compatibility
 
 All ordinary input now uses the selected conversation, including requests to

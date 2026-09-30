@@ -651,6 +651,17 @@ deduplication and return. App settings select and read back the trigger per
 connection. External host-tool permission and sender-bound delegation remain
 separate gaps; receiving a request does not establish execution authority.
 
+Before choosing a recipient, the shared conversation must resolve the desired
+outcome against relevant current evidence. Already-satisfied requests return the
+verified result without a duplicate assignment or effect; unavailable or stale
+facts stay unknown. Explanation and judgment may be completed directly, and
+unfinished work reuses a qualified existing owner. GQ03/GQ07 qualify this across
+repository operations and completed reports, then qualify consecutive direct
+group requests, correction, adoption and original-route return separately. This
+is general semantic triage, not a new steward-specific classifier or scheduler.
+Typed admission owns provider-independent trigger reasons; the App renders those
+facts without treating a configuration change as retroactive execution.
+
 ### R4: Shared Goal Alignment and Evolution
 
 - **Owner:** alignment RFC Stage 3–5 and TS Goal/work-graph owners.

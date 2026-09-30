@@ -185,6 +185,276 @@
           "content": "尚未创建，正在整理目标草稿。"
         }
       ]
+    },
+    "merged-object": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "example-product",
+          "description": "Maintains the example product and reviews its changes.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Review and merge PR 42",
+              "status": "open",
+              "claimed_by": "product-owner",
+              "recorded_at": "2026-08-31T12:00:00Z"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "example-product",
+            "agent_id": "product-owner"
+          }
+        ]
+      },
+      "fixture_boundary": "Synthetic authoritative read; not a live GitHub result.",
+      "current_object": {
+        "repository": "example-labs/example",
+        "number": 42
+      },
+      "external_observations": [
+        {
+          "source_url": "https://github.com/example-labs/example/pull/42",
+          "read_status": "verified_current",
+          "state": "MERGED",
+          "merged_at": "2026-09-01T12:00:00Z",
+          "observed_at": "2026-09-01T12:05:00Z"
+        }
+      ],
+      "evaluation_time": "2026-09-01T12:05:00Z"
+    },
+    "closed-object": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "example-product",
+          "description": "Maintains the example product and reviews its changes.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Review and merge PR 42",
+              "status": "open",
+              "claimed_by": "product-owner",
+              "recorded_at": "2026-08-31T12:00:00Z"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "example-product",
+            "agent_id": "product-owner"
+          }
+        ]
+      },
+      "fixture_boundary": "Synthetic authoritative read; not a live GitHub result.",
+      "current_object": {
+        "repository": "example-labs/example",
+        "number": 42
+      },
+      "external_observations": [
+        {
+          "source_url": "https://github.com/example-labs/example/pull/42",
+          "read_status": "verified_current",
+          "state": "CLOSED",
+          "merged_at": null,
+          "observed_at": "2026-09-01T12:05:00Z"
+        }
+      ],
+      "evaluation_time": "2026-09-01T12:05:00Z"
+    },
+    "unread-object": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "example-product",
+          "description": "Maintains the example product and reviews its changes.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Review and merge PR 42",
+              "status": "open",
+              "claimed_by": "product-owner",
+              "recorded_at": "2026-08-31T12:00:00Z"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "example-product",
+            "agent_id": "product-owner"
+          }
+        ]
+      },
+      "fixture_boundary": "Synthetic authoritative read; not a live GitHub result.",
+      "current_object": {
+        "repository": "example-labs/example",
+        "number": 42
+      },
+      "external_observations": [
+        {
+          "source_url": "https://github.com/example-labs/example/pull/42",
+          "read_status": "unavailable",
+          "reason": "Provider read unavailable; no current state observed."
+        }
+      ],
+      "evaluation_time": "2026-09-01T12:05:00Z"
+    },
+    "open-object": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "example-product",
+          "description": "Maintains the example product and reviews its changes.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Review and merge PR 42",
+              "status": "open",
+              "claimed_by": "product-owner",
+              "recorded_at": "2026-08-31T12:00:00Z"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "example-product",
+            "agent_id": "product-owner"
+          }
+        ]
+      },
+      "fixture_boundary": "Synthetic authoritative read; not a live GitHub result.",
+      "current_object": {
+        "repository": "example-labs/example",
+        "number": 42
+      },
+      "external_observations": [
+        {
+          "source_url": "https://github.com/example-labs/example/pull/42",
+          "read_status": "verified_current",
+          "state": "OPEN",
+          "merged_at": null,
+          "observed_at": "2026-09-01T12:05:00Z",
+          "checks": "failing",
+          "failure": "A reproducible rendering regression needs repair."
+        }
+      ],
+      "evaluation_time": "2026-09-01T12:05:00Z"
+    },
+    "completed-report": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "cashflow",
+          "description": "Research Microsoft public cash flows, FY2023–2025; report with cited sources. Owner: researcher.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Compare operating cash flow and capex",
+              "status": "open",
+              "claimed_by": "researcher"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "cashflow",
+            "agent_id": "researcher"
+          }
+        ]
+      },
+      "fixture_boundary": "Synthetic authoritative artifact read.",
+      "external_observations": [
+        {
+          "ref": "report-v2",
+          "read_status": "verified_current",
+          "status": "accepted",
+          "covers": "Microsoft cash flow FY2023–2025 with annual-report citations",
+          "content_read": true,
+          "observed_at": "2026-09-01T12:05:00Z"
+        }
+      ],
+      "evaluation_time": "2026-09-01T12:05:00Z"
+    },
+    "qualified-recipient-without-exact-todo": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "example-product",
+          "description": "Maintains the example product and reviews its changes.",
+          "activation_state": "active",
+          "current_todos": []
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "example-product",
+            "agent_id": "product-owner"
+          }
+        ]
+      },
+      "fixture_boundary": "Synthetic authoritative read; not a live GitHub result.",
+      "external_observations": [
+        {
+          "source_url": "https://github.com/example-labs/example/pull/42",
+          "read_status": "unavailable",
+          "reason": "Provider read unavailable; no current state observed."
+        }
+      ],
+      "evaluation_time": "2026-09-01T12:05:00Z",
+      "current_repository": "example-labs/example",
+      "agent_directory": {
+        "coverage": {
+          "complete": true
+        },
+        "agents": [
+          {
+            "goal_id": "example-product",
+            "agent_id": "product-owner",
+            "registered": true,
+            "activation_state": "active",
+            "scope_summary": "Product maintenance, defect repair and pull-request review.",
+            "context_delivery": "allowed",
+            "execution_readiness": "not_checked"
+          }
+        ]
+      }
     }
   },
   "cases": [
@@ -326,6 +596,77 @@
         "agent_id": "researcher"
       },
       "context_ref": "context-2"
+    },
+    {
+      "id": "already-merged-zh",
+      "request": "合并这个 PR。",
+      "expected": "answer",
+      "context_ref": "merged-object",
+      "required_evidence_refs": [
+        "https://github.com/example-labs/example/pull/42"
+      ]
+    },
+    {
+      "id": "already-merged-en",
+      "request": "Merge this PR.",
+      "expected": "answer",
+      "context_ref": "merged-object",
+      "required_evidence_refs": [
+        "https://github.com/example-labs/example/pull/42"
+      ]
+    },
+    {
+      "id": "already-fixed-and-merged",
+      "request": "修复并合并这个 PR。",
+      "expected": "answer",
+      "context_ref": "merged-object",
+      "required_evidence_refs": [
+        "https://github.com/example-labs/example/pull/42"
+      ]
+    },
+    {
+      "id": "closed-is-not-merged",
+      "request": "这个 PR 已经合并了吗？",
+      "expected": "answer",
+      "context_ref": "closed-object",
+      "required_evidence_refs": [
+        "https://github.com/example-labs/example/pull/42"
+      ]
+    },
+    {
+      "id": "unavailable-is-not-completed",
+      "request": "这个 PR 合了没？",
+      "expected": "answer",
+      "context_ref": "unread-object"
+    },
+    {
+      "id": "repair-remaining-work",
+      "request": "修复并合并这个 PR。",
+      "expected": "handoff",
+      "target": {
+        "goal_id": "example-product",
+        "agent_id": "product-owner"
+      },
+      "context_ref": "open-object"
+    },
+    {
+      "id": "already-accepted-report",
+      "request": "把微软那份现金流报告做完，给我。",
+      "expected": "answer",
+      "context_ref": "completed-report",
+      "required_evidence_refs": [
+        "report-v2"
+      ]
+    },
+    {
+      "id": "qualified-owner-no-matching-todo",
+      "request": "修复并合并42。",
+      "expected": "handoff",
+      "target": {
+        "goal_id": "example-product",
+        "agent_id": "product-owner"
+      },
+      "context_ref": "qualified-recipient-without-exact-todo"
     }
   ]
 }
