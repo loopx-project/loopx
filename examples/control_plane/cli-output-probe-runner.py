@@ -104,6 +104,7 @@ def _receipt_row(
         "runtime_root_command_route_count": (
             semantics.runtime_root_command_route_count(text)
         ),
+        "registry_command_route_count": semantics.registry_command_route_count(text),
         "host_prompt_static_safety_revision": semantics.host_prompt_static_safety_revision(text),
         "heartbeat_user_language_prompt_revision": (
             semantics.heartbeat_user_language_prompt_revision(text)

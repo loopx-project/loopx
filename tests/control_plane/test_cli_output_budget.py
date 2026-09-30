@@ -1131,7 +1131,7 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
     )
     # This fixed executable schema legitimately crosses the old 12k/320
     # ceiling; retain bounded headroom without relaxing Todo-scale growth.
-    assert 12_000 < len(text) <= 14_500
+    assert 12_000 < len(text) <= CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"].max_chars["crowded"]["json"]
     assert len(text.splitlines()) <= 400
 
 

@@ -19,6 +19,7 @@ from loopx.control_plane.testing.cli_output_semantics import (
     planning_horizon_schema_versions,
     planning_inventory_detail_schema_versions,
     runtime_root_command_route_count,
+    registry_command_route_count,
     todo_work_counts_schema_versions,
 )
 
@@ -47,6 +48,7 @@ def _row(**overrides: object) -> dict[str, object]:
         "planning_inventory_detail_schema_versions": [],
         "todo_work_counts_schema_versions": [],
         "runtime_root_command_route_count": 0,
+        "registry_command_route_count": 0,
     }
     row.update(overrides)
     return row
@@ -803,7 +805,8 @@ def test_planning_inventory_detail_migration_is_bounded_and_fail_closed() -> Non
     ]
 
 
-def test_runtime_root_route_growth_has_per_route_budget() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+def test_command_route_growth_has_per_route_budget(option: str) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
@@ -819,7 +822,7 @@ def test_runtime_root_route_growth_has_per_route_budget() -> None:
         compact_payload_chars=1_320,
         action_signature_sha256=None,
         action_signature_coverages=[],
-        runtime_root_command_route_count=2,
+        **{f"{option}_command_route_count": 2},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -833,11 +836,12 @@ def test_runtime_root_route_growth_has_per_route_budget() -> None:
         "compact_payload_chars": 320,
     }
     assert result["rows"][0]["review_signals"] == [
-        "runtime-root command route coverage added: 2 executable route(s)"
+        f"{option.replace('_', '-')} command route coverage added: 2 executable route(s)"
     ]
 
 
-def test_runtime_root_route_growth_still_fails_above_per_route_budget() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+def test_command_route_growth_still_fails_above_per_route_budget(option: str) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
@@ -853,7 +857,7 @@ def test_runtime_root_route_growth_still_fails_above_per_route_budget() -> None:
         compact_payload_chars=1_321,
         action_signature_sha256=None,
         action_signature_coverages=[],
-        runtime_root_command_route_count=2,
+        **{f"{option}_command_route_count": 2},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -862,19 +866,22 @@ def test_runtime_root_route_growth_still_fails_above_per_route_budget() -> None:
     assert "chars grew by 321; allowance is 320" in result["rows"][0]["failures"]
 
 
-def test_invalid_runtime_root_route_count_does_not_grant_budget() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+@pytest.mark.parametrize("before, after", [(0, True), (0, "2"), (None, 2), (-1, 2), (0, -1), (2, 2)])
+def test_invalid_or_unchanged_command_route_count_does_not_grant_budget(option: str, before: object, after: object) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
         lines=10,
         compact_payload_chars=1_000,
+        **{f"{option}_command_route_count": before},
     )
     candidate = _row(
         chars=1_097,
         utf8_bytes=1_097,
         lines=10,
         compact_payload_chars=1_097,
-        runtime_root_command_route_count=True,
+        **{f"{option}_command_route_count": after},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -902,20 +909,21 @@ def test_runtime_root_route_count_only_matches_executable_command_prefixes() -> 
     assert runtime_root_command_route_count(text) == 4
 
 
-def test_runtime_root_route_allowance_is_fail_closed_for_invalid_counts() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+def test_command_route_allowance_is_fail_closed_for_invalid_counts(option: str) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
         lines=10,
         compact_payload_chars=1_000,
-        runtime_root_command_route_count=0,
+        **{f"{option}_command_route_count": 0},
     )
     candidate = _row(
         chars=1_000,
         utf8_bytes=1_000,
         lines=10,
         compact_payload_chars=1_000,
-        runtime_root_command_route_count="2",
+        **{f"{option}_command_route_count": "2"},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -1109,3 +1117,14 @@ def test_projection_envelope_migration_is_status_only_bounded_and_one_time(outpu
         outside_base = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
         outside = {**candidate, "row_id": outside_base["row_id"]}
         assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]
+
+
+def test_both_command_routes_are_counted_in_either_order() -> None:
+    text = (
+        "loopx --registry '/tmp/registry path' --runtime-root /tmp/root refresh-state\n"
+        "loopx --runtime-root /tmp/root --registry /tmp/registry quota should-run\n"
+        "Use --registry PATH, or say loopx --registry /tmp/path.\n"
+        "loopx --registry"
+    )
+    assert registry_command_route_count(text) == 2
+    assert runtime_root_command_route_count(text) == 2

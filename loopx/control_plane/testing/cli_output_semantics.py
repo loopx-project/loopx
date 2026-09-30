@@ -79,10 +79,15 @@ def managed_executor_binding_revision(text: str) -> str | None:
     )
 
 _MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+.+$")
-_RUNTIME_ROOT_COMMAND_ROUTE = re.compile(
-    r"(?m)(?:^|[\"'`])[^\r\n\S]*loopx\s+--runtime-root\s+"
-    r"(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|\S+)"
-)
+_COMMAND_ROUTE_VALUE = r"(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|\S+)"
+_COMMAND_ROUTE_PATTERNS = {
+    option: re.compile(
+        r"(?m)(?:^|[\"'`])[^\r\n\S]*loopx\s+"
+        + rf"(?:--{other}\s+{_COMMAND_ROUTE_VALUE}\s+)?"
+        + rf"--{option}\s+{_COMMAND_ROUTE_VALUE}"
+    )
+    for option, other in (("runtime-root", "registry"), ("registry", "runtime-root"))
+}
 
 
 def json_shape_paths(value: Any, *, path: str = "$") -> list[str]:
@@ -203,7 +208,11 @@ def markdown_headings(text: str) -> list[str]:
 
 
 def runtime_root_command_route_count(text: str) -> int:
-    return len(_RUNTIME_ROOT_COMMAND_ROUTE.findall(text))
+    return len(_COMMAND_ROUTE_PATTERNS["runtime-root"].findall(text))
+
+
+def registry_command_route_count(text: str) -> int:
+    return len(_COMMAND_ROUTE_PATTERNS["registry"].findall(text))
 
 
 def projection_envelope_schema_versions(value: Any) -> list[str]:
