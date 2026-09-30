@@ -49,11 +49,19 @@ const SCOPES = {
     // Keep this list empty unless review establishes why a token is genuinely
     // out of scope for this surface.
     allowlistedFiles: new Set(),
+    // Lower bound on how many definitions the scan must produce. See the
+    // anti-vacuity guard in main() for why this is asserted from the tree.
+    definedTokenFloor: 30,
   },
 };
 
 const STYLE_EXTENSIONS = new Set([".css"]);
 const CODE_EXTENSIONS = new Set([".ts", ".tsx"]);
+
+function extensionOf(file) {
+  const dot = file.lastIndexOf(".");
+  return dot === -1 ? "" : file.slice(dot);
+}
 
 function walk(dir, extensions, found = []) {
   for (const entry of readdirSync(dir)) {
@@ -88,6 +96,117 @@ function lineAt(text, index) {
 }
 
 /**
+ * Inline-style custom properties written from TS/TSX, e.g.
+ *
+ *   style={{ "--goal-hue": identity.hue } as CSSProperties}
+ *   const style: CSSProperties = { "--pw-offset": "2px" };
+ *
+ * Why this is not "any quoted `--x:` key"
+ * ---------------------------------------
+ * A quoted property is only a *definition* when it lands in a style sink. An
+ * ordinary data object — a theme metadata table, an i18n map, a token catalog —
+ * can carry the same quoted key without ever setting a CSS property:
+ *
+ *   export const themeMetadata = { "--review-ghost": "not a style" };
+ *
+ * Treating that as a definition is how a genuinely undefined
+ * `var(--review-ghost)` gets waved through: the reference is subtracted from the
+ * undefined set and the gate exits 0. That is the exact silent failure this
+ * checker exists to prevent, so the match has to be bounded to a style sink.
+ *
+ * `setProperty` is matched separately below.
+ */
+const STYLE_SINK_OPENERS = [
+  // JSX attribute: style={{ ... }} / style={{ ... } as CSSProperties}
+  /style\s*=\s*\{\s*\{/g,
+  // Object property in a style constant: style: { ... }
+  /(?:^|[^A-Za-z0-9_$])style\s*:\s*\{/g,
+  // A value annotated as CSSProperties: const style: CSSProperties = { ... }
+  /:\s*CSSProperties\s*=\s*\{/g,
+];
+
+/**
+ * Objects justified by a trailing cast rather than a leading annotation:
+ *
+ *   return { "--goal-hue": hue } as CSSProperties;
+ *
+ * The cast is the only thing that makes this a style sink, so it has to be the
+ * anchor. Matching `return {` instead would accept any function that returns an
+ * object containing a quoted `--token` key — which is the false-negative the
+ * classifier exists to avoid, just wearing a different shape.
+ */
+const STYLE_SINK_TRAILING_CAST = /\}\s*as\s+CSSProperties\b/g;
+
+const QUOTED_CUSTOM_PROPERTY = /["'`](--[A-Za-z0-9_-]+)["'`]\s*:/g;
+
+/**
+ * Return the inner text of the object literal whose opening brace is the last
+ * character of `openIndex`, using brace depth rather than a lazy regex so a
+ * nested object (`{ "--x": f({ a: 1 }) }`) does not truncate the match early.
+ */
+function objectLiteralBody(text, openIndex) {
+  let depth = 0;
+  for (let i = openIndex; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(openIndex + 1, i);
+    } else if (char === '"' || char === "'" || char === "`") {
+      // Skip string contents so a brace inside a string cannot unbalance depth.
+      for (let j = i + 1; j < text.length; j += 1) {
+        if (text[j] === "\\") { j += 1; continue; }
+        if (text[j] === char) { i = j; break; }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Return the inner text of the object literal whose *closing* brace is `closeIndex`,
+ * walking backwards with brace depth. Used for the trailing-cast form, where the
+ * cast is the reliable anchor and the object start has to be found by matching
+ * outwards from the end.
+ */
+function objectLiteralBodyBefore(text, closeIndex) {
+  let depth = 0;
+  for (let i = closeIndex; i >= 0; i -= 1) {
+    const char = text[i];
+    if (char === "}") depth += 1;
+    else if (char === "{") {
+      depth -= 1;
+      if (depth === 0) return text.slice(i + 1, closeIndex);
+    }
+  }
+  return null;
+}
+
+function collectInlineStyleDefinitions(text, add, rel) {
+  const bodies = [];
+
+  for (const opener of STYLE_SINK_OPENERS) {
+    for (const match of text.matchAll(opener)) {
+      const openIndex = match.index + match[0].length - 1;
+      const body = objectLiteralBody(text, openIndex);
+      if (body !== null) bodies.push(body);
+    }
+  }
+
+  for (const match of text.matchAll(STYLE_SINK_TRAILING_CAST)) {
+    const closeIndex = match.index;
+    const body = objectLiteralBodyBefore(text, closeIndex);
+    if (body !== null) bodies.push(body);
+  }
+
+  for (const body of bodies) {
+    for (const key of body.matchAll(QUOTED_CUSTOM_PROPERTY)) {
+      add(key[1], `inline style in ${rel}`);
+    }
+  }
+}
+
+/**
  * Definitions, per file.
  *
  * Definition forms that occur in this repository:
@@ -118,14 +237,21 @@ function collectDefinitions(files) {
     for (const match of text.matchAll(/@property\s+(--[A-Za-z0-9_-]+)/g)) {
       add(match[1], `@property in ${rel}`);
     }
-    for (const match of text.matchAll(/(?:^|[;{(\s,])(--[A-Za-z0-9_-]+)\s*:/gm)) {
-      add(match[1], `declared in ${rel}`);
-    }
     for (const match of text.matchAll(/setProperty\(\s*["'`](--[A-Za-z0-9_-]+)["'`]/g)) {
       add(match[1], `setProperty in ${rel}`);
     }
-    for (const match of text.matchAll(/["'`](--[A-Za-z0-9_-]+)["'`]\s*:/g)) {
-      add(match[1], `inline style in ${rel}`);
+    // A stylesheet declares a property wherever it appears, so the permissive
+    // pattern is right there. It is wrong for TS/TSX, where the same shape is
+    // usually a plain data key: `{ "--review-ghost": "not a style" }` is an
+    // object property, not a definition, and counting it lets a genuinely
+    // undefined `var(--review-ghost)` through the gate. Code files therefore
+    // contribute only through the style sinks matched below.
+    if (CODE_EXTENSIONS.has(extensionOf(file))) {
+      collectInlineStyleDefinitions(text, add, rel);
+    } else {
+      for (const match of text.matchAll(/(?:^|[;{(\s,])(--[A-Za-z0-9_-]+)\s*:/gm)) {
+        add(match[1], `declared in ${rel}`);
+      }
     }
   }
 
@@ -191,13 +317,13 @@ function main() {
   // must produce, derived from the tree rather than from the scan.
   //
   // The floor is a lower bound, not an equality: adding tokens is normal. When
-  // a genuine token removal drops the count below it, lower the constant in the
-  // same change that removes the tokens.
-  const DEFINED_TOKEN_FLOOR = 30;
-  if (definitions.size < DEFINED_TOKEN_FLOOR) {
+  // a genuine token removal drops the count below it, lower the const in the
+  // scope definition in the same change that removes the tokens.
+  const definedTokenFloor = scope.definedTokenFloor;
+  if (definitions.size < definedTokenFloor) {
     console.error(
       `check-css-custom-properties: only ${definitions.size} defined tokens found under ` +
-        `${scope.roots.join(", ")}, below the floor of ${DEFINED_TOKEN_FLOOR}. ` +
+        `${scope.roots.join(", ")}, below the floor of ${definedTokenFloor}. ` +
         `The definition scan is probably broken, not the tree.`,
     );
     process.exitCode = 1;
@@ -228,4 +354,8 @@ function main() {
   );
 }
 
-main();
+// Imported by `check-css-custom-properties.test.mjs`, which covers the
+// classifier's negative case directly. Running the script still scans.
+export { collectDefinitions };
+
+if (import.meta.filename === process.argv[1]) main();

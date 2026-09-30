@@ -1,0 +1,27 @@
+/*
+ * Positive fixture stylesheet: one bare `var()` per style sink in `sinks.tsx`.
+ *
+ * The check must exit 0 for this scope. A non-zero exit means the classifier
+ * stopped recognising a real inline style definition. The two `--fixture-ghost-*`
+ * tokens are deliberately NOT referenced here; they belong to the negative case
+ * and are asserted directly in the test's case table.
+ */
+.fixture-jsx {
+  border-color: var(--fixture-jsx);
+}
+
+.fixture-cast {
+  color: var(--fixture-cast);
+}
+
+.fixture-annotated {
+  border-color: var(--fixture-annotated);
+}
+
+.fixture-object-property {
+  border-color: var(--fixture-object-property);
+}
+
+.fixture-imperative {
+  border-color: var(--fixture-imperative);
+}
