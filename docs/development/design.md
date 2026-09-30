@@ -111,12 +111,31 @@ Dark mode is an inverse of the same system, not a separate visual identity:
 Use **Geist Sans** for UI and prose and **Geist Mono** for code, data, compact
 technical labels, and section eyebrows.
 
-Fallbacks:
+Fallbacks are owned per surface, because each bundles its own font files. A
+stylesheet must reference the token rather than repeat the stack, and the token
+must be defined on the surface that uses it — a bare `var(--font-mono)` with no
+fallback drops the whole declaration when the token is missing, and the element
+silently inherits the body face instead of failing visibly.
+
+Dashboard (`apps/presentation/dashboard/src/styles.css`):
 
 ```css
---font-sans: "Geist", "Inter", "Helvetica Neue", Arial, sans-serif;
+--font-sans:
+  "Geist Variable", "Geist", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  sans-serif;
+--font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+```
+
+Marketing site (`apps/presentation/site/src/styles.css`):
+
+```css
 --font-mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", monospace;
 ```
+
+`scripts/check-css-custom-properties.mjs` rejects any bare reference to a custom
+property that no stylesheet or inline style defines. Tokens that are genuinely
+optional may keep a fallback (`var(--pw-surface, #fff)`); the check only rejects
+references that would be dropped.
 
 ### Type Scale
 
