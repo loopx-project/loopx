@@ -7,7 +7,13 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 export const composerSessionAdmissionScenario = {
   id: "composer-session-admission",
   async run({ browser, collectCoverage, url }) {
-    const context = await openWorkspacePage(browser, url, { collectCoverage });
+    const context = await openWorkspacePage(browser, url, { collectCoverage,
+      beforeGoto: async (_api, page) => page.addInitScript(() => {
+        if (!sessionStorage.getItem("loopx-pw-composer-steering")) {
+          sessionStorage.setItem("loopx-pw-composer-steering", JSON.stringify([["invalid", { id: "incomplete" }]]));
+        }
+      }),
+    });
     const { page } = context;
     const notes = [];
     const composerInput = page.getByLabel("向 LoopX 发送消息");
@@ -81,7 +87,7 @@ export const composerSessionAdmissionScenario = {
         if ([1, 6].includes(adjustments.length)) return route.fulfill({ status: 409, json: { ok: false, error: "接收状态未确认" } });
         if (adjustments.length === 4) return route.fulfill({ status: 409, json: { ok: false, error: "本次未送达", delivery_state: "not_delivered" } });
         const receipt = { ok: true, session_id: sessionId, turn_id: adjustments.length === 2 ? "wrong-turn" : target,
-          client_ingress_id: body.client_ingress_id, status: "delivered" };
+          client_ingress_id: body.client_ingress_id, status: "delivered", created: adjustments.length !== 7 };
         if (adjustments.length === 3) { delayedReceipt = () => route.fulfill({ json: receipt }); return; }
         await route.fulfill({ json: receipt });
       });
@@ -91,6 +97,13 @@ export const composerSessionAdmissionScenario = {
       if (await sendButton.isDisabled()) throw new Error("The native Turn cannot receive instructions from its ordinary composer");
       await sendButton.click();
       await page.getByRole("status").filter({ hasText: "接收状态未确认" }).waitFor();
+      await Promise.all(managed.heldEvents.splice(0).map(route => route.abort().catch(() => {})));
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await openGoalChat();
+      await page.getByRole("button", { name: "中断本轮", exact: true }).waitFor();
+      if (adjustments.length !== 1 || managed.posts.length || await composerInput.inputValue() !== instruction) {
+        throw new Error("Restoring an unconfirmed instruction sent automatically or lost its draft");
+      }
       await sendButton.click();
       await page.getByRole("status").filter({ hasText: "回执不匹配" }).waitFor();
       if (await composerInput.inputValue() !== instruction) throw new Error("Unconfirmed steering lost its draft");
@@ -115,15 +128,29 @@ export const composerSessionAdmissionScenario = {
       await sendButton.click();
       await page.getByRole("status").filter({ hasText: "接收状态未确认" }).waitFor();
       page.__loopxRuntime.sessions.set(sessionId, { ...page.__loopxRuntime.sessions.get(sessionId), active_turn_id: null, status: "ready" });
+      page.__loopxRuntime.messages.get(sessionId).push({ message_id: "stored-correction", turn_id: managed.turnId,
+        role: "user", text: instruction, created_at: "2026-08-13T01:00:01Z" });
       const completed = { event_id: "done", sequence: 1, kind: "turn.completed", payload: { response: { schema_version: "loopx_chat_agent_response_v0", message: "本轮已完成", proposals: [], gate: null } } };
       await Promise.all(managed.heldEvents.splice(0).map(route => route.fulfill({ contentType: "text/event-stream",
         body: `id: done\nevent: turn.completed\ndata: ${JSON.stringify(completed)}\n\n` })));
       await page.getByText("本轮已完成", { exact: true }).waitFor();
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await openGoalChat();
+      if (adjustments.length !== 6 || managed.posts.length) throw new Error("Reload automatically replayed uncertain work");
+      if (await composerInput.inputValue() !== instruction) throw new Error("Reload lost the unconfirmed correction draft");
+      const storedInstruction = page.locator(".personal-message").getByText(instruction, { exact: true });
+      await storedInstruction.waitFor();
       await sendButton.click();
       await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      if (await storedInstruction.count() !== 1) {
+        throw new Error("Reading a delivered receipt duplicated its stored instruction in the conversation");
+      }
       if (adjustments.length !== 7 || adjustments[5].client_ingress_id !== adjustments[6].client_ingress_id
         || adjustments.some(row => row.turnId !== managed.turnId) || managed.posts.length) {
         throw new Error("Steering retry changed its identity/target or started another Turn");
+      }
+      if (await page.evaluate(() => JSON.parse(sessionStorage.getItem("loopx-pw-composer-steering")).length)) {
+        throw new Error("Accepted instructions left an uncertain retry cached");
       }
       // A Turn sent from this page keeps its original send promise pending.
       // That promise must not block the same composer's native instructions.
@@ -139,7 +166,7 @@ export const composerSessionAdmissionScenario = {
         throw new Error("Instructions during the original send started new work or failed to clear the submitted draft");
       }
       await managed.release();
-      notes.push("managed Codex: ordinary composer steers its exact Turn while the original send waits, retaining drafts and retry identity, including after completion");
+      notes.push("managed Codex: ordinary composer steers its exact Turn while the original send waits, retaining drafts and retry identity, including after completion and reload; restored requests never dispatch automatically");
 
       const unsupported = await reloadWithRunningTurn("managed_runtime", `turn-unsupported-${Date.now()}`, "external");
       await turnRunningHint.waitFor();

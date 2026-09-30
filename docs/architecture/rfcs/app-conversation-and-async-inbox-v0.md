@@ -133,7 +133,14 @@ receipt → observed work or actionable failure → readable answer in the same 
   idle composer and initial presentation are unchanged. This changes the former
   managed-running Send lockout; LoopX mode retains its explicit delivery choice.
   A lost or mismatched receipt preserves draft and ingress identity, including
-  retry after completion. Only a confirmed non-delivery permits a new ingress.
+  retry after completion or page reload in the same browser tab. The shared
+  composer persists the original Session/Turn/text/ingress before dispatch and
+  reuses it only for the matching Session and text; restoring the cache never
+  sends automatically. Only a confirmed non-delivery permits a new ingress.
+  Replaying a delivered receipt uses the stored transcript rather than
+  inserting another local copy of the instruction.
+  Unavailable browser storage keeps current-page retry behavior but cannot
+  promise reload recovery. This tab-local cache is not delivery authority.
   Acceptance means the executor received the instructions, not that it adopted
   them or that delegated/team work stopped. Live adoption stays a release gate.
 - The compact receipt and full conversation offer the same controls. Failure
