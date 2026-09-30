@@ -18,8 +18,7 @@ from loopx.control_plane.testing.cli_output_semantics import (
     guided_todo_delta_schema_versions,
     planning_horizon_schema_versions,
     planning_inventory_detail_schema_versions,
-    runtime_root_command_route_count,
-    registry_command_route_count,
+    command_route_counts,
     todo_work_counts_schema_versions,
 )
 
@@ -906,7 +905,7 @@ def test_runtime_root_route_count_only_matches_executable_command_prefixes() -> 
         "loopx --runtime-root"
     )
 
-    assert runtime_root_command_route_count(text) == 4
+    assert command_route_counts(text)["runtime_root"] == 4
 
 
 @pytest.mark.parametrize("option", ["runtime_root", "registry"])
@@ -1126,5 +1125,27 @@ def test_both_command_routes_are_counted_in_either_order() -> None:
         "Use --registry PATH, or say loopx --registry /tmp/path.\n"
         "loopx --registry"
     )
-    assert registry_command_route_count(text) == 2
-    assert runtime_root_command_route_count(text) == 2
+    assert command_route_counts(text) == {"registry": 2, "runtime_root": 2}
+
+
+@pytest.mark.parametrize("command", [
+    'loopx --registry "" turn plan',
+    "loopx --registry --runtime-root /tmp/root turn plan",
+    'loopx --registry "/tmp/unclosed turn plan',
+    "loopx --registry /tmp/registry",
+    "loopx --registry /tmp/registry --runtime-root",
+    "loopx --registry /tmp/registry --format invalid turn plan",
+])
+@pytest.mark.parametrize("render", [str, lambda command: json.dumps({"command": command}), lambda command: f"- execute: `{command}`"])
+def test_malformed_command_never_grants_route_growth(command, render) -> None:
+    counts = command_route_counts(render(command))
+    assert counts == {"registry": 0, "runtime_root": 0}
+    base = _row(chars=1_000, utf8_bytes=1_000, compact_payload_chars=1_000)
+    candidate = _row(chars=1_160, utf8_bytes=1_160, compact_payload_chars=1_160,
+                     **{f"{key}_command_route_count": value for key, value in counts.items()})
+    assert compare_cli_output_receipts(_receipt(base), _receipt(candidate))["ok"] is False
+
+
+def test_json_escaped_paths_and_duplicate_arguments_are_counted_once() -> None:
+    command = """loopx --format json --registry '/tmp/a \"quoted\" path' --registry /tmp/final --runtime-root '/tmp/root path' turn plan"""
+    assert command_route_counts(json.dumps({"command": command})) == {"registry": 1, "runtime_root": 1}

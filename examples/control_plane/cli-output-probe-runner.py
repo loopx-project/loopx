@@ -101,10 +101,8 @@ def _receipt_row(
             if isinstance(payload, dict)
             else []
         ),
-        "runtime_root_command_route_count": (
-            semantics.runtime_root_command_route_count(text)
-        ),
-        "registry_command_route_count": semantics.registry_command_route_count(text),
+        **{f"{option}_command_route_count": count
+           for option, count in semantics.command_route_counts(text).items()},
         "host_prompt_static_safety_revision": semantics.host_prompt_static_safety_revision(text),
         "heartbeat_user_language_prompt_revision": (
             semantics.heartbeat_user_language_prompt_revision(text)
