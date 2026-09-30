@@ -14,6 +14,7 @@ export function ChannelHeader({
   mobileNavigationOpen,
   onOpenGoalCapabilities,
   onOpenManagerChat,
+  onOpenManagerSettings,
   onRefresh,
   onOpenNavigation,
   onSelectGoalTab,
@@ -32,6 +33,7 @@ export function ChannelHeader({
   mobileNavigationOpen?: boolean;
   onOpenGoalCapabilities?: () => void;
   onOpenManagerChat?: () => void;
+  onOpenManagerSettings?: () => void;
   onRefresh?: () => void;
   onOpenNavigation?: () => void;
   onSelectGoalTab: (tab: WorkspaceGoalTab) => void;
@@ -131,6 +133,17 @@ export function ChannelHeader({
           />
         );
 
+  const executionChipClass = managerExecutionUnavailable
+    ? "personal-execution-chip is-unavailable" : "personal-execution-chip";
+  const executionChipContent = managerChannelBinding ? <>
+    <span className="personal-execution-chip-endpoint">{managerChannelBinding.executor_endpoint}</span>
+    {managerExecutionKindLabel ? <span className="personal-execution-chip-kind">{managerExecutionKindLabel}</span> : null}
+    <span className="personal-execution-chip-model">{managerChannelBinding.model}</span>
+    {managerChannelBinding.reasoning_effort ? <span className="personal-execution-chip-model">{managerChannelBinding.reasoning_effort}</span> : null}
+    {managerOutputTokenBudgetLabel ? <span className="personal-execution-chip-budget">{managerOutputTokenBudgetLabel}</span> : null}
+    {onOpenManagerSettings ? <SlidersHorizontal aria-hidden size={12} /> : null}
+  </> : null;
+
   return (
     <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)}>
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
@@ -139,12 +152,9 @@ export function ChannelHeader({
         {selectedGoal && !selectedGoal.loadState ? <p className="personal-channel-activity"><GoalActivityChip goal={selectedGoal} /></p> : null}
         {!selectedGoal && managerChannelBinding ? (
           <p className="personal-manager-execution">
-            <span className={managerExecutionUnavailable ? "personal-execution-chip is-unavailable" : "personal-execution-chip"}>
-              <span className="personal-execution-chip-endpoint">{managerChannelBinding.executor_endpoint}</span>
-              {managerExecutionKindLabel ? <span className="personal-execution-chip-kind">{managerExecutionKindLabel}</span> : null}
-              <span className="personal-execution-chip-model">{managerChannelBinding.model}</span>
-              {managerOutputTokenBudgetLabel ? <span className="personal-execution-chip-budget">{managerOutputTokenBudgetLabel}</span> : null}
-            </span>
+            {onOpenManagerSettings ? <button aria-label={t("header.managerModelSettings")} title={t("header.managerModelSettings")}
+              className={executionChipClass} onClick={onOpenManagerSettings} type="button">{executionChipContent}</button>
+              : <span className={executionChipClass}>{executionChipContent}</span>}
             {managerExecutionUnavailable ? (
               <span className="personal-execution-note">
                 {t(managerExecutionUnavailableKey, {

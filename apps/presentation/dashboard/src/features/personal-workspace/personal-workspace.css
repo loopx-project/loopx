@@ -208,6 +208,9 @@
 .personal-channel-title p { margin: 3px 0 0; color: var(--pw-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .personal-channel-title p.personal-manager-execution { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .personal-execution-chip { display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--pw-line); border-radius: 999px; background: var(--pw-card); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 18px; }
+button.personal-execution-chip { min-height: 28px; border-radius: 6px; cursor: pointer; }
+button.personal-execution-chip:hover { border-color: var(--pw-line-strong); }
+button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; }
 .personal-execution-chip-endpoint { color: var(--pw-text); font-weight: 650; }
 .personal-execution-chip-kind { color: var(--pw-faint); }
 .personal-execution-chip-model { color: var(--pw-muted); }
@@ -218,11 +221,13 @@
 .personal-execution-chip.is-unavailable .personal-execution-chip-model { color: var(--pw-amber); }
 .personal-execution-chip.is-unavailable .personal-execution-chip-budget { color: var(--pw-amber); }
 @media (max-width: 640px) {
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-title { display: contents; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-title h1 { grid-row: 1; grid-column: 2; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-actions { grid-row: 1; grid-column: 3; }
-  .personal-channel-header:has(.personal-execution-chip-budget) p.personal-manager-execution { grid-row: 2; grid-column: 1 / -1; overflow: visible; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-execution-chip { max-width: 100%; flex-wrap: wrap; gap: 0 6px; border-radius: 6px; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-title { display: contents; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-title h1 { grid-row: 1; grid-column: 2; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-actions { grid-row: 1; grid-column: 3; }
+  .personal-channel-header:has(.personal-execution-chip) p.personal-manager-execution { grid-row: 2; grid-column: 1 / -1; overflow: visible; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-runtime-details { grid-row: 3; grid-column: 1 / -1; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-execution-chip { max-width: 100%; flex-wrap: wrap; gap: 0 6px; border-radius: 6px; }
+  button.personal-execution-chip { min-height: 44px; }
 }
 .personal-execution-note { overflow: hidden; color: var(--pw-muted); font-size: 11px; text-overflow: ellipsis; }
 /* Why the conditional steward default resolved this way: same hairline row, no
@@ -678,6 +683,7 @@
 .personal-lark-table-row > span { display: grid; gap: 3px; min-width: 0; }
 .personal-lark-table-row strong, .personal-lark-table-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-lark-table-row small { color: var(--pw-muted); font-size: 10px; }
+.personal-lark-table-row .personal-lark-health-detail { overflow: visible; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
 .personal-lark-row-actions { display: flex !important; justify-content: flex-end; }
 .personal-lark-row-actions button, .personal-lark-modal header button { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 8px; border: 1px solid var(--pw-line); border-radius: 8px; background: #fff; color: var(--pw-muted); cursor: pointer; font-size: 10px; }
 .personal-lark-row-actions button.is-confirm { border-color: #e6b0aa; background: var(--pw-red-bg); color: var(--pw-red); }

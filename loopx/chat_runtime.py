@@ -16,6 +16,7 @@ from .chat_manager import (
     is_manager_channel, manager_agent_objective, manager_model_config,
     manager_workspace, manager_skill_text, operator_credential_pair, operator_credential_resolution,
     manager_answer_readback,
+    manager_session_model_allocation,
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION
 from .control_plane.collaboration import conversation_scope
@@ -397,7 +398,7 @@ class ChatRuntimeController:
         manager_runtime: Mapping[str, Any] | None = None,
         project_coordination: bool = False,
         loopx_tools: bool = False,
-        executor_model: dict[str, str | None] | None = None,
+        executor_model: Mapping[str, str | None] | None = None,
     ) -> ChatRuntimeAdapter:
         if (
             manager_runtime is not None
@@ -430,6 +431,14 @@ class ChatRuntimeController:
                 objective = manager_agent_objective(
                     str(manager_profile["runtime_profile"])
                 )
+            model_config = (
+                executor_model or manager_model_config(
+                    endpoint=agent_id,
+                    machine_defaults=self.steward_executor_defaults(),
+                )
+                if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
+                else executor_model or {}
+            )
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
                 codex_home=self.codex_home,
@@ -454,15 +463,14 @@ class ChatRuntimeController:
                     if manager_profile is not None
                     else None
                 ),
-                **(
-                    (executor_model or manager_model_config(
-                        endpoint=agent_id,
-                        machine_defaults=self.steward_executor_defaults(),
-                    ))
-                    if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
-                    else (executor_model or {})
-                ),
-                **({"dynamic_tools": [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]} if not execution_mode and (goal_id == MANAGER_AGENT_GOAL_ID or project_coordination) else {}),
+                model=model_config.get("model"),
+                reasoning_effort=model_config.get("reasoning_effort"),
+                dynamic_tools=(
+                    [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
+                    else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]
+                ) if not execution_mode and (
+                    goal_id == MANAGER_AGENT_GOAL_ID or project_coordination
+                ) else None,
             )
         if agent_id == "claude-code":
             return ClaudeCodeAdapter.start(
@@ -708,6 +716,15 @@ class ChatRuntimeController:
                 error_code="attached_session_requires_host_bridge",
             )
         reusable: ChatRuntimeAdapter | None = None
+        # An owner-edited model takes effect between Turns. Keep a running Turn
+        # and its binding intact; accepted queued work has not started upstream.
+        model_allocation = None
+        if manager_runtime is not None and (
+            not session.get("active_turn_id")
+            or (session.get("active_turn_id") == accepted_turn_id
+                and (self.store.load_turn(session_id, str(accepted_turn_id)) or {}).get("status") == "queued")
+        ):
+            model_allocation = manager_session_model_allocation(self, session)
         legacy_project_context = (conversation_scope(session)["kind"] == "owner_goal"
             and session.get("coordination_context_version") != PROJECT_CONTEXT_VERSION
             # A context/tool refresh cannot discard a native Goal and its usage.
@@ -730,6 +747,7 @@ class ChatRuntimeController:
                 current is not None
                 and current.healthcheck()
                 and not manager_profile_changed
+                and model_allocation is None
             ):
                 reusable = current
             elif current is not None:
@@ -806,6 +824,7 @@ class ChatRuntimeController:
                 and (
                     session.get("manager_context_version") != MANAGER_CONTEXT_VERSION
                     or manager_profile_changed
+                    or model_allocation is not None
                 )
             )
             legacy_codex_goal_thread = (
@@ -843,7 +862,8 @@ class ChatRuntimeController:
                 execution_mode=str(session.get("channel_id") or "").startswith("task."),
                 project_coordination=conversation_scope(session)["kind"] == "owner_goal",
                 loopx_tools=session.get("loopx_tools") is True,
-                executor_model=alloc.restored_executor_model(session),
+                executor_model=(alloc.manager_executor_model(model_allocation)
+                    if model_allocation is not None else alloc.restored_executor_model(session)),
                 manager_runtime=manager_runtime,
             )
             if session.get("upstream_mode") == CODEX_GOAL_CHAT_MODE:
@@ -887,6 +907,7 @@ class ChatRuntimeController:
                 changes = {
                     "manager_context_version": MANAGER_CONTEXT_VERSION,
                     **manager_runtime_session_fields(manager_runtime),
+                    **alloc.manager_executor_session_fields(model_allocation),
                 }
                 if session["channel_id"] == "manager":
                     changes["goal_id"] = MANAGER_AGENT_GOAL_ID

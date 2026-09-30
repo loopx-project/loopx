@@ -115,6 +115,7 @@ export const managerChannelBindingSchema = z.object({
   executor_kind: z.string(),
   model: z.string(),
   model_source: z.string(),
+  reasoning_effort: z.string().optional(),
   selection_policy: z.enum(["preferred", "pinned", "flexible"]).default("preferred"),
   allocation_reason: z.string().default(""),
   configured_endpoint: z.string().nullable().optional(),
@@ -2022,6 +2023,9 @@ const larkTopicEventRejectionReasons = [
   "self_message",
   "invalid_routing_state",
   "not_addressed",
+  "historical_context_only",
+  "bot_message",
+  "human_identity_unverified",
 ] as const;
 export type LarkTopicEventRejectionReason = typeof larkTopicEventRejectionReasons[number];
 export type LarkPermissionGuidance = {

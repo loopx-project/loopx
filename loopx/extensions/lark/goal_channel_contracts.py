@@ -55,6 +55,9 @@ class LarkTopicEventDecisionReason(str, Enum):
     SELF_MESSAGE = "self_message"
     INVALID_ROUTING_STATE = "invalid_routing_state"
     NOT_ADDRESSED = "not_addressed"
+    HISTORICAL_CONTEXT_ONLY = "historical_context_only"
+    BOT_MESSAGE = "bot_message"
+    HUMAN_IDENTITY_UNVERIFIED = "human_identity_unverified"
 
 
 LARK_TOPIC_EVENT_REJECTION_REASONS = {
