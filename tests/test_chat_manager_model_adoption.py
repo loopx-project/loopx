@@ -12,17 +12,22 @@ from loopx.capabilities.machine_configuration.builtins import (
 )
 from loopx.capabilities.machine_configuration.store import configure_machine_configuration
 from loopx.chat_agent import CodexChatAgentError
-from loopx.chat_manager import manager_channel_binding, manager_executor_allocation
-from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_manager import (
+    MANAGER_CONTEXT_VERSION,
+    manager_channel_binding,
+    manager_executor_allocation,
+    open_manager_session,
+)
+from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_store import ChatSessionStore
 
 
-def configure(root, *, model, effort, endpoint="codex"):
+def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
     document = {
         "schema_version": "loopx_machine_configuration_v0",
         "namespaces": {"steward_executor": {
             "schema_version": "steward_executor_machine_defaults_v1",
-            "selection_policy": "preferred",
+            "selection_policy": policy,
             "eligible_endpoints": [],
             "executor_endpoint": endpoint,
             "executor_model": model,
@@ -91,6 +96,7 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
         {"role": "user", "content": "Keep using public sources."},
         {"role": "assistant", "content": "Understood."},
     ]
+    assert len(store.messages(session["session_id"])) == 2
     assert updated["channel_id"] == session["channel_id"]
     assert updated["agent_id"] == session["agent_id"]
     assert updated["manager_runtime_profile"] == "restricted"
@@ -149,4 +155,151 @@ def test_failed_new_adapter_does_not_claim_the_new_model(conversation, monkeypat
         runtime._ensure_adapter(session, work_dir=root, objective="manager")
     updated = store.load_session(session["session_id"])
     assert updated["status"] == "resume_failed"
+    assert updated["manager_executor_allocation"]["model"] == "gpt-6-sol"
+
+
+@pytest.fixture
+def upstream_boundary(monkeypatch, tmp_path):
+    """Keep public session opening and real history/model assembly in the path."""
+    root = tmp_path / "runtime"
+    store = ChatSessionStore(root)
+    starts = []
+
+    def start(**kwargs):
+        adapter = Adapter(len(starts))
+        if kwargs.get("resume_thread_id"):
+            adapter.upstream_thread_id = kwargs["resume_thread_id"]
+        starts.append((kwargs, adapter))
+        return adapter
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start", start)
+
+    def controller():
+        runtime = ChatRuntimeController(store=store, codex_bin="codex")
+        monkeypatch.setattr(runtime, "capabilities", lambda: [
+            {"agent_id": "codex", "available": True, "adapter_kind": "codex_app_server"},
+        ])
+        return runtime
+
+    def open_conversation(runtime):
+        return open_manager_session(
+            controller=runtime, goal_id="loopx-manager", work_dir=tmp_path,
+            provider="fixture", audience="owner",
+        )[0]
+
+    return root, store, controller, open_conversation, starts
+
+
+@pytest.mark.parametrize("refresh_context", [False, True])
+def test_model_edit_keeps_early_context_through_public_resume(upstream_boundary, refresh_context):
+    root, store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6-sol", effort="xhigh")
+    runtime = controller()
+    session = open_conversation(runtime)
+    messages = ["Use public sources only; never publish this report."] + [
+        f"Research note {index}." for index in range(13)
+    ]
+    for text in messages:
+        store.append_message(session["session_id"], role="user", text=text)
+    if refresh_context:
+        store.update_session(session["session_id"], manager_context_version=MANAGER_CONTEXT_VERSION - 1)
+    configure(root, model="gpt-6.1-sol", effort="high")
+
+    updated = open_conversation(runtime)
+
+    assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == ("gpt-6.1-sol", "high")
+    assert len(store.messages(session["session_id"])) == 14
+    # Model adoption, including an accompanying context/tool migration, starts
+    # fresh with the whole visible conversation. Empty native threads need not
+    # have a persisted rollout, so a model edit cannot assume resumability.
+    assert starts[-1][0]["resume_thread_id"] is None
+    assert updated["upstream_thread_id"] != session["upstream_thread_id"]
+    objective = starts[-1][0]["objective"]
+    positions = [objective.index(text) for text in messages]
+    assert positions == sorted(positions)
+
+
+@pytest.mark.parametrize("policy,effort,expected_effort", [
+    ("pinned", None, "low"),
+    ("preferred", "medium", "medium"),
+])
+def test_restart_then_policy_or_effort_edit_keeps_unedited_model(
+    upstream_boundary, monkeypatch, policy, effort, expected_effort,
+):
+    root, _store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model=None, effort=None)
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "low")
+    session = open_conversation(controller())
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    restarted = controller()
+    restored = open_conversation(restarted)
+    assert restored["manager_executor_allocation"]["model"] == "gpt-6-sol"
+    before = len(starts)
+
+    configure(root, model=None, effort=effort, policy=policy)
+    updated = open_conversation(restarted)
+
+    allocation = updated["manager_executor_allocation"]
+    assert (allocation["model"], allocation["reasoning_effort"]) == ("gpt-6-sol", expected_effort)
+    if effort is None:
+        assert updated["upstream_thread_id"] == session["upstream_thread_id"]
+        assert len(starts) == before  # Policy-only edits do not restart a provider.
+    else:
+        assert updated["upstream_thread_id"] != session["upstream_thread_id"]
+    again = open_conversation(controller())
+    assert again["manager_executor_allocation"] == allocation
+
+
+def test_model_only_edit_keeps_persisted_effort(upstream_boundary, monkeypatch):
+    root, _store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model=None, effort=None)
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "low")
+    open_conversation(controller())
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    configure(root, model="gpt-6-luna", effort=None)
+
+    updated = open_conversation(controller())
+
+    assert updated["manager_executor_allocation"]["reasoning_effort"] == "low"
+    assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == ("gpt-6-luna", "low")
+
+
+@pytest.mark.parametrize("clear_model", [True, False])
+def test_explicit_clear_resolves_only_the_cleared_field(upstream_boundary, monkeypatch, clear_model):
+    root, _store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6.1-sol", effort="high")
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "low")
+    runtime = controller()
+    open_conversation(runtime)
+    configure(root, model=None if clear_model else "gpt-6.1-sol", effort="high" if clear_model else None)
+
+    updated = open_conversation(runtime)
+
+    expected = ("gpt-6-sol", "high") if clear_model else ("gpt-6.1-sol", "low")
+    assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == expected
+    assert (updated["manager_executor_allocation"]["model"],
+            updated["manager_executor_allocation"]["reasoning_effort"]) == expected
+
+
+def test_same_effective_value_still_records_explicit_selection_before_clear(upstream_boundary, monkeypatch):
+    root, _store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model=None, effort=None)
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gpt-6-sol")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "low")
+    runtime = controller()
+    open_conversation(runtime)
+    configure(root, model=None, effort="low")
+    open_conversation(runtime)
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    configure(root, model=None, effort=None)
+
+    updated = open_conversation(runtime)
+
+    assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == ("gpt-6-sol", "high")
     assert updated["manager_executor_allocation"]["model"] == "gpt-6-sol"

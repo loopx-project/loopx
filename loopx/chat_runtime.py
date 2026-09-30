@@ -374,9 +374,12 @@ class ChatRuntimeController:
 
         history_context = ""
         if history:
+            # This history is supplied when native continuity cannot be reused.
+            # Dropping early messages discards user constraints in a fresh
+            # thread. Ordinary native resume supplies no replayed history.
             history_lines = [
                 f"{item.get('role', 'user')}: {str(item.get('content') or '').strip()}"
-                for item in history[-12:]
+                for item in history
                 if str(item.get("content") or "").strip()
             ]
             if history_lines:

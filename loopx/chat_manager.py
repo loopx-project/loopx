@@ -500,6 +500,8 @@ def manager_executor_allocation(
     model_config = manager_model_config(
         environ, endpoint=endpoint, machine_defaults=defaults
     )
+    configured_endpoint = _machine_default_text(defaults, "executor_endpoint")
+    defaults_apply = not configured_endpoint or endpoint == configured_endpoint
     return normalize_manager_executor_allocation({
         "schema_version": MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION,
         "selection_policy": policy,
@@ -507,7 +509,7 @@ def manager_executor_allocation(
         "executor_endpoint": endpoint,
         "executor_endpoint_source": endpoint_source,
         "executor_endpoint_default_reason": default_reason,
-        "configured_endpoint": _machine_default_text(defaults, "executor_endpoint") or None,
+        "configured_endpoint": configured_endpoint or None,
         "eligible_endpoints": eligible,
         "configuration_revision": (
             str(defaults.get("configuration_revision") or "")
@@ -518,6 +520,16 @@ def manager_executor_allocation(
         "model": model,
         "model_source": model_source,
         "reasoning_effort": model_config["reasoning_effort"],
+        "configured_model": (
+            _machine_default_text(defaults, "executor_model") or None
+            if defaults_apply
+            else None
+        ),
+        "configured_reasoning_effort": (
+            _machine_default_text(defaults, "executor_reasoning_effort") or None
+            if defaults_apply
+            else None
+        ),
     })
 
 
@@ -920,9 +932,33 @@ def manager_session_model_allocation(
         controller, requested, machine_defaults=defaults,
         environ=operator_credential_resolution(controller)["environ"],
     )
-    if (proposed["executor_endpoint"] != endpoint
-            or all(proposed[key] == previous[key] for key in ("model", "reasoning_effort"))):
+    if proposed["executor_endpoint"] != endpoint:
         return None
+    # Compare the accepted machine inputs, not resolved values or the whole
+    # namespace revision. Resolving an unchanged unset field against a restart's
+    # environment would silently replace the persisted model/effort binding.
+    previous_model = previous.get("configured_model", (
+        previous["model"] if previous["model_source"] == MANAGER_MODEL_SOURCE_MACHINE_CONFIGURATION else None
+    ))
+    # Older allocations never captured the effort's origin. A matching explicit
+    # value is unchanged, while a concrete different selection is an edit;
+    # do not invent a historical selection merely because the field is unset.
+    previous_effort = previous.get("configured_reasoning_effort", (
+        proposed["configured_reasoning_effort"]
+        if proposed["configured_reasoning_effort"] == previous["reasoning_effort"]
+        else None
+    ))
+    model_edited = proposed["configured_model"] != previous_model
+    effort_edited = proposed["configured_reasoning_effort"] != previous_effort
+    if not model_edited and not effort_edited:
+        return None
+    if not model_edited:
+        proposed["model"] = previous["model"]
+        proposed["model_source"] = previous["model_source"]
+    if not effort_edited:
+        proposed["reasoning_effort"] = previous["reasoning_effort"]
+    # An explicit selection equal to the current effective value still needs
+    # recording: a later clear must resolve that field from its lower layer.
     return proposed
 
 
