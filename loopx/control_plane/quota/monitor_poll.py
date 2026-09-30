@@ -401,7 +401,7 @@ def _find_monitor_poll_turn(
     normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
     normalized_target_key = str(target_key or "").strip() or None
     try:
-        lines = index_path.read_text(encoding="utf-8").splitlines()
+        lines = index_path.read_text(encoding="utf-8").split("\n")
     except OSError:
         return None
     for line in reversed(lines):

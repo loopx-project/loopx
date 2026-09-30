@@ -14,6 +14,7 @@ import {
   decodeCompletionValidationRevision,
   type CompletionValidationRevision,
 } from "../todos/completion_validation_revision.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 const UPDATE_FIELDS = new Set(["text", "note"]);
 
 export interface CoordinationTodoUpdateInput {
@@ -50,7 +51,7 @@ export function normalizeTodoUpdateInput(raw: CoordinationTodoUpdateInput): Coor
   if (raw.expected_provider_revision !== undefined) {
     requireAuthorityStoreId(raw.expected_provider_revision, "expected_provider_revision");
   }
-  if (raw.expected_registry_sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(raw.expected_registry_sha256)) {
+  if (raw.expected_registry_sha256 !== undefined && !BARE_SHA256_PATTERN.test(raw.expected_registry_sha256)) {
     throw new AuthorityStoreProtocolError("expected_registry_sha256 must be a SHA-256 digest");
   }
   if (raw.authority_reason != null && typeof raw.authority_reason !== "string") {

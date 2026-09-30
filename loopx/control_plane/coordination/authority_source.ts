@@ -5,6 +5,7 @@ import {readFile} from "node:fs/promises";
 import {isAbsolute} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export type AuthoritySourceCheck = () => Promise<boolean>;
 /** Legacy wires and service-owned callers retain their existing fact contract. */
@@ -25,7 +26,7 @@ export function registryAuthoritySourceCheck(
   }
   const source = requireJsonObject(input.registry_source, "registry_source");
   if (typeof source.path !== "string" || !isAbsolute(source.path) ||
-      typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(source.sha256)) {
+      typeof source.sha256 !== "string" || !BARE_SHA256_PATTERN.test(source.sha256)) {
     throw new TypeError("registry_source requires an absolute path and SHA-256 digest");
   }
   // Copy primitive values: later mutation of the decoded request cannot change

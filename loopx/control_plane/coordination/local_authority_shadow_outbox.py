@@ -42,6 +42,7 @@ from .coordination_state_contract_generated import (
     LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA,
 )
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from .shadow_management import (
     read_shadow_capture_binding,
     shadow_maintenance_lock_target,
@@ -260,7 +261,6 @@ def _index_entry_files(
 
 _WRITER_RUNTIMES = frozenset({WRITER_RUNTIME_PYTHON, WRITER_RUNTIME_TYPESCRIPT})
 _SOURCE_KINDS = frozenset({SOURCE_MARKDOWN, SOURCE_STATE_EVENT_LOG, SOURCE_TASK_LEASE})
-_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _load_prepared_record(
@@ -299,7 +299,7 @@ def _load_prepared_record(
         and bool(writer.get("write_class"))
         and source.get("kind") in _SOURCE_KINDS
         and isinstance(root_digest, str)
-        and _DIGEST_PATTERN.match(root_digest) is not None
+        and ENVELOPED_SHA256_PATTERN.match(root_digest) is not None
         and isinstance(lineage_id, str)
         and bool(lineage_id)
         and source_ref is not None
@@ -508,7 +508,8 @@ def decode_cursor(value: object, *, partition: str) -> dict[str, Any]:
         or (
             digest is not None
             and (
-                not isinstance(digest, str) or _DIGEST_PATTERN.fullmatch(digest) is None
+                not isinstance(digest, str)
+                or ENVELOPED_SHA256_PATTERN.fullmatch(digest) is None
             )
         )
         or any(
@@ -563,7 +564,38 @@ def write_cursor(
     )
 
 
-def _proved_sequence(runtime_root: Path, goal_id: str, partition: str) -> int:
+def _require_binding_goal_ref(
+    binding: Mapping[str, Any],
+    *,
+    goal_id: str,
+    goal_ref: Mapping[str, str] | None,
+) -> None:
+    bound = binding.get("goal_ref")
+    if goal_ref is None:
+        if bound is not None:
+            raise OutboxError(
+                "goal_instance_id_missing",
+                "exact shadow operation requires the source GoalRef",
+            )
+        return
+    if bound is None:
+        raise OutboxError(
+            "legacy_goal_binding",
+            "exact shadow operation cannot infer a legacy binding",
+        )
+    if bound != dict(goal_ref) or bound.get("goal_id") != goal_id:
+        raise OutboxError(
+            "stale_goal_instance",
+            "shadow operation belongs to another Goal instance",
+        )
+
+
+def _proved_sequence(
+    runtime_root: Path,
+    goal_id: str,
+    partition: str,
+    goal_ref: Mapping[str, str] | None,
+) -> int:
     """Read settled progress while the primary lock prevents management changes.
 
     This exceptional missing-cursor path owns neither M nor cursor writes. The
@@ -577,6 +609,9 @@ def _proved_sequence(runtime_root: Path, goal_id: str, partition: str) -> int:
         raise OutboxError(
             "bootstrap_required", "sequence recovery needs an active lineage"
         )
+    _require_binding_goal_ref(
+        binding["binding"], goal_id=goal_id, goal_ref=goal_ref
+    )
     view = effect_runtime_result(
         "coordination.runtime_shadow.outbox_read",
         {
@@ -611,7 +646,11 @@ def _proved_sequence(runtime_root: Path, goal_id: str, partition: str) -> int:
 
 
 def next_seq(
-    directory: Path, *, runtime_root: Path | None = None, goal_id: str | None = None
+    directory: Path,
+    *,
+    runtime_root: Path | None = None,
+    goal_id: str | None = None,
+    goal_ref: Mapping[str, str] | None = None,
 ) -> int:
     """Allocate after visible files and the cursor hint; drain proves continuity."""
 
@@ -625,7 +664,15 @@ def next_seq(
     if cursor is not None:
         highest = max(highest, int(cursor.get("last_seq") or 0))
     elif runtime_root is not None and goal_id is not None:
-        highest = max(highest, _proved_sequence(runtime_root, goal_id, directory.name))
+        highest = max(
+            highest,
+            _proved_sequence(
+                runtime_root,
+                goal_id,
+                directory.name,
+                goal_ref,
+            ),
+        )
     if highest >= MAX_OUTBOX_SEQUENCE:
         raise OutboxError("outbox_sequence_exhausted", "outbox sequence is exhausted")
     return highest + 1
@@ -747,14 +794,17 @@ class TodoPartitionCapture:
         self,
         *,
         enabled: bool,
+        registry_path: Path | None,
         runtime_root: Path | None,
         goal_id: str,
         state_path: Path | None,
         write_class: str,
         original_text: str,
         projector: TodoPartitionProjector | None,
+        goal_ref: Mapping[str, str] | None = None,
     ) -> None:
         self._enabled = enabled
+        self._registry_path = registry_path
         self._runtime_root = runtime_root
         self._goal_id = goal_id
         self._state_path = state_path
@@ -762,6 +812,7 @@ class TodoPartitionCapture:
         self._original_digest = text_digest(original_text)
         self._original_text = original_text
         self._projector = projector
+        self._goal_ref = dict(goal_ref) if goal_ref is not None else None
         self._directory = (
             partition_directory(runtime_root, goal_id, TODO_PARTITION)
             if enabled and runtime_root is not None
@@ -777,12 +828,14 @@ class TodoPartitionCapture:
         cls,
         *,
         enabled: bool,
+        registry_path: Path | None = None,
         runtime_root: Path | None,
         goal_id: str,
         state_path: Path | None,
         write_class: str,
         original_text: str,
         projector: TodoPartitionProjector | None,
+        goal_ref: Mapping[str, str] | None = None,
     ) -> TodoPartitionCapture:
         """``projector`` maps active-state text to the todos partition projection.
 
@@ -792,17 +845,27 @@ class TodoPartitionCapture:
 
         return cls(
             enabled=enabled,
+            registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=goal_id,
             state_path=state_path,
             write_class=write_class,
             original_text=original_text,
             projector=projector,
+            goal_ref=goal_ref,
         )
 
     @property
     def enabled(self) -> bool:
         return self._enabled and self._directory is not None
+
+    @property
+    def goal_ref(self) -> dict[str, str] | None:
+        return dict(self._goal_ref) if self._goal_ref is not None else None
+
+    @property
+    def registry_path(self) -> Path | None:
+        return self._registry_path
 
     def skip(self, reason: str) -> None:
         """Record why this writer deliberately did not open a transaction."""
@@ -841,6 +904,18 @@ class TodoPartitionCapture:
             )
             return
         binding = binding_view["binding"]
+        try:
+            _require_binding_goal_ref(
+                binding,
+                goal_id=self._goal_id,
+                goal_ref=self._goal_ref,
+            )
+        except OutboxError as error:
+            self._fail(
+                error.reason_code,
+                error,
+            )
+            return
         self._lineage_id = str(binding["capture_lineage_id"])
         source_root_digest = str(binding["source_root_digest"])
         try:
@@ -854,7 +929,10 @@ class TodoPartitionCapture:
             bytes_digest = source_ref
             source_kind = SOURCE_MARKDOWN
             seq = next_seq(
-                self._directory, runtime_root=self._runtime_root, goal_id=self._goal_id
+                self._directory,
+                runtime_root=self._runtime_root,
+                goal_id=self._goal_id,
+                goal_ref=self._goal_ref,
             )
             entry_id = entry_identity(
                 goal_id=self._goal_id,

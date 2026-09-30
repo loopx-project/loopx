@@ -9,10 +9,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import tempfile
 from typing import Any, TypeVar
 
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ...paths import GLOBAL_REGISTRY_FILENAME
 
@@ -27,7 +27,6 @@ _STRICT_HEADER_KEYS = {
     "minimum_writer_protocol",
     "payload_sha256",
 }
-_SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 T = TypeVar("T")
 
@@ -146,7 +145,7 @@ def _decode_document(raw_bytes: bytes) -> _ProjectRegistryDocument:
             "strict project registry minimum_writer_protocol must be nonempty"
         )
     digest = header["payload_sha256"]
-    if not isinstance(digest, str) or not _SHA256_PATTERN.fullmatch(digest):
+    if not isinstance(digest, str) or not ENVELOPED_SHA256_PATTERN.fullmatch(digest):
         raise ProjectRegistryError(
             "strict project registry payload_sha256 is malformed"
         )

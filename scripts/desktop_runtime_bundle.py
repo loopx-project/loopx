@@ -65,6 +65,10 @@ def build(root: Path) -> None:
         raise RuntimeError(
             "frontend build belongs to another source revision; rebuild before desktop packaging"
         )
+    # The contract delegates its digest shape to the shared owner; this build runs from a
+    # checkout, where LoopX may not be installed, so the root has to be importable first.
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     spec = importlib.util.spec_from_file_location(
         "chat_contract", root / "loopx/presentation/chat_bundle.py"
     )

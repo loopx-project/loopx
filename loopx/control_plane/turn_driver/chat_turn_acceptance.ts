@@ -9,6 +9,7 @@ import {
   requireNonEmptyString,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const CHAT_TURN_ACCEPTANCE_REQUEST_SCHEMA =
   "loopx_chat_turn_acceptance_request_v0";
@@ -35,7 +36,7 @@ const TERMINAL_TURN_STATUSES = new Set<TurnStatus>([
   "failed",
 ]);
 const OPAQUE_ID = /^[A-Za-z0-9._-]{1,160}$/;
-const SHA256 = /^sha256:[0-9a-f]{64}$/;
+const SHA256 = ENVELOPED_SHA256_PATTERN;
 const EMPTY_OBJECT_SHA256 = sha256("{}");
 
 type OpaqueId = string & {readonly __brand: "OpaqueId"};

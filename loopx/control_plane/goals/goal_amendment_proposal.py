@@ -57,7 +57,6 @@ basis under Stage 1's downgraded naming.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -82,6 +81,7 @@ from .goal_frontier import (
     autonomous_replan_is_required,
     autonomous_replan_scope_decision,
 )
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from .shared_goal_work_source import read_shared_goal_work_source
 from .shared_goal_alignment import (
     DEFAULT_REGISTRY_RELATIVE_PATH,
@@ -110,7 +110,6 @@ GOAL_AMENDMENT_PROPOSAL_ADMISSION_FACTS = (
 )
 AMENDMENT_PROPOSAL_JOURNAL_DIRNAME = "amendment-proposals"
 AMENDMENT_PROPOSAL_JOURNAL_BASENAME = "journal.jsonl"
-_SHA256_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def amendment_proposal_journal_path(
@@ -441,7 +440,7 @@ def _check_admission_shape(
         != str(proposal.get("proposal_id") or "").strip().lower()
         or admission.get("base_revision_basis")
         != str(proposal.get("base_revision_basis") or "").strip()
-        or not _SHA256_DIGEST_PATTERN.fullmatch(
+        or not ENVELOPED_SHA256_PATTERN.fullmatch(
             str(admission.get("proposal_digest") or "")
         )
     ):

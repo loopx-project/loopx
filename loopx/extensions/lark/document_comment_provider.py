@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...file_lock import exclusive_file_lock
 from ..external_connector_provider import (
     build_external_connector_permission_requirement,
@@ -46,7 +47,7 @@ LARK_DOCUMENT_COMMENT_REPAIR_URL = "https://open.larksuite.com/app"
 
 SAFE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}")
 SAFE_PROFILE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
-IDEMPOTENCY_KEY_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
+IDEMPOTENCY_KEY_PATTERN = ENVELOPED_SHA256_PATTERN
 CURSOR_PREFIX = "lark-comment-v0."
 REPLY_CHAIN_PREFIX = "lark-reply-v0."
 MAX_PROVIDER_PAGES = 20

@@ -278,6 +278,9 @@ def _dispatch_quota_turn_start_hooks(
             available=args.available_capabilities,
         )
         context_dispatch = dispatch_turn_start_hooks((turn_start_hook(root, registry_path, args.goal_id, args.agent_id),))
+        from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
+        context_dispatch = extend_preferences(context_dispatch, runtime_root=root, registry_path=registry_path,
+            goal_id=args.goal_id, agent_id=args.agent_id)
         dispatch = dict(dispatch)
         for key in ("results", "required_reads", "failures"):
             dispatch[key] = list(dispatch.get(key) or []) + list(context_dispatch.get(key) or [])

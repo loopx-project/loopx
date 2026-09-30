@@ -6,6 +6,7 @@ import {lstat, open, type FileHandle} from "node:fs/promises";
 import {basename, dirname, isAbsolute} from "node:path";
 import {EffectRuntimeRequestError} from "./effect_runtime_errors.ts";
 import {requireJsonObject, requireNonEmptyString} from "./runtime_decode.ts";
+import { BARE_SHA256_PATTERN } from "./content_digest.ts";
 
 export const MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 
@@ -39,7 +40,7 @@ export async function readPrivateJsonSnapshot(value: unknown): Promise<unknown> 
     const path = requireNonEmptyString(ref.path, "snapshot path");
     const digest = requireNonEmptyString(ref.sha256, "snapshot sha256");
     const size = ref.byte_count;
-    if (!/^[a-f0-9]{64}$/.test(digest) || typeof size !== "number" ||
+    if (!BARE_SHA256_PATTERN.test(digest) || typeof size !== "number" ||
         !Number.isSafeInteger(size) || size <= 0 || size > MAX_LOCAL_SNAPSHOT_BYTES) {
       throw new Error("invalid private snapshot reference");
     }

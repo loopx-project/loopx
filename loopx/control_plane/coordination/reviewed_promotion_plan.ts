@@ -2,6 +2,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import { requireJsonObject, requireBoolean } from "../runtime_decode.ts";
 import { canonicalAuthorityObject, requireAuthorityStoreId } from "./authority_store_codec.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const REVIEWED_PROMOTION_PLAN_SCHEMA = "loopx_reviewed_coordination_promotion_v0";
 export const REVIEWED_PROMOTION_OPERATION_SCHEMA = "loopx_reviewed_coordination_promotion_operation_v0";
@@ -10,7 +11,7 @@ export const REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA =
 export type ReviewedPromotionAction = "apply" | "recover";
 
 export function promotionPlanDigest(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
+  if (typeof value !== "string" || !BARE_SHA256_PATTERN.test(value)) {
     throw new TypeError("reviewed promotion plan digest must be a lowercase SHA-256");
   }
   return value;

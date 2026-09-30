@@ -18,6 +18,7 @@ import {FileAuthorityStore, syncAuthorityDirectory} from "./file_authority_store
 import {SqliteAuthorityStore} from "./sqlite_authority_store.ts";
 import {localAuthorityProviderPaths, openLocalAuthorityStoreHandle, publishLocalAuthoritySelection,
   requireLocalAuthorityRuntimeRoot} from "./local_authority_provider.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 type Provider = "file" | "sqlite";
 interface Source extends JsonObject {
@@ -43,7 +44,7 @@ interface Recovery extends JsonObject {
   target_store_identity: string;
   archive_sha256: string;
 }
-const HEX = /^[0-9a-f]{64}$/;
+const HEX = BARE_SHA256_PATTERN;
 function provider(value: unknown): Provider {
   if (value !== "file" && value !== "sqlite") throw new Error("Local migration requires file or sqlite");
   return value;

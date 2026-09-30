@@ -143,6 +143,7 @@ def test_runtime_shadow_bootstrap_is_explicit_default_off_and_typed(
         operation_id="bootstrap:goal-a:state-1",
         source_version="state:1",
         projection={"schema_version": "projection_v0", "todos": []},
+        goal_ref=None,
         runtime_invoker=lambda *args: calls.append(args),
     )
     assert disabled["status"] == "disabled"
@@ -176,6 +177,7 @@ def test_runtime_shadow_bootstrap_is_explicit_default_off_and_typed(
         operation_id="bootstrap:goal-a:state-1",
         source_version="state:1",
         projection={"schema_version": "projection_v0", "todos": []},
+        goal_ref=None,
         runtime_invoker=invoke,
     )
     assert applied["status"] == "applied"

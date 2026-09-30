@@ -24,11 +24,12 @@ import {
   isAuthorityStateCheckpoint,
   type AuthorityStateDelta,
 } from "./authority_state_log.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const SQLITE_AUTHORITY_STORE_SCHEMA = "loopx_sqlite_authority_store_v2";
 const IDENTITY = /^sqlite:[0-9a-f]{32}$/;
 const REVISION = /^sqlite:([0-9a-f]{32}):([1-9]\d*)$/;
-const DIGEST = /^[0-9a-f]{64}$/;
+const DIGEST = BARE_SHA256_PATTERN;
 const MAX_SEQUENCE = 9223372036854775807n;
 const AUDIT_PAGE = 512;
 const COMMIT_COLUMNS = `CAST(cursor AS TEXT) AS sequence, operation_id, commit_digest, state_digest,

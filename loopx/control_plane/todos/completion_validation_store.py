@@ -15,6 +15,7 @@ from .completion_validation_projection import (
     completion_validation_declaration,
     completion_validation_declaration_sha256,
 )
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 DECLARATION_SCHEMA_VERSION = "loopx_todo_completion_validation_declaration_v0"
@@ -101,7 +102,7 @@ def prepare_completion_validation_declaration(
 
 
 def _read_prepared_declaration(path: Path, goal_id: str, digest: str) -> dict[str, Any] | None:
-    if not re.fullmatch(r"[a-f0-9]{64}", digest):
+    if not BARE_SHA256_PATTERN.fullmatch(digest):
         raise ValueError("canonical validation digest must be SHA-256")
     try:
         value = read_json(path.parent / "blobs" / f"{digest}.json")

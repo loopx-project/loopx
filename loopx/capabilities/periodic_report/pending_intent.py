@@ -760,7 +760,7 @@ def _actual_work_window(
     run_index = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
     if run_index.is_file():
         try:
-            rows = run_index.read_text(encoding="utf-8").splitlines()
+            rows = run_index.read_text(encoding="utf-8").split("\n")
         except OSError:
             rows = []
         for raw_row in rows:

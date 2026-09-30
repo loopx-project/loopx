@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import tempfile
 from typing import Any
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 PROGRESS_REVIEW_RECEIPT_SCHEMA_VERSION = "progress_review_receipt_v0"
 PROGRESS_REVIEW_RECEIPT_STATUSES: tuple[str, ...] = (
@@ -39,7 +40,6 @@ PROGRESS_REVIEW_SIGNAL_RULE_VERSION = "progress_review_signal_rule_v1"
 PROGRESS_REVIEW_PENDING_REASON = "pending_evaluation"
 MAX_RECEIPT_BYTES = 65536
 MAX_LOADED_RECEIPTS = 256
-_HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _TEXT_LIMIT = 200
 
 
@@ -71,7 +71,7 @@ def _text(value: Any, *, field: str, required: bool = True) -> str | None:
 
 def _hex64(value: Any, *, field: str) -> str:
     text = _text(value, field=field)
-    if text is None or not _HEX64.fullmatch(text):
+    if text is None or not BARE_SHA256_PATTERN.fullmatch(text):
         raise ValueError(f"receipt.{field} must be a sha256 hex digest")
     return text
 

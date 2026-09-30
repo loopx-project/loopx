@@ -6,6 +6,11 @@ import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
+# Absolute by necessity: setup.py and the two build scripts exec this module by file
+# path, so there is no package context for a relative import. Each of those loaders puts
+# the checkout root on sys.path before exec'ing it, which is what keeps a source build
+# working when LoopX is not installed.
+from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 
 MANIFEST = "bundle-manifest.json"
 CHAT_BUNDLE_SCHEMA_VERSION = "loopx_chat_bundle_v1"
@@ -108,7 +113,7 @@ def validate_bundle(bundle: Path, *, source_root: Path | None = None) -> dict:
             if (
                 not safe_relative(name)
                 or not isinstance(expected, str)
-                or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                or not BARE_SHA256_PATTERN.fullmatch(expected)
             ):
                 raise ValueError("invalid bundle witness")
             path = bundle / name

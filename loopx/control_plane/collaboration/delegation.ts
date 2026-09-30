@@ -7,6 +7,7 @@ import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts
 import {acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
+import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new EffectRuntimeRequestError(message);
@@ -99,7 +100,7 @@ export function delegationTurnPlanDecision(params: JsonObject): JsonObject {
   };
   const transaction = requireJsonObject(plan.transaction, "Turn plan transaction");
   requireThat(typeof transaction.turn_key === "string"
-    && /^sha256:[a-f0-9]{64}$/.test(transaction.turn_key), "Turn plan transaction requires a valid turn_key");
+    && ENVELOPED_SHA256_PATTERN.test(transaction.turn_key), "Turn plan transaction requires a valid turn_key");
   return {
     schema_version: "loopx_delegation_turn_plan_decision_v0",
     state: "planned",
@@ -286,7 +287,7 @@ export function delegationInventoryQuery(params: JsonObject): JsonObject {
   const cursor = params.cursor ?? null;
   requireThat(Number.isInteger(limit) && Number(limit) >= 1 && Number(limit) <= 50,
     "delegation inventory limit must be between 1 and 50");
-  requireThat(cursor === null || (typeof cursor === "string" && /^[a-f0-9]{64}$/.test(cursor)),
+  requireThat(cursor === null || (typeof cursor === "string" && BARE_SHA256_PATTERN.test(cursor)),
     "invalid delegation inventory cursor");
   return {limit, cursor};
 }
@@ -294,7 +295,7 @@ export function delegationInventoryQuery(params: JsonObject): JsonObject {
 /** The host supplies a fresh Delegations.read result, never a saved status. */
 export function delegationInventoryItem(params: JsonObject): JsonObject {
   const record = requireJsonObject(params.record, "delegation inventory record");
-  requireThat(typeof record.record_id === "string" && /^[a-f0-9]{64}$/.test(record.record_id),
+  requireThat(typeof record.record_id === "string" && BARE_SHA256_PATTERN.test(record.record_id),
     "invalid delegation record address");
   requireThat(record.operation_id === null || (typeof record.operation_id === "string"
     && /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(record.operation_id)), "invalid delegation operation identity");
@@ -323,7 +324,7 @@ export function delegationInventoryItem(params: JsonObject): JsonObject {
     result.artifacts = observation.artifacts.map(value => {
       const artifact = requireJsonObject(value, "accepted artifact");
       requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
-        && /^[a-f0-9]{64}$/.test(artifact.sha256), "invalid accepted artifact reference");
+        && BARE_SHA256_PATTERN.test(artifact.sha256), "invalid accepted artifact reference");
       return {ref: artifact.ref, sha256: artifact.sha256};
     });
   }

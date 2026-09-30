@@ -10,6 +10,7 @@ import {canonicalAuthorityBytes, hasExactAuthorityKeys} from "./authority_store_
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
 import {ShadowManagementError} from "./shadow_management.ts";
 import {normalizeRegisteredTodoAgents} from "./todo_agents.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 interface ShadowRegistrySource {
   path: string;
@@ -25,7 +26,7 @@ function registrySource(snapshot: JsonObject): ShadowRegistrySource {
   }
   const value = raw as JsonObject;
   if (typeof value.path !== "string" || !isAbsolute(value.path) ||
-      typeof value.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.sha256) ||
+      typeof value.sha256 !== "string" || !BARE_SHA256_PATTERN.test(value.sha256) ||
       !Array.isArray(value.registered_agents) ||
       resolve(value.path) === resolve(String(snapshot.state_path))) {
     throw new ShadowManagementError("source_registry_witness_invalid");

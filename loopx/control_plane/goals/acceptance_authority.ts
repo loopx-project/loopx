@@ -13,6 +13,7 @@ import {GOAL_ACCEPTANCE_SCHEMA, acceptanceKeys, acceptanceRequire, acceptanceTas
   acceptanceCompletionRequirements, goalAcceptanceTodoDigest, goalAcceptanceWorkDigest, normalizeAcceptanceResults,
   normalizeGoalAcceptanceDocument, projectGoalAcceptance, readGoalAcceptance,
   type AcceptanceState, type AcceptanceVerification} from "./acceptance_contract.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 const RESULT_SCHEMA = "loopx_goal_acceptance_result_v0";
 const RECEIPT_SCHEMA = "loopx_goal_acceptance_operation_v0";
@@ -128,7 +129,7 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
 export async function commitGoalAcceptanceVerification(store: AuthorityStore, value: JsonObject): Promise<JsonObject> {
   const request = mutationRequest(value, true);
   acceptanceRequire(Number.isSafeInteger(request.revision) && Number(request.revision) > 0 &&
-    typeof request.contract_digest === "string" && /^[a-f0-9]{64}$/.test(request.contract_digest), "invalid verification contract basis");
+    typeof request.contract_digest === "string" && BARE_SHA256_PATTERN.test(request.contract_digest), "invalid verification contract basis");
   const todoId = request.todo_id == null ? null : requireAuthorityStoreId(request.todo_id, "verification todo_id");
   const results = normalizeAcceptanceResults(request.results);
   const command = receiptFor(request, "verify");

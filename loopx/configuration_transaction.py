@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
+from .control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 
 CONFIGURATION_REVISION_MISSING = "absent"
-_REVISION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def configuration_payload_revision(value: object) -> str:
@@ -51,8 +50,9 @@ def goal_capability_configuration_revision(
 
 def _validated_revision(value: str, *, label: str) -> str:
     revision = str(value or "").strip()
-    if revision != CONFIGURATION_REVISION_MISSING and not _REVISION_RE.fullmatch(
-        revision
+    if (
+        revision != CONFIGURATION_REVISION_MISSING
+        and not ENVELOPED_SHA256_PATTERN.fullmatch(revision)
     ):
         raise ValueError(f"{label} must be absent or a sha256 revision")
     return revision

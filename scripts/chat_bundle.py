@@ -11,10 +11,15 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+# The contract asks the shared digest owner what a stored digest looks like, so loading
+# it by file path needs the checkout importable: a source build has no installed LoopX.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location(
     "chat_bundle_contract", ROOT / "loopx/presentation/chat_bundle.py"
 )

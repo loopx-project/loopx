@@ -5,6 +5,7 @@ import {
   parseExactGoalRef,
   type ExactGoalRef,
 } from "./goal_instance_identity.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const SOURCE_SESSION_PROFILE_ID = "source_session_v1";
 export const SOURCE_SESSION_BINDING_LIMIT = 256;
@@ -109,7 +110,7 @@ function requiredString(value: unknown, label: string): string {
 
 function requestDigest(value: unknown): string {
   const digest = requiredString(value, "request_digest");
-  if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
+  if (!ENVELOPED_SHA256_PATTERN.test(digest)) {
     throw new EffectRuntimeRequestError("request_digest must be a SHA-256 digest");
   }
   return digest;

@@ -36,6 +36,7 @@ from ...control_plane.collaboration.inbox import (
     _request_lock,
     needs_conclusion as needs_conclusion,
 )
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 PHASES = ("decision", "conclusion")
 DELIVERY_STATUSES = {
@@ -310,7 +311,7 @@ def project_chat_return_deliveries(root, session_id, messages):
             if route.get("session_id") != session_id:
                 continue
             request_id = str(route.get("request_id") or "")
-            if path.stem != request_id or not re.fullmatch(r"[a-f0-9]{64}", request_id):
+            if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
             route_message_ids = {
                 "handoff." + _hash([request_id, phase]) for phase in PHASES

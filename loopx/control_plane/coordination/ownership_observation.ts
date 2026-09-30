@@ -4,7 +4,7 @@ import type {AuthorityStore} from "./authority_store.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 import {requireAuthorityStoreId} from "./authority_store_codec.ts";
-import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
+import {CoordinationProjectionRead} from "./coordination_projection.ts";
 import {leaseEpoch, leaseIsActive, TASK_LEASE_SCHEMA_VERSION} from "../work_items/task_lease_acquire.ts";
 
 export const OWNERSHIP_OBSERVATION_SCHEMA = "loopx_ownership_observation_request_v0";
@@ -76,8 +76,9 @@ export async function readCoordinationOwnership(store: AuthorityStore, goalId: s
   requireAuthorityStoreId(goalId, "goal id");
   const loaded = await store.loadAuthority();
   if (loaded.status !== "loaded") return {schema_version: OWNERSHIP_OBSERVATION_RESULT, ...loaded};
-  const index = indexCoordinationProjection(loaded.head, goalId);
-  validateCoordinationTodoReadModel(loaded.head, goalId);
+  const read = new CoordinationProjectionRead(loaded.head, goalId);
+  const index = read.coordinationIndex;
+  read.validateTodoReadModel();
   const todos = [...index.todos.values()].filter(todo => todo.archive_state === "active" && todo.done !== true);
   const result = projectOwnershipObservation({schema_version: OWNERSHIP_OBSERVATION_SCHEMA,
     observed_at: observedAt, todos, explicit_entries: todos.filter(todo => todo.role === "agent" && text(todo.claimed_by))

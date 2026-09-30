@@ -18,6 +18,7 @@ from .schemas import (
     CONTENT_OPS_QUEUE_PROJECTION_SCHEMA_VERSION,
     CONTENT_OPS_QUEUE_STATUS_PACKET_SCHEMA_VERSION,
 )
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 ALLOWED_ITEM_KINDS = {"article", "post", "profile_update", "reply", "repost"}
 ALLOWED_ITEM_STATES = {
@@ -35,7 +36,7 @@ ALLOWED_EFFECT_KINDS = {"profile_update", "publish", "reply", "repost"}
 TERMINAL_STATES = {"readback_verified", "skipped", "superseded"}
 
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_DIGEST_RE = ENVELOPED_SHA256_PATTERN
 _ITEM_KEYS = {
     "schema_version",
     "item_id",

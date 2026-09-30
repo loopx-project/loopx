@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -10,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .cadence import normalize_report_cadence
 
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...control_plane.todos.contract import normalize_todo_claimed_by
 from ..configuration_ui import resolve_capability_configuration
 from ..machine_configuration.contract import (
@@ -31,7 +31,6 @@ DELIVERY_PLAN_SCHEMA = "periodic_report_goal_delivery_plan_v0"
 SUBSCRIPTION_ERROR_SCHEMA = "periodic_report_subscription_error_v0"
 
 _INHERITANCE_MODE = "live_machine_default"
-_REVISION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class PeriodicReportSubscriptionConfigurationError(ValueError):
@@ -400,7 +399,7 @@ def normalize_periodic_report_delivery_authority(raw: object) -> dict[str, Any]:
         authority.get("effective_revision"),
         "delivery_authority.effective_revision",
     )
-    if not _REVISION_RE.fullmatch(effective_revision):
+    if not ENVELOPED_SHA256_PATTERN.fullmatch(effective_revision):
         raise ValueError("delivery_authority.effective_revision is invalid")
     return {
         "schema_version": DELIVERY_AUTHORITY_SCHEMA,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import subprocess
 from collections.abc import Mapping
 from json import loads as json_loads
@@ -36,6 +35,7 @@ from .completion_validation_store import (
     read_completion_validation_declaration,
 )
 from .contract import TODO_STATUS_DONE, normalize_todo_status
+from ..content_digest import BARE_SHA256_PATTERN
 
 # Kept safely under the 30s outer CLI/MCP subprocess budget so a timed-out
 # validation still produces a typed receipt before the outer call is killed.
@@ -383,7 +383,7 @@ def run_declared_completion_validation_effect(
     declaration_digest = effect.get("validation_declaration_sha256")
     if declaration_digest is not None and (
         not isinstance(declaration_digest, str)
-        or not re.fullmatch(r"[a-f0-9]{64}", declaration_digest)
+        or not BARE_SHA256_PATTERN.fullmatch(declaration_digest)
     ):
         raise ValueError(
             "validation_effect.validation_declaration_sha256 must be a SHA-256 digest"

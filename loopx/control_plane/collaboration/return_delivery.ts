@@ -5,13 +5,14 @@ import {
   requireJsonObject,
   requireNonEmptyString,
 } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA =
   "manager_return_delivery_attempt_v0";
 
 const PROVIDER = /^[a-z][a-z0-9_-]{0,31}$/;
 const OPAQUE_REF = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/;
-const DIGEST = /^sha256:[0-9a-f]{64}$/;
+const DIGEST = ENVELOPED_SHA256_PATTERN;
 const ATTEMPT_KEYS = [
   "schema_version",
   "provider",

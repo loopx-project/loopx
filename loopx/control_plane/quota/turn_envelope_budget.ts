@@ -33,7 +33,7 @@ function sectionBytes(envelope: JsonObject): Record<Section, number> {
 
 export function turnEnvelopeBudgetBytes(envelope: JsonObject): number {
   const reads = Array.isArray(envelope.required_reads) ? envelope.required_reads : [];
-  return TURN_ENVELOPE_BUDGET_BYTES + reads.slice(0, 5).reduce((total: number, value: unknown) => {
+  return TURN_ENVELOPE_BUDGET_BYTES + reads.reduce((total: number, value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return total;
     const read = value as JsonObject;
     return total + (read.source === "turn_start_capability_hook"

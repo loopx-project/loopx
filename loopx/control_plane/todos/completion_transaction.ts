@@ -37,6 +37,7 @@ import {
   resolveTodoCompletionPolicy,
   type TodoCompletionPolicyResult,
 } from "./completion_policy.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const TODO_COMPLETION_TRANSACTION_REQUEST_SCHEMA =
   "loopx_todo_completion_transaction_v0";
@@ -177,7 +178,7 @@ function optionalString(value: unknown, label: string): string | null {
 
 function optionalDigest(value: unknown, label: string): string | null {
   const normalized = optionalString(value, label);
-  if (normalized !== null && !/^[a-f0-9]{64}$/u.test(normalized)) {
+  if (normalized !== null && !BARE_SHA256_PATTERN.test(normalized)) {
     throw new EffectRuntimeRequestError(`${label} must be a SHA-256 digest or null`);
   }
   return normalized;

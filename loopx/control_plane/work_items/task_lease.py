@@ -44,6 +44,7 @@ from .local_lease_record import (
     require_expected_version as require_expected_version,
     write_lease as write_lease,
 )
+from ..content_digest import BARE_SHA256_PATTERN
 
 DEFAULT_TASK_LEASE_TTL_SECONDS = 45 * 60
 MAX_TASK_LEASE_TTL_SECONDS = 24 * 60 * 60
@@ -147,7 +148,7 @@ def _native_fence_payload(
     operation_id = raw.get("fence_operation_id")
     if operation_id is not None and (
         not isinstance(operation_id, str)
-        or not re.fullmatch(r"[a-f0-9]{64}", operation_id)
+        or not BARE_SHA256_PATTERN.fullmatch(operation_id)
     ):
         raise TaskLeaseError(
             f"native task-lease {operation} result has an invalid fence operation id",

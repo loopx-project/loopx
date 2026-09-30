@@ -11,6 +11,7 @@ import type {LocalLeaseRequest} from "./canonical_task_lease_lifecycle.ts";
 import {TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA, TASK_LEASE_CANONICAL_RENEW_REQUEST_SCHEMA,
   TASK_LEASE_CANONICAL_LIFECYCLE_REQUEST_SCHEMA, TASK_LEASE_CANONICAL_CLAIM_TRANSFER_REQUEST_SCHEMA}
   from "../coordination/coordination_state_contract.generated.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION =
   TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA;
@@ -199,7 +200,7 @@ function optionalFenceOperationId(value: unknown): string | null {
   if (value === null || value === undefined || value === "") return null;
   if (
     typeof value !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(value.trim())
+    !BARE_SHA256_PATTERN.test(value.trim())
   ) {
     throw new TaskLeaseLifecycleError(
       "fence_operation_id must be a 64-character lowercase hexadecimal token",

@@ -57,6 +57,7 @@ import {
   deriveCoordinationTodoSuccessorProposals,
   TODO_SUCCESSOR_DERIVATION_REQUEST_SCHEMA,
 } from "./todo_successor_derivation.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_result_v0";
@@ -351,7 +352,7 @@ function normalizeTerminalInput(
   if (raw.review_basis !== undefined) {
     const basis = canonicalAuthorityObject(raw.review_basis, "terminal review basis");
     if (Object.keys(basis).some(key => !["provider_revision", "registry_sha256"].includes(key)) ||
-        typeof basis.registry_sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(basis.registry_sha256)) {
+        typeof basis.registry_sha256 !== "string" || !BARE_SHA256_PATTERN.test(basis.registry_sha256)) {
       throw new AuthorityStoreProtocolError("terminal review requires an exact provider revision and registry SHA-256");
     }
     requireAuthorityStoreId(basis.provider_revision, "review provider revision");
@@ -360,7 +361,7 @@ function normalizeTerminalInput(
     requireAuthorityStoreId(raw.validation_source_provider_revision, "validation source provider revision");
   }
   if (raw.validation_declaration_sha256 != null &&
-      !/^[a-f0-9]{64}$/u.test(raw.validation_declaration_sha256)) {
+      !BARE_SHA256_PATTERN.test(raw.validation_declaration_sha256)) {
     throw new AuthorityStoreProtocolError("validation declaration commitment must be a SHA-256 digest");
   }
   if (raw.validation_declaration != null && raw.validation_declaration_sha256 != null &&
@@ -711,7 +712,7 @@ function acceptedCompletionResult(input: ResolvedCoordinationTodoTerminalLifecyc
   acceptanceRequire(Object.keys(row).length === fields.length && fields.every(field => Object.hasOwn(row, field)) &&
     row.provider === "local_runtime_v0" &&
     ["application/json", "text/markdown", "text/plain"].includes(String(row.content_type)) &&
-    typeof row.sha256 === "string" && /^[a-f0-9]{64}$/.test(row.sha256) &&
+    typeof row.sha256 === "string" && BARE_SHA256_PATTERN.test(row.sha256) &&
     Number.isSafeInteger(row.size_bytes) && Number(row.size_bytes) > 0 && Number(row.size_bytes) <= 128000,
     "Completion result must be a bounded local content-addressed object.");
   return {...row, schema_version: "loopx_completion_result_v0",
@@ -1301,7 +1302,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     }
     if (validationRequired && !implicitMonitorNoChange &&
         (update === undefined || authorityTodo.status !== "done")) {
-      if (typeof validationSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(validationSha256)) {
+      if (typeof validationSha256 !== "string" || !BARE_SHA256_PATTERN.test(validationSha256)) {
         return terminalFailure(
           "completion_validation_identity_missing",
           "canonical Todo requires validation but omits its declaration digest",

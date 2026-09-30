@@ -10,6 +10,7 @@ import {
   requireStringArray,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 /**
  * Read-only `shared_goal_alignment_v0` projection contract (RFC
@@ -68,7 +69,7 @@ const AGENT_ID_PATTERN = /^[a-z][a-z0-9_.:@-]{0,79}$/;
 // repository Goal-ID contract does not require a "goal-" prefix; registered
 // goal ids such as "loopx-meta" must decode.
 const GOAL_ID_PATTERN = /^(?!\.\.?$)[^\s/\\]+$/;
-const SOURCE_BASIS_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const SOURCE_BASIS_DIGEST_PATTERN = ENVELOPED_SHA256_PATTERN;
 
 export type RevisionBasis = (typeof REVISION_BASIS_VALUES)[number];
 export type BasisSource = (typeof BASIS_SOURCE_VALUES)[number];
@@ -208,7 +209,7 @@ function decodeSourceBasis(value: unknown): SourceBasisFacts {
   if (raw.todo_basis !== undefined) {
     const basis = requireJsonObject(raw.todo_basis, "todo_basis");
     if (basis.source_authority !== "file_v0" ||
-      typeof basis.records_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(basis.records_sha256)) {
+      typeof basis.records_sha256 !== "string" || !BARE_SHA256_PATTERN.test(basis.records_sha256)) {
       throw new EffectRuntimeRequestError("invalid canonical Todo basis");
     }
     todoBasis = {source_authority: basis.source_authority, records_sha256: basis.records_sha256,

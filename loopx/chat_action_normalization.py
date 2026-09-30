@@ -7,12 +7,12 @@ import re
 from typing import Any, Mapping
 
 from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.content_digest import BARE_SHA256_PATTERN
 from .control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
 from .control_plane.todos.contract import require_supported_todo_resume_when
 from .registry import registry_goals
 
 
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _AUTHORITY_PRINCIPAL = re.compile(r"^[a-z][a-z0-9._-]{0,30}:[A-Za-z0-9._:-]{1,200}$")
 
 
@@ -65,7 +65,7 @@ class ChatActionNormalizationMixin:
             if not isinstance(payload, Mapping):
                 raise ValueError("operation payload must be an object")
             payload_digest = str(values.get("payload_digest") or "").strip()
-            if not _SHA256.fullmatch(payload_digest):
+            if not BARE_SHA256_PATTERN.fullmatch(payload_digest):
                 raise ValueError("operation payload_digest must be lowercase SHA-256")
             if _digest(payload) != payload_digest:
                 raise ValueError("operation payload_digest does not match payload")

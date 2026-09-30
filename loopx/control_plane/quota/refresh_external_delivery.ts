@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { JsonObject, SettlementIdentity } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const EXTERNAL_DELIVERY_SCHEMA = "refresh_external_delivery_v0";
 export const EXTERNAL_DELIVERY_EVENT = "refresh_external_delivery";
@@ -16,7 +17,7 @@ export function decodeExternalDelivery(value: unknown): ExternalDeliveryRequest 
   const input = requireJsonObject(value, "external_delivery");
   if (typeof input.suppress !== "boolean" ||
       (input.resume_key !== null &&
-       (typeof input.resume_key !== "string" || !/^[a-f0-9]{64}$/.test(input.resume_key))) ||
+       (typeof input.resume_key !== "string" || !BARE_SHA256_PATTERN.test(input.resume_key))) ||
       (input.suppress && input.resume_key !== null)) {
     throw new EffectRuntimeRequestError("external_delivery requires suppress and a mutually exclusive resume key");
   }
@@ -48,7 +49,7 @@ export function refreshExternalDelivery(
     if (!details || details.schema_version !== EXTERNAL_DELIVERY_SCHEMA ||
         details.settlement_effect_id !== identity.effect_id || typeof event.event_id !== "string" ||
         (details.state !== "paused" && details.state !== "ready") ||
-        typeof details.resume_key !== "string" || !/^[a-f0-9]{64}$/.test(details.resume_key)) {
+        typeof details.resume_key !== "string" || !BARE_SHA256_PATTERN.test(details.resume_key)) {
       invalid = true;
       break;
     }

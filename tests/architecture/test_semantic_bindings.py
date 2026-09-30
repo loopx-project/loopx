@@ -150,3 +150,60 @@ def test_strict_extraction_does_not_execute_inspected_source():
     source = SourceFile('loopx/owner.py', '.py',
                         'raise RuntimeError("source must not execute")\nclass Action(str, Enum):\n RUN: str = "run"\n')
     assert generator.enum_members(source, 'Action', strict=True) == {'RUN': 'run'}
+
+
+def test_digest_binding_is_derived_from_the_typescript_owner():
+    import re
+
+    namespace = {}
+    exec(compile(generator.DIGEST_BINDING.read_text(), '<generated digest binding>', 'exec'), namespace)
+    assert namespace['BARE_SHA256_PATTERN'].fullmatch('a' * 64)
+    assert namespace['ENVELOPED_SHA256_PATTERN'].fullmatch('sha256:' + 'a' * 64)
+    for value in ['A' * 64, 'a' * 63, 'a' * 65, 'g' * 64, 'a' * 64 + '\n']:
+        assert namespace['BARE_SHA256_PATTERN'].fullmatch(value) is None
+    assert namespace['ENVELOPED_SHA256_PATTERN'].fullmatch('a' * 64) is None
+    assert namespace['BARE_SHA256_PATTERN'].fullmatch('sha256:' + 'a' * 64) is None
+    assert isinstance(namespace['BARE_SHA256_PATTERN'], re.Pattern)
+    assert generator.DIGEST_BINDING.relative_to(generator.ROOT).as_posix() in generator.verified_generated_paths()
+
+
+@pytest.mark.parametrize('suffix', ['i', 'g', 'm'])
+def test_digest_generator_rejects_regex_flags(suffix):
+    source = generator.DIGEST_OWNER.read_text().replace('/;', f'/{suffix};', 1)
+    with pytest.raises(ValueError, match='flagless'):
+        generator.render_digest_binding(source)
+
+
+@pytest.mark.parametrize('mutation', ['extra', 'missing', 'dynamic', 'unsupported'])
+def test_digest_generator_rejects_untranslated_source(mutation):
+    source = generator.DIGEST_OWNER.read_text()
+    if mutation == 'extra':
+        source += '\nthrow new Error("must not execute");\n'
+    elif mutation == 'missing':
+        source = source[:source.index('export const BARE_SHA256_PATTERN')]
+    elif mutation == 'dynamic':
+        source = source.replace('/^[0-9a-f]{64}$/', 'buildPattern()')
+    else:
+        source = source.replace('[0-9a-f]', r'\p{ASCII}')
+    with pytest.raises(ValueError, match='digest owner'):
+        generator.render_digest_binding(source)
+
+
+def test_changed_digest_owner_invalidates_old_binding(tmp_path, monkeypatch):
+    source = tmp_path / 'content_digest.ts'
+    source.write_text(generator.DIGEST_OWNER.read_text().replace('{64}', '{63}'))
+    monkeypatch.setattr(generator, 'DIGEST_OWNER', source)
+    # Detect source drift without rewriting any checked-in binding.
+    with pytest.raises(ValueError, match='stale generated semantic artifact'):
+        generator.verified_generated_paths()
+
+
+def test_generated_filename_or_header_does_not_exempt_hand_edits(tmp_path, monkeypatch):
+    artifact = tmp_path / 'content_digest.py'
+    expected = generator.render_digest_binding(generator.DIGEST_OWNER.read_text())
+    artifact.write_text(expected.replace('{64}', '{63}'))
+    monkeypatch.setattr(generator, 'ROOT', tmp_path)
+    monkeypatch.setattr(generator, 'build_artifacts', lambda: {artifact: expected})
+    with pytest.raises(ValueError, match='stale generated semantic artifact'):
+        generator.verified_generated_paths()
+    assert '{63}' in artifact.read_text()

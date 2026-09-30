@@ -3,6 +3,7 @@
 from pathlib import Path
 import importlib.util
 import shutil
+import sys
 from setuptools import setup
 from setuptools.command.build_py import build_py
 from setuptools.command.sdist import sdist
@@ -10,6 +11,10 @@ from setuptools.command.sdist import sdist
 
 def verify_frontend():
     root = Path(__file__).parent
+    # Same reason as scripts/chat_bundle.py: the contract delegates its digest shape to
+    # the shared owner, and a source distribution is verified before LoopX is installed.
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     spec = importlib.util.spec_from_file_location(
         "chat_bundle_contract", root / "loopx/presentation/chat_bundle.py"
     )

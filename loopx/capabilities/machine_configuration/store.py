@@ -21,6 +21,7 @@ from .contract import (
     normalize_machine_configuration,
     project_machine_configuration,
 )
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 
 MACHINE_CONFIGURATION_UPDATE_PLAN_SCHEMA = "machine_configuration_update_plan_v0"
@@ -346,8 +347,8 @@ def _read_transaction(runtime_root: Path, transaction_id: str) -> dict[str, Any]
         raise ValueError("machine-configuration transaction receipt is invalid")
     receipt["receipt_revision"] = receipt_revision
     applied_revision = str(receipt.get("applied_revision") or "")
-    if applied_revision != _MISSING_REVISION and not re.fullmatch(
-        r"sha256:[0-9a-f]{64}", applied_revision
+    if applied_revision != _MISSING_REVISION and not (
+        ENVELOPED_SHA256_PATTERN.fullmatch(applied_revision)
     ):
         raise ValueError("machine-configuration transaction revision is invalid")
     return receipt

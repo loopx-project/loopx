@@ -47,6 +47,7 @@ from .control_plane.runtime.run_index_rebuild import (
     apply_reviewed_collision_rebuild,
     build_collision_rebuild_plan,
     collision_review_groups,
+    split_index_lines,
     validate_reviewed_collision_plan,
 )
 from .control_plane.runtime.time import chronology_key, now_local_iso
@@ -725,7 +726,7 @@ def repair_index_duplicates(
             else nullcontext()
         )
         with lock:
-            raw_lines = index_path.read_text(encoding="utf-8").splitlines()
+            raw_lines = split_index_lines(index_path.read_text(encoding="utf-8"))
             grouped: dict[tuple[str, str, str], list[tuple[int, dict[str, Any]]]] = {}
             for line_number, line in enumerate(raw_lines, start=1):
                 if not line.strip():

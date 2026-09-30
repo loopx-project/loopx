@@ -15,6 +15,7 @@ import {sha256Digest, readOutboxCursor, outboxPartitionDirectory} from "./local_
 import {legacyCoordinationTodoLockPath, taskLeaseLockPath} from "./legacy_writer_lock_paths.ts";
 import {readShadowBootstrapSourcePath, type ShadowCaptureBinding} from "./shadow_management.ts";
 import {LOCAL_AUTHORITY_SHADOW_OUTBOX_ENTRY_SCHEMA, LOCAL_AUTHORITY_SHADOW_OUTBOX_COMMIT_SCHEMA} from "./coordination_state_contract.generated.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export type DrainPartition = "todos" | "leases";
 export interface DrainEntry {
@@ -56,7 +57,7 @@ export async function drainInventory(root: string, goal: string, partition: Drai
         record.goal_id === goal && record.partition === partition &&
         ["python", "typescript"].includes(String(writer.runtime)) && typeof writer.write_class === "string" && writer.write_class.length > 0 &&
         ["markdown_active_state", "state_event_log", "task_lease_record"].includes(String(source.kind)) &&
-        typeof record.source_root_digest === "string" && /^sha256:[0-9a-f]{64}$/.test(record.source_root_digest) && ref !== null &&
+        typeof record.source_root_digest === "string" && ENVELOPED_SHA256_PATTERN.test(record.source_root_digest) && ref !== null &&
         outboxEntryIdentity(goal, partition, seq, ref, record.capture_lineage_id, record.source_root_digest) === id);
       entry.prepared = true; entry.capture_lineage_id = record.capture_lineage_id; entry.prepared_sha256 = digest;
     } else {

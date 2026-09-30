@@ -15,6 +15,7 @@ from .reward_memory import (
     reviewer_artifact_notification_gate,
     reviewer_notification_before_send_gate,
 )
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 
 ISSUE_FIX_REVIEWER_NOTIFICATION_SINKS_INPUT_SCHEMA_VERSION = (
@@ -122,7 +123,7 @@ def reviewer_notification_receipts_from_state(
         dict.fromkeys(
             str(value)
             for value in (values if isinstance(values, list) else [])
-            if re.fullmatch(r"sha256:[a-f0-9]{64}", str(value))
+            if ENVELOPED_SHA256_PATTERN.fullmatch(str(value))
         )
     )
 
@@ -140,7 +141,7 @@ def reviewer_notification_queue_from_state(
         if (
             value.get("schema_version")
             != ISSUE_FIX_REVIEWER_NOTIFICATION_QUEUE_RECEIPT_SCHEMA_VERSION
-            or not re.fullmatch(r"sha256:[a-f0-9]{64}", key)
+            or not ENVELOPED_SHA256_PATTERN.fullmatch(key)
             or key in seen
         ):
             continue
@@ -164,7 +165,7 @@ def reviewer_notification_legacy_queue_from_state(
         if (
             value.get("schema_version")
             != ISSUE_FIX_REVIEWER_NOTIFICATION_LEGACY_QUEUE_RECEIPT_SCHEMA_VERSION
-            or not re.fullmatch(r"sha256:[a-f0-9]{64}", key)
+            or not ENVELOPED_SHA256_PATTERN.fullmatch(key)
             or key in seen
         ):
             continue
@@ -183,7 +184,7 @@ def with_reviewer_notification_state(
     )
     for value in sinks_input.get("receipts") or []:
         text = str(value)
-        if re.fullmatch(r"sha256:[a-f0-9]{64}", text) and text not in merged_receipts:
+        if ENVELOPED_SHA256_PATTERN.fullmatch(text) and text not in merged_receipts:
             merged_receipts.append(text)
 
     queue = reviewer_notification_queue_from_state(
@@ -517,7 +518,7 @@ def validate_issue_fix_reviewer_notification_sinks_result(
                 errors.append(f"sink result {field} must be false")
     receipts = packet.get("receipts")
     if not isinstance(receipts, list) or any(
-        not re.fullmatch(r"sha256:[a-f0-9]{64}", str(value))
+        not ENVELOPED_SHA256_PATTERN.fullmatch(str(value))
         for value in (receipts if isinstance(receipts, list) else [])
     ):
         errors.append("receipts must contain only stable sha256 keys")
@@ -535,7 +536,7 @@ def validate_issue_fix_reviewer_notification_sinks_result(
         if (
             receipt.get("schema_version")
             != ISSUE_FIX_REVIEWER_NOTIFICATION_QUEUE_RECEIPT_SCHEMA_VERSION
-            or not re.fullmatch(r"sha256:[a-f0-9]{64}", key)
+            or not ENVELOPED_SHA256_PATTERN.fullmatch(key)
             or key in queued_keys
             or receipt.get("status") != "queued"
             or not public_safe_compact_text(receipt.get("sink_kind"), limit=50)
@@ -693,7 +694,7 @@ def build_issue_fix_reviewer_notification_sinks_result(
     receipts = {
         str(value)
         for value in (raw_receipts if isinstance(raw_receipts, list) else [])
-        if re.fullmatch(r"sha256:[a-f0-9]{64}", str(value))
+        if ENVELOPED_SHA256_PATTERN.fullmatch(str(value))
     }
     semantic_history_pr_refs = {
         public_safe_compact_text(value, limit=300)

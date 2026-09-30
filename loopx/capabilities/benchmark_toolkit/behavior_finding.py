@@ -10,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from .study_projection import (
-    _DIGEST_RE,
     _active_envelopes,
     _bounded_text,
     _finite_number,
@@ -118,7 +118,7 @@ def normalize_benchmark_behavior_finding(payload: Mapping[str, Any]) -> dict[str
     if basis == "all_available" and sample != population:
         raise ValueError("all_available requires sample_count == population_count")
     digest = selection["cohort_digest"]
-    if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
+    if not isinstance(digest, str) or not BARE_SHA256_PATTERN.fullmatch(digest):
         raise ValueError("cohort_digest must be SHA-256")
     measures = []
     for item in _items(p["measures"], "measures", minimum=0):
@@ -165,7 +165,10 @@ def normalize_benchmark_behavior_finding(payload: Mapping[str, Any]) -> dict[str
         e = _object(
             item, {"kind", "digest", "label", "relation", "summary"}, "evidence"
         )
-        if not isinstance(e["digest"], str) or not _DIGEST_RE.fullmatch(e["digest"]):
+        item_digest = e["digest"]
+        if not isinstance(item_digest, str) or not BARE_SHA256_PATTERN.fullmatch(
+            item_digest
+        ):
             raise ValueError("evidence digest must be SHA-256")
         evidence.append(
             {

@@ -7,6 +7,7 @@ import {
 } from "../coordination/authority_store_codec.ts";
 import {normalizeTodoAgent} from "../coordination/todo_agents.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "./completion_validation_declaration.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const COMPLETION_VALIDATION_REVISION_SCHEMA =
   "loopx_todo_completion_validation_revision_v0";
@@ -25,7 +26,7 @@ export interface CompletionValidationRevision extends JsonObject {
 }
 
 const digest = (value: unknown, label: string): string => {
-  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
+  if (typeof value !== "string" || !BARE_SHA256_PATTERN.test(value)) {
     throw new AuthorityStoreProtocolError(`${label} must be a SHA-256 digest`);
   }
   return value;

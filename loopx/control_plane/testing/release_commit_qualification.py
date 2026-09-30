@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..runtime.public_safety import public_safe_compact_text
 from .actual_default_model_behavior_portfolio import (
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_COUNT,
@@ -45,7 +46,6 @@ EXPECTED_RESULT_SCHEMA_BY_QUALIFICATION = {
 }
 
 _HEX_ID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
-_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[A-Za-z0-9.+-]*)?$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/+\-]{0,159}$")
 
@@ -91,7 +91,7 @@ def _hex_id(value: Any, *, field: str) -> str:
 
 def _digest(value: Any, *, field: str) -> str:
     text = str(value or "").strip().lower()
-    if not _DIGEST_RE.fullmatch(text):
+    if not ENVELOPED_SHA256_PATTERN.fullmatch(text):
         raise ValueError(f"{field} must be a sha256 digest")
     return text
 

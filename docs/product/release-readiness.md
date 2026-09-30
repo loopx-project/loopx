@@ -670,6 +670,16 @@ path, and canary route rather than as a user-facing release baseline.
   under unchanged budgets. Its remaining fixture-quiescence limit is retained
   on the [existing profile lifecycle owner](https://github.com/loopx-project/loopx/pull/5226#issuecomment-5860681814).
 
+- `v1.2.3` on 2026-09-29 22:54 +08:00: App Goal drafts with explicit Apply,
+  exact Goal ownership for Chat and delegation, opt-in Kiro CLI mode, and typed
+  Explore observations at commit `0a401fe75`. The [published release](https://github.com/loopx-project/loopx/releases/tag/v1.2.3)
+  has 11 assets; package and desktop installer checksums, matching PyPI package
+  hashes, and the signed `desktop-stable` update feed were read back after all
+  three release workflows passed. `stable` was fast-forwarded to the tag.
+  This expedited release used focused local version, packaging, and two native
+  canary checks; the full Python/public smoke/model-behavior/PostgreSQL matrix
+  and a separate Pages check were not run.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 

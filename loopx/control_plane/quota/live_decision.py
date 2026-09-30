@@ -186,6 +186,10 @@ def _project_turn_start_required_reads(
 ) -> bool:
     """Order evidence before work and report whether the decision changed."""
 
+    # Keep failure observations even when no evidence read was produced. The
+    # typed envelope projects their cache/dependent-action policy for the host.
+    if dispatch:
+        payload["turn_start_capability_hook_dispatch"] = dict(dispatch)
     projected = _turn_start_required_reads(dispatch)
     if not projected:
         return False

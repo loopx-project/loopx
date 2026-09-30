@@ -7,6 +7,7 @@ import {
   requireNonEmptyString,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const EXTERNAL_EVIDENCE_REQUEST_SCHEMA_VERSION =
   "loopx_external_evidence_request_v0";
@@ -27,7 +28,7 @@ const PROVIDER_KINDS = ["method", "connector"] as const;
 const RECEIPT_STATUSES = ["succeeded", "failed", "no_evidence"] as const;
 const EVIDENCE_BASES = ["stated", "observed", "tested", "inferred"] as const;
 const ADMISSION_DECISIONS = ["admit", "reject"] as const;
-const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
+const SHA256_RE = ENVELOPED_SHA256_PATTERN;
 const PROVIDER_ID_RE = /^[a-z][a-z0-9_.:-]{1,95}$/;
 const SOURCE_REF_RE = /^(https?:\/\/|[a-z][a-z0-9+.-]*:\/\/|urn:)/;
 

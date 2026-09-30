@@ -7,6 +7,7 @@ import {
   requireNonEmptyString as requiredString,
   requireStringLiteral,
 } from "./runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "./content_digest.ts";
 
 export const EXTERNAL_EFFECT_RECEIPT_SCHEMA_VERSION =
   "loopx_external_effect_receipt_v0";
@@ -179,7 +180,7 @@ function canonicalDigest(value: unknown): string {
 
 function requiredCanonicalDigest(value: unknown, label: string): string {
   const digest = requiredString(value, label);
-  if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
+  if (!ENVELOPED_SHA256_PATTERN.test(digest)) {
     throw new EffectRuntimeRequestError(`${label} is invalid`);
   }
   return digest;

@@ -14,12 +14,17 @@ import re
 from typing import Any
 
 from .coordination_state_contract_generated import (
-    SHADOW_MANAGEMENT_MANIFEST_SCHEMA, SHADOW_MANAGEMENT_STATE_SCHEMA,
+    SHADOW_MANAGEMENT_EXACT_MANIFEST_SCHEMA,
+    SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA,
+    SHADOW_MANAGEMENT_MANIFEST_SCHEMA,
+    SHADOW_MANAGEMENT_STATE_SCHEMA,
 )
 from .local_authority_shadow_projection import sha256_digest
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 
 SHADOW_CAPTURE_PROFILE = "file_outbox_v1"
-_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_DIGEST = ENVELOPED_SHA256_PATTERN
+_GOAL_INSTANCE_ID = re.compile(r"ginst_[0-9a-f]{32}\Z")
 _STATE_KEYS = {
     "schema_version", "goal_id", "source_root_digest", "status", "binding",
     "operation", "previous_operation_id", "result",
@@ -28,6 +33,7 @@ _BINDING_KEYS = {
     "capture_profile", "capture_lineage_id", "source_root_digest", "store_identity",
     "bootstrap_operation_id", "bootstrap_provider_revision",
 }
+_EXACT_BINDING_KEYS = {*_BINDING_KEYS, "goal_ref"}
 _OPERATION_KEYS = {"kind", "operation_id", "request_digest", "manifest_digest", "phase"}
 
 
@@ -69,14 +75,28 @@ def _source_root_digests(runtime_root: Path) -> set[str]:
     }
 
 
-def _binding(value: object, root_digest: str) -> bool:
+def _goal_ref(value: object, goal_id: str) -> bool:
     return (
-        isinstance(value, dict) and set(value) == _BINDING_KEYS
-        and all(_text(item) for item in value.values())
+        isinstance(value, dict)
+        and set(value) == {"goal_id", "goal_instance_id"}
+        and value.get("goal_id") == goal_id
+        and isinstance(value.get("goal_instance_id"), str)
+        and _GOAL_INSTANCE_ID.fullmatch(value["goal_instance_id"]) is not None
+    )
+
+
+def _binding(
+    value: object, root_digest: str, goal_id: str, *, exact: bool
+) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == (_EXACT_BINDING_KEYS if exact else _BINDING_KEYS)
+        and all(_text(item) for key, item in value.items() if key != "goal_ref")
         and value["capture_profile"] == SHADOW_CAPTURE_PROFILE
         and value["source_root_digest"] == root_digest
         and re.fullmatch(r"file:[0-9a-f]{32}", value["store_identity"]) is not None
         and re.fullmatch(r"file:[1-9][0-9]*:[0-9a-f]{24}", value["bootstrap_provider_revision"]) is not None
+        and (not exact or _goal_ref(value["goal_ref"], goal_id))
     )
 
 
@@ -96,7 +116,8 @@ def read_shadow_management_state(runtime_root: Path, goal_id: str) -> dict[str, 
         if not isinstance(state, dict) or set(state) != _STATE_KEYS:
             raise ValueError("journal fields differ")
         root_digest = state["source_root_digest"]
-        if (state["schema_version"] != SHADOW_MANAGEMENT_STATE_SCHEMA
+        exact = state["schema_version"] == SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA
+        if (not exact and state["schema_version"] != SHADOW_MANAGEMENT_STATE_SCHEMA
                 or state["goal_id"] != goal_id or root_digest not in root_digests):
             raise ValueError("journal scope differs")
         status = state["status"]
@@ -124,7 +145,9 @@ def read_shadow_management_state(runtime_root: Path, goal_id: str) -> dict[str, 
             raise ValueError("journal result is invalid")
         if not terminal and state["result"] is not None:
             raise ValueError("journal result is premature")
-        if state["binding"] is not None and not _binding(state["binding"], root_digest):
+        if state["binding"] is not None and not _binding(
+            state["binding"], root_digest, goal_id, exact=exact
+        ):
             raise ValueError("journal binding is invalid")
         if status == "active" and state["binding"] is None:
             raise ValueError("active journal has no binding")
@@ -166,15 +189,30 @@ def read_shadow_bootstrap_source_path(
     path = shadow_management_directory(runtime_root, goal_id) / "operations" / directory / "manifest.json"
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
+        expected_manifest_schema = (
+            SHADOW_MANAGEMENT_EXACT_MANIFEST_SCHEMA
+            if state["schema_version"] == SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA
+            else SHADOW_MANAGEMENT_MANIFEST_SCHEMA
+        )
         if (not isinstance(manifest, dict)
                 or sha256_digest(manifest) != state["operation"]["manifest_digest"]
-                or manifest.get("schema_version") != SHADOW_MANAGEMENT_MANIFEST_SCHEMA
+                or manifest.get("schema_version") != expected_manifest_schema
                 or manifest.get("kind") != "bootstrap" or manifest.get("goal_id") != goal_id
                 or manifest.get("operation_id") != operation_id
                 or manifest.get("capture_lineage_id") != binding["capture_lineage_id"]
                 or manifest.get("source_root_digest") != binding["source_root_digest"]
                 or manifest.get("request_digest") != state["operation"]["request_digest"]):
             raise ValueError("bootstrap manifest binding differs")
+        if (
+            state["schema_version"] == SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA
+            and (
+                not _goal_ref(manifest.get("goal_ref"), goal_id)
+                or manifest.get("goal_ref") != binding.get("goal_ref")
+                or not isinstance(manifest.get("request"), dict)
+                or manifest["request"].get("goal_ref") != binding.get("goal_ref")
+            )
+        ):
+            raise ValueError("bootstrap manifest GoalRef differs")
         request = manifest.get("request")
         if (not isinstance(request, dict) or request.get("runtime_root") != str(runtime_root)
                 or request.get("goal_id") != goal_id or request.get("operation_id") != operation_id

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from enum import Enum
 from typing import Any
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION = "benchmark_runtime_continuity_v0"
-_SHA256_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_SHA256_DIGEST = BARE_SHA256_PATTERN
 
 
 class BenchmarkEventWindowState(str, Enum):

@@ -8,10 +8,11 @@ import type {AuthorityStoreCommittedTransaction} from "./authority_store.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorityObjectList,
   canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {AuthorityStateReplay, decodeAuthorityStateDelta} from "./authority_state_log.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const AUTHORITY_ARCHIVE_SCHEMA = "loopx_authority_archive_v0";
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
-const HEX = /^[0-9a-f]{64}$/;
+const HEX = BARE_SHA256_PATTERN;
 export interface ArchiveHeader extends JsonObject {
   kind: "header";
   schema_version: typeof AUTHORITY_ARCHIVE_SCHEMA;

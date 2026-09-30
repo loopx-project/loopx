@@ -21,6 +21,7 @@ from threading import Lock
 from typing import IO, Any
 
 from ..file_lock import process_is_alive
+from .content_digest import BARE_SHA256_PATTERN
 
 EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION = "loopx_effect_runtime_request_v0"
 EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION = "loopx_effect_runtime_response_v1"
@@ -662,7 +663,7 @@ def _read_local_snapshot_response(
         size, digest = ref.get("byte_count"), ref.get("sha256")
         if (not isinstance(size, int) or isinstance(size, bool) or size <= 0
                 or size > MAX_LOCAL_SNAPSHOT_BYTES or not isinstance(digest, str)
-                or re.fullmatch(r"[a-f0-9]{64}", digest) is None):
+                or BARE_SHA256_PATTERN.fullmatch(digest) is None):
             raise ValueError("invalid local snapshot reference")
         descriptor = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as file:

@@ -14,10 +14,11 @@ import stat
 import tempfile
 from pathlib import Path
 from typing import Any
+from ..content_digest import BARE_SHA256_PATTERN
 
 MAX_RESULT_BYTES = 128_000
 _CONTENT_TYPES = {".json": "application/json", ".md": "text/markdown", ".txt": "text/plain"}
-_DIGEST = re.compile(r"[a-f0-9]{64}\Z")
+_DIGEST = BARE_SHA256_PATTERN
 
 
 def _object_path(runtime_root: Path, goal_id: str, digest: str) -> Path:

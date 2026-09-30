@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from enum import Enum
 from typing import Any
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 BENCHMARK_PUBLIC_PROGRESS_SCHEMA_VERSION = "benchmark_public_progress_v0"
 BENCHMARK_CONTINUATION_DECISION_SCHEMA_VERSION = "benchmark_continuation_decision_v0"
@@ -34,7 +34,7 @@ def _non_negative_int(value: Any, *, field: str) -> int:
 
 def _sha256_digest(value: Any, *, field: str) -> str:
     text = str(value or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", text):
+    if not BARE_SHA256_PATTERN.fullmatch(text):
         raise ValueError(f"{field} must be a lowercase SHA-256 digest")
     return text
 

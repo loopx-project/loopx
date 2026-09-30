@@ -1,0 +1,26 @@
+{
+  "request_schema": "todo_succession_request_v1",
+  "result_schema": "todo_succession_result_v1",
+  "fact_columns": [
+    "todo_id",
+    "status",
+    "active",
+    "advancement",
+    "no_followup",
+    "successors",
+    "superseded_by",
+    "unblocks",
+    "resumes",
+    "handoff",
+    "context_fields"
+  ],
+  "evaluation_columns": [
+    "schema_version",
+    "item_sha256",
+    "successor_todo_ids",
+    "unresolved_successor_ids",
+    "tracked_completion",
+    "successor_gap",
+    "handoff_state"
+  ]
+}

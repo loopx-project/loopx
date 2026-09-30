@@ -16,6 +16,7 @@ from .core import (
     _SINK_ROLES,
     _SINK_STATUSES,
 )
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 
 GENERATION_BUNDLE_SCHEMA = "periodic_report_generation_bundle_v0"
 GENERATION_RECEIPT_SCHEMA = "periodic_report_generation_receipt_v0"
@@ -192,7 +193,7 @@ def _generation_receipt(raw: object) -> dict[str, Any]:
     document_digest = _text(
         receipt.get("document_digest"), "document_digest", maximum=80
     )
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", document_digest):
+    if not ENVELOPED_SHA256_PATTERN.fullmatch(document_digest):
         raise ValueError("generation_receipt.document_digest must use sha256")
     artifacts = _sequence(receipt.get("artifact_receipts"), "artifact_receipts")
     if not artifacts:
@@ -209,7 +210,7 @@ def _generation_receipt(raw: object) -> dict[str, Any]:
         content_digest = _text(
             artifact.get("content_digest"), f"{label}.content_digest", maximum=80
         )
-        if not re.fullmatch(r"sha256:[0-9a-f]{64}", content_digest):
+        if not ENVELOPED_SHA256_PATTERN.fullmatch(content_digest):
             raise ValueError(f"{label}.content_digest must use sha256")
         normalized_artifacts.append(
             {

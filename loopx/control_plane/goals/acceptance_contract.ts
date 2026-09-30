@@ -6,6 +6,7 @@ import {AuthorityStoreProtocolError, authorityUnicodeCompare, canonicalAuthority
 import {indexCoordinationProjectionTodos, validateCoordinationTodoReadModel} from "../coordination/coordination_projection.ts";
 import {COMPLETION_VALIDATION_BINDING_RECEIPT_SCHEMA,
   completionValidationRevisionHistory} from "../todos/completion_validation_revision.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const GOAL_ACCEPTANCE_SCHEMA = "loopx_goal_acceptance_v0";
 export interface AcceptanceCriterion extends JsonObject {
@@ -304,7 +305,7 @@ export function readGoalAcceptance(head: JsonObject, goalId: string): Acceptance
     acceptanceKeys(binding, ["todo_id", "todo_semantic_digest", "revision", "criterion_ids", "confirmed_by"]);
     const declared = document.bindings.find(item => item.todo_id === binding.todo_id);
     acceptanceRequire(declared && binding.confirmed_by === "owner" && binding.revision === state.revision &&
-      typeof binding.todo_semantic_digest === "string" && /^[a-f0-9]{64}$/.test(binding.todo_semantic_digest) &&
+      typeof binding.todo_semantic_digest === "string" && BARE_SHA256_PATTERN.test(binding.todo_semantic_digest) &&
       canonicalAuthoritySha256(binding.criterion_ids) === canonicalAuthoritySha256(declared.criterion_ids), "invalid owner-confirmed acceptance binding");
     return binding as AcceptanceBinding;
   });
@@ -318,7 +319,7 @@ export function readGoalAcceptance(head: JsonObject, goalId: string): Acceptance
     acceptanceRequire(operationId === receipt.operation_id, "verification operation id must be trimmed");
     acceptanceRequire(Number.isSafeInteger(receipt.contract_revision) && Number(receipt.contract_revision) > 0 &&
       Number(receipt.contract_revision) <= Number(state.revision) &&
-      [receipt.contract_digest, receipt.work_digest].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)),
+      [receipt.contract_digest, receipt.work_digest].every(value => typeof value === "string" && BARE_SHA256_PATTERN.test(value)),
       "invalid verification basis");
     const todoId = receipt.todo_id === null ? null : id(receipt.todo_id);
     // Historical receipts can name retired criteria. Current acceptance checks

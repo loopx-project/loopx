@@ -45,6 +45,8 @@
     "loopx/control_plane/coordination/nokv_jsonl_transport.ts",
     "loopx/control_plane/coordination/local_authority_shadow.ts",
     "loopx/control_plane/coordination/local_authority_shadow_outbox.ts",
+    "loopx/control_plane/content_digest.ts",
+    "tests/control_plane_ts/content_digest_single_owner.test.ts",
     "loopx/control_plane/coordination/postgresql_authority_store.ts",
     "loopx/control_plane/coordination/postgresql_authority_service.ts",
     "loopx/control_plane/coordination/sqlite_authority_migration.ts",

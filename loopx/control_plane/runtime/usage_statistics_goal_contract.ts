@@ -1,4 +1,5 @@
 import { object } from "./usage_statistics_contract.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const GOAL_SCHEMA = "loopx_goal_usage_aggregate_v1";
 export const GOAL_DURATIONS = ["lt_1m", "lt_10m", "lt_1h", "lt_6h", "lt_1d", "lt_7d", "lt_30d", "gte_30d"] as const;
@@ -37,7 +38,7 @@ export function validGoalAggregate(value: unknown): value is GoalAggregate {
 export function validGoalObservation(value: unknown, now: number): value is GoalObservation {
   return object(value) && Object.keys(value).sort().join() === "end,host,key,measurement,start"
     && (MEASUREMENTS as readonly unknown[]).includes(value.measurement) && (HOSTS as readonly unknown[]).includes(value.host)
-    && typeof value.key === "string" && /^[a-f0-9]{64}$/.test(value.key)
+    && typeof value.key === "string" && BARE_SHA256_PATTERN.test(value.key)
     && Number.isSafeInteger(value.start) && Number.isSafeInteger(value.end)
     && Number(value.start) > 0 && Number(value.start) <= Number(value.end)
     && Number(value.end) <= now + 1000 && Number(value.end) >= now - 7 * DAY

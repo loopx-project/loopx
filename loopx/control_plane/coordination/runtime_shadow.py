@@ -16,6 +16,7 @@ from typing import Any
 
 from .local_authority_shadow_projection import source_effect_runtime_result as effect_runtime_result
 from .coordination_state_contract_generated import (
+    COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA,
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA as RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA,
     COORDINATION_RUNTIME_SHADOW_COMMIT_REQUEST_SCHEMA as RUNTIME_SHADOW_REQUEST_SCHEMA_VERSION,
@@ -292,13 +293,13 @@ def build_runtime_shadow_source_snapshot(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Bind the supplied Goal and every derived fact to one registry observation."""
     from ...agent_registry import registered_agent_ids_for_goal
-    from ...history import load_registry
     from ...registry import find_registry_goal
+    from ..projects.registry_codec import load_project_registry
     from .authority_source_capture import authority_registry_source
     from .shadow_management import ShadowManagementError
 
     with authority_registry_source(registry_path) as witness:
-        registry = load_registry(registry_path)
+        registry = load_project_registry(registry_path)
         current = find_registry_goal(registry, str(goal["id"]))
         if current is None or current != dict(goal):
             raise ShadowManagementError("source_registry_changed_retry")
@@ -451,6 +452,7 @@ def bootstrap_coordination_runtime_shadow(
     source_version: str,
     projection: Mapping[str, Any],
     source_snapshot: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, Any] | None,
     runtime_invoker: RuntimeInvoker = effect_runtime_result,
 ) -> dict[str, object]:
     """Import one legacy baseline into an empty shadow without promoting it."""
@@ -464,14 +466,34 @@ def bootstrap_coordination_runtime_shadow(
             "primary_writeback_preserved": True,
             "decision_read_from_shadow": False,
         }
+    exact_ref: dict[str, str] | None = None
+    if goal_ref is not None:
+        from ..goals.source_session_registry_state import exact_goal_ref
+
+        exact_ref = exact_goal_ref(
+            str(goal_ref.get("goal_id") or ""),
+            str(goal_ref.get("goal_instance_id") or ""),
+        )
+        if (
+            exact_ref["goal_id"] != goal_id
+            or goal is None
+            or goal.get("id") != goal_id
+            or goal.get("goal_instance_id") != exact_ref["goal_instance_id"]
+        ):
+            raise ValueError("shadow bootstrap GoalRef does not match its Goal")
     request = {
-        "schema_version": RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION,
+        "schema_version": (
+            COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA
+            if exact_ref is not None
+            else RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION
+        ),
         "runtime_root": str(runtime_root.expanduser().absolute()),
         "goal_id": goal_id,
         "source_snapshot": dict(source_snapshot or {}),
         "operation_id": operation_id,
         "source_version": source_version,
         "projection": dict(projection),
+        **({"goal_ref": exact_ref} if exact_ref is not None else {}),
     }
     try:
         result = runtime_invoker(RUNTIME_SHADOW_BOOTSTRAP_METHOD, request)

@@ -7,13 +7,14 @@ import { hostCategory } from "./usage_statistics_goal_contract.ts";
 import type { GoalObservation } from "./usage_statistics_goal_contract.ts";
 import { readCodexTiming } from "./usage_statistics_codex.ts";
 import type { CodexCursor } from "./usage_statistics_codex.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 export type CycleObservation = { key: string; lane: string; turn: string | null; phase: "start" | "spend"; at: number; host: string; codex?: { path: string; id: string } };
 type Cycle = { id: string; start?: number; end?: number; touched: number; exact: boolean; host: string; floor?: number };
 type State = { generation: string; cycles: Cycle[]; cursors: Record<string, CodexCursor> };
 const WEEK = 7 * 86400000;
 export function validCycle(value: unknown, now: number): value is CycleObservation {
-  return object(value) && [value.key, value.lane].every(v => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))
-    && (value.turn === null || typeof value.turn === "string" && /^[a-f0-9]{64}$/.test(value.turn))
+  return object(value) && [value.key, value.lane].every(v => typeof v === "string" && BARE_SHA256_PATTERN.test(v))
+    && (value.turn === null || typeof value.turn === "string" && BARE_SHA256_PATTERN.test(value.turn))
     && ["start", "spend"].includes(String(value.phase)) && Number.isSafeInteger(value.at)
     && Number(value.at) <= now + 1000 && Number(value.at) >= now - 86400000 && typeof value.host === "string";
 }

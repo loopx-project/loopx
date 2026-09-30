@@ -37,6 +37,7 @@ from .activation_service import (
     _source_and_target,
     _source_status,
 )
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 GOAL_DELETION_SCHEMA_VERSION = "loopx_goal_deletion_v1"
@@ -46,7 +47,6 @@ GOAL_DELETION_STATE_FINGERPRINT_SCHEMA_VERSION = (
 )
 GOAL_DELETION_RECOVERY_SCHEMA_VERSION = "loopx_goal_deletion_recovery_v1"
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
-_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _MAX_RECOVERY_RECEIPT_BYTES = 64 * 1024
 
 
@@ -111,9 +111,9 @@ def _normalize_source_basis(value: Mapping[str, Any] | None) -> dict[str, str] |
     route_mode = str(value.get("route_mode") or "")
     if schema_version != GOAL_DELETION_SOURCE_BASIS_SCHEMA_VERSION:
         raise ValueError("expected source basis has an unsupported schema version")
-    if not _SHA256.fullmatch(source_identity):
+    if not BARE_SHA256_PATTERN.fullmatch(source_identity):
         raise ValueError("expected source identity must be a SHA-256 digest")
-    if not _SHA256.fullmatch(source_content_sha256):
+    if not BARE_SHA256_PATTERN.fullmatch(source_content_sha256):
         raise ValueError("expected source content digest must be a SHA-256 digest")
     if route_mode not in {mode.value for mode in GoalActivationAuthorityRouteMode}:
         raise ValueError("expected source route mode is unsupported")
@@ -335,7 +335,7 @@ def _validated_recovery_record(
     if value.get("goal_id") != goal_id:
         raise ValueError("Goal deletion recovery goal identity does not match")
     state_fingerprint = str(value.get("state_fingerprint") or "")
-    if not _SHA256.fullmatch(state_fingerprint):
+    if not BARE_SHA256_PATTERN.fullmatch(state_fingerprint):
         raise ValueError("Goal deletion recovery state fingerprint is invalid")
     source_basis_value = value.get("source_basis")
     if not isinstance(source_basis_value, Mapping):
@@ -390,7 +390,7 @@ def _validated_recovery_record(
             field="snapshot backup path",
         )
         preimage_sha256 = str(snapshot_value.get("preimage_sha256") or "")
-        if not _SHA256.fullmatch(preimage_sha256):
+        if not BARE_SHA256_PATTERN.fullmatch(preimage_sha256):
             raise ValueError("Goal deletion recovery preimage digest is invalid")
         if backup_path.parent != registry_path.parent or not (
             backup_path.name.startswith(f"{registry_path.name}.goal-delete-")
@@ -1180,7 +1180,7 @@ def delete_stopped_goal(
     normalized_goal_id = _require_opaque_id(goal_id, field="goal_id")
     requested_registry = Path(registry_path)
     normalized_fingerprint = str(expected_state_fingerprint or "").strip() or None
-    if normalized_fingerprint is not None and not _SHA256.fullmatch(
+    if normalized_fingerprint is not None and not BARE_SHA256_PATTERN.fullmatch(
         normalized_fingerprint
     ):
         raise ValueError("expected state fingerprint must be a SHA-256 digest")

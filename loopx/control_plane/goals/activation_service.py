@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 from pathlib import Path
-import re
 from typing import Any
 
 from ..projects.registry_codec import project_registry_transaction
@@ -23,6 +22,7 @@ from .activation import (
     goal_activation_state,
     normalize_goal_activation_state,
 )
+from ..content_digest import BARE_SHA256_PATTERN
 from .configure_goal_service import resolve_configure_goal_sync_target
 
 
@@ -34,7 +34,6 @@ GOAL_ACTIVATION_SOURCE_FINGERPRINT_SCHEMA_VERSION = (
 GOAL_ACTIVATION_AUTHORITY_ROUTE_SCHEMA_VERSION = (
     "loopx_goal_activation_authority_route_v1"
 )
-_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 class GoalActivationAuthorityRouteMode(str, Enum):
@@ -285,7 +284,7 @@ def set_goal_activation_state(
     source_bytes = source_registry.read_bytes()
     source_goal = _goal(load_registry(source_registry), normalized_goal_id)
     normalized_fingerprint = str(expected_state_fingerprint or "").strip() or None
-    if normalized_fingerprint is not None and not _SHA256.fullmatch(
+    if normalized_fingerprint is not None and not BARE_SHA256_PATTERN.fullmatch(
         normalized_fingerprint
     ):
         raise ValueError("expected state fingerprint must be a SHA-256 digest")

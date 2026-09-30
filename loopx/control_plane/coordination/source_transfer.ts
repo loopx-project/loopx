@@ -13,6 +13,7 @@ import {
   COORDINATION_SOURCE_TRANSFER_REQUEST_SCHEMA as SOURCE_TRANSFER_SCHEMA,
   COORDINATION_SOURCE_TRANSFER_RESULT_SCHEMA as SOURCE_TRANSFER_RESULT_SCHEMA,
 } from "./coordination_state_contract.generated.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 export {SOURCE_TRANSFER_SCHEMA, SOURCE_TRANSFER_RESULT_SCHEMA};
 export const MAX_SOURCE_TRANSFER_BYTES = COORDINATION_STATE_CONTRACT.source_transfer_limits.max_bytes;
 type Handler = (value: JsonObject) => unknown | Promise<unknown>;
@@ -28,7 +29,7 @@ export function withCoordinationSourceTransfer(method: string, handler: Handler)
     if (envelope.schema_version !== SOURCE_TRANSFER_SCHEMA) return handler(envelope);
     ensure(hasExactAuthorityKeys(envelope, ["schema_version", "method", "directory", "request_sha256", "request_bytes"]) &&
       envelope.method === method && typeof envelope.directory === "string" && isAbsolute(envelope.directory) &&
-      typeof envelope.request_sha256 === "string" && /^[a-f0-9]{64}$/u.test(envelope.request_sha256) &&
+      typeof envelope.request_sha256 === "string" && BARE_SHA256_PATTERN.test(envelope.request_sha256) &&
       typeof envelope.request_bytes === "number" && Number.isSafeInteger(envelope.request_bytes) &&
       envelope.request_bytes > 0 && envelope.request_bytes <= MAX_SOURCE_TRANSFER_BYTES,
     "invalid coordination source transfer envelope or artifact size");

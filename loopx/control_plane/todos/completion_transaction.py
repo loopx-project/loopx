@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from .contract import normalize_todo_id_list
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 TODO_COMPLETION_TRANSACTION_REQUEST_SCHEMA = "loopx_todo_completion_transaction_v0"
@@ -289,10 +289,10 @@ def _valid_receipt(value: Any) -> bool:
             value.get("validation_declaration_sha256") is None
             or (
                 isinstance(value.get("validation_declaration_sha256"), str)
-                and re.fullmatch(
-                    r"[a-f0-9]{64}",
-                    value.get("validation_declaration_sha256"),
-                ) is not None
+                and BARE_SHA256_PATTERN.fullmatch(
+                    value.get("validation_declaration_sha256")
+                )
+                is not None
             )
         )
     )
@@ -404,10 +404,10 @@ def _valid_execute_validation_result(result: Mapping[str, Any]) -> bool:
             effect.get("validation_declaration_sha256") is None
             or (
                 isinstance(effect.get("validation_declaration_sha256"), str)
-                and re.fullmatch(
-                    r"[a-f0-9]{64}",
-                    effect.get("validation_declaration_sha256"),
-                ) is not None
+                and BARE_SHA256_PATTERN.fullmatch(
+                    effect.get("validation_declaration_sha256")
+                )
+                is not None
             )
         )
     )

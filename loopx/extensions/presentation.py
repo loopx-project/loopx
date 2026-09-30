@@ -23,6 +23,7 @@ from .runtime import (
     run_standalone_extension,
 )
 from .process_runtime import run_capped_process
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from .readiness import (
     CORE_VIEW_VALIDATORS,
     ResolvedRuntimeEntrypoint,
@@ -44,7 +45,6 @@ EXTENSION_PROJECTION_PUBLISH_RECEIPT_SCHEMA_VERSION = (
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _ANCHOR_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MARKUP_RE = re.compile(r"<[^>]*>|javascript:", re.IGNORECASE)
 _LOCAL_PATH_RE = re.compile(
     r"(?:^|[\s(])(?:~[/\\]|/+(?:Users|home|tmp|private|var|etc|opt)/|"
@@ -313,7 +313,7 @@ def _evidence_reference(value: Any, *, context: str) -> str:
 
 def _sha256(value: Any, *, context: str) -> str:
     text = _plain_text(value, context=context, max_length=64)
-    if not _SHA256_RE.fullmatch(text):
+    if not BARE_SHA256_PATTERN.fullmatch(text):
         raise ValueError(f"{context} must be a lowercase SHA-256")
     return text
 

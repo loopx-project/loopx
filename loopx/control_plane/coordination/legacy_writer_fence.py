@@ -17,7 +17,7 @@ from typing import Any, Iterator
 
 from ..effect_runtime import effect_runtime_result
 from ...file_lock import exclusive_cross_runtime_file_lock
-from ...history import load_registry
+from ..projects.registry_codec import load_registry
 from ...paths import resolve_runtime_root
 from ...registry import registry_goals, resolve_state_file
 from ..goals.active_state_metadata import parse_state_frontmatter

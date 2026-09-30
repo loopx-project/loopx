@@ -1,5 +1,6 @@
 /** Read-only continuation evidence over the complete Todo graph.
  * These evaluations are derived display state, never completion or execution authority. */
+import wire from "./succession_wire_v1.json" with {type: "json"};
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
@@ -122,32 +123,54 @@ export function validateTodoSuccession(facts: unknown, value: unknown): JsonObje
   return evaluation;
 }
 
+/** Co-deployed transport contract: columns compress repeated keys, never rows.
+ * Decode before semantic validation so a positional mismatch cannot change meaning. */
+export const SUCCESSION_FACT_COLUMNS: readonly string[] = wire.fact_columns;
+export const SUCCESSION_EVALUATION_COLUMNS: readonly string[] = wire.evaluation_columns;
+
+function decodeColumns(values: unknown, columns: unknown, expected: readonly string[], label: string): JsonObject[] {
+  if (!Array.isArray(columns) || columns.length !== expected.length ||
+      columns.some((name, index) => name !== expected[index])) {
+    throw new EffectRuntimeRequestError(`succession ${label} columns mismatch`);
+  }
+  if (!Array.isArray(values)) throw new EffectRuntimeRequestError(`succession ${label} must be an array`);
+  return values.map(value => {
+    if (!Array.isArray(value) || value.length !== expected.length) {
+      throw new EffectRuntimeRequestError(`succession ${label} row width mismatch`);
+    }
+    return Object.fromEntries(expected.map((name, index) => [name, value[index]]));
+  });
+}
+
 export function projectTodoSuccession(value: unknown): JsonObject {
   const request = requireJsonObject(value, "Todo succession request");
-  if (request.schema_version !== "todo_succession_request_v0" || !Array.isArray(request.rows)) {
+  if (request.schema_version !== wire.request_schema) {
     throw new EffectRuntimeRequestError("Todo succession request schema mismatch");
   }
+  const facts = decodeColumns(request.rows, request.row_columns, SUCCESSION_FACT_COLUMNS, "facts");
   const contexts = request.context_field_sets;
-  if (contexts !== undefined && (!Array.isArray(contexts) || contexts.some(value =>
-      !Array.isArray(value) || value.some(field => typeof field !== "string")))) {
+  if (!Array.isArray(contexts) || contexts.some(value =>
+      !Array.isArray(value) || value.some(field => typeof field !== "string"))) {
     throw new EffectRuntimeRequestError("invalid succession context field sets");
   }
-  const rows = request.rows.map(value => {
-    const row = requireJsonObject(value, "succession row");
-    if (!Array.isArray(contexts)) return row;
+  const rows = facts.map(row => {
     const index = row.context_fields;
     if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || index >= contexts.length) {
       throw new EffectRuntimeRequestError("invalid succession context field index");
     }
     return {...row, context_fields: contexts[index]};
   });
-  const evaluations = request.evaluations;
-  if (evaluations !== undefined && (!Array.isArray(evaluations) || evaluations.length !== request.rows.length)) {
-    throw new EffectRuntimeRequestError("succession evaluation cardinality mismatch");
+  let results: JsonObject[];
+  if (request.evaluations !== undefined) {
+    const evaluations = decodeColumns(request.evaluations, request.evaluation_columns, SUCCESSION_EVALUATION_COLUMNS, "evaluations");
+    if (evaluations.length !== rows.length) throw new EffectRuntimeRequestError("succession evaluation cardinality mismatch");
+    results = rows.map((row, index) => validateTodoSuccession(row, evaluations[index]));
+  } else {
+    if (request.evaluation_columns !== undefined) throw new EffectRuntimeRequestError("unexpected succession evaluation columns");
+    results = evaluateTodoSuccession(rows);
   }
-  return {schema_version: "todo_succession_result_v0", evaluations: Array.isArray(evaluations)
-    ? rows.map((row, index) => validateTodoSuccession(row, evaluations[index]))
-    : evaluateTodoSuccession(rows)};
+  return {schema_version: wire.result_schema, evaluation_columns: [...SUCCESSION_EVALUATION_COLUMNS],
+    evaluations: results.map(row => SUCCESSION_EVALUATION_COLUMNS.map(name => row[name]!))};
 }
 
 /** Summary proofs are derived from every selected row before display caps.

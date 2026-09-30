@@ -10,6 +10,7 @@ from .four_arm_contract import (
     BENCHMARK_FOUR_ARM_CONTRACT_SCHEMA_VERSION,
     BENCHMARK_FOUR_ARM_QUALIFICATION_SCOPE,
 )
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 BENCHMARK_FACTORIAL_CONTRAST_SCHEMA_VERSION = "benchmark_factorial_contrast_v0"
 
@@ -124,7 +125,7 @@ def _normalize_four_arm_design(contract: Mapping[str, Any]) -> dict[str, Any]:
         if arm_role != expected_role:
             raise ValueError("four-arm contract role does not match its factor cell")
         task_goal_sha256 = str(raw_arm.get("task_goal_sha256") or "").strip()
-        if not re.fullmatch(r"[0-9a-f]{64}", task_goal_sha256):
+        if not BARE_SHA256_PATTERN.fullmatch(task_goal_sha256):
             raise ValueError("four-arm task-goal hash must be sha256")
         arm = {
             "arm_id": arm_id,

@@ -6,6 +6,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { object } from "./usage_statistics_contract.ts";
 import { GOAL_SCHEMA, HOSTS, MEASUREMENTS, goalDuration, validGoalObservation } from "./usage_statistics_goal_contract.ts";
 import type { GoalAggregate, GoalObservation, GoalCount, Measurement, Host } from "./usage_statistics_goal_contract.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 type Interval = [number, number];
 type MeasuredGoal = { key: string; measurement: Measurement; host: Host; first: number; last: number; intervals: Interval[]; total: number; watermark: number; day: string; reported?: string };
 type GoalState = { generation: string; goals: MeasuredGoal[] };
@@ -30,7 +31,7 @@ async function load(path: string, generation: string): Promise<GoalState> {
     if (value.generation !== generation) return { generation, goals: [] };
     if (!Array.isArray(value.goals) || value.goals.length > MAX_GOALS || value.goals.some(g => !object(g)
       || !MEASUREMENTS.includes(g.measurement) || !HOSTS.includes(g.host)
-      || typeof g.key !== "string" || !/^[a-f0-9]{64}$/.test(g.key)
+      || typeof g.key !== "string" || !BARE_SHA256_PATTERN.test(g.key)
       || ![g.first, g.last, g.total, g.watermark].every(n => Number.isSafeInteger(n) && n >= 0)
       || g.first > g.last || typeof g.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(g.day)
       || !Array.isArray(g.intervals) || g.intervals.length > MAX_INTERVALS

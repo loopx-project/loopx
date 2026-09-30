@@ -798,6 +798,25 @@ promotion retain their own acceptance. No new paid cohort or soak is authorized.
   owners are not qualified. `execution_authority: false` and the M3 activation
   hold remain unchanged.
 
+### 2026-09-29: M3 handoff inbox/outbox candidate
+
+- **Baseline:** `738115bde87eef3fd153abe456d53da5e2b249f8`.
+- **Proposed:** Bind each new shadow-management lineage to the exact source
+  GoalRef. Existing outbox entries, commit markers, and cursors remain
+  byte-compatible; their entry identity already includes the immutable lineage.
+  Exact bootstrap, management, and outbox-manifest records use new schema
+  versions. An exact caller cannot infer ownership from a legacy binding.
+- **Evidence:** A real source-session A-to-B recreation leaves Goal A's pending
+  files and candidate head unchanged when B drains. B cannot capture against
+  A's active lineage. A capture started by A is revalidated under the Goal
+  lifetime guard and rejected before its primary write if B has replaced A.
+  Explicit rollback archives A with its GoalRef, and a fresh B bootstrap
+  accepts and replays only B work. A legacy drain request cannot enter an exact
+  lineage.
+- **Remaining hold:** This qualifies only the `handoff_inbox_outbox` inventory
+  row. Todo/lease mutation admission, quota, automation, Goal Channel, and the
+  overall M3 activation hold remain separate.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

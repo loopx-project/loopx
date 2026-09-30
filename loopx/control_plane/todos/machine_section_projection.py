@@ -51,6 +51,7 @@ from .contract import (
     todo_marker_for_status,
 )
 from .todo_summary import canonical_todo_read_record, todo_priority_parts, normalize_todo_text
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 TODO_SECTION_PROJECTION_SCHEMA_VERSION = "loopx_todo_section_projection_v0"
@@ -459,7 +460,7 @@ def render_canonical_todo_sections(
                     f"Todo {todo_id!r} has a validation digest without authority"
                 )
             continue
-        if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        if not isinstance(digest, str) or not BARE_SHA256_PATTERN.fullmatch(digest):
             raise TodoSectionProjectionError(
                 f"Todo {todo_id!r} requires validation but omits its declaration digest"
             )

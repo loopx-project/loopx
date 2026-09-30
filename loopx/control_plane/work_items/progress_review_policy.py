@@ -11,8 +11,8 @@ re-exports this module; the control plane never imports the capability layer.
 from __future__ import annotations
 
 from collections.abc import Mapping
-import re
 from typing import Any
+from ..content_digest import BARE_SHA256_PATTERN
 
 PROGRESS_REVIEW_POLICY_SCHEMA_VERSION = "progress_review_policy_v0"
 PROGRESS_REVIEW_MODES: tuple[str, ...] = ("off", "shadow", "assist")
@@ -22,7 +22,6 @@ PROGRESS_REVIEW_DEFAULT_SIGNAL = "noul"
 PROGRESS_REVIEW_DEFAULT_DRIFT_THRESHOLD = 2
 PROGRESS_REVIEW_MIN_DRIFT_THRESHOLD = 2
 PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD = 20
-_HEX64 = re.compile(r"^[a-f0-9]{64}$")
 
 
 def normalize_progress_review_mode(value: Any) -> str:
@@ -70,7 +69,7 @@ def normalize_progress_review_contract_revision(value: Any) -> str | None:
         # An explicit empty value clears a pin at the change layer; the
         # effective policy reads it back as "no pin".
         return ""
-    if not _HEX64.fullmatch(text):
+    if not BARE_SHA256_PATTERN.fullmatch(text):
         raise ValueError(
             "progress_review.contract_revision must be a sha256 hex digest"
         )

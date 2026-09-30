@@ -2,6 +2,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 function sequence(value: unknown, minimum: number): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
@@ -12,7 +13,7 @@ function sequence(value: unknown, minimum: number): number {
 function identity(value: unknown) {
   const row = requireJsonObject(value, "supervisor event identity");
   const fingerprint = requireNonEmptyString(row.fingerprint, "event fingerprint");
-  if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new EffectRuntimeRequestError("invalid event fingerprint");
+  if (!BARE_SHA256_PATTERN.test(fingerprint)) throw new EffectRuntimeRequestError("invalid event fingerprint");
   return {event_id: requireNonEmptyString(row.event_id, "event_id"), fingerprint};
 }
 export function planSupervisorEventAppend(value: unknown): JsonObject {

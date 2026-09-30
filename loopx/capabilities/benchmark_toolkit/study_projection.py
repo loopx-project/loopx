@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ...file_lock import exclusive_file_lock
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from .experiment_board import (
     BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
     benchmark_experiment_board_row_key,
@@ -41,7 +42,6 @@ BENCHMARK_CASE_INSIGHT_PROJECTION_SCHEMA_VERSION = (
 BENCHMARK_STUDY_DASHBOARD_SCHEMA_VERSION = "benchmark_study_dashboard_v0"
 
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}$")
-_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ARM_ROLES = {"baseline", "control", "treatment", "explore"}
 _METRIC_ROLES = {"primary", "guardrail", "supporting"}
 _RECORD_KINDS = {
@@ -579,7 +579,7 @@ def normalize_benchmark_upload_envelope(
     if payload.get("record_id") != rebuilt["record_id"]:
         raise ValueError("benchmark upload record_id does not match envelope identity")
     digest = str(payload.get("payload_digest") or "")
-    if not _DIGEST_RE.fullmatch(digest) or digest != rebuilt["payload_digest"]:
+    if not BARE_SHA256_PATTERN.fullmatch(digest) or digest != rebuilt["payload_digest"]:
         raise ValueError("benchmark upload payload digest mismatch")
     return rebuilt
 

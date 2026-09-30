@@ -7,6 +7,7 @@ import {
 import { projectGoalBindingMatch } from "./goal_instance_identity.ts";
 
 import type { JsonObject } from "../effect_program.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export const GOAL_ACTION_PROJECTION_REQUEST_SCHEMA_VERSION =
   "loopx_goal_action_projection_request_v3";
@@ -15,7 +16,7 @@ export const GOAL_ACTION_CATALOG_SCHEMA_VERSION =
 export const GOAL_ACTION_SCHEMA_VERSION = "loopx_goal_action_v1";
 
 const OPAQUE_ID = /^[A-Za-z0-9._:-]{1,200}$/;
-const SHA256 = /^[a-f0-9]{64}$/;
+const SHA256 = BARE_SHA256_PATTERN;
 
 function requireOpaqueId(value: unknown, label: string): string {
   const token = requireNonEmptyString(value, label);

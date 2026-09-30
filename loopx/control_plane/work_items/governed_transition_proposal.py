@@ -19,6 +19,7 @@ from ...todos import (
 )
 from ..coordination.coordination_state_contract_generated import COORDINATION_STATE_CONTRACT
 from ..runtime.public_safety import validate_public_safe_value
+from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..todos.contract import (
     TODO_STATUS_DONE,
     TODO_STATUS_OPEN,
@@ -57,7 +58,6 @@ _OPTIONAL_RECEIPT_FIELDS = {
 }
 _LANE_TODO_ID_LIMIT = 8
 _LANE_TODO_ID = re.compile(r"^todo_[A-Za-z0-9]{1,40}$")
-_INTENT_BASIS = re.compile(r"^sha256:[0-9a-f]{64}$")
 _LANE_SETTLEMENT_FIELDS = {
     "lane_id",
     "agent_id",
@@ -178,7 +178,7 @@ def validate_governed_transition_receipts(
         intent_basis = receipt.get("intent_basis")
         if intent_basis is not None and (
             not isinstance(intent_basis, str)
-            or not _INTENT_BASIS.fullmatch(intent_basis)
+            or not ENVELOPED_SHA256_PATTERN.fullmatch(intent_basis)
         ):
             raise ValueError(
                 "governed transition proposal receipt intent_basis is invalid"

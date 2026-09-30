@@ -9,6 +9,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import { projectReplanHistory } from "./replan_history.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 export async function projectReplanHistorySnapshot(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "replan history snapshot");
@@ -16,7 +17,7 @@ export async function projectReplanHistorySnapshot(value: unknown): Promise<Json
   const path = requireNonEmptyString(request.path, "snapshot path");
   const digest = requireNonEmptyString(request.sha256, "snapshot sha256");
   const size = request.byte_count;
-  if (!isAbsolute(path) || !/^[a-f0-9]{64}$/.test(digest) ||
+  if (!isAbsolute(path) || !BARE_SHA256_PATTERN.test(digest) ||
       typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) {
     throw new EffectRuntimeRequestError("invalid replan history snapshot reference");
   }

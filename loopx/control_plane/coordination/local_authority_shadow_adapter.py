@@ -29,6 +29,7 @@ from .local_authority_shadow_projection import (
 )
 from .runtime_shadow import resolve_coordination_runtime_shadow_config, capture_todo_archive_dependencies
 from .shadow_management import read_shadow_capture_binding, shadow_management_state_path
+from .shadow_goal_scope import shadow_goal_scope
 
 
 from .runtime_shadow import local_authority_shadow_summary
@@ -69,6 +70,8 @@ INLINE_DRAIN_MAX_ENTRIES = 16
 INLINE_DRAIN_BUDGET_SECONDS = 2.0
 INLINE_DRAIN_LOCK_TIMEOUT_SECONDS = 0.25
 CLI_DRAIN_LOCK_TIMEOUT_SECONDS = 5.0
+SHADOW_DRAIN_SCHEMA = "loopx_shadow_drain_v0"
+SHADOW_EXACT_DRAIN_SCHEMA = "loopx_shadow_drain_v1"
 RETENTION_PRESSURE_BYTES = 8 * 1024 * 1024
 _SEED_WRITE_CLASSES = {"seed", "reseed_after_crash_gap"}
 _EVIDENCE_V1_OUTCOMES = {
@@ -206,10 +209,11 @@ def read_local_authority_shadow(
 def _drain_prelude(
     result: DrainResult,
     *,
+    registry: dict[str, Any],
     registry_path: Path,
     runtime_root: Path | None,
     goal_id: str,
-) -> tuple[dict[str, Any], Path] | None:
+) -> Path | None:
     """Validate the goal id and resolve the registry and root; typed failure on error."""
 
     if not goal_id or goal_id in {".", ".."} or "/" in goal_id or "\\" in goal_id:
@@ -217,7 +221,6 @@ def _drain_prelude(
         result.reason_code = "invalid_shadow_goal_id"
         return None
     try:
-        registry = load_registry(registry_path)
         result.config_enabled = (
             resolve_coordination_runtime_shadow_config(
                 find_registry_goal(registry, goal_id)
@@ -232,7 +235,7 @@ def _drain_prelude(
         result.outcome = "failed"
         result.reason_code = "invalid_shadow_config"
         return None
-    return registry, resolved
+    return resolved
 
 
 def drain_local_authority_shadow_outbox(
@@ -250,30 +253,36 @@ def drain_local_authority_shadow_outbox(
     explicit drain recovers it from durable receipts, not Python memory.
     """
     result = DrainResult(goal_id=goal_id)
-    prelude = _drain_prelude(
-        result, registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id
-    )
-    if prelude is None:
-        return result
-    _registry, resolved_root = prelude
-    # No activation or persisted capture state: avoid starting the TS runtime
-    # for ordinary feature-off writes. Existing state is interpreted only by TS.
-    if (not result.config_enabled
-            and not shadow_management_state_path(resolved_root, goal_id).exists()
-            and not outbox.outbox_root(resolved_root, goal_id).exists()):
-        return result
     try:
-        raw = effect_runtime_result(
-            "coordination.runtime_shadow.drain",
-            {"schema_version": "loopx_shadow_drain_v0", "runtime_root": str(resolved_root),
-             "goal_id": goal_id, "python_executable": sys.executable,
-             "config_enabled": result.config_enabled, "max_entries": max_entries,
-             "budget_seconds": budget_seconds, "lock_timeout_seconds": lock_timeout_seconds},
-            timeout=max(15.0, budget_seconds + 15.0), retry_safe=False,
-        )
-        if not isinstance(raw, dict) or raw.get("schema_version") != "loopx_shadow_drain_v0" or raw.get("goal_id") != goal_id:
-            raise ValueError("invalid native drain result")
-        return DrainResult(**{item.name: raw[item.name] for item in fields(DrainResult)})
+        with shadow_goal_scope(registry_path, goal_id=goal_id) as scope:
+            resolved_root = _drain_prelude(
+                result,
+                registry=scope.registry,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+            )
+            if resolved_root is None:
+                return result
+            # No activation or persisted capture state: avoid starting the TS runtime
+            # for ordinary feature-off writes. Existing state is interpreted only by TS.
+            if (not result.config_enabled
+                    and not shadow_management_state_path(resolved_root, goal_id).exists()
+                    and not outbox.outbox_root(resolved_root, goal_id).exists()):
+                return result
+            schema = SHADOW_EXACT_DRAIN_SCHEMA if scope.exact else SHADOW_DRAIN_SCHEMA
+            raw = effect_runtime_result(
+                "coordination.runtime_shadow.drain",
+                {"schema_version": schema, "runtime_root": str(resolved_root),
+                 "goal_id": goal_id, "python_executable": sys.executable,
+                 "config_enabled": result.config_enabled, "max_entries": max_entries,
+                 "budget_seconds": budget_seconds, "lock_timeout_seconds": lock_timeout_seconds,
+                 **({"goal_ref": scope.goal_ref} if scope.goal_ref is not None else {})},
+                timeout=max(15.0, budget_seconds + 15.0), retry_safe=False,
+            )
+            if not isinstance(raw, dict) or raw.get("schema_version") != schema or raw.get("goal_id") != goal_id:
+                raise ValueError("invalid native drain result")
+            return DrainResult(**{item.name: raw[item.name] for item in fields(DrainResult)})
     except Exception:
         result.outcome = "stopped"
         result.reason_code = "shadow_drain_outcome_unknown"

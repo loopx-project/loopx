@@ -29,6 +29,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...history import collect_history, validate_goal_id_path_segment
 
@@ -40,7 +41,6 @@ _CORPUS_DIR = "history-conclusions"
 _MANIFEST_FILE = ".loopx-history-conclusion-export.json"
 _MANIFEST_SCHEMA_VERSION = "loopx_history_conclusion_export_manifest_v0"
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
-_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 # Bounded ISO-8601-ish timestamp: digits, T/space, colon, dot, +/- and Z only.
 _TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.+\-]{1,20}Z?$")
 _PUBLIC_GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$")
@@ -162,7 +162,7 @@ def _read_owned_manifest(path: Path, *, goal_id: str) -> dict[str, str]:
             not name
             or Path(name).name != name
             or not name.endswith(".md")
-            or not _SHA256_RE.fullmatch(digest)
+            or not BARE_SHA256_PATTERN.fullmatch(digest)
             or name in owned
         ):
             raise RuntimeError("history export manifest contains an invalid file entry")

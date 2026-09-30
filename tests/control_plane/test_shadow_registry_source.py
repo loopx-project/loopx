@@ -57,6 +57,7 @@ def bootstrap(runtime, goal, projection, snapshot):
         source_version="state:1",
         projection=projection,
         source_snapshot=snapshot,
+        goal_ref=None,
     )
 
 

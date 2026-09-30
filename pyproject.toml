@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "1.2.2"
+version = "1.2.3"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -61,7 +61,7 @@ include = ["loopx*"]
 "loopx.control_plane.quota" = ["*.ts"]
 "loopx.control_plane.runtime" = ["*.ts"]
 "loopx.control_plane.scheduler" = ["*.ts"]
-"loopx.control_plane.todos" = ["*.ts"]
+"loopx.control_plane.todos" = ["*.ts", "*.json"]
 "loopx.control_plane.turn_driver" = ["*.ts"]
 "loopx.control_plane.work_items" = ["*.ts"]
 "*" = ["README.md", "README.zh-CN.md", "docs/*.md", "docs/protocols/*.md"]

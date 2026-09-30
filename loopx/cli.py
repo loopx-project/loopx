@@ -704,6 +704,7 @@ def main(argv: list[str] | None = None) -> int:
 
     semantic_preference_result = handle_semantic_preference_command(
         args,
+        registry_path=registry_path,
         runtime_root_arg=args.runtime_root,
         output_format=output_format,
         print_payload=print_payload,
@@ -864,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         print_payload=print_payload,
         runtime_root=(
             effective_runtime_root(registry_path, args.runtime_root)
-            if registry_path.exists()
+            if args.command == "pr-review" and registry_path.exists()
             else None
         ),
     )

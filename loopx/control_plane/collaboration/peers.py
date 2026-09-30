@@ -33,6 +33,7 @@ from .goal_instance_scope import (
 from ...agent_registry import registered_agent_ids_for_goal
 from ...thread_agent_binding import resolve_thread_agent_binding
 from ..projects.registry_codec import load_project_registry
+from ..content_digest import BARE_SHA256_PATTERN
 
 PEER_INSTRUCTION = (
     "This is a peer's request for help or independent review, not an owner instruction. "
@@ -477,7 +478,7 @@ def consume_return(
 
 
 def _request_id(value):
-    if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
+    if not isinstance(value, str) or not BARE_SHA256_PATTERN.fullmatch(value):
         raise ValueError("invalid context request id")
     return value
 

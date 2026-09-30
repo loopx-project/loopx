@@ -70,6 +70,7 @@ import {
 import {decodeTaskLeaseLifecycleRequest, TaskLeaseLifecycleError, TASK_LEASE_LIFECYCLE_OPERATIONS,
   type LifecycleRequest, type CanonicalLifecycleRequest, type LifecycleErrorInfo, type LifecycleStage,
   type TaskLeaseLifecycleOperation} from "./task_lease_lifecycle_request.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 
 // These exported names have existing direct callers; implementation is owned
@@ -110,6 +111,9 @@ async function captureLeaseWrite(
     active_todo_ids: request.authority === null
       ? null
       : [...request.authority.todos.keys()],
+    goal_ref: request.runtime_shadow !== null && "goal_ref" in request.runtime_shadow
+      ? request.runtime_shadow.goal_ref
+      : undefined,
   });
   if (capture.failure && await requireShadowPrimaryWriteAllowed(request.runtime_root, request.goal_id) !== null) {
     throw new ShadowManagementError("shadow_capture_prepare_failed", "durable shadow preparation failed; the primary lease was not changed");
@@ -264,13 +268,13 @@ async function readFenceReceipt(
     if (
       record.schema_version !== TASK_LEASE_FENCE_RECEIPT_SCHEMA ||
       typeof record.operation_id !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(record.operation_id) ||
+      !BARE_SHA256_PATTERN.test(record.operation_id) ||
       typeof record.request_digest !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(record.request_digest) ||
+      !BARE_SHA256_PATTERN.test(record.request_digest) ||
       (record.close_request_digest !== undefined &&
         record.close_request_digest !== null &&
         (typeof record.close_request_digest !== "string" ||
-          !/^[a-f0-9]{64}$/u.test(record.close_request_digest))) ||
+          !BARE_SHA256_PATTERN.test(record.close_request_digest))) ||
       !["acquired", "held", "closed"].includes(state as string) ||
       typeof record.goal_id !== "string" ||
       typeof record.todo_id !== "string" ||
@@ -703,10 +707,10 @@ async function readOperationReceipt(
     if (
       record.schema_version !== TASK_LEASE_LIFECYCLE_RECEIPT_SCHEMA ||
       typeof record.operation_id !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(record.operation_id) ||
+      !BARE_SHA256_PATTERN.test(record.operation_id) ||
       record.operation_id !== expectedOperationId ||
       typeof record.request_digest !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(record.request_digest) ||
+      !BARE_SHA256_PATTERN.test(record.request_digest) ||
       (record.state !== "prepared" && record.state !== "committed") ||
       (record.planned_lease !== null &&
         (typeof record.planned_lease !== "object" ||

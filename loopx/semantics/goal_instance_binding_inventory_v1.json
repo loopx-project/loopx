@@ -102,7 +102,7 @@
       "locator": "<runtime_root>/goals/<goal_id>/shadow/outbox and collaboration inbox",
       "revision_signal": "outbox sequence and handoff id",
       "content_digest_signal": "outbox entry source digest",
-      "observed_reference": "goal_id",
+      "observed_reference": "goal_id + goal_instance_id",
       "producer_sites": [
         "loopx/control_plane/coordination/local_authority_shadow_outbox.ts::beginLeaseOutboxEntry",
         "loopx/control_plane/todos/handoff_note.py::attach_todo_handoff_note"
@@ -113,9 +113,9 @@
       ],
       "effect_boundary": "loopx/control_plane/coordination/local_authority_shadow_adapter.py::drain_local_authority_shadow_outbox",
       "authority_role": "delivery_and_handoff_binding",
-      "current_identity_strength": "goal_alias_only",
+      "current_identity_strength": "exact_goal_ref_enforced",
       "cleanup_support": "outbox_drain_and_handoff_closeout",
-      "m1_disposition": "alias_only_inventory",
+      "m1_disposition": "m3_qualified",
       "target_milestone": "M3"
     },
     {

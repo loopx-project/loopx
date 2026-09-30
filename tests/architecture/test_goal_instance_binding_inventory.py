@@ -53,7 +53,7 @@ OBSERVED_OWNER_IDS = {
 PARTIALLY_ENFORCED_OWNER_IDS = {
     "first_party_host_runtime",
 }
-QUALIFIED_OWNER_IDS = {"attached_host_chat_session"}
+QUALIFIED_OWNER_IDS = {"attached_host_chat_session", "handoff_inbox_outbox"}
 TYPESCRIPT_DECLARATION = re.compile(
     r"^(?:export\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)",
     re.MULTILINE,

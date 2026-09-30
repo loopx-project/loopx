@@ -12,8 +12,10 @@ from typing import Any, Callable, Optional
 # module are unchanged.
 from ...public_safe_text import (
     LOCAL_PATH_SURFACE_PATTERN as LOCAL_PATH_SURFACE_PATTERN,
+    PUBLIC_SAFE_LOCAL_PATH_PATTERNS as PUBLIC_SAFE_LOCAL_PATH_PATTERNS,
     REMOTE_LOCATION_SURFACE_PATTERN as REMOTE_LOCATION_SURFACE_PATTERN,
     SECRET_LIKE_SURFACE_PATTERN as SECRET_LIKE_SURFACE_PATTERN,
+    find_public_safe_local_path as find_public_safe_local_path,
 )
 
 NormalizeText = Callable[..., str]

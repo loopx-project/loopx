@@ -12,6 +12,7 @@ import {
   requireStringArray,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 /**
  * Governed goal amendment proposal admission contract (RFC
@@ -126,7 +127,7 @@ const PROPOSAL_ID_PATTERN = /^gap_[a-z0-9_-]{3,64}$/;
 // (loopx/control_plane/todos/contract.py): replan obligation ids are
 // "replan-" + 16 lowercase hex chars, e.g. "replan-fe2d75e84da47ac3".
 const REPLAN_OBLIGATION_ID_PATTERN = /^replan-[a-f0-9]{16}$/;
-const SOURCE_BASIS_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const SOURCE_BASIS_DIGEST_PATTERN = ENVELOPED_SHA256_PATTERN;
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_.:@-]{0,79}$/;
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 

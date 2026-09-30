@@ -6,7 +6,7 @@ import {
   type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { turnStartPromptBudgetBytes } from "../capability_hooks.ts";
+import { projectTurnStartUnavailableContext, turnStartPromptBudgetBytes } from "../capability_hooks.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
 import { measureTurnEnvelope, turnEnvelopeBudgetBytes, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
@@ -299,11 +299,13 @@ function requiredReads(interaction: JsonObject, payload: JsonObject): JsonObject
   const raw = interaction.required_reads || payload.required_reads;
   if (!Array.isArray(raw)) return [];
   const result: JsonObject[] = [];
-  for (const value of raw.slice(0, 5)) {
+  for (const value of raw) {
     const item = object(value);
     const promptBudget = item.source === "turn_start_capability_hook"
       ? turnStartPromptBudgetBytes(item.prompt_budget_bytes) : 0;
-    const command = text(item.command, promptBudget || 360);
+    // Required reads are executable obligations, not display summaries. Keep
+    // every admitted command byte-for-byte, including quoted path whitespace.
+    const command = scalarString(item.command, "required read command");
     if (!command) continue;
     const compact: JsonObject = { command };
     if (promptBudget) compact.prompt_budget_bytes = promptBudget;
@@ -517,6 +519,8 @@ function contractCapsule(
     );
     if (Object.keys(compact).length > 0) capsule[sourceKey] = compact;
   }
+  const unavailableContext = projectTurnStartUnavailableContext(payload.turn_start_capability_hook_dispatch);
+  if (unavailableContext) capsule.unavailable_context = unavailableContext;
   // Preserve the bounded source diagnosis; the generic capsule list path is
   // for scalar lists and must not stringify structured component checks.
   const diagnostics = object(payload.vision_continuation_audit).outcome_checkpoint_diagnostics;

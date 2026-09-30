@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import heapq
-import re
 from typing import TYPE_CHECKING
 
 from ..effect_runtime import EffectRuntimeRemoteError, effect_runtime_result
 from .inbox import _read
 from .peers import _goal, require_operation_id
+from ..content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
     from ...collaboration_mcp import Delegations
@@ -26,7 +26,7 @@ def read_delegation_inventory(service: Delegations, *, limit: int = 20,
             for path in entries:
                 if path.suffix != ".json":
                     continue
-                if not re.fullmatch(r"[a-f0-9]{64}", path.stem):
+                if not BARE_SHA256_PATTERN.fullmatch(path.stem):
                     raise ValueError("unexpected delegation record address; reconcile inventory storage")
                 if query["cursor"] is None or path.stem > query["cursor"]:
                     yield path.stem

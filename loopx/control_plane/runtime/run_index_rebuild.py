@@ -37,8 +37,27 @@ def _event_identity(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def split_index_lines(text: str) -> list[str]:
+    """Return the physical records of a run-index file.
+
+    Records are separated by LF. A JSON string value may contain U+0085,
+    U+2028 or U+2029 (the writer uses ``ensure_ascii=False``), and those
+    characters are data, not record boundaries.
+
+    A trailing LF terminates the last record instead of opening an empty one,
+    so the physical line count, and therefore every line number and every
+    byte the rewrite consumers serialize back, matches what the writer
+    produced. A record that is genuinely empty keeps its place.
+    """
+
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def read_index_rows(index_path: Path) -> tuple[list[str], list[tuple[int, dict[str, Any]]]]:
-    raw_lines = index_path.read_text(encoding="utf-8").splitlines()
+    raw_lines = split_index_lines(index_path.read_text(encoding="utf-8"))
     rows: list[tuple[int, dict[str, Any]]] = []
     for line_number, line in enumerate(raw_lines, start=1):
         if not line.strip():

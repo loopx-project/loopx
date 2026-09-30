@@ -4,11 +4,12 @@ import {
   requireNonEmptyString as requiredString,
   requireJsonObject as requiredObject,
 } from "../runtime_decode.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 const SCHEMA_VERSION = "pending_capability_intent_projection_v0";
 const TOKEN_RE = /^[a-z][a-z0-9_.:-]{2,127}$/;
 const IDEMPOTENCY_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{2,255}$/;
-const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const DIGEST_RE = ENVELOPED_SHA256_PATTERN;
 const FIELDS = new Set([
   "schema_version",
   "capability_id",

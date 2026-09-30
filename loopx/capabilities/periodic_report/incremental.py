@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
 from ...registry import atomic_write_json, read_json
 
@@ -17,7 +18,6 @@ PUBLICATION_CURSOR_SCHEMA = "periodic_report_publication_cursor_v0"
 INCREMENTAL_BASELINE_SCHEMA = "periodic_report_incremental_baseline_v0"
 
 _IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
-_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _canonical_digest(value: object) -> str:
@@ -60,7 +60,7 @@ def _timestamp(value: object, label: str) -> str:
 
 def _digest(value: object, label: str) -> str:
     digest = _required_text(value, label, maximum=80)
-    if not _SHA256_RE.fullmatch(digest):
+    if not ENVELOPED_SHA256_PATTERN.fullmatch(digest):
         raise ValueError(f"{label} must use sha256")
     return digest
 

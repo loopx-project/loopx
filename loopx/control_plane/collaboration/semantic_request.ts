@@ -1,6 +1,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
 
@@ -55,7 +56,7 @@ export function normalizeCollaborationBrief(value: unknown): JsonObject {
     const ref = workspaceRef(input.ref);
     const result: JsonObject = { ref, description: text(input.description, "input.description", 1000) };
     if (input.sha256 !== undefined) {
-      if (typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256)) {
+      if (typeof input.sha256 !== "string" || !BARE_SHA256_PATTERN.test(input.sha256)) {
         throw new EffectRuntimeRequestError("input.sha256 must be a SHA256 digest");
       }
       result.sha256 = input.sha256;

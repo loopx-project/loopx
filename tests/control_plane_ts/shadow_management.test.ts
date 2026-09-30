@@ -13,6 +13,16 @@ import {
   readShadowBootstrapSourcePath, requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath,
   ShadowManagementError,
 } from "../../loopx/control_plane/coordination/shadow_management.ts";
+import * as schemas from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
+
+const GOAL_A = {
+  goal_id: "goal-a",
+  goal_instance_id: "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+};
+const GOAL_B = {
+  goal_id: "goal-a",
+  goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+};
 
 const primary = {
   withPrimaryLocks: async <T>(fn: () => Promise<T>) => await fn(),
@@ -24,6 +34,14 @@ function bootstrap(root: string, operationId = "bootstrap:initial") {
     runtime_root: root, goal_id: "goal-a", operation_id: operationId,
     source_version: "state:1", source_snapshot: { state_path: join(root, "state.md") },
     projection: { schema_version: "loopx_coordination_shadow_projection_v0", goal_id: "goal-a", todos: [], leases: [] },
+  };
+}
+
+function exactBootstrap(root: string, goalRef: object, operationId: string) {
+  return {
+    ...bootstrap(root, operationId),
+    schema_version: schemas.COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA,
+    goal_ref: goalRef,
   };
 }
 
@@ -73,6 +91,48 @@ test("runtime-root aliases survive restart and retain legacy shadow bindings", a
   assert.equal(legacyBinding?.source_root_digest, legacyDigest);
   assert.ok(legacyBinding);
   assert.equal(await readShadowBootstrapSourcePath(root, "goal-a", legacyBinding), join(alias, "state.md"));
+});
+
+test("rollback preserves Goal A attribution before Goal B starts a fresh lineage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-management-goal-ref-"));
+  const first = await bootstrapManagedShadow(
+    exactBootstrap(root, GOAL_A, "bootstrap:goal-a"),
+    primary,
+  );
+  assert.equal(first.status, "applied");
+  assert.deepEqual(first.goal_ref, GOAL_A);
+  const activeA = await readShadowManagementState(root, "goal-a");
+  assert.equal(activeA?.schema_version, schemas.SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA);
+  assert.deepEqual(activeA?.binding?.goal_ref, GOAL_A);
+
+  const retired = await rollbackManagedShadow({
+    runtime_root: root,
+    goal_id: "goal-a",
+    operation_id: "rollback:goal-a",
+    expected_provider_revision: first.provider_revision,
+  }, primary);
+  assert.equal(retired.status, "applied");
+  assert.deepEqual(retired.goal_ref, GOAL_A);
+  const archivedManifest = JSON.parse(
+    await readFile(join(String(retired.outbox_archive_path), "manifest.json"), "utf8"),
+  );
+  assert.equal(
+    archivedManifest.schema_version,
+    schemas.SHADOW_EXACT_OUTBOX_MANIFEST_SCHEMA,
+  );
+  assert.deepEqual(archivedManifest.goal_ref, GOAL_A);
+
+  const second = await bootstrapManagedShadow(
+    exactBootstrap(root, GOAL_B, "bootstrap:goal-b"),
+    primary,
+  );
+  assert.equal(second.status, "applied");
+  assert.deepEqual(second.goal_ref, GOAL_B);
+  assert.notEqual(second.capture_lineage_id, first.capture_lineage_id);
+  assert.deepEqual(
+    (await requireShadowPrimaryWriteAllowed(root, "goal-a"))?.goal_ref,
+    GOAL_B,
+  );
 });
 
 async function killAt(kind: "bootstrap" | "rollback", request: object, phase: string): Promise<void> {
