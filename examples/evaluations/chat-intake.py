@@ -37,6 +37,11 @@ def score(case, response):
         draft = response.get("goal_draft") or {}
         if not draft.get("completion_criteria") or draft.get("question"):
             errors.append("unnecessary_clarification")
+    # Object/version/source pointers are stable evidence, not routing keywords.
+    # Human review still judges the factual conclusion and usefulness of prose.
+    for ref in case.get("required_evidence_refs", []):
+        if ref not in str(response.get("message") or ""):
+            errors.append("missing_evidence_ref")
     return {"id": case["id"], "passed": not errors, "observed": observed, "errors": errors}
 
 
@@ -115,7 +120,7 @@ def main():
               "prompt_sha256": hashlib.sha256(_turn_prompt("").encode()).hexdigest(),
               "request_settings": {"reasoning_effort": "high", "runtime_profile": "restricted"} if args.provider == "codex" else {"temperature": 0, "max_tokens": 8192, "thinking": "provider_default"},
               "passed": sum(row["passed"] for row in rows), "total": len(rows), "results": rows,
-              "boundary": "Fixed public context with production prompt/parser. Codex uses the real restricted Chat adapter; operator-api also checks raw envelope integrity. No dynamic discovery, dispatch or work completion qualification."}
+              "boundary": "Fixed public context with production prompt/parser; synthetic authoritative observations test intake, not real fact lookup. Scoring checks effects, recipients and evidence pointers; review factual conclusions separately. Codex uses the real restricted Chat adapter; operator-api also checks raw envelope integrity. No dynamic discovery, dispatch or work completion qualification."}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     return 0 if report["passed"] == report["total"] else 1

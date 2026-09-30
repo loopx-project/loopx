@@ -1,5 +1,6 @@
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import { conversationReturnSessions, reconcileConversationReturns } from "../data/conversation-returns";
+import { conversationReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
+import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -43,7 +44,6 @@ import {
   updateLoopXMode,
   type LoopXModeSettings,
   fetchChatCapabilities,
-  fetchChatHistory,
   fetchChatSession,
   fetchChatSessions,
   interruptChatTurn,
@@ -55,6 +55,7 @@ import {
   resumeChatSession,
   resumeChatTurnStreaming,
   sendChatTurnStreaming,
+  chatSessionQueuesFollowUps,
   selectAvailableChatAgent,
   sessionInvalidatedByPayload,
   todoNoWriteReceiptFromPayload,
@@ -514,6 +515,7 @@ type PersonalManagerMessage = {
   sourceMessageId?: string;
   sourceSessionId?: string;
   sourceTurnId?: string;
+  sourceCreatedAt?: string;
   activity?: string[];
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
@@ -1296,6 +1298,7 @@ function PersonalGoalHome({
   const [goalSubagentConfigurationEnabled, setGoalSubagentConfigurationEnabled] = useState(false);
   const [managerRuntime, setManagerRuntime] = useState<ManagerRuntimeSessionReadback | null>(null);
   const [managerChannelBinding, setManagerChannelBinding] = useState<ManagerChannelBinding | null>(null);
+  const [capabilityRevision, setCapabilityRevision] = useState(0);
   const model = useMemo(() => {
     const base = buildPersonalHomeModel(payload, rows, t, goalSubagentConfigurationEnabled);
     if (!progress) return base;
@@ -1404,7 +1407,13 @@ function PersonalGoalHome({
   const [proposalsByContext, setProposalsByContext] = useState<Record<string, PersonalProposalCard[]>>({});
   const [sendingContextId, setSendingContextId] = useState<string | null>(null);
   const [runtimeBindings, setRuntimeBindings] = useState<Record<string, PersonalRuntimeBinding>>({});
+  // Bound Sessions whose mode queues a message sent while a Turn runs, read
+  // from the Session owner each time this page binds a Session.
+  const [followUpQueueSessionIds, setFollowUpQueueSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
+  // Bumped when the service reports a running Turn this page did not know
+  // about, so the Turn recovery effect re-reads the Session and adopts it.
+  const [turnRecoveryRequest, setTurnRecoveryRequest] = useState(0);
   const [executionDiscoveryError, setExecutionDiscoveryError] = useState<"partial" | "offline" | null>(null);
   const [executionSessionSnapshots, setExecutionSessionSnapshots] = useState<Record<string, ChatSessionSnapshot>>({});
   // undefined: not read yet; null: the session owner could not be read.
@@ -1418,6 +1427,14 @@ function PersonalGoalHome({
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
   const recoveringTurnKeys = useRef(new Set<string>());
+  // A running Turn a 409 reported, keyed by context: its pending reply holds
+  // the composer closed until the recovery effect adopts it or an
+  // authoritative Session read finds no such Turn, so the handoff never leaves
+  // a sendable gap. A failed read is no such finding: it keeps the handoff and
+  // counts the attempt toward the next re-read's backoff. From the 409 on, the
+  // reported Session and Turn also own the context's Turn controls, so the
+  // Adjust/Interrupt the pending reply shows act on that exact Turn.
+  const turnHandoffs = useRef(new Map<string, { agentId: string; failedReads: number; messageId: number; sessionId: string; turnId: string }>());
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const detailsCloseRef = useRef<HTMLButtonElement>(null);
@@ -1426,6 +1443,13 @@ function PersonalGoalHome({
   const managerQuickPrompts = ["我现在该做什么？", "哪些 Goal 在等我？", "Agent 在做什么？"];
   const contextMessages = messagesByContext[contextId] ?? [];
   const contextProposals = proposalsByContext[contextId] ?? [];
+  const conversationHistory = useConversationHistory({
+    agentId: selectedGoal ? selectedAgent.agentId : undefined,
+    currentAgentId: selectedAgent.agentId,
+    channelId: selectedGoal ? `goal.${selectedGoal.goalId}` : "manager",
+    goalId: selectedGoal?.goalId,
+    enabled: !readOnly && selectedAgent.available,
+  });
 
   // Who is speaking in the transcript. The manager channel answers as the LoopX
   // Manager: the executor that served the turn (and the model behind it) belongs
@@ -1512,7 +1536,7 @@ function PersonalGoalHome({
           const previous = current[contextId] ?? [];
           const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
             id: managerMessageId.current++, sourceMessageId: row.message_id,
-            sourceSessionId: sessionId,
+            sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
             role: "assistant" as const,
             agentLabel: "协作回执",
             sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
@@ -1532,6 +1556,17 @@ function PersonalGoalHome({
     sessionIds.forEach((sessionId) => { void receive(sessionId); });
     return () => { cancelled = true; timers.forEach(clearTimeout); };
   }, [readOnly, conversationReturnSessionKey, contextId]);
+
+  function recordSessionAdmission(session: ChatSessionSummary) {
+    const queues = chatSessionQueuesFollowUps(session);
+    setFollowUpQueueSessionIds((current) => {
+      if (current.has(session.session_id) === queues) return current;
+      const next = new Set(current);
+      if (queues) next.add(session.session_id);
+      else next.delete(session.session_id);
+      return next;
+    });
+  }
 
   function recordRuntimeBinding(targetContextId: string, binding: PersonalRuntimeBinding | null) {
     setRuntimeBindings((current) => {
@@ -1580,7 +1615,7 @@ function PersonalGoalHome({
     return () => {
       cancelled = true;
     };
-  }, [readOnly]);
+  }, [readOnly, capabilityRevision]);
 
   useEffect(() => {
     try {
@@ -1591,55 +1626,55 @@ function PersonalGoalHome({
   }, [selectedAgents]);
 
   useEffect(() => {
+    if (!conversationHistory.history) return;
+    const messages = conversationHistory.history.messages;
+    setMessagesByContext((current) => {
+      const previous = current[contextId] ?? [];
+      const updated = reconcileConversationHistory(previous, messages, (message): PersonalManagerMessage => ({
+        sourceMessageId: message.message_id,
+        sourceSessionId: message.session_id,
+        sourceTurnId: message.turn_id ?? undefined,
+        sourceCreatedAt: message.created_at,
+        goalDraft: normalizeGoalDraft(message.goal_draft),
+        agentLabel: message.role === "user" ? undefined : message.origin === "manager_followup"
+          ? "协作回执" : answerIdentityLabel(contextId, selectedAgent.label),
+        attachments: workspaceImageAttachments(message.attachments),
+        id: managerMessageId.current++, lines: [],
+        role: message.role === "user" ? "user" : "assistant",
+        returnDelivery: message.return_delivery, collaboration: message.collaboration,
+        sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
+          : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${selectedAgent.label} 会话`,
+        text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
+      }));
+      return updated === previous ? current : { ...current, [contextId]: updated };
+    });
+  }, [conversationHistory.history, contextId, selectedAgent.label]);
+
+  useEffect(() => {
     if (readOnly) return;
     if (!selectedAgent.available) return;
+    if (!conversationHistory.connectionKey || !conversationHistory.history) return;
+    const readHistory = conversationHistory.history;
     const targetContextId = contextId;
     const sessionKey = `${targetContextId}:${selectedAgent.agentId}`;
     const contextKind = selectedGoal ? "goal" : "manager";
-    const channelId = selectedGoal ? `goal.${selectedGoal.goalId}` : "manager";
     let cancelled = false;
     let recoveryController: AbortController | null = null;
     let latestDiscoveredSessionId: string | null = null;
+    let sessionReadFailed = false;
+    let handoffRetryTimer: number | undefined;
     void (async () => {
       try {
-        const history = await fetchChatHistory({
-          agentId: contextKind === "manager" ? undefined : selectedAgent.agentId,
-          channelId,
-          goalId: selectedGoal?.goalId,
-        });
-        if (cancelled) return;
-        setMessagesByContext((current) => {
-          if ((current[targetContextId]?.length ?? 0) > 0) return current;
-          return {
-            ...current,
-            [targetContextId]: history.messages.map((message) => ({
-              sourceMessageId: message.message_id,
-              goalDraft: normalizeGoalDraft(message.goal_draft),
-              sourceSessionId: message.session_id,
-              agentLabel: message.role === "user"
-                ? undefined
-                : message.origin === "manager_followup"
-                  ? "协作回执"
-                : answerIdentityLabel(targetContextId, selectedAgent.label),
-              attachments: workspaceImageAttachments(message.attachments),
-              id: managerMessageId.current++,
-              lines: [],
-              role: message.role === "user" ? "user" : "assistant",
-              returnDelivery: message.return_delivery,
-              collaboration: message.collaboration,
-              sourceLabel: message.role === "user"
-                ? undefined
-                : message.role === "error"
-                  ? "本地会话记录"
-                  : targetContextId === "manager"
-                    ? `恢复的${t("header.manager")}会话`
-                    : `恢复的 ${selectedAgent.label} 会话`,
-              text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
-            })),
-          };
-        });
         if (selectedAgent.agentId === "status-only") return;
-        const latest = history.sessions[0];
+        // A 409 handoff reports a Turn this page has not read, so the cached
+        // transcript cannot show it. Re-read the conversation before adopting
+        // that Turn; until the read returns, the handoff reply stays pending
+        // with its own Turn controls.
+        const history = turnHandoffs.current.has(targetContextId)
+          ? await conversationHistory.refresh()
+          : readHistory;
+        if (cancelled) return;
+        const latest = currentChannelSession(history, selectedAgent.agentId);
         latestDiscoveredSessionId = latest?.session_id ?? null;
         if (latest && !latest.resumable) {
           newSessionRequired.current.add(sessionKey);
@@ -1667,6 +1702,7 @@ function PersonalGoalHome({
         if (contextKind === "manager" && created.session.manager_runtime) {
           setManagerRuntime(created.session.manager_runtime);
         }
+        recordSessionAdmission(created.session);
         sessionIds.current.set(sessionKey, created.session_id);
         const activeSnapshot = history.snapshots.find(
           (snapshot) => snapshot.session.session_id === created.session_id,
@@ -1696,7 +1732,9 @@ function PersonalGoalHome({
         recoveryController = new AbortController();
         streamControllers.current.set(targetContextId, recoveryController);
         let streamedText = "";
-        const streamingMessageId = appendManagerAssistantMessage(targetContextId, {
+        const handoff = turnHandoffs.current.get(targetContextId);
+        if (handoff?.turnId === activeTurnId) turnHandoffs.current.delete(targetContextId);
+        const streamingMessageId = handoff?.turnId === activeTurnId ? handoff.messageId : appendManagerAssistantMessage(targetContextId, {
           activity: ["正在恢复进行中的 Agent 回合"],
           startedAt: typeof activeSnapshot?.active_turn?.created_at === "string"
             ? Date.parse(activeSnapshot.active_turn.created_at) || undefined : undefined,
@@ -1715,7 +1753,7 @@ function PersonalGoalHome({
             signal: recoveryController.signal,
             onDelta: (delta) => {
               streamedText += delta;
-              updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+              updateConversationMessage(targetContextId, streamingMessageId, {
                 text: streamedText,
               });
             },
@@ -1735,7 +1773,7 @@ function PersonalGoalHome({
             },
           });
           if (cancelled) return;
-          updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+          updateConversationMessage(targetContextId, streamingMessageId, {
             lines: streamed.response.gate
               ? [streamed.response.gate.summary, streamed.response.gate.next_action].filter(Boolean).slice(0, 2)
               : [],
@@ -1774,7 +1812,7 @@ function PersonalGoalHome({
           if (cancelled) return;
           const interrupted = interruptedTurnIds.current.delete(activeTurnId)
             || (error instanceof ChatApiError && error.payload.error_code === "turn_interrupted");
-          updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+          updateConversationMessage(targetContextId, streamingMessageId, {
             lines: [],
             pending: false,
             reconnect: error instanceof ChatApiError && error.payload.reconnectable === true,
@@ -1782,6 +1820,15 @@ function PersonalGoalHome({
             text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "无法恢复进行中的 Agent 回合。",
           });
         } finally {
+          // A cancelled recovery never settles its placeholder. Retire it, so
+          // it cannot stay pending beside the placeholder of the recovery that
+          // replaces it when the user returns to this conversation.
+          if (cancelled) {
+            setMessagesByContext((messages) => ({
+              ...messages,
+              [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== streamingMessageId),
+            }));
+          }
           recoveringTurnKeys.current.delete(recoveryKey);
           if (activeTurnIds.current.get(targetContextId) === activeTurnId) {
             activeTurnIds.current.delete(targetContextId);
@@ -1801,6 +1848,9 @@ function PersonalGoalHome({
         }
       } catch (error) {
         if (cancelled) return;
+        // The service refusing the resume is an answer about the Session; any
+        // other failure left this run without one.
+        sessionReadFailed = !(error instanceof ChatApiError && error.payload.error_code === "resume_failed");
         if (error instanceof ChatApiError && error.payload.error_code === "resume_failed") {
           newSessionRequired.current.add(sessionKey);
           if (latestDiscoveredSessionId) {
@@ -1812,13 +1862,46 @@ function PersonalGoalHome({
             });
           }
         }
+      } finally {
+        // A reported Turn this run read the Session but did not adopt has
+        // ended (or belongs to another Session), so its reply no longer holds
+        // the composer. When the read itself failed the Turn may still run:
+        // keep the reply pending, with its Turn controls, and read again.
+        const unadopted = turnHandoffs.current.get(targetContextId);
+        if (!cancelled && unadopted && sessionReadFailed) {
+          const failedReads = unadopted.failedReads + 1;
+          turnHandoffs.current.set(targetContextId, { ...unadopted, failedReads });
+          updateConversationMessage(targetContextId, unadopted.messageId, {
+            activity: ["暂时无法读取会话状态，正在重试"],
+          });
+          handoffRetryTimer = window.setTimeout(
+            () => setTurnRecoveryRequest((current) => current + 1),
+            Math.min(1000 * 2 ** (failedReads - 1), 10_000),
+          );
+        } else if (!cancelled && unadopted) {
+          turnHandoffs.current.delete(targetContextId);
+          if (activeTurnIds.current.get(targetContextId) === unadopted.turnId) {
+            activeTurnIds.current.delete(targetContextId);
+            recordRuntimeBinding(targetContextId, {
+              agentId: unadopted.agentId,
+              resumable: true,
+              sessionId: unadopted.sessionId,
+              status: "ready",
+            });
+          }
+          setMessagesByContext((messages) => ({
+            ...messages,
+            [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== unadopted.messageId),
+          }));
+        }
       }
     })();
     return () => {
       cancelled = true;
       recoveryController?.abort();
+      window.clearTimeout(handoffRetryTimer);
     };
-  }, [contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents]);
+  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
   useEffect(() => {
     if (readOnly) return;
@@ -1990,19 +2073,22 @@ function PersonalGoalHome({
     return id;
   }
 
-  function updateManagerAssistantMessage(
+  function updateConversationMessage(
     targetContextId: string,
     messageId: number,
     update: Partial<Omit<PersonalManagerMessage, "id" | "role">>,
   ) {
     setMessagesByContext((messages) => ({
       ...messages,
-      [targetContextId]: (messages[targetContextId] ?? []).map((message) =>
-        message.id === messageId ? { ...message, ...update,
+      [targetContextId]: (messages[targetContextId] ?? []).filter((message) =>
+        // A read may arrive before the original send's storage receipt. Keep
+        // the live row when its exact persisted identity becomes known.
+        message.id === messageId || !update.sourceMessageId || !update.sourceSessionId
+          || message.sourceMessageId !== update.sourceMessageId || message.sourceSessionId !== update.sourceSessionId
+      ).map((message) => message.id === messageId ? { ...message, ...update,
           ...(update.text !== undefined || update.activity !== undefined ? { updatedAt: Date.now() } : {}),
           ...(message.pending && update.pending === false ? { preparing: false, endedAt: Date.now() } : {}),
-        } : message
-      ),
+        } : message),
     }));
   }
 
@@ -2024,6 +2110,7 @@ function PersonalGoalHome({
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
     const session = await createChatSession(goalId, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", "goal", signal);
+    recordSessionAdmission(session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
     recordRuntimeBinding(goalId, {agentId, resumable: true, sessionId: session.session_id, status: session.session.status});
@@ -2070,7 +2157,7 @@ function PersonalGoalHome({
     if (selectedRoute.agentId === "status-only" || (!targetGoal && targetContextId !== "manager")) {
       const answer = personalManagerSnapshot(targetQuestionModel);
       const usesStatusOnlyRoute = selectedRoute.agentId === "status-only";
-      appendManagerAssistantMessage(targetContextId, {
+      const answerMessageId = appendManagerAssistantMessage(targetContextId, {
         agentLabel: usesStatusOnlyRoute ? "仅查状态" : "LoopX 管家",
         lines: answer.lines.slice(0, 3),
         sourceLabel: usesStatusOnlyRoute ? "LoopX 状态投影 · 仅查状态" : "LoopX 状态投影",
@@ -2081,6 +2168,13 @@ function PersonalGoalHome({
         contextKind: targetContextId === "manager" ? "manager" : "goal",
         goalId: targetContextId === "manager" ? undefined : targetContextId,
         question,
+      }).then((receipt) => {
+        updateConversationMessage(targetContextId, userMessageId, {
+          sourceSessionId: receipt.session_id, sourceMessageId: receipt.user_message_id,
+        });
+        updateConversationMessage(targetContextId, answerMessageId, {
+          sourceSessionId: receipt.session_id, sourceMessageId: receipt.answer_message_id,
+        });
       }).catch(() => {
         // The current projection answer remains visible when local history persistence is unavailable.
       });
@@ -2098,6 +2192,8 @@ function PersonalGoalHome({
       lines: [], pending: true, preparing: true, text: "",
     });
     let submittedTurnId: string | undefined;
+    let submittedSessionId: string | undefined;
+    let handedOff = false;
     let streamedText = "";
     try {
       let sessionId = targetContextId === "manager" ? sessionIds.current.get(sessionKey) : await prepareGoalConversation(targetContextId, selectedRoute.agentId, preparationController.signal);
@@ -2115,6 +2211,7 @@ function PersonalGoalHome({
         if (targetContextId === "manager" && session.session.manager_runtime) {
           setManagerRuntime(session.session.manager_runtime);
         }
+        recordSessionAdmission(session.session);
         sessionId = session.session_id;
         sessionIds.current.set(sessionKey, sessionId);
         recordRuntimeBinding(targetContextId, {
@@ -2125,11 +2222,12 @@ function PersonalGoalHome({
         });
         newSessionRequired.current.delete(sessionKey);
       }
+      submittedSessionId = sessionId;
       preparationController.signal.throwIfAborted();
       // Cancellation only owns preparation. Once dispatch begins, the server turn
       // and its acknowledgement own interruption; never claim an unsent request.
       preparationControllers.current.delete(targetContextId);
-      updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+      updateConversationMessage(targetContextId, streamingMessageId, {
         preparing: false, activity: [locale === "zh-CN" ? "执行器已连接，正在提交请求" : "Connected · submitting the request"],
       });
       const streamOptions = {
@@ -2141,7 +2239,7 @@ function PersonalGoalHome({
         })(),
         onDelta: (delta: string) => {
           streamedText += delta;
-          updateManagerAssistantMessage(targetContextId, streamingMessageId, { text: streamedText });
+          updateConversationMessage(targetContextId, streamingMessageId, { text: streamedText });
         },
         onActivity: (label: string) => {
           setMessagesByContext((messages) => ({
@@ -2158,8 +2256,11 @@ function PersonalGoalHome({
           }));
         },
         onPhase: (phase: string, turnId: string) => {
+          if (submittedTurnId !== turnId) updateConversationMessage(targetContextId, userMessageId, {
+            sourceTurnId: turnId, sourceSessionId: sessionId,
+          });
           submittedTurnId = turnId;
-          updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+          updateConversationMessage(targetContextId, streamingMessageId, {
             sourceTurnId: turnId, sourceSessionId: sessionId,
             ...(phase === "turn.accepted" ? { activity: [locale === "zh-CN" ? "请求已接收，等待执行器输出" : "Request accepted · waiting for executor output"] } : {}),
           });
@@ -2183,7 +2284,7 @@ function PersonalGoalHome({
         streamed = await sendChatTurnStreaming(sessionId, question, streamOptions);
       }
       const response = streamed.response;
-      updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+      updateConversationMessage(targetContextId, streamingMessageId, {
         goalDraft: response.goal_draft,
         lines: response.gate ? [response.gate.summary, response.gate.next_action].filter(Boolean).slice(0, 2) : [],
         pending: false,
@@ -2198,7 +2299,7 @@ function PersonalGoalHome({
         void fetchChatSession(sessionId).then((stored) => {
           const answer = stored.messages.find((item) =>
             item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
-          if (answer) updateManagerAssistantMessage(targetContextId, completedMessageId, {
+          if (answer) updateConversationMessage(targetContextId, completedMessageId, {
             sourceMessageId: answer.message_id, sourceSessionId: sessionId,
             collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
           });
@@ -2209,7 +2310,7 @@ function PersonalGoalHome({
       // names the Goal whose workspace holds the card, so a manager-channel
       // proposal here is only ever a Todo the owner has to be sent to.
       if (todoProposals.length > 0 && !targetGoal) {
-        updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+        updateConversationMessage(targetContextId, streamingMessageId, {
           lines: ["请进入要修改的 Goal，预览并确认具体变更。"],
         });
       }
@@ -2238,7 +2339,7 @@ function PersonalGoalHome({
       }
     } catch (error) {
       if (preparationController.signal.aborted && !submittedTurnId) {
-        updateManagerAssistantMessage(targetContextId, streamingMessageId, {
+        updateConversationMessage(targetContextId, streamingMessageId, {
           pending: false, preparing: false, text: locale === "zh-CN" ? "已取消发送；请求尚未交给执行器处理。" : "Send cancelled. The request was not submitted to the executor.",
         });
         return;
@@ -2255,10 +2356,50 @@ function PersonalGoalHome({
             : `${selectedRoute.label} 会话`,
           text: [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n"),
         };
-        updateManagerAssistantMessage(targetContextId, streamingMessageId, interruptedMessage);
+        updateConversationMessage(targetContextId, streamingMessageId, interruptedMessage);
         return;
       }
       const payloadError = error instanceof ChatApiError ? error.payload : null;
+      const runningTurnId = !route?.loopxMode && typeof payloadError?.active_turn_id === "string"
+        ? payloadError.active_turn_id
+        : "";
+      if (runningTurnId) {
+        // The Session already runs a Turn this page had not seen, so the
+        // message was not accepted. Withdraw it and turn its reply into the
+        // running Turn's pending reply at once, so the composer stays closed
+        // while the recovery effect re-reads the Session and adopts that
+        // reply. Rejecting the send keeps the draft.
+        setMessagesByContext((messages) => ({
+          ...messages,
+          [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== userMessageId),
+        }));
+        if (submittedSessionId) {
+          updateConversationMessage(targetContextId, streamingMessageId, {
+            activity: ["正在接管进行中的 Agent 回合"],
+            pending: true,
+            sourceSessionId: submittedSessionId,
+            sourceTurnId: runningTurnId,
+          });
+          turnHandoffs.current.set(targetContextId, {
+            agentId: selectedRoute.agentId,
+            failedReads: 0,
+            messageId: streamingMessageId,
+            sessionId: submittedSessionId,
+            turnId: runningTurnId,
+          });
+          activeTurnIds.current.set(targetContextId, runningTurnId);
+          recordRuntimeBinding(targetContextId, {
+            agentId: selectedRoute.agentId,
+            resumable: true,
+            sessionId: submittedSessionId,
+            status: "running",
+            turnId: runningTurnId,
+          });
+          handedOff = true;
+        }
+        if (targetContextId === contextId) setTurnRecoveryRequest((current) => current + 1);
+        throw new ChatApiError(t("composer.turnRunning"), payloadError ?? {});
+      }
       if (payloadError && sessionInvalidatedByPayload(payloadError)) {
         sessionIds.current.delete(sessionKey);
       }
@@ -2290,13 +2431,16 @@ function PersonalGoalHome({
             ? error.message
             : `${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话暂时不可用。`,
       };
-      updateManagerAssistantMessage(targetContextId, streamingMessageId, failureMessage);
+      updateConversationMessage(targetContextId, streamingMessageId, failureMessage);
     } finally {
-      activeTurnIds.current.delete(targetContextId);
+      // A handed-off Turn is still running: its ownership stays for the
+      // recovery that adopts it or the read that finds it ended.
+      if (!handedOff) activeTurnIds.current.delete(targetContextId);
+      if (targetContextId === "manager") setCapabilityRevision((revision) => revision + 1);
       preparationControllers.current.delete(targetContextId);
       streamControllers.current.delete(targetContextId);
       const boundSessionId = sessionIds.current.get(sessionKey);
-      if (boundSessionId) {
+      if (boundSessionId && !handedOff) {
         recordRuntimeBinding(targetContextId, {
           agentId: selectedRoute.agentId,
           resumable: true,
@@ -2332,6 +2476,17 @@ function PersonalGoalHome({
         sessionId,
         status: "ready",
       });
+      // No stream settles a Turn still in its 409 handoff, so the receipt
+      // settles its pending reply.
+      const handoff = turnHandoffs.current.get(targetContextId);
+      if (handoff?.turnId === turnId) {
+        turnHandoffs.current.delete(targetContextId);
+        updateConversationMessage(targetContextId, handoff.messageId, {
+          lines: [],
+          pending: false,
+          text: "已中断。你可以在当前会话继续发送消息。",
+        });
+      }
       setSendingContextId((current) => current === targetContextId ? null : current);
     }
   }
@@ -2343,6 +2498,7 @@ function PersonalGoalHome({
     if (!sessionId) return;
     try {
       const restored = await resumeChatSession(sessionId);
+      recordSessionAdmission(restored.session);
       sessionIds.current.set(sessionKey, sessionId);
       newSessionRequired.current.delete(sessionKey);
       recordRuntimeBinding(targetContextId, {
@@ -2732,10 +2888,10 @@ function PersonalGoalHome({
                   signal: controller.signal,
                   onDelta: (delta) => {
                     streamedText += delta;
-                    updateManagerAssistantMessage(run.goalId, messageId, { text: streamedText });
+                    updateConversationMessage(run.goalId, messageId, { text: streamedText });
                   },
                 });
-                updateManagerAssistantMessage(run.goalId, messageId, {
+                updateConversationMessage(run.goalId, messageId, {
                   activity: [],
                   pending: false,
                   text: visibleAgentMessage(streamed.response.message || streamedText.trim()) || `${run.agentLabel} 已完成纠偏。`,
@@ -2743,7 +2899,7 @@ function PersonalGoalHome({
               } catch (error) {
                 const interrupted = interruptedTurnIds.current.delete(turnId)
                   || (error instanceof ChatApiError && error.payload.error_code === "turn_interrupted");
-                updateManagerAssistantMessage(run.goalId, messageId, {
+                updateConversationMessage(run.goalId, messageId, {
                   activity: [],
                   pending: false,
                   text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "纠偏回合失败。",
@@ -2907,7 +3063,10 @@ function PersonalGoalHome({
             anchor.click();
             URL.revokeObjectURL(url);
           },
-          onRefresh,
+          onRefresh: async () => {
+            await onRefresh();
+            setCapabilityRevision((revision) => revision + 1);
+          },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
           onSelectGoal: (goalId) => goalId ? openGoalChat(goalId) : openManagerChat(),
@@ -2921,6 +3080,8 @@ function PersonalGoalHome({
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
+        conversationQueuesFollowUps={followUpQueueSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
+        conversationHistoryState={conversationHistory}
         model={workspaceModel}
         readOnly={readOnly}
         selectedAgentId={selectedAgent.agentId}

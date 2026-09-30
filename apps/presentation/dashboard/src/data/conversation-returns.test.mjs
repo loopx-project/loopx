@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { conversationReturnSessions, reconcileConversationReturns } from "./conversation-returns.ts";
+import { conversationReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "./conversation-returns.ts";
 
 const collaboration = { returns: [] };
 const original = [
@@ -39,4 +39,32 @@ assert.equal(hydrated[0], original[0]);
 assert.deepEqual(conversationReturnSessions(undefined, delivered), ["current"]);
 assert.deepEqual(conversationReturnSessions(undefined, original), ["current", "old"]);
 assert.deepEqual(conversationReturnSessions(undefined, [delivered[0], delivered.at(-1)]), []);
+const historyRows = [
+  { session_id: "old", message_id: "answer", role: "agent", turn_id: "old-turn", text: "Older answer", created_at: "2026-08-01" },
+  { session_id: "current", message_id: "answer", role: "agent", turn_id: "current-turn", text: "Stored answer", created_at: "2026-08-02", collaboration },
+];
+const live = [{ sourceSessionId: "current", sourceTurnId: "current-turn", text: "Live answer", pending: true }];
+const createHistory = (row) => ({ sourceSessionId: row.session_id, sourceMessageId: row.message_id,
+  sourceCreatedAt: row.created_at, text: row.text });
+const recoveredHistory = reconcileConversationHistory(live, historyRows, createHistory);
+assert.equal(recoveredHistory.length, 2, "Same Turn keeps its existing live answer");
+assert.equal(recoveredHistory[0].text, "Older answer");
+assert.equal(recoveredHistory[1].text, "Live answer");
+assert.equal(recoveredHistory[1].pending, true);
+assert.equal(recoveredHistory[1].collaboration, collaboration);
+assert.equal(reconcileConversationHistory(recoveredHistory, historyRows, createHistory), recoveredHistory, "Repeated read is idempotent");
+assert.equal(reconcileConversationHistory(recoveredHistory, [historyRows[0]], createHistory), recoveredHistory, "An incomplete read never retracts known history");
+const bothRoles = [
+  { sourceSessionId: "current", sourceTurnId: "same-turn", role: "user", text: "My request" },
+  { sourceSessionId: "current", sourceTurnId: "same-turn", role: "assistant", text: "Live answer" },
+];
+const storedRoles = [
+  { session_id: "current", message_id: "user-message", turn_id: "same-turn", role: "user", text: "My request" },
+  { session_id: "current", message_id: "agent-message", turn_id: "same-turn", role: "agent", text: "Stored answer" },
+];
+const hydratedRoles = reconcileConversationHistory(bothRoles, storedRoles, createHistory);
+assert.equal(hydratedRoles.length, 2);
+assert.equal(hydratedRoles[0].sourceMessageId, "user-message");
+assert.equal(hydratedRoles[1].sourceMessageId, "agent-message");
+assert.equal(hydratedRoles[1].text, "Live answer");
 console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation and watch retirement)");

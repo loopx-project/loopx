@@ -119,6 +119,55 @@ test("operation frame rejects identity drift and malformed projection fields", (
   assert.equal(compileOperationReviewFrame(malformed), undefined);
 });
 
+test("original-Agent pending, unknown and reconciled results share truthful surface semantics", () => {
+  const proposal: Record<string, any> = operationProposal("claimed");
+  proposal.status = "applying";
+  proposal.normalized_parameters.executor = {kind: "agent_session"};
+  proposal.normalized_parameters.projection.simulated = false;
+  let frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "pending" && frame.executionState, "host_authentication_required");
+  proposal.operation.agent_handoff = {consumption_id: "attempt-1"};
+  frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "pending" && frame.executionState, "consumed_outcome_pending");
+  proposal.status = "applied";
+  proposal.receipt = {projection_verified: true};
+  proposal.operation.lifecycle_state = "outcome_observed";
+  proposal.operation.outcome = {outcome: "submission_unknown", simulation: false, summary: "Reconciliation required."};
+  proposal.operation.result_delivery = {receipt_id: "delivery-1", outcome_stage: "initial"};
+  const unknown = compileActionReviewPlan(proposal);
+  assert.equal(unknown.interaction, "repair");
+  assert.equal(unknown.canApply, false);
+  assert.equal(unknown.operationFrame?.kind === "result" && unknown.operationFrame.resultKind, "unknown");
+  proposal.operation.reconciliation = {outcome: "not_executed", simulation: false, summary: "No external effect verified."};
+  assert.equal(compileActionReviewPlan(proposal).interaction, "repair", "Old unknown-result card is not final delivery");
+  proposal.operation.result_delivery.outcome_stage = "reconciled";
+  const reconciled = compileActionReviewPlan(proposal);
+  assert.equal(reconciled.interaction, "completed");
+  assert.equal(reconciled.canApply, false);
+  assert.equal(reconciled.operationFrame?.kind === "result" && reconciled.operationFrame.resultKind, "not_executed");
+  assert.equal(proposal.operation.outcome.outcome, "submission_unknown");
+});
+
+test("managed executor and source context use the same frame without turning approval into execution", () => {
+  const proposal: Record<string, any> = operationProposal("claimed");
+  proposal.status = "applying";
+  proposal.normalized_parameters.agent_id = "worker";
+  proposal.normalized_parameters.executor = {kind: "managed_turn", todo_id: "todo-worker", model: "test-model", reasoning_effort: "xhigh"};
+  proposal.normalized_parameters.source_route = {host_surface: "codex-app", agent_id: "source-agent", thread_id: "private-source-thread"};
+  let frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "pending" && frame.executionState, "managed_turn_pending");
+  assert.equal(frame?.content.fields.at(-3)?.value, "Managed Turn / 受管回合 · test-model@xhigh");
+  assert.equal(frame?.content.fields.at(-2)?.value, "worker · todo-worker");
+  assert.equal(frame?.content.fields.at(-1)?.value, "codex-app · source-agent");
+  assert.equal(JSON.stringify(frame).includes("private-source-thread"), false);
+  assert.equal(compileActionReviewPlan(proposal).canApply, false);
+  assert.equal(compileActionReviewPlan(proposal).reason, "operation_authorization_pending");
+  proposal.operation.agent_handoff = {consumption_id: "managed-attempt"};
+  frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "pending" && frame.executionState, "consumed_outcome_pending");
+  assert.equal(compileActionReviewPlan(proposal).reason, "operation_outcome_pending");
+});
+
 test("generic action review keeps state precedence and stale classification", () => {
   const proposal = {
     proposal_id: "preview-1",

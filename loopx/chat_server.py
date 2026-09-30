@@ -646,8 +646,8 @@ class ChatRequestHandler(
                     channel_id=channel_id,
                 )
             session_id = str(session["session_id"])
-            self.server.chat_store.append_message(session_id, role="user", text=question)
-            self.server.chat_store.append_message(session_id, role="agent", text=answer)
+            user_message = self.server.chat_store.append_message(session_id, role="user", text=question)
+            answer_message = self.server.chat_store.append_message(session_id, role="agent", text=answer)
             self.server.chat_store.update_session(session_id, last_activity_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         except Exception as exc:  # noqa: BLE001 - local validation response.
             self._send_error(str(exc))
@@ -657,6 +657,8 @@ class ChatRequestHandler(
                 "ok": True,
                 "schema_version": "loopx_chat_projection_exchange_v1",
                 "session_id": session_id,
+                "user_message_id": user_message["message_id"],
+                "answer_message_id": answer_message["message_id"],
             },
             status=201,
         )

@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -40,7 +41,9 @@ def run_install(
     *,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    print(f"install-local-overwrite-smoke: installing {release_id}", flush=True)
+    started = time.monotonic()
+    result = subprocess.run(
         [str(INSTALL_SCRIPT)],
         cwd=REPO_ROOT,
         env={**env, "LOOPX_RELEASE_ID": release_id},
@@ -48,6 +51,8 @@ def run_install(
         capture_output=True,
         text=True,
     )
+    print(f"install-local-overwrite-smoke: {release_id} in {time.monotonic() - started:.2f}s", flush=True)
+    return result
 
 
 def assert_loopx_link_points_to(wrapper: Path, release_id: str) -> None:
@@ -90,6 +95,8 @@ def assert_directory_is_not_overwritten() -> None:
         profile = home / ".zshrc"
         wrapper = bin_dir / "loopx"
         wrapper.mkdir(parents=True)
+        sentinel = wrapper / "user.txt"
+        sentinel.write_text("keep user content", encoding="utf-8")
 
         env = install_env(root, bin_dir, profile)
         failed = run_install(env, "directory-conflict", check=False)
@@ -97,6 +104,10 @@ def assert_directory_is_not_overwritten() -> None:
         assert wrapper.is_dir(), wrapper
         assert "loopx installer error:" in failed.stderr, failed.stderr
         assert f"{wrapper} is a directory; remove it before installing" in failed.stderr, failed.stderr
+        assert sentinel.read_text(encoding="utf-8") == "keep user content"
+        assert not (home / ".local" / "share" / "loopx" / "releases").exists()
+        assert not (home / ".codex").exists()
+        assert not profile.exists()
 
 
 def main() -> int:

@@ -102,7 +102,7 @@ function shortRevision(value: string | undefined) {
   return value.replace(/^sha256:/, "").slice(0, 12);
 }
 
-export function MachineConfigurationSettings({ section }: { section: "steward" | "other" }) {
+export function MachineConfigurationSettings({ section, onChanged }: { section: "steward" | "other"; onChanged?: () => void }) {
   const { locale, t } = useWorkspaceI18n();
   const [inspection, setInspection] = useState<MachineConfigurationInspection | null>(null);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState("");
@@ -279,6 +279,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
       setNotice(result.status === "applied"
         ? t(operation === "remove" ? "machine.removed" : "machine.applied")
         : t("machine.unchanged"));
+      onChanged?.();
     } catch (cause) {
       setPreview(null);
       setPreviewOperation("upsert");
@@ -312,6 +313,7 @@ export function MachineConfigurationSettings({ section }: { section: "steward" |
       setPreview(null);
       await reload();
       setNotice(t("machine.rolledBack"));
+      onChanged?.();
     } catch (cause) {
       setRollbackPlan(null);
       setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));

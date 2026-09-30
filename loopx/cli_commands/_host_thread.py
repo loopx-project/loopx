@@ -20,11 +20,18 @@ HOST_THREAD_ID_ENV: dict[str, str] = {
 }
 
 
+def ambient_host_thread_id(host_surface: str) -> str | None:
+    """Read the host-provided local context, never a caller's route override.
+
+    This is a trusted-local-runtime fence, not authentication against another
+    process that can change this OS user's environment or canonical files.
+    """
+    variable = HOST_THREAD_ID_ENV.get(host_surface)
+    return (os.environ.get(variable) or None) if variable else None
+
+
 def current_host_thread_id(args: argparse.Namespace) -> str | None:
     explicit = getattr(args, "thread_id", None)
     if explicit:
         return str(explicit)
-    variable = HOST_THREAD_ID_ENV.get(str(getattr(args, "host_surface", None) or ""))
-    if not variable:
-        return None
-    return os.environ.get(variable) or None
+    return ambient_host_thread_id(str(getattr(args, "host_surface", None) or ""))

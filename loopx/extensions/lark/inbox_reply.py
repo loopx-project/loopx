@@ -14,13 +14,16 @@ from .event_inbox import (
     load_lark_event_inbox_config,
 )
 from .inbox_reactions import complete_lark_event_inbox_reactions
+from .presentation.markdown_post import (
+    lark_markdown_post_content,
+    lark_markdown_preview_matches,
+    lark_markdown_readback_matches,
+)
+
 from .outbound import (
     DEFAULT_LARK_TEXT_LIMIT,
     LARK_POST_REQUEST_MAX_BYTES,
     expected_lark_mention_identities,
-    lark_markdown_post_content,
-    lark_markdown_preview_matches,
-    lark_markdown_readback_matches,
     lark_member_identities,
     lark_provider_preview_matches_outbound,
     lark_readback_matches_outbound,
@@ -280,7 +283,7 @@ def _deliver_lark_inbox_outbound(
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
-    delivery_attempt_recorder: Callable[[Mapping[str, str]], None] | None = None,
+    delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
 ) -> dict[str, Any]:
     """Deliver through one inbox-configured bot with exact provider readback.
@@ -736,7 +739,7 @@ def reply_lark_event_inbox(
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
-    delivery_attempt_recorder: Callable[[Mapping[str, str]], None] | None = None,
+    delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
 ) -> dict[str, Any]:
     """Reply with the explicit inbox-configured bot and placement policy.

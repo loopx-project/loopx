@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers and optional domain-provider maintainers
 - **Created:** 2026-09-12
-- **Last normative revision:** 2026-09-12
+- **Last normative revision:** 2026-09-30
 - **Implementation baseline:** `72e557586`
 - **Related contracts:** [Extensions](../../reference/extensions.md),
   [Effect interpreter](agent-loop-effect-interpreter-v0.md)
@@ -17,6 +17,8 @@ the contract; a difference in their requirements or boundaries is a defect.
 Sections 1–11 define the proposed contract, not shipped commands. Section 12
 records unresolved implementation choices. This document changes no runtime,
 default permission, configuration or user entry point.
+Section 13 describes the source-context/admitted-executor continuation slice;
+its deployment and live acceptance remain separate from local validation.
 
 ## 1. Decision summary
 
@@ -289,3 +291,165 @@ extract the actual shared seam, not a speculative adapter framework.
 4. **Deployment qualification:** verify the actual Lark app callback and
    authenticated web-owner mechanism. A healthy event process alone is not
    evidence that either user path works. Required before M1 acceptance.
+
+## 13. Human-confirmed Agent execution: source and executor are separate
+
+An original conversation supplies context and a result-return audience. It need
+not be the process that executes an operation. The long-term contract is
+**human approval → admitted execution → one-shot consumption → original-system
+evidence → verified return**, not “a Desktop thread ID is an execution token”.
+An existing domain Agent may reuse its authorized workflow, or an explicitly
+configured delegation may use a LoopX-owned managed Turn. Neither route grants
+new account access, trading permission or broad write authority.
+
+### Single owners and immutable execution subjects
+
+- The original `operation.execute` in `chat/actions/actions.json` remains the
+  sole confirmation, claim, consumption, outcome and reconciliation store.
+- The existing attached subject stays
+  `{kind: "agent_session", host_surface, thread_id, revision: "agent-session-handoff-v0"}`.
+  Its public CLI authentication gate remains closed.
+- The new opt-in subject is
+  `{kind: "managed_turn", todo_id, session_id, profile_digest, model, reasoning_effort, revision: "managed-turn-handoff-v0"}`.
+  It refers to the existing Codex Turn session owner, not a second runtime
+  directory. Preparation verifies the registered Goal/Agent, exact Todo/session,
+  current Goal instance when applicable, transport and pinned profile.
+- `source_route` is an optional projection of the existing registered
+  conversation binding. It is immutable context/return information, not caller
+  identity, an execution grant or proof that a message was delivered.
+- TypeScript owns executor normalization, binding judgments, transport
+  configuration readback, one-shot admission, recovery and presentation.
+  Python is the native subprocess, session/storage-lock and Lark IO adapter.
+  No parallel Python approval or domain-neutral policy owner is introduced.
+- An old attached approval is never converted to a managed approval. Changing
+  session, Todo, model, effort, sandbox, workspace, home, executable or
+  invocation-scoped MCP configuration requires an explicit fresh iteration and
+  fresh approval. No trajectories, SQLite rows or credentials are copied.
+
+Lifecycle-only `source_session_v1` registries still reject business-operation
+preparation. This slice does not enable a replacement Goal instance, change
+provider authority, or transplant an old operation into another runtime.
+
+### Existing delegation and Turn entry
+
+The original operator-owned delegation configuration remains the launch grant.
+A Codex binding can opt in through its existing `host_args`:
+
+```text
+--host codex-cli --codex-operation-tools
+--codex-model MODEL --codex-reasoning-effort EFFORT
+--codex-sandbox read-only
+```
+
+The same options are available on `turn run-once`. Existing delegation
+inspect/preflight, start, admission, lease, session continuation, result
+validation and acceptance are reused. The profile is read back by the existing
+host owner; no new frontend configuration store or hidden default is added.
+Preflight reports an unpinned/unsupported configuration as unavailable. A valid
+argv is still runtime-unverified, not proof that a host or an operation ran.
+Use `workspace-write` only when the existing work grant requires it;
+`danger-full-access` is not accepted by this transport.
+
+The admitted host launches the existing `CodexChatAgentSession` app-server
+adapter, persists its opaque thread under the existing Goal/Agent/Todo session
+owner, and installs a non-exporting `loopx_operation` dynamic tool. The owned
+stdio connection checks native thread and active Turn metadata before dispatch.
+The tool arguments cannot supply an actor, a verification flag, trust key,
+signature or bearer token. Receipts return on that same native connection.
+A registered source Desktop thread is neither resumed nor impersonated.
+
+`context` exposes the exact managed subject without an execution permit;
+`prepare` previews immutable terms in the canonical action store;
+`pending` reads a bounded Inbox; `inspect`, `consume` and `report` use the
+same locked operation seam. The invocation-scoped collaboration MCP server is
+preserved for ordinary delegation work; it is not an operation-identity issuer.
+The host result uses the existing typed Turn result contract and validation.
+Final-answer prose does not count as an operation outcome.
+
+This first transport is Codex-specific IO, not a new Codex-specific approval
+model. Other managed hosts can implement the same contract only after their
+native identity producer, effective-profile readback, revocation and response
+route are qualified. Attached Desktop support remains an independent optional
+adapter; it is **not a prerequisite for the managed route**. A future remote
+boundary may require owner-enrolled authenticated invocation verification, but
+an unused signer or locally minted credential is not a prerequisite for an
+owned in-process dispatch seam.
+
+### Confirmation, one-shot consumption and recovery
+
+Existing authenticated Lark callbacks record the exact human confirmation and
+claim the proposal; they never launch a browser or domain adapter. Replay,
+simulation and card-delivery recovery do not execute a domain effect.
+The Dashboard remains read-only for human operation confirmation.
+
+Only the first successful atomic consumption returns `execution_allowed: true`.
+It checks authenticated confirmation, immutable terms, current execution
+binding, active Goal and expiry, then persists consumption before the Agent's
+domain work. Every retry, including the same attempt after response loss or a
+restart, returns no execution permission. This fences **authorization
+consumption**, not every possible tool call by a trusted Agent, and does not
+promise exactly-once venue execution.
+
+The lock order is Goal lifetime → registry → existing Turn session (managed
+route only) → action store. Session replacement/discard uses the same lock as
+consumption. Revocation committed first prevents consumption; a later
+revocation cannot erase a committed receipt. No lock is held across domain work.
+
+The bound host reports `loopx_operation_outcome_v0`: exact operation/payload/
+confirmation digests, claim, executor revision, consumption ID, verified
+projection, `simulation: false`, bounded original-system evidence references
+and separate `external_write_performed`. Outcomes are `executed`,
+`not_executed` or `submission_unknown`; unknown conservatively discloses a
+possible external effect. A native transport success is not venue evidence.
+Core does not interpret prices, venues, fees, positions or protection orders.
+
+Consumed/unknown obligations survive expiry and session withdrawal. A current
+same-Goal/Agent replacement may inspect/report historical evidence only after
+the original binding is withdrawn. It cannot consume an unused ticket or
+rewrite its executor. The original outcome is immutable; reconciliation binds
+`reconciles_outcome_digest` and appends actual reporter/route provenance.
+Readback retains both original and reconciled evidence. A stopped/historical
+Goal uses the existing evidence-only lifecycle guards, not a new execution grant.
+
+### Shared Inbox, frontend, Lark and truthful return
+
+The existing Inbox projects canonical locators directly, with recovery first,
+20-item pages, total/typed overflow and an independent operation cursor.
+`loopx_operation pending` accepts its bound cursor; the CLI projection uses
+`manager-inbox read --operation-cursor CURSOR`. New/changed work restarts
+without a cursor. Reading or exhausting a page does not resolve obligations.
+
+The shared TypeScript operation frame shows executor, pinned model/effort,
+Goal/Agent/Todo scope, optional source context, and distinct states: confirmed
+but attached authentication unavailable; confirmed and awaiting the bound
+managed Turn; consumed awaiting evidence; unknown requiring reconciliation;
+and independently verified result delivery. CLI, Dashboard and the original
+Lark card consume the same frame. Result readback must match the current
+`initial` or `reconciled` stage; an older unknown-result delivery cannot certify
+a reconciled result. Existing delivery recovery updates the original card,
+never resubmits the operation. Delegation result acceptance and requester
+adoption remain separate receipts, not an automatic new chat protocol.
+
+### Qualification and remaining delivery
+
+This slice qualifies owned-process native tool dispatch (including bounded
+real Codex context calls on a new Turn and a same-thread resumed Turn, both
+accepted by the existing typed result validator), canonical approval/consumption/result fixtures,
+profile/session revocation, original-route isolation, delegation preflight,
+and packaged presentation. The live context probe creates a new managed GPT
+session in its owning home; it performs no proposals, group clicks or financial
+effects. Synthetic approval fixtures are not genuine user approval.
+
+Public `goal-channel inspect-operation/consume-operation/report-operation`
+remain fail-closed before private reads or writes, even with matching
+`CODEX_THREAD_ID`, route flags, self-signed proof or an older runtime's actor
+success. No proof-import shortcut is exposed.
+
+Immediate confirmation-triggered host wakeup is not implemented:
+`host_delivery: "not_attempted"` remains truthful. Continue through the
+existing admitted Turn/delegation route; later durable wakeup must reuse its
+original scheduling/session owner, not start a parallel resumed executor.
+Before claiming the investment minimum loop, still prove installation,
+genuine human approval, bound native consumption, domain preflight and
+original-system evidence, accepted result and original-card/audience readback.
+The core PR requires owner review and is not self-installed before merge.

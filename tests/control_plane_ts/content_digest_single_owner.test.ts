@@ -120,6 +120,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/todos/completion_transaction.ts",
   "control_plane/todos/completion_validation_revision.ts",
   "control_plane/turn_driver/chat_turn_acceptance.ts",
+  "control_plane/work_items/operation_agent_handoff.ts",
   "control_plane/work_items/pending_capability_intent.ts",
   "control_plane/work_items/replan_history_snapshot.ts",
   "control_plane/work_items/task_lease_acquire.ts",

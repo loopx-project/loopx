@@ -542,9 +542,26 @@ channel readback adds `executor_endpoint_source: machine_configuration` plus the
 document's `status` and `configuration_revision`, so a machine decision can be
 told from a service-environment value without reading the store. The resolved
 endpoint, model, effort, policy, allocation reason, eligible pool and source
-revision are also persisted on the manager Session. A live Session therefore
-keeps the allocation under which it started instead of being reinterpreted
-after a configuration edit or process restart. `loopx chat-endpoint
+revision are also persisted on the manager Session. A running Turn keeps its
+allocation. An owner edit to the same endpoint's model/effort takes effect at
+the next idle or accepted-queued Turn boundary: open the upstream adapter with
+the new model, carry the complete visible history and retain the same permission scope,
+then persist and project the new allocation only after successful startup.
+Model adoption and context/tool migrations start a fresh thread with the visible
+conversation in chronological order; an arbitrary recent-message cutoff cannot
+discard early user constraints. This also works when an empty native thread has
+no persisted rollout to resume. Capture the model/effort machine inputs accepted
+with each allocation: policy-only edits leave the provider untouched, and editing
+one field preserves the other field's persisted value. Changing an explicit
+selection to unset resolves only that cleared field from its existing lower
+layers, even when the explicit selection equalled the previous effective value.
+Older allocations without captured machine inputs preserve unknown unset fields;
+only evidenced explicit edits can update them without recreating the Session.
+Environment-only changes and another endpoint's defaults do not reinterpret an
+existing binding after restart. The App's model/effort badge opens the existing
+Steward settings and refreshes authoritative channel readback after a setting
+transaction or conversation Turn; it never projects a saved default as proof
+that a running Turn changed model. `loopx chat-endpoint
 inspect-steward` reads the effective configuration and current Session binding
 through the same public projection.
 

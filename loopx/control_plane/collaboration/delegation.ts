@@ -269,6 +269,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     promotion_from_surface_allowed: false,
     executor: {host: executor.executor, available: executor.available,
       reason: executor.unavailable_reason, profile: executor.execution_profile,
+      ...(executor.operation_transport ? {operation_transport: executor.operation_transport} : {}),
       ...delegationRuntimeFacts(executor)},
     effects,
     note: "Point-in-time preflight, not an execution permit or evidence of running work. "

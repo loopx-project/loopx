@@ -596,20 +596,16 @@ def assert_required_reads_are_mirrored_into_execution_channels() -> None:
         work_lane=advancement_lane(),
         heartbeat_mode="steering_audit_then_one_step",
     )
-    payload["required_reads"] = [
+    expected = [
         {
             "kind": "agent_scoped_evidence_log",
             "command": "  loopx evidence-log --goal-id interaction-state-machine-goal  ",
         }
     ]
+    # Reads are mirrored losslessly; the transport does not rewrite commands.
+    payload["required_reads"] = expected
     payload = finalize(payload)
     contract = payload["interaction_contract"]
-    expected = [
-        {
-            "kind": "agent_scoped_evidence_log",
-            "command": "loopx evidence-log --goal-id interaction-state-machine-goal",
-        }
-    ]
     assert contract["agent_channel"]["required_reads"] == expected, contract
     assert contract["cli_channel"]["required_reads"] == expected, contract
     assert "required_reads" not in contract["user_channel"], contract

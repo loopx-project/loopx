@@ -60,6 +60,10 @@
 .personal-status-source-meta > span.is-error i { background: #dd5b47; }
 .personal-status-source-meta > span.is-degraded i { background: #e5a33d; }
 .personal-service-notice { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--pw-line); background: var(--pw-amber-bg); color: var(--pw-amber); font-size: 13px; line-height: 20px; }
+.personal-history-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--pw-muted); font-size: 13px; line-height: 1.5; }
+.personal-history-notice > div { display: grid; gap: 2px; }
+.personal-history-notice button { flex-shrink: 0; padding: 6px 10px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; }
+.personal-history-notice button:disabled { opacity: .6; cursor: wait; }
 .personal-status-source-meta small { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .personal-status-source-meta button { margin-left: auto; width: 22px; height: 22px; color: var(--pw-faint); }
 .personal-status-source-error { margin: 0 3px; color: var(--pw-red); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
@@ -208,6 +212,9 @@
 .personal-channel-title p { margin: 3px 0 0; color: var(--pw-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .personal-channel-title p.personal-manager-execution { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .personal-execution-chip { display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--pw-line); border-radius: 999px; background: var(--pw-card); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 18px; }
+button.personal-execution-chip { min-height: 28px; border-radius: 6px; cursor: pointer; }
+button.personal-execution-chip:hover { border-color: var(--pw-line-strong); }
+button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; }
 .personal-execution-chip-endpoint { color: var(--pw-text); font-weight: 650; }
 .personal-execution-chip-kind { color: var(--pw-faint); }
 .personal-execution-chip-model { color: var(--pw-muted); }
@@ -218,11 +225,13 @@
 .personal-execution-chip.is-unavailable .personal-execution-chip-model { color: var(--pw-amber); }
 .personal-execution-chip.is-unavailable .personal-execution-chip-budget { color: var(--pw-amber); }
 @media (max-width: 640px) {
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-title { display: contents; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-title h1 { grid-row: 1; grid-column: 2; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-channel-actions { grid-row: 1; grid-column: 3; }
-  .personal-channel-header:has(.personal-execution-chip-budget) p.personal-manager-execution { grid-row: 2; grid-column: 1 / -1; overflow: visible; }
-  .personal-channel-header:has(.personal-execution-chip-budget) .personal-execution-chip { max-width: 100%; flex-wrap: wrap; gap: 0 6px; border-radius: 6px; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-title { display: contents; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-title h1 { grid-row: 1; grid-column: 2; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-channel-actions { grid-row: 1; grid-column: 3; }
+  .personal-channel-header:has(.personal-execution-chip) p.personal-manager-execution { grid-row: 2; grid-column: 1 / -1; overflow: visible; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-runtime-details { grid-row: 3; grid-column: 1 / -1; }
+  .personal-channel-header:has(.personal-execution-chip) .personal-execution-chip { max-width: 100%; flex-wrap: wrap; gap: 0 6px; border-radius: 6px; }
+  button.personal-execution-chip { min-height: 44px; }
 }
 .personal-execution-note { overflow: hidden; color: var(--pw-muted); font-size: 11px; text-overflow: ellipsis; }
 /* Why the conditional steward default resolved this way: same hairline row, no
@@ -678,6 +687,7 @@
 .personal-lark-table-row > span { display: grid; gap: 3px; min-width: 0; }
 .personal-lark-table-row strong, .personal-lark-table-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-lark-table-row small { color: var(--pw-muted); font-size: 10px; }
+.personal-lark-table-row .personal-lark-health-detail { overflow: visible; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
 .personal-lark-row-actions { display: flex !important; justify-content: flex-end; }
 .personal-lark-row-actions button, .personal-lark-modal header button { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 8px; border: 1px solid var(--pw-line); border-radius: 8px; background: #fff; color: var(--pw-muted); cursor: pointer; font-size: 10px; }
 .personal-lark-row-actions button.is-confirm { border-color: #e6b0aa; background: var(--pw-red-bg); color: var(--pw-red); }
@@ -750,6 +760,8 @@
 .personal-proposal-row strong { font-size: 13px; }
 .personal-proposal-row p { margin: 0; color: #686f7c; font-size: 11px; }
 .personal-proposal-row > b { color: #315fc8; font-size: 11px; }
+.personal-proposal-row[data-action-kind="operation.execute"] { grid-template-columns: 36px minmax(0, 1fr); }
+.personal-proposal-row[data-action-kind="operation.execute"] > b { grid-column: 2; overflow-wrap: anywhere; }
 .personal-proposal-row.is-applied { border-color: #b5ddcc; background: #f3fbf7; }
 .personal-proposal-row.is-error, .personal-proposal-row.is-stale { border-color: #efc3c3; background: #fff7f7; }
 .personal-proposal-row.is-gated { border-color: #ead39c; background: #fffaf0; }
@@ -1085,6 +1097,7 @@
 .personal-composer-images img { width: 100%; height: 100%; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; }
 .personal-composer-images button { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid var(--pw-line-strong); border-radius: 50%; background: #fff; color: var(--pw-text); cursor: pointer; box-shadow: 0 1px 4px rgb(30 28 20 / 18%); }
 .personal-composer-error { margin: 0 0 7px; color: var(--pw-red); font-size: 11.5px; }
+.personal-composer-status { margin: 0 0 7px; color: var(--pw-muted); font-size: 12px; }
 
 .personal-context-drawer { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
 .personal-drawer-header { display: flex; align-items: flex-start; justify-content: space-between; min-height: 84px; padding: 20px 18px 16px; border-bottom: 1px solid var(--pw-line); }
@@ -1166,6 +1179,18 @@
 .personal-detail-card dl div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; font-size: 12px; }
 .personal-detail-card dt { color: var(--pw-faint); }
 .personal-detail-card dd { margin: 0; overflow-wrap: anywhere; }
+.personal-attention-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--pw-muted); font-size: 12px; }
+.personal-attention-brief h3 { margin: 20px 0 12px; font-size: 16px; }
+.personal-attention-brief h4 { margin: 24px 0 8px; font-size: 13px; font-weight: 600; }
+.personal-attention-brief .personal-md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.personal-attention-brief .personal-md p { color: var(--pw-text); font-size: inherit; line-height: inherit; }
+.personal-attention-brief .personal-attention-missing { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--pw-amber-bg); color: var(--pw-amber); }
+.personal-attention-identifiers { margin-top: 24px; border-top: 1px solid var(--pw-line); padding-top: 16px; }
+.personal-attention-identifiers summary { color: var(--pw-muted); cursor: pointer; font-size: 12px; min-height: 44px; display: flex; align-items: center; gap: 8px; list-style: none; }
+.personal-attention-identifiers summary::-webkit-details-marker { display: none; }
+.personal-attention-identifiers summary::before { content: "▸"; }
+.personal-attention-identifiers[open] summary::before { content: "▾"; }
+.personal-attention-identifiers dl { margin: 0 0 16px; }
 .personal-run-drawer-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 11px; background: #efefec; }
 .personal-run-drawer-tabs button { min-height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--pw-muted); cursor: pointer; font-size: 12px; font-weight: 650; }
 .personal-run-drawer-tabs button[aria-selected="true"] { background: #fff; color: var(--pw-text); box-shadow: 0 1px 4px rgb(30 28 20 / 12%); }

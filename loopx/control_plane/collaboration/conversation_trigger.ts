@@ -19,6 +19,6 @@ export function resolveConversationTrigger(input: JsonObject): JsonObject {
   } else if (mode === "human_messages" && input.human === true) {
     authorized = true;
     reason = "configured_human_message";
-  }
+  } else if (mode === "human_messages") reason = "human_identity_unverified";
   return {mode, authorized, reason};
 }

@@ -40,6 +40,12 @@ answer), and a `Superseded` RFC must link its successor that reciprocally names
 its predecessor. Normative checkpoint persistence/recovery headings and
 historical appendix records are legal.
 
+`Delivery maturity: Proposal` means that implementation has not shipped; it
+does not make an Accepted RFC a draft. In the README's delivery column, name
+the implemented slice and remaining delivery boundary. Keep lifecycle state
+in the canonical header and generated index rather than describing a merged
+active RFC as Draft or Under review in delivery prose.
+
 ---
 
 ## 1. Decision summary

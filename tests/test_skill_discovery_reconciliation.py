@@ -145,9 +145,15 @@ def test_custom_home_does_not_touch_another_codex_profile(roots):
     assert not (alternate / "loopx").exists()
 
 
-def test_user_alias_is_preserved_and_native_host_aliases_still_work(tmp_path):
+def test_user_alias_is_preserved_and_deprecated_host_aliases_are_retired(tmp_path):
+    """A user-owned alias skill is never touched, and the deprecated managed
+    alias is not republished to another host root: a cross-host import would
+    otherwise copy it into the shared ~/.agents/skills root next to the
+    canonical facade and make one outcome resolve twice."""
+
     codex, claude = tmp_path / "codex", tmp_path / "claude"
     custom = skill(codex / "skills", "loop-global-summary", "User skill")
+    deprecated = skill(claude / "skills", "loop-global-summary")
     install_slash_commands(
         execute=True,
         surfaces=["codex", "claude-code"],
@@ -155,7 +161,8 @@ def test_user_alias_is_preserved_and_native_host_aliases_still_work(tmp_path):
         claude_home=str(claude),
     )
     assert custom.read_text() == "User skill"
-    assert (claude / "skills/loop-global-summary/SKILL.md").exists()
+    assert not deprecated.exists()
+    assert (claude / "skills/loopx-global-summary/SKILL.md").exists()
 
 
 def test_retirement_updates_receipt_without_blessing_modified_survivor(tmp_path):

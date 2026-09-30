@@ -12,7 +12,10 @@ import {
 import { writeDashboardBrowserCoverage } from "./dashboard-browser-coverage.mjs";
 import { conversationActivityScenario } from "./personal-workspace-browser/conversation-activity.mjs";
 import { chatRecoveryScenario } from "./personal-workspace-browser/chat-recovery.mjs";
+import { composerSessionAdmissionScenario } from "./personal-workspace-browser/composer-session-admission.mjs";
+import { attachedHostFollowUpScenario } from "./personal-workspace-browser/attached-host-follow-up.mjs";
 import { conversationReturnContinuityScenario } from "./personal-workspace-browser/conversation-return-continuity.mjs";
+import { conversationHistoryRecoveryScenario } from "./personal-workspace-browser/conversation-history-recovery.mjs";
 import { executionChipScenario } from "./personal-workspace-browser/execution-chip.mjs";
 import {
   collectCoverage,
@@ -33,6 +36,7 @@ import { progressiveLoadingScenario } from "./personal-workspace-browser/progres
 import { stewardJourneyScenario } from "./personal-workspace-browser/steward-journey.mjs";
 import { teamPlanScenario } from "./personal-workspace-browser/team-plan.mjs";
 import { typedActionsScenario } from "./personal-workspace-browser/typed-actions.mjs";
+import { confirmedOperationsScenario } from "./personal-workspace-browser/confirmed-operations.mjs";
 import { stewardModelSettingsScenario } from "./personal-workspace-browser/steward-model-settings.mjs";
 import { workspaceLocaleScenario } from "./personal-workspace-browser/workspace-locale.mjs";
 import { answerPresentationScenario } from "./personal-workspace-browser/answer-presentation.mjs";
@@ -49,7 +53,8 @@ import { executionServiceOfflineScenario } from "./personal-workspace-browser/ex
 
 import { conversationStartupScenario } from "./personal-workspace-browser/conversation-startup.mjs";
 
-const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, conversationReturnContinuityScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario];
+const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario];
+scenarioCatalog.push(confirmedOperationsScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

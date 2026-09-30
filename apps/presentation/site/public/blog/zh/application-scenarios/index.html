@@ -22,10 +22,8 @@
     button:focus-visible{outline:2px solid var(--blue);outline-offset:3px}button[aria-pressed=true]{background:var(--ink);color:#fff}
     .site-header{padding:0 24px}.article-heading{padding-top:64px}.article-heading .eyebrow{margin-top:0}
     .chapter-line{display:flex;flex-wrap:wrap;gap:16px;align-items:center;color:var(--body);font-size:12px;margin-top:28px}
-    .scenario-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:32px 0}
-    .scenario{padding:24px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
-    .scenario .number{font:500 12px var(--font-mono);color:var(--blue)}.scenario h3{margin:16px 0 12px;font-size:20px}.scenario p{font-size:14px;margin:0}.scenario small{display:block;border-top:1px solid var(--border);padding-top:16px;margin-top:20px;font-size:12px}
     .takeaway{font-size:22px!important;line-height:1.65;color:var(--ink);letter-spacing:-.02em}
+    .quadrant-figure .architecture-viewport a{min-width:640px}.quadrant-figure figcaption{font-size:13px}
     .loop-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:24px 0}.loop-row>div{padding:16px;border:1px solid var(--border);background:var(--surface);border-radius:6px;font-size:14px}.loop-row b{display:block;color:var(--ink)}.loop-row span{display:block;font-size:12px;margin-top:8px}
     .comparison{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:24px 0}.comparison>div{border:1px solid var(--border);border-radius:12px;padding:24px;background:var(--surface)}.comparison strong{display:block;font-size:32px;letter-spacing:-.04em;margin:12px 0}.comparison p{font-size:14px;margin:0}
     .study-signal{margin:32px 0;padding:28px 0 4px;border-top:1px solid var(--border);scroll-margin-top:24px}.study-signal h3{margin:0 0 12px}.study-signal .study-setting{font-size:12px;margin-bottom:16px}.study-signal p{margin-bottom:16px}.study-signal .signal-boundary{font-size:14px}.study-signal .study-link{font-size:14px;margin-bottom:0}.presenting .study-signal .study-setting{font-size:14px}.presenting .study-signal .signal-boundary,.presenting .study-signal .study-link{font-size:17px}
@@ -33,10 +31,10 @@
     .small-note{font-size:12px!important;color:var(--body)}.layers{margin:24px 0;border-top:1px solid var(--border)}.layer{display:grid;grid-template-columns:150px 1fr;gap:24px;border-bottom:1px solid var(--border);padding:18px 0;font-size:14px}.layer b{color:var(--ink)}
     .evolution{counter-reset:step;list-style:none!important;padding:0!important}.evolution li{counter-increment:step;display:grid;grid-template-columns:40px 1fr;gap:16px;padding:20px 0;border-bottom:1px solid var(--border);margin:0}.evolution li::before{content:"0" counter(step);font:500 14px var(--font-mono);color:var(--blue);padding-top:4px}.evolution b{display:block}.evolution span{display:block;font-size:14px;margin-top:6px}
     .source-list{font-size:13px}.site-footer{padding:32px 24px;border-top:1px solid var(--border);font-size:12px}.site-footer a{margin-left:auto}
-    .presenting .article-layout{max-width:1200px;grid-template-columns:180px minmax(0,960px);gap:40px}.presenting .prose{font-size:21px}.presenting .prose h2{font-size:36px}.presenting .takeaway{font-size:28px!important}.presenting .prose section{padding-bottom:40px;scroll-margin-top:24px}.presenting table{font-size:17px}.presenting .scenario p,.presenting .loop-row>div,.presenting .layer,.presenting .state-demo dd{font-size:17px}.presenting .toc{font-size:13px}.presenting .toc details{top:20px}
+    .presenting .article-layout{max-width:1200px;grid-template-columns:180px minmax(0,960px);gap:40px}.presenting .prose{font-size:21px}.presenting .prose h2{font-size:36px}.presenting .takeaway{font-size:28px!important}.presenting .prose section{padding-bottom:40px;scroll-margin-top:24px}.presenting table{font-size:17px}.presenting .loop-row>div,.presenting .layer,.presenting .state-demo dd{font-size:17px}.presenting .toc{font-size:13px}.presenting .toc details{top:20px}
     @media(max-width:1100px){.article-heading,.article-layout{margin-left:24px;margin-right:24px}.presenting .article-layout{grid-template-columns:160px minmax(0,1fr)}}
-    @media(max-width:760px){.scenario-grid,.comparison{grid-template-columns:1fr}.loop-row{grid-template-columns:1fr 1fr}.article-layout,.presenting .article-layout{display:block}.toc{margin-bottom:40px}.toc details{position:static}.site-header{gap:12px;flex-wrap:wrap;padding:12px 20px}.site-header nav{gap:16px}.header-actions{gap:8px}.article-heading{padding-top:40px}.state-demo dl,.layer{grid-template-columns:1fr;gap:8px}.state-demo dd{margin-bottom:16px}.scenario small{margin-top:12px;padding-top:12px}.presenting .prose{font-size:18px}}
-    @media print{.site-header,.toc,.stage-buttons,.chapter-line,.site-footer{display:none!important}.article-layout,.presenting .article-layout{display:block;max-width:none;padding:24px 0}.article-heading{padding:0 0 24px}.prose h2{break-after:avoid}.diagram,.comparison,.state-demo,.scenario{break-inside:avoid}body{background:#fff}}
+    @media(max-width:760px){.comparison{grid-template-columns:1fr}.loop-row{grid-template-columns:1fr 1fr}.article-layout,.presenting .article-layout{display:block}.toc{margin-bottom:40px}.toc details{position:static}.site-header{gap:12px;flex-wrap:wrap;padding:12px 20px}.site-header nav{gap:16px}.header-actions{gap:8px}.article-heading{padding-top:40px}.state-demo dl,.layer{grid-template-columns:1fr;gap:8px}.state-demo dd{margin-bottom:16px}.presenting .prose{font-size:18px}}
+    @media print{.site-header,.toc,.stage-buttons,.chapter-line,.site-footer{display:none!important}.article-layout,.presenting .article-layout{display:block;max-width:none;padding:24px 0}.article-heading{padding:0 0 24px}.prose h2{break-after:avoid}.diagram,.comparison,.state-demo{break-inside:avoid}body{background:#fff}}
   </style>
 </head>
 <body>
@@ -55,18 +53,24 @@
   </div>
   <div class="article-layout">
     <aside class="toc"><details open><summary>本文目录</summary><nav aria-label="文章目录">
-      <a href="#map">三类工作</a><a href="#complex">01 把复杂任务做完</a><a href="#benchmark">Benchmark 给的提醒</a><a href="#exploration">02 在探索中找路</a><a href="#employee">03 持续承担交付</a><a href="#layers">状态与能力怎样分工</a><a href="#evolution">下一步怎样演进</a><a href="#sources">公开依据</a>
+      <a href="#map">两个轴，三类工作</a><a href="#complex">01 把复杂任务做完</a><a href="#exploration">02 在探索中找路</a><a href="#employee">03 持续承担交付</a><a href="#movement">工作怎样跨越象限</a><a href="#layers">状态与能力怎样分工</a><a href="#fit">什么时候需要长程控制面</a><a href="#benchmark">Benchmark 给的提醒</a><a href="#evolution">下一步怎样演进</a><a href="#sources">公开依据</a>
     </nav></details></aside>
     <article class="prose">
       <section id="map">
-        <h2>先看工作，再看抽象</h2>
-        <div class="scenario-grid">
-          <div class="scenario"><span class="number">01 / COMPLETION</span><h3>验收明确的复杂任务</h3><p>重构、迁移、协议实现。终点比较明确，执行路线仍有不确定性。</p><small>保留：验收缺口、版本、修复证据<br>关注：完成率与成本</small></div>
-          <div class="scenario"><span class="number">02 / DISCOVERY</span><h3>开放探索类任务</h3><p>调研、算法实验、系统优化。下一条路线由新证据不断改变。</p><small>保留：假设、反证、候选方向<br>关注：有效发现与验证</small></div>
-          <div class="scenario"><span class="number">03 / DELIVERY</span><h3>持续交付的数字员工</h3><p>接收 issue、修复、跟进评审，处理新反馈，并对结果持续负责。</p><small>保留：职责、外部状态、等待条件<br>关注：交付质量与人的投入</small></div>
-        </div>
-        <p>这三类可以嵌套。一个长期维护仓库的 Agent，可能先探索性能问题，再完成一项验收明确的修复，最后持续跟进 PR。前两类主要描述工作如何求解，第三类还增加了持续的职责与到达的新任务。</p>
-        <p class="takeaway">真正延续下来的，应当是工作及其判断依据。</p>
+        <h2>先问两件事：什么算完成，怎样做成？</h2>
+        <p>面对一项交给 Agent 的工作，我会先拆开两种不确定性：<strong>目标是否明确，过程是否明确。</strong>知道自己要什么，和知道怎样得到它，是两回事。</p>
+        <p><strong>目标明确</strong>，是能说清结果、约束与验收标准；<strong>过程明确</strong>，是已有可复用的做法。步骤很多的流程，也可以很明确；一句“把系统优化好”，却可能同时缺少结果标准和求解路线。</p>
+        <figure class="quadrant-figure">
+          <div class="architecture-viewport" tabindex="0" role="region" aria-label="目标与过程明确度象限图，可横向滚动">
+            <a href="../../assets/task-quadrants-zh.svg" aria-label="打开工作象限图原图"><img src="../../assets/task-quadrants-zh.svg" width="1040" height="920" alt="横轴是目标明确度，向右增加；纵轴是过程明确度，向上增加。左上先澄清目标，右上常规执行，左下是 02 开放探索，右下是 01 复杂任务。03 持续交付的数字员工跨越这些象限。"></a>
+          </div>
+          <figcaption>明确度会随证据和人的反馈变化。01、02 描述工作如何求解，03 描述责任如何延续。窄屏可横向查看，点击图可打开原图。</figcaption>
+        </figure>
+        <p><strong>右上：目标、过程都明确。</strong>按既定格式转换数据、运行已验证的发布流程，重点在可靠执行。短小的工作用脚本或 Workflow 就很好；如果还要跨天等待、处理中断、对后续结果负责，才出现额外的长程管理需求。</p>
+        <p><strong>左上：过程明确，目标仍模糊。</strong>团队知道怎样写周报，却未必说清它应该帮助谁做什么决策。这时应先澄清读者、价值标准和取舍。把熟悉的流程加速，并不会自动让结果更有用。</p>
+        <p><strong>右下对应 01，左下对应 02。</strong>前者知道终点，需要找路；后者连下一步值得追求什么，也要通过探索逐渐弄清。探索仍然可以约定本轮要回答的问题、证据要求和停止条件，目标模糊不等于无限续跑。</p>
+        <p><strong>03 是横跨象限的持续职责。</strong>一个长期维护仓库的 Agent，可能先澄清性能诉求，再探索瓶颈、完成修复、跟进 PR。它既承担复杂任务，也承担探索，还要在新反馈到来时继续负责。</p>
+        <p class="takeaway">工作的不确定性，决定该保留什么；<br>责任的持续性，决定要保留多久。</p>
       </section>
 
       <section id="complex">
@@ -76,11 +80,85 @@
           <div><b>定义验收</b><span>规范、基线、预算</span></div><div><b>实现并验证</b><span>产物绑定具体版本</span></div><div><b>找出缺口</b><span>测试之外还缺什么</span></div><div><b>继续或停止</b><span>补缺口，或明确收口</span></div>
         </div>
         <p>LoopX 的作用，是让目标和验收缺口跨轮次保持连续，让新证据进入下一步决策。模型负责实现与判断，领域验证器负责检验结果；控制面记录哪些结果被接受、哪些工作仍未完成。</p>
+        <p>这里要保留的不只是完成了哪些步骤，还包括<strong>当前验收版本、未解决的缺口、尝试过的修复，以及每条验证绑定的产物版本</strong>。任务列表耗尽而验收未满足，下一步仍是重新规划；人修改了兼容性要求，旧版本的通过记录也不能代替新验收。</p>
         <p>适合它的任务，通常会经历多轮验证、等待或交接。短小、一次会话就能验收的工作，现有 Agent 可能已经足够，新增控制面需要证明自身开销值得。</p>
+      </section>
+
+      <section id="exploration">
+        <h2>02 / 在开放探索中找路</h2>
+        <p>“找到一个更好的算法方案”没有预先写好的完整任务链。真正的进展可能是验证一个假设，也可能是排除一条看似有希望的路线。只保留成功结论，下一轮就容易重试已被否定的想法。</p>
+        <div class="loop-row" aria-label="探索中的证据闭环">
+          <div><b>提出问题</b><span>约束与待验证假设</span></div><div><b>尝试多条路线</b><span>隔离实验，控制预算</span></div><div><b>记录正反证据</b><span>支持、反驳、引出新问题</span></div><div><b>更新探索方向</b><span>继续、合并、淘汰或暂停</span></div>
+        </div>
+        <p><strong>Explore</strong> 已有可选的证据图和有界分支规划：节点表示问题与发现，关系表达 <code>supports</code>、<code>refutes</code>、<code>leads_to</code>。规划建议需要经过正常执行边界，图本身不启动 Worker，也不授予花费权限。</p>
+        <p><strong>Auto Research</strong> 把这一思路组织成研究工作：选题、提出假设、执行实验、独立评价、形成报告。现有协议与命令提供了基础，公开 showcase 文档仍包含蓝图和待验证项；实际效果需要在具体任务中证明。</p>
+        <p>探索的验收可以落在“减少了哪些不确定性”：比较候选路线、给出可复现实验、排除一个假设，或者明确还缺什么证据。<strong>一个有依据的否定结论，也可以完成一轮有边界的研究。</strong>有限的研究交付能收口，长期的方向探索则可以由下一轮继续承担。</p>
+
+        <h3>RSI 放在这里，但收紧含义</h3>
+        <p>如果改进对象变成 Agent 自己的工具、策略或 Harness，就进入自改进研究。<strong>能修改自身代码，只是能够提出候选版本；持续变强还需要独立评价、跨任务泛化、回归检查和回滚。</strong></p>
+        <p>把历史经验用于下一次决策、自动生成实验、修改 Harness，是不同层次。这里可以讨论通往递归自改进（RSI）的实验路径，不能把“自动迭代”直接说成已经实现开放式自我提升。</p>
+      </section>
+
+      <section id="employee">
+        <h2>03 / 持续承担交付责任</h2>
+        <p>一个 PR / issue fix 数字员工，工作的起点是“这件事是否值得修”，交付后还要面对 CI、评审意见、分支变化和合并结果。任务不断到来，外部事实也不断变化。</p>
+        <p class="takeaway">生成补丁之后，责任还没有结束。</p>
+        <p>下面用一个构造场景说明：修复已提交，CI 和评审仍在进行。点击外部状态，看下一步如何改变。</p>
+        <div class="stage-buttons" hidden role="group" aria-label="选择 PR 的外部状态">
+          <button type="button" data-state="pending" aria-pressed="true">CI 等待中</button><button type="button" data-state="failed" aria-pressed="false">CI 失败</button><button type="button" data-state="changed" aria-pressed="false">提交版本变化</button><button type="button" data-state="merged" aria-pressed="false">PR 已合并</button>
+        </div>
+        <div class="state-demo" aria-live="polite" aria-atomic="true"><dl>
+          <dt>外部事实</dt><dd id="fact">GitHub 返回当前修订的 checks pending。</dd>
+          <dt>领域状态</dt><dd id="domain">记录 PR、修订与检查状态；相同观察无需制造新进展。</dd>
+          <dt>能力提出下一步</dt><dd id="proposal">保留监控和恢复条件，等待结果。</dd>
+          <dt>控制面检查</dt><dd id="kernel">按授权、预算和执行资格准入；等待范围之外的工作仍可推进。</dd>
+          <dt>对人的意义</dt><dd id="meaning">没有重要变化时保持安静，避免把轮询变成催促。</dd>
+        </dl></div>
+        <noscript><p class="small-note">当前展示 CI 等待中的静态示例；启用 JavaScript 后可以切换状态。</p></noscript>
+        <p class="small-note">交互图为设计说明，不连接真实仓库，也不执行任何 GitHub 操作。</p>
+        <p>“数字员工”在这里意味着有持续职责、边界、记忆与反馈闭环。是否值得使用，要看被接受的修复、重开与回归、处理时延、每次交付成本，以及需要人反复盯守多少次。PR 数量和在线时长只是过程信号。</p>
+        <p>持续职责还需要明确<strong>何时唤醒、何时保持安静、何时必须交给人</strong>：新的评审意见可以成为工作输入，未变化的 CI 等待无需反复打扰；权限不足、目标取舍或超出预算，则需要明确停点。一次修复可以完成，维护职责仍可继续；持续职责也应当能被暂停、撤回或交接。</p>
+      </section>
+
+      <section id="movement">
+        <h2>工作会跨越象限，状态必须跟得上</h2>
+        <p>以维护服务性能为例。最初只有“让系统更快”，人和 Agent 先确定负载、指标与兼容边界；结果标准明确以后，还要探索瓶颈在哪里。找到修复路线，工作再转为实现与验收；提交之后，又进入评审、反馈与回归跟进。</p>
+        <div class="loop-row" aria-label="从模糊诉求到持续交付的示意案例">
+          <div><b>澄清期待</b><span>固定负载、指标与边界</span></div><div><b>探索瓶颈</b><span>保留基线、假设与反证</span></div><div><b>落实修复</b><span>实现并验证具体版本</span></div><div><b>持续跟进</b><span>评审、回归与新反馈</span></div>
+        </div>
+        <p>这种移动不是单向升级：一次新反馈可能改变目标，一条反例可能推翻路线。探索出来的稳定方法可以沉淀为常规流程，常规流程遇到新条件又需要重新探索。Agent 需要识别当前剩下的是目标分歧、路线不确定，还是纯粹等待。</p>
+        <p>任务名并不决定位置，当前掌握的信息才决定位置。同样叫“调研”，如果已经约定问题、交付与评分，就可以按验收明确的任务管理；同样叫“重构”，如果方法已成熟，也可以更多依靠既定流程。两条轴描述程度，象限只标出常见的工作形态。</p>
+        <p>因此，交接时有价值的状态包括：<strong>当前目标与约束、为什么选择这条路线、已经被否定的方案、产物与验收版本，以及下一次继续或停止的条件。</strong>只保存聊天摘要或“已完成第几步”，很难承接这些变化。</p>
+        <p>同一项工作可以更换模型、会话或执行者，但目标的修订、失败证据与尚未履行的责任应当连续。这也是长程控制面在三个场景中的共同位置。</p>
+      </section>
+
+      <section id="layers">
+        <h2>领域越丰富，分工越要清楚</h2>
+        <div class="layers">
+          <div class="layer"><b>Kernel<br>控制权与通用生命周期</b><span>哪个目标与工作项有效，谁可执行，哪些授权和预算适用，怎样交接、等待与提交状态。</span></div>
+          <div class="layer"><b>Domain State<br>领域连续性</b><span>这个 issue 是否可修，PR 对应哪个修订，CI 和评审到了哪一步，哪些结论仍然有效。</span></div>
+          <div class="layer"><b>Capability<br>结果契约与判断</b><span>把领域事实翻译成可验证的下一步：修复、等待、交给人判断或收口，并定义这个场景怎样验收。</span></div>
+          <div class="layer"><b>Provider / Runtime<br>外部读写与实际执行</b><span>调用代码仓库、测试和工具，执行已授权动作并回读结果。GitHub 仍拥有代码、CI 和评审的外部事实。</span></div>
+        </div>
+        <p>以 <code>checks failing</code> 为例：领域能力可以提出一个修 CI 的后继任务；它不能因“需要修”就自行得到写仓库或合并权限。换成实验任务，CI 状态变成指标和留出集结论，通用的认领、授权、恢复规则仍应保持一致。</p>
+        <p>这也是 Capability 的价值：把一个场景中反复出现的判断与结果契约沉淀下来。它并不要求把所有业务阶段都写进 Kernel。</p>
+      </section>
+
+      <section id="fit">
+        <h2>什么时候值得加一层长程控制面？</h2>
+        <p>象限说明工作的不确定性，<strong>跨轮次的连续性需求</strong>决定是否需要额外的状态管理。一个小时就能验收的探索，未必需要长程系统；路线完全明确的发布，却可能因跨天等待、多人接手和外部反馈而需要它。</p>
+        <ul>
+          <li><strong>复杂任务：</strong>换会话后，需要重新解释验收、恢复修复进度，或重复确认此前已经发现的缺口。</li>
+          <li><strong>开放探索：</strong>多条路线并行，失败经验容易丢失，下一轮需要根据证据而非印象分配投入。</li>
+          <li><strong>持续职责：</strong>新任务、评审或外部结果不断到来，人不得不充当调度器和催办员。</li>
+        </ul>
+        <p>这些地方，状态外置化才有具体的价值。引入 LoopX 后，应检查有效产出是否增加、回退和重复工作是否减少，以及人是否少花了管理注意力；同时计算新增的执行与维护成本。</p>
+        <p>我的目标始终是让 Agent 多干活、人少操心。把探索、执行与持续职责拆开，是为了让不同工作得到合适的管理方式，让人的判断用在值得介入的地方。</p>
       </section>
 
       <section id="benchmark">
         <h2>Benchmark：从 LHTB 看长程工作，再看三个补充信号</h2>
+        <p>多数 benchmark 已经给定验收，主要检验“目标明确、路线未定”的求解能力。即使一道题要求探索算法，最终要提交什么、如何评分仍然已知；这和开放地选择研究方向、持续承担维护职责，是不同层面的工作。</p>
         <p>先看跨领域长程任务中的恢复与回退，再用三项软件工程研究补充续跑、交付和验证行为。四项研究的任务、模型设置与统计口径不同，应分别理解；现有结果还不足以概括 LoopX 的普遍增益。</p>
 
         <div class="study-signal" id="benchmark-lhtb">
@@ -131,52 +209,6 @@
         <p class="takeaway">让进度可恢复，让已有成果可保留，再检查续跑是否补上了验收缺口。</p>
         <p>四项研究提供了局部正向观察，也暴露了回退、成本和归因问题。下一步需要在匹配预算和重复实验中，分别验证恢复、回滚、交付与反例驱动修复的收益。</p>
         <p class="small-note">SWE-Marathon 与 DeepSWE × Sol 已撤回的 SSH Goal、Codex CLI 成绩和结论均不用于这里的比较。</p>
-      </section>
-
-      <section id="exploration">
-        <h2>02 / 在开放探索中找路</h2>
-        <p>“找到一个更好的算法方案”没有预先写好的完整任务链。真正的进展可能是验证一个假设，也可能是排除一条看似有希望的路线。只保留成功结论，下一轮就容易重试已被否定的想法。</p>
-        <div class="loop-row" aria-label="探索中的证据闭环">
-          <div><b>提出问题</b><span>约束与待验证假设</span></div><div><b>尝试多条路线</b><span>隔离实验，控制预算</span></div><div><b>记录正反证据</b><span>支持、反驳、引出新问题</span></div><div><b>更新探索方向</b><span>继续、合并、淘汰或暂停</span></div>
-        </div>
-        <p><strong>Explore</strong> 已有可选的证据图和有界分支规划：节点表示问题与发现，关系表达 <code>supports</code>、<code>refutes</code>、<code>leads_to</code>。规划建议需要经过正常执行边界，图本身不启动 Worker，也不授予花费权限。</p>
-        <p><strong>Auto Research</strong> 把这一思路组织成研究工作：选题、提出假设、执行实验、独立评价、形成报告。现有协议与命令提供了基础，公开 showcase 文档仍包含蓝图和待验证项；实际效果需要在具体任务中证明。</p>
-
-        <h3>RSI 放在这里，但收紧含义</h3>
-        <p>如果改进对象变成 Agent 自己的工具、策略或 Harness，就进入自改进研究。<strong>能修改自身代码，只是能够提出候选版本；持续变强还需要独立评价、跨任务泛化、回归检查和回滚。</strong></p>
-        <p>把历史经验用于下一次决策、自动生成实验、修改 Harness，是不同层次。这里可以讨论通往递归自改进（RSI）的实验路径，不能把“自动迭代”直接说成已经实现开放式自我提升。</p>
-      </section>
-
-      <section id="employee">
-        <h2>03 / 持续承担交付责任</h2>
-        <p>一个 PR / issue fix 数字员工，工作的起点是“这件事是否值得修”，交付后还要面对 CI、评审意见、分支变化和合并结果。任务不断到来，外部事实也不断变化。</p>
-        <p class="takeaway">生成补丁之后，责任还没有结束。</p>
-        <p>下面用一个构造场景说明：修复已提交，CI 和评审仍在进行。点击外部状态，看下一步如何改变。</p>
-        <div class="stage-buttons" hidden role="group" aria-label="选择 PR 的外部状态">
-          <button type="button" data-state="pending" aria-pressed="true">CI 等待中</button><button type="button" data-state="failed" aria-pressed="false">CI 失败</button><button type="button" data-state="changed" aria-pressed="false">提交版本变化</button><button type="button" data-state="merged" aria-pressed="false">PR 已合并</button>
-        </div>
-        <div class="state-demo" aria-live="polite" aria-atomic="true"><dl>
-          <dt>外部事实</dt><dd id="fact">GitHub 返回当前修订的 checks pending。</dd>
-          <dt>领域状态</dt><dd id="domain">记录 PR、修订与检查状态；相同观察无需制造新进展。</dd>
-          <dt>能力提出下一步</dt><dd id="proposal">保留监控和恢复条件，等待结果。</dd>
-          <dt>控制面检查</dt><dd id="kernel">按授权、预算和执行资格准入；等待范围之外的工作仍可推进。</dd>
-          <dt>对人的意义</dt><dd id="meaning">没有重要变化时保持安静，避免把轮询变成催促。</dd>
-        </dl></div>
-        <noscript><p class="small-note">当前展示 CI 等待中的静态示例；启用 JavaScript 后可以切换状态。</p></noscript>
-        <p class="small-note">交互图为设计说明，不连接真实仓库，也不执行任何 GitHub 操作。</p>
-        <p>“数字员工”在这里意味着有持续职责、边界、记忆与反馈闭环。是否值得使用，要看被接受的修复、重开与回归、处理时延、每次交付成本，以及需要人反复盯守多少次。PR 数量和在线时长只是过程信号。</p>
-      </section>
-
-      <section id="layers">
-        <h2>领域越丰富，分工越要清楚</h2>
-        <div class="layers">
-          <div class="layer"><b>Kernel<br>控制权与通用生命周期</b><span>哪个目标与工作项有效，谁可执行，哪些授权和预算适用，怎样交接、等待与提交状态。</span></div>
-          <div class="layer"><b>Domain State<br>领域连续性</b><span>这个 issue 是否可修，PR 对应哪个修订，CI 和评审到了哪一步，哪些结论仍然有效。</span></div>
-          <div class="layer"><b>Capability<br>结果契约与判断</b><span>把领域事实翻译成可验证的下一步：修复、等待、交给人判断或收口，并定义这个场景怎样验收。</span></div>
-          <div class="layer"><b>Provider / Runtime<br>外部读写与实际执行</b><span>调用代码仓库、测试和工具，执行已授权动作并回读结果。GitHub 仍拥有代码、CI 和评审的外部事实。</span></div>
-        </div>
-        <p>以 <code>checks failing</code> 为例：领域能力可以提出一个修 CI 的后继任务；它不能因“需要修”就自行得到写仓库或合并权限。换成实验任务，CI 状态变成指标和留出集结论，通用的认领、授权、恢复规则仍应保持一致。</p>
-        <p>这也是 Capability 的价值：把一个场景中反复出现的判断与结果契约沉淀下来。它并不要求把所有业务阶段都写进 Kernel。</p>
       </section>
 
       <section id="evolution">

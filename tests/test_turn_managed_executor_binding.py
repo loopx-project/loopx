@@ -108,6 +108,34 @@ def test_trusted_codex_binding_projects_its_independent_agent_profile():
     assert "unrelated-managed-credential" not in json.dumps(binding)
 
 
+def test_owned_operation_transport_is_opt_in_and_read_back_by_the_existing_host_owner():
+    options = ["--host", "codex-cli", "--codex-operation-tools"]
+    blocked = managed_executor_binding_from_host_args(options, environ={})
+    assert blocked["available"] is False
+    assert blocked["unavailable_reason"] == "operation_transport_profile_required"
+    pinned = managed_executor_binding_from_host_args(
+        [*options, "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh"],
+        environ={},
+    )
+    assert pinned["available"] is None  # argv cannot qualify a real host
+    assert pinned["execution_profile"] == "test-model@xhigh"
+    assert pinned["operation_transport"]["identity_source"] == "native_thread_turn_metadata"
+    assert pinned["operation_transport"]["runtime_qualified"] is False
+    assert "operation_transport" not in managed_executor_binding("codex-cli")
+
+
+@pytest.mark.parametrize("host", ["dsh", "claude-code", "generic-cli"])
+def test_operation_transport_never_disappears_or_falls_back_on_another_host(host):
+    observed = managed_executor_binding(
+        host, environ={}, dsh_runner_configured=True,
+        codex_operation_tools=True, model="test-model", reasoning_effort="xhigh",
+    )
+    assert observed["available"] is False
+    assert observed["unavailable_reason"] == "operation_transport_host_unsupported"
+    assert observed["operation_transport"]["configuration_valid"] is False
+    assert observed["operation_transport"]["runtime_qualified"] is False
+
+
 def test_managed_executor_reports_the_operator_credential_and_endpoint():
     binding = managed_executor_binding(
         "dsh",
