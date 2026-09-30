@@ -131,8 +131,17 @@ export const chatRecoveryScenario = {
       if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Deferred explanation overflows on mobile");
       await page.screenshot({ path: resolve(outputDir, "collaboration-deferred-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
-      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "explicit_unverified" }];
+      // Match the production readback when a stored reply/delivery record is
+      // unreadable. Native-file + real HTTP tests qualify the recovery itself;
+      // this scripted API fixture qualifies only the packaged presentation.
+      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "explicit_unverified", error: "delivery_state_unreadable" }];
       await collaboration.getByText("回复送达尚未核验", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
+      await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-desktop.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Unreadable return status overflows on mobile");
+      await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-mobile.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
       if (api.turnRequests.length !== turnsBeforeReturn) throw new Error("Disposition readback started another model turn");
       pass("collaboration-brief", "Original conversation preserves context, constraints, inputs and receiver decision without a new turn");
 
