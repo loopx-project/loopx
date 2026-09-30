@@ -7,8 +7,8 @@ running work, so the agent management projection can derive `executing` and
 
 - the Turn lane holder record, one per Goal and agent, read through
   `turn_lane_liveness`; a delegated member executes inside its own lane too;
-- the delegation worker: a delegation journal row whose operation lock and
-  whose execution slot for the delegated Todo are both held by a live process;
+- the delegation worker: an in-flight delegation journal row whose operation
+  lock and the delegated Todo's execution slot are held by one live process;
 - the task leases on the Goal's open Todos, read from the canonical head after
   cutover and from the local lease files before it.
 
@@ -31,7 +31,7 @@ from ..collaboration.inbox import _hash as manager_context_hash
 from ..collaboration.inbox import _read as read_manager_context_record
 from ..collaboration.inbox import _root as manager_context_root
 from ..coordination.local_authority import read_canonical_todos_if_promoted
-from ..runtime.time import now_utc
+from ..runtime.time import now_utc, parse_timestamp
 from ..todos.contract import normalize_todo_claimed_by
 from ..turn_driver.lane_fence import (
     TURN_LANE_ABSENT,
@@ -61,6 +61,10 @@ LEASE_STATUS_ACTIVE = "active"
 LEASE_STATUS_UNAVAILABLE = "unavailable"
 _LANE_HOLDER_FIELDS = ("host", "pid", "acquired_at")
 _JOURNAL_ADDRESS = re.compile(r"[a-f0-9]{64}")
+# Observations that still have a transition in the delegation owner
+# (`loopx/control_plane/collaboration/delegation.ts`); `accepted` and `rejected`
+# are final, and an unlisted status is not evidence of a running worker.
+_DELEGATION_IN_FLIGHT_STATUSES = frozenset({"prepared", "running", "turn_returned"})
 
 
 def _lane_rank(state: str) -> int:
@@ -96,20 +100,29 @@ def _lane_fact(runtime_root: Path, *, goal_id: str, agent_id: str) -> dict[str, 
     return fact
 
 
+def _same_process(holder: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+    return bool(holder.get("host")) and all(holder.get(key) == other.get(key) for key in ("host", "pid"))
+
+
 def _delegation_worker_agents(
     runtime_root: Path, *, goal_id: str, requesters: Iterable[str]
 ) -> set[str]:
     """Delegated members whose worker is executing their Todo right now.
 
     A journal row lives under its Goal and requester, so only this Goal's
-    requesters are read. The row's operation lock is also taken briefly by
-    readers and by result adoption, so a live operation holder alone is not a
-    worker; the execution slot for the delegated Todo is taken only by the
-    worker while it runs, which makes a live slot holder the execution fact.
+    requesters are read. The worker holds the row's operation lock and, nested
+    inside it, the execution slot of the delegated Todo, in one process. Two
+    live holders are two facts until they are the same process: readers and
+    result adoption hold an operation lock briefly, so a re-bound Todo can show
+    a live reader on an old operation while another operation's worker holds
+    the slot. A slot therefore attributes to at most one operation: in flight,
+    held by the slot's own process, and the latest such operation to be taken
+    before the slot. An operation with no further transition (see
+    ``delegation.ts``) is never a worker, whoever holds its lock.
     """
 
     store = manager_context_root(runtime_root)
-    active: set[str] = set()
+    candidates: dict[Path, list[tuple[datetime, str, Mapping[str, Any]]]] = {}
     for requester in dict.fromkeys(requesters):
         journal = store / "executions" / manager_context_hash([goal_id, requester])
         try:
@@ -119,17 +132,38 @@ def _delegation_worker_agents(
         for path in rows:
             if not _JOURNAL_ADDRESS.fullmatch(path.stem) or path.is_symlink() or not path.is_file():
                 continue
-            if lock_holder_liveness(path)[0] != LOCK_HOLDER_LIVE:
+            liveness, holder = lock_holder_liveness(path)
+            acquired_at = parse_timestamp(holder.get("acquired_at"))
+            if liveness != LOCK_HOLDER_LIVE or acquired_at is None:
                 continue
             try:
-                binding = read_manager_context_record(path)["identity"]["binding"]
+                row = read_manager_context_record(path)
+                binding = row["identity"]["binding"]
                 member, todo_id = binding["agent_id"], binding["todo_id"]
                 slot = store / "execution-slots" / manager_context_hash([goal_id, todo_id])
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             agent_id = normalize_todo_claimed_by(member)
-            if agent_id and lock_holder_liveness(slot)[0] == LOCK_HOLDER_LIVE:
-                active.add(agent_id)
+            if agent_id and row.get("status") in _DELEGATION_IN_FLIGHT_STATUSES:
+                candidates.setdefault(slot, []).append((acquired_at, agent_id, holder))
+    active: set[str] = set()
+    for slot, operations in candidates.items():
+        liveness, slot_holder = lock_holder_liveness(slot)
+        slot_acquired_at = parse_timestamp(slot_holder.get("acquired_at"))
+        if liveness != LOCK_HOLDER_LIVE or slot_acquired_at is None:
+            continue
+        owned = [
+            (acquired_at, agent_id)
+            for acquired_at, agent_id, holder in operations
+            if _same_process(holder, slot_holder) and acquired_at <= slot_acquired_at
+        ]
+        if not owned:
+            continue
+        latest = max(acquired_at for acquired_at, _agent in owned)
+        agents = {agent_id for acquired_at, agent_id in owned if acquired_at == latest}
+        # A tie between members cannot name the worker; fail closed on it.
+        if len(agents) == 1:
+            active |= agents
     return active
 
 

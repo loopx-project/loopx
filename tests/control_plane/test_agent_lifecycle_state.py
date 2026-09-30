@@ -5,10 +5,13 @@ delegation worker locks, task leases), never from a Todo timestamp. The facts
 fixtures here are real: a lane held in-process, a holder record edited the
 way a crash or another machine leaves it, a lease file, a delegation row lock.
 """
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -146,12 +149,13 @@ def _dead_pid() -> int:
             continue
 
 
-def _write_lease(runtime_root: Path, *, expires_in_hours: float, status: str = "active") -> None:
+def _write_lease(runtime_root: Path, *, expires_in_hours: float, status: str = "active",
+                 owner: str = "peer") -> None:
     now = datetime.now(timezone.utc)
     path = runtime_root / "goals" / GOAL / "task-leases" / "todo_peer.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
-        "schema_version": "task_lease_v0", "goal_id": GOAL, "todo_id": "todo_peer", "owner": "peer",
+        "schema_version": "task_lease_v0", "goal_id": GOAL, "todo_id": "todo_peer", "owner": owner,
         "idempotency_key": "execution-peer", "version": 1, "lease_epoch": 1, "status": status,
         "write_scopes": ["src/**"], "acquire_ttl_seconds": 600, "acquired_at": now.isoformat(),
         "updated_at": now.isoformat(), "expires_at": (now + timedelta(hours=expires_in_hours)).isoformat(),
@@ -218,15 +222,40 @@ def test_an_expired_active_lease_with_nothing_live_is_unknown(monkeypatch, tmp_p
     assert released["agents"][0]["execution"]["lease"] == {"status": "released"}
 
 
-def _delegation_row(runtime_root: Path, *, goal: str, requester: str) -> tuple[Path, Path]:
+def _delegation_row(runtime_root: Path, *, goal: str, requester: str, agent: str = "peer",
+                    operation: str = "op-1", status: str = "running") -> tuple[Path, Path]:
     """A journal row where the delegation service keeps it, plus its execution slot."""
     store = manager_context_root(runtime_root)
-    row_path = store / "executions" / manager_context_hash([goal, requester]) / ("b" * 64 + ".json")
+    row_path = (store / "executions" / manager_context_hash([goal, requester])
+                / (manager_context_hash(operation) + ".json"))
     row_path.parent.mkdir(parents=True, exist_ok=True)
-    row_path.write_text(json.dumps({"identity": {"binding": {"id": "b1", "agent_id": "peer", "todo_id": "todo_peer"},
-                                                 "request_id": "r1", "operation_id": "op-1"},
-                                    "status": "running"}), encoding="utf-8")
+    row_path.write_text(json.dumps({"identity": {"binding": {"id": "b1", "agent_id": agent, "todo_id": "todo_peer"},
+                                                 "request_id": "r1", "operation_id": operation},
+                                    "status": status}), encoding="utf-8")
     return row_path, store / "execution-slots" / manager_context_hash([goal, "todo_peer"])
+
+
+_WORKER = """
+import sys
+from pathlib import Path
+from loopx.file_lock import exclusive_file_lock
+with exclusive_file_lock(Path(sys.argv[1])), exclusive_file_lock(Path(sys.argv[2])):
+    print("held", flush=True)
+    sys.stdin.readline()
+"""
+
+
+@contextmanager
+def _worker_process(row_path: Path, slot: Path):
+    """A separate process holding one operation lock and the Todo's slot, as a worker does."""
+    worker = subprocess.Popen([sys.executable, "-c", _WORKER, str(row_path), str(slot)],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert worker.stdout.readline().strip() == "held"
+        yield worker.pid
+    finally:
+        worker.stdin.close()
+        worker.wait(timeout=30)
 
 
 def _peer_row(packet):
@@ -260,6 +289,144 @@ def test_an_operation_lock_without_its_execution_slot_is_not_a_worker(monkeypatc
     with exclusive_file_lock(other_row), exclusive_file_lock(other_slot):
         scoped, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=registered)
     assert _peer_row(scoped)["state"] == "launchable"
+
+
+REUSED = ("coordinator", "peer", "old-peer")
+
+
+def test_a_historical_result_reader_does_not_borrow_the_current_workers_slot(monkeypatch, tmp_path):
+    """The Todo was re-bound: old-peer's accepted operation is only being read while peer's worker runs."""
+    runtime_root = tmp_path / "runtime"
+    old_row, slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", agent="old-peer",
+                                    operation="op-old", status="accepted")
+    new_row, _ = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", operation="op-new")
+    with _worker_process(new_row, slot) as worker_pid, exclusive_file_lock(old_row):
+        assert worker_pid != os.getpid()
+        packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=REUSED)
+        facts = collect_agent_execution_facts(runtime_root=runtime_root, status_payload=_payload(REUSED))
+    by_agent = {row["agent_id"]: row for row in packet["agents"]}
+    assert by_agent["peer"]["state"] == "executing"
+    assert by_agent["old-peer"]["state"] == "registered"
+    assert facts["old-peer"]["delegation_worker_active"] is False
+
+
+def test_an_operation_held_by_another_process_than_the_slot_is_not_that_workers(monkeypatch, tmp_path):
+    """Two live holders are two facts: only the process holding the slot is the worker."""
+    runtime_root = tmp_path / "runtime"
+    # Still in flight, so only the holder identity can tell the two operations apart.
+    old_row, slot = _delegation_row(runtime_root, goal=GOAL, requester="old-requester", agent="old-peer",
+                                    operation="op-old", status="running")
+    new_row, _ = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", operation="op-new")
+    registered = ("coordinator", "old-requester", "peer", "old-peer")
+    with _worker_process(new_row, slot), exclusive_file_lock(old_row):
+        packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=registered)
+    by_agent = {row["agent_id"]: row for row in packet["agents"]}
+    assert by_agent["peer"]["state"] == "executing"
+    assert by_agent["old-peer"]["state"] == "registered"
+
+
+def test_a_reader_that_locked_first_is_not_the_worker_of_an_unseen_operation(monkeypatch, tmp_path):
+    """The reader took the old operation before the worker took the slot; order alone cannot tell them apart."""
+    runtime_root = tmp_path / "runtime"
+    old_row, slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", agent="old-peer",
+                                    operation="op-old", status="running")
+    # The worker's own row is under a requester this Goal does not project.
+    new_row, _ = _delegation_row(runtime_root, goal=GOAL, requester="unlisted", operation="op-new")
+    with exclusive_file_lock(old_row), _worker_process(new_row, slot):
+        packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=REUSED)
+    by_agent = {row["agent_id"]: row for row in packet["agents"]}
+    assert by_agent["old-peer"]["state"] == "registered"
+    assert by_agent["peer"]["state"] == "launchable"
+
+
+def test_a_crashed_operation_whose_pid_was_reused_does_not_share_the_slot(monkeypatch, tmp_path):
+    """A slot names one worker: the latest in-flight operation its process took before the slot."""
+    runtime_root = tmp_path / "runtime"
+    old_row, slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", agent="old-peer",
+                                    operation="op-old", status="running")
+    new_row, _ = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", operation="op-new")
+    with exclusive_file_lock(old_row):
+        pass
+    with _worker_process(new_row, slot) as worker_pid:
+        # The old worker crashed mid-run and its pid now belongs to the new worker.
+        _rewrite_holder(old_row, pid=worker_pid)
+        packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=REUSED)
+        by_agent = {row["agent_id"]: row for row in packet["agents"]}
+        assert by_agent["peer"]["state"] == "executing"
+        assert by_agent["old-peer"]["state"] == "registered"
+        # When the records cannot say which operation came last, neither is named.
+        new_acquired = json.loads(lock_holder_path(new_row).read_text(encoding="utf-8"))["acquired_at"]
+        _rewrite_holder(old_row, pid=worker_pid, acquired_at=new_acquired)
+        tied, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=REUSED)
+        # The slot is taken inside its operation: a lock the process took after the slot is not its operation.
+        slot_acquired = datetime.fromisoformat(
+            json.loads(lock_holder_path(slot).read_text(encoding="utf-8"))["acquired_at"].replace("Z", "+00:00"))
+        _rewrite_holder(old_row, pid=worker_pid, acquired_at=(slot_acquired + timedelta(seconds=1)).isoformat())
+        later, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=REUSED)
+    assert {row["agent_id"]: row["state"] for row in later["agents"]} == {
+        "coordinator": "registered", "peer": "executing", "old-peer": "registered"}
+    assert {row["agent_id"]: row["state"] for row in tied["agents"]} == {
+        "coordinator": "registered", "peer": "launchable", "old-peer": "registered"}
+
+
+def test_a_settled_operation_is_no_worker_even_under_the_slot_holder(monkeypatch, tmp_path):
+    """An accepted or rejected operation has no further transition: its holder is a reader."""
+    runtime_root = tmp_path / "runtime"
+    for status in ("accepted", "rejected"):
+        row_path, slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", status=status)
+        with exclusive_file_lock(row_path), exclusive_file_lock(slot):
+            packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root,
+                                         registered=("coordinator", "peer"))
+        assert _peer_row(packet)["state"] == "launchable", status
+
+
+def test_a_released_or_stale_worker_record_is_no_worker(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "runtime"
+    registered = ("coordinator", "peer")
+    row_path, slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator")
+    with exclusive_file_lock(row_path), exclusive_file_lock(slot):
+        pass
+    released, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=registered)
+    assert _peer_row(released)["state"] == "launchable"
+    # A crashed worker leaves both records naming its pid; a dead pid executes nothing.
+    dead = _dead_pid()
+    _rewrite_holder(row_path, pid=dead)
+    _rewrite_holder(slot, pid=dead)
+    crashed, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=registered)
+    assert _peer_row(crashed)["state"] == "launchable"
+
+
+def test_one_agents_live_lane_is_not_another_agents_execution(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "runtime"
+    plan = {"turn_envelope": {"agent_id": "old-peer"}}
+    with turn_lane_singleflight(runtime_root=runtime_root, goal_id=GOAL, plan=plan) as held:
+        assert held is not None
+        packet, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=REUSED)
+    by_agent = {row["agent_id"]: row for row in packet["agents"]}
+    assert by_agent["old-peer"]["state"] == "executing"
+    assert by_agent["peer"]["state"] == "launchable"
+    assert by_agent["peer"]["execution"]["lane"] == "absent"
+
+
+def test_a_lease_left_by_the_previous_claimant_stays_with_its_owner(monkeypatch, tmp_path):
+    """A re-bound Todo's stale lease is the old owner's unverifiable fact, never the new claimant's."""
+    runtime_root = tmp_path / "runtime"
+    _write_lease(runtime_root, expires_in_hours=-1, owner="old-peer")
+    packet, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=REUSED)
+    by_agent = {row["agent_id"]: row for row in packet["agents"]}
+    assert by_agent["peer"]["state"] == "launchable"
+    assert "lease" not in by_agent["peer"]["execution"]
+    assert by_agent["old-peer"]["state"] == "unknown"
+    _write_lease(runtime_root, expires_in_hours=-1, owner="old-peer", status="released")
+    released, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=REUSED)
+    assert {row["agent_id"]: row["state"] for row in released["agents"]}["old-peer"] == "registered"
+
+
+def _payload(registered):
+    todo = {"todo_id": "todo_peer", "goal_id": GOAL, "role": "agent", "claimed_by": "peer", "status": "open"}
+    return {"goal_filter": GOAL, "run_history": {"goals": [{
+        "id": GOAL, "coordination": {"registered_agents": list(registered)}}]},
+        "todo_index": {"items": [todo]}}
 
 
 def test_no_runtime_root_means_no_facts_not_no_execution(monkeypatch):
