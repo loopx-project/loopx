@@ -58,6 +58,12 @@ _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
 
 
+class _RuntimeSourceChanged(RuntimeError):
+    def __init__(self, snapshot: _RuntimeSourceSnapshot) -> None:
+        super().__init__("runtime source changed while hashing")
+        self.snapshot = snapshot
+
+
 @dataclass(frozen=True)
 class _RuntimeRevision:
     fingerprint: str
@@ -290,28 +296,35 @@ def _runtime_fingerprint_for_snapshot(
             assert read.data is not None
             digest.update(relative.encode("utf-8"))
             digest.update(read.data)
+    current_snapshot = _runtime_source_snapshot(source_root)
+    if current_snapshot != snapshot:
+        raise _RuntimeSourceChanged(current_snapshot)
     return digest.hexdigest()
 
 
 def _runtime_fingerprint() -> str:
     root = _control_plane_root()
     resolved_root = os.fspath(root.resolve())
-    try:
-        return _runtime_fingerprint_for_snapshot(
-            resolved_root,
-            _runtime_source_snapshot(root),
-        )
-    except FileNotFoundError:
+    snapshot: _RuntimeSourceSnapshot | None = None
+    last_error: Exception | None = None
+    for _attempt in range(2):
         try:
+            if snapshot is None:
+                snapshot = _runtime_source_snapshot(root)
             return _runtime_fingerprint_for_snapshot(
                 resolved_root,
-                _runtime_source_snapshot(root),
+                snapshot,
             )
+        except _RuntimeSourceChanged as exc:
+            last_error = exc
+            snapshot = exc.snapshot
         except FileNotFoundError as exc:
-            raise EffectRuntimeStartupError(
-                "TypeScript Effect runtime source topology did not stabilize",
-                diagnostic_code="packaged_runtime_source_unstable",
-            ) from exc
+            last_error = exc
+            snapshot = None
+    raise EffectRuntimeStartupError(
+        "TypeScript Effect runtime source topology did not stabilize",
+        diagnostic_code="packaged_runtime_source_unstable",
+    ) from last_error
 
 
 @contextmanager
