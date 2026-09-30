@@ -1135,6 +1135,8 @@ def test_both_command_routes_are_counted_in_either_order() -> None:
     "loopx --registry /tmp/registry",
     "loopx --registry /tmp/registry --runtime-root",
     "loopx --registry /tmp/registry --format invalid turn plan",
+    'loopx --registry /tmp/registry ""',
+    'loopx --registry /tmp/registry "   "',
 ])
 @pytest.mark.parametrize("render", [str, lambda command: json.dumps({"command": command}), lambda command: f"- execute: `{command}`"])
 def test_malformed_command_never_grants_route_growth(command, render) -> None:

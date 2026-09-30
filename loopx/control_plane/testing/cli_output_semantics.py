@@ -253,7 +253,8 @@ def command_route_counts(text: str) -> dict[str, int]:
                 bindings.add(option[2:].replace("-", "_"))
             index += 2
         # Reject an incomplete/invalid option prefix, or one with no subcommand.
-        if index == len(argv) or argv[index].startswith("-"):
+        if (index == len(argv) or not argv[index].strip()
+                or argv[index].startswith("-")):
             continue
         for binding in bindings:
             counts[binding] += 1
