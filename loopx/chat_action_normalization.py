@@ -50,6 +50,7 @@ class ChatActionNormalizationMixin:
                     "expires_at",
                     "authorized_principals",
                     "executor",
+                    "source_route",
                 },
             )
             if values.get("schema_version") != "loopx_operation_request_v0":
@@ -233,26 +234,18 @@ class ChatActionNormalizationMixin:
                     field: _opaque(raw_executor.get(field), field=f"executor.{field}")
                     for field in ("extension_id", "protocol", "permission", "revision")
                 }
-            source_routes = [
-                route
-                for route in (goal.get("coordination") or {}).get(
-                    "thread_agent_bindings", []
-                )
-                if isinstance(route, Mapping) and route.get("agent_id") == agent_id
-                and all(isinstance(route.get(key), str) and route[key]
-                        for key in ("host_surface", "thread_id"))
-            ]
-            source_route = (
-                {
-                    "goal_id": goal_id,
-                    **{
-                        key: source_routes[0][key]
-                        for key in ("agent_id", "host_surface", "thread_id")
-                    },
-                }
-                if len(source_routes) == 1
-                else None
-            )
+            managed_source = executor.get("kind") == "managed_turn"
+            if not managed_source and values.get("source_route") is not None:
+                raise ValueError("source route selection requires a managed executor")
+            from .control_plane.effect_runtime import effect_runtime_result
+
+            source_route = effect_runtime_result(
+                "operation.source_route.resolve",
+                {"goal_id": goal_id, "agent_id": agent_id,
+                 "bindings": (goal.get("coordination") or {}).get("thread_agent_bindings", []),
+                 "selected_route": values.get("source_route"),
+                 "ambiguity_policy": "reject" if managed_source else "legacy_null"},
+            )["source_route"]
             expires_at = parse_timestamp(
                 _text(values.get("expires_at"), field="expires_at", limit=80)
             )

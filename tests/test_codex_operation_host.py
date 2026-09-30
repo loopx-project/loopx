@@ -58,6 +58,14 @@ for line in sys.stdin:
         if os.environ.get("FAKE_OPERATION_HANG") == "1":
             while True: time.sleep(.1)
         text = row["params"]["input"][0]["text"]
+        # The actual native prompt must separate proposal preparation from
+        # domain execution; otherwise approval can never get a proposal.
+        assert "context/pending/inspect do not require consumption" in text
+        assert "prepare may run before human confirmation or consume" in text
+        assert "prepare writes a canonical proposal" in text
+        assert "execution_allowed=false is expected for prepare" in text
+        assert "Only domain/external effects require the first successful consume" in text
+        assert "Execute only after the first receipt" not in text
         import re
         key = re.search(r'"turn_key":"([^"]+)"', text).group(1)
         emit({"id": row["id"], "result": {"turn": {"id": turn}}})
@@ -90,6 +98,7 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
         "codex_bin": str(executable),
         "model": "test-model",
         "reasoning_effort": "xhigh",
+        "source_route": {"host_surface": "codex-app", "thread_id": "source-one"},
         "timeout_seconds": 5,
     }
     first = run_codex_operation_host(_request(), **options)
@@ -103,7 +112,8 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
     )
     assert binding["operation_transport"] == "app-server-operation-tools-v0"
     second = run_codex_operation_host(
-        _request(session_action="resume", turn_key="sha256:" + "b" * 64), **options
+        _request(session_action="resume", turn_key="sha256:" + "b" * 64),
+        **{**options, "source_route": {"host_surface": "codex-app", "thread_id": "source-two"}},
     )
     assert second["turn_key"] == "sha256:" + "b" * 64
     assert (
@@ -117,7 +127,7 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
     with pytest.raises(ValueError, match="original managed transport"):
         run_codex_cli_host(
             _request(session_action="resume"),
-            **{key: value for key, value in options.items() if key != "registry_path"},
+            **{key: value for key, value in options.items() if key not in {"registry_path", "source_route"}},
         )
 
 
@@ -135,11 +145,20 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
         pytest.fail("Operation opt-in must not downgrade to plain Codex exec")
 
     monkeypatch.setattr("loopx.cli_commands.turn.run_codex_cli_host", forbidden_plain_cli)
+    selected_route = {"host_surface": "codex-app", "thread_id": "source-thread"}
+    observed_routes = []
+
+    def operation_host(*args, **kwargs):
+        observed_routes.append(kwargs["source_route"])
+        return run_codex_operation_host(*args, **kwargs)
+
+    monkeypatch.setattr("loopx.control_plane.turn_driver.codex_operation_host.run_codex_operation_host", operation_host)
     arguments = [
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
         "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
         "--no-global-sync", "--codex-operation-tools", "--codex-bin", str(executable),
+        "--codex-operation-source-route-json", json.dumps(selected_route),
         "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
         "--codex-sandbox", "read-only", "--timeout-seconds", "5",
         "--validation-command-json", json.dumps([sys.executable, "-c", "import json,sys; json.load(sys.stdin)"]),
@@ -161,6 +180,22 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     assert binding["operation_transport"] == "app-server-operation-tools-v0"
     assert binding["session_id"] == "owned-app-server-thread"
     assert payload["effects"]["quota_spent"] is False
+    assert observed_routes == [selected_route]
+
+
+def test_source_route_cli_requires_owned_operation_transport(tmp_path, capsys):
+    from loopx.cli import main as cli_main
+
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    rc = cli_main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--no-global-sync", "--codex-operation-source-route-json",
+        json.dumps({"host_surface": "codex-app", "thread_id": "source-thread"}),
+    ])
+    assert rc != 0
+    assert "requires --codex-operation-tools" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {AGENT_OPERATION_REVISION, MANAGED_OPERATION_REVISION, managedOperationBindingCurrent, deriveAgentOperationActor, normalizeAgentOperationExecutor, planAgentOperationHandoff,
-  projectAgentOperationInbox, projectManagedOperationTransport} from "../../loopx/control_plane/work_items/operation_agent_handoff.ts";
+  projectAgentOperationInbox, projectManagedOperationTransport, resolveOperationSourceRoute} from "../../loopx/control_plane/work_items/operation_agent_handoff.ts";
+
+test("registered return audience is explicit under ambiguity and never executor identity", () => {
+  const route = {agent_id: "agent", host_surface: "codex-app", thread_id: "original"};
+  const value = {goal_id: "goal", agent_id: "agent", bindings: [route]};
+  assert.deepEqual(resolveOperationSourceRoute(value).source_route, {goal_id: "goal", ...route});
+  assert.deepEqual(resolveOperationSourceRoute({...value, bindings: [route, route]}), resolveOperationSourceRoute(value));
+  assert.equal(resolveOperationSourceRoute({...value, bindings: []}).source_route, null);
+  const multiple = {...value, bindings: [route, {...route, thread_id: "historical"}]};
+  assert.throws(() => resolveOperationSourceRoute(multiple), {code: "operation_source_route_ambiguous"});
+  // Unchanged non-managed callers retain their historical null-on-ambiguity
+  // routing behavior; the normalizer never lets a model choose this policy.
+  assert.equal(resolveOperationSourceRoute({...multiple, ambiguity_policy: "legacy_null"}).source_route, null);
+  assert.deepEqual(resolveOperationSourceRoute({...value, ambiguity_policy: "legacy_null"}), resolveOperationSourceRoute(value));
+  const selector = {host_surface: route.host_surface, thread_id: route.thread_id};
+  assert.deepEqual(resolveOperationSourceRoute({...multiple, selected_route: selector}), resolveOperationSourceRoute(value));
+  for (const selected_route of ["original", {...selector, thread_id: "unregistered"},
+    {...selector, host_surface: "other-host"}, {...selector, verified: true}]) {
+    assert.throws(() => resolveOperationSourceRoute({...multiple, selected_route}));
+  }
+  assert.throws(() => resolveOperationSourceRoute({...multiple, agent_id: "other-agent", selected_route: selector}));
+});
 
 function input(): JsonObject {
   const executor = {kind: "agent_session", host_surface: "codex-app", thread_id: "original-thread",

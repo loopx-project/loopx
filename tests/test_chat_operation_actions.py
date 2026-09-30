@@ -182,6 +182,44 @@ def test_owned_managed_tool_uses_canonical_approval_once_without_desktop_binding
     assert recovered["ok"] is True and recovered["needs_reconciliation"] is False
 
 
+def test_managed_prepare_selects_registered_return_audience_without_rebinding_executor(tmp_path: Path) -> None:
+    from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+
+    service, store = _service(tmp_path)
+    registry = json.loads(service.registry_path.read_text())
+    route = {"agent_id": "finance-fixture-agent", "host_surface": "codex-app", "thread_id": "source-current"}
+    registry["goals"][0]["coordination"]["thread_agent_bindings"] = [
+        route, {**route, "thread_id": "source-historical"},
+    ]
+    service.registry_path.write_text(json.dumps(registry))
+    original = _managed_handler(service, store)
+    request = _request()
+    request["normalized_parameters"].pop("executor")
+    request["normalized_parameters"]["projection"]["simulated"] = False
+    native = {"thread_id": "owned-managed-thread", "host_turn_id": "native-turn-1"}
+    rejected = original("loopx_operation", {"action": "prepare", "request": request}, native)
+    assert rejected["error"] == "operation_source_route_ambiguous"
+    assert store.list() == []
+    selector = {key: route[key] for key in ("host_surface", "thread_id")}
+    selected = operation_tool_handler(
+        runtime_root=store.root.parent.parent, registry_path=service.registry_path,
+        lineage={"goal_id": GOAL_ID, "agent_id": "finance-fixture-agent", "todo_id": "todo-managed"},
+        session_id=native["thread_id"], profile_digest="c" * 64, model="test-model",
+        reasoning_effort="xhigh", source_route=selector,
+    )
+    model_override = {**request, "normalized_parameters": {**request["normalized_parameters"],
+        "source_route": {**selector, "thread_id": "source-historical"}}}
+    assert selected("loopx_operation", {"action": "prepare", "request": model_override}, native)["ok"] is False
+    prepared = selected("loopx_operation", {"action": "prepare", "request": request}, native)
+    assert prepared["ok"] and not prepared["execution_allowed"]
+    proposal = prepared["proposal"]
+    assert proposal["normalized_parameters"]["source_route"] == {"goal_id": GOAL_ID, **route}
+    assert proposal["normalized_parameters"]["executor"]["session_id"] == native["thread_id"]
+    assert not selected("loopx_operation", {"action": "consume", "proposal_id": proposal["proposal_id"],
+        "consumption_id": "not-approved"}, native)["ok"]
+    assert len(store.list()) == 1
+
+
 def test_managed_pending_reuses_registered_agent_and_goal_instance_scope(
     tmp_path: Path,
 ) -> None:

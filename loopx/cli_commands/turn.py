@@ -131,6 +131,8 @@ def handle_turn_command(
         strict_goal_admission = goal_admission if goal_admission.enabled else None
         if getattr(args, "codex_operation_tools", False) and args.host != "codex-cli":
             raise ValueError("--codex-operation-tools requires the codex-cli host")
+        if getattr(args, "codex_operation_source_route_json", None) is not None and not getattr(args, "codex_operation_tools", False):
+            raise ValueError("--codex-operation-source-route-json requires --codex-operation-tools")
         # Planning and dry-run execution inspect existing admitted intents.
         # Only an executing wake may sync inboxes or reserve a calendar window.
         turn_start_hook_dispatch = {}
@@ -1002,7 +1004,8 @@ def handle_turn_command(
                         )
 
                         return run_codex_operation_host(
-                            request, registry_path=registry_path, **options
+                            request, registry_path=registry_path,
+                            source_route=getattr(args, "codex_operation_source_route_json", None), **options
                         )
                     return run_codex_cli_host(request, **options)
 
