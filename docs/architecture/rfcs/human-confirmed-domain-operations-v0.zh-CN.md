@@ -365,7 +365,7 @@ Core PR 仍须 owner review，不在合并前自行安装。
 受众时，必须由宿主显式传入 `--codex-operation-source-route-json
 '{"host_surface":"codex-app","thread_id":"REGISTERED_THREAD"}'`。
 这只是已登记的回传受众，不是认证、session 替换或执行许可；模型不能改投。
-重复绑定会去重；无登记受众保持历史 null 路由，非受管 adapter 保留既有隐式
+受管重复绑定会去重；无登记受众保持历史 null 路由，非受管 adapter 保留既有计数式隐式
 路由行为。准备落盘后，返回受众进入原确认摘要，不可修改。
 
 源受众选择与准备提示构成有界后台切片，不是完整产品交付。下面的个人工作台

@@ -468,9 +468,9 @@ selected automatically. Multiple historical audiences require an explicit host
 option, `--codex-operation-source-route-json
 '{"host_surface":"codex-app","thread_id":"REGISTERED_THREAD"}'`.
 The selector is registered-audience routing, not authentication, a session
-replacement or an execution permit; the model cannot retarget it. Duplicate
+replacement or an execution permit; the model cannot retarget it. Managed duplicate
 bindings collapse. No registered audience retains the historical null route;
-non-managed adapters retain their previous implicit routing behavior. Store
+non-managed adapters retain their previous count-based implicit routing behavior. Store
 preparation freezes the selected audience in the original confirmation digest.
 
 Source-audience selection and the preparation prompt form a bounded backend

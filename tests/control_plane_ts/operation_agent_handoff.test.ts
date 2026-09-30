@@ -15,6 +15,7 @@ test("registered return audience is explicit under ambiguity and never executor 
   // Unchanged non-managed callers retain their historical null-on-ambiguity
   // routing behavior; the normalizer never lets a model choose this policy.
   assert.equal(resolveOperationSourceRoute({...multiple, ambiguity_policy: "legacy_null"}).source_route, null);
+  assert.equal(resolveOperationSourceRoute({...value, bindings: [route, route], ambiguity_policy: "legacy_null"}).source_route, null);
   assert.deepEqual(resolveOperationSourceRoute({...value, ambiguity_policy: "legacy_null"}), resolveOperationSourceRoute(value));
   const selector = {host_surface: route.host_surface, thread_id: route.thread_id};
   assert.deepEqual(resolveOperationSourceRoute({...multiple, selected_route: selector}), resolveOperationSourceRoute(value));
