@@ -56,7 +56,14 @@ not amend normative sections.
    wire values or move value authority to the registry. M2 now generates the
    Turn vocabularies, route projection and ordered controller rules from
    `turn_loop_controller_contract_v0.json` via `generate_turn_contract.py`;
-   this does not migrate every cross-runtime vocabulary.
+   this does not migrate every cross-runtime vocabulary. The semantic binding
+   generator also derives the existing Python digest-pattern module from its TS
+   owner. This narrow literal grammar rejects flags, dynamic expressions and
+   unsupported regex syntax. The twin ratchet excludes a source-derived binding
+   only after recomputing and matching its entire artifact; a filename/header
+   alone never qualifies. Digest callers keep their imports and matching behavior,
+   and no runtime bridge is added. This restores 43 independently maintained
+   pairs without raising the 43-pair ceiling.
 3. **Default and opt-in boundary.** The check is always on for the repository.
    It has no runtime flag because it never runs inside the product.
 4. **Principal constraint.** Fail closed, deterministic, and not weakenable by

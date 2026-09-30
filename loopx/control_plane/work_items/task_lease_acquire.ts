@@ -989,6 +989,9 @@ async function commitAcquire(
       previous_lease: existing,
       planned_lease: lease,
       active_todo_ids: [...request.authority.todos.keys()],
+      goal_ref: request.runtime_shadow !== null && "goal_ref" in request.runtime_shadow
+        ? request.runtime_shadow.goal_ref
+        : undefined,
     });
   if (shadowCapture?.failure && await requireShadowPrimaryWriteAllowed(request.runtime_root, request.goal_id) !== null) {
     throw new ShadowManagementError("shadow_capture_prepare_failed", "durable shadow preparation failed; the primary lease was not changed");

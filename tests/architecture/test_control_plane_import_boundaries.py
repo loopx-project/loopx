@@ -247,6 +247,23 @@ def test_periodic_report_hook_does_not_break_cold_imports() -> None:
         assert completed.returncode == 0, completed.stderr
 
 
+def test_read_adapters_do_not_load_writeback_facades_for_leaf_helpers() -> None:
+    # Run independently: an earlier test importing a writer must not hide an
+    # accidental cold-start dependency of a read-only entrypoint.
+    for module, unrelated in (
+        ("loopx.control_plane.coordination.local_authority", "loopx.history"),
+        ("loopx.cli_commands.status", "loopx.state_refresh"),
+    ):
+        completed = subprocess.run(
+            [sys.executable, "-c", (
+                f"import sys; import {module}; "
+                f"assert {unrelated!r} not in sys.modules, {unrelated!r}"
+            )],
+            cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+
 def test_core_does_not_import_experiments() -> None:
     forbidden_edges = {
         (_module_name(path), dependency)

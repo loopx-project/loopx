@@ -570,6 +570,38 @@ export function validateTurnStartHookInvocation(input: {
   return { ...result };
 }
 
+/** Transport failed context observations to the executor, not only diagnostics.
+ * Missing context never means empty context or a grant to use a stale cache.
+ */
+export function projectTurnStartUnavailableContext(value: unknown): JsonObject | null {
+  if (value === undefined || value === null) return null;
+  const dispatch = requiredObject(value, "turn-start dispatch");
+  const affected: JsonObject[] = [];
+  for (const field of ["results", "failures"] as const) {
+    const rows = dispatch[field] ?? [];
+    if (!Array.isArray(rows)) throw new TypeError(`turn-start ${field} must be an array`);
+    for (const raw of rows) {
+      const row = requiredObject(raw, `turn-start ${field} entry`);
+      const status = field === "failures" ? "failed" : row.status;
+      if (!["partial", "unavailable", "failed"].includes(String(status))) continue;
+      const identity: JsonObject = {};
+      for (const key of ["hook_id", "capability_id", "error_code"] as const) {
+        const token = requiredString(row[key], `turn-start ${key}`);
+        if (token.length > 160 || !TOKEN_RE.test(token)) throw new TypeError(`invalid turn-start ${key}`);
+        identity[key] = token;
+      }
+      affected.push({...identity, status});
+    }
+  }
+  if (affected.length === 0) return null;
+  return {
+    affected_hooks: affected,
+    cache_policy: "invalidate_affected_hook_context",
+    dependent_action_policy: "hold_until_fresh_context",
+    independent_work_policy: "preserve_existing_authority",
+  };
+}
+
 export function validatePostWritebackHookRegistration(
   value: unknown,
 ): JsonObject & {

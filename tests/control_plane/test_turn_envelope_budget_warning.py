@@ -168,3 +168,19 @@ def test_installed_skill_defers_delegation_policy_to_enabled_provider(tmp_path):
         "configured_limit_kind": "upper_bound",
         "live_availability": "not_observed",
     }
+
+
+def test_interaction_and_native_envelope_preserve_all_required_commands():
+    from loopx.control_plane.work_items.interaction_contract import build_interaction_contract
+
+    source = _full_decision()
+    reads = [{"kind": "agent_preferences" if i == 5 else f"fixture_{i}",
+              "source": "turn_start_capability_hook", "reason": "Read before work",
+              "command": "loopx --registry '/" + "workspace  dir/" * 45 + f"registry.json' inspect --item {i}"}
+             for i in range(6)]
+    source["required_reads"] = reads
+    source["interaction_contract"] = build_interaction_contract(source)
+    envelope = build_turn_envelope(source)
+    assert [x["command"] for x in source["interaction_contract"]["agent_channel"]["required_reads"]] == [x["command"] for x in reads]
+    assert [x["command"] for x in envelope["required_reads"]] == [x["command"] for x in reads]
+    assert envelope["action_signature"]["matches"] is True

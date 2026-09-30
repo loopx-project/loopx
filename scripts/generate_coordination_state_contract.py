@@ -53,6 +53,7 @@ RUNTIME_SHADOW_PROTOCOL_KEYS = (
     "inspect_request_schema",
     "inspect_result_schema",
     "bootstrap_request_schema",
+    "exact_bootstrap_request_schema",
     "bootstrap_result_schema",
     "rollback_request_schema",
     "rollback_result_schema",
@@ -63,6 +64,7 @@ RUNTIME_SHADOW_PROTOCOL_KEYS = (
 )
 LOCAL_AUTHORITY_SHADOW_PROTOCOL_KEYS = (
     "binding_schema",
+    "exact_binding_schema",
     "config_schema",
     "request_schema",
     "projection_schema",
@@ -73,6 +75,7 @@ LOCAL_AUTHORITY_SHADOW_PROTOCOL_KEYS = (
     "drain_cursor_schema",
     "transaction_projection_schema",
     "commit_entry_request_schema",
+    "exact_commit_entry_request_schema",
     "commit_entry_result_schema",
     "read_request_schema",
     "read_result_schema",
@@ -165,8 +168,11 @@ PROTOCOL_BINDINGS = {
     "local_authority_shadow_protocol": {key: f"LOCAL_AUTHORITY_SHADOW_{key.upper()}" for key in LOCAL_AUTHORITY_SHADOW_PROTOCOL_KEYS},
     "shadow_management_protocol": {
         "state_schema": "SHADOW_MANAGEMENT_STATE_SCHEMA",
+        "exact_state_schema": "SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA",
         "manifest_schema": "SHADOW_MANAGEMENT_MANIFEST_SCHEMA",
+        "exact_manifest_schema": "SHADOW_MANAGEMENT_EXACT_MANIFEST_SCHEMA",
         "outbox_manifest_schema": "SHADOW_OUTBOX_MANIFEST_SCHEMA",
+        "exact_outbox_manifest_schema": "SHADOW_EXACT_OUTBOX_MANIFEST_SCHEMA",
     },
     "legacy_writer_fence_protocol": LEGACY_WRITER_FENCE_CONSTANT_NAMES,
     "delivery_continuity_protocol": {key: f"DELIVERY_{key.upper()}" for key in DELIVERY_CONTINUITY_PROTOCOL_KEYS},

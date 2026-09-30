@@ -11,6 +11,11 @@ import {
   readLocalAuthorityShadow,
 } from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
 import { outboxEntryIdentity, beginLeaseOutboxEntry } from "../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts";
+import {
+  drainShadowOutbox,
+  SHADOW_DRAIN_SCHEMA,
+  SHADOW_EXACT_DRAIN_SCHEMA,
+} from "../../loopx/control_plane/coordination/shadow_drain.ts";
 import { requireShadowCaptureBinding } from "../../loopx/control_plane/coordination/shadow_management.ts";
 import * as schemas from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import { fixture, pendingEntry, settleFiles, todo, sha } from "./shadow_file_fixture.ts";
@@ -18,6 +23,14 @@ import { resolveTestPython } from "../../scripts/test-python.mjs";
 
 const execFileAsync = promisify(execFile);
 const PYTHON = resolveTestPython();
+const GOAL_A = {
+  goal_id: "goal-a",
+  goal_instance_id: "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+};
+const GOAL_B = {
+  goal_id: "goal-a",
+  goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+};
 
 test("one primary entry commits exactly once after a complete baseline", async (t) => {
   const f = await fixture(t);
@@ -41,6 +54,47 @@ test("one primary entry commits exactly once after a complete baseline", async (
   assert.equal(replay.outcome, "replayed"); assert.equal(replay.cursor, "2");
   const history = await f.store.scanCommitted(null, 10);
   assert.equal(history.status, "page"); if (history.status === "page") assert.equal(history.transactions.length, 2);
+});
+
+test("exact drain rejects stale and legacy callers before advancing Goal A", async (t) => {
+  const f = await fixture(t, GOAL_A);
+  await pendingEntry(f, 1, {handoff_mode: "hard_lease", todos: [todo()]});
+  const before = await f.store.loadAuthority();
+  const base = {
+    runtime_root: f.root,
+    goal_id: "goal-a",
+    python_executable: PYTHON,
+    config_enabled: true,
+    max_entries: 10,
+    budget_seconds: 10,
+    lock_timeout_seconds: 2,
+  };
+
+  const stale = await drainShadowOutbox({
+    ...base,
+    schema_version: SHADOW_EXACT_DRAIN_SCHEMA,
+    goal_ref: GOAL_B,
+  });
+  assert.equal(stale.outcome, "stopped");
+  assert.equal(stale.reason_code, "stale_goal_instance");
+  assert.equal(stale.pending_after, 1);
+  assert.deepEqual(await f.store.loadAuthority(), before);
+
+  const legacy = await drainShadowOutbox({
+    ...base,
+    schema_version: SHADOW_DRAIN_SCHEMA,
+  });
+  assert.equal(legacy.outcome, "stopped");
+  assert.equal(legacy.reason_code, "legacy_goal_binding");
+  assert.deepEqual(await f.store.loadAuthority(), before);
+
+  const current = await drainShadowOutbox({
+    ...base,
+    schema_version: SHADOW_EXACT_DRAIN_SCHEMA,
+    goal_ref: GOAL_A,
+  });
+  assert.equal(current.outcome, "drained");
+  assert.equal(current.delivered, 1);
 });
 
 test("receipt replay rejects every changed identity field even after pending cleanup", async (t) => {
@@ -147,6 +201,39 @@ test("a lease writer with a missing cursor obtains its next sequence from proved
   assert.equal(capture.failure, null);
   assert.equal(capture.seq, 2);
   await assert.rejects(readFile(join(directory, "drain-cursor.json")), { code: "ENOENT" });
+});
+
+test("exact lease capture rejects a recreated Goal and an unstamped caller", async (t) => {
+  const f = await fixture(t, GOAL_A);
+  const lease = {
+    schema_version: "task_lease_v0",
+    goal_id: "goal-a",
+    todo_id: "todo_one",
+    owner: "agent-a",
+    version: 1,
+    lease_epoch: 1,
+    status: "active",
+    updated_at: "2026-09-06T00:00:00Z",
+  };
+  const input = {
+    runtime_root: f.root,
+    goal_id: "goal-a",
+    lease_directory: join(f.root, "goals", "goal-a", "task-leases"),
+    write_class: "task_lease_acquire",
+    operation_id: null,
+    previous_lease: null,
+    planned_lease: lease,
+    active_todo_ids: null,
+  };
+  const stale = await beginLeaseOutboxEntry({...input, goal_ref: GOAL_B});
+  assert.equal(stale.failure?.reason_code, "stale_goal_instance");
+  assert.equal(stale.failure?.error_class, "ShadowManagementError");
+  const unstamped = await beginLeaseOutboxEntry(input);
+  assert.equal(unstamped.failure?.reason_code, "goal_instance_id_missing");
+  assert.equal(unstamped.failure?.error_class, "ShadowManagementError");
+  const current = await beginLeaseOutboxEntry({...input, goal_ref: GOAL_A});
+  assert.equal(current.failure, null);
+  assert.equal(current.seq, 1);
 });
 
 test("a lease writer uses the active binding digest through a runtime-root alias", async (t) => {

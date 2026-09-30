@@ -126,6 +126,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                              'inspect_request_schema': 'loopx_coordination_runtime_shadow_inspect_v0',
                              'inspect_result_schema': 'loopx_coordination_runtime_shadow_inspection_v0',
                              'bootstrap_request_schema': 'loopx_coordination_runtime_shadow_bootstrap_v0',
+                             'exact_bootstrap_request_schema': 'loopx_coordination_runtime_shadow_bootstrap_v1',
                              'bootstrap_result_schema': 'loopx_coordination_runtime_shadow_bootstrap_result_v0',
                              'rollback_request_schema': 'loopx_coordination_runtime_shadow_rollback_v0',
                              'rollback_result_schema': 'loopx_coordination_runtime_shadow_rollback_result_v0',
@@ -134,6 +135,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                              'todo_read_request_schema': 'loopx_coordination_runtime_shadow_todo_read_v0',
                              'todo_read_result_schema': 'loopx_coordination_runtime_shadow_todo_read_result_v0'},
  'local_authority_shadow_protocol': {'binding_schema': 'loopx_coordination_runtime_shadow_binding_v0',
+                                     'exact_binding_schema': 'loopx_coordination_runtime_shadow_binding_v1',
                                      'config_schema': 'loopx_local_authority_shadow_config_v0',
                                      'request_schema': 'loopx_local_authority_shadow_request_v0',
                                      'projection_schema': 'loopx_local_authority_shadow_projection_v0',
@@ -144,6 +146,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                      'drain_cursor_schema': 'loopx_local_authority_shadow_drain_cursor_v0',
                                      'transaction_projection_schema': 'loopx_coordination_runtime_shadow_projection_v0',
                                      'commit_entry_request_schema': 'loopx_shadow_entry_delivery_request_v0',
+                                     'exact_commit_entry_request_schema': 'loopx_shadow_entry_delivery_request_v1',
                                      'commit_entry_result_schema': 'loopx_coordination_runtime_shadow_commit_entry_result_v0',
                                      'read_request_schema': 'loopx_coordination_runtime_shadow_outbox_read_v0',
                                      'read_result_schema': 'loopx_coordination_runtime_shadow_outbox_read_result_v0',
@@ -151,8 +154,11 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                      'transaction_receipt_schema': 'loopx_coordination_runtime_shadow_outbox_receipt_v1',
                                      'transaction_evidence_schema': 'loopx_local_authority_shadow_evidence_v1'},
  'shadow_management_protocol': {'state_schema': 'loopx_shadow_management_state_v1',
+                                'exact_state_schema': 'loopx_shadow_management_state_v2',
                                 'manifest_schema': 'loopx_shadow_management_manifest_v1',
-                                'outbox_manifest_schema': 'loopx_shadow_outbox_manifest_v1'},
+                                'exact_manifest_schema': 'loopx_shadow_management_manifest_v2',
+                                'outbox_manifest_schema': 'loopx_shadow_outbox_manifest_v1',
+                                'exact_outbox_manifest_schema': 'loopx_shadow_outbox_manifest_v2'},
  'legacy_writer_fence_protocol': {'fence_schema': 'loopx_legacy_coordination_writer_fence_v0',
                                   'engage_request_schema': 'loopx_legacy_coordination_writer_fence_engage_request_v0',
                                   'result_schema': 'loopx_legacy_coordination_writer_fence_result_v0',
@@ -227,6 +233,7 @@ COORDINATION_RUNTIME_SHADOW_RECEIPT_SCHEMA: Final[str] = 'loopx_coordination_run
 COORDINATION_RUNTIME_SHADOW_INSPECT_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_inspect_v0'
 COORDINATION_RUNTIME_SHADOW_INSPECT_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_inspection_v0'
 COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_bootstrap_v0'
+COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_bootstrap_v1'
 COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_bootstrap_result_v0'
 COORDINATION_RUNTIME_SHADOW_ROLLBACK_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_rollback_v0'
 COORDINATION_RUNTIME_SHADOW_ROLLBACK_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_rollback_result_v0'
@@ -236,6 +243,7 @@ COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA: Final[str] = 'loopx_coordi
 COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_todo_read_result_v0'
 
 LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_binding_v0'
+LOCAL_AUTHORITY_SHADOW_EXACT_BINDING_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_binding_v1'
 LOCAL_AUTHORITY_SHADOW_CONFIG_SCHEMA: Final[str] = 'loopx_local_authority_shadow_config_v0'
 LOCAL_AUTHORITY_SHADOW_REQUEST_SCHEMA: Final[str] = 'loopx_local_authority_shadow_request_v0'
 LOCAL_AUTHORITY_SHADOW_PROJECTION_SCHEMA: Final[str] = 'loopx_local_authority_shadow_projection_v0'
@@ -246,6 +254,7 @@ LOCAL_AUTHORITY_SHADOW_OUTBOX_COMMIT_SCHEMA: Final[str] = 'loopx_local_authority
 LOCAL_AUTHORITY_SHADOW_DRAIN_CURSOR_SCHEMA: Final[str] = 'loopx_local_authority_shadow_drain_cursor_v0'
 LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_projection_v0'
 LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA: Final[str] = 'loopx_shadow_entry_delivery_request_v0'
+LOCAL_AUTHORITY_SHADOW_EXACT_COMMIT_ENTRY_REQUEST_SCHEMA: Final[str] = 'loopx_shadow_entry_delivery_request_v1'
 LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_commit_entry_result_v0'
 LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_outbox_read_v0'
 LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_outbox_read_result_v0'
@@ -254,8 +263,11 @@ LOCAL_AUTHORITY_SHADOW_TRANSACTION_RECEIPT_SCHEMA: Final[str] = 'loopx_coordinat
 LOCAL_AUTHORITY_SHADOW_TRANSACTION_EVIDENCE_SCHEMA: Final[str] = 'loopx_local_authority_shadow_evidence_v1'
 
 SHADOW_MANAGEMENT_STATE_SCHEMA: Final[str] = 'loopx_shadow_management_state_v1'
+SHADOW_MANAGEMENT_EXACT_STATE_SCHEMA: Final[str] = 'loopx_shadow_management_state_v2'
 SHADOW_MANAGEMENT_MANIFEST_SCHEMA: Final[str] = 'loopx_shadow_management_manifest_v1'
+SHADOW_MANAGEMENT_EXACT_MANIFEST_SCHEMA: Final[str] = 'loopx_shadow_management_manifest_v2'
 SHADOW_OUTBOX_MANIFEST_SCHEMA: Final[str] = 'loopx_shadow_outbox_manifest_v1'
+SHADOW_EXACT_OUTBOX_MANIFEST_SCHEMA: Final[str] = 'loopx_shadow_outbox_manifest_v2'
 
 LEGACY_COORDINATION_WRITER_FENCE_SCHEMA: Final[str] = 'loopx_legacy_coordination_writer_fence_v0'
 LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA: Final[str] = 'loopx_legacy_coordination_writer_fence_engage_request_v0'

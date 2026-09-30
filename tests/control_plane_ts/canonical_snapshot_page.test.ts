@@ -89,3 +89,52 @@ test("ordering uses Unicode code points rather than JavaScript default UTF-16 so
   await seedSnapshot(store, projection);
   assert.deepEqual((await collectSnapshot(store)).todos.map(row => row.todo_id), ["z", "\ue000", "🙂"]);
 });
+
+for (const kind of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" | "sqlite")[]) {
+  test(`${kind}: collection and ownership preserve their validation precedence on one retained head`, async t => {
+    const {readCoordinationOwnership} = await import("../../loopx/control_plane/coordination/ownership_observation.ts");
+    for (const variant of ["valid", "bad_digest", "orphan_lease", "both", "duplicate_todo"] as const) {
+      const {store} = await fixture(t, kind);
+      const projection = productionScaleCoordinationFixture("goal-a", "native").projection;
+      if (variant === "bad_digest" || variant === "both") {
+        (projection.todo_read_model as JsonObject).records_sha256 = "0".repeat(64);
+      }
+      if (variant === "orphan_lease" || variant === "both" || variant === "duplicate_todo") {
+        (projection.leases as JsonObject[]).push({todo_id: "missing-todo"});
+      }
+      if (variant === "duplicate_todo") {
+        (projection.todos as JsonObject[]).push((projection.todos as JsonObject[])[0]!);
+      }
+      await seedSnapshot(store, projection);
+      const before = await store.loadAuthority();
+      if (variant === "valid") {
+        const full = await collectSnapshot(store);
+        assert.deepEqual(full.todos, projection.todos);
+        assert.deepEqual(full.leases, projection.leases);
+        const observation = await readCoordinationOwnership(store, "goal-a", "2026-09-29T00:00:00Z");
+        assert.equal(observation.todo_count, full.todos.length);
+        assert.equal(observation.lease_count, full.leases.length);
+        full.todos[0]!.note = "consumer-only edit";
+        full.leases[0]!.owner = "consumer-only owner";
+        const fresh = await collectSnapshot(store);
+        assert.deepEqual(fresh.todos, projection.todos);
+        assert.deepEqual(fresh.leases, projection.leases);
+      } else {
+        const collectionReason = variant === "duplicate_todo" ? /duplicate todo ids/
+          : variant === "orphan_lease" ? /lease references an unknown todo/ : /digest mismatch/;
+        const ownershipReason = variant === "duplicate_todo" ? /duplicate todo ids/
+          : variant === "bad_digest" ? /digest mismatch/ : /lease references an unknown todo/;
+        await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest(), store), collectionReason);
+        await assert.rejects(readCoordinationOwnership(store, "goal-a", "2026-09-29T00:00:00Z"), ownershipReason);
+        // Todo-only callers never acquired a lease-graph dependency. Keep that
+        // acceptance boundary even while complete reads reuse the Todo index.
+        if (variant === "orphan_lease") {
+          const todoOnly = await collectSnapshot(store, snapshotRequest({include_leases: false}));
+          assert.deepEqual(todoOnly.todos, projection.todos);
+          assert.deepEqual(todoOnly.leases, []);
+        }
+      }
+      assert.deepEqual(await store.loadAuthority(), before, "validation cannot rewrite the retained head");
+    }
+  });
+}

@@ -7,6 +7,15 @@ import {deliverShadowEntry} from "../../loopx/control_plane/coordination/shadow_
 import {outboxEntryFileName} from "../../loopx/control_plane/coordination/local_authority_shadow_outbox.ts";
 import {fixture, pendingEntry, settleFiles, sha, todo, entrySelection as selection} from "./shadow_file_fixture.ts";
 
+const GOAL_A = {
+  goal_id: "goal-a",
+  goal_instance_id: "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+};
+const GOAL_B = {
+  goal_id: "goal-a",
+  goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+};
+
 function entryPath(r: JsonObject, phase: "prepared" | "committed" = "prepared"): string {
   return join(String(r.runtime_root), "authority-shadow", "outbox", String(r.goal_id), String(r.partition),
     outboxEntryFileName(Number(r.seq), String(r.entry_id), phase));
@@ -27,6 +36,26 @@ test("delivery derives marked commits and replays exact receipts after cleanup",
   assert.equal(replay.partition_digest, first.partition_digest);
   assert.equal(replay.provider_revision, first.provider_revision);
   assert.equal((await deliverShadowEntry({...r, prepared_sha256: sha("changed")})).reason_code, "outbox_receipt_mismatch");
+});
+
+test("exact delivery rejects an entry after the Goal alias is recreated", async t => {
+  const f = await fixture(t, GOAL_A);
+  const request = await pendingEntry(
+    f,
+    1,
+    {handoff_mode: "hard_lease", todos: [todo()]},
+  );
+  const before = await f.store.loadAuthority();
+  const rejected = await deliverShadowEntry({
+    ...selection(request),
+    goal_ref: GOAL_B,
+  });
+  assert.equal(rejected.outcome, "failed");
+  assert.equal(rejected.reason_code, "stale_goal_instance");
+  assert.deepEqual(await f.store.loadAuthority(), before);
+
+  const delivered = await deliverShadowEntry(selection(request));
+  assert.equal(delivered.outcome, "delivered");
 });
 
 for (const state of ["committed", "abandoned", "foreign"] as const) {

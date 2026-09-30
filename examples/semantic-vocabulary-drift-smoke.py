@@ -1058,8 +1058,11 @@ def check_dual_runtime_twins(registry: dict[str, Any]) -> str:
     paths = {file.path for file in load_sources(REPO_ROOT, entry["root"])}
     twins = sorted(path for path in paths if path.endswith(".py") and not path.endswith("/__init__.py") and path[:-3] + ".ts" in paths)
     from scripts.generate_turn_contract import verified_generated_paths
-    generated = verified_generated_paths()
-    generated_twins = [path for path in twins if path in generated and path[:-3] + '.ts' in generated]
+    from scripts.generate_semantic_bindings import verified_generated_paths as semantic_generated_paths
+    generated = verified_generated_paths() | semantic_generated_paths()
+    # A verified source-derived binding has no independently maintained rule;
+    # its owner may be authored TS/Python or a shared generated contract.
+    generated_twins = [path for path in twins if path in generated or path[:-3] + '.ts' in generated]
     maintained = len(twins) - len(generated_twins)
     require(maintained <= entry['module_budget'], f"{maintained} independently maintained py/ts twins; budget is {entry['module_budget']}")
     return f"twins_raw={len(twins)} generated_verified={len(generated_twins)} independently_maintained={maintained}/{entry['module_budget']}"

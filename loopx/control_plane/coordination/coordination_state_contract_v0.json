@@ -130,6 +130,7 @@
     "inspect_request_schema": "loopx_coordination_runtime_shadow_inspect_v0",
     "inspect_result_schema": "loopx_coordination_runtime_shadow_inspection_v0",
     "bootstrap_request_schema": "loopx_coordination_runtime_shadow_bootstrap_v0",
+    "exact_bootstrap_request_schema": "loopx_coordination_runtime_shadow_bootstrap_v1",
     "bootstrap_result_schema": "loopx_coordination_runtime_shadow_bootstrap_result_v0",
     "rollback_request_schema": "loopx_coordination_runtime_shadow_rollback_v0",
     "rollback_result_schema": "loopx_coordination_runtime_shadow_rollback_result_v0",
@@ -140,6 +141,7 @@
   },
   "local_authority_shadow_protocol": {
     "binding_schema": "loopx_coordination_runtime_shadow_binding_v0",
+    "exact_binding_schema": "loopx_coordination_runtime_shadow_binding_v1",
     "config_schema": "loopx_local_authority_shadow_config_v0",
     "request_schema": "loopx_local_authority_shadow_request_v0",
     "projection_schema": "loopx_local_authority_shadow_projection_v0",
@@ -150,6 +152,7 @@
     "drain_cursor_schema": "loopx_local_authority_shadow_drain_cursor_v0",
     "transaction_projection_schema": "loopx_coordination_runtime_shadow_projection_v0",
     "commit_entry_request_schema": "loopx_shadow_entry_delivery_request_v0",
+    "exact_commit_entry_request_schema": "loopx_shadow_entry_delivery_request_v1",
     "commit_entry_result_schema": "loopx_coordination_runtime_shadow_commit_entry_result_v0",
     "read_request_schema": "loopx_coordination_runtime_shadow_outbox_read_v0",
     "read_result_schema": "loopx_coordination_runtime_shadow_outbox_read_result_v0",
@@ -159,8 +162,11 @@
   },
   "shadow_management_protocol": {
     "state_schema": "loopx_shadow_management_state_v1",
+    "exact_state_schema": "loopx_shadow_management_state_v2",
     "manifest_schema": "loopx_shadow_management_manifest_v1",
-    "outbox_manifest_schema": "loopx_shadow_outbox_manifest_v1"
+    "exact_manifest_schema": "loopx_shadow_management_manifest_v2",
+    "outbox_manifest_schema": "loopx_shadow_outbox_manifest_v1",
+    "exact_outbox_manifest_schema": "loopx_shadow_outbox_manifest_v2"
   },
   "legacy_writer_fence_protocol": {
     "fence_schema": "loopx_legacy_coordination_writer_fence_v0",

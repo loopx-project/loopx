@@ -25,8 +25,12 @@ import {
   validateCoordinationTodoReadModel,
 } from "./coordination_projection.ts";
 import { FileAuthorityStore } from "./file_authority_store.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {
+  requireShadowBindingGoalRef,
   requireShadowCaptureBinding,
+  shadowBindingGoalRef,
+  type WireGoalRef,
   withShadowMaintenanceLock,
 } from "./shadow_management.ts";
 import { outboxEntryIdentity, ShadowLineageError } from "./local_authority_shadow_identity.ts";
@@ -89,6 +93,7 @@ const COMMIT_ENTRY_REQUEST_FIELDS = new Set([
   "entry",
   "partition_projection",
   "partition_digest",
+  "goal_ref",
 ]);
 const ENTRY_FIELDS = new Set([
   "prepared_sha256", "committed_sha256",
@@ -163,6 +168,7 @@ interface ShadowEntry {
 export interface CommitEntryRequest {
   runtime_root: string;
   goal_id: string;
+  goal_ref: JsonObject | null;
   entry: ShadowEntry;
   partition_projection: JsonObject | null;
   partition_digest: string | null;
@@ -322,9 +328,22 @@ function decodeCommitEntryRequest(value: unknown): CommitEntryRequest {
       `entry resolution ${entry.resolution} requires partition_projection and partition_digest`,
     );
   }
+  const goalId = requireGoalId(request.goal_id);
+  let goalRef: JsonObject | null = null;
+  if (request.goal_ref !== null && request.goal_ref !== undefined) {
+    const parsed = parseExactGoalRef(request.goal_ref);
+    if (parsed.kind !== "parsed" || parsed.value.goalId.value !== goalId) {
+      throw new EffectRuntimeRequestError("goal_ref must be an exact reference for goal_id");
+    }
+    goalRef = {
+      goal_id: parsed.value.goalId.value,
+      goal_instance_id: parsed.value.goalInstanceId.value,
+    };
+  }
   return {
     runtime_root: requireNonEmptyString(request.runtime_root, "runtime_root"),
-    goal_id: requireGoalId(request.goal_id),
+    goal_id: goalId,
+    goal_ref: goalRef,
     entry,
     partition_projection: projection,
     partition_digest: digest,
@@ -645,6 +664,7 @@ export interface ShadowLineageBinding {
   store_identity: string;
   bootstrap_operation_id: string;
   bootstrap_provider_revision: string;
+  goal_ref?: WireGoalRef;
 }
 
 function requireLineage(condition: unknown, reason: string): asserts condition {
@@ -660,6 +680,11 @@ function sourceReference(entry: ShadowEntry, digest: string | null): string {
 
 function validateEntryIdentity(request: CommitEntryRequest, binding: ShadowLineageBinding): void {
   const { entry } = request;
+  if (request.goal_ref === null) {
+    requireLineage(shadowBindingGoalRef(binding) === null, "legacy_goal_binding");
+  } else {
+    requireShadowBindingGoalRef(binding, request.goal_ref, request.goal_id);
+  }
   requireLineage(entry.capture_lineage_id === binding.capture_lineage_id, "stale_generation");
   // requireShadowCaptureBinding has already proved that this binding belongs
   // to the requested physical runtime root. Keep accepting the binding's
@@ -711,8 +736,14 @@ export interface ValidatedShadowLineage {
  */
 export async function readProvenShadowSequence(
   runtimeRoot: string, goalId: string, partition: ShadowPartition, expectedLineageId: string,
+  expectedGoalRef: unknown = null,
 ): Promise<number> {
   const binding = await requireShadowCaptureBinding(runtimeRoot, goalId);
+  if (expectedGoalRef === null) {
+    requireLineage(shadowBindingGoalRef(binding) === null, "legacy_goal_binding");
+  } else {
+    requireShadowBindingGoalRef(binding, expectedGoalRef, goalId);
+  }
   requireLineage(binding.capture_lineage_id === expectedLineageId, "stale_generation");
   const store = new FileAuthorityStore(join(runtimeRoot, "authority-shadow", "file-v0"), goalId, { existingOnly: true });
   const lineage = await loadValidatedShadowLineage(store, runtimeRoot, goalId, binding);
@@ -784,6 +815,7 @@ export async function loadValidatedShadowLineage(
       : { leases: transaction.projection.leases };
     const request: CommitEntryRequest = {
       runtime_root: runtimeRoot, goal_id: goalId,
+      goal_ref: shadowBindingGoalRef(binding),
       entry: decodeEntry({
         capture_lineage_id: receipt.capture_lineage_id,
         prepared_sha256: receipt.prepared_sha256, committed_sha256: receipt.committed_sha256,

@@ -780,6 +780,11 @@ TypeScript effective-action/frontier 绑定与[术语表](../../reference/glossa
 检查生成物新鲜度，不新增 required CI job。运行 TypeScript 生产者扫描之前，
 先用 `npm ci --ignore-scripts` 安装锁定的 Node 依赖。
 
+同一语义绑定生成器还从 TS owner 生成现有 Python 摘要格式模块：仅接受两条无 flags
+的受限字面量正则，动态表达式与不支持的语法明确拒绝。孪生预算只在重新生成并逐字
+核对产物后，排除独立维护计数；文件名或 generated 注释不能豁免。调用方导入、匹配
+行为保持不变，也不增加运行时桥接。独立维护对数因此恢复为 43，上限仍为 43。
+
 Turn 契约使用独立的生成器和来源。只读验证入口：
 
 ```bash

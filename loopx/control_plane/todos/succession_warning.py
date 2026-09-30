@@ -1,6 +1,8 @@
 """Succession read-policy adapter and existing warning presentation."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from ..effect_runtime import effect_runtime_result
@@ -16,6 +18,12 @@ from .contract import (
     normalize_todo_resume_when,
     normalize_todo_excluded_agents,
 )
+
+
+# Both adapters consume the same positional schema; TS owns semantic validation.
+_SUCCESSION_WIRE = json.loads(Path(__file__).with_name("succession_wire_v1.json").read_text(encoding="utf-8"))
+SUCCESSION_FACT_COLUMNS = tuple(_SUCCESSION_WIRE["fact_columns"])
+SUCCESSION_EVALUATION_COLUMNS = tuple(_SUCCESSION_WIRE["evaluation_columns"])
 
 
 TODO_SUCCESSION_WARNING_SCHEMA_VERSION = "todo_succession_warning_v0"
@@ -179,17 +187,24 @@ def project_succession(items: list[dict[str, Any]], *, reuse: bool = False) -> l
             context_ids[shape] = len(contexts)
             contexts.append(list(shape))
         row["context_fields"] = context_ids[shape]
-    request: dict[str, Any] = {"schema_version": "todo_succession_request_v0",
-        "rows": rows, "context_field_sets": contexts}
+    request: dict[str, Any] = {"schema_version": _SUCCESSION_WIRE["request_schema"],
+        "row_columns": list(SUCCESSION_FACT_COLUMNS),
+        "rows": [[row[name] for name in SUCCESSION_FACT_COLUMNS] for row in rows],
+        "context_field_sets": contexts}
     if reuse:
-        request["evaluations"] = [item.succession_evaluation if isinstance(item, _EvaluatedTodo) else None for item in items]
+        request["evaluation_columns"] = list(SUCCESSION_EVALUATION_COLUMNS)
+        request["evaluations"] = [
+            [item.succession_evaluation.get(name) for name in SUCCESSION_EVALUATION_COLUMNS]
+            if isinstance(item, _EvaluatedTodo) else None for item in items]
     result = effect_runtime_result("todo.succession.project", request)
-    if not isinstance(result, dict) or result.get("schema_version") != "todo_succession_result_v0":
+    if (not isinstance(result, dict) or result.get("schema_version") != _SUCCESSION_WIRE["result_schema"]
+            or result.get("evaluation_columns") != list(SUCCESSION_EVALUATION_COLUMNS)):
         raise ValueError("invalid typed Todo succession result")
     evaluations = result.get("evaluations")
-    if not isinstance(evaluations, list) or len(evaluations) != len(items) or any(not isinstance(row, dict) for row in evaluations):
+    if (not isinstance(evaluations, list) or len(evaluations) != len(items)
+            or any(not isinstance(row, list) or len(row) != len(SUCCESSION_EVALUATION_COLUMNS) for row in evaluations)):
         raise ValueError("invalid typed Todo succession cardinality")
-    return evaluations
+    return [dict(zip(SUCCESSION_EVALUATION_COLUMNS, row, strict=True)) for row in evaluations]
 
 
 def evaluate_succession(items: list[dict[str, Any]], lineage: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:

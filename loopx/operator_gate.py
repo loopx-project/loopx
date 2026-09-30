@@ -9,7 +9,8 @@ from .history import collect_history, load_registry
 from .paths import resolve_runtime_root
 from .registry import registry_goals
 from .runtime import validate_goal_id_path_segment
-from .state_refresh import now_local, run_file_stem
+from .control_plane.runtime.time import now_local_iso as now_local
+from .control_plane.runtime.run_artifacts import run_file_stem
 from .control_plane.runtime.shared_runtime_material_projection import (
     finalize_material_projection,
     prepare_material_projection_route,

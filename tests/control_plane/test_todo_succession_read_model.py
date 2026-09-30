@@ -126,3 +126,21 @@ def test_evaluation_does_not_mutate_or_expand_input_rows():
     assert rows[0] is not original
     assert json.dumps(rows, sort_keys=True) == before
     assert "succession_evaluation" not in original
+
+
+@pytest.mark.parametrize("mutation", ["columns", "row_width", "cardinality"])
+def test_succession_wire_response_cannot_silently_rebind_fields(monkeypatch, mutation):
+    from loopx.control_plane.todos import succession_warning as owner
+    columns = list(owner.SUCCESSION_EVALUATION_COLUMNS)
+    value = ["todo_succession_evaluation_v0", "hash", [], [], True, True, None]
+    response = {"schema_version": "todo_succession_result_v1", "evaluation_columns": columns,
+                "evaluations": [value]}
+    if mutation == "columns":
+        response["evaluation_columns"] = list(reversed(columns))
+    elif mutation == "row_width":
+        response["evaluations"] = [value[:-1]]
+    else:
+        response["evaluations"] = []
+    monkeypatch.setattr(owner, "effect_runtime_result", lambda *a, **kw: response)
+    with pytest.raises(ValueError, match="typed Todo succession"):
+        owner.project_succession([work("todo_source")])

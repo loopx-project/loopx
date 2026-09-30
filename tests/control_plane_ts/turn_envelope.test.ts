@@ -176,7 +176,7 @@ test("Turn preserves checkpointed scope approval without lifting other gates", (
   assert.deepEqual(render(), baseline);
 });
 
-test("only active hook reads carry additive prompt budget through the envelope", () => {
+test("required commands remain intact independently of additive hook prompt budgets", () => {
   const source = payload();
   const baseline = buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" });
   const command = "loopx inspect --registry /" + "route/".repeat(80) + "registry.json";
@@ -185,7 +185,7 @@ test("only active hook reads carry additive prompt budget through the envelope",
   source.required_reads = [read];
   const ordinary = buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" });
   assert.equal((ordinary.compaction as JsonObject).budget_bytes, 8_192);
-  assert.equal(((ordinary.required_reads as JsonObject[])[0].command as string).length, 360);
+  assert.equal((ordinary.required_reads as JsonObject[])[0].command, command);
   assert.equal((ordinary.compaction as JsonObject).hook_prompt_budget_bytes, undefined);
   source.required_reads = [{ ...read, prompt_budget_bytes: 1_536 }];
   const active = buildTurnEnvelope({ payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: "" });
@@ -553,4 +553,54 @@ test("transaction boundary rejects malformed prepared facts", () => {
     }),
     EffectRuntimeRequestError,
   );
+});
+
+
+test("all required reads survive compaction and later reads affect the signature", () => {
+  const source = payload();
+  // The sixth read used to disappear; long quoted routes were also rewritten.
+  const reads = Array.from({length: 12}, (_, index) => ({
+    kind: index === 5 ? "agent_preferences" : `fixture_${index}`,
+    command: `loopx --registry '/${"workspace  dir/".repeat(45)}registry.json' inspect --item ${index}`,
+    source: "turn_start_capability_hook", reason: "Read before work",
+    ...(index === 11 ? {prompt_budget_bytes: 1_536} : {}),
+  }));
+  (source.interaction_contract as JsonObject).required_reads = reads;
+  const render = () => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const result = render();
+  assert.deepEqual((result.required_reads as JsonObject[]).map(x => x.command), reads.map(x => x.command));
+  assert.equal((result.compaction as JsonObject).budget_bytes, 8_192 + 1_536);
+  assert.equal((result.compaction as JsonObject).within_budget, false);
+  assert.equal((result.action_signature as JsonObject).matches, true);
+  const tampered = structuredClone(result);
+  (tampered.required_reads as JsonObject[]).pop();
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(tampered), quotaActionSignatureDocument(source, protocolActionFields));
+  reads[5].command += " --fresh";
+  assert.notEqual((render().action_signature as JsonObject).source_hash, (result.action_signature as JsonObject).source_hash);
+});
+
+
+test("unavailable hook context is signed without suppressing independent work", () => {
+  const source = payload();
+  const render = () => buildTurnEnvelope({payload: source,
+    protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  const baseline = render();
+  source.turn_start_capability_hook_dispatch = {results: [], failures: []};
+  assert.deepEqual(turnEnvelopeActionSignatureDocument(render()), turnEnvelopeActionSignatureDocument(baseline));
+  for (const [status, field] of [["unavailable", "results"], ["partial", "results"], ["failed", "failures"]]) {
+    const row = {hook_id: "fixture.context", capability_id: "fixture", status, error_code: "provider_failed", private_detail: "must not leak"};
+    source.turn_start_capability_hook_dispatch = {[field]: [row]};
+    const result = render();
+    const missing = (result.contract_capsule as JsonObject).unavailable_context as JsonObject;
+    assert.deepEqual(missing, {affected_hooks: [{hook_id: "fixture.context", capability_id: "fixture", status, error_code: "provider_failed"}],
+      cache_policy: "invalidate_affected_hook_context", dependent_action_policy: "hold_until_fresh_context",
+      independent_work_policy: "preserve_existing_authority"});
+    for (const key of ["action", "boundary", "execution_policy", "writeback"]) assert.deepEqual(result[key], baseline[key]);
+    assert.equal(JSON.stringify(result).includes("must not leak"), false);
+    assert.equal((result.action_signature as JsonObject).matches, true);
+    assert.notEqual((result.action_signature as JsonObject).source_hash, (baseline.action_signature as JsonObject).source_hash);
+    missing.cache_policy = "reuse_cached_context";
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(result), quotaActionSignatureDocument(source, protocolActionFields));
+  }
 });

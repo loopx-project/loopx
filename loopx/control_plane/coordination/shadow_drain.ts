@@ -8,31 +8,69 @@ import {durableWriteJson, withFileMutationLock} from "../effect_runtime_io.ts";
 import {EffectRuntimeLockTimeoutError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
-import {readShadowManagementState, requireShadowCaptureBinding, shadowMaintenanceLockPath} from "./shadow_management.ts";
+import {
+  readShadowManagementState,
+  requireShadowBindingGoalRef,
+  requireShadowCaptureBinding,
+  shadowBindingGoalRef,
+  shadowMaintenanceLockPath,
+} from "./shadow_management.ts";
+import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {readShadowDrainPlan, SHADOW_DRAIN_PLAN_REQUEST_SCHEMA} from "./shadow_drain_plan.ts";
-import {deliverShadowEntry, SHADOW_ENTRY_DELIVERY_REQUEST_SCHEMA} from "./shadow_entry_delivery.ts";
+import {
+  deliverShadowEntry,
+  SHADOW_ENTRY_DELIVERY_REQUEST_SCHEMA,
+  SHADOW_EXACT_ENTRY_DELIVERY_REQUEST_SCHEMA,
+} from "./shadow_entry_delivery.ts";
 import {outboxPartitionDirectory, LOCAL_AUTHORITY_SHADOW_DRAIN_CURSOR_SCHEMA} from "./local_authority_shadow_outbox.ts";
 import {ShadowLineageError, type LocalAuthorityShadowDependencies} from "./local_authority_shadow.ts";
 import {DrainKernelLockHost, drainInventory, reclaimDrainFiles, verifyDrainFiles, withDrainPrimary, type DrainPartition, type DrainEntry} from "./shadow_drain_files.ts";
 
 export const SHADOW_DRAIN_SCHEMA = "loopx_shadow_drain_v0";
-interface Request {runtime_root: string; goal_id: string; python_executable: string; config_enabled: boolean;
-  max_entries: number; budget_seconds: number; lock_timeout_seconds: number}
+export const SHADOW_EXACT_DRAIN_SCHEMA = "loopx_shadow_drain_v1";
+interface Request {schema_version: typeof SHADOW_DRAIN_SCHEMA | typeof SHADOW_EXACT_DRAIN_SCHEMA;
+  runtime_root: string; goal_id: string; python_executable: string; config_enabled: boolean;
+  max_entries: number; budget_seconds: number; lock_timeout_seconds: number; goal_ref: JsonObject | null}
 interface Dependencies extends LocalAuthorityShadowDependencies {
   /** Scheduling-only fault seam; never accepted from a public request. */
   afterEffect?: (phase: "after_proof" | "before_commit" | "after_commit" | "after_cursor" | "after_unlink") => Promise<void>;
 }
 function decode(value: unknown): Request {
   const r = requireJsonObject(value, "drain request");
-  if (!hasExactAuthorityKeys(r, ["schema_version", "runtime_root", "goal_id", "python_executable", "config_enabled",
-    "max_entries", "budget_seconds", "lock_timeout_seconds"]) || r.schema_version !== SHADOW_DRAIN_SCHEMA ||
+  const exactIdentity = r.schema_version === SHADOW_EXACT_DRAIN_SCHEMA;
+  const fields = ["schema_version", "runtime_root", "goal_id", "python_executable", "config_enabled",
+    "max_entries", "budget_seconds", "lock_timeout_seconds"];
+  if (exactIdentity) fields.push("goal_ref");
+  if (!hasExactAuthorityKeys(r, fields) ||
+    (!exactIdentity && r.schema_version !== SHADOW_DRAIN_SCHEMA) ||
     typeof r.runtime_root !== "string" || !isAbsolute(r.runtime_root) || r.runtime_root.includes("\0") ||
     typeof r.python_executable !== "string" || !isAbsolute(r.python_executable) || r.python_executable.includes("\0") ||
     typeof r.config_enabled !== "boolean" || !Number.isSafeInteger(r.max_entries) || Number(r.max_entries) < 1 ||
     [r.budget_seconds, r.lock_timeout_seconds].some(n => typeof n !== "number" || !Number.isFinite(n) || n < 0))
     throw new ShadowLineageError("shadow_drain_request_invalid");
-  requireAuthorityStoreId(r.goal_id, "goal id");
-  return r as unknown as Request;
+  const goalId = requireAuthorityStoreId(r.goal_id, "goal id");
+  let goalRef: JsonObject | null = null;
+  if (exactIdentity) {
+    const parsed = parseExactGoalRef(r.goal_ref);
+    if (parsed.kind !== "parsed" || parsed.value.goalId.value !== goalId) {
+      throw new ShadowLineageError("shadow_drain_request_invalid");
+    }
+    goalRef = {
+      goal_id: parsed.value.goalId.value,
+      goal_instance_id: parsed.value.goalInstanceId.value,
+    };
+  }
+  return {
+    schema_version: exactIdentity ? SHADOW_EXACT_DRAIN_SCHEMA : SHADOW_DRAIN_SCHEMA,
+    runtime_root: r.runtime_root,
+    goal_id: goalId,
+    python_executable: String(r.python_executable),
+    config_enabled: r.config_enabled,
+    max_entries: Number(r.max_entries),
+    budget_seconds: Number(r.budget_seconds),
+    lock_timeout_seconds: Number(r.lock_timeout_seconds),
+    goal_ref: goalRef,
+  };
 }
 function errorCode(error: unknown): string {
   if (error instanceof EffectRuntimeLockTimeoutError) return "drain_lock_busy";
@@ -53,7 +91,7 @@ export async function drainShadowOutbox(value: unknown, dependencies: Dependenci
   let consumed = 0;
   const deadline = performance.now() + r.budget_seconds * 1000;
   const timeOpen = () => performance.now() < deadline;
-  const finish = (): JsonObject => ({schema_version: SHADOW_DRAIN_SCHEMA, ...result,
+  const finish = (): JsonObject => ({schema_version: r.schema_version, ...result,
     ok: ["drained", "nothing_pending"].includes(result.outcome) && result.stopped_at === null,
     drained_count: result.delivered + result.replayed + result.reconciled});
   const observe = (view: JsonObject) => {
@@ -73,10 +111,23 @@ export async function drainShadowOutbox(value: unknown, dependencies: Dependenci
       }
       return finish();
     }
-    const lineage = (await requireShadowCaptureBinding(root, goal)).capture_lineage_id;
+    const initialBinding = await requireShadowCaptureBinding(root, goal);
+    if (r.goal_ref === null) {
+      if (shadowBindingGoalRef(initialBinding) !== null) {
+        throw new ShadowLineageError("legacy_goal_binding");
+      }
+    } else {
+      requireShadowBindingGoalRef(initialBinding, r.goal_ref, goal);
+    }
+    const lineage = initialBinding.capture_lineage_id;
     const binding = async () => {
       const active = await requireShadowCaptureBinding(root, goal);
       if (active.capture_lineage_id !== lineage) throw new ShadowLineageError("stale_generation");
+      if (r.goal_ref === null) {
+        if (shadowBindingGoalRef(active) !== null) throw new ShadowLineageError("legacy_goal_binding");
+      } else {
+        requireShadowBindingGoalRef(active, r.goal_ref, goal);
+      }
       return active;
     };
     const reconcile = async (partition: DrainPartition, acknowledgement: JsonObject | null = null): Promise<DrainEntry[]> => {
@@ -134,7 +185,11 @@ export async function drainShadowOutbox(value: unknown, dependencies: Dependenci
         if (!timeOpen()) {result.budget_exhausted = true; break;}
         const raw = await deliverShadowEntry({schema_version: SHADOW_ENTRY_DELIVERY_REQUEST_SCHEMA, runtime_root: root, goal_id: goal,
           partition, entry_id: entry.entry_id, seq: entry.seq, capture_lineage_id: entry.capture_lineage_id,
-          prepared_sha256: entry.prepared_sha256, committed_sha256: entry.committed_sha256}, dependencies);
+          prepared_sha256: entry.prepared_sha256, committed_sha256: entry.committed_sha256,
+          ...(r.goal_ref === null ? {} : {
+            schema_version: SHADOW_EXACT_ENTRY_DELIVERY_REQUEST_SCHEMA,
+            goal_ref: r.goal_ref,
+          })}, dependencies);
         consumed++; await dependencies.afterEffect?.("after_commit");
         if (!["delivered", "replayed", "ambiguous_reconciled"].includes(String(raw.outcome))) {
           result.stopped_at = {partition, seq: entry.seq, entry_id: entry.entry_id, outcome: raw.outcome,

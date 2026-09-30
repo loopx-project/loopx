@@ -1003,11 +1003,11 @@ def _interaction_required_reads(payload: dict[str, Any]) -> list[dict[str, Any]]
     for item in reads:
         if not isinstance(item, dict):
             continue
-        command = protocol_action_text(item.get("command"), limit=(
-            item.get("prompt_budget_bytes", 360) if item.get("source") == "turn_start_capability_hook" else 360))
-        if not command:
+        # Transport the admitted command intact; display compaction can change
+        # quoted paths or remove arguments. The typed envelope owns validation.
+        if not item.get("command"):
             continue
-        result.append({**item, "command": command})
+        result.append(dict(item))
     return result
 
 

@@ -11,12 +11,14 @@ import type { AuthorityStore } from "./authority_store.ts";
 import { canonicalAuthorityBytes, canonicalAuthorityObject, canonicalAuthoritySha256, requireAuthorityStoreId } from "./authority_store_codec.ts";
 import { indexCoordinationProjectionTodos, validateCoordinationTodoReadModel } from "./coordination_projection.ts";
 import { FileAuthorityStore } from "./file_authority_store.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { legacyCoordinationTodoLockPath, legacyCoordinationLeaseLockPath, loadLegacyCoordinationWriterFence } from "./legacy_writer_fence.ts";
 import { loadValidatedShadowLineage, localAuthorityShadowHeadDigest, ShadowLineageError } from "./local_authority_shadow.ts";
 import { readOutboxCursor } from "./local_authority_shadow_outbox.ts";
 import {
   bootstrapManagedShadow, rollbackManagedShadow, requireShadowCaptureBinding,
-  withShadowMaintenanceLock, ShadowManagementError, requireShadowPrimaryWriteAllowed,
+  shadowBindingGoalRef, withShadowMaintenanceLock, ShadowManagementError,
+  requireShadowPrimaryWriteAllowed,
 } from "./shadow_management.ts";
 import * as schemas from "./coordination_state_contract.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
@@ -186,8 +188,26 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
 export async function bootstrapCoordinationRuntimeShadow(value: unknown, _dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
   const schema = schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA;
   try {
-    const request = decodeRuntimeShadowRequest(value, schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA, ["operation_id", "source_version"]);
+    const input = requireJsonObject(value, "coordination shadow bootstrap request");
+    const exactIdentity = input.schema_version === schemas.COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA;
+    const request = decodeRuntimeShadowRequest(
+      value,
+      exactIdentity
+        ? schemas.COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA
+        : schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
+      exactIdentity ? ["operation_id", "source_version", "goal_ref"] : ["operation_id", "source_version"],
+    );
     text(request.operation_id, "operation_id"); text(request.source_version, "source_version");
+    if (exactIdentity) {
+      const goalRef = parseExactGoalRef(request.goal_ref);
+      if (goalRef.kind !== "parsed" || goalRef.value.goalId.value !== request.goal_id) {
+        throw new ShadowManagementError("goal_ref_invalid");
+      }
+      request.goal_ref = {
+        goal_id: goalRef.value.goalId.value,
+        goal_instance_id: goalRef.value.goalInstanceId.value,
+      };
+    }
     const result = await bootstrapManagedShadow(request, {
       withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation),
       verifySourceSnapshot: () => verifyShadowSourceSnapshot(request),
@@ -224,7 +244,11 @@ async function pendingOutbox(root: string, goal: string,
   try { manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes)); }
   catch { throw new ShadowLineageError("outbox_manifest_unproved"); }
   if (!canonicalAuthorityBytes(manifest).equals(canonicalAuthorityBytes({
-    schema_version: schemas.SHADOW_OUTBOX_MANIFEST_SCHEMA, goal_id: goal, ...binding,
+    schema_version: shadowBindingGoalRef(binding) === null
+      ? schemas.SHADOW_OUTBOX_MANIFEST_SCHEMA
+      : schemas.SHADOW_EXACT_OUTBOX_MANIFEST_SCHEMA,
+    goal_id: goal,
+    ...binding,
   }))) throw new ShadowLineageError("outbox_manifest_unproved");
   for (const partition of ["todos", "leases"]) {
     const directory = join(root, "authority-shadow", "outbox", goal, partition);

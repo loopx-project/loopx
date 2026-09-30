@@ -29,3 +29,13 @@ def test_run_artifact_reservation_is_atomic_across_processes(tmp_path: Path) -> 
     assert len(markdown_names) == worker_count
     assert {path.name for path in tmp_path.glob("*.json")} == json_names
     assert all((tmp_path / name).stat().st_size == 0 for name in json_names)
+
+
+def test_run_filename_facades_reuse_the_runtime_codec() -> None:
+    from loopx import operator_gate, state_refresh
+    from loopx.control_plane.runtime.run_artifacts import run_file_stem
+
+    assert operator_gate.run_file_stem is run_file_stem
+    assert state_refresh.run_file_stem is run_file_stem
+    assert run_file_stem("2026-09-29T14:00:00.123+08:00") == "2026-09-29T14-00-00-123-08-00"
+    assert run_file_stem("../🧪/2026-09-29/") == "2026-09-29"

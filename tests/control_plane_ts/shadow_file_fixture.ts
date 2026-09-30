@@ -27,14 +27,27 @@ export function projection(todos: JsonObject[] = [], leases: JsonObject[] = [], 
       records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_CANONICAL_READ_RECORD_FIELDS] },
     partitions: { todos: null, leases: null } };
 }
-export interface ShadowFixture { root: string; statePath: string; store: FileAuthorityStore; baseline: JsonObject }
+export interface ShadowFixture {
+  root: string;
+  statePath: string;
+  store: FileAuthorityStore;
+  baseline: JsonObject;
+  goalRef?: JsonObject | null;
+}
 export async function sourceRequest(f: ShadowFixture, head: JsonObject): Promise<JsonObject> {
   const registryPath = join(f.root, "registry.json");
   let registryBytes: Buffer;
   try { registryBytes = await readFile(registryPath); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    registryBytes = Buffer.from(JSON.stringify({goals: [{id: "goal-a", coordination: {registered_agents: ["agent-a", "agent-b"]}}]}));
+    registryBytes = Buffer.from(JSON.stringify({
+      ...(f.goalRef == null ? {} : {profile_id: "source_session_v1"}),
+      goals: [{
+        id: "goal-a",
+        ...(f.goalRef == null ? {} : {goal_instance_id: f.goalRef.goal_instance_id}),
+        coordination: {registered_agents: ["agent-a", "agent-b"]},
+      }],
+    }));
     await writeFile(registryPath, registryBytes);
   }
   const agents = JSON.parse(registryBytes.toString("utf8")).goals[0].coordination.registered_agents;
@@ -49,15 +62,27 @@ export async function sourceRequest(f: ShadowFixture, head: JsonObject): Promise
       lease_inventory: inventory, projection_sha256: canonicalAuthoritySha256(head), evidence_files: [], registry_source: {path: registryPath,
         sha256: sha(registryBytes).slice(7), registered_agents: agents} } };
 }
-export async function fixture(t: TestContext): Promise<ShadowFixture> {
+export async function fixture(
+  t: TestContext,
+  goalRef: JsonObject | null = null,
+): Promise<ShadowFixture> {
   const root = await mkdtemp(join(tmpdir(), "loopx-file-outbox-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const statePath = join(root, "ACTIVE_GOAL_STATE.md");
   await writeFile(statePath, "---\ngoal_id: goal-a\nhandoff_mode: hard_lease\n---\n\n## Agent Todo\n\n");
-  const f = { root, statePath, store: new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), "goal-a"), baseline: projection() };
+  const f = {
+    root,
+    statePath,
+    store: new FileAuthorityStore(join(root, "authority-shadow", "file-v0"), "goal-a"),
+    baseline: projection(),
+    goalRef,
+  };
   const boot = await bootstrapCoordinationRuntimeShadow({ ...await sourceRequest(f, f.baseline),
-    schema_version: schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA,
-    operation_id: "bootstrap:test:first", source_version: "source:initial" });
+    schema_version: goalRef === null
+      ? schemas.COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA
+      : schemas.COORDINATION_RUNTIME_SHADOW_EXACT_BOOTSTRAP_REQUEST_SCHEMA,
+    operation_id: "bootstrap:test:first", source_version: "source:initial",
+    ...(goalRef === null ? {} : {goal_ref: goalRef}) });
   if (boot.status !== "applied") throw new Error(`fixture bootstrap failed: ${JSON.stringify(boot)}`);
   return f;
 }
@@ -100,6 +125,7 @@ export async function pendingEntry(f: ShadowFixture, seq: number, part: JsonObje
   const resolution = options.resolution ?? "committed";
   const noOp = resolution === "abandoned" || resolution === "unproved";
   return { runtime_root: f.root, goal_id: "goal-a",
+    ...(f.goalRef == null ? {} : {goal_ref: f.goalRef}),
     entry: { capture_lineage_id: binding.capture_lineage_id, entry_id: entryId, partition, seq, writer, source,
       source_root_digest: binding.source_root_digest, prepared_at: preparedAt, committed_at: marker ? committedAt : null,
       prepared_sha256: sha(preparedBytes), committed_sha256: marker ? sha(markerBytes) : null, resolution },
@@ -123,8 +149,12 @@ export async function settleFiles(f: ShadowFixture, request: JsonObject, result:
 /** Production delivery sends identity and byte witnesses, not a second projection. */
 export function entrySelection(request: JsonObject): JsonObject {
   const entry = request.entry as JsonObject;
-  return {schema_version: schemas.LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA,
+  const goalRef = request.goal_ref ?? null;
+  return {schema_version: goalRef === null
+      ? schemas.LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA
+      : schemas.LOCAL_AUTHORITY_SHADOW_EXACT_COMMIT_ENTRY_REQUEST_SCHEMA,
     runtime_root: request.runtime_root, goal_id: request.goal_id,
+    ...(goalRef === null ? {} : {goal_ref: goalRef}),
     ...Object.fromEntries(["partition", "seq", "entry_id", "capture_lineage_id", "prepared_sha256", "committed_sha256"]
       .map(key => [key, entry[key]]))};
 }

@@ -82,12 +82,16 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     boundary = _mapping(envelope.get("boundary"))
     required_reads = envelope.get("required_reads")
     write_scope = boundary.get("write_scope")
-    return {
+    authority = {
         "primary_action": primary_action,
         "required_reads": list(required_reads) if isinstance(required_reads, list) else [],
         "write_scope": list(write_scope) if isinstance(write_scope, list) else [],
         "workspace_guard": _mapping(boundary.get("workspace_guard")),
     }
+    unavailable = _mapping(_mapping(envelope.get("contract_capsule")).get("unavailable_context"))
+    if unavailable:
+        authority["unavailable_context"] = unavailable
+    return authority
 
 
 def extract_action_text(request: Mapping[str, Any]) -> str:
@@ -109,11 +113,19 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+    context_instruction = (
+        "For unavailable_context, discard cached context from the affected hooks; "
+        "do not interpret failure as empty context. Hold actions that require that "
+        "missing context until it is read successfully. Independent work may "
+        "continue under its existing authority; this grants no new permissions.\n"
+        if authority.get("unavailable_context") else ""
+    )
     return (
         "You are executing one bounded LoopX-governed work segment.\n"
         "The JSON below is the complete host authority for this Turn. Execute "
         "primary_action only after required_reads, write only inside write_scope, "
         "and obey workspace_guard. Do not infer authority from other prose.\n\n"
+        f"{context_instruction}"
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"

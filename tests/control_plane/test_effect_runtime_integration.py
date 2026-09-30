@@ -393,6 +393,7 @@ def test_coordination_runtime_shadow_bootstrap_crosses_python_typescript_boundar
         "source_version": "state:1",
         "projection": projection,
         "source_snapshot": source_snapshot,
+        "goal_ref": None,
     }
 
     applied = bootstrap_coordination_runtime_shadow(**request)

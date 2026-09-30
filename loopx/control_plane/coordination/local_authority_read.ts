@@ -7,7 +7,7 @@ import {authorityStoreSourceAuthority as sourceAuthorityFor} from "./authority_s
 import {requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {openRuntimeAuthorityStore as openRuntimeStore, requireLocalAuthorityRuntimeRoot as runtimeRoot,
   localAuthorityOpenFailure, type LocalAuthorityProviderDependencies} from "./local_authority_provider.ts";
-import {indexCoordinationProjection, indexCoordinationProjectionTodos, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
+import {CoordinationProjectionRead, indexCoordinationProjectionTodos, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
 import {LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA, LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
   LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA, LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA} from "./coordination_state_contract.generated.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
@@ -16,10 +16,11 @@ import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/proj
  * transport only; retained records, read-model validation and acceptance keep
  * this same owner. */
 export function canonicalTodoCollection(head: JsonObject, goalId: string, includeLeases: boolean) {
+  const read = new CoordinationProjectionRead(head, goalId);
   return {
-    projection: indexCoordinationProjectionTodos(head, goalId),
-    todoReadModel: validateCoordinationTodoReadModel(head, goalId),
-    leaseIndex: includeLeases ? indexCoordinationProjection(head, goalId) : null,
+    projection: read.todoIndex,
+    todoReadModel: read.validateTodoReadModel(),
+    leaseIndex: includeLeases ? read.coordinationIndex : null,
     acceptance: projectGoalAcceptance(head, goalId),
   };
 }

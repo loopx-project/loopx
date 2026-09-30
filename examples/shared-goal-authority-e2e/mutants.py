@@ -133,7 +133,7 @@ CASES = [
          'tests/control_plane_ts/coordination_runtime_shadow.test.ts', 'observation transaction mixed'),
     Case('management_request_digest', ((COORDINATION + "shadow_management.ts", replacement('if (state.operation.request_digest !== digest) throw new ShadowManagementError("management_operation_identity_mismatch");', 'if (false) throw new ShadowManagementError("management_operation_identity_mismatch");')),),
          "tests/control_plane_ts/shadow_management.test.ts", 'management request digest'),
-    Case('management_manifest_hash', ((COORDINATION + "shadow_management.ts", replacement('managementDigest(manifest) !== state.operation.manifest_digest\n      || manifest.schema_version !== SHADOW_MANAGEMENT_MANIFEST_SCHEMA\n', 'false\n      || manifest.schema_version !== SHADOW_MANAGEMENT_MANIFEST_SCHEMA\n')),),
+    Case('management_manifest_hash', ((COORDINATION + "shadow_management.ts", replacement('managementDigest(manifest) !== state.operation.manifest_digest\n      || !supportedSchema\n', 'false\n      || !supportedSchema\n')),),
          "tests/control_plane_ts/shadow_management.test.ts", 'management manifest hash'),
     Case('management_phase', ((COORDINATION + "shadow_management.ts", replacement('operation.kind !== kind || !phases.includes(String(operation.phase))', 'operation.kind !== kind')),),
          "tests/control_plane_ts/shadow_management.test.ts", 'management phase validation'),

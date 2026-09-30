@@ -723,6 +723,23 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
   downstream drain、不支持的旧/常驻二进制和其余 inventory owner 尚未
   qualified；`execution_authority: false` 与 M3 activation hold 保持不变。
 
+### 2026-09-29：M3 handoff inbox/outbox 候选
+
+- **基线：** `738115bde87eef3fd153abe456d53da5e2b249f8`。
+- **候选实现：** 将每个新 shadow management lineage 绑定到 source registry
+  的精确 GoalRef。既有 outbox entry、commit marker 和 cursor 字节保持兼容；
+  entry identity 已包含不可变 lineage。Exact bootstrap、management 和
+  outbox manifest 使用新 schema。Exact caller 不能从 legacy binding 推断身份。
+- **证据：** 真实 source-session A-to-B recreation 后，B drain 不会修改 Goal A
+  的 pending 文件或 candidate head，B 也不能向 A 的 active lineage 写 capture。
+  如果 A 已开始 capture 而 B 在 primary write 前替换 A，writer 会在 Goal
+  lifetime guard 内重新校验，并在写入前拒绝该 capture。显式 rollback 会连同
+  GoalRef 归档 A；重新 bootstrap 后，B 只提交并 replay 自己的工作。Legacy
+  drain request 不能进入 exact lineage。
+- **剩余 hold：** 本切片只资格化 `handoff_inbox_outbox` inventory 行。
+  Todo/lease mutation admission、quota、automation、Goal Channel 与 M3 总
+  activation hold 仍分别验收。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | Owner／批准 | 替代方案 | 变更的规范章节 |

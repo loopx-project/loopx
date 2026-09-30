@@ -5,11 +5,18 @@ import { join } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
 import { durableWriteJson } from "../effect_runtime_io.ts";
 import { authorityUnicodeCompare, canonicalAuthorityBytes } from "./authority_store_codec.ts";
-import { requireShadowCaptureBinding, ShadowManagementError } from "./shadow_management.ts";
+import {
+  requireShadowBindingGoalRef,
+  requireShadowCaptureBinding,
+  shadowBindingGoalRef,
+  ShadowManagementError,
+} from "./shadow_management.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { outboxEntryIdentity, OUTBOX_ENTRY_FILE_PATTERN } from "./local_authority_shadow_identity.ts";
 import { readProvenShadowSequence } from "./local_authority_shadow.ts";
 import {
   LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA,
+  LOCAL_AUTHORITY_SHADOW_EXACT_BINDING_SCHEMA,
   LOCAL_AUTHORITY_SHADOW_DRAIN_CURSOR_SCHEMA,
   LOCAL_AUTHORITY_SHADOW_OUTBOX_COMMIT_SCHEMA,
   LOCAL_AUTHORITY_SHADOW_OUTBOX_ENTRY_SCHEMA,
@@ -29,6 +36,7 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 export {
   outboxEntryIdentity,
   LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA,
+  LOCAL_AUTHORITY_SHADOW_EXACT_BINDING_SCHEMA,
   LOCAL_AUTHORITY_SHADOW_DRAIN_CURSOR_SCHEMA,
   LOCAL_AUTHORITY_SHADOW_OUTBOX_COMMIT_SCHEMA,
   LOCAL_AUTHORITY_SHADOW_OUTBOX_ENTRY_SCHEMA,
@@ -37,10 +45,18 @@ export const LEASE_PARTITION = "leases";
 const LEASE_FILE = /^[A-Za-z0-9_.-]+\.json$/u;
 const LEASE_SOURCE_FIELDS = ["todo_id", "version", "lease_epoch", "status", "updated_at"] as const;
 
-export interface LocalAuthorityShadowBinding {
+export interface LegacyLocalAuthorityShadowBinding {
   schema_version: typeof LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA;
   provider: "file_v0";
 }
+export interface ExactLocalAuthorityShadowBinding {
+  schema_version: typeof LOCAL_AUTHORITY_SHADOW_EXACT_BINDING_SCHEMA;
+  provider: "file_v0";
+  goal_ref: JsonObject;
+}
+export type LocalAuthorityShadowBinding =
+  | LegacyLocalAuthorityShadowBinding
+  | ExactLocalAuthorityShadowBinding;
 
 /** Decode the optional per-request binding; anything but the exact contract is "absent". */
 export function decodeLocalAuthorityShadowBinding(
@@ -51,14 +67,28 @@ export function decodeLocalAuthorityShadowBinding(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
+  if (record.schema_version === LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA) {
+    return keys.length === 2 && record.provider === "file_v0"
+      ? { schema_version: LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA, provider: "file_v0" }
+      : null;
+  }
+  const goalRef = parseExactGoalRef(record.goal_ref);
   if (
-    keys.length !== 2 ||
-    record.schema_version !== LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA ||
-    record.provider !== "file_v0"
+    keys.length !== 3 ||
+    record.schema_version !== LOCAL_AUTHORITY_SHADOW_EXACT_BINDING_SCHEMA ||
+    record.provider !== "file_v0" ||
+    goalRef.kind !== "parsed"
   ) {
     return null;
   }
-  return { schema_version: LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA, provider: "file_v0" };
+  return {
+    schema_version: LOCAL_AUTHORITY_SHADOW_EXACT_BINDING_SCHEMA,
+    provider: "file_v0",
+    goal_ref: {
+      goal_id: goalRef.value.goalId.value,
+      goal_instance_id: goalRef.value.goalInstanceId.value,
+    },
+  };
 }
 
 export function sha256Digest(input: Uint8Array | string): string {
@@ -142,7 +172,13 @@ export function decodeOutboxCursor(value: unknown, partition: string): JsonObjec
   return record;
 }
 
-async function nextSeq(directory: string, runtimeRoot: string, goalId: string, lineageId: string): Promise<number> {
+async function nextSeq(
+  directory: string,
+  runtimeRoot: string,
+  goalId: string,
+  lineageId: string,
+  goalRef: unknown,
+): Promise<number> {
   let highest = 0;
   try {
     for (const name of await readdir(directory)) {
@@ -154,7 +190,7 @@ async function nextSeq(directory: string, runtimeRoot: string, goalId: string, l
   }
   const cursor = await readOutboxCursor(directory, LEASE_PARTITION);
   const proved = cursor === null
-    ? await readProvenShadowSequence(runtimeRoot, goalId, LEASE_PARTITION, lineageId)
+    ? await readProvenShadowSequence(runtimeRoot, goalId, LEASE_PARTITION, lineageId, goalRef)
     : cursor.last_seq as number;
   highest = Math.max(highest, proved);
   if (highest >= MAX_OUTBOX_SEQUENCE) throw new Error("outbox sequence exhausted");
@@ -231,6 +267,7 @@ export interface LeaseOutboxCaptureInput {
    * strict pre-existing behavior.
    */
   active_todo_ids: readonly string[] | null;
+  goal_ref?: unknown;
 }
 
 export interface LeaseOutboxCapture {
@@ -276,6 +313,13 @@ export async function beginLeaseOutboxEntry(
   const directory = outboxPartitionDirectory(input.runtime_root, input.goal_id, LEASE_PARTITION);
   try {
     const binding = await requireShadowCaptureBinding(input.runtime_root, input.goal_id);
+    const boundGoalRef = shadowBindingGoalRef(binding);
+    if (boundGoalRef === null && input.goal_ref !== undefined && input.goal_ref !== null) {
+      throw new ShadowManagementError("legacy_goal_binding");
+    }
+    if (boundGoalRef !== null) {
+      requireShadowBindingGoalRef(binding, input.goal_ref, input.goal_id);
+    }
     if (input.previous_lease !== null &&
         canonicalAuthorityBytes(input.previous_lease).equals(canonicalAuthorityBytes(input.planned_lease))) {
       return { ...inert, skipped_reason: "partition_unchanged" };
@@ -295,7 +339,13 @@ export async function beginLeaseOutboxEntry(
       leases: previousRecords.map((item) => item.record),
     }));
     const bytesDigest = leaseRecordDigest(input.planned_lease);
-    const seq = await nextSeq(directory, input.runtime_root, input.goal_id, binding.capture_lineage_id);
+    const seq = await nextSeq(
+      directory,
+      input.runtime_root,
+      input.goal_id,
+      binding.capture_lineage_id,
+      input.goal_ref ?? null,
+    );
     const sourceRootDigest = binding.source_root_digest;
     const entryId = outboxEntryIdentity(input.goal_id, LEASE_PARTITION, seq, bytesDigest,
       binding.capture_lineage_id, sourceRootDigest);
@@ -356,6 +406,9 @@ export async function beginLeaseOutboxEntry(
   } catch (error) {
     if (error instanceof ShadowManagementError && error.code === "bootstrap_required") {
       return { ...inert, skipped_reason: "bootstrap_required" };
+    }
+    if (error instanceof ShadowManagementError) {
+      return { ...inert, failure: failureOf(error.code, error) };
     }
     return { ...inert, failure: failureOf("outbox_prepare_failed", error) };
   }

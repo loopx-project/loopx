@@ -179,7 +179,13 @@ export function validateCoordinationTodoReadModel(
   value: JsonObject,
   expectedGoalId: string,
 ): JsonObject {
-  const index = indexCoordinationProjectionTodos(value, expectedGoalId);
+  return validateIndexedTodoReadModel(value, indexCoordinationProjectionTodos(value, expectedGoalId));
+}
+
+function validateIndexedTodoReadModel(
+  value: JsonObject,
+  index: CoordinationTodoProjectionIndex,
+): JsonObject {
   const records = index.todo_ids.map((todoId) => index.todos.get(todoId)!);
   // Identity indexing already validates/copies every record and rejects duplicate
   // IDs. The insertion order of those same records proves order; serializing
@@ -304,7 +310,13 @@ export function indexCoordinationProjection(
   value: JsonObject,
   expectedGoalId: string,
 ): CoordinationProjectionIndex {
-  const todoIndex = indexCoordinationProjectionTodos(value, expectedGoalId);
+  return indexCoordinationLeases(value, indexCoordinationProjectionTodos(value, expectedGoalId));
+}
+
+function indexCoordinationLeases(
+  value: JsonObject,
+  todoIndex: CoordinationTodoProjectionIndex,
+): CoordinationProjectionIndex {
   const leases = indexRecords(value.leases, "leases");
   for (const todoId of leases.keys()) {
     if (!todoIndex.todos.has(todoId)) {
@@ -318,6 +330,37 @@ export function indexCoordinationProjection(
     leases,
     lease_todo_ids: sortedIds(leases.keys()),
   };
+}
+
+/**
+ * One synchronous consumer's read of an already-loaded projection. Reuse its
+ * validated Todo identities across read-model and lease checks; never retain
+ * this object across provider reads, mutations or asynchronous work. Getters
+ * let each consumer preserve its existing validation order and lease scope.
+ * This owns no provider revision cache and grants no write or lease authority.
+ */
+export class CoordinationProjectionRead {
+  private todos: CoordinationTodoProjectionIndex | undefined;
+  private coordination: CoordinationProjectionIndex | undefined;
+  private readonly head: JsonObject;
+  private readonly goalId: string;
+
+  constructor(head: JsonObject, goalId: string) {
+    this.head = head;
+    this.goalId = goalId;
+  }
+
+  get todoIndex(): CoordinationTodoProjectionIndex {
+    return this.todos ??= indexCoordinationProjectionTodos(this.head, this.goalId);
+  }
+
+  get coordinationIndex(): CoordinationProjectionIndex {
+    return this.coordination ??= indexCoordinationLeases(this.head, this.todoIndex);
+  }
+
+  validateTodoReadModel(): JsonObject {
+    return validateIndexedTodoReadModel(this.head, this.todoIndex);
+  }
 }
 
 /**

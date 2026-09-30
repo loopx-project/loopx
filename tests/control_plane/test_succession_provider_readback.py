@@ -69,3 +69,42 @@ def test_real_cli_graph_selection_history_and_read_only_manager(tmp_path, monkey
     assert all('succession_evaluation' not in row for row in captured['todos'])
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a') == before
     assert (state.read_bytes() if state.exists() else None) == state_before
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_large_goal_reuses_complete_succession_without_exceeding_rpc_budget(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, state, registry = tmp_path / 'runtime', tmp_path / 'state.md', tmp_path / 'registry.json'
+    state.write_text('# Goal\n\n## Agent Todo\n')
+    records = [{
+        'todo_id': f'todo_capacity_{index:05}', 'schema_version': 'todo_item_v0',
+        'role': 'agent', 'text': 'Verify retained work', 'status': 'done', 'done': True,
+        'archive_state': 'active', 'source_section': 'Agent Todo', 'index': index + 1,
+        'task_class': 'advancement_task', 'claimed_by': 'agent-a', 'no_followup': True,
+        'note': 'Retained metadata 完整🙂', 'evidence': 'fixture:verified',
+    } for index in range(5000)]
+    records[0].update(no_followup=False)
+    records[-1].update(status='open', done=False, no_followup=False,
+                       resume_when='todo_done:todo_capacity_00000')
+    projection = build_todo_runtime_shadow_projection(goal_id='goal-a', todos=records, handoff_mode='soft_claim')
+    registry.write_text(json.dumps({'common_runtime_root': str(runtime), 'goals': [{
+        'id': 'goal-a', 'repo': str(tmp_path), 'state_file': state.name, 'status': 'active',
+        'coordination': {'registered_agents': ['agent-a']},
+    }]}))
+    initialize_canonical_authority(runtime, 'goal-a', projection, state_path=state, provider=provider)
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a')
+    result = cli(registry)
+    summary = result['agent_todos']
+    assert summary['total_count'] == 5000
+    assert summary['done_count'] == 4999
+    assert summary['open_count'] == 1
+    assert summary.get('completed_without_successor_count', 0) == 0
+    assert 'terminal_closure_proof' not in summary
+    selected = cli(registry, '--todo-id', 'todo_capacity_00000', '--limit', '1')['agent_todos']
+    assert selected.get('completed_without_successor_count', 0) == 0
+    assert 'terminal_closure_proof' not in selected
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id='goal-a')
+    assert after == before
+    assert after is not None
+    assert all(row['note'] == 'Retained metadata 完整🙂' and row['evidence'] == 'fixture:verified'
+               for row in after['todos'])

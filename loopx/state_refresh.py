@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .control_plane.runtime.time import chronology_key, now_local_iso
+from .control_plane.runtime.run_artifacts import run_file_stem as run_file_stem
 from .control_plane.work_items.delivery_history import require_consistent_delivery_claim
 from .control_plane.work_items.delivery_batch_scale import (
     DELIVERY_BATCH_SCALE_CHOICES as DELIVERY_BATCH_SCALE_CHOICES,
@@ -129,10 +130,6 @@ REPAIR_NOOP_SCHEMA_VERSION = "repair_noop_v0"
 
 def now_local() -> str:
     return now_local_iso()
-
-
-def run_file_stem(generated_at: str) -> str:
-    return re.sub(r"[^0-9A-Za-z-]+", "-", generated_at).strip("-")
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:

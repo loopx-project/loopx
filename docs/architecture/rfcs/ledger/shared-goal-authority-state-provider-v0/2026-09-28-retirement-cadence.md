@@ -279,7 +279,35 @@ projection, ten warm Node samples per provider reduced validator medians from
 change the default. No cached authority, lease omission, response cap or
 frontend contract change is introduced. Unicode order, duplicates, malformed
 JSON, archived-record tampering and both record formats remain rejection tests.
-Next qualify reuse of the complete validated Todo/lease snapshot across
-ownership and status, then coordinate full-Goal frontend summary/list/detail
-consumers. Agent status already has bounded display; final JSON compaction
-alone does not remove full-source computation.
+The next bounded step, based on `c57454e40`, reuses one validated Todo identity
+index within each synchronous collection or ownership consumer. It removes
+repeated record copies while preserving each consumer's validation order and
+Todo-only independence from lease integrity. It does not share a provider load
+between RPCs. On the same detached projection, ten alternating warm samples per
+arm give full Todo/lease collection medians of 32.4→27.5 ms (File-loaded input)
+and 32.9→28.0 ms (SQLite-loaded input). Ownership, including its provider load,
+changes 43.2→39.8 ms and 62.9→61.4 ms respectively; the latter has an outlier.
+Full CLI status retains all records and metadata, differing only in observation
+timestamps and read ages. Real File, SQLite and PostgreSQL suites pass. These
+component results do not establish a cold-start gain, sustained-operation
+acceptance or a provider-default decision. Cross-RPC ownership/status reads and
+full-Goal frontend summary/list/detail remain separate unfinished work. Agent
+status already has bounded display; final JSON compaction alone does not remove
+full-source computation.
+
+### Succession transport capacity
+
+A current 5,000-row summary reproduces a separate B boundary: the initial
+whole-graph succession evaluation fits, but resending its facts and evaluations
+for display verification exceeds the existing 2 MiB request limit. The
+co-deployed internal succession RPC now uses declared, strictly checked columns
+for both facts and evaluations, following the summary adapter's existing pattern.
+No rows, lineage edges, hashes or metadata are dropped; the TS graph and reuse
+validators are unchanged. The old internal wire shape is replaced, not retained
+as a second parser; persisted Todo formats and public responses do not change.
+The representative request falls from over 2 MiB to about 0.96 MB without raising
+budgets. Real File/SQLite CLI tests cover exact counts, distant inferred edges,
+metadata preservation and unchanged provider state. This is a bounded capacity
+repair, not unlimited graph capacity, stable latency evidence, D2 qualification
+or permission to change the default provider. Full-Goal summary/list/detail
+adoption and sustained observation remain separate work.
