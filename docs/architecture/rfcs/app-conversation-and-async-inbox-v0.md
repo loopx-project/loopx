@@ -317,12 +317,32 @@ The return-verification slice uses the existing TS classification owner for
 both adapter results and typed resolution failures. Exception text is diagnostic,
 not route/authority evidence: a transient read failure retains its locator and
 backoff, then reconciles the original result without another send. Explicit
-revocation, lost routing and missing initial receipts remain terminal. This
+revocation, lost routing and missing required provider acknowledgements remain terminal. This
 also holds after a `source_session_v1` Goal is recreated: a crash-persisted
 attempt recovers on the original GoalRef and conversation, transient verification
 backs off without resending, and typed terminal blockers stay stopped. This
 qualifies the persisted recovery boundary, not live provider availability or
 the complete GQ09 journey.
+
+Committed handoff recovery uses the existing typed collaboration lifecycle. A
+failed, timed-out or interrupted originating Turn does not cancel work already
+committed to a receiver's Inbox. Once that Turn settles, its receiver's saved
+result may return through the same trusted route even when the caller lost its
+handoff response. Recheck the current source grant, committed request identity,
+route and exact Goal instance; a conflicting saved handoff receipt blocks
+recovery rather than being ignored. Preserve the original failed Turn and append
+one idempotent return. Active originating Turns still wait; source revocation,
+missing entries and changed routes cannot authorize a send. Provider-specific
+initial-reply acknowledgement and post-send verification remain separate gates.
+
+The GQ07/GQ09 regression variant is “Keep going and bring me the result.” Inject
+failure after Inbox/route commit but before the caller's response is saved,
+reopen the real store, then publish the receiver's conclusion. Steward and Goal
+conversations must show that conclusion once without rerunning the model or
+rewriting the failed Turn. Synthetic production File/HTTP and typed counterexamples
+qualify this recovery boundary; they do not establish live owner selection,
+receiver adoption, native steering or two real team cycles. Pending-work visibility
+without the original handoff response remains a distinct App read-model gap.
 
 App history recovery is a shared TS read boundary for steward and Goal channels.
 One unavailable older Session must not hide readable messages, lose their
