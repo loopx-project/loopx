@@ -486,7 +486,13 @@ repeat inspection. The same projection is rendered in **Team execution** and
 returned by CLI/MCP/Goal Chat. Inspection creates no directory, retargets no
 binding, launches no worker and exports no private path or filesystem error.
 It is a point-in-time observation; a changed binding fails closed and start
-still rechecks the existing work/authority boundaries.
+still rechecks the existing work/authority boundaries. Inspection also
+reobserves the directory target after acceptance and the real Turn preview:
+if that target disappeared or was replaced, it returns the same bounded
+workspace diagnosis instead of reporting the old workspace as ready. This
+does not lock the filesystem or authorize launch.
+Expected preview failures also recheck the workspace; when the directory is
+unchanged, the original timeout, malformed response or I/O error is preserved.
 
 中文：工作目录故障在调用者授权与 Goal 活跃检查之后、Authority 与 Turn 检查之前
 返回 `workspace_unavailable`。`workspace_state` 区分 `missing`（不存在）、
@@ -496,6 +502,9 @@ still rechecks the existing work/authority boundaries.
 要求核对原执行配置及绑定目录后重新检查；团队执行页面与 CLI/MCP/Goal Chat 消费
 同一投影。检查不创建目录、不改绑、不启动成员，也不暴露私人路径或文件系统错误。
 结果只是时点观察；配置变更仍拒绝，实际启动仍须重新通过原有工作与权限边界。
+预期的预览故障也重新检查目录；目录未变时保留原始超时、响应解析或 I/O 错误。
+预检还会在验收检查与真实 Turn 预览后复核目录目标；期间消失或被替换时，返回相同
+的有界工作目录诊断，不把旧目录误报为就绪。这并不锁定文件系统，也不授权启动。
 
 `executor.runtime_probe` preserves the host's bounded probe scope: a DSH
 `probing_interpreter` result concerns module availability in the interpreter
