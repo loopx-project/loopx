@@ -53,6 +53,27 @@ const SCOPES = {
     // anti-vacuity guard in main() for why this is asserted from the tree.
     definedTokenFloor: 30,
   },
+  // Fixture scopes so the contract test can run the **shipped command** over
+  // committed inputs. A gate whose only signal is an exit code has to be tested
+  // on the exit code, not only on an exported function.
+  "fixture-clean": {
+    // A stylesheet reference satisfied by a real JSX/cast style sink.
+    roots: ["scripts/fixtures/css-custom-properties/clean"],
+    allowlistedFiles: new Set(),
+    definedTokenFloor: 1,
+  },
+  "fixture-dead-source": {
+    // References the only commented-out, stringified or unbound text mentions.
+    roots: ["scripts/fixtures/css-custom-properties/dead-source"],
+    allowlistedFiles: new Set(),
+    definedTokenFloor: 0,
+  },
+  "fixture-brace-value": {
+    // A closing brace inside a style value must not end the object early.
+    roots: ["scripts/fixtures/css-custom-properties/brace-value"],
+    allowlistedFiles: new Set(),
+    definedTokenFloor: 0,
+  },
 };
 
 const STYLE_EXTENSIONS = new Set([".css"]);
@@ -80,11 +101,78 @@ function walk(dir, extensions, found = []) {
 }
 
 /**
- * Strip /* ... *\/ comments so a token mentioned in prose is not read as a
- * reference, while preserving character offsets for line numbers.
+ * Blank comments so no match can come from text a browser never executes, while
+ * preserving character offsets for line numbers.
+ *
+ * Removing only block comments was not enough: a commented-out
+ * `style: { "--x": ... }` could satisfy a bare `var(--x)` elsewhere, and the
+ * required gate exited 0 for a declaration the browser will drop. Line comments
+ * are blanked here too.
+ *
+ * String bodies are deliberately kept. A quoted custom-property key is only
+ * recognisable together with its text, and `collectBareReferences` reads the
+ * same comment-blanked text the definitions scan does, so a `var(--x)` written
+ * inside a string is not a reference either.
  */
-function stripComments(text) {
+function blankComments(text) {
+  const out = new Array(text.length);
+  let index = 0;
+  const blank = (from, to) => {
+    for (let i = from; i < to; i += 1) out[i] = text[i] === "\n" ? "\n" : " ";
+  };
+  while (index < text.length) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === "/" && next === "*") {
+      const end = text.indexOf("*/", index + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      blank(index, stop);
+      index = stop;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      const end = text.indexOf("\n", index + 2);
+      const stop = end === -1 ? text.length : end;
+      blank(index, stop);
+      index = stop;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      // Keep the literal, escapes included, so quoted keys stay readable.
+      out[index] = char;
+      let i = index + 1;
+      let closed = false;
+      while (i < text.length) {
+        if (text[i] === "\\") {
+          out[i] = text[i];
+          if (i + 1 < text.length) out[i + 1] = text[i + 1];
+          i += 2;
+          continue;
+        }
+        out[i] = text[i];
+        if (text[i] === char) {
+          closed = true;
+          break;
+        }
+        i += 1;
+      }
+      index = closed ? i + 1 : Math.max(i, index + 1);
+      continue;
+    }
+    out[index] = char;
+    index += 1;
+  }
+  return out.join("");
+}
+
+/** A stylesheet has no line comments: only its `/* *\/` blocks can be dead text. */
+function stripStylesheetComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "));
+}
+
+/** The mask a file's kind calls for: code files blank line comments too. */
+function maskedSource(file, raw) {
+  return extensionOf(file) === ".css" ? stripStylesheetComments(raw) : blankComments(raw);
 }
 
 function lineAt(text, index) {
@@ -117,11 +205,10 @@ function lineAt(text, index) {
  * `setProperty` is matched separately below.
  */
 const STYLE_SINK_OPENERS = [
-  // JSX attribute: style={{ ... }} / style={{ ... } as CSSProperties}
+  // A JSX attribute: `style={{ "--x": v }}`. The doubled brace is what makes it
+  // an element prop rather than an object that merely has a `style` key.
   /style\s*=\s*\{\s*\{/g,
-  // Object property in a style constant: style: { ... }
-  /(?:^|[^A-Za-z0-9_$])style\s*:\s*\{/g,
-  // A value annotated as CSSProperties: const style: CSSProperties = { ... }
+  // A value annotated as CSSProperties: `const s: CSSProperties = { ... }`.
   /:\s*CSSProperties\s*=\s*\{/g,
 ];
 
@@ -164,19 +251,48 @@ function objectLiteralBody(text, openIndex) {
 }
 
 /**
- * Return the inner text of the object literal whose *closing* brace is `closeIndex`,
- * walking backwards with brace depth. Used for the trailing-cast form, where the
- * cast is the reliable anchor and the object start has to be found by matching
- * outwards from the end.
+ * The opening quote of the string literal that ends at `endIndex`, or null when
+ * the position is not a literal's closing quote.
+ */
+function findStringStart(text, endIndex) {
+  const quote = text[endIndex];
+  for (let i = endIndex - 1; i >= 0; i -= 1) {
+    if (text[i] === "\\") {
+      i -= 1;
+      continue;
+    }
+    if (text[i] === quote) return i;
+    // A literal does not span a line unless it is a template.
+    if (text[i] === "\n" && quote !== "`") return null;
+  }
+  return null;
+}
+
+/**
+ * Return the inner text of the object literal whose *closing* brace is `closeIndex`.
+ *
+ * Used for the trailing-cast form, where `as CSSProperties` is the anchor and
+ * the object start has to be found by brace depth walking backwards. It applies
+ * the same lexical rule as the forward scan: a brace inside a string is not a
+ * brace. Counting it closed the body early and pulled a neighbouring object's
+ * keys in, so unrelated data could satisfy a CSS reference.
  */
 function objectLiteralBodyBefore(text, closeIndex) {
   let depth = 0;
   for (let i = closeIndex; i >= 0; i -= 1) {
     const char = text[i];
-    if (char === "}") depth += 1;
-    else if (char === "{") {
+    if (char === "}") {
+      depth += 1;
+      continue;
+    }
+    if (char === "{") {
       depth -= 1;
       if (depth === 0) return text.slice(i + 1, closeIndex);
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      const start = findStringStart(text, i);
+      if (start !== null) i = start;
     }
   }
   return null;
@@ -232,7 +348,7 @@ function collectDefinitions(files) {
   for (const file of files) {
     const rel = relative(REPO_ROOT, file).split(sep).join("/");
     const raw = readFileSync(file, "utf8");
-    const text = stripComments(raw);
+    const text = maskedSource(file, raw);
 
     for (const match of text.matchAll(/@property\s+(--[A-Za-z0-9_-]+)/g)) {
       add(match[1], `@property in ${rel}`);
@@ -266,7 +382,7 @@ function collectBareReferences(files) {
   const references = [];
   for (const file of files) {
     const rel = relative(REPO_ROOT, file).split(sep).join("/");
-    const text = stripComments(readFileSync(file, "utf8"));
+    const text = maskedSource(file, readFileSync(file, "utf8"));
     for (const match of text.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g)) {
       references.push({ token: match[1], file: rel, line: lineAt(text, match.index) });
     }

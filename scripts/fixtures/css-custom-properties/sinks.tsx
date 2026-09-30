@@ -21,8 +21,9 @@ export function castSink(hue: number) {
 // 3. Annotated style constant.
 export const annotatedSink: CSSProperties = { "--fixture-annotated": "2px" };
 
-// 4. Style object property.
-export const objectPropertySink = { style: { "--fixture-object-property": "3px" } };
+// 4. An object that merely has a `style` key is NOT a sink: nothing proves it
+//    is ever bound to an element, so it must not satisfy a reference.
+export const unboundStyleLikeData = { style: { "--fixture-object-property": "3px" } };
 
 // 5. Imperative write.
 export const imperativeSink = (element: HTMLElement) =>

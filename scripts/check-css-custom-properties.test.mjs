@@ -33,6 +33,8 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { collectDefinitions } from "./check-css-custom-properties.mjs";
 
@@ -58,7 +60,6 @@ const definitionsFor = (paths) => collectDefinitions(paths).definitions;
     "--fixture-jsx": "a JSX style attribute",
     "--fixture-cast": "a trailing `as CSSProperties` cast",
     "--fixture-annotated": "a CSSProperties-annotated constant",
-    "--fixture-object-property": "a `style:` object property",
     "--fixture-imperative": "a setProperty call",
   };
   for (const [token, form] of Object.entries(expected)) {
@@ -129,6 +130,38 @@ const definitionsFor = (paths) => collectDefinitions(paths).definitions;
     fromSinksAndSheet.size > fromSheetOnly.size,
     "inline sinks add definitions beyond the stylesheet declarations alone",
   );
+}
+
+// --- The gate as the repository actually runs it ----------------------------
+//
+// The classifier assertions above read an exported function. The gate's only
+// signal is its exit code, so the negative cases are re-run through the shipped
+// command over committed fixture scopes. A regression that made the classifier
+// return the right *set* while `main` still exited 0 would pass every check
+// above and fail here.
+{
+  const run = (scope) => spawnSync(process.execPath,
+    [fileURLToPath(new URL("./check-css-custom-properties.mjs", import.meta.url)), scope],
+    {encoding: "utf8"});
+
+  const clean = run("fixture-clean");
+  assert.equal(clean.status, 0,
+    `a reference satisfied by a real style sink must pass:\n${clean.stdout}${clean.stderr}`);
+
+  for (const [scope, token] of [
+    ["fixture-dead-source", "--fixture-commented"],
+    ["fixture-dead-source", "--fixture-block-commented"],
+    ["fixture-dead-source", "--fixture-stringified"],
+    ["fixture-dead-source", "--fixture-unbound"],
+    ["fixture-brace-value", "--fixture-brace-ghost-before"],
+    ["fixture-brace-value", "--fixture-brace-ghost-after"],
+  ]) {
+    const failed = run(scope);
+    assert.equal(failed.status, 1,
+      `${scope} must exit non-zero: commented, stringified and unbound text is not a definition`);
+    assert.ok(failed.stderr.includes(token),
+      `${scope} must report ${token} as undefined:\n${failed.stderr}`);
+  }
 }
 
 console.log("check-css-custom-properties classifier contract: ok");

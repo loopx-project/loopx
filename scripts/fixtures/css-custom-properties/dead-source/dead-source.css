@@ -1,0 +1,9 @@
+/*
+ * Negative fixture stylesheet: every reference below is genuinely undefined,
+ * because the only places those tokens appear are comments, a string, and an
+ * object that never reaches a style sink.
+ */
+.fixture-dead-commented { color: var(--fixture-commented); }
+.fixture-dead-block { color: var(--fixture-block-commented); }
+.fixture-dead-string { color: var(--fixture-stringified); }
+.fixture-dead-unbound { color: var(--fixture-unbound); }

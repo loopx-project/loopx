@@ -18,9 +18,6 @@
   border-color: var(--fixture-annotated);
 }
 
-.fixture-object-property {
-  border-color: var(--fixture-object-property);
-}
 
 .fixture-imperative {
   border-color: var(--fixture-imperative);
