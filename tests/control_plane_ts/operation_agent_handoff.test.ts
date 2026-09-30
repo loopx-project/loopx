@@ -21,6 +21,17 @@ test("registered return audience is explicit under ambiguity and never executor 
   assert.throws(() => resolveOperationSourceRoute({...multiple, agent_id: "other-agent", selected_route: selector}));
 });
 
+test("source routing preserves owner-normalized audience tokens, not executor ID grammar", () => {
+  const route = {agent_id: "agent", host_surface: "custom-host", thread_id: "source@current"};
+  const value = {goal_id: "goal", agent_id: "agent", bindings: [route]};
+  assert.deepEqual(resolveOperationSourceRoute(value).source_route, {goal_id: "goal", ...route});
+  const multiple = {...value, bindings: [route, {...route, thread_id: "safe-second"}]};
+  assert.throws(() => resolveOperationSourceRoute(multiple), {code: "operation_source_route_ambiguous"});
+  const selected_route = {host_surface: route.host_surface, thread_id: route.thread_id};
+  assert.deepEqual(resolveOperationSourceRoute({...multiple, selected_route}), resolveOperationSourceRoute(value));
+  assert.throws(() => resolveOperationSourceRoute({...multiple, selected_route: {...selected_route, thread_id: "unregistered+source"}}));
+});
+
 function input(): JsonObject {
   const executor = {kind: "agent_session", host_surface: "codex-app", thread_id: "original-thread",
     revision: AGENT_OPERATION_REVISION};

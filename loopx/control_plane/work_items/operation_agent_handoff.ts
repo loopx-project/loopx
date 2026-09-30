@@ -27,8 +27,9 @@ function timestamp(value: unknown): number {
   return parsed;
 }
 
-/** A registered return audience is never executor identity. Select explicitly
- * when history contains several routes; never freeze an ambiguous null route. */
+/** Python supplies owner-normalized thread bindings and selector tokens. A
+ * return audience is not an executor ID: do not narrow the registry vocabulary.
+ * Select explicitly under ambiguity; never freeze an ambiguous null route. */
 export function resolveOperationSourceRoute(input: JsonObject): JsonObject {
   const goal = id(input.goal_id, "goal_id");
   const agent = id(input.agent_id, "agent_id");
@@ -37,9 +38,10 @@ export function resolveOperationSourceRoute(input: JsonObject): JsonObject {
   for (const raw of bindings) {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
     const route = raw as JsonObject;
-    if (route.agent_id !== agent || typeof route.host_surface !== "string"
-      || typeof route.thread_id !== "string" || !ID.test(route.host_surface) || !ID.test(route.thread_id)) continue;
-    const audience = {goal_id: goal, agent_id: agent, host_surface: route.host_surface, thread_id: route.thread_id};
+    if (route.agent_id !== agent) continue;
+    const audience = {goal_id: goal, agent_id: agent,
+      host_surface: requireNonEmptyString(route.host_surface, "registered source host_surface"),
+      thread_id: requireNonEmptyString(route.thread_id, "registered source thread_id")};
     routes.set(JSON.stringify(audience), audience);
   }
   if (input.selected_route != null) {
@@ -49,7 +51,8 @@ export function resolveOperationSourceRoute(input: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("source route selects only host_surface and thread_id");
     }
     const audience = {goal_id: goal, agent_id: agent,
-      host_surface: id(selected.host_surface, "source host_surface"), thread_id: id(selected.thread_id, "source thread_id")};
+      host_surface: requireNonEmptyString(selected.host_surface, "source host_surface"),
+      thread_id: requireNonEmptyString(selected.thread_id, "source thread_id")};
     requireThat(routes.has(JSON.stringify(audience)), "operation source route is not registered for this Goal and Agent");
     return {source_route: audience};
   }

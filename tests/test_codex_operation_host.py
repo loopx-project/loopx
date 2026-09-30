@@ -85,6 +85,174 @@ for line in sys.stdin:
 """
 
 
+SOURCE_PREPARE_SERVER = """#!/usr/bin/env python3
+import json, os, sys
+thread, turn = "owned-source-test-thread", "native-source-test-turn"
+calls = json.loads(os.environ["FAKE_SOURCE_TOOL_CALLS"])
+results = []
+def emit(value):
+    print(json.dumps(value), flush=True)
+def call_next():
+    if len(results) < len(calls):
+        emit({"id": 100 + len(results), "method": "item/tool/call", "params": {
+            "threadId": thread, "turnId": turn, "tool": "loopx_operation",
+            "arguments": calls[len(results)]}})
+    else:
+        emit({"method": "item/agentMessage/delta", "params": {
+            "threadId": thread, "turnId": turn, "delta": json.dumps({"results": results})}})
+        emit({"method": "turn/completed", "params": {
+            "threadId": thread, "turn": {"id": turn, "status": "completed"}}})
+for line in sys.stdin:
+    row = json.loads(line)
+    if row.get("method") == "initialize":
+        emit({"id": row["id"], "result": {}})
+    elif row.get("method") == "thread/start":
+        emit({"id": row["id"], "result": {"thread": {"id": thread},
+            "model": "test-model", "reasoningEffort": "xhigh"}})
+    elif row.get("method") == "turn/start":
+        emit({"id": row["id"], "result": {"turn": {"id": turn}}})
+        call_next()
+    elif isinstance(row.get("id"), int) and row["id"] >= 100:
+        result = json.loads(row["result"]["contentItems"][0]["text"])
+        results.append(result)
+        if result.get("proposal") and len(results) == 1:
+            calls.append({"action": "consume", "proposal_id": result["proposal"]["proposal_id"],
+                "consumption_id": "unapproved-native-attempt"})
+        call_next()
+"""
+
+
+@pytest.mark.parametrize(
+    "thread_id", ["source@current", "accepted+thread", "source:alternate"]
+)
+@pytest.mark.parametrize(
+    "multiple,selected", [(False, False), (True, False), (True, True)]
+)
+def test_registered_source_tokens_survive_owned_native_prepare_and_store_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    thread_id: str,
+    multiple: bool,
+    selected: bool,
+) -> None:
+    from examples.operation_action_fixtures import (
+        GOAL_ID,
+        managed_handler,
+        request,
+        service,
+    )
+    from loopx.chat_agent import CodexChatAgentSession
+    from loopx.control_plane.turn_driver.codex_operation_host import (
+        OPERATION_TOOL,
+        operation_tool_handler,
+    )
+    from loopx.thread_agent_binding import (
+        bind_thread_agent_in_registry,
+        resolve_registry_thread_agent_binding,
+    )
+
+    api, store = service(tmp_path)
+    route = {"host_surface": "custom-host", "thread_id": thread_id}
+    for source in [
+        route,
+        *(
+            [{"host_surface": "custom-host", "thread_id": "safe-second"}]
+            if multiple
+            else []
+        ),
+    ]:
+        bound = bind_thread_agent_in_registry(
+            registry_path=api.registry_path,
+            goal_id=GOAL_ID,
+            agent_id="finance-fixture-agent",
+            execute=True,
+            **source,
+        )
+        assert bound["ok"] and bound["written"]
+        assert (
+            resolve_registry_thread_agent_binding(
+                registry_path=api.registry_path, **source
+            )["status"]
+            == "bound"
+        )
+    value = request()
+    value["normalized_parameters"].pop("executor")
+    value["normalized_parameters"]["projection"]["simulated"] = False
+    arguments = {"action": "prepare", "request": value}
+    monkeypatch.setenv("FAKE_SOURCE_TOOL_CALLS", json.dumps([arguments, arguments]))
+    executable = tmp_path / "fake-source-prepare-server"
+    executable.write_text(SOURCE_PREPARE_SERVER)
+    executable.chmod(0o700)
+    session = CodexChatAgentSession.start(
+        codex_bin=str(executable),
+        work_dir=tmp_path,
+        goal_id=GOAL_ID,
+        objective="Synthetic source preparation",
+        execution_mode=True,
+        sandbox="read-only",
+        model="test-model",
+        reasoning_effort="xhigh",
+        dynamic_tools=[OPERATION_TOOL],
+        hard_timeout_sec=10,
+        response_timeout_sec=5,
+    )
+    try:
+        session.bound_tool_handler = managed_handler(
+            api, store, session_id=session.thread_id
+        )
+        if selected:
+            session.bound_tool_handler = operation_tool_handler(
+                runtime_root=store.root.parent.parent,
+                registry_path=api.registry_path,
+                lineage={
+                    "goal_id": GOAL_ID,
+                    "agent_id": "finance-fixture-agent",
+                    "todo_id": "todo-managed",
+                },
+                session_id=session.thread_id,
+                profile_digest="c" * 64,
+                model="test-model",
+                reasoning_effort="xhigh",
+                source_route=route,
+            )
+        results = session.send(
+            "Prepare the supplied synthetic proposal; no domain effects.",
+            output_schema={
+                "type": "object",
+                "properties": {"results": {"type": "array"}},
+                "required": ["results"],
+            },
+        )["results"]
+    finally:
+        session.bound_tool_handler = None
+        session.close()
+    if multiple and not selected:
+        assert all(
+            result.get("error") == "operation_source_route_ambiguous"
+            for result in results
+        )
+        assert store.list() == []
+    else:
+        first, replay, refused = results
+        assert first["ok"] and first["execution_allowed"] is False
+        persisted = store.load(first["proposal"]["proposal_id"])
+        assert persisted["normalized_parameters"]["source_route"] == {
+            "goal_id": GOAL_ID,
+            "agent_id": "finance-fixture-agent",
+            **route,
+        }
+        executor = persisted["normalized_parameters"]["executor"]
+        assert (
+            executor["session_id"] == "owned-source-test-thread"
+            and executor["profile_digest"] == "c" * 64
+        )
+        assert (
+            replay["proposal"]["proposal_id"] == persisted["proposal_id"]
+            and len(store.list()) == 1
+        )
+        assert refused["ok"] is False
+
+
 def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same_profile(
     tmp_path: Path,
 ) -> None:

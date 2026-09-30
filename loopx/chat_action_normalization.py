@@ -240,12 +240,32 @@ class ChatActionNormalizationMixin:
             source_route = None
             if managed_source:
                 from .control_plane.effect_runtime import effect_runtime_result
+                from .thread_agent_binding import (
+                    collect_accepted_bindings,
+                    resolve_thread_agent_binding,
+                )
+
+                selected_route = values.get("source_route")
+                if isinstance(selected_route, Mapping):
+                    selected_binding = resolve_thread_agent_binding(
+                        goal,
+                        host_surface=selected_route.get("host_surface"),
+                        thread_id=selected_route.get("thread_id"),
+                    )
+                    selected_route = {
+                        **selected_route,
+                        "host_surface": selected_binding["host_surface"],
+                        "thread_id": selected_binding["thread_id"],
+                    }
 
                 source_route = effect_runtime_result(
                     "operation.source_route.resolve",
-                    {"goal_id": goal_id, "agent_id": agent_id,
-                     "bindings": (goal.get("coordination") or {}).get("thread_agent_bindings", []),
-                     "selected_route": values.get("source_route")},
+                    {
+                        "goal_id": goal_id,
+                        "agent_id": agent_id,
+                        "bindings": collect_accepted_bindings([goal]),
+                        "selected_route": selected_route,
+                    },
                 )["source_route"]
             expires_at = parse_timestamp(
                 _text(values.get("expires_at"), field="expires_at", limit=80)
