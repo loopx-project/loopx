@@ -56,6 +56,8 @@ export const composerSessionAdmissionScenario = {
           const body = route.request().postDataJSON();
           posts.push(body.message);
           const queuedTurnId = `${turnId}-queued-${posts.length}`;
+          page.__loopxRuntime.messages.get(sessionId).push({ message_id: `${queuedTurnId}-user`, turn_id: queuedTurnId,
+            role: "user", text: body.message, created_at: "2026-08-13T01:00:01Z" });
           // A queued follow-up waits behind the running Turn; its stream is held too.
           routes.push(`**/api/chat/sessions/${sessionId}/turns/${queuedTurnId}/events`);
           await page.route(routes.at(-1), (held) => { heldEvents.push(held); });
@@ -84,10 +86,14 @@ export const composerSessionAdmissionScenario = {
         const body = route.request().postDataJSON();
         const target = new URL(route.request().url()).pathname.split("/")[6];
         adjustments.push({ ...body, turnId: target });
-        if ([1, 6].includes(adjustments.length)) return route.fulfill({ status: 409, json: { ok: false, error: "接收状态未确认" } });
+        if (adjustments.length === 9) {
+          page.__loopxRuntime.messages.get(sessionId).push({ message_id: "stored-current-page", turn_id: target,
+            role: "user", text: body.message, created_at: "2026-08-13T01:00:02Z" });
+        }
+        if ([1, 6, 9].includes(adjustments.length)) return route.fulfill({ status: 409, json: { ok: false, error: "接收状态未确认" } });
         if (adjustments.length === 4) return route.fulfill({ status: 409, json: { ok: false, error: "本次未送达", delivery_state: "not_delivered" } });
         const receipt = { ok: true, session_id: sessionId, turn_id: adjustments.length === 2 ? "wrong-turn" : target,
-          client_ingress_id: body.client_ingress_id, status: "delivered", created: adjustments.length !== 7 };
+          client_ingress_id: body.client_ingress_id, status: "delivered", created: ![7, 10].includes(adjustments.length) };
         if (adjustments.length === 3) { delayedReceipt = () => route.fulfill({ json: receipt }); return; }
         await route.fulfill({ json: receipt });
       });
@@ -165,6 +171,20 @@ export const composerSessionAdmissionScenario = {
         || adjustments[7].turnId === managed.turnId || await composerInput.inputValue()) {
         throw new Error("Instructions during the original send started new work or failed to clear the submitted draft");
       }
+      // Without reloading, a delivered replay must fetch the new stored message,
+      // not reuse the history snapshot taken before the instruction was sent.
+      const currentPageInstruction = "问卷里补上使用频率。";
+      await composerInput.fill(currentPageInstruction);
+      await sendButton.click();
+      await page.getByRole("status").filter({ hasText: "接收状态未确认" }).waitFor();
+      await sendButton.click();
+      await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      const currentPageStored = page.locator(".personal-message").getByText(currentPageInstruction, { exact: true });
+      await currentPageStored.waitFor({ timeout: 5000 });
+      if (await currentPageStored.count() !== 1 || adjustments.length !== 10
+        || adjustments[8].client_ingress_id !== adjustments[9].client_ingress_id || managed.posts.length !== 1) {
+        throw new Error("Delivered replay did not read back one stored instruction on the current page");
+      }
       await managed.release();
       notes.push("managed Codex: ordinary composer steers its exact Turn while the original send waits, retaining drafts and retry identity, including after completion and reload; restored requests never dispatch automatically");
 
@@ -174,7 +194,7 @@ export const composerSessionAdmissionScenario = {
       if (!await sendButton.isDisabled()) throw new Error("Unsupported executor was offered native steering");
       await sendButton.click({ force: true });
       await page.waitForTimeout(100);
-      if (unsupported.posts.length || adjustments.length !== 8) throw new Error("Unsupported executor received an effect");
+      if (unsupported.posts.length || adjustments.length !== 10) throw new Error("Unsupported executor received an effect");
       await composerInput.fill("");
       await unsupported.release();
       notes.push("unsupported managed adapter: draft retained and no Turn or steering effect");

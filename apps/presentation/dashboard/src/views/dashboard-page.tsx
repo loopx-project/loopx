@@ -2956,7 +2956,7 @@ function PersonalGoalHome({
             if (receipt.created === false) {
               // A replay reads an existing delivery; its message belongs to the
               // stored transcript, not a second optimistic user bubble.
-              if (targetContextId === contextId) conversationHistory.retry();
+              if (targetContextId === contextId) await conversationHistory.refresh();
               return;
             }
             const id = managerMessageId.current++;

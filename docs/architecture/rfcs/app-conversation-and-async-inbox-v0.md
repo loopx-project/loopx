@@ -137,8 +137,10 @@ receipt → observed work or actionable failure → readable answer in the same 
   composer persists the original Session/Turn/text/ingress before dispatch and
   reuses it only for the matching Session and text; restoring the cache never
   sends automatically. Only a confirmed non-delivery permits a new ingress.
-  Replaying a delivered receipt uses the stored transcript rather than
-  inserting another local copy of the instruction.
+  Replaying a delivered receipt reads the current stored transcript rather than
+  reusing an earlier snapshot or inserting another local copy of the instruction.
+  History keeps the initial user request and later instructions as distinct messages
+  even while the initial request is still being reconciled with its stored identity.
   Unavailable browser storage keeps current-page retry behavior but cannot
   promise reload recovery. This tab-local cache is not delivery authority.
   Acceptance means the executor received the instructions, not that it adopted

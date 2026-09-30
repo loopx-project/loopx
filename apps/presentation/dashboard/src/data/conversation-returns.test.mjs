@@ -67,4 +67,16 @@ assert.equal(hydratedRoles.length, 2);
 assert.equal(hydratedRoles[0].sourceMessageId, "user-message");
 assert.equal(hydratedRoles[1].sourceMessageId, "agent-message");
 assert.equal(hydratedRoles[1].text, "Live answer");
+// The initial optimistic request is the first user message of its Turn.
+// Later instructions must retain independent stored identities and remain visible.
+const withInstructions = [storedRoles[0],
+  { session_id: "current", message_id: "instruction-1", turn_id: "same-turn", role: "user", text: "Chinese first" },
+  { session_id: "current", message_id: "instruction-2", turn_id: "same-turn", role: "user", text: "Do not publish" },
+  storedRoles[1]];
+const recoveredInstructions = reconcileConversationHistory(bothRoles, withInstructions, createHistory);
+assert.equal(recoveredInstructions.length, 4);
+assert.equal(recoveredInstructions.find(row => row.text === "My request").sourceMessageId, "user-message");
+assert.equal(recoveredInstructions.find(row => row.text === "Chinese first").sourceMessageId, "instruction-1");
+assert.equal(recoveredInstructions.find(row => row.text === "Do not publish").sourceMessageId, "instruction-2");
+assert.equal(reconcileConversationHistory(recoveredInstructions, withInstructions, createHistory), recoveredInstructions);
 console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation and watch retirement)");
