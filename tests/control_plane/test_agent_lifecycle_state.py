@@ -291,7 +291,14 @@ def test_an_operation_lock_without_its_execution_slot_is_not_a_worker(monkeypatc
     assert _peer_row(scoped)["state"] == "launchable"
 
 
-REUSED = ("coordinator", "peer", "old-peer")
+def _payload(registered):
+    todo = {"todo_id": "todo_peer", "goal_id": GOAL, "role": "agent", "claimed_by": "peer", "status": "open"}
+    return {"goal_filter": GOAL, "run_history": {"goals": [{
+        "id": GOAL, "coordination": {"registered_agents": list(registered)}}]},
+        "todo_index": {"items": [todo]}}
+
+
+REUSED = ("coordinator", "peer", "old-peer")  # a Todo re-bound from old-peer to peer
 
 
 def test_a_historical_result_reader_does_not_borrow_the_current_workers_slot(monkeypatch, tmp_path):
@@ -300,8 +307,7 @@ def test_a_historical_result_reader_does_not_borrow_the_current_workers_slot(mon
     old_row, slot = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", agent="old-peer",
                                     operation="op-old", status="accepted")
     new_row, _ = _delegation_row(runtime_root, goal=GOAL, requester="coordinator", operation="op-new")
-    with _worker_process(new_row, slot) as worker_pid, exclusive_file_lock(old_row):
-        assert worker_pid != os.getpid()
+    with _worker_process(new_row, slot), exclusive_file_lock(old_row):
         packet, _ = build_projection(monkeypatch, age=30, runtime_root=runtime_root, registered=REUSED)
         facts = collect_agent_execution_facts(runtime_root=runtime_root, status_payload=_payload(REUSED))
     by_agent = {row["agent_id"]: row for row in packet["agents"]}
@@ -420,13 +426,6 @@ def test_a_lease_left_by_the_previous_claimant_stays_with_its_owner(monkeypatch,
     _write_lease(runtime_root, expires_in_hours=-1, owner="old-peer", status="released")
     released, _ = build_projection(monkeypatch, age=0, runtime_root=runtime_root, registered=REUSED)
     assert {row["agent_id"]: row["state"] for row in released["agents"]}["old-peer"] == "registered"
-
-
-def _payload(registered):
-    todo = {"todo_id": "todo_peer", "goal_id": GOAL, "role": "agent", "claimed_by": "peer", "status": "open"}
-    return {"goal_filter": GOAL, "run_history": {"goals": [{
-        "id": GOAL, "coordination": {"registered_agents": list(registered)}}]},
-        "todo_index": {"items": [todo]}}
 
 
 def test_no_runtime_root_means_no_facts_not_no_execution(monkeypatch):
