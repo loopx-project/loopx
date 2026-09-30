@@ -160,6 +160,18 @@ packaged UI with synthetic fixtures and qualify the chosen real query separately
 | Execution and control | Existing managed Turn, attached-session/host binding, Chat steering/interrupt | Qualify the exact supported profile. Neither registered nor inbox-acknowledged means running; native steering, next-Turn queue and unsupported must stay distinct |
 | Result | Answer-report, artifact/revision, review/adoption and return owners | Read the stored version; preserve source and independent review. A failed report read retries reading, not a new model run |
 
+Lark's readable-answer exit also checks rendered emphasis, not only a matching
+Markdown source receipt. Following the [CommonMark delimiter rules](https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis),
+the shared inbox reply adapter normalizes a paired
+strong span whose trailing punctuation is immediately followed by a word:
+`**Done.**Next` becomes `**Done**.Next`. Visible text remains identical; the
+punctuation moves outside the emphasis. Inline/fenced code, escaped markers and
+link destinations stay opaque. Qualify this with a real post's rendered bold
+styles and preserved inline-code syntax, alongside source/thread placement and
+idempotent readback. This provider formatting stays in the Python Lark adapter
+under the TS migration RFC; it adds no conversation state or decision owner.
+App formatting and other Lark Markdown constructs remain separate acceptance.
+
 No new capability is needed for the first repair: this is the existing App
 conversation/action boundary, with built-in Chat/runtime providers unchanged.
 The shared inbox work belongs under existing coordination/collaboration owners;

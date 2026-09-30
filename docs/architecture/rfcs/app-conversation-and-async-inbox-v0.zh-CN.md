@@ -109,6 +109,15 @@ LoopX 还必须核验综合结果返回原请求。这些是文档陈述，非�
 | 执行与控制 | 现有 managed Turn、attached-session/host binding、Chat steering/interrupt | 验收精确受支持的 profile。已注册或 inbox acknowledged 都不等于正在运行；原生 steering、next-Turn queue 和 unsupported 必须分别表达 |
 | 结果 | Answer-report、artifact/revision、review/adoption 与 return owners | 读取已存版本，保留来源与独立审阅。report 读取失败重试读取，不重新运行模型 |
 
+Lark 可读回复的出口还要检查实际强调呈现，不能把 Markdown 原文读回一致当成视觉验收。
+依照 [CommonMark 分隔符规则](https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis)，
+共享 inbox 回复适配器对“加粗内的末尾标点紧接下一单词”做格式规范化：
+`**完成。**下一句` 转为 `**完成**。下一句`。显示文字不变，末尾标点移到强调之外；
+行内/围栏代码、转义标记和链接地址不参与改写。用真实 post 的已渲染 bold 样式与保留的行内代码
+语法验收，同时保留原上下文/线程位置及幂等读回。此项属于 TS 重构 RFC 允许保留的
+Python Lark provider 格式适配，不新增会话状态或决策 owner。
+App 格式和其他 Lark Markdown 结构仍有各自的验收边界。
+
 首个修复不需要新 capability：它属于现有 App 会话与 action 边界，内置 Chat/runtime provider 不变。
 共享 inbox 工作属于现有 coordination/collaboration owners；Lark 仍是 extension 提供的 provider。
 只有真实 provider-neutral 调用结果无法容纳于这些 owner 时，才重新考虑公开 capability。
