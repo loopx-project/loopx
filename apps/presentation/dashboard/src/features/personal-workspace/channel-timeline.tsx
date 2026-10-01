@@ -74,7 +74,7 @@ export function ChannelTimeline({
         : "";
 
   const gatedItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
-    item.kind === "proposal" && item.proposal.status === "gated");
+    item.kind === "proposal" && item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute");
   // Only routine execution is folded. Waiting, interruption, and failures stay
   // visible; no prose-based inference that a waiting run is safe to ignore.
   const routineRuns = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
@@ -95,7 +95,7 @@ export function ChannelTimeline({
     ? [workingCount && `${workingCount} 个执行中`, queuedCount && `${queuedCount} 个排队中`, completedCount && `${completedCount} 次执行已结束`, progressCount && `${progressCount} 项进展更新`]
     : [workingCount && `${workingCount} running`, queuedCount && `${queuedCount} queued`, completedCount && `${completedCount} runs finished`, progressCount && `${progressCount} progress updates`]).filter(Boolean).join(" · ");
   const activeProposalItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
-    item.kind === "proposal" && item.proposal.status !== "gated");
+    item.kind === "proposal" && (item.proposal.status !== "gated" || item.proposal.actionKind === "operation.execute"));
   // Only drafts awaiting the owner fold behind the newest one; applying, applied and failed results stay visible.
   // "Newest" is read from the stored proposal, not from the position in this
   // list: a restore arrives newest first and a draft created in this session is
