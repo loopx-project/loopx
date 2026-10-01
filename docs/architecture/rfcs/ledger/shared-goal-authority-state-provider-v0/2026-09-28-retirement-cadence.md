@@ -51,7 +51,7 @@ Deletion is code retirement, not deletion of users' state, receipts or backups.
 
 ### Proposed T4 slice: unused Python lease/handoff facades
 
-Caller audit at `f49b4a008` finds the following internal crossings unused by
+Caller audit at `e240730ec` finds the following internal crossings unused by
 production. Native decision and transaction owners remain; this is independent
 of D2 qualification and default-entry adoption.
 
