@@ -34,6 +34,7 @@ from loopx.control_plane.turn_driver.executor import BuiltInHostError
 from loopx.control_plane.turn_driver.subagent_execution_topology import (
     OPAQUE_REF_PATTERN,
 )
+from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
 
 
 FAILURE_ENVELOPE_FIXTURES = (
@@ -113,8 +114,7 @@ def _request(
 def _fake_codex(tmp_path: Path) -> tuple[Path, Path]:
     executable = tmp_path / "fake-codex"
     log_path = tmp_path / "codex-argv.jsonl"
-    executable.write_text(
-        """#!/usr/bin/env python3
+    source = """#!/usr/bin/env python3
 import json
 import os
 import pathlib
@@ -168,11 +168,14 @@ if os.environ.get("FAKE_CODEX_FAIL") == "1":
     raise SystemExit(9)
 if os.environ.get("FAKE_CODEX_CHILD_MARKER"):
     marker = os.environ["FAKE_CODEX_CHILD_MARKER"]
-    child = subprocess.Popen([sys.executable, "-c",
-        "import pathlib,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-        "p=pathlib.Path(" + repr(marker) + ");n=0\\n"
-        "while True:\\n p.write_text(str(n));n+=1;time.sleep(.01)"])
-    pathlib.Path(marker + ".pid").write_text(str(child.pid))
+    child = subprocess.Popen([
+        sys.executable,
+        "-c",
+        __COUNTER_PROCESS_SOURCE__,
+        marker,
+        marker + ".pid",
+        ".01",
+    ])
     while not pathlib.Path(marker).exists():
         time.sleep(.01)
 if os.environ.get("FAKE_CODEX_SLEEP"):
@@ -191,7 +194,12 @@ output_path.write_text(json.dumps({
     "vision_unchanged_reason": "The fixture objective remains unchanged.",
     "summary": "One public fixture advanced."
 }), encoding="utf-8")
-""",
+"""
+    executable.write_text(
+        source.replace(
+            "__COUNTER_PROCESS_SOURCE__",
+            repr(COUNTER_PROCESS_SOURCE),
+        ),
         encoding="utf-8",
     )
     executable.chmod(0o755)
