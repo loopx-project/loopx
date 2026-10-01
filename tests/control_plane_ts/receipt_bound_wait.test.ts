@@ -64,3 +64,14 @@ for (const resume_when of ["resume_at:2026-01-01T00:10:00Z", "resume_at:2026-01-
     ]}), {status: "none"});
   });
 }
+
+
+test("a deferred Todo closes its original Turn rather than selecting a replacement", () => {
+  const input = request();
+  input.todos[0].status = "deferred";
+  const result = projectReceiptBoundWait(input);
+  assert.equal(result.status, "recovery_required");
+  const recovery = result.recovery as Record<string, unknown>;
+  assert.equal(recovery.binding_id, "todo_waiting");
+  assert.equal(recovery.turn_instance_id, "host-turn-1");
+});

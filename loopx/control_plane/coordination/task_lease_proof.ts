@@ -9,6 +9,8 @@ import {canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 import {decideTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
+import type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
+import {isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {leaseEpoch} from "../work_items/task_lease_acquire.ts";
@@ -89,10 +91,7 @@ export function leasedTodoEditRejection(todo: JsonObject, intent: JsonObject): {
 
 /** Diagnostic only: acquisition still rechecks the current head and its CAS.
  * Reuse admission rather than recommend a new lease solely from its expiry. */
-export function todoUpdateLeaseRecovery(head: JsonObject, input: {
-  goal_id: string; todo_id: string; actor_agent_id: string | null;
-  registered_agents: readonly string[]; now: Date; planning_intent?: JsonObject;
-}, mode: string): TodoUpdateLeaseRecovery {
+export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTodoUpdateInput, mode: string): TodoUpdateLeaseRecovery {
   const index = indexCoordinationProjection(head, input.goal_id);
   const facts = canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id,
     input.registered_agents, input.now);
@@ -111,7 +110,7 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: {
   };
   const todo = index.todos.get(input.todo_id)!;
   const intent = input.planning_intent ?? {};
-  const editRejection = lease === null ? null : leasedTodoEditRejection(todo, intent);
+  const editRejection = lease === null || isOwnerDeferral(input, todo) ? null : leasedTodoEditRejection(todo, intent);
   if (editRejection !== null) {
     return {...base, action: "resolve_lifecycle_edit", reason_code: editRejection.code,
       reason: "This edit changes leased work requirements or status. Use the owning lifecycle transition; reacquiring a lease alone cannot authorize this metadata edit."};

@@ -17,7 +17,7 @@ function reject(message: string): never {
 }
 
 function causalCondition(waiting: JsonObject, target: JsonObject): JsonObject | null {
-  if (waiting.status !== "open" || waiting.role !== "agent" ||
+  if (!["open", "deferred"].includes(String(waiting.status)) || waiting.role !== "agent" ||
       (waiting.archive_state != null && waiting.archive_state !== "active") ||
       waiting.task_class !== "advancement_task" ||
       waiting.resume_ready !== false || waiting.todo_id === target.todo_id ||
@@ -112,6 +112,9 @@ export function prepareBlockedWait(value: unknown): JsonObject {
       resume_when: resume, observed_at: request.observed_at,
       waiting_todo: retainedTodo(todo), target_todo: retainedTodo(target) };
   }
+  if (typeof resume === "string" && resume.startsWith("pr_merged:")) {
+    reject("cannot qualify a PR merge wait from Todo facts alone; use a registered monitor_changed or todo_done dependency with current readback, then retry this same Turn. A PR number is not pending-dependency evidence");
+  }
   if (!resume && request.allow_turn_settlement_retry === true && todo.status === "open") {
     const due = new Date(observed + 300_000).toISOString().replace(".000Z", "Z");
     return { schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
@@ -147,7 +150,7 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   const todos = request.todos.map(row => requireJsonObject(row, "receipt-bound Todo"));
   const matches = todos.filter(row => row.todo_id === request.todo_id);
   const todo = matches[0];
-  if (matches.length !== 1 || !todo || todo.role !== "agent" || todo.status !== "open" ||
+  if (matches.length !== 1 || !todo || todo.role !== "agent" || !["open", "deferred"].includes(String(todo.status)) ||
       todo.archive_state !== "active" || todo.task_class !== "advancement_task" ||
       todo.resume_ready !== false || (todo.claimed_by && todo.claimed_by !== request.agent_id)) {
     return {status: "none"};

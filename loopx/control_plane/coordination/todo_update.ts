@@ -15,7 +15,7 @@ import {
 } from "./coordination_projection.ts";
 
 import {planMonitorCycleTransition} from "./todo_monitor_cycle.ts";
-import {isDeferredReopen, planDeferredReopen} from "./todo_deferred_reopen.ts";
+import {isDeferredReopen, isOwnerDeferral, planDeferredLifecycle} from "./todo_deferred_lifecycle.ts";
 import {isBlockedLifecycleTransition, planBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {todoUpdateAdmissionRejection} from "./todo_update_admission.ts";
 import { CoordinationCommandReceipt } from "./command_receipt.ts";
@@ -71,6 +71,8 @@ function updateReceipt(input: CoordinationTodoUpdateInput, requestSha: string) {
           monitor_poll_transition: canonicalAuthorityObject(original.monitor_poll_transition, "Monitor update receipt transition")}),
         ...(original.monitor_lifecycle_transition === undefined ? {} : {monitor_lifecycle_transition:
           canonicalAuthorityObject(original.monitor_lifecycle_transition, "Monitor lifecycle receipt transition")}),
+        ...(original.deferred_transition === undefined ? {} : {deferred_transition:
+          canonicalAuthorityObject(original.deferred_transition, "Deferred lifecycle receipt transition")}),
         ...(original.deferred_resume_transition === undefined ? {} : {deferred_resume_transition:
           canonicalAuthorityObject(original.deferred_resume_transition, "Deferred resume receipt transition")}),
         ...(original.blocked_lifecycle_transition === undefined ? {} : {blocked_lifecycle_transition:
@@ -226,13 +228,14 @@ export async function executeCoordinationTodoUpdate(
     }
   }
   let cycle: ReturnType<typeof planMonitorCycleTransition>;
-  let deferredCycle: ReturnType<typeof planDeferredReopen> | null = null;
+  let deferredCycle: ReturnType<typeof planDeferredLifecycle> | null = null;
   let blockedCycle: ReturnType<typeof planBlockedLifecycleTransition> | null = null;
   try {
     cycle = planMonitorCycleTransition({goal_id: input.goal_id, before: target.todo, after: next,
       lease: target.leases.get(input.todo_id), handoff_mode: head.head.handoff_mode, now: input.now});
-    if (head.head.handoff_mode === "hard_lease" && isDeferredReopen(input, target.todo)) {
-      deferredCycle = planDeferredReopen({goal_id: input.goal_id, before: target.todo, after: next,
+    if ((head.head.handoff_mode === "hard_lease" || target.leases.has(input.todo_id)) &&
+        (isDeferredReopen(input, target.todo) || isOwnerDeferral(input, target.todo))) {
+      deferredCycle = planDeferredLifecycle({goal_id: input.goal_id, before: target.todo, after: next,
         lease: target.leases.get(input.todo_id), now: input.now});
     }
     if (head.head.handoff_mode === "hard_lease" && isBlockedLifecycleTransition(input, target.todo)) {
@@ -242,6 +245,9 @@ export async function executeCoordinationTodoUpdate(
   } catch (error) {
     return failure("invalid_coordination_projection", error instanceof Error ? error.message : "invalid retained lease");
   }
+  const deferredTransition = deferredCycle?.transition == null ? {} : {
+    [isOwnerDeferral(input, target.todo) ? "deferred_transition" : "deferred_resume_transition"]: deferredCycle.transition,
+  };
   const commit: AuthorityStoreCommit = changed ? prepareCoordinationProjectionCommit({
     goal_id: input.goal_id, operation_id: input.operation_id,
     expected_provider_revision: head.provider_revision, projection: head.head,
@@ -269,7 +275,7 @@ export async function executeCoordinationTodoUpdate(
     ...(completionValidationRevisionReceipt === null ? {} :
       {completion_validation_revision: completionValidationRevisionReceipt}),
     ...(cycle.transition === null ? {} : {monitor_lifecycle_transition: cycle.transition}),
-    ...(deferredCycle?.transition == null ? {} : {deferred_resume_transition: deferredCycle.transition}),
+    ...deferredTransition,
     ...(blockedCycle?.transition == null ? {} : {blocked_lifecycle_transition: blockedCycle.transition})};
   commit.receipts = [{schema_version: COORDINATION_TODO_UPDATE_RECEIPT_SCHEMA,
     operation_id: input.operation_id, goal_id: input.goal_id,
@@ -278,7 +284,7 @@ export async function executeCoordinationTodoUpdate(
     ...(completionValidationRevisionReceipt === null ? {} :
       {completion_validation_revision: completionValidationRevisionReceipt}),
     ...(cycle.transition === null ? {} : {monitor_lifecycle_transition: cycle.transition}),
-    ...(deferredCycle?.transition == null ? {} : {deferred_resume_transition: deferredCycle.transition}),
+    ...deferredTransition,
     ...(blockedCycle?.transition == null ? {} : {blocked_lifecycle_transition: blockedCycle.transition})}];
   return receipt.commit(store, commit);
 }

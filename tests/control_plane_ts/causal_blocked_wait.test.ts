@@ -64,3 +64,20 @@ test("unregistered, fabricated and self-referential wait strings never suffice",
   assert.throws(() => prepareBlockedWait({ ...request, todos: [{ ...request.todos[0], role: "user" }, request.todos[1]] }), /registered pending/);
   assert.throws(() => prepareBlockedWait({ ...request, todos: [{ ...request.todos[0], archive_state: "archived" }, request.todos[1]] }), /registered pending/);
 });
+
+test("deferred dependency work retains the original Turn's blocked closeout proof", () => {
+  const request = fixture("todo_done");
+  request.todos[0].status = "deferred";
+  const wait = prepareBlockedWait(request);
+  assert.equal(isBoundedBlockedRetry(wait, "todo_waiting"), true);
+  assert.equal(isBoundedBlockedRetry(wait, "todo_other"), false);
+  assert.throws(() => prepareBlockedWait({...request,
+    todos: [request.todos[0], {...request.todos[1], status: "done"}]}), /registered pending/);
+});
+
+
+test("a PR wait gives a causal recovery route without accepting caller-authored PR evidence", () => {
+  const request = fixture("todo_done");
+  request.todos[0].resume_when = "pr_merged:example/project#1";
+  assert.throws(() => prepareBlockedWait(request), /cannot qualify a PR merge wait.*registered monitor_changed or todo_done/);
+});
