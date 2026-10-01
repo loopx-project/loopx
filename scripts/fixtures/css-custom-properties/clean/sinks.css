@@ -22,3 +22,11 @@
 .fixture-imperative {
   border-color: var(--fixture-imperative);
 }
+
+:root { --fixture-stylesheet: red; }
+@property --fixture-registered {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: red;
+}
+.fixture-declared { color: var(--fixture-stylesheet); background: var(--fixture-registered); }

@@ -132,10 +132,17 @@ Marketing site (`apps/presentation/site/src/styles.css`):
 --font-mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", monospace;
 ```
 
-`scripts/check-css-custom-properties.mjs` rejects any bare reference to a custom
-property that no stylesheet or inline style defines. Tokens that are genuinely
-optional may keep a fallback (`var(--pw-surface, #fff)`); the check only rejects
-references that would be dropped.
+`scripts/check-css-custom-properties.mjs` rejects Dashboard CSS bare references
+whose custom property has no definition in the surface inventory. Run `npm ci`
+at the repository root, then `npm run check:css-custom-properties --prefix
+apps/presentation/dashboard`. The check uses the existing TypeScript parser for
+JSX style objects, `CSSProperties`-typed objects and literal
+`element.style.setProperty` calls. Comments, string examples and ordinary data
+keys do not define tokens. Parse errors fail the check.
+
+This is a syntactic inventory: it does not prove runtime reachability, resolve
+object spreads or aliases, or model CSS inheritance and selector scope. Tokens
+that are genuinely optional may keep a fallback (`var(--pw-surface, #fff)`).
 
 ### Type Scale
 

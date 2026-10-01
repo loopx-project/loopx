@@ -1,9 +1,16 @@
-/*
- * Negative fixture stylesheet: every reference below is genuinely undefined,
- * because the only places those tokens appear are comments, a string, and an
- * object that never reaches a style sink.
- */
+/* Only --fixture-real reaches a style sink; all other bare references must fail. */
 .fixture-dead-commented { color: var(--fixture-commented); }
 .fixture-dead-block { color: var(--fixture-block-commented); }
 .fixture-dead-string { color: var(--fixture-stringified); }
 .fixture-dead-unbound { color: var(--fixture-unbound); }
+.fixture-quoted-jsx { color: var(--fixture-quoted-jsx); }
+.fixture-quoted-call { color: var(--fixture-quoted-call); }
+.fixture-quoted-cast { color: var(--fixture-quoted-cast); }
+.fixture-quoted-annotation { color: var(--fixture-quoted-annotation); }
+.fixture-template-jsx { color: var(--fixture-template-jsx); }
+.fixture-regex-jsx { color: var(--fixture-regex-jsx); }
+.fixture-unrelated-call { color: var(--fixture-unrelated-call); }
+.fixture-nested-value { color: var(--fixture-nested-value); }
+.fixture-string-key { color: var(--fixture-string-key); }
+.fixture-css-text { color: var(--fixture-css-text); }
+.fixture-real { width: var(--fixture-real); }
