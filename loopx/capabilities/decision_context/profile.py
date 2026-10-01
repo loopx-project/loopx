@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ...public_safe_text import COMPACT_TOKEN_PATTERN as _TOKEN_RE
 from .providers import decision_source_provider_registered
 from .sources import DecisionSourceSpec
 
@@ -19,7 +19,6 @@ DECISION_CONTEXT_ACTIVATION_STATUS_SCHEMA_VERSION = (
 MAX_DECISION_SOURCES = 64
 MAX_SOURCE_PROVIDER_BINDINGS = 16
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _CONFIG_FIELDS = {
     "schema_version",
     "goal_id",

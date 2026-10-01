@@ -5,6 +5,10 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ...public_safe_text import (
+    MODULE_QUALIFIED_SURFACE_PATTERN as SURFACE_RE,
+    PUBLIC_SAFE_REFERENCE_PATTERN as TOKEN_RE,
+)
 from .architecture import MEMORY_CLASS_IDS
 
 
@@ -16,8 +20,6 @@ REWARD_MEMORY_SEMANTIC_PREFERENCE_BRIDGE_SCHEMA_VERSION = (
 MAX_CORPORA = 50
 MAX_SURFACES = 20
 CORPUS_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
-SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
 
 READ_AUTHORITIES = {
     "goal_run_scoped",

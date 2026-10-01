@@ -62,7 +62,7 @@ def _source_text_spelling_the_scheme_list() -> list[str]:
     offenders: list[str] = []
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         if SCHEME_LIST in path.read_text(encoding="utf-8"):
-            offenders.append(str(path.relative_to(REPOSITORY_ROOT)))
+            offenders.append(path.relative_to(REPOSITORY_ROOT).as_posix())
     return offenders
 
 

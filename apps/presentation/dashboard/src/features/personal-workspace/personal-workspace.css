@@ -212,7 +212,7 @@
 .personal-channel-title p { margin: 3px 0 0; color: var(--pw-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .personal-channel-title p.personal-manager-execution { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .personal-execution-chip { display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--pw-line); border-radius: 999px; background: var(--pw-card); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 18px; }
-button.personal-execution-chip { min-height: 28px; border-radius: 6px; cursor: pointer; }
+button.personal-execution-chip { min-height: 26px; border-radius: 6px; cursor: pointer; }
 button.personal-execution-chip:hover { border-color: var(--pw-line-strong); }
 button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; }
 .personal-execution-chip-endpoint { color: var(--pw-text); font-weight: 650; }
