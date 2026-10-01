@@ -476,6 +476,12 @@ full suite with its existing workload and deadlines; this concurrency bound
 does not relax capacity admission criteria. Test transport timeouts with
 controlled clocks or observable request cancellation, separately from loaded
 whole-suite throughput measurements.
+Healthy external-worker fixtures use the production quota timeout; only timeout
+cases inject a short deadline. Detached telemetry integration waits for a local
+start/end record with a bounded watchdog. That observation includes process
+startup and is separate from the HTTP cancellation contract. Rebuild Chat after
+changing shared TS inputs before running packaged-dashboard tests; a stale
+source witness must still reject the bundle.
 
 Canary executes Python checks with the interpreter that launched LoopX
 (`sys.executable`). Its displayed `python3` command is not a second interpreter

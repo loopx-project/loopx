@@ -100,7 +100,7 @@ def _args(
     fake_cli: Path,
     state_file: Path,
     wake_cmd: str | None = None,
-    quota_timeout_seconds: float = 0.1,
+    quota_timeout_seconds: float = 30.0,
     wake_timeout_seconds: float = 0.1,
 ) -> argparse.Namespace:
     return argparse.Namespace(
@@ -136,7 +136,6 @@ def test_default_invocation_persists_backoff_state(
     args = _args(
         fake_cli=fake_cli,
         state_file=root / "ignored-explicit.json",
-        quota_timeout_seconds=1.0,
     )
     args.state_file = None
 
@@ -175,7 +174,6 @@ def test_unchanged_limit_runs_final_quota_probe_before_stop(
     args = _args(
         fake_cli=fake_cli,
         state_file=root / "state.json",
-        quota_timeout_seconds=1.0,
     )
     args.once = False
 
@@ -200,6 +198,7 @@ def test_quota_probe_timeout_enters_tick_error(tmp_path: Path) -> None:
         _args(
             fake_cli=fake_cli,
             state_file=tmp_path / "quota-timeout" / "state.json",
+            quota_timeout_seconds=0.1,
         )
     )
 
@@ -239,7 +238,6 @@ def test_stop_directive_does_not_require_cold_path_scheduler_detail(
         _args(
             fake_cli=fake_cli,
             state_file=root / "state.json",
-            quota_timeout_seconds=1.0,
         )
     )
 
