@@ -1040,3 +1040,55 @@ def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_
         assert current_turn["turn_id"] == turn["turn_id"]
         assert "A completed its bounded review." in text
         assert drain(tmp_path, registry, store, sender) == 0
+
+
+@pytest.mark.parametrize("channel", ["manager", "goal.delivery"])
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "exact"])
+@pytest.mark.parametrize("status", ["running", "failed"])
+def test_committed_request_remains_visible_without_a_saved_answer(tmp_path, channel, exact, status):
+    registry = _create_source_registry(tmp_path)
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _manager_request(tmp_path, registry, channel=channel, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    store.update_turn(session["session_id"], turn["turn_id"], status=status, response=None)
+    read_inbox(tmp_path, registry, "delivery", "builder")
+    before = store.messages(session["session_id"])
+    for _ in range(2):
+        snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+        cards = [m for m in snapshot["messages"] if m.get("collaboration")]
+        assert len(cards) == 1
+        assert cards[0]["role"] == "user"
+        assert cards[0]["collaboration"]["request_id"] == receipt["request_id"]
+        assert cards[0]["collaboration"]["read_status"] == "supplied"
+        assert cards[0]["collaboration"]["decision"] == "pending"
+        assert cards[0]["collaboration"]["returns"] == []
+        assert store.messages(session["session_id"]) == before
+    assert store.load_turn(session["session_id"], turn["turn_id"])["status"] == status
+
+
+@pytest.mark.parametrize("damage", ["other_session", "other_client", "conflicting_receipt", "ambiguous_route", "missing_entry"])
+def test_lost_answer_readback_cannot_invent_or_rebind_a_commitment(tmp_path, damage):
+    from loopx.capabilities.manager_context.roundtrip import project_chat_session_snapshot
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _manager_request(tmp_path, registry, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    store.update_turn(session["session_id"], turn["turn_id"], status="failed", response=None)
+    route_path = _root(tmp_path) / "roundtrips" / (receipt["request_id"] + ".json")
+    route = json.loads(route_path.read_text())
+    if damage == "other_session":
+        route["session_id"] = "another-conversation"
+        _write(route_path, route)
+    elif damage == "other_client":
+        route["client_turn_id"] = "another-question"
+        _write(route_path, route)
+    elif damage == "ambiguous_route":
+        _write(route_path.with_name("b" * 64 + ".json"), route)
+    elif damage == "missing_entry":
+        next((_root(tmp_path) / "entries").glob("*/" + receipt["request_id"] + ".json")).unlink()
+    else:
+        store.update_turn(session["session_id"], turn["turn_id"], response={"context_handoff_receipt": {**receipt, "agent_id": "other"}})
+    before = store.messages(session["session_id"])
+    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=registry)
+    assert snapshot["messages"] == before
+    assert not any(m.get("collaboration") for m in snapshot["messages"])

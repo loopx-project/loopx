@@ -225,3 +225,21 @@ test("lost-answer recovery cannot substitute a source, request, instance or conf
     kind: "proved", basis: "committed_request_and_receipt",
   });
 });
+
+
+test("readback observes a committed active request without permitting its result return", () => {
+  for (const profile_id of [null, "source_session_v1"]) {
+    const initial_delivery = committedDelivery("running", profile_id !== null);
+    const patch = { profile_id, initial_delivery };
+    assert.equal(decideCollaborationLifecycle(facts("original_request_inspect", patch)).kind,
+      profile_id === null ? "legacy" : "allow");
+    assert.deepEqual(decideCollaborationLifecycle(facts("original_return_admit", patch)),
+      { kind: "reject", code: "initial_delivery_unproved" });
+    assert.deepEqual(decideCollaborationLifecycle(facts("original_request_inspect", {
+      ...patch, initial_delivery: { ...initial_delivery, route: { ...initial_delivery.route, client_turn_id: "other" } },
+    })), { kind: "reject", code: "initial_delivery_unproved" });
+  }
+  assert.deepEqual(decideCollaborationLifecycle(facts("original_request_inspect", {
+    current_goal_ref: GOAL_B, initial_delivery: committedDelivery("failed"),
+  })), { kind: "allow", mode: "historical_read", goal_ref: GOAL_A });
+});

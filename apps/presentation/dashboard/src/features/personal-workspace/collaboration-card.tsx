@@ -26,13 +26,22 @@ export function CollaborationCard({ request }: { request?: CollaborationReadback
   if (!request) return null;
   const c = copy[locale];
   const brief = request.brief;
-  const decision = request.decision as "adopt" | "defer" | "reject" | "no_change";
+  const decision = (() => {
+    switch (request.decision) {
+      case "adopt": return c.adopt;
+      case "defer": return c.defer;
+      case "reject": return c.reject;
+      case "no_change": return c.no_change;
+      case "unavailable": return c.unavailable;
+      default: return c.unknown;
+    }
+  })();
   const conclusion = request.returns.find((reply) => reply.phase === "conclusion");
   return <section className="personal-collaboration" aria-label={c.title}>
     <header><strong>{brief.purpose}</strong><span>{c.owner}: {request.goal_id ? `${request.goal_id} / ` : ""}{request.agent_id}</span></header>
     <p className="personal-collaboration-status">
       <span>{request.read_status === "supplied" ? c.supplied : request.read_status === "unavailable" ? c.unavailable : c.pending}</span>
-      <span>{c.decision}: {c[decision] ?? (request.decision === "unavailable" ? c.unavailable : c.unknown)}</span>
+      <span>{c.decision}: {decision}</span>
       {conclusion ? <span>{conclusion.status === "delivered" ? c.delivered
         : conclusion.status === "queued" ? c.result : c.unverified}</span> : null}
     </p>

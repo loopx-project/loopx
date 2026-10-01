@@ -21,6 +21,7 @@ const OPERATIONS = [
   "original_return_admit",
   "original_return_settle",
   "history_inspect",
+  "original_request_inspect",
 ] as const;
 
 type CollaborationOperation = (typeof OPERATIONS)[number];
@@ -75,6 +76,7 @@ function operation(value: unknown): CollaborationOperation {
     case "original_return_admit":
     case "original_return_settle":
     case "history_inspect":
+    case "original_request_inspect":
       return value;
     default:
       throw new EffectRuntimeRequestError(
@@ -105,7 +107,7 @@ function wireGoalRef(value: ExactGoalRef): WireGoalRef {
  * IO adapters supply the committed entry, trusted route and current source
  * authority. A caller failure does not cancel separately delegated work.
  */
-export function proveOriginalRequestDelivery(value: unknown): JsonObject {
+function proveCommittedRequest(value: unknown): JsonObject {
   const facts = jsonObject(value);
   const request = jsonObject(facts?.request);
   const route = jsonObject(facts?.route);
@@ -132,10 +134,6 @@ export function proveOriginalRequestDelivery(value: unknown): JsonObject {
       || facts?.authorized_source_id !== request.source_id) {
     return { kind: "unproved", reason: "source_mismatch" };
   }
-  switch (turn.status) {
-    case "completed": case "failed": case "timed_out": case "interrupted": break;
-    default: return { kind: "unproved", reason: "originating_turn_unsettled" };
-  }
   const receiptValue = turn.context_handoff_receipt;
   if (receiptValue !== null && receiptValue !== undefined) {
     const receipt = jsonObject(receiptValue);
@@ -150,6 +148,28 @@ export function proveOriginalRequestDelivery(value: unknown): JsonObject {
   return { kind: "proved", basis: "committed_request" };
 }
 
+export function proveOriginalRequestDelivery(value: unknown): JsonObject {
+  const turn = jsonObject(jsonObject(value)?.turn);
+  switch (turn?.status) {
+    case "completed": case "failed": case "timed_out": case "interrupted":
+      return proveCommittedRequest(value);
+    default: return { kind: "unproved", reason: "originating_turn_unsettled" };
+  }
+}
+
+function requestProof(value: JsonObject, operation: CollaborationOperation): boolean {
+  // Readback observes a committed request while its caller is still active.
+  // It grants no result-return or receiver execution authority.
+  return (operation === "original_request_inspect"
+    ? proveCommittedRequest(value.initial_delivery)
+    : proveOriginalRequestDelivery(value.initial_delivery)).kind === "proved";
+}
+
+function requiresRequestProof(operation: CollaborationOperation): boolean {
+  return operation === "original_request_inspect"
+    || operation === "original_return_admit" || operation === "original_return_settle";
+}
+
 function isObservation(operation: CollaborationOperation): boolean {
   return operation === "inbox_observe"
     || operation === "peer_return_observe";
@@ -160,14 +180,16 @@ function requiresRoute(operation: CollaborationOperation): boolean {
     || operation === "peer_return_observe"
     || operation === "peer_return_consume"
     || operation === "original_return_admit"
-    || operation === "original_return_settle";
+    || operation === "original_return_settle"
+    || operation === "original_request_inspect";
 }
 
 function permitsHistorical(operation: CollaborationOperation): boolean {
   return operation === "result_publish"
     || operation === "original_return_admit"
     || operation === "original_return_settle"
-    || operation === "history_inspect";
+    || operation === "history_inspect"
+    || operation === "original_request_inspect";
 }
 
 function lifecycleFacts(
@@ -187,7 +209,7 @@ function lifecycleFacts(
     currentGoalRef,
     recordGoalRef,
     routeGoalRef,
-    initialDeliveryProved: proveOriginalRequestDelivery(value.initial_delivery).kind === "proved",
+    initialDeliveryProved: requestProof(value, selectedOperation),
   };
 }
 
@@ -230,8 +252,7 @@ function decideExactLifecycle(
   const current = goalRefsEqual(callerGoalRef, currentGoalRef);
   if (current) {
     if (
-      (operation === "original_return_admit"
-        || operation === "original_return_settle")
+      requiresRequestProof(operation)
       && !facts.initialDeliveryProved
     ) {
       return { kind: "reject", code: "initial_delivery_unproved" };
@@ -248,8 +269,7 @@ function decideExactLifecycle(
       : { kind: "reject", code: "historical_mutation_forbidden" };
   }
   if (
-    (operation === "original_return_admit"
-      || operation === "original_return_settle")
+    requiresRequestProof(operation)
     && !facts.initialDeliveryProved
   ) {
     return { kind: "reject", code: "initial_delivery_unproved" };
@@ -264,6 +284,7 @@ function decideExactLifecycle(
         goal_ref: wireGoalRef(callerGoalRef),
       };
     case "history_inspect":
+    case "original_request_inspect":
       return {
         kind: "allow",
         mode: "historical_read",
@@ -292,8 +313,7 @@ export function decideCollaborationLifecycle(
   }
   const selectedOperation = operation(raw.operation);
   if (raw.profile_id === null) {
-    if ((selectedOperation === "original_return_admit" || selectedOperation === "original_return_settle")
-        && proveOriginalRequestDelivery(raw.initial_delivery).kind !== "proved") {
+    if (requiresRequestProof(selectedOperation) && !requestProof(raw, selectedOperation)) {
       return { kind: "reject", code: "initial_delivery_unproved" };
     }
     return { kind: "legacy" };

@@ -177,7 +177,7 @@ def decide_collaboration_lifecycle(
     route: dict[str, Any] | None = None,
     initial_delivery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not scope.exact and operation not in {"original_return_admit", "original_return_settle"}:
+    if not scope.exact and operation not in {"original_return_admit", "original_return_settle", "original_request_inspect"}:
         return {"kind": "legacy"}
     result = effect_runtime_result(
         "collaboration.goal_instance.decide",
