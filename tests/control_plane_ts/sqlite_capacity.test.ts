@@ -3,6 +3,7 @@ import {spawnSync} from "node:child_process";
 import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
+import {performance} from "node:perf_hooks";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
 import {capacityLedger, latency, type CapacityAxis} from "../../examples/coordination/sqlite-capacity-report.ts";
@@ -174,10 +175,13 @@ test("small capacity entrypoint exercises real SQLite and never claims a full qu
   const directory = await mkdtemp(join(tmpdir(), "sqlite-capacity-report-"));
   t.after(() => rm(directory, {recursive: true, force: true}));
   const output = join(directory, "report.json");
+  const started = performance.now();
   const child = spawnSync(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
     fileURLToPath(new URL("../../examples/coordination/sqlite-capacity.ts", import.meta.url)),
     "--profile", "rehearsal", "--output", output], {encoding: "utf8", timeout: 150000});
-  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.status, 0, JSON.stringify({status: child.status, signal: child.signal,
+    error_code: (child.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+    elapsed_ms: performance.now() - started, timeout_ms: 150000, stderr: child.stderr}));
   const report = JSON.parse(await readFile(output, "utf8"));
   assert.equal(report.full_d2_qualified, false);
   assert.deepEqual(report.axes.map((row: CapacityAxis) => row.completed_commits), [100, 1000]);
