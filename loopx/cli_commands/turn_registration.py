@@ -225,6 +225,11 @@ def register_turn_commands(
         help="Opt in to the owned app-server operation transport for this admitted codex-cli Turn. Reuses the original Todo/session; does not authenticate an attached Desktop or grant domain effects.",
     )
     run_once.add_argument(
+        "--codex-operation-source-route-json",
+        type=json.loads,
+        help="Registered return audience {host_surface,thread_id} for operation proposals. Required when this Agent has several source routes; not executor authentication or execution permission.",
+    )
+    run_once.add_argument(
         "--codex-reasoning-effort",
         choices=list(REASONING_EFFORTS),
         help=(

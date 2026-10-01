@@ -16,6 +16,7 @@ from loopx.control_plane.turn_driver.host_process_transport import (
     HostOutputLines,
     run_host_process,
 )
+from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
 
 
 def test_host_output_lines_bound_storage_and_use_lf() -> None:
@@ -76,23 +77,53 @@ def test_callback_failure_waits_for_owned_host_cleanup(tmp_path: Path) -> None:
     assert time.monotonic() - started < 8
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process interruption contract")
+def test_counter_process_fixture_publishes_atomically(tmp_path: Path) -> None:
+    marker = tmp_path / "counter"
+    pid_path = tmp_path / "pid"
+    pause_path = tmp_path / "before-publish"
+    marker.write_text("published", encoding="utf-8")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            COUNTER_PROCESS_SOURCE,
+            str(marker),
+            str(pid_path),
+            "0.02",
+            str(pause_path),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not pause_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert pause_path.exists(), "Counter process never reached the publication fence"
+        process.kill()
+        process.wait(timeout=5)
+        assert marker.read_text(encoding="utf-8") == "published"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group cancellation contract")
 def test_disappearing_python_owner_cancels_real_host(tmp_path: Path) -> None:
     marker = tmp_path / "counter"
     pid_path = tmp_path / "pid"
-    host = f"""
-import os,time,signal
-from pathlib import Path
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-Path({str(pid_path)!r}).write_text(str(os.getpid()))
-i=0
-while True:
- Path({str(marker)!r}).write_text(str(i));i+=1;time.sleep(.02)
-"""
+    host_argv = [
+        sys.executable,
+        "-c",
+        COUNTER_PROCESS_SOURCE,
+        str(marker),
+        str(pid_path),
+        "0.02",
+    ]
     launcher = f"""
 from pathlib import Path
 from loopx.control_plane.turn_driver.host_process_transport import run_host_process
-run_host_process({[sys.executable, "-c", host]!r}, project=Path({str(tmp_path)!r}), input_text='', timeout_seconds=30)
+run_host_process({host_argv!r}, project=Path({str(tmp_path)!r}), input_text='', timeout_seconds=30)
 """
     owner = subprocess.Popen(
         [sys.executable, "-c", launcher],
@@ -125,16 +156,15 @@ run_host_process({[sys.executable, "-c", host]!r}, project=Path({str(tmp_path)!r
 def test_generic_host_timeout_stops_real_descendant(tmp_path: Path) -> None:
     marker = tmp_path / "child-work"
     pid_path = tmp_path / "child-pid"
-    child = f"""
-import os,time,signal
-from pathlib import Path
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-Path({str(pid_path)!r}).write_text(str(os.getpid()))
-i=0
-while True:
- Path({str(marker)!r}).write_text(str(i));i+=1;time.sleep(.02)
-"""
-    host = f"import subprocess,sys,time;subprocess.Popen({[sys.executable, '-c', child]!r});time.sleep(30)"
+    child_argv = [
+        sys.executable,
+        "-c",
+        COUNTER_PROCESS_SOURCE,
+        str(marker),
+        str(pid_path),
+        "0.02",
+    ]
+    host = f"import subprocess,time;subprocess.Popen({child_argv!r});time.sleep(30)"
     try:
         result = _run_host(
             {}, argv=[sys.executable, "-c", host], project=tmp_path, timeout_seconds=1

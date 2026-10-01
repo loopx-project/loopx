@@ -165,10 +165,17 @@ parity）。启用后，`observer.ts` 只观察 `session/created`、`session/eve
 到配置的 goal。token 级 `assistant/chunk`（已退场类型，只有旧 durable 日志还会重放）
 不被消费。
 
+人工离线导出／删除／恢复演练使用
+[本地 retention 参考方案（v0）](docs/local-retention-v0.md#中文)。它保留完整 ledger 字节与
+负面完整性证据，要求冻结 writer 并由 owner 选择有限保留期限；没有实现自动 TTL，也不构成
+live 部署验收。操作 regular file 前会验证 provider 目录与 CLI 的 canonical runtime 布局一致。
+方案说明了当前文件名别名边界，归属不明确时须暂停删除。
+
 ## 验证
 
 ```bash
 python3 examples/reliability_diagnostics/dsh-shadow-observer-fixture-smoke.py
+uv run --extra test python examples/reliability_diagnostics/ledger-retention-smoke.py
 python3 -m pytest tests/capabilities/test_reliability_diagnostics.py tests/capabilities/test_reliability_diagnostics_dsh_provider.py -q
 cd packages/dsh-loopx-plugin && pnpm typecheck && pnpm test -- observer
 ```
