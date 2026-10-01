@@ -10,7 +10,7 @@ import {TODO_OWNERSHIP_INTENT_FIELDS} from "../todos/authoring_scope.ts";
 import {evaluateCoordinationTodoMutationDecision,
   COORDINATION_TODO_MUTATION_DECISION_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
 import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection} from "./task_lease_proof.ts";
-import {deferredReopenRejection, isDeferredReopen} from "./todo_deferred_reopen.ts";
+import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 
 interface TodoUpdateRejection {code: string; reason: string; handoff_mode?: string; recovery?: JsonObject}
@@ -125,7 +125,7 @@ export function todoUpdateAdmissionRejection(
         error instanceof Error ? error.message : "invalid retained lease facts");
     }
   }
-  if (mode === "hard_lease" && isDeferredReopen(input, todo)) {
+  if ((mode === "hard_lease" || lease !== undefined) && isDeferredReopen(input, todo)) {
     try {
       return deferredReopenRejection({goal_id: input.goal_id, todo_id: input.todo_id,
         actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
@@ -156,7 +156,7 @@ export function todoUpdateAdmissionRejection(
         return reject("update_owner_mismatch", "Leased Todo update requires the current claim owner");
       }
       if (lease !== undefined) {
-        return leasedTodoEditRejection(todo, input.planning_intent ?? {});
+        return isOwnerDeferral(input, todo) ? null : leasedTodoEditRejection(todo, input.planning_intent ?? {});
       }
     } catch (error) {
       return reject("invalid_coordination_projection",

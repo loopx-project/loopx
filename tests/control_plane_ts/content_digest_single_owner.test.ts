@@ -126,6 +126,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/work_items/task_lease_acquire.ts",
   "control_plane/work_items/task_lease_lifecycle.ts",
   "control_plane/work_items/task_lease_lifecycle_request.ts",
+  "control_plane/work_items/task_lease_workspace.ts",
 ];
 
 function packageFiles(dir: string, base = ""): string[] {

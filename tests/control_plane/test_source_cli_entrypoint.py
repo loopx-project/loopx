@@ -311,7 +311,7 @@ usage_ping._detach = lambda *args: sent.append(args)
     assert json.loads(result.stdout)["ok"] is True
     assert "random installation ID" in result.stderr
     stored = json.loads((state / "usage-ping.json").read_text())
-    assert stored["notice"]["version"] == 4
+    assert stored["notice"]["version"] == 5
     assert "last_attempt_day" not in stored and "counters" not in stored
 
 
