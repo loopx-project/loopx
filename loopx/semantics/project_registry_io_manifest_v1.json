@@ -967,8 +967,16 @@
     },
     {
       "site": "loopx/control_plane/collaboration/peer_host_route.py::<module>.resolve_peer_host_route::codec_read:load_registry#1",
-      "line": 65,
+      "line": 123,
       "column": 16,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/control_plane/collaboration/peer_host_route.py::<module>.resolve_peer_host_route::codec_read:load_registry#2",
+      "line": 176,
+      "column": 38,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"

@@ -48,6 +48,49 @@ def _matching_bindings(
     ]
 
 
+def _observe_bindings(
+    matching: list[dict[str, str]], visible: list[dict[str, str]],
+    available_observers: Mapping[str, HostThreadObserver],
+) -> tuple[list[dict[str, str]], list[HostThreadActivity | None]]:
+    # Read each host once, including every accepted alternative. A publication
+    # cap or an unreadable host must not turn an unknown binding into history.
+    requested: dict[str, set[str]] = {}
+    for candidate in matching:
+        if candidate in visible:
+            requested.setdefault(candidate["host_surface"], set()).add(candidate["thread_id"])
+    observed: dict[str, Mapping[str, HostThreadActivity]] = {}
+    failures: dict[str, str] = {}
+    for surface, ids in requested.items():
+        observer = available_observers.get(surface)
+        if observer is None:
+            failures[surface] = "host_observer_unavailable"
+            continue
+        try:
+            observed[surface] = observer(sorted(ids))
+        except Exception:  # noqa: BLE001 - host failure remains an unknown alternative.
+            failures[surface] = "host_observation_failed"
+    facts: list[dict[str, str]] = []
+    activity: list[HostThreadActivity | None] = []
+    for candidate in matching:
+        surface, thread = candidate["host_surface"], candidate["thread_id"]
+        item = observed.get(surface, {}).get(thread)
+        activity.append(item)
+        if candidate not in visible:
+            reason = "route_candidate_withheld"
+        elif surface in failures:
+            reason = failures[surface]
+        elif item is None:
+            reason = HostThreadUnknownReason.THREAD_NOT_FOUND.value
+        elif item.state is HostThreadState.UNKNOWN:
+            assert item.reason is not None  # HostThreadActivity's constructor invariant.
+            reason = item.reason.value
+        else:
+            facts.append({"state": item.state.value})
+            continue
+        facts.append({"state": "unavailable", "reason": reason})
+    return facts, activity
+
+
 def resolve_peer_host_route(
     registry_path: Path,
     *,
@@ -120,42 +163,7 @@ def resolve_peer_host_route(
         result["reason"] = "route_candidate_withheld"
         return result
     available_observers = codex_thread_observers() if observers is None else observers
-    # Read each host once, including every accepted alternative. A publication
-    # cap or an unreadable host must not turn an unknown binding into history.
-    requested: dict[str, set[str]] = {}
-    for candidate in matching:
-        if candidate in visible:
-            requested.setdefault(candidate["host_surface"], set()).add(candidate["thread_id"])
-    observed: dict[str, Mapping[str, HostThreadActivity]] = {}
-    failures: dict[str, str] = {}
-    for surface, ids in requested.items():
-        observer = available_observers.get(surface)
-        if observer is None:
-            failures[surface] = "host_observer_unavailable"
-            continue
-        try:
-            observed[surface] = observer(sorted(ids))
-        except Exception:  # noqa: BLE001 - host failure remains an unknown alternative.
-            failures[surface] = "host_observation_failed"
-    facts: list[dict[str, str]] = []
-    activity: list[HostThreadActivity | None] = []
-    for candidate in matching:
-        surface, thread = candidate["host_surface"], candidate["thread_id"]
-        item = observed.get(surface, {}).get(thread)
-        activity.append(item)
-        if candidate not in visible:
-            reason = "route_candidate_withheld"
-        elif surface in failures:
-            reason = failures[surface]
-        elif item is None:
-            reason = HostThreadUnknownReason.THREAD_NOT_FOUND.value
-        elif item.state is HostThreadState.UNKNOWN:
-            assert item.reason is not None  # HostThreadActivity's constructor invariant.
-            reason = item.reason.value
-        else:
-            facts.append({"state": item.state.value})
-            continue
-        facts.append({"state": "unavailable", "reason": reason})
+    facts, activity = _observe_bindings(matching, visible, available_observers)
     if len(activity) == 1 and activity[0] is not None:
         result["host_observation"] = activity[0].to_payload()
     selection = effect_runtime_result("collaboration.peer_host_route.select", {"observations": facts})

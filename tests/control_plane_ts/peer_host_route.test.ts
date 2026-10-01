@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectObservedPeerHostRoute } from "../../loopx/control_plane/collaboration/peer_host_route.ts";
+import { selectObservedPeerHostRoute } from "../../loopx/control_plane/collaboration/peer_route_selection.ts";
 
 const archived = { state: "archived" };
 const idle = { state: "idle" };
