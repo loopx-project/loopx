@@ -36,6 +36,9 @@ export const conversationActivityScenario = {
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await page.clock.install();
       await page.clock.fastForward(25000);
+      // Compare the same instant across views; clock.install alone keeps
+      // advancing and can cross a second boundary while navigation completes.
+      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
       await pending.locator(".personal-message-quiet").waitFor();
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
