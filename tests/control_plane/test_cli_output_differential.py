@@ -18,7 +18,7 @@ from loopx.control_plane.testing.cli_output_semantics import (
     guided_todo_delta_schema_versions,
     planning_horizon_schema_versions,
     planning_inventory_detail_schema_versions,
-    runtime_root_command_route_count,
+    command_route_counts,
     todo_work_counts_schema_versions,
 )
 
@@ -47,6 +47,7 @@ def _row(**overrides: object) -> dict[str, object]:
         "planning_inventory_detail_schema_versions": [],
         "todo_work_counts_schema_versions": [],
         "runtime_root_command_route_count": 0,
+        "registry_command_route_count": 0,
     }
     row.update(overrides)
     return row
@@ -803,7 +804,8 @@ def test_planning_inventory_detail_migration_is_bounded_and_fail_closed() -> Non
     ]
 
 
-def test_runtime_root_route_growth_has_per_route_budget() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+def test_command_route_growth_has_per_route_budget(option: str) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
@@ -819,7 +821,7 @@ def test_runtime_root_route_growth_has_per_route_budget() -> None:
         compact_payload_chars=1_320,
         action_signature_sha256=None,
         action_signature_coverages=[],
-        runtime_root_command_route_count=2,
+        **{f"{option}_command_route_count": 2},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -833,11 +835,12 @@ def test_runtime_root_route_growth_has_per_route_budget() -> None:
         "compact_payload_chars": 320,
     }
     assert result["rows"][0]["review_signals"] == [
-        "runtime-root command route coverage added: 2 executable route(s)"
+        f"{option.replace('_', '-')} command route coverage added: 2 executable route(s)"
     ]
 
 
-def test_runtime_root_route_growth_still_fails_above_per_route_budget() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+def test_command_route_growth_still_fails_above_per_route_budget(option: str) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
@@ -853,7 +856,7 @@ def test_runtime_root_route_growth_still_fails_above_per_route_budget() -> None:
         compact_payload_chars=1_321,
         action_signature_sha256=None,
         action_signature_coverages=[],
-        runtime_root_command_route_count=2,
+        **{f"{option}_command_route_count": 2},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -862,19 +865,22 @@ def test_runtime_root_route_growth_still_fails_above_per_route_budget() -> None:
     assert "chars grew by 321; allowance is 320" in result["rows"][0]["failures"]
 
 
-def test_invalid_runtime_root_route_count_does_not_grant_budget() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+@pytest.mark.parametrize("before, after", [(0, True), (0, "2"), (None, 2), (-1, 2), (0, -1), (2, 2)])
+def test_invalid_or_unchanged_command_route_count_does_not_grant_budget(option: str, before: object, after: object) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
         lines=10,
         compact_payload_chars=1_000,
+        **{f"{option}_command_route_count": before},
     )
     candidate = _row(
         chars=1_097,
         utf8_bytes=1_097,
         lines=10,
         compact_payload_chars=1_097,
-        runtime_root_command_route_count=True,
+        **{f"{option}_command_route_count": after},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -899,23 +905,24 @@ def test_runtime_root_route_count_only_matches_executable_command_prefixes() -> 
         "loopx --runtime-root"
     )
 
-    assert runtime_root_command_route_count(text) == 4
+    assert command_route_counts(text)["runtime_root"] == 4
 
 
-def test_runtime_root_route_allowance_is_fail_closed_for_invalid_counts() -> None:
+@pytest.mark.parametrize("option", ["runtime_root", "registry"])
+def test_command_route_allowance_is_fail_closed_for_invalid_counts(option: str) -> None:
     base = _row(
         chars=1_000,
         utf8_bytes=1_000,
         lines=10,
         compact_payload_chars=1_000,
-        runtime_root_command_route_count=0,
+        **{f"{option}_command_route_count": 0},
     )
     candidate = _row(
         chars=1_000,
         utf8_bytes=1_000,
         lines=10,
         compact_payload_chars=1_000,
-        runtime_root_command_route_count="2",
+        **{f"{option}_command_route_count": "2"},
     )
 
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -1109,3 +1116,38 @@ def test_projection_envelope_migration_is_status_only_bounded_and_one_time(outpu
         outside_base = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
         outside = {**candidate, "row_id": outside_base["row_id"]}
         assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]
+
+
+def test_both_command_routes_are_counted_in_either_order() -> None:
+    text = (
+        "loopx --registry '/tmp/registry path' --runtime-root /tmp/root refresh-state\n"
+        "loopx --runtime-root /tmp/root --registry /tmp/registry quota should-run\n"
+        "Use --registry PATH, or say loopx --registry /tmp/path.\n"
+        "loopx --registry"
+    )
+    assert command_route_counts(text) == {"registry": 2, "runtime_root": 2}
+
+
+@pytest.mark.parametrize("command", [
+    'loopx --registry "" turn plan',
+    "loopx --registry --runtime-root /tmp/root turn plan",
+    'loopx --registry "/tmp/unclosed turn plan',
+    "loopx --registry /tmp/registry",
+    "loopx --registry /tmp/registry --runtime-root",
+    "loopx --registry /tmp/registry --format invalid turn plan",
+    'loopx --registry /tmp/registry ""',
+    'loopx --registry /tmp/registry "   "',
+])
+@pytest.mark.parametrize("render", [str, lambda command: json.dumps({"command": command}), lambda command: f"- execute: `{command}`"])
+def test_malformed_command_never_grants_route_growth(command, render) -> None:
+    counts = command_route_counts(render(command))
+    assert counts == {"registry": 0, "runtime_root": 0}
+    base = _row(chars=1_000, utf8_bytes=1_000, compact_payload_chars=1_000)
+    candidate = _row(chars=1_160, utf8_bytes=1_160, compact_payload_chars=1_160,
+                     **{f"{key}_command_route_count": value for key, value in counts.items()})
+    assert compare_cli_output_receipts(_receipt(base), _receipt(candidate))["ok"] is False
+
+
+def test_json_escaped_paths_and_duplicate_arguments_are_counted_once() -> None:
+    command = """loopx --format json --registry '/tmp/a \"quoted\" path' --registry /tmp/final --runtime-root '/tmp/root path' turn plan"""
+    assert command_route_counts(json.dumps({"command": command})) == {"registry": 1, "runtime_root": 1}
