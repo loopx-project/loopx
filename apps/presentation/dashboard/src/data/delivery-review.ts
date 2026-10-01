@@ -38,19 +38,49 @@ const graphSchema = z.object({
     context.addIssue({ code: "custom", message: "Graph identities or endpoints are invalid" });
   }
 });
+const goalMapNodeSchema = z.object({
+  node_id: z.string().min(1), kind: z.enum(["deliverable", "gate", "monitor"]), title: z.string(),
+  state: nodeSchema.shape.state, depth: z.number().int().nonnegative(), refs: refsSchema,
+  owner_agent: z.string().optional(), task_domain: z.string().optional(),
+});
+const goalMapSchema = z.object({
+  schema_version: z.literal("goal_task_map_v0"), mode: z.literal("read_only"), goal_id: z.string(),
+  limits: z.object({
+    node_limit: z.number().int().positive(), emitted_node_count: z.number().int().nonnegative(),
+    omitted_node_count: z.number().int().nonnegative(), source_truncated: z.boolean(),
+    missing_endpoint_count: z.number().int().nonnegative(), cycle_edge_count: z.number().int().nonnegative(),
+    topology_complete: z.boolean(),
+  }),
+  nodes: z.array(goalMapNodeSchema),
+  edges: z.array(z.object({
+    edge_id: z.string().min(1), from_node_id: z.string(), to_node_id: z.string(),
+    relation: z.enum(["depends_on", "continues", "supersedes"]),
+    enforcement: z.enum(["typed_lifecycle", "typed_condition", "lineage_only"]), reason: z.string(),
+  })),
+}).superRefine((map, context) => {
+  const nodes = new Set(map.nodes.map(node => node.node_id));
+  if (nodes.size !== map.nodes.length || new Set(map.edges.map(edge => edge.edge_id)).size !== map.edges.length
+      || map.edges.some(edge => !nodes.has(edge.from_node_id) || !nodes.has(edge.to_node_id))) {
+    context.addIssue({ code: "custom", message: "Goal map identities or endpoints are invalid" });
+  }
+});
 const snapshotSchema = z.object({
   ok: z.literal(true), goal_id: z.string(), observed_at: z.string().datetime({ offset: true }),
-  graph: graphSchema.nullable(), acceptance: goalAcceptanceObservationSchema.nullable(),
+  graph: graphSchema.nullable(), goal_map: goalMapSchema.nullable().optional(),
+  acceptance: goalAcceptanceObservationSchema.nullable(),
 });
 export type DeliveryReviewSnapshot = z.infer<typeof snapshotSchema>;
 export type ReviewGraph = NonNullable<DeliveryReviewSnapshot["graph"]>;
 export type ReviewNode = ReviewGraph["nodes"][number];
 export type ReviewRelation = ReviewGraph["edges"][number]["relation"];
 export type ReviewFocus = "all" | "conditions" | "evidence" | "related";
+type GoalMapNode = z.infer<typeof goalMapNodeSchema>;
+type GoalMapEdge = z.infer<typeof goalMapSchema>["edges"][number];
 
 export function parseDeliveryReview(value: unknown, goalId: string): DeliveryReviewSnapshot {
   const result = snapshotSchema.parse(value);
   if (result.goal_id !== goalId || (result.graph && result.graph.goal_id !== goalId)
+      || (result.goal_map && result.goal_map.goal_id !== goalId)
       || (result.acceptance && result.acceptance.goal_id !== goalId)) {
     throw new Error("Review source does not match the selected Goal");
   }
@@ -108,6 +138,7 @@ export type ReviewExportLabels = {
   owner: string; reason: string; historical: string; checks: string; missingSources: string; observedScope: string;
   kind: Record<ReviewNode["kind"], string>; state: Record<ReviewNode["state"], string>;
   relation: Record<ReviewRelation, string>;
+  workMap: { title: string; boundary: string; kind: Record<GoalMapNode["kind"], string>; relation: Record<GoalMapEdge["relation"], string> } & Record<string, unknown>;
 };
 
 /** Export the entire validated snapshot, never the search-filtered screen. */
@@ -129,6 +160,14 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
     const names = new Map(graph.nodes.map(node => [node.node_id, node.title]));
     rows.push("", `## ${labels.relations}`, "");
     for (const edge of graph.edges) rows.push(`- ${line(names.get(edge.from_node_id))} → ${labels.relation[edge.relation]} → ${line(names.get(edge.to_node_id))}: ${line(edge.reason)} (${line(edge.edge_id)})`, `  ${labels.refs}: ${line(JSON.stringify(edge.refs ?? {}))}`);
+  }
+  const map = snapshot.goal_map;
+  if (map) {
+    rows.push("", `## ${labels.workMap.title}`, "", labels.workMap.boundary, "", "```json", JSON.stringify(map.limits, null, 2), "```", "");
+    const names = new Map(map.nodes.map(node => [node.node_id, node.title]));
+    for (const node of map.nodes) rows.push(`- ${line(node.title)} · ${labels.workMap.kind[node.kind]} · ${labels.state[node.state]}${node.owner_agent ? ` · ${line(node.owner_agent)}` : ""} (${line(node.refs.todo_ids?.join(", "))})`);
+    if (map.edges.length) rows.push("");
+    for (const edge of map.edges) rows.push(`- ${line(names.get(edge.from_node_id))} → ${labels.workMap.relation[edge.relation]} → ${line(names.get(edge.to_node_id))}`);
   }
   rows.push("", `## ${labels.acceptance}`, "");
   const acceptance = snapshot.acceptance;

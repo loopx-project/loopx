@@ -68,14 +68,17 @@ def write_story_artifacts(project: Path, story: dict, notice: str) -> None:
     )
 
 
-def seed_delivery_tasks(
-    story: dict, gates: dict, registry: Path, runtime: Path
-) -> list:
-    todos = []
-    ids = {"gate:" + key: value["todo_id"] for key, value in gates.items()}
+def seed_delivery_tasks(story: dict, registry: Path, runtime: Path) -> list:
+    """Record each story dependency as the typed relation its state allows."""
+    todos, ids = [], {}
+    by_key = {task["key"]: task for task in story["tasks"]}
+    dependents: dict[str, list[str]] = {}
+    for task in story["tasks"]:
+        if task.get("after"):
+            dependents.setdefault(task["after"], []).append(task["key"])
     for task in story["tasks"]:
         owner, status, title = task["agent"], task["status"], task["title"]
-        dependency = ids[task["after"]] if task.get("after") else None
+        after = task.get("after")
         result = checked(
             add_goal_todo(
                 registry_path=registry,
@@ -88,26 +91,44 @@ def seed_delivery_tasks(
                 task_domain=task["phase"].lower().replace(" ", "-"),
                 claimed_by=owner,
                 status="open" if status == "done" else status,
-                resume_when="todo_done:" + dependency if status == "deferred" else None,
-                note=f"Phase: {task['phase']}. Dependency: {dependency or 'none'}. See BRIEF.md and calculations.json.",
+                resume_when="todo_done:" + ids[after] if status == "deferred" else None,
+                note=f"Phase: {task['phase']}. See BRIEF.md and calculations.json.",
             )
         )
-        todo_id = result["todo_id"]
-        ids[task["key"]] = todo_id
-        if status == "done":
+        ids[task["key"]] = result["todo_id"]
+        todos.append({**task, "todo_id": result["todo_id"]})
+    for task in story["tasks"]:
+        # Deferred work already waits on its condition; the rest needs a link.
+        linked = [
+            key for key in dependents.get(task["key"], [])
+            if by_key[key]["status"] != "deferred"
+        ]
+        if task["status"] == "done":
             checked(
                 complete_goal_todo(
                     registry_path=registry,
                     runtime_root_arg=str(runtime),
                     goal_id=story["id"],
-                    todo_id=todo_id,
-                    agent_id=owner,
+                    todo_id=ids[task["key"]],
+                    agent_id=task["agent"],
                     evidence="Scenario replay checkpoint; BRIEF.md, working-table.csv and calculations.json retain the planning inputs. No live execution receipt claimed.",
-                    no_followup=True,
+                    successor_todo_ids=[ids[key] for key in linked] or None,
+                    no_followup=not linked,
                 )
             )
-        todos.append({**task, "todo_id": todo_id})
-
+        elif linked:
+            if len(linked) > 1:
+                raise ValueError(f"{task['key']} can unblock only one task")
+            checked(
+                update_goal_todo(
+                    registry_path=registry,
+                    runtime_root_arg=str(runtime),
+                    goal_id=story["id"],
+                    todo_id=ids[task["key"]],
+                    agent_id=task["agent"],
+                    unblocks_todo_id=ids[linked[0]],
+                )
+            )
     return todos
 
 
@@ -153,6 +174,8 @@ def seed_story(root: Path, story: dict, notice: str) -> dict:
         )
     )
     write_story_artifacts(project, story, notice)
+    todos = seed_delivery_tasks(story, registry, runtime)
+    gated = {t["after"]: t["todo_id"] for t in todos if (t.get("after") or "").startswith("gate:")}
     gates = {}
     for decision in story["gates"]:
         gate = checked(
@@ -164,6 +187,7 @@ def seed_story(root: Path, story: dict, notice: str) -> dict:
                 task_class="user_gate",
                 action_kind="approve",
                 blocks_agent=decision["agent"],
+                unblocks_todo_id=gated["gate:" + decision["key"]],
                 text="[P0] " + decision["title"],
             )
         )
@@ -171,7 +195,6 @@ def seed_story(root: Path, story: dict, notice: str) -> dict:
             "todo_id": gate["todo_id"],
             "agent": decision["agent"],
         }
-    todos = seed_delivery_tasks(story, gates, registry, runtime)
     # The App and CLI replay share the canonical User completion relationship.
     # Do not teach the demo a second writer that opens the dependent afterward.
     for key, gate in gates.items():
