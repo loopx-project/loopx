@@ -1103,6 +1103,8 @@ def handle_turn_command(
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")
     except Exception as exc:  # noqa: BLE001 - CLI boundary renders typed JSON failure
+        from ..usage_ping import capture_failure
+        capture_failure(exc)
         journal_readback = None
         if execution_started:
             transaction = payload.get("transaction") or {}

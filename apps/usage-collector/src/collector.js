@@ -1,4 +1,5 @@
 import { validAggregate, validPing, recordAggregate, aggregateStats, validGoalAggregate, recordGoals, goalStats } from "./basic-usage.ts";
+import { validDiagnostics, recordDiagnostics, diagnosticStats } from "./basic-usage.ts";
 // Pure request handling for the LoopX usage collector. worker.js binds it to
 // Cloudflare; tests bind it to an in-memory database.
 
@@ -138,13 +139,45 @@ export async function purge(db, day) {
     db.prepare("DELETE FROM goal_duration_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM goal_usage_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM usage_counts WHERE day < ?1").bind(shiftDays(day, -30)),
+    db.prepare("DELETE FROM diagnostic_counts WHERE receipt_day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM installs WHERE install_id NOT IN (SELECT DISTINCT install_id FROM pings)"),
   ]);
+}
+
+export async function adoptionStats(db, day) {
+  const cohorts = {};
+  for (const horizon of [1, 7, 30]) {
+    const row = await db.prepare(
+      "SELECT COUNT(*) AS eligible, COALESCE(SUM(EXISTS(SELECT 1 FROM pings p WHERE p.install_id = installs.install_id " +
+      "AND p.day > installs.first_day AND p.day <= date(installs.first_day, ?1))), 0) AS returned " +
+      "FROM installs WHERE first_day BETWEEN ?2 AND ?3",
+    ).bind(`+${horizon} days`, shiftDays(day, -horizon - 29), shiftDays(day, -horizon)).first();
+    // Do not publish a rate whose numerator or denominator is a small cell.
+    cohorts[`within_${horizon}d`] = Number(row?.eligible) >= MIN_BUCKET && Number(row?.returned) >= MIN_BUCKET
+      && (Number(row.eligible) === Number(row.returned) || Number(row.eligible) - Number(row.returned) >= MIN_BUCKET)
+      ? { eligible: Number(row.eligible), returned: Number(row.returned) } : null;
+  }
+  const rows = await db.prepare(
+    "SELECT CASE WHEN days = 1 THEN '1' WHEN days <= 3 THEN '2_3' WHEN days <= 7 THEN '4_7' " +
+    "WHEN days <= 14 THEN '8_14' ELSE '15_30' END AS key, COUNT(*) AS installs FROM " +
+    "(SELECT install_id, COUNT(*) AS days FROM pings WHERE day BETWEEN ?1 AND ?2 GROUP BY install_id) GROUP BY key",
+  ).bind(shiftDays(day, -29), day).all();
+  return { schema: "loopx_installation_return_stats_v1", generated_on: day,
+    definition: "Each cohort contains 30 first-seen UTC dates ending at least N days ago. Return means a heartbeat on a later day within N days, not exact day-N retention. Persistent installation state is not a person or organization; resets and ephemeral hosts affect counts. Small numerator/denominator or nonzero complement cohorts omitted. Horizon populations overlap.",
+    cohorts, active_day_distribution: suppressSmall(rows.results) };
 }
 
 export async function handle(request, db, now = new Date()) {
   const url = new URL(request.url);
   const day = utcDay(now);
+  if (url.pathname === "/v1/adoption-stats") {
+    if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+    return json(await adoptionStats(db, day), 200, { "cache-control": "public, max-age=3600" });
+  }
+  if (url.pathname === "/v1/diagnostic-stats") {
+    if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+    return json(await diagnosticStats(db, shiftDays(day, -29)), 200, { "cache-control": "public, max-age=3600" });
+  }
   if (url.pathname === "/v1/goal-stats") {
     if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
     return json(await goalStats(db, shiftDays(day, -29)), 200, { "cache-control": "public, max-age=3600" });
@@ -187,6 +220,11 @@ export async function handle(request, db, now = new Date()) {
       return new Response(null, { status: 204 });
     }
     if (url.pathname === "/v1/aggregate") {
+      if (validDiagnostics(parsed)) {
+        if (parsed.counters.some(row => row.activity_day > day || row.activity_day < shiftDays(day, -7))) return json({ error: "activity day outside retention window" }, 400);
+        await recordDiagnostics(db, parsed, day);
+        return new Response(null, { status: 204 });
+      }
       if (!validAggregate(parsed)) return json({ error: "invalid aggregate" }, 400);
       await recordAggregate(db, parsed, day);
       return new Response(null, { status: 204 });

@@ -87,6 +87,8 @@ def print_payload(
 	fmt: str,
 	markdown_renderer: Callable[[dict[str, object]], str],
 ) -> None:
+	from .usage_ping import capture_result
+	capture_result(payload)
 	if fmt == "json":
 		print(json.dumps(payload, ensure_ascii=False, indent=2))
 	else:
@@ -427,6 +429,8 @@ def dispatch_common_command(
 
 
 def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
+	from .usage_ping import select_operation
+	select_operation(args)
 	args.format = resolve_global_output_format(args)
 	guard_result = enforce_native_controller_guard(args)
 	if guard_result is not None:

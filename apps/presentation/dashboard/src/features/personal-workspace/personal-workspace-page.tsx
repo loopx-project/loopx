@@ -750,6 +750,7 @@ function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<Workspa
 
 export function PersonalWorkspacePage({
   conversationQueuesFollowUps = false,
+  conversationSupportsSteering = false,
   conversationSessionId,
   conversationHistoryState,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
@@ -767,6 +768,8 @@ export function PersonalWorkspacePage({
 }: {
   /** The bound Session's mode queues a message sent while its Turn runs. */
   conversationQueuesFollowUps?: boolean;
+  /** The bound managed executor offers native exact-turn steering. */
+  conversationSupportsSteering?: boolean;
   conversationSessionId?: string;
   conversationHistoryState?: ConversationHistoryStatus;
   agents?: WorkspaceAgentOption[];
@@ -806,6 +809,8 @@ export function PersonalWorkspacePage({
     }
   });
   const [sending, setSending] = useState(false);
+  const [steering, setSteering] = useState(false);
+  const steeringRequests = useRef(new Map<string, { sessionId: string; turnId: string; text: string; id: string }>());
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -848,8 +853,9 @@ export function PersonalWorkspacePage({
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
   }, [composer, selectedGoalId, managerChatOpen]);
-  function setComposerDraft(key: string, value: string) {
+  function setComposerDraft(key: string, value: string, expectedValue?: string) {
     setDrafts((current) => {
+      if (expectedValue !== undefined && current[key] !== expectedValue) return current;
       const next = { ...current };
       if (value) {
         next[key] = value;
@@ -1027,18 +1033,17 @@ export function PersonalWorkspacePage({
       setGoalConversationReceiptVisible(true);
     }
   }, [goalMessages, selectedGoal, selectedGoalTab]);
-  // A managed runtime Session admits one Turn at a time. While the current
-  // Session shows a Turn in flight, a new message would only be rejected, so
-  // the composer waits and points to the reply's own adjust/interrupt
-  // controls. Two deliveries stay open because the service queues them behind
-  // the running Turn: LoopX mode through its own queue, and any message to an
-  // attached host Session.
+  // One composer for both conversations. Running managed Codex work receives
+  // exact-turn instructions; attached hosts and LoopX mode keep their queues.
   const loopxDeliveryOpen = Boolean(conversationSessionId && loopxMode?.session_id === conversationSessionId
     && loopxMode?.enabled && loopxMode.active_turn_id);
-  const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(conversationSessionId)
-    && managerMessages.some((message) => message.pending && Boolean(message.sourceTurnId)
-      && message.sourceSessionId === conversationSessionId);
-  const composerBlocked = sending || conversationTurnRunning;
+  const runningMessage = managerMessages.find((message) => message.pending && Boolean(message.sourceTurnId)
+    && message.sourceSessionId === conversationSessionId);
+  const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
+  const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
+    && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
+  const composerBlocked = steering || (!steeringTurnId && (sending || conversationTurnRunning));
+  const quickPromptBlocked = steering || sending || conversationTurnRunning;
   const managerChatItems = useMemo(
     () => items.filter((item) => item.kind === "message"
       || (item.kind === "proposal" && (sessionProposalIds.includes(item.proposal.previewId)
@@ -1626,7 +1631,36 @@ export function PersonalWorkspacePage({
   async function sendMessage(messageOverride?: string) {
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
-    if (!message || sending || conversationHistoryState?.sendBlocked) return;
+    if (!message || composerBlocked || conversationHistoryState?.sendBlocked) return;
+    const previousSteering = steeringRequests.current.get(composerDraftKey);
+    const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text === message
+      ? previousSteering : undefined;
+    if ((retry || steeringTurnId) && conversationSessionId && callbacks.onSteerConversationTurn) {
+      if (pendingImages.length) {
+        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
+        return;
+      }
+      const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
+      steeringRequests.current.set(composerDraftKey, request);
+      setSteering(true);
+      setActionFeedback(null);
+      setImageAttachmentError(null);
+      try {
+        await callbacks.onSteerConversationTurn(selectedGoalId ?? "manager", request.turnId, message, request.id);
+        steeringRequests.current.delete(composerDraftKey);
+        if (!messageOverride) setComposerDraft(composerDraftKey, "", composer);
+        setActionFeedback(locale === "zh-CN" ? "执行器已接收本轮追加指令。" : "The executor accepted instructions for this turn.");
+      } catch (error) {
+        // Unknown delivery retries the original Turn even after it completes.
+        // A confirmed non-delivery may use a new ingress after recovery.
+        if (error instanceof ChatApiError && error.payload.delivery_state === "not_delivered") {
+          steeringRequests.current.delete(composerDraftKey);
+        }
+        setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
+      } finally { setSteering(false); }
+      return;
+    }
+    if (sending) return;
     followConversationRef.current = true;
     setShowLatestMessage(false);
     if (loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id && conversationSessionId) {
@@ -1969,16 +2003,16 @@ export function PersonalWorkspacePage({
               <summary>{locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
             {selectedGoal ? (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.nextAction")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
-                <button aria-label={t("composer.agentProgress")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
+                <button aria-label={t("composer.nextAction")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.nextActionPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.nextAction")}</span></button>
+                <button aria-label={t("composer.agentProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.agentProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.agentProgress")}</span></button>
                 <button aria-label={t("composer.monitor")} disabled={sending} onClick={() => prepareScheduleDraft("monitor", selectedGoalId)} title={t("composer.sendMessageHint")} type="button"><CalendarClock size={13} /><span>{t("composer.monitor")}</span></button>
-                <button aria-label={t("composer.blockers")} disabled={composerBlocked || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
-                <button aria-label={t("composer.evidence")} disabled={composerBlocked || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
+                <button aria-label={t("composer.blockers")} disabled={quickPromptBlocked || !stewardPromptText("gate")} onClick={() => void sendMessage(stewardPromptText("gate"))} title={t("composer.sendMessageHint")} type="button"><AlertCircle size={13} /><span>{t("composer.blockers")}</span></button>
+                <button aria-label={t("composer.evidence")} disabled={quickPromptBlocked || !stewardPromptText("evidence")} onClick={() => void sendMessage(stewardPromptText("evidence"))} title={t("composer.sendMessageHint")} type="button"><FileText size={13} /><span>{t("composer.evidence")}</span></button>
               </div>
             ) : (
               <div className="personal-quick-prompts">
-                <button aria-label={t("composer.globalTasks")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
-                <button aria-label={t("composer.globalProgress")} disabled={composerBlocked} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
+                <button aria-label={t("composer.globalTasks")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalTasksPrompt"))} title={t("composer.sendMessageHint")} type="button"><MessageCircleQuestion size={13} /><span>{t("composer.globalTasks")}</span></button>
+                <button aria-label={t("composer.globalProgress")} disabled={quickPromptBlocked} onClick={() => void sendMessage(t("composer.globalProgressPrompt"))} title={t("composer.sendMessageHint")} type="button"><Send size={13} /><span>{t("composer.globalProgress")}</span></button>
                 <button aria-label={t("composer.createGoal")} onClick={requestGoalCreate} title={t("composer.createGoalHint")} type="button"><Plus size={13} /><span>{t("composer.createGoal")}</span></button>
               </div>
             )}
@@ -1991,7 +2025,9 @@ export function PersonalWorkspacePage({
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
-            {conversationTurnRunning ? <p className="personal-composer-status" role="status">{t("composer.turnRunning")}</p> : null}
+            {conversationTurnRunning ? <p className="personal-composer-status" role="status">{steeringTurnId
+              ? (locale === "zh-CN" ? "本轮进行中 · 发消息可调整当前工作" : "Turn in progress · send instructions to adjust this work")
+              : t("composer.turnRunning")}</p> : null}
             <div
               className="personal-channel-composer"
               onDragOver={(event) => {
@@ -2034,7 +2070,9 @@ export function PersonalWorkspacePage({
               />
               <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
             </div>
-            {conversationOpen ? <div className="personal-composer-hint">{sending
+            {conversationOpen ? <div className="personal-composer-hint">{steering
+              ? (locale === "zh-CN" ? "正在发送本轮追加指令…" : "Sending instructions for this turn…")
+              : sending && !steeringTurnId
               ? (locale === "zh-CN" ? "正在回复 · 修改当前任务请使用“调整本轮”" : "Reply in progress · use Adjust turn to change the current task")
               : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </>}

@@ -524,8 +524,10 @@ def test_exact_external_return_does_not_resend_after_expired_unknown_admission(
     ("initial_delivery_receipt_unavailable", True),
 ])
 def test_exact_external_return_verifies_after_recreation_without_resend(
-    tmp_path: Path, verification_failure: str | None, terminal: bool,
+    tmp_path: Path, verification_failure: str | None, terminal: bool, monkeypatch,
 ) -> None:
+    observations = []
+    monkeypatch.setattr('loopx.usage_ping.observe_verified_return', lambda: observations.append('verified'))
     registry = _create_source_registry(tmp_path)
     store, _, receipt = _external_manager_request(tmp_path, registry)
     admitted_at = datetime(2026, 9, 28, tzinfo=timezone.utc)
@@ -589,6 +591,7 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
     assert first["status"] == "admitted"
     assert first["attempt"]["message_ref"] == "om_exact_reply"
     assert first["goal_ref"] == receipt["goal_ref"]
+    assert observations == []  # An unverified provider attempt is not a return.
 
     _recreate(registry)
     assert (
@@ -625,6 +628,7 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
         assert transport.verify_calls == (1 if terminal else 2)
         if terminal:
             assert json.loads(state_path.read_text(encoding="utf-8")) == failed
+            assert observations == []
             return
     state = json.loads(
         (
@@ -637,6 +641,8 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
     assert state["status"] == "delivered"
     assert state["goal_ref"] == receipt["goal_ref"]
     assert state["verification"] == "reconciled_after_restart"
+    drain(tmp_path, registry, ChatSessionStore(tmp_path), transport, now=admitted_at + timedelta(days=2))
+    assert observations == ['verified']
 
 
 def test_long_lived_mcp_keeps_its_captured_instance_after_recreation(

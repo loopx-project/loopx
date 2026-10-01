@@ -56,6 +56,7 @@ import {
   resumeChatTurnStreaming,
   sendChatTurnStreaming,
   chatSessionQueuesFollowUps,
+  chatSessionSupportsSteering,
   selectAvailableChatAgent,
   sessionInvalidatedByPayload,
   todoNoWriteReceiptFromPayload,
@@ -1410,6 +1411,7 @@ function PersonalGoalHome({
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
   // from the Session owner each time this page binds a Session.
   const [followUpQueueSessionIds, setFollowUpQueueSessionIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [steeringSessionIds, setSteeringSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
   // Bumped when the service reports a running Turn this page did not know
   // about, so the Turn recovery effect re-reads the Session and adopts it.
@@ -1559,6 +1561,14 @@ function PersonalGoalHome({
 
   function recordSessionAdmission(session: ChatSessionSummary) {
     const queues = chatSessionQueuesFollowUps(session);
+    const supportsSteering = chatSessionSupportsSteering(session);
+    setSteeringSessionIds((current) => {
+      if (current.has(session.session_id) === supportsSteering) return current;
+      const next = new Set(current);
+      if (supportsSteering) next.add(session.session_id);
+      else next.delete(session.session_id);
+      return next;
+    });
     setFollowUpQueueSessionIds((current) => {
       if (current.has(session.session_id) === queues) return current;
       const next = new Set(current);
@@ -2939,9 +2949,9 @@ function PersonalGoalHome({
           },
           onSteerConversationTurn: async (targetContextId, turnId, message, ingressId) => {
             const binding = runtimeBindings[targetContextId];
-            if (!binding?.sessionId || binding.turnId !== turnId || activeTurnIds.current.get(targetContextId) !== turnId) {
-              throw new Error("本轮已结束或已被新的回合取代，追加指令未发送，草稿已保留。");
-            }
+            if (!binding?.sessionId) throw new Error("当前会话不可用，追加指令未发送，草稿已保留。");
+            // The service owns exact-turn admission and durable retry. A delivered
+            // ingress may be read back after completion; never retarget it locally.
             await steerChatTurn(binding.sessionId, turnId, message, ingressId);
             const id = managerMessageId.current++;
             setMessagesByContext(current => {
@@ -3081,6 +3091,7 @@ function PersonalGoalHome({
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
         conversationQueuesFollowUps={followUpQueueSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
+        conversationSupportsSteering={steeringSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
         conversationHistoryState={conversationHistory}
         model={workspaceModel}
         readOnly={readOnly}

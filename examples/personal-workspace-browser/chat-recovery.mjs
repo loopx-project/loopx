@@ -42,6 +42,8 @@ export const chatRecoveryScenario = {
       if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
       await page.getByRole("button", { name: "询问全局待办", exact: true }).click();
+      // This is a fresh question, not an instruction to the shortcut's active Turn.
+      await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
       await page.getByLabel("向 LoopX 发送消息").fill("我现在该做什么？只读回答，不要创建或修改任何状态。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
       await page.getByText("管家已读取当前授权范围的 Goal 证据。", { exact: true }).waitFor({ state: "visible" });
@@ -292,7 +294,7 @@ export const chatRecoveryScenario = {
       for (const suffix of ["a", "b"]) {
         const sessionId = `session-run-action-${suffix}`;
         page.__loopxRuntime.sessions.set(sessionId, {
-          session_id: sessionId, goal_id: actionGoalId, agent_id: "codex", adapter_kind: "codex",
+          session_id: sessionId, goal_id: actionGoalId, agent_id: "codex", adapter_kind: "codex_app_server",
           channel_id: `task.run-action-${suffix}`, status: "ready", active_turn_id: null, last_error_code: null,
           created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", resumable: true,
         });
@@ -352,13 +354,15 @@ export const chatRecoveryScenario = {
       if (await closeButton.isDisabled()) throw new Error("Session B's own close success left its button disabled");
       pass("run-action-ownership", "Late Session close results report on, and release the guard of, only the Run that issued them");
 
-      // The Chat service accepts one Turn per Session. After a reload the page
-      // only learns about a running Turn from the Session snapshot, so the
-      // composer must wait for it instead of sending into a 409.
+      // An executor without native steering accepts one Turn at a time. Its
+      // recovered and 409-handoff paths must keep Send closed; supported Codex
+      // instructions are covered by composer-session-admission.
       const turnsBeforeRunningCheck = api.turnRequests.length;
       await page.getByLabel("向 LoopX 发送消息").fill("刷新后验证中断控制：输入框应等待本轮。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
       while (api.turnRequests.length === turnsBeforeRunningCheck) await page.waitForTimeout(50);
+      const unsupportedSessionId = api.turnRequests.at(-1).sessionId;
+      page.__loopxRuntime.sessions.set(unsupportedSessionId, { ...page.__loopxRuntime.sessions.get(unsupportedSessionId), adapter_kind: "external" });
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator(".personal-goal-link").first().click();

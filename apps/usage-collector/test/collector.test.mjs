@@ -204,3 +204,57 @@ test("measurement migration preserves historical counts and is safe to repeat", 
   assert.equal(db.prepare("SELECT count FROM goal_usage_counts").get().count,8);
   db.close();
 });
+
+test("diagnostics store separate activity/receipt days, preserve legacy data and reject private/late fields", async () => {
+  const db = d1();
+  const send = value => new Request("https://collector.example/v1/aggregate", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value),
+  });
+  const row = { feature: "pr-review", operation: "merge-readiness", outcome: "blocked", error: "not_ready", duration: "lt_1s", count: 6,
+    version: "1.2.3", activity_day: "2026-09-29", context: "maintainer", signal: "none" };
+  const value = { schema: "loopx_usage_diagnostics_v1", counters: [row] };
+  for (const field of ["install_id", "goal_id", "arguments", "ip", "raw_error"]) {
+    assert.equal((await handle(send({ ...value, [field]: "private" }), db, at("2026-09-30"))).status, 400);
+  }
+  assert.equal((await handle(send(value), db, at("2026-09-30"))).status, 204);
+  assert.equal((await handle(send({ ...value, counters: [{ ...row, activity_day: "2026-10-01" }] }), db, at("2026-09-30"))).status, 400);
+  assert.equal((await handle(send({ ...value, counters: [{ ...row, activity_day: "2026-09-01" }] }), db, at("2026-09-30"))).status, 400);
+  const stored = db.raw.get("SELECT * FROM diagnostic_counts");
+  assert.equal(stored.receipt_day, "2026-09-30"); assert.equal(stored.activity_day, "2026-09-29");
+  assert.equal("install_id" in stored, false);
+  const stats = await (await handle(new Request("https://collector.example/v1/diagnostic-stats"), db, at("2026-09-30"))).json();
+  assert.deepEqual(stats.totals.outcome, { blocked: 6 });
+  assert.deepEqual(stats.totals.context, { maintainer: 6 });
+  await purge(db, "2026-11-01");
+  assert.equal(db.raw.get("SELECT COUNT(*) n FROM diagnostic_counts").n, 0);
+});
+
+test("return cohorts require matured observation windows, deduplicate days and omit small cells", async () => {
+  const db = d1();
+  for (let n = 1; n <= 10; n++) {
+    await handle(post(ping(n)), db, at("2026-09-01"));
+    if (n <= 5) {
+      await handle(post(ping(n)), db, at("2026-09-03"));
+      await handle(post(ping(n)), db, at("2026-09-03"));
+    }
+  }
+  await handle(post(ping(11)), db, at("2026-09-29")); // too recent for 7-day eligibility
+  const stats = await (await handle(new Request("https://collector.example/v1/adoption-stats"), db, at("2026-09-30"))).json();
+  assert.deepEqual(stats.cohorts.within_7d, { eligible: 10, returned: 5 });
+  assert.equal(stats.cohorts.within_1d, null); assert.equal(stats.cohorts.within_30d, null);
+  assert.deepEqual(stats.active_day_distribution, { "1": 6, "2_3": 5 });
+  assert.equal(JSON.stringify(stats).includes(id(1)), false);
+  await handle(post(ping(6)), db, at("2026-09-04"));
+  const smallComplement = await (await handle(new Request("https://collector.example/v1/adoption-stats"), db, at("2026-09-30"))).json();
+  assert.equal(smallComplement.cohorts.within_7d, null);
+});
+
+test("diagnostics migration is repeatable and never reattributes legacy observations", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE usage_counts (count INTEGER); INSERT INTO usage_counts VALUES (7)");
+  const migration = readFileSync(new URL("../migrations/0004-diagnostics.sql", import.meta.url), "utf8");
+  db.exec(migration); db.exec(migration);
+  assert.equal(db.prepare("SELECT count FROM usage_counts").get().count, 7);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM diagnostic_counts").get().n, 0);
+  db.close();
+});

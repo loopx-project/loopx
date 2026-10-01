@@ -227,6 +227,50 @@ def test_codex_chat_pins_explicit_home_in_child_environment(monkeypatch, tmp_pat
         session.close()
 
 
+@pytest.mark.parametrize("commentary", ["I will read the context.", '{"answer":"not-final"}'])
+@pytest.mark.parametrize("final_phase", [None, "final_answer"])
+def test_structured_turn_uses_completed_answer_not_commentary_or_partial_deltas(
+    monkeypatch, tmp_path, commentary, final_phase,
+):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(), thread_id="thread-fixture",
+        work_dir=tmp_path, execution_mode=True,
+    )
+    params = {"threadId": "thread-fixture", "turnId": "turn-fixture"}
+    final = {"type": "agentMessage", "text": '{"answer":"actual"}'}
+    if final_phase is not None:
+        final["phase"] = final_phase
+    upstream = iter([
+        {"method": "item/agentMessage/delta", "params": {**params, "delta": commentary}},
+        {"method": "item/completed", "params": {**params, "item": {
+            "type": "agentMessage", "phase": "commentary", "text": commentary}}},
+        {"method": "item/agentMessage/delta", "params": {**params, "delta": '{"answer":'}},
+        {"method": "item/completed", "params": {**params, "item": final}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
+    assert session.send("Return the structured result.", output_schema={"type": "object"}) == {"answer": "actual"}
+
+
+@pytest.mark.parametrize("phase", ["commentary", "futurePhase", []])
+def test_structured_turn_cannot_promote_nonfinal_json_to_a_final_result(monkeypatch, tmp_path, phase):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(), thread_id="thread-fixture",
+        work_dir=tmp_path, execution_mode=True,
+    )
+    upstream = iter([
+        {"method": "item/agentMessage/delta", "params": {"delta": '{"answer":"not-final"}'}},
+        {"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": phase, "text": '{"answer":"not-final"}'}}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
+    with pytest.raises(chat_agent.CodexChatAgentError, match="structured output"):
+        session.send("Return the structured result.", output_schema={"type": "object"})
+
+
 def test_trusted_manager_profile_reaches_app_server_and_turn_prompt(
     monkeypatch,
     tmp_path,

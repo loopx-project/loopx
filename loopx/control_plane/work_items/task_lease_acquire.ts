@@ -1,6 +1,7 @@
+import {observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
-import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire, type AcquireDecisionOtherLease} from "./task_lease_acquire_decision.ts";
+import {evaluateTaskLeaseWriteScopesOverlap, evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire, type AcquireDecisionOtherLease} from "./task_lease_acquire_decision.ts";
 import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
 import { ShadowManagementError, requireShadowPrimaryWriteAllowed } from "../coordination/shadow_management.ts";
 import { parseIsoTimestamp } from "../runtime_timestamp.ts";
@@ -80,6 +81,8 @@ export interface AuthorityFacts {
 
 interface AcquireRequest {
   canonical: boolean;
+  write_worktree: string | null;
+  write_workspace?: LeaseWorkspace | null;
   runtime_root: string;
   goal_id: string;
   owner: string;
@@ -410,7 +413,7 @@ function decodeRequest(value: unknown): AcquireRequest {
   // CLI: a missing authority projection is reported before unrelated fields.
   if (canonical) {
     const allowed = new Set(["schema_version", "runtime_root", "goal_id", "todo_id", "owner", "idempotency_key",
-      "ttl_seconds", "write_scopes", "expected_version", "authority"]);
+      "ttl_seconds", "write_scopes", "write_worktree", "expected_version", "authority"]);
     const unsupported = Object.keys(request).find(key => !allowed.has(key));
     if (unsupported) throw new TaskLeaseAcquireError(`canonical acquire does not accept ${unsupported}`, "invalid_canonical_acquire_request");
   }
@@ -418,6 +421,7 @@ function decodeRequest(value: unknown): AcquireRequest {
   const authority = decodeTaskLeaseAuthority(canonical ? {...rawAuthority, handoff_mode: "legacy", todos: [], todo_projection_error: null} : rawAuthority);
   return {
     canonical,
+    write_worktree: request.write_worktree == null ? null : stringValue(request.write_worktree, "write_worktree"),
     runtime_root: stringValue(request.runtime_root, "runtime_root"),
     goal_id: normalizeGoalId(request.goal_id),
     owner: normalizeOwner(request.owner),
@@ -1019,6 +1023,13 @@ export async function executeTaskLeaseAcquire(
   const context = executionContext(value);
   try {
     request = decodeRequest(value);
+    if (request.write_worktree !== null) {
+      if (!request.canonical || request.write_scopes.length === 0) throw new TaskLeaseAcquireError(
+        "--write-worktree requires canonical authority and nonempty code-edit scopes", "invalid_worktree_lease_request");
+      try { request.write_workspace = await observeLeaseWorktree(request.write_worktree, path =>
+        evaluateTaskLeaseWriteScopesOverlap({left: request.write_scopes, right: [path]}).overlap === true); }
+      catch { throw new TaskLeaseAcquireError("cannot verify independent Git worktree and origin for --write-worktree", "invalid_worktree_lease_request"); }
+    }
   } catch (error) {
     if (error instanceof TaskLeaseAcquireError || error instanceof ShadowManagementError || error instanceof LegacyCoordinationWriteError) {
       return failureEnvelope(

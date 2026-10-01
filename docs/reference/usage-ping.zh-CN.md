@@ -19,18 +19,19 @@ loopx usage-ping enable      # 阅读告知后明确开启
 ## 能回答什么
 
 - 每日版本、系统、CPU 架构、Python 小版本和安装渠道：哪些环境需要优先维护。
-- 随机安装 ID 的跨日心跳：有多少安装持续使用。它统计安装而非用户；重新安装或
-  关闭后再开启可能计为新安装。现有统计接口提供活跃与新增；更细留存报表未实现。
-- 固定 CLI 功能分类与次数：哪些入口常用。自动化轮询也会计数，不能当成用户价值。
-- 命令结果、错误类别和耗时区间：哪些入口失败或慢。退出码为 0 不等于 Goal 完成；
-  某些已处理的业务阻塞也可能返回 0。
+- 随机安装 ID 跨日心跳：持久机器状态目录的活跃与成熟的 1/7/30 天回访，不是
+  用户或组织数；删除状态或关闭后重开可能计为新安装。
+- 固定 CLI 功能/子操作、版本和 UTC 活动日期：哪些入口常用，自动化轮询也计数。
+- 类型化结果、原因和耗时区间：哪些入口失败或慢；合并条件未满足单列 `blocked`。
+- 回执支持的注册、Turn 提交、Todo 完成/验证、结果回传：观察推进，不靠退出成功
+  推断 Goal 完成，也不宣称独立验证了结果质量。
 
 第一版只计 CLI 调用，包括 Agent 发起的命令。顶层 `--help`/`--version` 快速路径、
 原生 exec 替换的 scheduler followup、纯 API 操作以及 App/Lark 内的每一次交互不计数。
 心跳在命令调度前由后台发送；长驻服务的命令结果只在 CLI 返回时计数，
 不宣称覆盖全部产品使用或任务成功率。
 
-## 两种数据包
+## 分离的数据契约
 
 每日心跳 `POST /v1/ping`：
 
@@ -38,18 +39,54 @@ loopx usage-ping enable      # 阅读告知后明确开启
 {"schema":"loopx_usage_ping_v1","install_id":"00000000-0000-4000-8000-000000000001","version":"1.2.0","os":"linux","arch":"x64","python":"3.13","channel":"pip"}
 ```
 
-ID 随机生成，不绑定账号、不从硬件派生，但能跨天关联，因此不能称为完全匿名。
+ID 随机生成，属于持久机器状态目录，不绑定账号、不从硬件派生。普通 session 和
+告知升级保留 ID，明确关闭删除 ID。临时 home、删/复制状态或重新开启会影响统计。
+它能跨天关联，因此不能称为完全匿名。
 系统只允许 `darwin|linux|windows|other`，架构只允许 `x64|arm64|x86|other`，
 安装渠道只允许 `pip|local_release|source|unknown`。版本只接受数字三段式，包含
 自定义后缀的版本不会上传。
 
-独立的 CLI 汇总批次 `POST /v1/aggregate`：
+当前 CLI 诊断 `POST /v1/aggregate`（告知版本 5）：
+
+```json
+{"schema":"loopx_usage_diagnostics_v1","counters":[{"feature":"pr-review","operation":"merge-readiness","outcome":"blocked","error":"not_ready","duration":"lt_1s","count":4,"version":"1.2.3","activity_day":"2026-09-30","context":"unknown","signal":"none"}]}
+```
+
+默认新增数字三段版本、UTC 活动**日期**（非事件时间）、固定子操作、结果/原因及
+回执支持的生命周期信号。环境类型由 `LOOPX_USAGE_CONTEXT` 自愿声明：
+`unknown`（默认）、`personal`、`shared_service`、`ephemeral`、`organization_managed`、
+`maintainer`；无效值成为 `unknown`，不猜企业、人数或机器拓扑，不接受公司名称。
+维护者可声明 `maintainer`，分开**未来诊断计数**；不会标注心跳，也无法追溯识别旧
+无 ID 汇总。需要排除整机所有采集时仍用统一关闭开关。
+
+收集器另加接收日期，仅接收此前七天至当天的活动日期，拒绝过期或未来数据。
+表中没有安装 ID、Goal 或请求时间。两端共用 TS 契约；子操作来自解析器结构，
+不读取参数值：
+
+- `turn`：`plan|run-once|status`；`quota`：`status|plan|should-run|spend-slot|monitor-poll`。
+- `todo`：`list|add|claim|update|complete`。
+- `project`：`register|resolve|bind-session|unbind-session`。
+- `pr-review`：`merge-readiness|check-result`；其他操作归为 `default`。
+- 已验证回传观测使用 `other/result-return`。
+
+结果为 `ok|blocked|failed|cancelled`；原因固定为
+`none|not_ready|invalid_input|permission|not_found|timeout|connection|interrupted|command_failed`。
+合并检查正常返回 `ready=false` 时记 `blocked/not_ready`，原非零退出码不改。
+错误分类依据异常类型与明确布尔字段，不解析错误文字。
+
+信号为 `none|project_registered|managed_turn_committed|todo_completed|todo_validated|result_returned`。
+需要已有 changed/committed 回执，不靠成功退出推断；dry-run、未变化的 Todo 完成
+不计新转移；Turn 重放不满足既有“本次 effects 已提交”判定。完成回执确有 passed
+验证才记 `todo_validated`。回传目前仅覆盖 manager-context 精确来源、provider 已
+验证且本次落为 delivered 的路径，旧路径或未验证回传不覆盖，不改变工作授权。
+
+保留的旧 CLI 汇总契约（同一接收地址）：
 
 ```json
 {"schema":"loopx_usage_aggregate_v1","counters":[{"feature":"todo","outcome":"ok","duration":"lt_1s","error":"none","count":4}]}
 ```
 
-不带安装 ID、版本、时间戳、Goal 或其他关联键。接收端只添加接收日期并累加计数，
+这一旧契约不带安装 ID、版本、时间戳、Goal 或其他关联键。接收端只添加接收日期并累加计数，
 不保存逐次请求行。发送端和收集器共用严格的 TS 白名单：
 
 - 功能：`status|quota|todo|turn|project|connect|pr-review|version|chat|other`。
@@ -116,8 +153,9 @@ authority provider 备份、公共投影。普通命令只读取很小的本地�
 计数，设置和 status 查询不触发发送。此行为替代已开启统计的交互式、无人值守 CLI
 原有的次日发送机制；Goal 时长快照仍按天发送。
 
-本地汇总最多 128 种计数组合，每项封顶 10,000；以最早积压日期计算，超过七个 UTC
-日的计数丢弃。旧按日缓冲格式仍可读取。告知版本 4 要求在新频率生效前重新告知：
+旧汇总最多 128 种组合，新诊断最多 32 种，每项封顶 10,000。诊断按活动日期过期，
+旧汇总以最早积压日期计算，超过七个 UTC 日丢弃。溢出仅记有界本地
+`diagnostic_dropped`，不建无限队列；旧缓冲可读。告知版本 5 要求扩大默认范围前重新告知：
 确认前不发送、不消费缓存；确认后丢弃旧范围计数并更新 generation，阻止旧排队
 观测补发，后续新测量才可发送。明确关闭继续生效，`consent_required` 仍须明确启用。
 每批在发送前持久化认领时间、移除对应计数，并在同一短锁内发起请求，网络等待不占锁。失败或时钟回拨也不能绕过间隔。
@@ -125,8 +163,8 @@ authority provider 备份、公共投影。普通命令只读取很小的本地�
 尾部计数；优化减少对次日回访的依赖，但不承诺完整采集。锁竞争、进程退出和网络
 故障也可能丢数。这是有损诊断，不能当账单或审计日志。
 
-CLI 汇总仍不携带安装 ID、版本或活动日期；服务端按 UTC 接收日期汇总，可能与实际
-使用日期不同。不能拿调用量除以上报安装数推算每安装用量，也不能归因到某个版本。
+新诊断带版本和活动日期，不带安装 ID 或事件时间；旧计数没有版本/活动日期，不能
+追溯补归因。两种计数都不能除以上报安装数推算每安装用量。
 更频繁的请求可能增加网络时序关联的机会；载荷不带标识不代表无法关联。
 
 每个网络请求限时 3 秒，不阻塞命令完成、不改变输出和退出码。使用受支持 Node
@@ -134,6 +172,9 @@ CLI 汇总仍不携带安装 ID、版本或活动日期；服务端按 UTC 接�
 关闭删除本机 ID 和
 待发送计数；旧后台进程不能恢复它们，也不能继续发送下一条通道。已经交给网络的
 请求无法撤回；重新开启会生成新 ID。损坏或未知格式状态拒绝发送，可明确 disable 修复。
+status/设置另显示最多 20 条本地发送摘要：UTC 日期、通道、行数和接收/拒绝/不可达。
+不记请求正文、错误或 URL，关闭清空摘要。HTTP 接收不等于收集器持久化或工作验收；
+待发送预览也不是发送回执。
 
 ## 服务端与解释边界
 
@@ -141,6 +182,16 @@ CLI 汇总仍不携带安装 ID、版本或活动日期；服务端按 UTC 接�
 汇总计数保存 30 天。原 `/v0/stats` 继续提供新旧客户端的去重活跃和新增安装数。
 `/v1/aggregate-stats` 分别给出功能、结果、耗时和错误总量，低于 5 的格子不公开，
 不公开多维组合或逐安装行为历史。
+`/v1/diagnostic-stats` 分别提供最近 30 个接收日的功能、子操作、结果、原因、耗时、
+版本、环境和信号总量，低于 5 的单元不公开。仅运营侧查询可排除
+`context='maintainer'`、比较活动/接收日期，仍不能关联安装。
+先应用增量迁移 `0004-diagnostics.sql` 并部署 Worker，再发布告知 v5 客户端；旧 Worker
+会有损地拒绝新包，回滚可保留新增表，不给历史数据虚构诊断行。
+
+`/v1/adoption-stats` 基于已有心跳，每个 1/7/30 天 cohort 取完整观察窗口已结束的
+30 个首次出现日期。回访指 N 天内任意后续日期有心跳，不是严格第 N 天留存。
+另给最近 30 天活跃天数分档，抑制小样本；各窗口重叠，不能相加。安装多、调用多
+不足以判断企业采用、去重人数或付费客户。
 
 应用代码不保存 IP、User-Agent 或 Cloudflare 请求元数据；部署模板关闭 Worker
 observability。但网络服务商仍处理连接信息，分开数据包不保证绝对不可关联。
@@ -199,7 +250,7 @@ Codex 发现使用既有 Goal/agent/task 绑定和所选 `CODEX_HOME` 的只读�
 分布，少于 5 的单元不公开。设置与 `loopx usage-ping status` 的 `goal_preview`
 是本机当前快照，不是发送回执。
 
-沿用统一开关、环境变量和同意策略，关闭也停止本地时间读取。扩大范围需要第 3 版
+沿用统一开关、环境变量和同意策略，关闭也停止本地时间读取。扩大范围需要当前第 5 版
 告知，保留原有关闭选择。发布客户端前先备份 D1，依次应用 `0002-goal-usage.sql`、
 `0003-goal-duration-sources.sql` 并部署 Worker。后者将旧计数转入 `host_call` /
 `unknown`，保留旧表以便回滚，不影响心跳和 CLI 计数。尚未发布的 Goal v1 协议

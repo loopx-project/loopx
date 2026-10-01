@@ -1,3 +1,4 @@
+import {sameLeaseWorkspace} from "../work_items/task_lease_workspace.ts";
 /** Historical acquisition and current permission are different facts. Both
  * standalone acquire and atomic claim/acquire return this current proof. */
 import type {JsonObject} from "../effect_program.ts";
@@ -55,6 +56,8 @@ export async function currentLeaseAcquisitionProof<S extends string>(store: Auth
       leaseVersion(current) < leaseVersion(original)) {
     return failed("idempotency_key_reuse", "acquire receipt belongs to a retired execution; use a new execution key", details);
   }
+  if (!sameLeaseWorkspace(current.write_workspace, original.write_workspace)) return failed(
+    "lease_workspace_divergence", "current worktree identity differs from its acquisition receipt", details);
   const repositoryRejection = leaseWriteRepository(current.write_repository) !== leaseWriteRepository(original.write_repository)
     ? "lease_repository_divergence" : leaseRepositoryRejection(facts.todo, current);
   if (repositoryRejection !== null) return failed(repositoryRejection,

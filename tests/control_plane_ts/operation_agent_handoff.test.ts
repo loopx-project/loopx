@@ -36,6 +36,28 @@ test("operator transport preflight projects pinned configuration without claimin
   }
 });
 
+test("operation transport accepts the explicit CLI effort vocabulary without qualifying a model", () => {
+  for (const reasoning_effort of ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]) {
+    for (const sandbox of ["read-only", "workspace-write"]) {
+      const projected = projectManagedOperationTransport({host: "codex-cli", sandbox,
+        model: "test-model", reasoning_effort});
+      assert.equal(projected.reason, null, reasoning_effort);
+      const transport = projected.transport as JsonObject;
+      assert.equal(transport.configuration_valid, true);
+      assert.equal(transport.runtime_qualified, false);
+      assert.equal(transport.human_confirmation_required, true);
+      assert.equal(transport.first_consumption_required, true);
+      assert.equal(transport.source_conversation_is_executor, false);
+    }
+  }
+  for (const reasoning_effort of [null, "", "unknown", "MAX", 1, ["max"]]) {
+    const projected = projectManagedOperationTransport({host: "codex-cli", sandbox: "read-only",
+      model: "test-model", reasoning_effort});
+    assert.equal(projected.reason, "operation_transport_profile_required");
+    assert.equal((projected.transport as JsonObject).configuration_valid, false);
+  }
+});
+
 function managedInput(): JsonObject {
   const value = input();
   const parameters = (value.proposal as JsonObject).normalized_parameters as JsonObject;

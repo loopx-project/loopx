@@ -5545,7 +5545,7 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
     assert _classification_count(runtime, "replan_noop") == 0
 
 
-def test_runtime_capability_reentry_preserves_receipt_bound_todo_and_rejects_explicit_conflict(
+def test_runtime_capability_reentry_replays_bound_receipt_after_rejected_rebind(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -5604,7 +5604,10 @@ def test_runtime_capability_reentry_preserves_receipt_bound_todo_and_rejects_exp
     assert conflict_rc == 1, conflict
     assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
     assert "explicitly requested Todo" in conflict["reason"]
-    assert conflict["heartbeat_receipt"]["status"] == "write_failed"
+    assert conflict["heartbeat_receipt"]["status"] == "replayed"
+    assert conflict["heartbeat_receipt"]["event_id"] == first["heartbeat_receipt"]["event_id"]
+    assert conflict["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    assert conflict["effective_action"] == "quota_skip"
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
 
 

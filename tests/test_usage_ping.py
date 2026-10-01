@@ -143,7 +143,7 @@ def test_absent_stderr_keeps_real_cli_json_pure_until_a_stream_discloses(isolate
     assert main(['version', '--format', 'json']) == 0
     assert 'random installation ID' in stderr.getvalue()
     assert json.loads(capsys.readouterr().out)['ok'] is True
-    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 4
+    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 5
 
 
 @pytest.mark.parametrize('setting,value', [
@@ -261,14 +261,15 @@ def test_real_cli_first_result_reaches_http_without_next_day_return(isolated, co
     second = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert second.returncode == 0 and json.loads(second.stdout) == json.loads(first.stdout)
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not any(p['schema'] == 'loopx_usage_aggregate_v1' for p in received):
+    while time.monotonic() < deadline and not any(p['schema'] == 'loopx_usage_diagnostics_v1' for p in received):
         time.sleep(0.02)
-    aggregates = [p for p in received if p['schema'] == 'loopx_usage_aggregate_v1']
+    aggregates = [p for p in received if p['schema'] == 'loopx_usage_diagnostics_v1']
     assert len(aggregates) == 1, 'one completed command must not depend on a next-day invocation'
     assert set(aggregates[0]) == {'schema', 'counters'}
     counters = aggregates[0]['counters']
     assert len(counters) == 1 and counters[0]['feature'] == 'version'
     assert counters[0]['outcome'] == 'ok' and counters[0]['count'] == 1
+    assert counters[0]['version'] and counters[0]['context'] == 'unknown'
     assert usage_ping.control('status')['aggregate_preview'] is None
     usage_ping.control('disable')
 
@@ -279,6 +280,26 @@ def test_business_failure_and_usage_failure_do_not_replace_original_result(isola
     monkeypatch.setattr(cli, '_run_command', lambda *_: 7)
     monkeypatch.setattr(usage_ping, '_command', lambda: (_ for _ in ()).throw(OSError('no node')))
     assert main(['version']) == 7
+
+
+@pytest.mark.parametrize('switch,value', [
+    ('CI', 'true'), ('CI', '1'), ('LOOPX_USAGE_PING', '0'),
+    ('LOOPX_USAGE_PING', 'off'), ('DO_NOT_TRACK', '1'),
+])
+def test_disabled_synthetic_real_cli_never_contacts_collector(isolated, collector, switch, value):
+    endpoint, received, accepted, release = collector
+    release.set()
+    env = {**os.environ, 'LOOPX_USAGE_PING_ENDPOINT': endpoint, switch: value}
+    setup = ('import sys; from pathlib import Path; from loopx import usage_ping; '
+             'usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; ')
+    command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
+    # A matching acknowledged state cannot override an environment suppressor.
+    usage_ping.control('enable')
+    for _ in range(2):
+        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0 and json.loads(result.stdout)['ok'] is True
+    assert not accepted.wait(0.5)
+    assert received == []
 
 
 @pytest.mark.parametrize('bypass_proxy', [False, True])
@@ -327,7 +348,7 @@ def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated, u
             assert usage_ping.state_path().read_bytes() == before
         else:
             assert not usage_ping.state_path().exists()
-        assert initial['notice']['version'] == 4
+        assert initial['notice']['version'] == 5
         connection.request('POST', path, json.dumps({'notice': initial['notice']}), {'Content-Type': 'application/json'})
         response = connection.getresponse()
         acknowledged = json.loads(response.read())
@@ -403,7 +424,7 @@ def test_v3_cli_upgrade_requires_visible_renewal_before_real_http(isolated, coll
     assert 'first measured CLI result' in visible.stderr and '15 minutes' in visible.stderr
     assert 'network timing' in visible.stderr
     current = json.loads(path.read_text())
-    assert current['notice']['version'] == 4
+    assert current['notice']['version'] == 5
     assert current['generation'] != old['generation']
     assert current['counters'] == []
     assert not accepted.wait(0.3) and received == []
@@ -411,7 +432,53 @@ def test_v3_cli_upgrade_requires_visible_renewal_before_real_http(isolated, coll
     assert subsequent.returncode == 0 and subsequent.stderr == ''
     assert accepted.wait(5)
     deadline = time.monotonic() + 5
-    while not any(item.get('schema') == 'loopx_usage_aggregate_v1' for item in received) and time.monotonic() < deadline:
+    while not any(item.get('schema') == 'loopx_usage_diagnostics_v1' for item in received) and time.monotonic() < deadline:
         time.sleep(0.02)
-    batches = [item for item in received if item.get('schema') == 'loopx_usage_aggregate_v1']
+    batches = [item for item in received if item.get('schema') == 'loopx_usage_diagnostics_v1']
     assert len(batches) == 1 and sum(row['count'] for row in batches[0]['counters']) == 1
+
+
+def test_actual_pr_readiness_cli_keeps_exit_code_and_projects_only_typed_facts(isolated, monkeypatch, capsys):
+    import runpy
+    from pathlib import Path
+    fixtures = runpy.run_path(str(Path(__file__).with_name('test_pr_review_github_scan.py')))
+    pr = fixtures['_merge_ready_pr']()
+    pr['statusCheckRollup'] = [{'name': 'test', 'status': 'IN_PROGRESS'}]
+    pr['review_thread_summary'] = {'complete': True, 'total_count': 0, 'unresolved_count': 0}
+    fixture = isolated / 'prs.json'
+    fixture.write_text(json.dumps({'repository': 'owner/repo', 'pull_requests': [pr]}))
+    registry = isolated / 'registry.json'
+    registry.write_text(json.dumps({'goals': [{'id': 'review-goal', 'repo': str(isolated), 'status': 'active'}]}))
+    usage_ping.control('enable')
+    requests = []
+    monkeypatch.setattr(usage_ping, '_detach', requests.append)
+    code = main(['--registry', str(registry), 'pr-review', '--goal-id', 'review-goal', '--fixture', str(fixture), '--check-merge-readiness', '4110@' + 'a' * 40, '--format', 'json'])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1 and payload['ok'] and not payload['ready'], payload
+    observation = next(row for row in requests if row['action'] == 'observe')
+    assert observation['operation'] == 'merge-readiness'
+    assert observation['result_facts'] == {'ok': True, 'ready': False}
+    assert 'owner/repo' not in json.dumps(observation) and str(fixture) not in json.dumps(observation)
+
+
+def test_turn_capture_reuses_committed_current_effects_not_historical_receipt(isolated):
+    usage_ping.begin('turn')
+    committed = {'schema_version': 'loopx_turn_execution_v0', 'ok': True,
+                 'status': 'committed', 'receipt': {'status': 'committed'},
+                 'validation': {'status': 'passed'}, 'effects': {'state_written': True, 'quota_spent': True}}
+    usage_ping.capture_result(committed)
+    assert usage_ping._observation.get()['result_facts']['turn_committed'] is True
+    usage_ping.capture_result({**committed, 'replayed': True, 'effects': {'state_written': False, 'quota_spent': False}})
+    assert usage_ping._observation.get()['result_facts']['turn_committed'] is False
+    usage_ping.finish(None, 'turn', 0)
+
+
+def test_projection_failure_cannot_replace_business_output(isolated, monkeypatch, capsys):
+    from loopx.cli_runtime import print_payload
+    usage_ping.begin('turn')
+    monkeypatch.setattr('loopx.control_plane.turn_driver.loopx_turn_execution_committed', lambda _: (_ for _ in ()).throw(ValueError('private')))
+    payload = {'schema_version': 'loopx_turn_execution_v0', 'ok': True}
+    print_payload(payload, 'json', lambda _: 'unused')
+    assert json.loads(capsys.readouterr().out) == payload
+    assert 'result_facts' not in usage_ping._observation.get()
+    usage_ping.finish(None, 'turn', 0)

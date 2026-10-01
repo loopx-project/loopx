@@ -677,6 +677,8 @@ def handle_todo_command(
         else:
             raise ValueError("unsupported todo command")
     except Exception as exc:
+        from ..usage_ping import capture_failure
+        capture_failure(exc)
         payload = todo_error_payload(args, exc)
     append_todo_rollout_event(
         payload,

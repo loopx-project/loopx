@@ -126,6 +126,16 @@ receipt → observed work or actionable failure → readable answer in the same 
 - Before dispatch, cancel only session preparation and state that the request
   was not submitted. After acceptance, existing exact-turn steering/interrupt
   controls own effects; stopping observation is not stopping the worker.
+- During a managed Codex Turn, the ordinary composer sends text instructions to
+  that exact Turn, without a second adjustment form or another Turn submission.
+  Attached-host messages keep their next-Turn queue semantics; unsupported
+  managed adapters keep the draft without advertising native steering. The
+  idle composer and initial presentation are unchanged. This changes the former
+  managed-running Send lockout; LoopX mode retains its explicit delivery choice.
+  A lost or mismatched receipt preserves draft and ingress identity, including
+  retry after completion. Only a confirmed non-delivery permits a new ingress.
+  Acceptance means the executor received the instructions, not that it adopted
+  them or that delegated/team work stopped. Live adoption stays a release gate.
 - The compact receipt and full conversation offer the same controls. Failure
   ends the live indicator, preserves the request/partial answer and names the
   next supported action. A completed delegation still shows receiver adoption
