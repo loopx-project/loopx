@@ -149,10 +149,12 @@ def wait(service, operation="analysis-1"):
     pytest.fail(str(service.read(operation)))
 
 
-def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_turn(service):
+@pytest.mark.parametrize("mcp_profile", ["delegation-default", "explicit-null", "unmatched-null"])
+def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_turn(service, mcp_profile):
     """Real detached worker/CLI/Turn; synthetic native transport, no model/effect."""
     from examples import operation_action_fixtures as fixtures
     from loopx.chat_action_store import ChatActionStore
+    from loopx.cli import build_parser
     from loopx.control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
     from loopx.control_plane.turn_driver.codex_cli import load_codex_cli_session
     from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host, operation_tool_handler
@@ -161,15 +163,34 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
 
     root, runner = service
     executable = root / "fixture-codex"
-    executable.write_text(FAKE_SERVER)
+    native_starts = root / "native-starts"
+    startup_probe = (
+        "from pathlib import Path\n"
+        f"counter = Path({str(native_starts)!r})\n"
+        "counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
+    )
+    executable.write_text(FAKE_SERVER.replace('thread = "owned-app-server-thread"',
+        startup_probe + 'thread = "owned-app-server-thread"'))
     executable.chmod(0o700)
     config = json.loads(runner.config.read_text())
     binding = config["bindings"][0]
     binding["host_args"] = ["--host", "codex-cli", "--codex-bin", str(executable),
         "--codex-operation-tools", "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh"]
+    if mcp_profile == "explicit-null":
+        # Existing operator option, not a new profile or a worker-selected grant.
+        binding["host_args"] += ["--codex-mcp-server-json", "null"]
     runner.config.write_text(json.dumps(config))
     argv = runner._execution_arguments(binding, "preparation")
-    mcp_server = json.loads(argv[argv.index("--codex-mcp-server-json") + 1])
+    parsed = build_parser().parse_args(["turn", "run-once", "--goal-id", runner.goal_id,
+        "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"], *argv])
+    if mcp_profile == "explicit-null":
+        assert argv.count("--codex-mcp-server-json") == 2
+        assert parsed.codex_mcp_server_json is None
+    else:
+        assert parsed.codex_mcp_server_json["name"] == "loopx_delegation"
+    # Reproduce an original standalone operation Session: do NOT prepare it
+    # with the injected delegation MCP just to make the later resume match.
+    mcp_server = parsed.codex_mcp_server_json if mcp_profile == "delegation-default" else None
     lineage = {"goal_id": runner.goal_id, "agent_id": binding["agent_id"], "todo_id": binding["todo_id"]}
     request = _request()
     request["turn_envelope"].update(goal_id=runner.goal_id, agent_id=binding["agent_id"])
@@ -177,6 +198,7 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
     run_codex_operation_host(request, runtime_root=runner.root, registry_path=runner.registry,
         project=Path(binding["workspace"]), codex_bin=str(executable), model="test-model",
         reasoning_effort="xhigh", mcp_server=mcp_server, timeout_seconds=5)
+    assert native_starts.read_text() == "1"
     session = load_codex_cli_session(runner.root, lineage=lineage)
     handler = operation_tool_handler(runtime_root=runner.root, registry_path=runner.registry,
         lineage=lineage, session_id=session["session_id"], profile_digest=session["operation_profile_digest"],
@@ -203,16 +225,30 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
     assert receipt["state"] == "delegation_requested", receipt
     result = wait(runner, receipt["operation_id"])
     stored = store.load(proposal["proposal_id"])
-    assert stored["operation"]["host_start"] is not None, result
-    assert stored["operation"]["host_start"]["route"]["thread_id"] == session["session_id"]
+    resumed = load_codex_cli_session(runner.root, lineage=lineage)
+    assert resumed["session_id"] == session["session_id"]
+    assert resumed["operation_profile_digest"] == session["operation_profile_digest"]
     assert stored["operation"].get("agent_handoff") is None
     assert stored["operation"]["outcome"] is None
+    # Omitting the original null override must still fail closed, rather than
+    # changing/replacing the original Session to bypass the profile fence.
+    if mcp_profile == "unmatched-null":
+        assert result["status"] == "rejected", result
+        assert stored["operation"].get("host_start") is None, result
+        assert native_starts.read_text() == "1"  # refused before native process start
+        assert stored["status"] == confirmed["status"]
+        assert stored["operation"]["confirmation"] == confirmed["operation"]["confirmation"]
+        return
+    assert native_starts.read_text() == "2"
+    assert stored["operation"]["host_start"] is not None, result
+    assert stored["operation"]["host_start"]["route"]["thread_id"] == session["session_id"]
     # Fixture deliberately waits: startup is not validated domain completion.
     assert result["status"] == "rejected"
     journal = json.loads(runner.path(receipt["operation_id"]).read_text())
     assert stored["operation"]["host_start"]["turn_key"] == journal["turn_key"]
     assert dispatch_confirmed_operation_wake(stored, runtime_root=runner.root,
         configuration=wake_config)["state"] == "existing_delegation"
+    assert native_starts.read_text() == "2"
 
 
 def test_detached_result_reconnects_without_duplicate_execution(service):

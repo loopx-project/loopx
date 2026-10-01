@@ -110,15 +110,15 @@ workspace、Codex Session 与持久 delegation operation。`delegation inspect` 
 规划投影会读回例如 `gpt-5.6-sol@xhigh`，start/resume 也把同一配置送入原 Session。
 这不扩大 requester grant，也不把 profile 冒充验收或结果返回回执。
 
-For a Codex binding, the delegation host also supplies one invocation-scoped
+By default, a Codex binding also supplies one invocation-scoped
 `loopx_delegation` stdio MCP server to every fresh or resumed worker Session.
 Its command pins the selected worker `agent_id`, workspace, Goal, registry,
 runtime and operator execution configuration before Codex starts. The model
 cannot select or rewrite those values. Codex receives the server through
 per-invocation configuration, so LoopX does not modify the user's global Codex
-MCP settings and a resumed worker keeps the same binding. The server is required
-for this managed worker route and its already identity-scoped tools are approved
-inside that route; failure to start the server rejects the Turn instead of
+MCP settings and a resumed worker keeps the same binding. When configured, the
+server and its already identity-scoped tools are approved inside that route;
+failure to start the server rejects the Turn instead of
 silently continuing without tools. The native tools are
 the collaboration and authorized delegation operations from that bound server;
 they do not add shell, Todo or external-action authority.
@@ -129,7 +129,7 @@ shell-only coordination. Both surfaces call the same `Delegations` service and
 preserve the same binding, operation and acceptance rules; the shell path is
 not a second control-plane implementation.
 
-中文：Codex binding 会为每个新建或续接的 worker Session 注入一次调用范围内的
+中文：Codex binding 默认会为每个新建或续接的 worker Session 注入一次调用范围内的
 `loopx_delegation` stdio MCP server。启动前，host 已固定 worker `agent_id`、
 workspace、Goal、registry、runtime 与 operator execution configuration；模型不能
 选择或改写这些值。该配置不会修改用户的全局 Codex MCP 设置，也不会授予 shell、
@@ -725,6 +725,52 @@ and the original pinned model/effort. Do not select `fresh`, change the owning
 home, binary, sandbox or effective MCP configuration, or retarget the Todo.
 Prepare the operation in this same managed session/profile. Existing delegation
 inspection and ordinary Turn admission still determine whether it can run.
+
+If the original standalone operation Session was prepared **without** a
+delegation MCP server, its profile includes `mcp_server: null`. Preserve that
+exact profile using the existing operator-owned binding option:
+
+```json
+{
+  "host_args": [
+    "--host", "codex-cli",
+    "--codex-operation-tools",
+    "--codex-model", "original-model",
+    "--codex-reasoning-effort", "original-effort",
+    "--codex-sandbox", "read-only",
+    "--codex-mcp-server-json", "null"
+  ]
+}
+```
+
+This is a fragment; replace the model/effort placeholders with their original
+values and retain the original executable, workspace, home and Agent/Todo
+grant as well. Binding `host_args` follow the default injected MCP
+option, so the real CLI parser uses the explicit JSON `null`. Do not infer
+absence by reading the first occurrence in argv. Omit this override for an
+original delegation-MCP profile: removing that server would also be drift.
+Inspect the original profile before enabling the collector; runtime
+qualification requires same-session/profile native acceptance, not just this
+configuration readback. No global Codex configuration is changed.
+The native `loopx_operation` tool remains bound to the original transport;
+`null` does not grant collaboration MCP tools, bypass ordinary receiver
+adoption/validation, or prove consumption, outcome or source delivery. A
+synthetic typed `wait` may yield native acceptance and a rejected delegation;
+that is not an accepted work result or an end-to-end operation loop.
+
+中文：若原独立 operation Session 在没有 delegation MCP 时准备，profile 中的
+`mcp_server` 为 `null`，应在原 operator binding 的 `host_args` 显式设置
+`["--codex-mcp-server-json", "null"]`，保留 executable、workspace、home、原
+Agent/Todo grant 及模型/深度等其余字段。上例仅为片段，model/effort 占位符须替换
+为原值；binding 参数在默认注入
+参数之后，真实 CLI parser 采用后面的 JSON `null`，不能取 argv 第一个同名参数
+来判断生效配置。原 profile 使用 delegation MCP 时不要加此覆盖，删除 server
+同样属于漂移。启用 collector 前核对原 profile；运行资格必须由同 session/profile
+的原生接收回执证明，不能只凭配置读回。不改全局 Codex 配置。原生
+`loopx_operation` 工具保持原连接绑定，但 `null`
+不会授予 collaboration MCP 工具、绕过接收方采纳/验收，也不证明消费、结果或原
+来源送达；合成 typed `wait` 可同时产生原生接收和 delegation rejected，不代表
+工作完成或端到端操作闭环。
 
 `loopx lark-inbox collector-plan` and `collector-status` expose
 `operation_callback_managed_wake_configured`, a configuration observation, not
