@@ -71,6 +71,7 @@ import {
   requireNonEmptyString as requiredString,
   requireStringArray as stringArray,
   requireStringLiteral,
+  requireInteger,
 } from "./runtime_decode.ts";
 import {
   governedCapabilitySettlementStatus,
@@ -630,7 +631,8 @@ export function createEffectRuntimeHandlers(
     ["quota.monitor_poll.commit", evaluateQuotaMonitorPollCommit],
     ["presentation.decision_notice.project", projectDecisionNotice],
     ["presentation.action_review_plan.compile", (params) =>
-      compileActionReviewPlan(params.proposal)],
+      compileActionReviewPlan(params.proposal, params.now_ms === undefined
+        ? undefined : requireInteger(params.now_ms, "now_ms"))],
     ["operation.agent_executor.normalize", normalizeAgentOperationExecutor],
     ["operation.managed_binding.current", managedOperationBindingCurrent],
     ["operation.managed_transport.project", projectManagedOperationTransport],

@@ -332,8 +332,8 @@ export function compileOperationReviewFrame(proposalValue: unknown, nowMs?: numb
       resultKind: "cancelled", resultDeliveryVerified: false, summary: ""};
   }
   if (lifecycleState === "awaiting_confirmation") {
-    // An explicit read-time display guard only. Card reconstruction omits the
-    // display clock so delayed callbacks still reach canonical confirmed_at
+    // An explicit read-time/fresh-delivery guard. Card reconstruction omits the
+    // clock so delayed callbacks still reach canonical confirmed_at
     // validation. Never mutate the envelope or invent an outcome.
     const expiryMs = /(?:Z|[+-]\d{2}:\d{2})$/i.test(expiresAt) ? Date.parse(expiresAt) : NaN;
     if (nowMs !== undefined && (!Number.isFinite(expiryMs) || !Number.isFinite(nowMs) || nowMs > expiryMs)) {

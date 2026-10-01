@@ -92,12 +92,14 @@ def _field_markdown(fields: list[Mapping[str, Any]]) -> str:
     )
 
 
-def _operation_review_frame(proposal: Mapping[str, Any]) -> dict[str, Any]:
+def _operation_review_frame(
+    proposal: Mapping[str, Any], *, now_ms: int | None = None
+) -> dict[str, Any]:
     """Read provider-neutral operation presentation semantics from TypeScript."""
 
     plan = effect_runtime_result(
         "presentation.action_review_plan.compile",
-        {"proposal": proposal},
+        {"proposal": proposal, **({"now_ms": now_ms} if now_ms is not None else {})},
     )
     if not isinstance(plan, Mapping):
         raise ValueError("operation review plan is unavailable")
@@ -136,8 +138,10 @@ def _result_delivery_current(proposal: Mapping[str, Any]) -> bool:
 
 def build_goal_channel_operation_card(
     proposal: Mapping[str, Any],
+    *,
+    now_ms: int | None = None,
 ) -> dict[str, Any]:
-    frame = _operation_review_frame(proposal)
+    frame = _operation_review_frame(proposal, now_ms=now_ms)
     if frame.get("kind") != "confirmation":
         raise ActionConflictError("operation is not awaiting confirmation")
     projection = frame.get("content")
@@ -496,7 +500,9 @@ def deliver_goal_channel_operation_card(
         agent_id=agent_id,
     )
     route = goal_channel_delivery_route(goal_id, lambda _goal_id: binding)
-    card = build_goal_channel_operation_card(proposal)
+    card = build_goal_channel_operation_card(
+        proposal, now_ms=int(datetime.now(timezone.utc).timestamp() * 1000)
+    )
     card_digest = _digest(card)
     key = str(operation["confirmation_digest"])
     if not execute:
@@ -541,6 +547,11 @@ def deliver_goal_channel_operation_card(
             blocker="sender_identity_unverified",
             failure_stage="verify_sender_identity",
         )
+    # Identity verification can cross the deadline. Fresh delivery uses the
+    # shared TS expiry guard; historical callback reconstruction stays timeless.
+    build_goal_channel_operation_card(
+        proposal, now_ms=int(datetime.now(timezone.utc).timestamp() * 1000)
+    )
     sent = dict(session.send(card, key, route))
     message_id = str(sent.get("message_id") or "")
     try:

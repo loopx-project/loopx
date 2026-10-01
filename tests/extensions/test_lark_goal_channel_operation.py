@@ -978,6 +978,63 @@ def _event(proposal: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("phase", ["preview", "before_verify", "after_verify"])
+def test_fresh_delivery_rejects_expiry_before_any_message_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    expiry_ms = int(
+        datetime.fromisoformat(proposal["operation"]["expires_at"]).timestamp() * 1000
+    )
+    times = iter(
+        [expiry_ms - 1000, expiry_ms + 1000]
+        if phase == "after_verify"
+        else [expiry_ms + 1000]
+    )
+
+    class DeliveryClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return datetime.fromtimestamp(next(times) / 1000, tz=tz)
+
+    monkeypatch.setattr(goal_channel_operation, "datetime", DeliveryClock)
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    with pytest.raises(ActionConflictError, match="not awaiting confirmation"):
+        deliver_goal_channel_operation_card(
+            proposal_id=proposal["proposal_id"],
+            action_store_root=store.root,
+            runtime_root=runtime,
+            binding_path=binding,
+            target_path=target,
+            execute=phase != "preview",
+            runner=_runner(calls, sent_cards),
+            executor_binding_resolver=lambda _parameters, _runtime: {
+                "revision": "simulator-v0"
+            },
+        )
+
+    assert not sent_cards
+    assert not any("+messages-send" in call for call in calls)
+    assert bool(calls) == (phase == "after_verify")
+    assert store.load(proposal["proposal_id"]) == proposal
+
+
+def test_historical_confirmation_card_reconstruction_ignores_processing_time(
+    tmp_path: Path,
+) -> None:
+    store, registry, _runtime, _binding, _target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    submitted = build_goal_channel_operation_card(proposal)
+    after_expiry = int(
+        datetime.fromisoformat(proposal["operation"]["expires_at"]).timestamp() * 1000
+    ) + 1000
+    with pytest.raises(ActionConflictError, match="not awaiting confirmation"):
+        build_goal_channel_operation_card(proposal, now_ms=after_expiry)
+    assert goal_channel_operation._submitted_confirmation_card(proposal) == submitted
+
+
 def test_callback_timestamp_normalizes_milliseconds_and_microseconds() -> None:
     expected = "2023-11-14T22:13:20.123000Z"
 
@@ -1455,6 +1512,7 @@ def test_microsecond_callback_completes_simulation_and_result_delivery(
 
 def test_card_v2_normalized_readback_and_callback_fallback_complete_simulation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, registry, runtime, binding, target = _fixture(tmp_path)
     proposal = _prepare(store, registry)
@@ -1484,6 +1542,25 @@ def test_card_v2_normalized_readback_and_callback_fallback_complete_simulation(
         **_event(durable, card),
         "card_content": json.dumps(_lark_card_v2_callback_fallback(card)),
     }
+    # Exercise the legacy no-snapshot fallback with a timely provider event
+    # processed after expiry. Processing time must not replace confirmed_at.
+    expiry = datetime.fromisoformat(durable["operation"]["expires_at"])
+
+    class CallbackClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return (expiry + timedelta(hours=1)).astimezone(tz)
+
+    load = ChatActionStore.load
+
+    def legacy_load(self: ChatActionStore, proposal_id: str) -> dict[str, Any] | None:
+        loaded = load(self, proposal_id)
+        if loaded is not None and loaded.get("operation", {}).get("delivery"):
+            loaded["operation"]["delivery"].pop("submitted_card", None)
+        return loaded
+
+    monkeypatch.setattr(goal_channel_operation, "datetime", CallbackClock)
+    monkeypatch.setattr(ChatActionStore, "load", legacy_load)
     execution_count = 0
 
     def executor(claimed: dict[str, Any]) -> dict[str, Any]:
