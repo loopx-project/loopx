@@ -14,12 +14,13 @@ from typing import Any
 from ...agent_registry import registered_agent_ids_for_goal
 from ...codex_app_thread_activity import codex_thread_observers
 from ...control_plane.agents.host_thread_activity import (
+    HostThreadActivity,
     HostThreadObserver,
     HostThreadState,
     HostThreadUnknownReason,
+    MAX_OBSERVED_THREADS_PER_GOAL,
 )
 from ...control_plane.runtime.public_safety import validate_public_safe_value
-from ...history import load_registry
 from ...registry import find_registry_goal
 from ...thread_agent_binding import (
     CODEX_THREAD_HOST_SURFACES,
@@ -27,6 +28,8 @@ from ...thread_agent_binding import (
     resolve_registry_thread_agent_binding,
     summarize_agent_binding_routes,
 )
+from ..effect_runtime import effect_runtime_result
+from ..projects.registry_codec import load_registry
 
 
 PEER_HOST_ROUTE_SCHEMA_VERSION = "loopx_peer_host_route_v0"
@@ -109,13 +112,58 @@ def resolve_peer_host_route(
 
     if not matching:
         return result
-    if len(matching) != 1:
+    if len(matching) > MAX_OBSERVED_THREADS_PER_GOAL:
         result.update(status="ambiguous", reason="multiple_binding_candidates")
         return result
-    selected = matching[0]
-    if selected not in visible:
+    if len(matching) == 1 and matching[0] not in visible:
         result["reason"] = "route_candidate_withheld"
         return result
+    available_observers = codex_thread_observers() if observers is None else observers
+    # Read each host once, including every accepted alternative. A publication
+    # cap or an unreadable host must not turn an unknown binding into history.
+    requested: dict[str, set[str]] = {}
+    for candidate in matching:
+        if candidate in visible:
+            requested.setdefault(candidate["host_surface"], set()).add(candidate["thread_id"])
+    observed: dict[str, Mapping[str, HostThreadActivity]] = {}
+    failures: dict[str, str] = {}
+    for surface, ids in requested.items():
+        observer = available_observers.get(surface)
+        if observer is None:
+            failures[surface] = "host_observer_unavailable"
+            continue
+        try:
+            observed[surface] = observer(sorted(ids))
+        except Exception:  # noqa: BLE001 - host failure remains an unknown alternative.
+            failures[surface] = "host_observation_failed"
+    facts: list[dict[str, str]] = []
+    activity: list[HostThreadActivity | None] = []
+    for candidate in matching:
+        surface, thread = candidate["host_surface"], candidate["thread_id"]
+        item = observed.get(surface, {}).get(thread)
+        activity.append(item)
+        if candidate not in visible:
+            reason = "route_candidate_withheld"
+        elif surface in failures:
+            reason = failures[surface]
+        elif item is None:
+            reason = HostThreadUnknownReason.THREAD_NOT_FOUND.value
+        elif item.state is HostThreadState.UNKNOWN:
+            assert item.reason is not None  # HostThreadActivity's constructor invariant.
+            reason = item.reason.value
+        else:
+            facts.append({"state": item.state.value})
+            continue
+        facts.append({"state": "unavailable", "reason": reason})
+    if len(activity) == 1 and activity[0] is not None:
+        result["host_observation"] = activity[0].to_payload()
+    selection = effect_runtime_result("collaboration.peer_host_route.select", {"observations": facts})
+    if selection["status"] != "resolved":
+        result.update(status=selection["status"], reason=selection["reason"])
+        return result
+    index = selection["selected_index"]
+    selected = matching[index]
+    # Recheck the identity after host I/O, never trusting a stale registration.
     exact = resolve_registry_thread_agent_binding(
         registry_path=registry_path,
         host_surface=selected["host_surface"],
@@ -128,26 +176,8 @@ def resolve_peer_host_route(
         result.update(status="ambiguous", reason="binding_identity_conflict")
         return result
 
-    available_observers = codex_thread_observers() if observers is None else observers
-    observer = available_observers.get(selected["host_surface"])
-    if observer is None:
-        result["reason"] = "host_observer_unavailable"
-        return result
-    try:
-        observation = observer([selected["thread_id"]]).get(selected["thread_id"])
-    except Exception:  # noqa: BLE001 - host read failure cannot authorize delivery.
-        result["reason"] = "host_observation_failed"
-        return result
-    if observation is None:
-        result["reason"] = HostThreadUnknownReason.THREAD_NOT_FOUND.value
-        return result
-    result["host_observation"] = observation.to_payload()
-    if observation.state is HostThreadState.ARCHIVED:
-        result["reason"] = "host_thread_archived"
-    elif observation.state is HostThreadState.UNKNOWN:
-        result["reason"] = (
-            observation.reason.value if observation.reason else "host_unknown"
-        )
-    else:
-        result.update(status="resolved", reason=None, selected_route=selected)
+    selected_activity = activity[index]
+    assert selected_activity is not None  # The typed selector requires a readable observation.
+    result["host_observation"] = selected_activity.to_payload()
+    result.update(status="resolved", reason=None, selected_route=selected)
     return result
