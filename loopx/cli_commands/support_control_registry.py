@@ -3,20 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..history import load_registry
-from ..paths import DEFAULT_RUNTIME_ROOT, global_registry_path
+from ..paths import global_registry_path, select_default_runtime_root
 from ..registry import registry_goals, resolve_state_file
 
 
 def fallback_global_registry(registry_path: Path, runtime_root_arg: str | None) -> Path:
     if registry_path.exists():
         return registry_path
-    runtime_root = Path(runtime_root_arg).expanduser() if runtime_root_arg else DEFAULT_RUNTIME_ROOT
+    runtime_root = Path(runtime_root_arg).expanduser() if runtime_root_arg else select_default_runtime_root()
     fallback_registry = global_registry_path(runtime_root)
     return fallback_registry if fallback_registry.exists() else registry_path
 
 
 def explicit_global_registry(runtime_root_arg: str | None) -> Path:
-    runtime_root = Path(runtime_root_arg).expanduser() if runtime_root_arg else DEFAULT_RUNTIME_ROOT
+    runtime_root = Path(runtime_root_arg).expanduser() if runtime_root_arg else select_default_runtime_root()
     return global_registry_path(runtime_root)
 
 

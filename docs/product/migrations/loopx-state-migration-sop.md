@@ -2,6 +2,10 @@
 
 Status: draft for the LoopX rename PR.
 
+This document describes the historical Goal Harness-to-LoopX import. For
+LoopX installations moving their default runtime from `.codex/loopx` to
+`.loopx`, use the [local state path migration](local-state-path-migration.md).
+
 This SOP is for existing local users who already have Goal Harness state under
 the legacy runtime and want to move that state into LoopX without keeping a
 legacy CLI compatibility alias.

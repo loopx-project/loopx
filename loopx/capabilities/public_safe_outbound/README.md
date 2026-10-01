@@ -14,7 +14,7 @@
 
 本 capability 的源码不硬编码任何公司信息。公司内部标记（域名、内网链接、
 私有路径前缀、凭据模式）维护在**本地 loopx 中心区域**（例如
-`~/.codex/loopx/public-safety/internal-markers.json`），运行时经
+`~/.loopx/public-safety/internal-markers.json`），运行时经
 `PUBLIC_SAFE_CONFIG` 注入：
 
 ```json
@@ -44,7 +44,7 @@ git diff --cached | python -m loopx.capabilities.public_safe_outbound.scan_cli \
 带公司门禁的完整用法：
 
 ```bash
-PUBLIC_SAFE_CONFIG=~/.codex/loopx/public-safety/internal-markers.json \
+PUBLIC_SAFE_CONFIG=~/.loopx/public-safety/internal-markers.json \
   python -m loopx.capabilities.public_safe_outbound.scan_cli \
   --scan-root <repo> --format json
 ```

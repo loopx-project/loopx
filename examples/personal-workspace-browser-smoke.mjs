@@ -79,7 +79,7 @@ async function main() {
     );
   }
   await mkdir(outputDir, { recursive: true });
-  const server = startServer();
+  const server = await startServer();
   let browser;
   const results = {};
   const coverageEntries = [];

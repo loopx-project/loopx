@@ -42,7 +42,7 @@ Refresh the UI afterward. Only that decision and its direct blocked successor ar
 
 These are authored scenario replays using real LoopX APIs and state transitions, not customer case studies or receipts of live Agent execution. Natural project titles keep the interface readable; the manifest and completion evidence retain provenance. Source-card inventories and website checklists are planning inputs, not claims of external research or executed website tests. Event money is a project budget, not model spending.
 
-The demo does not import personal registries, session history or credentials, and does not sync into the global registry. The loopback server uses a separate HOME/CODEX_HOME, minimal environment and unavailable Agent/Lark binaries. Chat and Lark connection errors are intentional isolation and do not qualify live IM behavior. Stop with Ctrl-C.
+The demo does not import personal registries, session history or credentials, and does not sync into the global registry. Prepare, advance and serve run in a separate HOME/CODEX_HOME with a minimal environment; even preparation never discovers personal default registries. The loopback server uses unavailable Agent/Lark binaries. Chat and Lark connection errors are intentional isolation and do not qualify live IM behavior. Stop with Ctrl-C.
 
 This remains a source-checkout demo under `demo/`, outside the installed wheel and capability catalog. Screenshots and recordings belong in ignored `output/playwright/`. Keep real operating statistics separately timestamped with their counting scope.
 

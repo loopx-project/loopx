@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from typing import Any
 
 from loopx.bootstrap import bootstrap_project
 from loopx.configure_goal import configure_goal
@@ -23,13 +24,13 @@ MARKER = ".workspace-story-demo.json"
 REGISTRY_NAME = "registry.json"
 
 
-def checked(result: dict) -> dict:
+def checked(result: dict[str, Any]) -> dict[str, Any]:
     if not result.get("ok"):
         raise RuntimeError(json.dumps(result, ensure_ascii=False))
     return result
 
 
-def write_story_artifacts(project: Path, story: dict, notice: str) -> None:
+def write_story_artifacts(project: Path, story: dict[str, Any], notice: str) -> None:
     (project / "BRIEF.md").write_text(f"# {story['title']}\n\n{story['brief']}\n")
     with (project / "working-table.csv").open("w", newline="") as table:
         writer = csv.writer(table)
@@ -68,9 +69,10 @@ def write_story_artifacts(project: Path, story: dict, notice: str) -> None:
     )
 
 
-def seed_delivery_tasks(story: dict, registry: Path, runtime: Path) -> list:
+def seed_delivery_tasks(story: dict[str, Any], registry: Path, runtime: Path) -> list[dict[str, Any]]:
     """Record each story dependency as the typed relation its state allows."""
-    todos, ids = [], {}
+    todos: list[dict[str, Any]] = []
+    ids: dict[str, str] = {}
     by_key = {task["key"]: task for task in story["tasks"]}
     dependents: dict[str, list[str]] = {}
     for task in story["tasks"]:
@@ -132,7 +134,7 @@ def seed_delivery_tasks(story: dict, registry: Path, runtime: Path) -> list:
     return todos
 
 
-def seed_story(root: Path, story: dict, notice: str) -> dict:
+def seed_story(root: Path, story: dict[str, Any], notice: str) -> dict[str, Any]:
     runtime = root / "runtime"
     registry = root / REGISTRY_NAME
     project = root / "projects" / story["id"]
@@ -263,14 +265,14 @@ def seed_story(root: Path, story: dict, notice: str) -> dict:
     }
 
 
-def prepare(root: Path) -> dict:
+def prepare(root: Path) -> dict[str, Any]:
     root = root.expanduser()
     if root.is_symlink():
         raise ValueError("Demo root must not be a symlink")
     root = root.resolve()
     marker = root / MARKER
     if marker.exists():
-        manifest = json.loads(marker.read_text())
+        manifest: dict[str, Any] = json.loads(marker.read_text())
         if manifest.get("schema_version") != "workspace_story_demo_v3":
             raise ValueError("Unrecognized demo manifest")
         if manifest.get("root") != str(root) or manifest.get("registry") != str(
@@ -302,7 +304,7 @@ def prepare(root: Path) -> dict:
 
 
 def advance(
-    root: Path, manifest: dict, story_id: str, decision_key: str | None
+    root: Path, manifest: dict[str, Any], story_id: str, decision_key: str | None
 ) -> None:
     story = next(s for s in manifest["goals"] if s["id"] == story_id)
     registry = root / REGISTRY_NAME
@@ -334,30 +336,21 @@ def advance(
     )
 
 
-def serve_isolated(root: Path, port: int) -> None:
-    # Isolate machine settings, host discovery and credentials from the user's home.
+def run_isolated(args: argparse.Namespace, root: Path) -> None:
+    # Prepare and replay must be isolated too: even read-only default discovery
+    # can consult personal registries before the server starts.
     home = root / "home"
-    manifest = prepare(root)
-    home.mkdir(exist_ok=True)
     env = {
         k: v
         for k, v in os.environ.items()
         if k in {"PATH", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT"}
     }
     env.update(HOME=str(home), CODEX_HOME=str(home / ".codex"), PYTHONPATH=str(REPO))
-    print(
-        json.dumps(
-            {
-                "url": f"http://127.0.0.1:{port}/chat/",
-                "notice": manifest["notice"],
-            }
-        ),
-        flush=True,
-    )
     # Paths and ports are data, never arguments to an interpreter invocation.
     result = subprocess.run(
-        [sys.executable, "-m", "demo.workspace", "serve", "--_isolated"],
-        input=json.dumps({"root": str(root), "port": port}),
+        [sys.executable, "-m", "demo.workspace", args.command, "--_isolated"],
+        input=json.dumps({"root": str(root), "port": args.port,
+                          "story": args.story, "decision": args.decision}),
         text=True,
         cwd=REPO,
         env=env,
@@ -387,6 +380,8 @@ def main() -> None:
         config = json.load(sys.stdin)
         args.root = Path(config["root"])
         args.port = int(config["port"])
+        args.story = config.get("story")
+        args.decision = config.get("decision")
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
     root = (
@@ -395,9 +390,10 @@ def main() -> None:
     if root.is_symlink():
         parser.error("Demo root must not be a symlink")
     root = root.resolve()
-    if args.command == "serve" and not args._isolated:
-        serve_isolated(root, args.port)
+    if not args._isolated:
+        run_isolated(args, root)
     manifest = prepare(root)
+    (root / "home").mkdir(exist_ok=True)
     if args.command == "advance":
         if not args.story:
             parser.error("advance requires --story")
@@ -406,6 +402,8 @@ def main() -> None:
     if args.command == "prepare":
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
         return
+    print(json.dumps({"url": f"http://127.0.0.1:{args.port}/chat/",
+                      "notice": manifest["notice"]}), flush=True)
     from loopx.chat_server import serve_chat
 
     serve_chat(

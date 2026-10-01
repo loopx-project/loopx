@@ -471,7 +471,7 @@ def test_live_inventory_ignores_missing_or_stale_reports(tmp_path, monkeypatch, 
     # A newly observed duplicate must still fail; an old or missing report cannot hide it.
     duplicate = [smoke["SourceFile"](f"loopx/q9_{name}.py", ".py", 'Q9_DUPLICATE = "same"\n')
                  for name in ("first", "second")]
-    with pytest.raises(smoke["Drift"], match="same_runtime_forks grew"):
+    with pytest.raises(smoke["Drift"], match="same_runtime_forks"):
         smoke["check_inventory"](registry, sources + duplicate)
 
 

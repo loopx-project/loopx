@@ -30,11 +30,22 @@ def test_real_state_replay_is_local_and_repeatable(tmp_path, monkeypatch):
     registry = home / ".codex" / "loopx" / "registry.global.json"
     registry.parent.mkdir(parents=True)
     registry.write_text('{"sentinel": "personal registry"}')
+    current_registry = home / ".loopx" / "registry.global.json"
+    current_registry.parent.mkdir(parents=True)
+    current_registry.write_text('{"sentinel": "other personal registry"}')
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     root = tmp_path / "demo"
-    manifest = prepare(root)
-    assert prepare(root) == manifest
+    def prepare_from_cli():
+        result = subprocess.run(
+            [sys.executable, "-m", "demo.workspace", "prepare", "--root", str(root)],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    manifest = prepare_from_cli()
+    assert prepare_from_cli() == manifest
     assert len(manifest["goals"]) == 3
 
     def todos(goal_id):
@@ -97,3 +108,4 @@ def test_real_state_replay_is_local_and_repeatable(tmp_path, monkeypatch):
     assert todos("community-day") == before["community-day"]
     assert todos("neighborhood-site") == before["neighborhood-site"]
     assert registry.read_text() == '{"sentinel": "personal registry"}'
+    assert current_registry.read_text() == '{"sentinel": "other personal registry"}'

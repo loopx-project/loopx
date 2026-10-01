@@ -282,7 +282,7 @@ def test_source_module_usage_opt_out_has_no_machine_state_or_sender(tmp_path: Pa
     result = run_entry("module", ["version", "--format", "json"], setup=f"""
 from pathlib import Path
 from loopx import usage_ping
-usage_ping.DEFAULT_RUNTIME_ROOT = Path({str(state)!r})
+usage_ping.select_default_runtime_root = lambda: Path({str(state)!r})
 sent = []
 def unexpected_send(*args):
     sent.append(args)
@@ -303,7 +303,7 @@ from loopx import usage_ping
 for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
     os.environ.pop(key, None)
 os.environ["LOOPX_USAGE_PING_ENDPOINT"] = "http://127.0.0.1:1/v1/ping"
-usage_ping.DEFAULT_RUNTIME_ROOT = Path({str(state)!r})
+usage_ping.select_default_runtime_root = lambda: Path({str(state)!r})
 sent = []
 usage_ping._detach = lambda *args: sent.append(args)
 """, assertions="assert sent == [], sent")

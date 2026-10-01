@@ -769,7 +769,7 @@ Project roles and public history are recorded in
 [Project History](docs/project/history.md).
 
 LoopX keeps local active state separate from the public repository. Do not
-commit `.loopx/`, `.codex/goals/`, live `ACTIVE_GOAL_STATE.md`, raw benchmark
+commit `.loopx/`, legacy `.codex/goals/`, live `ACTIVE_GOAL_STATE.md`, raw benchmark
 traces, credentials, private logs, or operator artifacts.
 
 ## Current Status
