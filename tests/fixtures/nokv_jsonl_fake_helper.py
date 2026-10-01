@@ -21,6 +21,8 @@ emit({"request_id": first["request_id"], "status": "ready"})
 for line in sys.stdin:
     request = json.loads(line)
     request_id = request["request_id"]
+    if mode == "unresponsive":
+        continue
     if mode == "disconnect":
         sys.stderr.write("provider-private-diagnostic=must-not-escape\n")
         sys.stderr.flush()
