@@ -74,7 +74,7 @@ export function ChannelTimeline({
         : "";
 
   const gatedItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
-    item.kind === "proposal" && item.proposal.status === "gated");
+    item.kind === "proposal" && item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute");
   // Only routine execution is folded. Waiting, interruption, and failures stay
   // visible; no prose-based inference that a waiting run is safe to ignore.
   const routineRuns = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
@@ -95,7 +95,7 @@ export function ChannelTimeline({
     ? [workingCount && `${workingCount} 个执行中`, queuedCount && `${queuedCount} 个排队中`, completedCount && `${completedCount} 次执行已结束`, progressCount && `${progressCount} 项进展更新`]
     : [workingCount && `${workingCount} running`, queuedCount && `${queuedCount} queued`, completedCount && `${completedCount} runs finished`, progressCount && `${progressCount} progress updates`]).filter(Boolean).join(" · ");
   const activeProposalItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "proposal" }> =>
-    item.kind === "proposal" && item.proposal.status !== "gated");
+    item.kind === "proposal" && (item.proposal.status !== "gated" || item.proposal.actionKind === "operation.execute"));
   // Only drafts awaiting the owner fold behind the newest one; applying, applied and failed results stay visible.
   // "Newest" is read from the stored proposal, not from the position in this
   // list: a restore arrives newest first and a draft created in this session is
@@ -121,10 +121,12 @@ export function ChannelTimeline({
     }
     if (item.kind === "proposal") {
       const appliedTeamPlan = item.proposal.actionKind === "team.plan" && item.proposal.status === "applied";
+      const pendingOperation = item.proposal.reviewPlan?.operationFrame?.kind === "pending";
       return (
         <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
-          <span><small>{appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
+          <span><small>{pendingOperation ? t(`proposal.kind.${item.proposal.actionKind}`)
+            : appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
             : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
           <b>{item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review") : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
         </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan

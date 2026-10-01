@@ -916,6 +916,9 @@ The default thresholds remain two equivalent typed observations, two blocked
 successor waits, six executed unchanged Monitor turns, twenty material turns
 for periodic review, and five persisted unchanged polls for a Monitor-only
 lane. Trigger precedence remains progress, Monitor, then periodic review.
+No-change `quota_monitor_poll` receipts do not advance the periodic material-turn
+counter; a poll with an explicit material transition does. Monitor repetition
+and persisted streak checks still inspect their own poll evidence.
 Accepted ACKs reset the historical window; clearing another frontier obligation
 still requires its existing typed semantic outcome and revision rules. A future
 blocking Monitor suppresses premature wait replanning only while its schedule

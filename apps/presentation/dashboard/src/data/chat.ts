@@ -498,13 +498,13 @@ const typedActionListEnvelopeSchema = z.object({
   proposals: z.array(typedActionProposalSchema),
 });
 
-export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}) {
+export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   if (filters.contextKind) query.set("context_kind", filters.contextKind);
   if (filters.goalId) query.set("goal_id", filters.goalId);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return typedActionListEnvelopeSchema.parse(
-    await requestJson<unknown>(`/api/actions${suffix}`),
+    await requestJson<unknown>(`/api/actions${suffix}`, { signal }),
   ).proposals;
 }
 

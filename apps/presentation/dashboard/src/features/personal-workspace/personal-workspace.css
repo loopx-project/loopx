@@ -325,15 +325,16 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-home-lane.is-observing > header i { background: var(--pw-blue); }
 .personal-home-lane.is-scheduled > header i { background: #8b6bd8; }
 .personal-home-lane-list { display: grid; align-content: start; gap: 9px; }
-.personal-home-goal-card { display: grid; gap: 7px; width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--pw-line); border-radius: 12px; background: #fff; color: inherit; cursor: pointer; text-align: left; box-shadow: 0 1px 4px rgb(30 28 20 / 6%); transition: border-color .14s ease, transform .14s ease, box-shadow .14s ease; }
+.personal-home-goal-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--pw-line); border-radius: 12px; background: #fff; color: inherit; cursor: pointer; text-align: left; box-shadow: 0 1px 4px rgb(30 28 20 / 6%); transition: border-color .14s ease, transform .14s ease, box-shadow .14s ease; }
 .personal-home-goal-card:hover { border-color: var(--pw-line-strong); transform: translateY(-1px); box-shadow: 0 4px 12px rgb(30 28 20 / 8%); }
 .personal-home-goal-card:focus-visible { outline: 2px solid #7da2ff; outline-offset: 2px; }
 .personal-home-goal-meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--pw-muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-home-goal-card > p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--pw-muted); font-size: 11px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.personal-home-goal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 2px; }
-.personal-home-goal-card > footer .personal-goal-activity-chip { font-size: 11px; }
+.personal-home-goal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding-top: 2px; }
+.personal-home-goal-card > footer .personal-goal-activity-chip { flex: 1 1 0; min-width: 0; font-size: 11px; }
+.personal-home-goal-card > footer .personal-goal-activity-chip > span:last-child { min-width: 0; }
 .personal-home-goal-card > footer > span:not(.personal-goal-activity-chip) { flex: none; padding: 2px 7px; border-radius: 99px; background: #f2f1ed; color: var(--pw-muted); font-size: 9.5px; }
-.personal-home-goal-card > footer small { overflow: hidden; color: var(--pw-faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.personal-home-goal-card > footer small { flex: none; overflow: hidden; color: var(--pw-faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .personal-home-history { border: 1px solid var(--pw-line); border-radius: 13px; background: rgb(255 255 255 / 60%); }
 .personal-home-history > summary { display: flex; align-items: center; gap: 9px; min-height: 44px; padding: 0 14px; cursor: pointer; list-style: none; }
 .personal-home-history > summary::-webkit-details-marker { display: none; }

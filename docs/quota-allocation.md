@@ -129,7 +129,8 @@ Other cadences are independent: the standard profile's two-small-delivery
 streak suggests widening work; fine mode's five-small-delivery streak suggests
 direction review. Neither is this completed-Todo counter. The periodic review
 window of 20 material run records and long-open-Todo-chain triggers also retain
-their existing thresholds.
+their existing thresholds. Quiet or unchanged Monitor polls do not consume the
+periodic material-run window; their dedicated Monitor replan thresholds still apply.
 
 ### Governed Turn Execution
 

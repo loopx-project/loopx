@@ -146,6 +146,12 @@ check(managedFrame?.kind === "pending" && managedFrame.executionState === "manag
 check(managedFrame?.content.fields.some(field => field.value.includes("test-model@xhigh")) === true,
   "The shared managed profile survives the frontend schema transport");
 check(compileActionReviewPlan(managedPending).canApply === false, "Managed approval exposes no local execute control");
+const startedManaged = typedActionProposalSchema.parse({...managedPending,
+  operation: {...managedPending.operation, host_start: {schema_version: "loopx_operation_host_start_v0", host_turn_id: "native-turn"}}});
+const startedFrame = compileActionReviewPlan(startedManaged).operationFrame;
+check(startedFrame?.kind === "pending" && startedFrame.executionState === "managed_turn_started",
+  "Native accepted start survives schema transport without claiming consumption or execution");
+check(compileActionReviewPlan(startedManaged).canApply === false, "Accepted native start grants no apply control");
 check(compileActionReviewPlan(unknownAgentResult).interaction === "repair", "Delivered unknown submission is not completion");
 const reconciledAgentResult = typedActionProposalSchema.parse({...unknownAgentResult,
   operation: {...unknownAgentResult.operation, reconciliation: {outcome: "not_executed", simulation: false}}});

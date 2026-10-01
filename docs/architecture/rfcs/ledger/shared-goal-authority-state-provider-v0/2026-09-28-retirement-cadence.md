@@ -49,6 +49,26 @@ public CLI/import or serialized contracts. Retain public behavior tests; remove
 only characterization scaffolding whose retired implementation has no consumer.
 Deletion is code retirement, not deletion of users' state, receipts or backups.
 
+### Proposed T4 slice: unused Python lease/handoff facades
+
+Caller audit at `e240730ec` finds the following internal crossings unused by
+production. Native decision and transaction owners remain; this is independent
+of D2 qualification and default-entry adoption.
+
+| Removed boundary | Last caller / replacement | Compatibility and validation |
+| --- | --- | --- |
+| `authority_core.py` acquire/renew/transfer/release, owner-eligibility and handoff-transition command facades | Only the old core tests; real lease and handoff adapters already use whole native transactions | No persisted command format or public CLI schema changes. Retain independent native generation, replay, conflict, cleanup and quiescence tests; exercise real File/SQLite entrypoints. |
+| `task_lease.acquire.decide`, `task_lease.lifecycle.decide`, `coordination.handoff_mode.plan` RPC registrations | Only those retired facades / handler tests; native transactions call the same typed rules directly | Obsolete private RPCs now reject unsupported methods. Keep `task_lease.owner_eligibility` and write-scope overlap: actual Python callers remain. |
+| Lease-only `local_snapshot.py` normalization and error projection | No remaining caller; native executors own lease facts and errors | Keep `todo_snapshot_from_mapping`, used by live Todo mutation authorization. No store, receipt, backup or migration reader is removed. |
+
+`authority_core.py` is still a live Todo bridge. `LeaseAction` and
+`LeaseModeGateCommand` also remain because the semantic-vocabulary registry
+explicitly retains that input contract until its M4 review. This slice does not
+lower semantic coverage floors to discard a declared compatibility obligation.
+Old facade-only tests retire with their implementation; public/native behavior
+tests remain. Reverting this slice restores the internal crossing without a data
+conversion. Maintainer review is required; this proposal is not installed behavior.
+
 ## Next delivery order
 
 | Order | Complete outcome / owner | Concrete exit and deletion opportunity |

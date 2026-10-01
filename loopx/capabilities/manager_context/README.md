@@ -362,8 +362,10 @@ When the intended recipient is an existing Codex host task, resolve that peer
 before substituting a temporary child. First inspect `agent-directory` for the
 named Agent and its candidate count. Use
 `loopx resolve-peer-route --goal-id allocation --agent-id reviewer` for an
-observed local route. If several historical bindings exist, supply the exact
-user-selected task link with `--thread-link codex://threads/<id>`; never choose
+observed local route. Archived history permits a unique readable route without
+a task link; missing or unknown alternatives preserve ambiguity. If the result
+is still ambiguous, supply the exact user-selected task link with
+`--thread-link codex://threads/<id>`; never choose
 the last binding by order or recency. Then record the request with
 `manager-inbox request ... --require-host-route --peer-thread-link
 codex://threads/<id>`. The result contains the same stable request id and a

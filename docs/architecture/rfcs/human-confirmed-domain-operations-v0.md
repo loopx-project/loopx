@@ -418,6 +418,11 @@ The existing Inbox projects canonical locators directly, with recovery first,
 `loopx_operation pending` accepts its bound cursor; the CLI projection uses
 `manager-inbox read --operation-cursor CURSOR`. New/changed work restarts
 without a cursor. Reading or exhausting a page does not resolve obligations.
+The owned native tool applies the same exact execution-subject filter as Turn
+startup before pagination. Current approvals for another Todo/session/profile
+of the same Agent cannot appear on that task's page or starve its continuations;
+its cursor cannot be reused by another execution subject. The existing TS inbox
+owner makes these decisions; this is not a separate host-owned inbox.
 
 The shared TypeScript operation frame shows executor, pinned model/effort,
 Goal/Agent/Todo scope, optional source context, and distinct states: confirmed
@@ -445,10 +450,44 @@ remain fail-closed before private reads or writes, even with matching
 `CODEX_THREAD_ID`, route flags, self-signed proof or an older runtime's actor
 success. No proof-import shortcut is exposed.
 
-Immediate confirmation-triggered host wakeup is not implemented:
-`host_delivery: "not_attempted"` remains truthful. Continue through the
-existing admitted Turn/delegation route; later durable wakeup must reuse its
-original scheduling/session owner, not start a parallel resumed executor.
+An admitted operation-enabled Turn now automatically includes canonical
+confirmed-operation locators for its exact Goal/Agent/Todo/session/profile,
+filtered before inbox pagination. After the native `turn/start` response is
+accepted, the existing action store records immutable first-start evidence:
+confirmation event/time, claim, LoopX Turn key, native Turn and acceptance time.
+`host_delivery: "native_start_accepted"` means that observation only; it grants
+no consumption or effect authority and does not claim the Turn is still live.
+Receipt failure aborts before operation-tool dispatch; later Turns preserve the
+first observation. CLI/Inbox, Dashboard and Lark distinguish accepted native
+continuation from consumed authorization and an actual outcome.
+
+An authenticated confirmation callback may now request one continuation through
+the existing delegation owner, **only with a separate, default-off operator
+launch grant**. The grant selects one existing requester/binding, not a model,
+workspace or executor supplied by the card. The operation owner checks exact
+Goal/Agent/Todo/session/profile, confirmation lifetime and unconsumed state.
+The ordinary Turn still owns quota, lease, validation and native startup; its
+native adapter rechecks the complete effective profile before resuming the
+original session. A new/replacement session is refused. Confirmation does not
+grant launch configuration or domain execution authority.
+
+The canonical operation id determines one durable delegation identity. Callback
+replays read its locator without another spawn or artifact validation. A lost
+launch acknowledgement remains an original-journal recovery case; callbacks
+do not auto-resume an uncertain worker. Removing the operator grant is read at
+the next callback boundary. Already started work is not retroactively cancelled.
+`delegation_requested` does not prove native start, validated completion or
+source delivery; `host_delivery` remains `"not_attempted"` until native acceptance.
+See [operator activation](../../reference/local-delegation.md#confirmed-operation-callback-continuation).
+
+File/SQLite qualification uses authenticated synthetic confirmation fixtures,
+the real detached delegation worker and CLI/Turn path, and a synthetic native
+transport. It proves original-session startup without consumption or a domain
+effect; deliberate waiting is not accepted Todo completion. Genuine Lark/model
+and financial probes have not been run for this increment. Frontend grant
+editing and authenticated result return to the original source audience remain
+separate, **partial-delivery** obligations; current grant activation is through
+the operator-owned collector configuration, not a new UI authority.
 Before claiming the investment minimum loop, still prove installation,
 genuine human approval, bound native consumption, domain preflight and
 original-system evidence, accepted result and original-card/audience readback.

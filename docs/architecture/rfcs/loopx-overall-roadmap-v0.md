@@ -644,6 +644,12 @@ callback; neither may appear as work completed or a second user-visible reply.
 This uses the R3 collaboration owner and current managed Turn wake instead of
 a separate steward scheduler.
 
+For App continuity in GQ07–GQ09, qualify chosen Manager/Goal view restoration
+through reload and browser Back/Forward using the existing typed route and
+draft owner. Keep source/Goal identity and prove navigation causes no work
+mutation or Turn replay. This bounded presentation qualification does not
+close R3's receiver-adoption, steering or original-route return acceptance.
+
 R3 entry qualification also covers ordinary human messages in an explicitly
 configured steward group without a mention. The shared TS admission rule owns
 trigger semantics; Lark supplies provider identity and the existing inbox owns

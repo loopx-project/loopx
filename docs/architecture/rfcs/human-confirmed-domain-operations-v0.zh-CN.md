@@ -328,6 +328,10 @@ executor revision、consumption ID、核验投影、`simulation: false`、
 及独立 operation cursor。`loopx_operation pending` 接受绑定游标；CLI 投影用
 `manager-inbox read --operation-cursor CURSOR`。新增/改变工作应无游标重读，
 读完一页或遍历结束不代表义务已解决。
+自有原生工具与 Turn 启动使用相同的精确执行主体过滤，并在分页前生效。
+同一 Agent 另一 Todo/session/profile 的当前批准不能出现在本任务页面或挤占其
+续接信息；游标也不能跨执行主体复用。判定仍由既有 TS Inbox owner 负责，
+不新建宿主自有 Inbox。
 
 共享 TS 操作 frame 展示执行者、固定模型/思考深度、Goal/Agent/Todo 范围、可选来源
 上下文，并区分：已确认但外接认证不可用、已确认待绑定受管回合、已消费待证据、未知须
@@ -348,9 +352,33 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
 意外返回 actor 成功，也没有 proof-import 捷径。
 
-本切片不实现确认后的即时宿主唤醒，`host_delivery: "not_attempted"` 保持真实。
-沿既有已准入 Turn/delegation 续接；后续持久唤醒复用其调度/session owner，
-不启动平行 resumed 执行者。宣称投研最小闭环前，仍须证明安装、真实用户批准、
+启用 operation 的已准入 Turn 自动携带其精确 Goal/Agent/Todo/session/profile 的
+规范确认请求定位信息，并在 Inbox 分页前过滤范围。仅在原生 `turn/start` 返回接受后，
+既有 action store 才记录不可覆盖的首次启动证据：确认事件/时间、claim、LoopX Turn key、
+原生 Turn 和接受时间。`host_delivery: "native_start_accepted"` 只证明该观察，
+不授予消费或外部效果权限，也不声称回合仍在运行。回执失败时先停止、不分发 operation 工具；
+后续回合保留首次观察。CLI/Inbox、Dashboard 和 Lark 区分原生续接接受、授权消费和真实结果。
+
+认证确认 callback 现在可通过既有 delegation owner 请求一次续跑，前提是具有
+**独立且默认关闭的 operator 启动 grant**。grant 指定已有 requester/binding，
+不采用卡片提供的模型、工作树或执行者。操作 owner 核对精确
+Goal/Agent/Todo/session/profile、确认期限和未消费状态；普通 Turn 仍负责 quota、
+租约、验收及原生启动。原生适配器在恢复前重验完整生效配置，拒绝新建/替换会话。
+用户确认不授予启动配置或垂域执行权限。
+
+规范 operation id 固定唯一持久 delegation 身份。callback 重放只读原定位信息，
+不再次 spawn 或运行产物验收；丢失启动 ACK 仍由原 journal 恢复，不在回调自动续跑
+不确定的 worker。移除 operator grant 会在下一次 callback 边界读回生效，
+不追溯取消已经开始的工作。`delegation_requested` 不证明原生启动、完成验收或
+来源送达；原生接受前 `host_delivery: "not_attempted"` 保持真实。
+启用方式见[原配置入口](../../reference/local-delegation.md#confirmed-operation-callback-continuation)。
+
+File/SQLite 资格化使用合成认证确认夹具、真实 detached delegation worker 与
+CLI/Turn 路径，以及合成原生传输；证明原会话启动，但未消费批准或执行垂域操作。
+夹具故意等待，不冒充 Todo 完成。本增量未跑真实 Lark/模型或金融探针。
+前端 grant 编辑及经认证的原来源受众结果回传仍为独立的**部分交付**义务；
+目前只能通过 operator-owned collector 配置启用，不另建 UI 状态权威。
+宣称投研最小闭环前，仍须证明安装、真实用户批准、
 绑定原生消费、垂域提交前检查与原系统证据、结果验收及原卡/受众读回。
 Core PR 仍须 owner review，不在合并前自行安装。
 

@@ -117,6 +117,76 @@ def _prepare_agent_handoff(
     )
 
 
+@pytest.mark.parametrize("fault", [None, "grant", "todo", "profile", "fresh", "stopped", "dispatch"])
+def test_callback_wake_uses_one_operator_granted_delegation_without_consuming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str | None,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.collaboration_mcp import Delegations
+
+    store, registry, runtime, channel, target = _fixture(tmp_path)
+    proposal = _prepare_agent_handoff(store, registry, managed=True)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("callback-requester")
+    if fault == "stopped":
+        data["goals"][0]["status"] = "stopped"
+    registry.write_text(json.dumps(data))
+    config = registry.parent / "delegations.json"
+    worker = tmp_path / "worker"
+    worker.mkdir()
+    binding = {"id": "confirmed-operation", "agent_id": AGENT_ID,
+               "todo_id": "other" if fault == "todo" else "todo-managed",
+               "requesters": [] if fault == "grant" else ["callback-requester"],
+               "workspace": str(worker), "timeout_seconds": 30, "output_refs": ["result.json"],
+               "host_args": ["--host", "codex-cli", "--codex-operation-tools", "--codex-model",
+                             "other" if fault == "profile" else "test-model", "--codex-reasoning-effort", "xhigh"]}
+    if fault == "fresh":
+        binding["host_args"] += ["--iteration-context", "fresh"]
+    config.write_text(json.dumps({"schema_version": "loopx_local_delegation_v0", "bindings": [binding]}))
+    launched = []
+    def spawn(self, operation_id):
+        launched.append(operation_id)
+        if fault == "dispatch":
+            raise RuntimeError("private argv must not be returned")
+    monkeypatch.setattr(Delegations, "_spawn", spawn)
+    cards = {}
+    runner = _runner([], cards)
+    deliver_goal_channel_operation_card(proposal_id=proposal["proposal_id"], action_store_root=store.root,
+        runtime_root=runtime, binding_path=channel, target_path=target, execute=True, runner=runner)
+    delivered = store.load(proposal["proposal_id"])
+    event = _event(delivered, cards[delivered["operation"]["delivery"]["message_id"]])
+    configuration = {"registry_path": str(registry), "goal_id": GOAL_ID,
+        "requester_agent_id": "callback-requester", "binding_id": binding["id"],
+        "project": str(registry.parent.parent), "execution_config": ".loopx/delegations.json"}
+    kwargs = dict(runtime_root=runtime, action_store_root=store.root, profile_app_id=APP_ID,
+                  cli_bin="lark-cli", profile="operation-bot", runner=runner, managed_turn_wake=configuration)
+    first = handle_goal_channel_operation_callback(event, **kwargs)
+    # Concurrent callback replay/lost ACK reuses the actual canonical journal.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replays = list(pool.map(lambda _: handle_goal_channel_operation_callback(event, **kwargs), range(2)))
+    assert first["ok"] and first["status"] == "authorization_pending"
+    assert first["managed_turn_wake"]["execution_allowed"] is False
+    assert first["managed_turn_wake"]["native_start_verified"] is False
+    assert "private argv" not in json.dumps(first)
+    stored = store.load(proposal["proposal_id"])
+    assert stored["operation"]["lifecycle_state"] == "claimed"
+    assert stored["operation"].get("agent_handoff") is None
+    assert stored["operation"].get("host_start") is None
+    assert stored["operation"]["outcome"] is None
+    if fault in {None, "dispatch"}:
+        assert len(launched) == 1
+        assert all(row["managed_turn_wake"]["state"] == "existing_delegation" for row in replays)
+        service = Delegations(runtime, registry, GOAL_ID, "callback-requester", config)
+        row = json.loads(service.path(launched[0]).read_text())
+        assert row["identity"]["confirmed_operation_id"] == proposal["proposal_id"]
+        argv = service._execution_arguments(binding, launched[0])
+        assert argv[-2:] == ["--codex-confirmed-operation-id", proposal["proposal_id"]]
+        assert first["managed_turn_wake"]["state"] == ("blocked" if fault else "delegation_requested")
+    else:
+        assert launched == []
+        assert first["managed_turn_wake"]["state"] == "blocked"
+
+
 @pytest.mark.parametrize("managed", [False, True])
 def test_authenticated_callback_hands_off_without_calling_any_executor_and_reconciles_original_result(
     tmp_path: Path,
@@ -164,6 +234,10 @@ def test_authenticated_callback_hands_off_without_calling_any_executor_and_recon
     assert first["status"] == replay["status"] == "authorization_pending"
     assert first["outcome"] is None and not first["domain_external_write_performed"]
     assert first["callback_ack_is_execution_receipt"] is False
+    for receipt in [first, replay]:
+        assert receipt["managed_turn_wake"]["state"] == "not_configured"
+        assert receipt["managed_turn_wake"]["execution_allowed"] is False
+        assert receipt["managed_turn_wake"]["native_start_verified"] is False
     claimed = store.load(proposal["proposal_id"])
     assert claimed["operation"]["result_delivery"] is None
     assert (
@@ -186,6 +260,13 @@ def test_authenticated_callback_hands_off_without_calling_any_executor_and_recon
             model="test-model",
             reasoning_effort="xhigh",
         )
+        start = agent_operation_action(
+            runtime, registry, proposal_id=proposal["proposal_id"], actor=actor,
+            action="observe_host_start", turn_key="sha256:" + "b" * 64,
+        )
+        assert start["recorded"] is True and start["execution_allowed"] is False
+        started_card = build_goal_channel_operation_result_card(store.load(proposal["proposal_id"]))
+        assert "原生续接已接受；授权仍待消费，尚无执行结果" in normalized_card_text(started_card)
     args = Namespace(
         goal_channel_command="consume-operation",
         goal_id=GOAL_ID,
@@ -978,6 +1059,63 @@ def _event(proposal: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("phase", ["preview", "before_verify", "after_verify"])
+def test_fresh_delivery_rejects_expiry_before_any_message_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    expiry_ms = int(
+        datetime.fromisoformat(proposal["operation"]["expires_at"]).timestamp() * 1000
+    )
+    times = iter(
+        [expiry_ms - 1000, expiry_ms + 1000]
+        if phase == "after_verify"
+        else [expiry_ms + 1000]
+    )
+
+    class DeliveryClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return datetime.fromtimestamp(next(times) / 1000, tz=tz)
+
+    monkeypatch.setattr(goal_channel_operation, "datetime", DeliveryClock)
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    with pytest.raises(ActionConflictError, match="not awaiting confirmation"):
+        deliver_goal_channel_operation_card(
+            proposal_id=proposal["proposal_id"],
+            action_store_root=store.root,
+            runtime_root=runtime,
+            binding_path=binding,
+            target_path=target,
+            execute=phase != "preview",
+            runner=_runner(calls, sent_cards),
+            executor_binding_resolver=lambda _parameters, _runtime: {
+                "revision": "simulator-v0"
+            },
+        )
+
+    assert not sent_cards
+    assert not any("+messages-send" in call for call in calls)
+    assert bool(calls) == (phase == "after_verify")
+    assert store.load(proposal["proposal_id"]) == proposal
+
+
+def test_historical_confirmation_card_reconstruction_ignores_processing_time(
+    tmp_path: Path,
+) -> None:
+    store, registry, _runtime, _binding, _target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    submitted = build_goal_channel_operation_card(proposal)
+    after_expiry = int(
+        datetime.fromisoformat(proposal["operation"]["expires_at"]).timestamp() * 1000
+    ) + 1000
+    with pytest.raises(ActionConflictError, match="not awaiting confirmation"):
+        build_goal_channel_operation_card(proposal, now_ms=after_expiry)
+    assert goal_channel_operation._submitted_confirmation_card(proposal) == submitted
+
+
 def test_callback_timestamp_normalizes_milliseconds_and_microseconds() -> None:
     expected = "2023-11-14T22:13:20.123000Z"
 
@@ -1064,6 +1202,22 @@ def test_card_is_one_bounded_non_forwardable_confirmation_projection(
     assert {
         button["elements"][0]["behaviors"][0]["value"]["decision"] for button in buttons
     } == {"confirm", "reject"}
+
+
+def test_cancelled_request_card_does_not_claim_execution_completed(tmp_path: Path) -> None:
+    store, registry, _runtime, _binding, _target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    cancelled = store.cancel(proposal["proposal_id"])
+
+    card = build_goal_channel_operation_result_card(cancelled)
+
+    assert cancelled["operation"]["outcome"]["outcome"] == "cancelled_before_confirmation"
+    assert card["header"]["template"] == "orange"
+    tag = card["header"]["text_tag_list"][0]
+    assert tag["color"] == "orange"
+    assert tag["text"]["content"] == "确认请求已取消，未执行"
+    assert "已完成" not in card["config"]["summary"]["content"]
+    assert cancelled["operation"].get("authorization_consumed_at") is None
 
 
 def test_lark_cards_consume_one_shared_ts_frame_each(
@@ -1455,6 +1609,7 @@ def test_microsecond_callback_completes_simulation_and_result_delivery(
 
 def test_card_v2_normalized_readback_and_callback_fallback_complete_simulation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, registry, runtime, binding, target = _fixture(tmp_path)
     proposal = _prepare(store, registry)
@@ -1484,6 +1639,25 @@ def test_card_v2_normalized_readback_and_callback_fallback_complete_simulation(
         **_event(durable, card),
         "card_content": json.dumps(_lark_card_v2_callback_fallback(card)),
     }
+    # Exercise the legacy no-snapshot fallback with a timely provider event
+    # processed after expiry. Processing time must not replace confirmed_at.
+    expiry = datetime.fromisoformat(durable["operation"]["expires_at"])
+
+    class CallbackClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return (expiry + timedelta(hours=1)).astimezone(tz)
+
+    load = ChatActionStore.load
+
+    def legacy_load(self: ChatActionStore, proposal_id: str) -> dict[str, Any] | None:
+        loaded = load(self, proposal_id)
+        if loaded is not None and loaded.get("operation", {}).get("delivery"):
+            loaded["operation"]["delivery"].pop("submitted_card", None)
+        return loaded
+
+    monkeypatch.setattr(goal_channel_operation, "datetime", CallbackClock)
+    monkeypatch.setattr(ChatActionStore, "load", legacy_load)
     execution_count = 0
 
     def executor(claimed: dict[str, Any]) -> dict[str, Any]:

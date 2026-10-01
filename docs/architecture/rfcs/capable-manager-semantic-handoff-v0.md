@@ -237,6 +237,15 @@ The steward sends one source-linked consultation or delegated-work request to th
 
 **Discovery implementation checkpoint.** The existing manager/context read tool now has an `agents` view over the complete permitted registry, with responsibility search, pagination and explicit stopped-history opt-in. It reads independently of the progress snapshot's Agent cap and sender-bound delivery list. Local owner scope is broad by default; Goal Chat and external audiences retain their scope. CLI and authorized SSH exports share the reader. Registration, declared responsibility, context delivery permission and unchecked execution readiness remain distinct. This qualifies a bounded read/diagnostic slice of A24, not worker selection, launch, adoption or original-route completion; prompt-only adapters and older remote installations remain explicit coverage gaps. Continue A24 through existing delivery configuration, actual worker execution and result return before claiming the golden query passed.
 
+The shared local peer-route resolver now excludes alternatives only on explicit
+host archive evidence before selecting a unique readable binding. This removes
+manual task-link lookup for an Agent with archived session history; unknown,
+missing, unsupported and multiple readable alternatives retain a gap. The rule
+lives in TypeScript collaboration, while Python adapts registry and host reads.
+Real disposable host-store and CLI tests qualify request/replay pinning, not
+native worker submission, freshness, capacity, receiver adoption or A24. Keep
+the App-first original-conversation pilot open until those facts are proven.
+
 ### 5.6 One exchange, independent durable facts
 
 The user-facing exchange is **received → assessed/working → result**, with meaningful updates when needed. Internally, keep transport and work facts separate:
@@ -462,6 +471,8 @@ Obligation coverage is derived from source requests and receiver assessments, no
 Artifact continuity is part of semantic continuity. Reuse the artifact owner to carry type, version/digest, resolvable location, access scope and any extraction/summary provenance for relevant images, documents and code. A receiver must obtain the required material or record why it could not. Text-only channels project a readable summary and an authorized artifact link; they do not silently remove evidence or copy a sender-local path as a remote locator. Do not add a mandatory artifact download for questions the brief already answers.
 
 Long-running work must remain legible in the existing conversation: what is being attempted, who owns the next step, what is actually blocking, and what conclusion is owed. Provide expandable tool/artifact activity and current semantic context in the frontend; Lark gets a concise equivalent and actionable results. Distinguish a queued worker, unavailable host, permission refusal, website login and undelivered answer. Do not expose raw protocol envelopes or claim fine-grained tool activity on adapters that cannot supply it.
+
+The App must also preserve the user's chosen work view across reload and browser history. Manager conversation and Goal overview/tasks/conversation/artifacts use the existing typed workspace route; source loading must not insert duplicate history entries. Preserve the source and Goal identity, retain an unsent draft under its existing owner, and never start or replay a Turn merely to restore navigation. Fresh-entry defaults remain distinct from restoring an explicit view. Packaged navigation recovery qualifies this presentation boundary only; actual receiver adoption, steering and owed-result return retain their independent acceptance requirements.
 
 Reuse existing capability instructions, context hooks, memory and scheduling owners. Reusable methods may inform planning and handoff, with their source/version visible; remembered lessons do not replace accepted task state or current verification. Stable recurring work may use the existing schedule/event path after its task and replay behavior are understood. This RFC does not add a routine engine, compulsory method learning, a new hook family or business-specific automation.
 

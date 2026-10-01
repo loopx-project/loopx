@@ -22,7 +22,6 @@ import {
   fetchGoalChannelTargets,
   fetchLarkConnections,
   fetchLoopXMode,
-  listTypedActions,
   previewTypedAction,
   setupGoalChannel,
   stewardPrompts,
@@ -33,6 +32,7 @@ import {
   type ManagerRuntimeSessionReadback,
   type TypedActionProposal,
 } from "../../data/chat";
+import { useTypedActionReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
 import { GoalLoopXMode } from "./goal-loopx-mode";
@@ -82,7 +82,8 @@ function dedupeProposals(proposals: WorkspaceActionPreview[]): WorkspaceActionPr
   const latest = new Map<string, WorkspaceActionPreview>();
   proposals.forEach((proposal) => {
     const subject = proposal.fields.find((field) => field.key === "todo_id")?.value ?? "";
-    const key = [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
+    const key = proposal.actionKind === "operation.execute" ? proposal.previewId
+      : [proposal.actionKind, proposal.goalId ?? "", subject, proposal.title].join(":");
     // Two records can describe the same draft; keep the newest by its stored
     // time rather than whichever one this list happened to end with, since a
     // restored list and a session-created draft arrive in opposite orders.
@@ -107,11 +108,17 @@ function ManagerHomeBoard({
   onSelectGoal,
   onRetry,
   systemHealth,
+  operations,
+  onSelectOperation,
+  onViewAllOperations,
 }: {
   goals: WorkspaceGoal[];
   onSelectGoal: (goalId: string) => void;
   onRetry?: () => void;
   systemHealth?: WorkspaceSystemHealth;
+  operations: WorkspaceActionPreview[];
+  onSelectOperation: (proposal: WorkspaceActionPreview) => void;
+  onViewAllOperations: () => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const currentGoals = goals.filter((goal) => goal.activationState === "active");
@@ -164,7 +171,8 @@ function ManagerHomeBoard({
           <button className="min-h-11 rounded-md border px-3 py-2 text-sm" onClick={onRetry} type="button">{t("startup.retryFailed")}</button></div> : null}
         {currentGoals.filter((goal) => goal.loadState).map(goalCard)}
       </section> : null}
-      {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal} /> : null}
+      {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
+        operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} /> : null}
       <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>
       <div className="personal-home-lanes">
         {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
@@ -558,11 +566,16 @@ function operationProposalFields(
       label: t("proposal.field.operationState"),
       value: frame?.kind === "pending" && frame.executionState
         ? t(`proposal.operationState.${frame.executionState}`)
+        : frame?.kind === "inactive" ? t(`actionReview.${frame.reason}`)
         : frame?.kind === "result" && frame.resultKind === "unknown"
         ? t("proposal.operationState.submission_unknown")
+        : frame?.kind === "result" && frame.resultKind === "cancelled"
+        ? t("proposal.primary.operationCancelled")
+        : frame?.kind === "confirmation" && !frame.confirmationDeliveryVerified
+        ? t("proposal.primary.operationDeliveryPending")
         : frame?.lifecycleState ?? proposal.status,
     },
-    ...(frame?.kind === "result" ? [{
+    ...(frame?.kind === "result" && frame.resultKind !== "cancelled" ? [{
       key: "result_delivery",
       label: t("proposal.field.resultDelivery"),
       value: frame.resultDeliveryVerified
@@ -613,7 +626,7 @@ function workspaceCandidatesFromGate(gate: Record<string, unknown> | null | unde
 
 function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate): WorkspaceActionPreview {
   const lifecycleOperation = lifecycleOperationFor(proposal);
-  const reviewPlan = compileActionReviewPlan(proposal);
+  const reviewPlan = compileActionReviewPlan(proposal, Date.now());
   const title = typeof proposal.normalized_parameters.title === "string"
     ? proposal.normalized_parameters.title
     : typeof proposal.normalized_parameters.goal_id === "string"
@@ -657,12 +670,18 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposalFields(proposal.normalized_parameters, t),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
     impact: reviewPlan.retryOriginal ? t(`actionReview.${reviewPlan.reason}`) : proposal.action_kind === "operation.execute"
-      ? operationFrame?.kind === "pending" && operationFrame.executionState
+      ? operationFrame?.kind === "inactive" ? t(`actionReview.${operationFrame.reason}`)
+        : operationFrame?.kind === "pending" && operationFrame.executionState
         ? t(operationFrame.executionState === "consumed_outcome_pending"
           ? "proposal.impact.operationConsumed" : operationFrame.executionState === "managed_turn_pending"
-          ? "proposal.impact.operationManagedPending" : "proposal.impact.operationAuthorized")
+          ? "proposal.impact.operationManagedPending" : operationFrame.executionState === "managed_turn_started"
+          ? "proposal.impact.operationManagedStarted" : "proposal.impact.operationAuthorized")
         : operationFrame?.kind === "result" && operationFrame.resultKind === "unknown"
-        ? t("proposal.impact.operationUnknown") : t("proposal.impact.operation")
+        ? t("proposal.impact.operationUnknown")
+        : operationFrame?.kind === "result"
+        ? t(operationFrame.resultKind === "cancelled" ? "proposal.impact.operationCancelled" : "proposal.impact.operationResult")
+        : operationFrame?.kind === "confirmation" && !operationFrame.confirmationDeliveryVerified
+        ? t("proposal.impact.operationDeliveryPending") : t("proposal.impact.operation")
       : proposal.action_kind === "team.plan"
       ? proposal.status === "applied" ? t("proposal.teamPlan.assignedHint") : t("proposal.impact.teamPlan")
       : proposal.action_kind === "goal.create"
@@ -692,15 +711,18 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
     } : undefined,
     workspaceCandidates,
     primaryLabel: reviewPlan.retryOriginal ? t("drawer.retryOriginal") : proposal.action_kind === "operation.execute"
-      ? operationFrame?.kind === "pending" && operationFrame.executionState
+      ? operationFrame?.kind === "inactive" ? t(`actionReview.${operationFrame.reason}`)
+        : operationFrame?.kind === "pending" && operationFrame.executionState
         ? t(`proposal.operationState.${operationFrame.executionState}`)
         : operationFrame?.kind === "result" && operationFrame.resultKind === "unknown"
         ? t("proposal.operationState.submission_unknown")
         : operationFrame?.kind === "result"
-        ? operationFrame.resultDeliveryVerified
+        ? operationFrame.resultKind === "cancelled"
+          ? t("proposal.primary.operationCancelled") : operationFrame.resultDeliveryVerified
           ? t("proposal.primary.operationResultVerified")
           : t("proposal.primary.operationResultPending")
-        : t("proposal.primary.operationGroup")
+        : operationFrame?.kind === "confirmation" && operationFrame.confirmationDeliveryVerified
+        ? t("proposal.primary.operationGroup") : t("proposal.primary.operationDeliveryPending")
       : proposal.action_kind === "team.plan" ? t(proposal.status === "applied" ? "proposal.teamPlan.viewResult" : "proposal.primary.teamPlan")
       : proposal.action_kind === "goal.create" ? t("proposal.primary.goalCreate")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
@@ -757,7 +779,7 @@ export function PersonalWorkspacePage({
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
-  initialManagerChatOpen = false,
+  selectedView: controlledView,
   managerChannelBinding,
   managerRuntime,
   model,
@@ -776,7 +798,7 @@ export function PersonalWorkspacePage({
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
-  initialManagerChatOpen?: boolean;
+  selectedView?: WorkspaceGoalTab;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
@@ -794,8 +816,13 @@ export function PersonalWorkspacePage({
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
-  const [selectedGoalTab, setSelectedGoalTab] = useState<WorkspaceGoalTab>("chat");
-  const [managerChatOpen, setManagerChatOpen] = useState(initialManagerChatOpen);
+  const [localView, setLocalView] = useState<WorkspaceGoalTab>(controlledGoalId ? "chat" : "overview");
+  const selectedGoalTab = controlledView ?? localView;
+  const managerChatOpen = selectedGoalTab === "chat";
+  function setSelectedGoalTab(view: WorkspaceGoalTab) {
+    setLocalView(view);
+    callbacks.onSelectView?.(view);
+  }
   const [managerConversationReceiptVisible, setManagerConversationReceiptVisible] = useState(false);
   const [goalConversationReceiptVisible, setGoalConversationReceiptVisible] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => {
@@ -826,6 +853,7 @@ export function PersonalWorkspacePage({
   const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0);
   const [sessionProposalIds, setSessionProposalIds] = useState<string[]>([]);
   const [managerChannelProposalIds, setManagerChannelProposalIds] = useState<string[]>([]);
+  const restoredProposalIdsRef = useRef(new Set<string>());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<WorkspaceTheme>(readWorkspaceTheme);
   const [goalContexts, setGoalContexts] = useState<Record<string, GoalRepositoryContext>>({});
@@ -842,6 +870,7 @@ export function PersonalWorkspacePage({
   const quickCompletingTodoIdsRef = useRef(new Set<string>());
   const [digest, setDigest] = useState<{ done: number; failed: number } | null>(null);
   const selectedGoalId = controlledGoalId === undefined ? localGoalId : controlledGoalId;
+  const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
   const composerDraftKey = `${selectedGoalId ?? "manager"}:${selectedAgentId}`;
   const composer = drafts[composerDraftKey] ?? "";
@@ -1085,6 +1114,10 @@ export function PersonalWorkspacePage({
     latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length]);
   const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {
     if (selection?.kind === "settings") return null;
+    if (selection?.kind === "proposal") {
+      const current = proposals[selection.item.previewId];
+      return current ? { kind: "proposal", item: current } : selection;
+    }
     if (selection?.kind === "attention") return { kind: "attention", item: refreshAttention(selection.item, model.attentionHistory ?? model.userTodos) };
     if (selection?.kind === "goal") {
       const currentGoal = workspaceGoals.find((goal) => goal.goalId === selection.item.goalId);
@@ -1095,7 +1128,7 @@ export function PersonalWorkspacePage({
       item.kind === "run" && item.run.runId === selection.item.runId
     );
     return currentRun ? { item: currentRun.run, kind: "run" } : selection;
-  }, [items, selection, workspaceGoals, model.attentionHistory, model.userTodos]);
+  }, [items, selection, proposals, workspaceGoals, model.attentionHistory, model.userTodos]);
 
   useEffect(() => {
     if (readOnly) {
@@ -1159,34 +1192,38 @@ export function PersonalWorkspacePage({
   useEffect(() => {
     if (readOnly) {
       setProposals({});
+      restoredProposalIdsRef.current.clear();
+      setManagerChannelProposalIds([]);
       return;
     }
-    let cancelled = false;
-    void listTypedActions(selectedGoalId ? { goalId: selectedGoalId } : { contextKind: "manager" })
-      .then((stored) => {
-        if (cancelled) return;
-        const restoreable = stored
-          .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
-            || compileActionReviewPlan(proposal).retryOriginal === true
-            || (proposal.action_kind === "team.plan" && proposal.status === "applied")
-            || (proposal.action_kind === "operation.execute" && proposal.status === "applied"))
-          .map((proposal) => workspaceProposal(proposal, t));
-        const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
-        setProposals((current) => ({ ...current, ...restored }));
-        // The manager conversation shows the cards this channel offered: a team
-        // plan the steward proposed from here is confirmed here, instead of the
-        // owner hunting for the Goal whose workspace happens to hold the card.
-        // A Goal-scoped fetch belongs to that Goal's workspace, not to this
-        // conversation, so it is left alone.
-        if (!selectedGoalId) {
-          setManagerChannelProposalIds(restoreable.map((proposal) => proposal.previewId));
-        }
-      })
-      .catch(() => {
-        // The workspace remains usable when the optional local proposal store is unavailable.
-      });
-    return () => { cancelled = true; };
-  }, [readOnly, selectedGoalId, t]);
+    if (!actionReadback.data) return;
+    const knownGoals = new Set(workspaceGoals.map(goal => goal.goalId));
+    const stored = actionReadback.data.filter(proposal => selectedGoalId || proposal.context.kind === "manager"
+      || (proposal.action_kind === "operation.execute" && knownGoals.has(String(proposal.normalized_parameters.goal_id))));
+    const restoreable = stored
+      .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
+        || compileActionReviewPlan(proposal).retryOriginal === true
+        || (proposal.action_kind === "team.plan" && proposal.status === "applied")
+        // Terminal operations replace cached gated cards, including in an
+        // already-open drawer. They never authorize local execution.
+        || proposal.action_kind === "operation.execute")
+      .map((proposal) => workspaceProposal(proposal, t));
+    const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
+    const previousIds = restoredProposalIdsRef.current;
+    restoredProposalIdsRef.current = new Set(Object.keys(restored));
+    setProposals((current) => ({...Object.fromEntries(Object.entries(current).filter(([id]) => !previousIds.has(id))), ...restored}));
+    // The manager conversation shows the cards this channel offered: a team
+    // plan the steward proposed from here is confirmed here, instead of the
+    // owner hunting for the Goal whose workspace happens to hold the card.
+    // A Goal-scoped fetch belongs to that Goal's workspace, not to this
+    // conversation, so it is left alone.
+    if (!selectedGoalId) setManagerChannelProposalIds(stored.filter(proposal => proposal.context.kind === "manager"
+      || proposal.action_kind === "operation.execute")
+      .map(proposal => proposal.proposal_id));
+  }, [readOnly, selectedGoalId, actionReadback.data, actionReadback.dataUpdatedAt, t, workspaceGoals]);
+
+  const homeOperations = Object.values(proposals).filter(proposal => proposal.actionKind === "operation.execute"
+    && proposal.reviewPlan?.operationFrame?.kind === "confirmation" && proposal.status === "gated");
 
   async function createPreview(
     request: WorkspaceActionPreviewRequest,
@@ -1523,8 +1560,8 @@ export function PersonalWorkspacePage({
   const drawerCallbacks: PersonalWorkspaceCallbacks = {
     ...callbacks,
     onOpenRunSession: async (run) => {
-      if (run.goalId !== selectedGoalId) selectGoal(run.goalId);
-      setSelectedGoalTab("chat");
+      if (run.goalId !== selectedGoalId) selectGoal(run.goalId, "chat");
+      else setSelectedGoalTab("chat");
       await callbacks.onOpenRunSession?.(run);
       setActiveSessionRun(run);
       setSelection(null);
@@ -1539,8 +1576,8 @@ export function PersonalWorkspacePage({
       setSelection(null);
     },
     onOpenOutput: (output) => {
-      if (output.goalId !== selectedGoalId) selectGoal(output.goalId);
-      setSelectedGoalTab("files");
+      if (output.goalId !== selectedGoalId) selectGoal(output.goalId, "files");
+      else setSelectedGoalTab("files");
       callbacks.onOpenOutput?.(output);
     },
     onApplyProposal: applyProposal,
@@ -1619,16 +1656,15 @@ export function PersonalWorkspacePage({
     onOpenOutput: drawerCallbacks.onOpenOutput,
   } : drawerCallbacks;
 
-  function selectGoal(goalId: string | null) {
+  function selectGoal(goalId: string | null, view: WorkspaceGoalTab = goalId ? "tasks" : "overview") {
     setLocalGoalId(goalId);
-    setManagerChatOpen(false);
     setManagerConversationReceiptVisible(false);
     setGoalConversationReceiptVisible(false);
     setActiveSessionRun(null);
     setSelection(null);
-    setSelectedGoalTab("tasks");
+    setLocalView(view);
     setMobileSidebarOpen(false);
-    callbacks.onSelectGoal?.(goalId);
+    callbacks.onSelectGoal?.(goalId, view);
   }
 
   function selectAgent(agentId: string) {
@@ -1803,7 +1839,10 @@ export function PersonalWorkspacePage({
     <div hidden={settingsOpen}>
     <WorkspaceShell
       notice={serviceNotice}
-      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections} onClose={() => {
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
+        proposalReadbackUnavailable={actionReadback.isError || !actionReadback.data
+          || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
+        proposalReadbackFetching={actionReadback.isFetching} onRetryProposalReadback={() => void actionReadback.refetch()} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
           && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {
@@ -1836,7 +1875,7 @@ export function PersonalWorkspacePage({
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
               setManagerConversationReceiptVisible(false);
-              setManagerChatOpen(true);
+              setSelectedGoalTab("chat");
             }}
             onSelectGoalTab={(tab) => {
               if (tab === "chat") openGoalConversation();
@@ -1844,7 +1883,7 @@ export function PersonalWorkspacePage({
             }}
             onSelectAgent={selectAgent}
             onReturnManagerHome={() => {
-              setManagerChatOpen(false);
+              setSelectedGoalTab("overview");
               setManagerConversationReceiptVisible(false);
               window.requestAnimationFrame(() => channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 }));
             }}
@@ -1886,7 +1925,7 @@ export function PersonalWorkspacePage({
             {!selectedGoal && !managerChatOpen ? (
               <section className="personal-manager-greeting">
                 <span><Bot size={20} /></span>
-                <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null}</>}</p></div>
+                <div><small className="personal-brief-date">{t("brief.title")} · {new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</small><strong>{t("home.greeting")}</strong><p>{model.goals.some((goal) => goal.activationState === "active" && goal.loadState) ? t("startup.partial") : <>{t("home.waitingCount", { count: managerNeedsYouCount })} {managerBlockingCount > 0 ? t("home.blockingSummary", { count: managerBlockingCount }) : null} {!actionReadback.isError && homeOperations.length ? t("home.operationSummary", {count: homeOperations.length}) : null}</>}</p></div>
               </section>
             ) : null}
             {selectedGoal?.loadState ? (
@@ -1945,7 +1984,9 @@ export function PersonalWorkspacePage({
                   </>),
                 }} />
             ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onSelectGoal={selectGoal} systemHealth={model.systemHealth} />
+              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
+                operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
+                onViewAllOperations={() => setManagerChatOpen(true)} />
             ) : (
               <ChannelTimeline onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={managerChatItems} onSelect={setSelection} selectedGoal={null} showManagerTeamResults
                 onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
@@ -1956,10 +1997,14 @@ export function PersonalWorkspacePage({
                 onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
                   ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId)
                   : undefined}
-                onOpenGoalEvidence={(goalId) => { selectGoal(goalId); openGoalConversation(); }} />
+                onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
             )}
           </div>
           <div className="personal-composer-wrap">
+            {!readOnly && actionReadback.isError ? <div className="personal-history-notice" role="status" data-testid="personal-action-readback-error">
+              <span>{t("proposal.readbackUnavailable")}</span><button type="button" disabled={actionReadback.isFetching}
+                onClick={() => void actionReadback.refetch()}>{t("proposal.readbackRetry")}</button>
+            </div> : null}
             {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
               <div className="personal-history-notice" role="status">
                 <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
@@ -1984,7 +2029,7 @@ export function PersonalWorkspacePage({
                 onClose={() => setManagerConversationReceiptVisible(false)}
                 onOpenConversation={() => {
                   setManagerConversationReceiptVisible(false);
-                  setManagerChatOpen(true);
+                  setSelectedGoalTab("chat");
                 }} />
             ) : null}
             {selectedGoal && selectedGoalTab !== "chat" && goalConversationReceiptVisible && goalMessages.length ? (

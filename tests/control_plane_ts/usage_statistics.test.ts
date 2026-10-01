@@ -231,14 +231,32 @@ test("startup heartbeat does not invent a successful command result", async t =>
   assert.equal((await inspect(path, ctx)).aggregate_preview, null);
 });
 
-test("a real unresponsive collector times out without retaining error details", async t => {
+test("a real unresponsive collector aborts both requests without retaining error details", { timeout: 30_000 }, async t => {
   const server = createServer(() => {});
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const { path, state } = await fixture(t); const ctx = context();
   ctx.env.LOOPX_USAGE_PING_ENDPOINT = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/ping`;
-  await configure(path, ctx, "enable"); const started = performance.now();
+  await configure(path, ctx, "enable");
+  // Inspect the network deadline itself, not filesystem/CPU scheduling time.
+  // Keep real fetch and real timeout signals so missing cancellation still fails.
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const signals: AbortSignal[] = [];
+  const deadlines: number[] = [];
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => {
+    deadlines.push(milliseconds);
+    const signal = timeout(milliseconds);
+    signals.push(signal);
+    return signal;
+  });
   assert.equal((await observe(path, ctx, (await state()).generation, row)).sent, false);
-  assert.ok(performance.now() - started < 4500);
-  assert.equal((await state()).last_sent_day, undefined);
+  assert.deepEqual(deadlines, [3000, 3000]);
+  assert.ok(signals.every(signal => signal.aborted && signal.reason.name === "TimeoutError"));
+  const saved = await state();
+  assert.doesNotMatch(JSON.stringify(saved), /TimeoutError|aborted due to timeout/);
+  assert.equal(saved.last_sent_day, undefined);
+  assert.deepEqual(saved.deliveries, [
+    { day: "2026-09-26", channel: "heartbeat", rows: 1, status: "unavailable" },
+    { day: "2026-09-26", channel: "cli", rows: 1, status: "unavailable" },
+  ]);
 });

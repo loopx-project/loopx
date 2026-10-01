@@ -2,7 +2,7 @@
  * second approval store. Python supplies locked storage and registry facts;
  * this owner decides admission, one-shot consumption and result binding. */
 import type {JsonObject} from "../effect_program.ts";
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 
@@ -175,6 +175,7 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
   const confirmation = operation.confirmation == null ? null
     : requireJsonObject(operation.confirmation, "operation confirmation");
   const claim = operation.claim == null ? null : requireJsonObject(operation.claim, "operation claim");
+  const hostStart = operation.host_start == null ? null : requireJsonObject(operation.host_start, "native host start");
   const now = timestamp(input.now);
   const expires = timestamp(operation.expires_at);
   const managed = executor.kind === "managed_turn";
@@ -186,7 +187,8 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
     payload_digest: operation.payload_digest, confirmation_digest: operation.confirmation_digest,
     claim_id: claim?.claim_id ?? null, executor_revision: executor.revision, expires_at: operation.expires_at,
     route, authorization_source: "canonical_typed_operation", execution_allowed: false,
-    host_delivery: "not_attempted", external_write_performed: false,
+    host_delivery: hostStart ? "native_start_accepted" : "not_attempted", host_start: hostStart,
+    external_write_performed: false,
     executor_kind: executor.kind, source_route: parameters.source_route ?? null,
     host_authentication_required: !managed};
   const handoff = operation.agent_handoff == null ? null
@@ -206,6 +208,52 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
   requireThat(confirmation?.decision === "confirm"
     && confirmation.confirmation_digest === operation.confirmation_digest && claim,
     "agent execution requires authenticated confirmation");
+  if (action === "wake") {
+    // A launch fence, never authentication or first-consumption authority.
+    // The existing delegation owner supplies its operator grant; the native
+    // host rechecks the complete effective profile immediately before resume.
+    const launch = requireJsonObject(input.launch_context, "operation wake launch context");
+    const selected = requireJsonObject(input.executor_route, "operation wake executor route");
+    requireThat(managed && input.binding_current === true
+      && launch.host === "codex-cli" && launch.operation_tools === true
+      && launch.iteration_context !== "fresh"
+      && Object.entries(route).every(([key, value]) => selected[key] === value)
+      && selected.model === executor.model && selected.reasoning_effort === executor.reasoning_effort,
+      "operation wake must resume the original managed session and profile");
+    requireThat(!hostStart && !handoff && !observed
+      && operation.lifecycle_state === "claimed" && proposal.status === "applying",
+      "operation wake requires an unstarted, unconsumed confirmed operation");
+    requireThat(now < expires && timestamp(confirmation.confirmed_at) <= now,
+      "operation wake is outside the confirmation lifetime");
+    return {...base, status: "wake_admitted", wake_allowed: true};
+  }
+  if (action === "observe_host_start") {
+    const actor = requireJsonObject(input.actor, "native start actor");
+    requireThat(managed && Object.entries(route).every(([key, value]) => actor[key] === value)
+      && actor.model === executor.model && actor.reasoning_effort === executor.reasoning_effort
+      && input.binding_current === true, "native start is not the original managed binding");
+    const hostTurnId = id(actor.host_turn_id, "native host Turn");
+    const turnKey = requireNonEmptyString(input.turn_key, "LoopX Turn key");
+    requireThat(ENVELOPED_SHA256_PATTERN.test(turnKey), "native start requires a bound LoopX Turn key");
+    // This is first-start evidence, not a launch lock or execution permit.
+    // A retry must preserve the original time and causal identity, never relabel
+    // a later scheduled Turn as the first confirmation-triggered continuation.
+    if (hostStart) return {...base, status: "native_start_accepted", recorded: false};
+    requireThat(!handoff && !observed && operation.lifecycle_state === "claimed" && proposal.status === "applying",
+      "native start cannot manufacture continuation evidence after consumption or outcome");
+    requireThat(now < expires && timestamp(confirmation.confirmed_at) <= now,
+      "native continuation is outside the confirmation lifetime");
+    const eventId = requireNonEmptyString(confirmation.event_id, "confirmation event");
+    requireThat(eventId.length <= 512 && !/[\x00-\x1f]/.test(eventId), "confirmation event is invalid");
+    const receipt: JsonObject = {schema_version: "loopx_operation_host_start_v0",
+      operation_id: operation.operation_id, payload_digest: operation.payload_digest,
+      confirmation_digest: operation.confirmation_digest,
+      confirmation_event_id: eventId, confirmed_at: confirmation.confirmed_at,
+      claim_id: id(claim.claim_id, "operation claim"), route, turn_key: turnKey,
+      host_turn_id: hostTurnId, accepted_at: input.now, trigger_kind: "canonical_operation_inbox",
+      execution_allowed: false, external_write_performed: false};
+    return {...base, status: "native_start_accepted", recorded: true, write_host_start: receipt};
+  }
   if (action === "consume") {
     const actor = requireJsonObject(input.actor, "execution actor");
     requireThat(Object.entries(route).every(([key, value]) => actor[key] === value),
@@ -264,7 +312,10 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
  * overflow locator can be inspected directly in the canonical action store. */
 export function projectAgentOperationInbox(input: JsonObject): JsonObject {
   if (!Array.isArray(input.items)) throw new EffectRuntimeRequestError("handoff items must be an array");
-  const items = input.items.map(value => requireJsonObject(value, "handoff item"));
+  const executorRoute = input.executor_route == null ? null : requireJsonObject(input.executor_route, "executor route");
+  const items = input.items.map(value => requireJsonObject(value, "handoff item"))
+    .filter(item => executorRoute === null || Object.entries(executorRoute)
+      .every(([key, value]) => requireJsonObject(item.route, "operation route")[key] === value));
   const rank = (item: JsonObject) => item.needs_reconciliation === true ? 0 : 1;
   items.sort((a, b) => rank(a) - rank(b)
     || String(a.operation_id).localeCompare(String(b.operation_id), "en"));

@@ -49,6 +49,10 @@ def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict
         "monitor": {
             "target_id": str(target.get("target_id") or "").strip() or None,
             "mode": str(target.get("monitor_mode") or "").strip() or None,
+            "material_change": (
+                event.get("material_change")
+                if isinstance(event.get("material_change"), bool) else None
+            ),
             "frontier": str(target.get("frontier_identity") or "") or None,
             "todo_id": str(run.get("todo_id") or event.get("todo_id") or "").strip() or None,
             "target_key": str(run.get("target_key") or event.get("target_key") or "").strip() or None,

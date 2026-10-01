@@ -131,6 +131,8 @@ def handle_turn_command(
         strict_goal_admission = goal_admission if goal_admission.enabled else None
         if getattr(args, "codex_operation_tools", False) and args.host != "codex-cli":
             raise ValueError("--codex-operation-tools requires the codex-cli host")
+        if getattr(args, "codex_confirmed_operation_id", None) and not getattr(args, "codex_operation_tools", False):
+            raise ValueError("confirmed operation continuation requires the owned operation transport")
         if getattr(args, "codex_operation_source_route_json", None) is not None and not getattr(args, "codex_operation_tools", False):
             raise ValueError("--codex-operation-source-route-json requires --codex-operation-tools")
         # Planning and dry-run execution inspect existing admitted intents.
@@ -1005,7 +1007,9 @@ def handle_turn_command(
 
                         return run_codex_operation_host(
                             request, registry_path=registry_path,
-                            source_route=getattr(args, "codex_operation_source_route_json", None), **options
+                            confirmed_operation_id=getattr(args, "codex_confirmed_operation_id", None),
+                            source_route=getattr(args, "codex_operation_source_route_json", None),
+                            **options
                         )
                     return run_codex_cli_host(request, **options)
 

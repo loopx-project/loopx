@@ -23,7 +23,9 @@ from ..extensions.lark.goal_channel import (
     setup_lark_goal_channel,
     sync_lark_goal_channel,
 )
-from ..extensions.lark.goal_channel_contracts import binding_for_goal, operation_packet
+from ..extensions.lark.goal_channel_contracts import (
+    binding_for_goal, notification_request_snapshot, operation_packet,
+)
 from ..extensions.lark.goal_topic_batch import upgrade_lark_goal_topics
 from ..extensions.runtime import (
     default_extension_state_file,
@@ -420,11 +422,16 @@ def _quota_packet(
         limit=20,
         goal_id=goal_id,
     )
-    return build_quota_should_run(
+    packet = build_quota_should_run(
         status,
         goal_id=goal_id,
         agent_id=agent_id,
     )
+    # Transport adapter: retain the complete same-read Todo projection only
+    # for this notification. Quota's 180-character hot path stays unchanged;
+    # the shared TS presentation owner checks identity/version/lifecycle.
+    packet["request_snapshot"] = notification_request_snapshot(status, goal_id)
+    return packet
 
 
 def handle_goal_channel_command(
