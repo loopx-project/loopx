@@ -455,6 +455,23 @@ For shell/Git/API effects outside Core, use an effect-intent ID and the provider
 
 ### 5.11 Long-horizon continuation as a product contract
 
+Concise replies must carry their actual source message before unrelated recent
+context. The shared TS conversation projection joins the captured parent ID and
+conversation ID, bounds quoted text and exposes missing or truncated context.
+The Lark collector preserves its existing parent lookup as a private inbox
+observation; manager and ordinary Goal Topic Turns consume the same projection.
+A parent-bearing mention also requires lookup. No extra history sweep, text
+classifier or execution grant is introduced. A captured quote is not approval,
+fresh fact verification or a new instruction. Unknown ancestry stays unknown;
+recent material cannot silently substitute for it.
+
+This qualifies collector→inbox→real Chat store/protocol ingress with synthetic
+provider/model fixtures, including replay. It does not qualify live referent
+reasoning, deployed group adoption or the whole handoff. App conversation history
+continues through its existing owner; no App input or opening layout changes in
+this adapter slice. R3 next qualifies installed source readback and the receiver's
+actual interpretation/return, together with current-work recovery and R2 cycles.
+
 A persistent conversation is useful, but work must also survive losing that conversation's executable session. At each supported continuation point, compose the current accepted work state with unresolved request obligations, relevant decisions and changed evidence. Distinguish a dated research conclusion from a current fact. When a correction contradicts an accepted constraint, preserve both revisions and record the receiver's resolution before the affected effect. Do not replay an earlier rejected approach merely because its rejection fell out of the prompt.
 
 Obligation coverage is derived from source requests and receiver assessments, not a second checklist database. The manager identifies the substantive questions; the receiver records which it accepted, deferred or rejected and why, linking current Todo/Vision/evidence where applicable. A result covers those obligations or explicitly leaves a bounded remainder with an owner and resume condition. An acknowledgement, elapsed timer, successful routine invocation or completed subtask cannot silently discharge the whole request. A later session reconstructs that relationship from accepted state and references, without importing runtime-private history.

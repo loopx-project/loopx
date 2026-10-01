@@ -651,6 +651,12 @@ deduplication and return. App settings select and read back the trigger per
 connection. External host-tool permission and sender-bound delegation remain
 separate gaps; receiving a request does not establish execution authority.
 
+Resolve source context before routing: a short reply retains the exact
+same-conversation parent, with missing and truncated material explicit. TS owns the bounded context projection;
+Lark transport and the private inbox preserve provider ancestry without granting
+instruction or operation authority. Real store/protocol fixtures cover ingress
+and replay; installed interpretation and original-route result remain R3 gates.
+
 Before choosing a recipient, the shared conversation must resolve the desired
 outcome against relevant current evidence. Already-satisfied requests return the
 verified result without a duplicate assignment or effect; unavailable or stale

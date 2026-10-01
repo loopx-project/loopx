@@ -311,6 +311,19 @@ def _event_from_payload(
         and "parent_id" in event
         and payload.get("reply_to_bot") is True
     )
+    # Transport only bounded provider text and its source identifiers. The TS
+    # conversation owner checks the parent/conversation join before model use.
+    reply_context = payload.get("reply_context")
+    if isinstance(reply_context, Mapping):
+        reply_content = reply_context.get("content")
+        reply_content = reply_content if isinstance(reply_content, str) else ""
+        event["reply_context"] = {
+            "message_id": str(reply_context.get("message_id") or "")[:200],
+            "conversation_id": str(reply_context.get("conversation_id") or "")[:200],
+            "content": reply_content[:16000],
+            "content_truncated": len(reply_content) > 16000
+            or reply_context.get("content_truncated") is True,
+        }
     addressed_to_bot = bool(
         event["reply_to_bot"]
         or (

@@ -343,6 +343,7 @@ def _jq_projection(chat_ids: str | Sequence[str]) -> str:
         "event_id:(.event_id // .message_id // .id),"
         "message_id:(.message_id // .id),"
         "create_time:.create_time,content:.content,"
+        "parent_id:.parent_id,root_id:.root_id,"
         "attachment_count:(.attachment_count // 0),"
         "sender_type:(.sender_type // .sender.sender_type),"
         "sender_id:(.sender_id // .sender.id // .sender.sender_id),"

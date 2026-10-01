@@ -28,6 +28,7 @@ from .goal_channel_operation import (
     recover_goal_channel_simulation_claims,
 )
 from .private_json import write_private_json_atomic
+from .goal_channel_message_delivery import normalized_card_text
 
 APP_ID_PATTERN = re.compile(r"cli_[A-Za-z0-9_-]+")
 EVENT_READY_PREFIX = "[event] ready "
@@ -363,6 +364,41 @@ def _is_profile_self_message(
     return sender_type == "app" and sender_id == profile_app_id
 
 
+def _reply_source_content(message: Mapping[str, Any]) -> str:
+    """Extract visible provider text, never card callback/operation payloads."""
+    body = message.get("body")
+    raw = body.get("content") if isinstance(body, Mapping) else message.get("content")
+    if not isinstance(raw, str):
+        return ""
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if not isinstance(value, Mapping):
+        return raw
+    if isinstance(value.get("text"), str):
+        return value["text"]
+    if card := normalized_card_text(value):
+        return card
+    # A post may be a single localized body or a locale-keyed provider object.
+    post = value if "content" in value else next(iter(value.values()), None)
+    if not isinstance(post, Mapping) or not isinstance(post.get("content"), list):
+        return ""
+    lines = [str(post.get("title") or "")]
+    for row in post["content"]:
+        if not isinstance(row, list):
+            return ""
+        parts = []
+        for node in row:
+            if not isinstance(node, Mapping) or node.get("tag") not in {"text", "a"}:
+                return ""  # Unsupported media is a context gap, not raw JSON.
+            parts.append(str(node.get("text") or ""))
+            if node.get("tag") == "a":
+                parts.append(str(node.get("href") or ""))
+        lines.append("".join(parts))
+    return "\n".join(lines).strip()
+
+
 def enrich_lark_event_reply_context(
     event: Mapping[str, Any],
     *,
@@ -377,6 +413,7 @@ def enrich_lark_event_reply_context(
     """Verify whether an event structurally replies to this profile's bot."""
 
     enriched = dict(event)
+    enriched.pop("reply_context", None)
     enriched["reply_context_verified"] = False
     enriched["reply_to_bot"] = False
     enriched["message_context_status"] = "message_context_unavailable"
@@ -433,6 +470,13 @@ def enrich_lark_event_reply_context(
         enriched["message_context_status"] = parent_status
     if parent is None or str(parent.get("chat_id") or "") != configured_chat_id:
         return enriched
+    # Keep the actual provider parent, including posts/cards, for the shared
+    # typed context projection. This observation never changes turn admission.
+    enriched["reply_context"] = {
+        "message_id": str(parent.get("message_id") or ""),
+        "conversation_id": configured_chat_id,
+        "content": _reply_source_content(parent),
+    }
     parent_sender_type, parent_sender_id = _sender_identity(parent)
     enriched["reply_context_verified"] = True
     enriched["message_context_status"] = "message_context_verified"
@@ -621,7 +665,10 @@ def _operation_transport_runner(
 def lark_event_requires_reply_context_lookup(
     event: Mapping[str, Any], *, bot_display_name: str
 ) -> bool:
-    """Require provider context unless the stream carries a typed Bot mention."""
+    """A parent-bearing mention still needs its provider source context."""
+
+    if MESSAGE_ID_PATTERN.fullmatch(str(event.get("parent_id") or "")):
+        return True
 
     provider_fields = {
         key: event[key] for key in ("mentioned", "mentions") if key in event
