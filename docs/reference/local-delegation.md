@@ -726,7 +726,7 @@ home, binary, sandbox or effective MCP configuration, or retarget the Todo.
 Prepare the operation in this same managed session/profile. Existing delegation
 inspection and ordinary Turn admission still determine whether it can run.
 
-`lark-event-collector plan` and `inspect` expose
+`loopx lark-inbox collector-plan` and `collector-status` expose
 `operation_callback_managed_wake_configured`, a configuration observation, not
 runtime qualification. An authenticated callback returns `managed_turn_wake`:
 `delegation_requested` gives the original operation locator;

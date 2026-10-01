@@ -234,6 +234,10 @@ def test_authenticated_callback_hands_off_without_calling_any_executor_and_recon
     assert first["status"] == replay["status"] == "authorization_pending"
     assert first["outcome"] is None and not first["domain_external_write_performed"]
     assert first["callback_ack_is_execution_receipt"] is False
+    for receipt in [first, replay]:
+        assert receipt["managed_turn_wake"]["state"] == "not_configured"
+        assert receipt["managed_turn_wake"]["execution_allowed"] is False
+        assert receipt["managed_turn_wake"]["native_start_verified"] is False
     claimed = store.load(proposal["proposal_id"])
     assert claimed["operation"]["result_delivery"] is None
     assert (
