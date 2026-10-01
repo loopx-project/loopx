@@ -160,8 +160,13 @@ Rules:
 
 For a named existing peer, `resolve-peer-route --goal-id ... --agent-id ...`
 reads the binding owner and the local host observer before any request is
-recorded. `ambiguous` preserves all accepted candidate identities and asks for
-an exact task link; it never selects the last or newest binding. An explicit
+recorded. Without a task link, the shared typed selector may resolve exactly one
+readable local task when every alternative has an explicit host `archived`
+observation. It observes all matching candidates within the existing 32-thread
+budget, independently of the three-row publication cap. Missing, unsupported,
+failed or withheld observations remain unknown alternatives; multiple remaining
+candidates or an over-budget inventory stay `ambiguous`. It never selects the
+last, newest or only visible binding. An explicit
 `--thread-link` must resolve to that same Goal and Agent across the project
 registry. `unavailable` includes archived, unknown, unsupported and missing
 host observations. `not_authorized` means the named peer is outside the Goal or
@@ -170,6 +175,14 @@ an exact project binding plus a readable local host record. The host must still
 verify its own profile and submission permission. Every preview says
 `host_delivery: not_attempted`, and no route preview grants a claim, lease,
 session resume or message-send permission.
+
+This changes the previous default refusal for *all* multiple bindings: archived
+history no longer requires the owner to supply a link. It applies to the local
+CLI and `manager-inbox request --require-host-route`, including trusted steward
+and peer callers. Readable records are still neither fresh runtime liveness nor
+model/capacity qualification. Restricted Chat and remote hosts do not acquire a
+new observer or execution path. The selected registry identity is rechecked
+after host reads, and request replay keeps its original exact route.
 
 ## Presence Vocabulary
 

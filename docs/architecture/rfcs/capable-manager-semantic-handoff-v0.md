@@ -237,6 +237,15 @@ The steward sends one source-linked consultation or delegated-work request to th
 
 **Discovery implementation checkpoint.** The existing manager/context read tool now has an `agents` view over the complete permitted registry, with responsibility search, pagination and explicit stopped-history opt-in. It reads independently of the progress snapshot's Agent cap and sender-bound delivery list. Local owner scope is broad by default; Goal Chat and external audiences retain their scope. CLI and authorized SSH exports share the reader. Registration, declared responsibility, context delivery permission and unchecked execution readiness remain distinct. This qualifies a bounded read/diagnostic slice of A24, not worker selection, launch, adoption or original-route completion; prompt-only adapters and older remote installations remain explicit coverage gaps. Continue A24 through existing delivery configuration, actual worker execution and result return before claiming the golden query passed.
 
+The shared local peer-route resolver now excludes alternatives only on explicit
+host archive evidence before selecting a unique readable binding. This removes
+manual task-link lookup for an Agent with archived session history; unknown,
+missing, unsupported and multiple readable alternatives retain a gap. The rule
+lives in TypeScript collaboration, while Python adapts registry and host reads.
+Real disposable host-store and CLI tests qualify request/replay pinning, not
+native worker submission, freshness, capacity, receiver adoption or A24. Keep
+the App-first original-conversation pilot open until those facts are proven.
+
 ### 5.6 One exchange, independent durable facts
 
 The user-facing exchange is **received → assessed/working → result**, with meaningful updates when needed. Internally, keep transport and work facts separate:
