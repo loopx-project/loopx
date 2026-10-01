@@ -1,3 +1,5 @@
+import type {DecisionOutcome, ResumeState} from "../todos/user_completion_types.js";
+
 export type ActionReviewIdentity = {
   schemaVersion: "action_review_plan_v0";
   proposalId: string;
@@ -72,9 +74,21 @@ type ActionReviewState =
       canApply: false;
     };
 
+/** An owner decision on one User request, recorded by the canonical User completion owner. */
+export type DecisionReviewFrame = {
+  decision: DecisionOutcome;
+  /**
+   * What the canonical receipt says happened to the work waiting on it. Only
+   * present after a verified apply; an unrecognized or mismatched receipt is
+   * `unknown`, never a guessed success.
+   */
+  dependentEffect?: "resumed" | "still_waiting" | "paused" | "no_waiting_work" | "unknown";
+};
+
 export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   operationFrame?: OperationReviewFrame;
   reviewCardFrame?: ReviewCardFrame;
+  decisionFrame?: DecisionReviewFrame;
   /** Recover this exact canonical command; generating a new preview loses its receipt identity. */
   retryOriginal?: true;
 };
@@ -386,6 +400,33 @@ export function compileOperationReviewFrame(proposalValue: unknown, nowMs?: numb
   };
 }
 
+// Presentation buckets over `ResumeState` in control_plane/todos/user_completion.ts.
+const DEPENDENT_EFFECTS = {
+  resumed: "resumed",
+  decision_requirements_remaining: "still_waiting",
+  other_user_blockers_active: "still_waiting",
+  explicit_blocker_repair_required: "still_waiting",
+  decision_rejected: "paused",
+  decision_cancelled: "paused",
+  target_not_blocked: "no_waiting_work",
+  target_not_active: "no_waiting_work",
+  target_not_found: "no_waiting_work",
+  target_or_decision_scope_not_found: "unknown",
+} as const satisfies Readonly<Record<ResumeState, NonNullable<DecisionReviewFrame["dependentEffect"]>>>;
+
+function compileDecisionReviewFrame(proposal: Record<string, unknown>): DecisionReviewFrame | undefined {
+  if (proposal.action_kind !== "gate.resolve") return undefined;
+  const decision = objectValue(proposal.normalized_parameters)?.decision;
+  if (decision !== "approve" && decision !== "reject" && decision !== "cancel") return undefined;
+  const receipt = objectValue(proposal.receipt);
+  if (proposal.status !== "applied" || receipt?.projection_verified !== true) return { decision };
+  if (receipt.outcome !== "gate_resolved" || receipt.decision_outcome !== decision
+      || !Object.hasOwn(receipt, "unblock_resume_state")) return { decision, dependentEffect: "unknown" };
+  const state = receipt.unblock_resume_state;
+  return { decision, dependentEffect: typeof state === "string" && Object.hasOwn(DEPENDENT_EFFECTS, state)
+    ? DEPENDENT_EFFECTS[state as keyof typeof DEPENDENT_EFFECTS] : "unknown" };
+}
+
 /**
  * Compile provider-neutral presentation semantics from a typed action proposal.
  * This reducer owns no action authority and performs no external effects.
@@ -401,11 +442,13 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   };
   const operationFrame = compileOperationReviewFrame(proposal, nowMs);
   const reviewCardFrame = compileReviewCardFrame(proposal);
+  const decisionFrame = compileDecisionReviewFrame(proposal);
   const finish = (state: ActionReviewState): ActionReviewPlan => ({
     ...identity,
     ...state,
     ...(operationFrame ? { operationFrame } : {}),
     ...(reviewCardFrame ? { reviewCardFrame } : {}),
+    ...(decisionFrame ? { decisionFrame } : {}),
   });
   const held = (
     interaction: "gated" | "refresh" | "repair" | "pending" | "completed" | "inactive",
@@ -436,7 +479,8 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const isCanonicalTerminal = basis?.schema_version === "loopx_chat_canonical_terminal_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null
     && ((proposal.action_kind === "todo.update" && parameters?.operation === "complete")
-      || (proposal.action_kind === "monitor.update" && parameters?.operation === "stop"));
+      || (proposal.action_kind === "monitor.update" && parameters?.operation === "stop")
+      || (proposal.action_kind === "gate.resolve" && ["approve", "reject", "cancel"].includes(String(parameters?.decision))));
   if ((isCanonicalUpdate || isCanonicalTerminal) && (proposal.status === "applying" || proposal.status === "failed")) {
     const failure = objectValue(proposal.failure);
     return {...finish({interaction: "review", canApply: true,

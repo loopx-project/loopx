@@ -172,6 +172,27 @@ def seed_story(root: Path, story: dict, notice: str) -> dict:
             "agent": decision["agent"],
         }
     todos = seed_delivery_tasks(story, gates, registry, runtime)
+    # The App and CLI replay share the canonical User completion relationship.
+    # Do not teach the demo a second writer that opens the dependent afterward.
+    for key, gate in gates.items():
+        targets = [todo for todo in todos if todo.get("after") == "gate:" + key]
+        if len(targets) != 1:
+            raise ValueError("Each demo decision must have one direct dependent")
+        target = targets[0]
+        scope = {"schema_version": "decision_scope_v0", "kind": "direction",
+                 "granularity": "action", "scope_key": f"{story['id']}:{key}"}
+        checked(update_goal_todo(
+            registry_path=registry, runtime_root_arg=str(runtime),
+            goal_id=story["id"], todo_id=gate["todo_id"],
+            unblocks_todo_id=target["todo_id"], decision_scope=scope,
+            agent_id=gate["agent"], reason="Bind the demo decision to its dependent.",
+        ))
+        checked(update_goal_todo(
+            registry_path=registry, runtime_root_arg=str(runtime),
+            goal_id=story["id"], todo_id=target["todo_id"],
+            required_decision_scopes=[scope], agent_id=target["agent"],
+            reason="Wait for the demo owner decision.",
+        ))
     monitors = []
     for owner, title, cadence, target in story["monitors"]:
         monitor = checked(
@@ -227,7 +248,7 @@ def prepare(root: Path) -> dict:
     marker = root / MARKER
     if marker.exists():
         manifest = json.loads(marker.read_text())
-        if manifest.get("schema_version") != "workspace_story_demo_v2":
+        if manifest.get("schema_version") != "workspace_story_demo_v3":
             raise ValueError("Unrecognized demo manifest")
         if manifest.get("root") != str(root) or manifest.get("registry") != str(
             root / REGISTRY_NAME
@@ -244,7 +265,7 @@ def prepare(root: Path) -> dict:
     registry = root / REGISTRY_NAME
     catalog = json.loads((HERE / "stories.json").read_text())
     manifest = {
-        "schema_version": "workspace_story_demo_v2",
+        "schema_version": "workspace_story_demo_v3",
         "notice": catalog["notice"],
         "root": str(root),
         "registry": str(registry),
@@ -279,19 +300,6 @@ def advance(
             no_followup=True,
         )
     )
-    for todo in story["todos"]:
-        if todo["status"] == "blocked" and todo.get("after") == "gate:" + decision_key:
-            checked(
-                update_goal_todo(
-                    registry_path=registry,
-                    runtime_root_arg=str(root / "runtime"),
-                    goal_id=story_id,
-                    todo_id=todo["todo_id"],
-                    status="open",
-                    agent_id=todo["agent"],
-                    reason="Decision replay resolved this local blocker.",
-                )
-            )
     print(
         json.dumps(
             {

@@ -664,3 +664,25 @@ def test_typescript_runtime_rejects_malformed_projection_types(
             agent_id="fixture-agent",
             turn_key=TURN_KEY,
         )
+
+
+@pytest.mark.parametrize("status,count", [
+    ("committed", 3), ("stopped", 0), ("scheduler_action_required", 3),
+    ("in_progress", 7), ("failed", 0),
+])
+def test_inspection_rejects_status_phase_pairs_the_writer_cannot_commit(
+    tmp_path: Path, status: str, count: int,
+) -> None:
+    journal = _journal(status=status)
+    journal["completed_phases"] = COMPLETED_PHASES[:count]
+    path = _write_journal(tmp_path, journal)
+    before = path.read_bytes()
+    exit_code, raw = _run_inspection_cli(tmp_path, output_format="json")
+    payload = json.loads(raw)
+    assert exit_code == 0  # Inspection succeeded; the stored history is invalid.
+    assert payload["replay_legal"] is False
+    assert payload["journal_consistent"] is False
+    assert "journal_status_phase_mismatch" in payload["violations"]
+    assert payload["recovery_decision"]["action"] == "blocked"
+    assert payload["effects"] == []
+    assert path.read_bytes() == before

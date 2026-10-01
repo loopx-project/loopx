@@ -16,6 +16,7 @@ from ...control_plane.capability_hooks import (
     InteractionProjectionHookRegistration,
 )
 from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.digest_envelope import sha256_envelope
 from ...history import load_registry
 from .todo_source import read_report_todo_source
 from ...registry import (
@@ -91,7 +92,7 @@ def _canonical_digest(value: object) -> str:
     encoded = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _intent_key(intent: Mapping[str, Any]) -> str:

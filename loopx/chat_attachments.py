@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import re
 import uuid
 from typing import Any
@@ -13,9 +14,31 @@ CHAT_IMAGE_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
 CHAT_IMAGE_MAX_COUNT = 4
 CHAT_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 CHAT_IMAGE_MAX_TOTAL_BYTES = 12 * 1024 * 1024
+# Images travel as base64 inside the JSON turn request. Keep the existing
+# non-image envelope budget; only this transport receives the image allowance.
+CHAT_JSON_MAX_BYTES = 64_000
+CHAT_TURN_MAX_BODY_BYTES = (
+    CHAT_JSON_MAX_BYTES
+    + ((CHAT_IMAGE_MAX_TOTAL_BYTES + 2) // 3) * 4
+    + CHAT_IMAGE_MAX_COUNT * (len("data:image/jpeg;base64,") + 4)
+)
 _CHAT_IMAGE_DATA_URL = re.compile(
     r"^data:(image/(?:gif|jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$"
 )
+
+
+def validate_chat_turn_envelope(body: dict[str, Any]) -> None:
+    """Image data must not subsidize oversized text or attachment metadata."""
+    envelope = dict(body)
+    attachments = body.get("attachments")
+    if isinstance(attachments, list):
+        envelope["attachments"] = [
+            {key: value for key, value in raw.items() if key != "data_url"}
+            if isinstance(raw, dict) else raw
+            for raw in attachments
+        ]
+    if len(json.dumps(envelope, ensure_ascii=False).encode("utf-8")) > CHAT_JSON_MAX_BYTES:
+        raise ValueError("message and attachment metadata exceed the 64KB limit")
 
 
 def _compact_text(value: Any, *, limit: int) -> str:

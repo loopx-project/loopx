@@ -453,6 +453,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    decidedGateTodoIds: new Set(),
     hostThreadActivity: {},
     answerForMessage: null,
     loopxModeRequests: [],
@@ -531,9 +532,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     const first = fixture.attention_queue?.items?.[0];
     if (first) {
       first.waiting_on = "user_or_controller";
+      const gateDecided = state.decidedGateTodoIds.has("todo-browser-user-gate");
       first.user_todos = {
-        items: [{ done: false, goal_id: first.goal_id, index: 0, role: "user", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }],
-        open_count: 1,
+        items: [{ done: gateDecided, status: gateDecided ? "done" : "open", goal_id: first.goal_id, index: 0, role: "user", task_class: "user_gate", blocks_agent: "codex", text: "确认本轮独立审查范围", todo_id: "todo-browser-user-gate" }],
+        open_count: gateDecided ? 0 : 1,
         source_section: "User Todo",
         total_count: 1,
       };
@@ -1869,11 +1871,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       // previews, so the plan a confirmed card carries has to be read there.
       const teamPlanReceipt = teamPlanApplyReceipt(actionProposals.get(apply[1]));
       if (teamPlanReceipt && replay) teamPlanReceipt.outcome = "team_plan_commit_recovered";
+      // Mirrors ChatActionService's gate.resolve receipt (tests/control_plane/test_chat_gate_decisions.py).
+      const decisionParameters = actionKind === "gate.resolve" ? preview?.normalized_parameters : null;
+      if (decisionParameters) state.decidedGateTodoIds.add(decisionParameters.todo_id);
+      const decisionReceipt = decisionParameters ? { projection_verified: true, receipt_id: "fixture-receipt", outcome: "gate_resolved",
+        decision_outcome: decisionParameters.decision,
+        unblock_resume_state: { approve: "resumed", reject: "decision_rejected", cancel: "decision_cancelled" }[decisionParameters.decision] ?? null } : null;
       const proposal = {
         schema_version: "loopx_chat_action_proposal_v1", proposal_id: apply[1], action_kind: actionKind,
         summary: "已应用", normalized_parameters: preview?.normalized_parameters ?? actionProposals.get(apply[1])?.normalized_parameters ?? {}, context: preview?.context ?? actionProposals.get(apply[1])?.context ?? {}, expected_state_fingerprint: "fixture-r1",
         permission_classification: "durable_write", validation_evidence: [], available_transitions: ["apply", "cancel"],
-        status: "applied", receipt: teamPlanReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
+        status: "applied", receipt: teamPlanReceipt ?? decisionReceipt ?? { projection_verified: true, receipt_id: "fixture-receipt" }, stale: null, created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
       };
       actionProposals.set(apply[1], proposal);
       if (actionKind === "team.plan" && state.loseNextTeamPlanResponse) {

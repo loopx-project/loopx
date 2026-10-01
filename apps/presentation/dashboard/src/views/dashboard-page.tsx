@@ -493,6 +493,7 @@ type PersonalGoalItem = {
 
 type PersonalNeedsYouItem = {
   details?: AttentionDetails;
+  decisionSource?: "todo" | "run_operator_gate";
   actionKind?: string | null;
   blocking: boolean;
   goalId: string;
@@ -1032,6 +1033,7 @@ function buildPersonalHomeModel(
       details: attentionDetails({ task_class: "user_gate", status: "open", note: row.latestRun?.operator_gate?.reason_summary }),
       actionKind: "gate.resolve",
       blocking: true,
+      decisionSource: "run_operator_gate",
       goalId: row.goal.id,
       sourceOrder: payload.attention_queue.items.length + rowOrder,
       taskClass: "user_gate",
@@ -2135,7 +2137,7 @@ function PersonalGoalHome({
       ...messages,
       [targetContextId]: [
         ...(messages[targetContextId] ?? []),
-        { startedAt: message.pending ? Date.now() : undefined, updatedAt: Date.now(), ...message, id, role: "assistant" },
+        { sourceCreatedAt: new Date().toISOString(), startedAt: message.pending ? Date.now() : undefined, updatedAt: Date.now(), ...message, id, role: "assistant" },
       ],
     }));
     return id;
@@ -2203,7 +2205,7 @@ function PersonalGoalHome({
       ...messages,
       [targetContextId]: [
         ...(messages[targetContextId] ?? []),
-        { attachments: route?.attachments, id: userMessageId, lines: [], role: "user", text: question },
+        { sourceCreatedAt: new Date().toISOString(), attachments: route?.attachments, id: userMessageId, lines: [], role: "user", text: question },
       ],
     }));
     setManagerInput("");
@@ -2464,6 +2466,8 @@ function PersonalGoalHome({
         sourceLabel: "LoopX Chat 本地后端",
         text: payloadError?.error_code === "resume_failed"
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
+          : payloadError?.delivery_state === "not_delivered" && payloadError.turn_replay_safe === true && !submittedTurnId
+            ? `${locale === "zh-CN" ? "请求未提交；草稿和图片已保留，可以修改后重新发送。" : "Request not submitted. Draft and images retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
           : preparationControllers.current.has(targetContextId)
             ? `${locale === "zh-CN" ? "尚未提交请求。连接执行器失败，可以重新发送。" : "Request not submitted. Could not connect to the executor; you can send again."}\n\n${error instanceof Error ? error.message : ""}`
           : error instanceof Error
@@ -2471,6 +2475,10 @@ function PersonalGoalHome({
             : `${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话暂时不可用。`,
       };
       updateConversationMessage(targetContextId, streamingMessageId, failureMessage);
+      // Only confirmed pre-admission rejection restores the composer. An
+      // uncertain delivery must never invite an automatic duplicate request.
+      if (!submittedTurnId && payloadError?.delivery_state === "not_delivered"
+        && payloadError.turn_replay_safe === true) throw error;
     } finally {
       // A handed-off Turn is still running: its ownership stays for the
       // recovery that adopts it or the read that finds it ended.
@@ -2719,6 +2727,7 @@ function PersonalGoalHome({
       id: `message:${message.id}`,
       kind: "message",
         message: {
+          createdAt: message.sourceCreatedAt,
           activity: message.activity,
           agentLabel: message.agentLabel,
           attachments: message.attachments,

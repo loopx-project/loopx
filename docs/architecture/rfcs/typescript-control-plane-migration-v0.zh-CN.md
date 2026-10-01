@@ -838,6 +838,8 @@ T3/D1 reader，未完成全部 Todo writer、retention/compaction 或 promotion�
 
 配额准入与结算消费者现在从统一 Todo reader 读取完整来源，在显示压缩前解析显式 Todo 选择。它删除直接追加 Markdown 候选的路径，保留 promote 前的事件适配；promote 后权威为空或不可读都不能复活展示行。结算进度由现有 TS 回执链归约，Python 负责完整身份命令及 JSON/Markdown 展示。现有幂等 writer 可补齐缺失的 spend 回执而不再次扣款。这关闭已复现的 T3 消费者缺口，不代表 D1–D3、provider promotion 或剩余 Python 事务适配已完成。操作语义见[结算进度契约](../../quota-allocation.md#receipt-backed-settlement-progress)。
 
+**Scoped gate 动作回读。** 最终 quota 包在选择、能力、workspace、回执及通知决策之后，通过 TS quota 规则投影 scoped User gate/action override。可选 `selected_action` 只在 interaction 允许交付时取最终选中 Todo 的文字；待选择、修复和已结算包省略该字段。准入诊断与回执身份保留。这修正 peer gate 场景的 CLI JSON 误导，不代表剩余 route／primary-action builder 已迁移、推荐已成为预留，或 T3/D1–D3 已完成。
+
 **长历史传输边界。** Replan 历史仍由一个 TS owner 决策。小请求保留 inline
 codec；较大的完整事实快照通过私有临时文件和摘要绑定的引用传递。同一 reducer
 校验全部记录、agent 作用域内的 ACK 及重试身份；RPC 预算和展示窗口都不允许截断
@@ -1535,3 +1537,7 @@ TS 摘要批次；Python 保留旧格式解码、公开字段筛选及渲染。�
 2026-09-24: [带租约接力与剩余本地默认交付包](ledger/shared-goal-authority-state-provider-v0/2026-09-24-leased-continuation.zh-CN.md).
 
 事件重放与剩余切换清单见 [2026-09-25](ledger/shared-goal-authority-state-provider-v0/2026-09-25-event-replay.zh-CN.md).
+
+### settlement 定位的 Turn journal 回读
+
+原生查询统一拥有恢复定位和 completion capability 证据，并共享写入／回读的状态阶段约束。兼容变更、实测代价、验证范围与 facade 退出条件见 [2026-10-02 检查点](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.zh-CN.md)。

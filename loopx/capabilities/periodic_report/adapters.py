@@ -16,6 +16,7 @@ from .core import (
     _SOURCE_STATUSES,
 )
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+from ...control_plane.digest_envelope import sha256_envelope
 
 
 SOURCE_RESULT_SCHEMA = "periodic_report_source_result_v0"
@@ -751,7 +752,7 @@ def _normalize_artifact_result(
     if len(raw_content) > 1000000:
         raise ValueError("artifact.content exceeds 1000000 characters")
     content = raw_content
-    expected_digest = f"sha256:{hashlib.sha256(content.encode('utf-8')).hexdigest()}"
+    expected_digest = sha256_envelope(content.encode("utf-8"))
     if artifact.get("content_digest") != expected_digest:
         raise ValueError("artifact.content_digest does not match content")
     document_digest = _text(
@@ -760,16 +761,13 @@ def _normalize_artifact_result(
     if not ENVELOPED_SHA256_PATTERN.fullmatch(document_digest):
         raise ValueError("artifact.document_digest must use sha256")
     if expected_document is not None:
-        expected_document_digest = (
-            "sha256:"
-            + hashlib.sha256(
-                json.dumps(
-                    expected_document,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
+        expected_document_digest = sha256_envelope(
+            json.dumps(
+                expected_document,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
         )
         if document_digest != expected_document_digest:
             raise ValueError("artifact.document_digest does not match document")

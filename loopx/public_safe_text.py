@@ -263,6 +263,14 @@ MODULE_QUALIFIED_SURFACE_PATTERN = re.compile(
 )
 
 
+# One definition for "this identifier is a lowercase public-safe slug". Four
+# periodic-report surfaces and one hand-off validator each compiled the same
+# shape locally; the four report files are being edited by another branch of
+# mine right now, so this slice converts the three free ones and the guard
+# declares the other four by file and count.
+PUBLIC_SAFE_SLUG_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
+
+
 # The text-owner rule set (feedback / authority / boundary_authority / the
 # TypeScript Vision checkpoint). Each entry carries an explicit category and a
 # stable reason so `classify_private_text` can hand a caller a named verdict
