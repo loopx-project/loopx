@@ -193,10 +193,20 @@ never be silently attributed to the configured goal. Token-level
 `assistant/chunk` events — a retired type that only older durable logs still
 replay — are not consumed.
 
+For an operator-run offline export/delete/restore rehearsal, use the
+[local retention reference (v0)](docs/local-retention-v0.md). It preserves whole
+ledger bytes and negative integrity evidence, requires a frozen writer and an
+owner-selected finite retention period, and verifies the provider directory
+matches the CLI's canonical runtime layout before operating on a regular file.
+It does not implement automatic TTL or qualify a live deployment. It also
+documents the current filename-alias boundary; ambiguous ownership must hold
+deletion.
+
 ## Validation
 
 ```bash
 python3 examples/reliability_diagnostics/dsh-shadow-observer-fixture-smoke.py
+uv run --extra test python examples/reliability_diagnostics/ledger-retention-smoke.py
 python3 -m pytest tests/capabilities/test_reliability_diagnostics.py tests/capabilities/test_reliability_diagnostics_dsh_provider.py -q
 cd packages/dsh-loopx-plugin && pnpm typecheck && pnpm test -- observer
 ```

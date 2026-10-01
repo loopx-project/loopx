@@ -532,8 +532,15 @@ envelope and stats records, integrity receipt, read-only diagnostic
 projection, a deterministic DSH-shaped fixture, and producer-side
 public-safety rejection before the first ledger append. Still open before P0
 exit: an eligible C1 observer run on a real `dsh` session, the reported
-overhead measurement, and the ledger retention and deletion profile from
-decision 4 below.
+overhead measurement, and deployment-owner acceptance of the ledger retention
+and deletion profile from decision 4 below. The
+[local retention reference (v0)](../../../loopx/capabilities/reliability_diagnostics/docs/local-retention-v0.md)
+and its synthetic CLI lifecycle smoke supply a canonical-layout offline
+export/delete/restore rehearsal, including literal shell boundary checks,
+installed-package readback and preservation of negative evidence. They do not
+implement automated retention or prove real-observer
+shutdown, filename/tenant isolation, C0/C1 or a deployment's deletion policy.
+Implementation and milestone evidence remain in [task #5211](https://github.com/loopx-project/loopx/issues/5211).
 
 ### P1 — Benchmark-qualified diagnostic pilot
 
