@@ -144,6 +144,75 @@ def test_confirmed_operation_is_automatically_carried_into_accepted_native_turn(
     assert store.load(claimed["proposal_id"])["operation"]["host_start"] == receipt
 
 
+def test_dynamic_pending_filters_other_managed_tasks_before_pagination(
+    tmp_path: Path,
+) -> None:
+    from examples import operation_action_fixtures as fixtures
+
+    service, store = fixtures.service(tmp_path, goal_id="fixture-goal")
+    current = fixtures.managed_handler(service, store, goal_id="fixture-goal")
+    other = fixtures.managed_handler(
+        service, store, goal_id="fixture-goal", todo_id="todo-other",
+        session_id="other-managed-thread",
+    )
+
+    def prepare_and_confirm(handler, index: int, thread_id: str):
+        request = fixtures.request(
+            goal_id="fixture-goal",
+            payload={"schema_version": "qualification_v0", "marker": "synthetic"},
+        )
+        request["idempotency_key"] = f"pending-fixture-{index}"
+        terms = request["normalized_parameters"]
+        terms.pop("executor")
+        terms.update(domain="qualification", operation_kind="qualification.observe", operation_schema="qualification_v0")
+        terms["projection"].update(simulated=False, title="Synthetic qualification", focus="No external effect")
+        prepared = handler(
+            "loopx_operation", {"action": "prepare", "request": request},
+            {"thread_id": thread_id, "host_turn_id": "fixture-native-turn"},
+        )
+        assert prepared["ok"], prepared
+        proposal = prepared["proposal"]
+        delivered = store.record_operation_delivery(
+            proposal["proposal_id"], delivery=fixtures.delivery(proposal),
+        )
+        return store.decide_operation(
+            proposal["proposal_id"], decision="confirm",
+            confirmation=fixtures.confirmation(delivered),
+        )["proposal_id"]
+
+    # All these are current, approved canonical operations for the SAME Agent.
+    # They must neither leak into this task nor exhaust its first page.
+    other_ids = {
+        prepare_and_confirm(other, index, "other-managed-thread")
+        for index in range(25)
+    }
+    own_id = prepare_and_confirm(current, 25, "owned-managed-thread")
+    pending = current(
+        "loopx_operation", {"action": "pending"},
+        {"thread_id": "owned-managed-thread", "host_turn_id": "fixture-native-turn"},
+    )
+    assert pending["ok"], pending
+    assert pending["pending_count"] == 1
+    assert {item["operation_id"] for item in pending["items"]} == {own_id}
+    assert pending["next_cursor"] is None
+    assert not other_ids.intersection(item["operation_id"] for item in pending["items"])
+
+    # A task-local page token is not reusable by another execution subject.
+    for index in range(26, 50):
+        prepare_and_confirm(current, index, "owned-managed-thread")
+    page = current(
+        "loopx_operation", {"action": "pending"},
+        {"thread_id": "owned-managed-thread", "host_turn_id": "fixture-native-turn"},
+    )
+    assert page["next_cursor"]
+    rejected = other(
+        "loopx_operation", {"action": "pending", "cursor": page["next_cursor"]},
+        {"thread_id": "other-managed-thread", "host_turn_id": "fixture-native-turn"},
+    )
+    assert rejected["ok"] is False
+    assert rejected["execution_allowed"] is False
+
+
 def test_process_launch_without_native_acceptance_cannot_record_operation_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

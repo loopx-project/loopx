@@ -418,6 +418,11 @@ The existing Inbox projects canonical locators directly, with recovery first,
 `loopx_operation pending` accepts its bound cursor; the CLI projection uses
 `manager-inbox read --operation-cursor CURSOR`. New/changed work restarts
 without a cursor. Reading or exhausting a page does not resolve obligations.
+The owned native tool applies the same exact execution-subject filter as Turn
+startup before pagination. Current approvals for another Todo/session/profile
+of the same Agent cannot appear on that task's page or starve its continuations;
+its cursor cannot be reused by another execution subject. The existing TS inbox
+owner makes these decisions; this is not a separate host-owned inbox.
 
 The shared TypeScript operation frame shows executor, pinned model/effort,
 Goal/Agent/Todo scope, optional source context, and distinct states: confirmed

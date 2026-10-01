@@ -328,6 +328,10 @@ executor revision、consumption ID、核验投影、`simulation: false`、
 及独立 operation cursor。`loopx_operation pending` 接受绑定游标；CLI 投影用
 `manager-inbox read --operation-cursor CURSOR`。新增/改变工作应无游标重读，
 读完一页或遍历结束不代表义务已解决。
+自有原生工具与 Turn 启动使用相同的精确执行主体过滤，并在分页前生效。
+同一 Agent 另一 Todo/session/profile 的当前批准不能出现在本任务页面或挤占其
+续接信息；游标也不能跨执行主体复用。判定仍由既有 TS Inbox owner 负责，
+不新建宿主自有 Inbox。
 
 共享 TS 操作 frame 展示执行者、固定模型/思考深度、Goal/Agent/Todo 范围、可选来源
 上下文，并区分：已确认但外接认证不可用、已确认待绑定受管回合、已消费待证据、未知须

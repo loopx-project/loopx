@@ -93,6 +93,12 @@ def operation_tool_handler(
         "model": model,
         "reasoning_effort": reasoning_effort,
     }
+    executor_route = {
+        **lineage,
+        "host_surface": "loopx-managed-codex",
+        "thread_id": session_id,
+        "profile_digest": profile_digest,
+    }
 
     def handle(tool: str, arguments: Any, native: dict[str, Any]) -> dict[str, Any]:
         if tool != "loopx_operation" or not isinstance(arguments, dict):
@@ -149,6 +155,7 @@ def operation_tool_handler(
                             scope=scope,
                             cursor=arguments.get("cursor"),
                             cursor_scope=cursor_scope,
+                            executor_route=executor_route,
                         ),
                     }
             if action == "prepare":
