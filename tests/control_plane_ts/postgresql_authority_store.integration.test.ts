@@ -170,6 +170,41 @@ if (database && installed) {
     if (cleared.status === "loaded") assert.equal((cleared.head.todos as {priority?: string}[])[0]!.priority, undefined);
   });
 
+  test("PostgreSQL owner deferral atomically retires the lease and replays after reopen", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const todos = [{schema_version: "todo_domain_record_v0", todo_id: "todo_wait", role: "agent",
+      status: "open", done: false, archive_state: "active", text: "Wait for dependency",
+      task_class: "advancement_task", claimed_by: "agent-a"}];
+    await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+      events: [], receipts: [], next_projection: {goal_id: options.goal_id, handoff_mode: "hard_lease", todos,
+        leases: [{schema_version: "task_lease_v0", goal_id: options.goal_id, todo_id: "todo_wait",
+          owner: "agent-a", idempotency_key: "execution", version: 1, lease_epoch: 1,
+          status: "active", expires_at: "2030-01-01T01:00:00Z", write_scopes: []}],
+        todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: 1,
+          records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]}}});
+    const request = {goal_id: options.goal_id, todo_id: "todo_wait", expected_role: "agent",
+      actor_agent_id: "agent-a", registered_agents: ["agent-a"], operation_id: "defer",
+      patch: {}, clear_fields: [], planning_intent: {status: "deferred",
+        resume_when: "todo_done:todo_dependency", reason: "Dependency pending"},
+      lease_idempotency_key: "execution", lease_expected_version: 1,
+      dry_run: false, now: new Date("2030-01-01T00:00:00Z")};
+    const before = await store.loadAuthority();
+    assert.equal((await executeCoordinationTodoUpdate(store, {...request, lease_expected_version: 2})).status, "failed");
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "applied");
+    const reopened = new PostgreSqlAuthorityStore(database, options);
+    const after = await reopened.loadAuthority();
+    assert.equal(after.status, "loaded");
+    if (after.status !== "loaded") return;
+    assert.equal((after.head.todos as {status: string}[])[0].status, "deferred");
+    assert.equal((after.head.leases as {status: string}[])[0].status, "released");
+    assert.equal((await executeCoordinationTodoUpdate(reopened, request)).status, "replayed");
+    assert.deepEqual(await reopened.loadAuthority(), after);
+  });
+
   test("PostgreSQL scan binds head and rows to one snapshot during concurrent commit", async t => {
     await installed;
     const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
