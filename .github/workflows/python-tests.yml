@@ -324,6 +324,12 @@ jobs:
           npm ci --ignore-scripts
           npm ci --ignore-scripts --prefix apps/presentation/dashboard
 
+      - name: Check the CSS custom-property classifier contract
+        run: node scripts/check-css-custom-properties.test.mjs
+
+      - name: Reject undefined CSS custom properties
+        run: node scripts/check-css-custom-properties.mjs dashboard
+
       - name: Measure Dashboard unit and browser interactions
         env:
           LOOPX_DASHBOARD_COVERAGE: "1"
