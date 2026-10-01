@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
+  type AgentResponse,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -427,6 +428,7 @@ const typedOperationEnvelopeSchema = z.object({
 
 export const typedActionProposalSchema = z.object({
   schema_version: z.literal("loopx_chat_action_proposal_v1"),
+  idempotency_key: z.string().optional(),
   proposal_id: z.string().min(1),
   action_kind: typedActionKindSchema,
   summary: z.string().min(1),
@@ -1238,6 +1240,18 @@ async function receiveChatTurnStreaming(
     sessionId,
     turnId,
   };
+}
+
+/** Read a stored Turn's terminal outcome without submitting or resuming work.
+ * Failed/interrupted Turns have no completed proposals; transport failures throw
+ * so callers can retry instead of treating an unavailable response as empty.
+ */
+export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
+  let completed: AgentResponse | null = null;
+  await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
+    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+  }, signal);
+  return completed;
 }
 
 export async function resumeChatTurnStreaming(

@@ -49,11 +49,12 @@ public CLI/import or serialized contracts. Retain public behavior tests; remove
 only characterization scaffolding whose retired implementation has no consumer.
 Deletion is code retirement, not deletion of users' state, receipts or backups.
 
-### Proposed T4 slice: unused Python lease/handoff facades
+### Merged T4 slice: unused Python lease/handoff facades
 
-Caller audit at `e240730ec` finds the following internal crossings unused by
-production. Native decision and transaction owners remain; this is independent
-of D2 qualification and default-entry adoption.
+The caller audit at `e240730ec` led to #5395, merged at `8474c8d86`.
+The following unused internal crossings are retired. Native decision and
+transaction owners remain; this is independent of D2 qualification and
+default-entry adoption.
 
 | Removed boundary | Last caller / replacement | Compatibility and validation |
 | --- | --- | --- |
@@ -65,9 +66,11 @@ of D2 qualification and default-entry adoption.
 `LeaseModeGateCommand` also remain because the semantic-vocabulary registry
 explicitly retains that input contract until its M4 review. This slice does not
 lower semantic coverage floors to discard a declared compatibility obligation.
-Old facade-only tests retire with their implementation; public/native behavior
+Old facade-only tests retired with their implementation; public/native behavior
 tests remain. Reverting this slice restores the internal crossing without a data
-conversion. Maintainer review is required; this proposal is not installed behavior.
+conversion. Local CLI adoption at `db3672f3c` verifies a clean source manifest,
+qualified SQLite runtime, current known authority formats and healthy canonical
+contract readback. This does not certify every installed Host or D2.
 
 ## Next delivery order
 
@@ -373,3 +376,24 @@ microbenchmark with fingerprint memoization explicitly cleared regressed from
 costs more when all bytes are already hot. Neither workload establishes a fleet
 latency guarantee. Whole-Goal payload/consumer work and sustained operation
 remain open; this increment authorizes no legacy-writer deletion or UI truncation.
+
+### File recovery receipt batches
+
+Archive restore and audit already use the provider-neutral 1–64 operation
+receipt batch contract. File now implements that contract with one exact-byte
+and store-identity proof per batch instead of rereading its envelope for each
+receipt. Caller order, duplicates, missing results and original receipt bodies
+remain intact; each returned body is detached. Invalid input or corrupt retained
+history rejects the batch. Array holes are rejected before storage access,
+including through the shared helper. Single-receipt error projection stays unchanged.
+
+On the same detached, restored 1,287-commit history, nine warm samples per arm
+on macOS arm64 / Node 24.21.0 reduce a 16-receipt File batch median from
+346.2 to 21.3 ms; the unchanged SQLite control measures 111.3 and 111.1 ms.
+Receipt results and authority heads match within each provider. These are warm
+component timings, not equivalent provider-integrity work, whole-restore latency,
+cold-read or D2/default qualification. File still rewrites the retained envelope
+on each restored commit; a prior full-history restore exceeded its caller's
+300-second timeout and later published an exact matching acknowledgement.
+That remaining recovery cost is not closed by this receipt-read optimization.
+The #4224 soak was started; its final evidence and applicability remain pending.

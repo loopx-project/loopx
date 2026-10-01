@@ -30,6 +30,7 @@ import {
 import { navigationSortingScenario } from "./personal-workspace-browser/navigation-sorting.mjs";
 import { capabilityScopeScenario } from "./personal-workspace-browser/capability-scope.mjs";
 import { automationCadenceScenario } from "./personal-workspace-browser/automation-cadence.mjs";
+import { monitorReadbackScenario } from "./personal-workspace-browser/monitor-readback.mjs";
 import { teamEvidenceScenario } from "./personal-workspace-browser/team-evidence.mjs";
 import { managedGoalResultsScenario } from "./personal-workspace-browser/managed-goal-results.mjs";
 import { loopxModeScenario } from "./personal-workspace-browser/loopx-mode.mjs";
@@ -53,10 +54,12 @@ import { larkCliMissingScenario } from "./personal-workspace-browser/lark-cli-mi
 import { executionServiceOfflineScenario } from "./personal-workspace-browser/execution-service-offline.mjs";
 
 import { conversationStartupScenario } from "./personal-workspace-browser/conversation-startup.mjs";
+import { chatTodoProposalScenario } from "./personal-workspace-browser/chat-todo-proposal.mjs";
 
-const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario];
+const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario, chatTodoProposalScenario];
 scenarioCatalog.push(confirmedOperationsScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
+scenarioCatalog.push(monitorReadbackScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

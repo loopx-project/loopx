@@ -42,6 +42,7 @@ import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
+import { formatMonitorDate } from "./monitor-readback";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
@@ -1165,10 +1166,20 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <p>{selection.item.target ?? selection.item.schedule ?? t("drawer.scheduleDefaultTarget")}</p>
               <dl>
                 <div><dt>{t("drawer.scheduleTimezone")}</dt><dd>{selection.item.timezone ?? t("drawer.scheduleLocalTimezone")}</dd></div>
-                <div><dt>{t("drawer.scheduleNext")}</dt><dd>{selection.item.nextRunAt ?? t("drawer.schedulePending")}</dd></div>
-                <div><dt>{t("drawer.scheduleLast")}</dt><dd>{selection.item.previousRunAt ?? t("drawer.scheduleNeverRun")}</dd></div>
-                <div><dt>{t("drawer.scheduleNotification")}</dt><dd>{selection.item.notificationRule ?? t("drawer.scheduleDefaultNotification")}</dd></div>
-                <div><dt>{t("drawer.scheduleStopCondition")}</dt><dd>{selection.item.stopCondition ?? t("drawer.scheduleDefaultStop")}</dd></div>
+                {selection.item.scheduleKind === "monitor" ? <>
+                  <div><dt>{t("drawer.scheduleOwner")}</dt><dd>{selection.item.agentId ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleCadence")}</dt><dd>{selection.item.schedule ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleNextCheck")}</dt><dd>{formatMonitorDate(selection.item.nextRunAt, locale) ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleLastCheck")}</dt><dd>{formatMonitorDate(selection.item.previousRunAt, locale) ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleExpires")}</dt><dd>{formatMonitorDate(selection.item.expiresAt, locale) ?? t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleWatchOnly")}</dt><dd>{selection.item.watchOnly === true ? t("drawer.scheduleWatchYes") : selection.item.watchOnly === false ? t("drawer.scheduleWatchNo") : t("drawer.scheduleUnknown")}</dd></div>
+                  <div><dt>{t("drawer.scheduleResumeWhen")}</dt><dd>{selection.item.stopCondition ?? t("drawer.scheduleUnknown")}</dd></div>
+                </> : <>
+                  <div><dt>{t("drawer.scheduleNext")}</dt><dd>{selection.item.nextRunAt ?? t("drawer.schedulePending")}</dd></div>
+                  <div><dt>{t("drawer.scheduleLast")}</dt><dd>{selection.item.previousRunAt ?? t("drawer.scheduleNeverRun")}</dd></div>
+                  <div><dt>{t("drawer.scheduleStopCondition")}</dt><dd>{selection.item.stopCondition ?? t("drawer.scheduleDefaultStop")}</dd></div>
+                </>}
+                <div><dt>{t("drawer.scheduleNotification")}</dt><dd>{selection.item.notificationRule ?? (selection.item.scheduleKind === "monitor" ? t("drawer.scheduleUnknown") : t("drawer.scheduleDefaultNotification"))}</dd></div>
               </dl>
             </section>
             {!readOnly && selection.item.scheduleKind === "monitor" ? <button className="personal-primary-action" onClick={() => void callbacks.onUpdateSchedule?.(selection.item, "run_now")} type="button"><Play size={16} />{t("drawer.scheduleRunNow")}</button> : null}

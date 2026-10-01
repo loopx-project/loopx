@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { goalCreateRequest } from "./goal-create-request.ts";
+import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
 const answerText = source("./answer-text.ts");
@@ -115,7 +116,8 @@ assert.match(styles, /\.personal-proposal-row\[data-action-kind="operation\.exec
 assert.match(drawer, /selection\.item\.actionKind !== "operation\.execute"/, "Dashboard hides generic local controls for authenticated group operations");
 assert.match(dashboard, /response\.protected_action/, "Agent semantic protected intent is projected only after the Chat response");
 assert.match(dashboard, /normalizedMessage\.includes\(normalizedTarget\)/, "A model-invented protected target cannot reach typed preview");
-assert.match(page, /if \(semanticPreview\) await createPreview\(semanticPreview\)/, "Semantic intent still enters the typed preview boundary");
+assert.match(page, /if \(previews\?\.decision\) await createPreview\(previews\.decision\)/, "Semantic intent still enters the typed preview boundary");
+assert.match(page, /previews\.candidates\.map\(\(request\) => createPreview\(request, \{ select: false \}\)\)/, "Agent candidate proposals enter the same typed preview boundary without taking the drawer");
 for (const legacyClassifier of ["hasHeartbeatIntent", "hasMonitorIntent", "hasTodoCreationIntent", "isExecutionIntent"]) {
   assert.doesNotMatch(page, new RegExp(`function ${legacyClassifier}`), `${legacyClassifier} no longer bypasses the Router contract`);
 }
@@ -217,6 +219,11 @@ for (const field of ["timezone", "nextRunAt", "previousRunAt", "notificationRule
   assert.match(model, new RegExp(`${field}\\??:`), `Schedule exposes ${field}`);
 }
 assert.match(drawer, /personal-execution-history/, "Schedule drawer renders execution history");
+assert.match(dashboard, /monitorTodoReadback\(todo\)/, "Status maps canonical monitor metadata into the shared Todo type");
+assert.match(page, /monitorScheduleReadback\(todo\)/, "Monitor schedules consume the shared readback, not Goal-level guesses");
+for (const field of ["next_due_at", "expires_at", "last_checked_at", "cadence", "watch_only"]) {
+  assert.match(status, new RegExp(`${field}:`), `Status explicitly types monitor field ${field}`);
+}
 assert.match(page, /const heartbeat = schedule\.scheduleKind === "heartbeat"/, "Schedule distinguishes heartbeat lifecycle type");
 assert.match(page, /actionKind: heartbeat \? "heartbeat\.bind" : "monitor\.update"/, "Schedule previews preserve heartbeat lifecycle type");
 

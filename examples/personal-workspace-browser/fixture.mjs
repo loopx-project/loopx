@@ -379,7 +379,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   }
   // Like ChatStore, persist completion before serving it and replay after disconnect.
   const completedTurns = runtime.completedTurns ??= new Map();
-  const finishTurn = (sessionId, turnId, answer, protectedAction = null, goalDraft = null) => {
+  const finishTurn = (sessionId, turnId, answer, protectedAction = null, goalDraft = null, proposals = []) => {
     const key = JSON.stringify([sessionId, turnId]);
     if (completedTurns.has(key)) return completedTurns.get(key);
     const current = sessions.get(sessionId);
@@ -390,7 +390,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     }
     messages.set(sessionId, visible);
     const event = (id, kind, payload) => `id: ${id}\nevent: ${kind}\ndata: ${JSON.stringify({ event_id: id, sequence: Number(id), kind, created_at: "2026-08-13T01:00:02Z", payload })}\n\n`;
-    const body = event("1", "assistant.delta", { text: answer }) + event("2", "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, ...(goalDraft ? {goal_draft: goalDraft} : {}), proposals: [], protected_action: protectedAction, gate: null } });
+    const body = event("1", "assistant.delta", { text: answer }) + event("2", "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, ...(goalDraft ? {goal_draft: goalDraft} : {}), proposals, protected_action: protectedAction, gate: null } });
     completedTurns.set(key, body);
     sessions.set(sessionId, { ...current, active_turn_id: null, status: "ready", updated_at: "2026-08-13T01:00:02Z" });
     return body;
@@ -1282,9 +1282,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (resumedEvents && request.method() === "GET") {
       const sessionId = resumedEvents[1];
       const turnId = resumedEvents[2];
-      const answer = "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
+      const completed = completedTurns.get(JSON.stringify([sessionId, turnId]));
+      if (completed) {
+        await route.fulfill({ contentType: "text/event-stream", body: completed, status: 200 });
+        return;
+      }
+      // A resumed Turn completes with the same scripted answer it was sent for.
+      const scriptedAnswer = typeof state.answerForMessage === "function" ? state.answerForMessage(turnMessages.get(turnId) ?? "") : null;
+      const answer = (typeof scriptedAnswer === "object" ? scriptedAnswer?.message : scriptedAnswer)
+        || "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
       await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(turnMessages.get(turnId) ?? "") ? 5000 : 1200));
-      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer), status: 200 });
+      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, null, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
       return;
     }
     if (url.pathname === "/api/chat/goals/contexts") {
@@ -1703,7 +1711,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             ? "我识别到一个明确的合并请求。LoopX 会先展示受保护操作预览，不会直接执行。"
             : "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。");
     await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(operatorMessage) ? 5000 : 1200));
-    await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft), status: 200 });
+    await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
   });
   await page.route(/\/api\/actions(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());
@@ -1755,10 +1763,17 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         return;
       }
       const proposal_id = `proposal-${body.idempotency_key}`;
+      // Match the native store: replay preserves even an applied/cancelled
+      // preview's identity and lifecycle, rather than resetting it to ready.
+      const existing = actionProposals.get(proposal_id);
+      if (existing) {
+        await route.fulfill({ contentType: "application/json", json: { ok: true, proposal: existing }, status: 200 });
+        return;
+      }
       actionKinds.set(proposal_id, body.action_kind);
       state.actionPreviews.push({ ...body, proposalId: proposal_id });
       const proposal = {
-        schema_version: "loopx_chat_action_proposal_v1", proposal_id, action_kind: body.action_kind,
+        schema_version: "loopx_chat_action_proposal_v1", proposal_id, idempotency_key: body.idempotency_key, action_kind: body.action_kind,
         summary: body.summary, normalized_parameters: body.normalized_parameters, context: body.context,
         expected_state_fingerprint: "fixture-r1", permission_classification: "durable_write",
         validation_evidence: ["fixture validation"], available_transitions: ["apply", "cancel"],
