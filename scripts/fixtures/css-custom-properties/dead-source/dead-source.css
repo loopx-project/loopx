@@ -14,3 +14,6 @@
 .fixture-string-key { color: var(--fixture-string-key); }
 .fixture-css-text { color: var(--fixture-css-text); }
 .fixture-real { width: var(--fixture-real); }
+.fixture-css-string { content: " --fixture-css-string: red;"; color: var(--fixture-css-string); }
+.fixture-css-value { --fixture-holder: --fixture-css-value: red; color: var(--fixture-css-value); }
+.fixture-css-literal { content: "var(--fixture-literal-only)"; }

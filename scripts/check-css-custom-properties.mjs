@@ -39,9 +39,13 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import { createRequire } from "node:module";
 import ts from "typescript";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
+const requireDashboard = createRequire(join(REPO_ROOT, "apps/presentation/dashboard/package.json"));
+const postcss = requireDashboard("postcss");
+const parseValue = requireDashboard("postcss-value-parser");
 
 const SCOPES = {
   dashboard: {
@@ -101,17 +105,8 @@ function walk(dir, extensions, found = []) {
   return found;
 }
 
-/** CSS has block comments, but no JavaScript line comments. Preserve line numbers. */
-function stripStylesheetComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "));
-}
-
-function lineAt(text, index) {
-  let line = 1;
-  for (let i = 0; i < index && i < text.length; i += 1) {
-    if (text[i] === "\n") line += 1;
-  }
-  return line;
+function stylesheet(text, file) {
+  return postcss.parse(text, { from: relative(REPO_ROOT, file) });
 }
 
 /**
@@ -198,13 +193,13 @@ function collectDefinitions(files) {
     if (CODE_EXTENSIONS.has(extensionOf(file))) {
       collectInlineStyleDefinitions(raw, add, rel);
     } else {
-      const text = stripStylesheetComments(raw);
-      for (const match of text.matchAll(/@property\s+(--[A-Za-z0-9_-]+)/g)) {
-        add(match[1], `@property in ${rel}`);
-      }
-      for (const match of text.matchAll(/(?:^|[;{(\s,])(--[A-Za-z0-9_-]+)\s*:/gm)) {
-        add(match[1], `declared in ${rel}`);
-      }
+      const ast = stylesheet(raw, file);
+      ast.walkAtRules("property", (rule) => {
+        if (/^--[A-Za-z0-9_-]+$/.test(rule.params.trim())) add(rule.params.trim(), `@property in ${rel}`);
+      });
+      ast.walkDecls((declaration) => {
+        if (declaration.prop.startsWith("--")) add(declaration.prop, `declared in ${rel}`);
+      });
     }
   }
 
@@ -219,10 +214,17 @@ function collectBareReferences(files) {
   const references = [];
   for (const file of files) {
     const rel = relative(REPO_ROOT, file).split(sep).join("/");
-    const text = stripStylesheetComments(readFileSync(file, "utf8"));
-    for (const match of text.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g)) {
-      references.push({ token: match[1], file: rel, line: lineAt(text, match.index) });
-    }
+    stylesheet(readFileSync(file, "utf8"), file).walkDecls((declaration) => {
+      const value = declaration.raws.value?.raw ?? declaration.value;
+      parseValue(value).walk((node) => {
+        if (node.type !== "function" || node.value !== "var") return;
+        if (node.nodes.some((part) => part.type === "div" && part.value === ",")) return;
+        const name = node.nodes.filter((part) => part.type !== "space" && part.type !== "comment");
+        if (name.length !== 1 || name[0].type !== "word" || !name[0].value.startsWith("--")) return;
+        references.push({ token: name[0].value, file: rel,
+          line: declaration.source.start.line + value.slice(0, node.sourceIndex).split("\n").length - 1 });
+      });
+    });
   }
   return references;
 }

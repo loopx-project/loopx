@@ -134,11 +134,14 @@ Marketing site (`apps/presentation/site/src/styles.css`):
 
 `scripts/check-css-custom-properties.mjs` rejects Dashboard CSS bare references
 whose custom property has no definition in the surface inventory. Run `npm ci`
-at the repository root, then `npm run check:css-custom-properties --prefix
-apps/presentation/dashboard`. The check uses the existing TypeScript parser for
+at the repository root and `npm ci --prefix apps/presentation/dashboard`, then
+`npm run check:css-custom-properties --prefix apps/presentation/dashboard`.
+The check uses the existing TypeScript parser for
 JSX style objects, `CSSProperties`-typed objects and literal
 `element.style.setProperty` calls. Comments, string examples and ordinary data
-keys do not define tokens. Parse errors fail the check.
+keys do not define tokens. PostCSS and its declared value parser distinguish
+stylesheet declarations and variable functions from quoted examples, comments
+and other declaration values. Parse errors fail the check.
 
 This is a syntactic inventory: it does not prove runtime reachability, resolve
 object spreads or aliases, or model CSS inheritance and selector scope. Tokens

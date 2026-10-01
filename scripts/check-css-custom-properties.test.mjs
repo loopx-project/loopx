@@ -15,7 +15,7 @@ const inertTokens = [
   "--fixture-commented", "--fixture-block-commented", "--fixture-stringified", "--fixture-unbound",
   "--fixture-quoted-jsx", "--fixture-quoted-call", "--fixture-quoted-cast", "--fixture-quoted-annotation",
   "--fixture-template-jsx", "--fixture-regex-jsx", "--fixture-unrelated-call", "--fixture-nested-value",
-  "--fixture-string-key", "--fixture-css-text",
+  "--fixture-string-key", "--fixture-css-text", "--fixture-css-string", "--fixture-css-value",
 ];
 
 // Independent semantic oracle: execute trusted fixtures as JavaScript and observe
