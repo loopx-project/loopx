@@ -687,6 +687,107 @@ could not be resolved,
 `fallback_hint.available=false` and the pasteable heartbeat gate is the correct
 stop - never guess an automation id.
 
+### Optional Prompt-Delivery Canary / 可选提示词送达检查
+
+An installed `ACTIVE` automation and a successful scheduler ACK prove
+configuration, not prompt delivery or Agent startup. This is a manual,
+read-only diagnostic for one caller-selected turn; it does not implement the
+missed-delivery window detection requested by [#3927](https://github.com/loopx-project/loopx/issues/3927).
+The existing fallback executable exposes it through an explicit option:
+
+```bash
+loopx-apply-rrule --check-delivery --observe-host \
+  --automation-id <automation-id> --goal-id <goal-id> --agent-id <agent-id> \
+  --scheduled-thread-id <host-thread-id> --scheduled-turn-id <host-turn-id>
+```
+
+Select the scheduled thread and **turn** independently in the host. The command
+starts `codex app-server` and calls only `initialize` and `thread/read` with
+`includeTurns=true`; it never starts or resumes a thread or launches a model.
+Use `--codex-bin <executable>` when `codex` is not on PATH. The server must use
+the same Codex home as the desktop app. The existing apply path is unchanged
+without `--check-delivery`; stop invoking the option to disable this diagnostic.
+
+Compare the received envelope with the **saved TOML prompt**, including a
+managed bootstrap if that is what the automation stores. Do not regenerate
+today's thin execution body as the expected prompt: the bootstrap loads those
+rules after delivery. A match proves neither successful bootstrap loading nor
+quota-guard execution. Diagnose upgrades separately through
+[managed prompt readback](reference/automation-prompt-upgrades.md).
+
+The adapter recognizes the desktop heartbeat envelope as the initial user
+message or `codex_app.automation_update` function output when exposed by the
+read API. Stored histories that omit that function output remain unverified.
+It hashes the received
+instructions as exact UTF-8, preserving whitespace, and requires subsequent
+Agent activity before any later user or standalone tool input in the same turn.
+Activity that predates the envelope or begins only after manual steering cannot
+certify the initial delivery. Missing, ambiguous or unsupported envelopes,
+incomplete history, missing startup time, and read failures remain unverified.
+It uses the host's turn-start timestamp; it does not invent precise prompt
+arrival or first-output timestamps. The app-server read API is documented in
+[Codex App Server](https://developers.openai.com/codex/app-server).
+
+For a separately obtained compact observation, replace `--observe-host` with
+`--delivery-observation <local-json-file>`. These sources are mutually exclusive.
+Without either source, delivery remains unverified. The JSON schema is:
+
+| Field | Required observation |
+| --- | --- |
+| `schema_version` | `codex_app_prompt_delivery_observation_v1` |
+| `automation_id`, `thread_id`, `turn_id` | Exact selected identities |
+| `goal_id`, `agent_id` | Caller correlation context; the host does not independently attest these |
+| `prompt_sha256` | SHA-256 of the exact received task body, or `null` if missing |
+| `turn_started_at_ms` | Host turn-start UTC epoch milliseconds, or `null` if unavailable |
+| `agent_activity_observed` | Boolean: Agent activity follows the initial delivery item |
+| `observed_at_ms` | UTC epoch milliseconds as of the check |
+
+The canary requires an active heartbeat bound to that thread, an exact digest
+match against the stored TOML, and a turn age of at most 900 seconds.
+The prompt, active state and thread binding are read again before success;
+`manifest_binding_changed` means an upgrade/rebinding raced the observation:
+read the current configuration and select its new turn before retrying.
+Unrelated RRULE edits do not invalidate the observation. TOML readback does not
+attest the running App's cache or SQLite consistency; use the managed prompt
+readback above for configuration repair.
+Override with `--delivery-max-age-seconds N` (1–86400). Re-reading an old turn
+does not refresh its age. Compact input is limited to 4096 bytes and the manifest
+to 256 KiB. Host reads are bounded to 10 seconds, 128 messages and 2 MiB; a large
+thread can therefore remain unverified. Thread history is read into memory only
+and never printed or persisted by the adapter. The host process may maintain
+its own runtime metadata. Results expose fixed reason codes, never raw prompts,
+history, paths or host errors.
+
+Exit `0`, `status=host_observation_matched` means the observed facts match this
+selected turn. Exit `1`, `status=host_prompt_delivery_unverified` means evidence
+is missing or inconsistent. A matching envelope is **not cryptographic scheduler
+attestation**: a manually supplied envelope could match too. Neither result
+grants execution permission or proves future liveness or Todo completion.
+The check does not query quota, modify automation TOML/SQLite, ACK, create a
+receipt, or change `automation_liveness_v0`, admission or notification policy.
+If host evidence is unavailable, inspect the selected turn and test the generated
+heartbeat body in a visible session using the normal LoopX quota guard.
+
+中文：使用上述 `--check-delivery --observe-host` 命令回读宿主中独立选定的
+thread/turn；必要时用 `--codex-bin` 指定同一 Codex home 下的宿主程序。
+检查比较已保存的 TOML 正文；若保存的是 bootstrap，就比较 bootstrap，
+不重新生成最新 thin 正文，也不把匹配当成规则加载或 quota guard 已执行。
+核对本轮初始 heartbeat 正文摘要、宿主启动时间和下一次输入前的 Agent 活动；
+人工补发消息后才开始的活动不能证明初始送达。配置在回读期间变化返回
+`manifest_binding_changed`，应先确认当前配置并选择新轮次；RRULE 单独变化不受影响。
+TOML 不能证明 App 缓存或 SQLite 一致，升级核对走上述 managed prompt readback。
+诊断不启动
+模型、不修改自动化、不 ACK、不消费 quota。缺失或不一致返回未验证和退出码 1；
+匹配返回退出码 0，但不证明定时器来源、未来活性或任务完成，也不授予执行权限。
+可用 `--delivery-observation` 替代宿主回读，传入上述 v1 JSON；goal/agent 仅为
+调用者关联信息。默认时效 900 秒，可设为 1–86400 秒。读取上限为 10 秒和 2 MiB，
+超限保持未验证；历史仅在内存中处理，输出不含正文、路径或原始错误，宿主进程
+可能维护自身运行元数据。停止调用选项即停用；无法获得证据时，在可见会话中按
+正常 quota guard 测试 heartbeat，不能把配置安装成功当成正文送达。
+这是单轮手动诊断；自动漏送窗口、最后 tick 的 doctor/status 投影，以及真实
+桌面定时触发验收仍未交付，不能据此关闭 #3927。没有独立选定的宿主 turn 时，
+保持未验证，不猜测 turn、不导入其他 Codex home 的历史。
+
 ```text
 Create a heartbeat automation starting at 3 minutes for the current thread;
 then apply `quota should-run.scheduler_hint`: update RRULE only when
