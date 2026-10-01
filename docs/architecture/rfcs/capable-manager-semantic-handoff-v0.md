@@ -516,6 +516,27 @@ Delivery now prioritizes one complete supported intent→receiver→work→resul
 
 The [golden-query pack](../../product/use-cases/steward/golden-queries.md) supplies short user requests and independent outcome/attention oracles. GQ01/GQ02 qualify creation and existing-Agent connection; GQ03/GQ04 qualify responsible dispatch; GQ05/GQ11–GQ13 qualify two-cycle small-team coordination, with GQ07–GQ09 continuity; GQ06/GQ10/GQ14–GQ15 extend materials, attention and replanning. GQ16/GQ17 remain later cross-host/scale qualification. These are scenario tests over existing A1–A24, not new Core protocol states.
 
+GQ06's [material-to-work pilot](../../product/use-cases/steward/golden-queries.md#gq06-material-to-work-pilot--从材料到实际改进)
+qualifies an ordinary article request through the same M2/M3 boundary. Source
+identity, applicability to current work and satisfied outcome are separate
+facts: an indexed source or written proposal cannot close unfinished work, and
+a byte-only revision cannot justify duplicate work. Compare authoritative
+current artifacts and receiver assessment before choosing a supported
+no-change, relevant existing work, direct permitted action or bounded new
+request. A note/read receipt is neither implementation nor adoption.
+
+The placement remains the existing conversation/artifact owner for input and
+provenance, configured notes or explicitly activated Material Lifecycle for
+authorized knowledge writes, and collaboration/work-items for assessment,
+execution and return. Ordinary source reading does not activate Material
+Lifecycle. Keep shared decision/effect semantics in the existing TypeScript
+owners; provider IO stays in its adapter. No source-specific classifier,
+manager-only material store, mandatory memory provider or second inbox is
+introduced. App-first release qualification includes a same-source unfinished
+gap, a changed-source no-op, scope correction and lost-acknowledgement replay;
+Lark qualifies the same relations separately. The specification enables that
+next implementation/qualification slice; it does not mark M2/M3 or GQ06 passed.
+
 When routing fails, distinguish unread/unavailable sources, incomplete or stale directory coverage, no relevant registered owner, unauthorized scope, missing binding, unknown runtime readiness, capacity wait and receiver rejection. Probe/refresh permitted sources and repair an eligible binding through its owner before asking the user to locate an Agent. Registration grants neither reachability nor authority. If no existing receiver qualifies, an already-authorized creation path is valid; otherwise retain the request and ask only for the concrete missing decision. Never select an irrelevant sole candidate or silently replace an explicitly requested model. A well-written recommendation with no requested dispatch is still an undelivered task.
 
 Ordinary follow-ups retain the responsible owner; direct small reads need no team. One binding retains one execution driver. Existing request/outbox and continuous-monitor owners handle event-driven continuation and delayed return; do not compensate with faster polling. Retain useful constraints through scoped context, distinguishing preference, current fact and action grant; optional memory providers remain optional. GQ03's CI example requires causal evidence and all other review blockers, not a blanket approve policy.

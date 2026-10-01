@@ -529,7 +529,7 @@ export const chatRecoveryScenario = {
         const body = route.request().postDataJSON();
         const [sessionId, turnId] = new URL(route.request().url()).pathname.match(/sessions\/([^/]+)\/turns\/([^/]+)\/steer/).slice(1);
         steers.push({ sessionId, turnId });
-        await route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: turnId, client_ingress_id: body.client_ingress_id, status: "delivered" } });
+        await route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: turnId, client_ingress_id: body.client_ingress_id, status: "delivered", created: true } });
       });
       const interruptsBefore = api.interrupts.length;
       await composerInput.fill(draft);

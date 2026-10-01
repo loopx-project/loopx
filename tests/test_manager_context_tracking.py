@@ -1,6 +1,8 @@
 """Handoff states, durable receipts and audience separation through real stores."""
 
 import json
+import subprocess
+import sys
 from argparse import Namespace
 
 import pytest
@@ -149,14 +151,17 @@ def test_external_query_is_exact_audience_not_just_goal(fixture):
     assert tool().read(TOOL_NAME, {"view": "handoffs"})["included"] == 1
 
 
-def test_links_use_core_state_and_do_not_copy_progress(fixture, monkeypatch):
+@pytest.mark.parametrize("tid", [
+    "todo_123456789abc", "todo_123456789abcdef0123456789",
+    "todo_work-item_123", "todo_abc", "todo_" + "a" * 64,
+])
+def test_links_use_core_state_and_do_not_copy_progress(fixture, monkeypatch, tid):
     import loopx.capabilities.manager_context.tracking as tracking
 
     root, registry, session, turn, target = fixture
     rid = deliver(root, registry, session=session, turn=turn, request=target)[
         "request_id"
     ]
-    tid = "todo_123456789abc"
     core = {
         "ok": True,
         "todos": [
@@ -185,6 +190,89 @@ def test_links_use_core_state_and_do_not_copy_progress(fixture, monkeypatch):
     with pytest.raises(ValueError):
         link(root, registry, "research", "worker", rid, [], ["/private/raw.txt"])
     assert "Evaluate hypothesis" not in path.read_text()
+
+
+@pytest.mark.parametrize("tid", [
+    "todo_ab", "todo_" + "a" * 65, "todo_../escape", "todo_ABC",
+    " todo_abc", "todo_abc\n", "task_abc",
+])
+def test_invalid_link_ids_fail_before_core_read_or_receipt(fixture, monkeypatch, tid):
+    import loopx.capabilities.manager_context.tracking as tracking
+
+    root, registry, session, turn, target = fixture
+    rid = deliver(root, registry, session=session, turn=turn, request=target)["request_id"]
+    monkeypatch.setattr(tracking, "list_goal_todos", lambda **_: pytest.fail("invalid id read Core"))
+    with pytest.raises(ValueError, match="invalid Core Todo id"):
+        link(root, registry, "research", "worker", rid, [tid], [])
+    assert not (_root(root) / "links" / (rid + ".json")).exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority, isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, root, state = promoted_create_fixture(tmp_path, provider=provider)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("agent-b")
+    other_state = tmp_path / "other-state.md"
+    other_state.write_text("# Goal\n\n## Agent Todo\n")
+    data["goals"].append({
+        "id": "goal-b", "repo": str(tmp_path), "state_file": str(other_state),
+        "coordination": {"registered_agents": ["agent-a"]},
+    })
+    registry.write_text(json.dumps(data))
+    initialize_canonical_authority(
+        root, "goal-b", build_todo_runtime_shadow_projection(goal_id="goal-b", todos=[]),
+        state_path=other_state, provider=provider,
+    )
+
+    def cli(*args, ok=True):
+        proc = subprocess.run(
+            [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+             "--registry", str(registry), "--runtime-root", str(root), *args],
+            capture_output=True, text=True, timeout=45,
+        )
+        assert proc.returncode == (0 if ok else 1), (proc.stdout, proc.stderr)
+        result = json.loads(proc.stdout)
+        assert result["ok"] is ok
+        return result
+
+    def add(owner, goal="goal-a"):
+        return cli("todo", "add", "--goal-id", goal, "--role", "agent",
+                   "--text", f"Verify linked work for {owner}", "--claimed-by", owner)["todo_id"]
+
+    tid, foreign = add("agent-a"), add("agent-b")
+    # The real Core creation path emits modern ids, not a hand-built legacy fixture.
+    assert len(tid.removeprefix("todo_")) == 24
+    rid = deliver(
+        root, registry,
+        session={"session_id": "manager-session", "channel_id": "manager"},
+        turn={"client_turn_id": "link-request", "origin": "web", "message": "Verify work"},
+        request={"goal_id": "goal-a", "agent_id": "agent-a"},
+    )["request_id"]
+    inbox = ("--goal-id", "goal-a", "--agent-id", "agent-a", "--request-id", rid)
+    linked = cli("manager-inbox", "link", *inbox, "--related-todo-id", tid)
+    assert linked["todo_ids"] == [tid]
+    path = _root(root) / "links" / (rid + ".json")
+    original = path.read_bytes()
+    cli("manager-inbox", "link", *inbox, "--related-todo-id", tid)
+    assert path.read_bytes() == original
+    for rejected in (foreign, add("agent-a", "goal-b"), "todo_unknown-canonical-id"):
+        failure = cli("manager-inbox", "link", *inbox, "--related-todo-id", rejected, ok=False)
+        assert failure["error"] == "linked Todo must belong to the receiving Agent"
+        assert path.read_bytes() == original
+    cli("todo", "update", "--goal-id", "goal-a", "--todo-id", tid,
+        "--agent-id", "agent-a", "--text", "Verified current work")
+    row = cli("manager-inbox", "status", *inbox)["rows"][0]
+    assert [(t["todo_id"], t["title"], t["status"]) for t in row["linked_todos"]] == [
+        (tid, "Verified current work", "open")
+    ]
+    assert "Verified current work" not in path.read_text()
+    assert state.exists()
 
 
 def test_pagination_and_conflicts_do_not_erase_gaps(fixture):

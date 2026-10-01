@@ -10,6 +10,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {leaseWriteRepository} from "./task_lease_repository.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 export interface LeaseWorkspace extends JsonObject {
   host: string;

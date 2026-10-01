@@ -2952,7 +2952,13 @@ function PersonalGoalHome({
             if (!binding?.sessionId) throw new Error("当前会话不可用，追加指令未发送，草稿已保留。");
             // The service owns exact-turn admission and durable retry. A delivered
             // ingress may be read back after completion; never retarget it locally.
-            await steerChatTurn(binding.sessionId, turnId, message, ingressId);
+            const receipt = await steerChatTurn(binding.sessionId, turnId, message, ingressId);
+            if (receipt.created === false) {
+              // A replay reads an existing delivery; its message belongs to the
+              // stored transcript, not a second optimistic user bubble.
+              if (targetContextId === contextId) await conversationHistory.refresh();
+              return;
+            }
             const id = managerMessageId.current++;
             setMessagesByContext(current => {
               const messages = current[targetContextId] ?? [];
