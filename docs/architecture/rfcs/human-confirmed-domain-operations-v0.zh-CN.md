@@ -348,8 +348,16 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
 意外返回 actor 成功，也没有 proof-import 捷径。
 
-本切片不实现确认后的即时宿主唤醒，`host_delivery: "not_attempted"` 保持真实。
-沿既有已准入 Turn/delegation 续接；后续持久唤醒复用其调度/session owner，
-不启动平行 resumed 执行者。宣称投研最小闭环前，仍须证明安装、真实用户批准、
+启用 operation 的已准入 Turn 自动携带其精确 Goal/Agent/Todo/session/profile 的
+规范确认请求定位信息，并在 Inbox 分页前过滤范围。仅在原生 `turn/start` 返回接受后，
+既有 action store 才记录不可覆盖的首次启动证据：确认事件/时间、claim、LoopX Turn key、
+原生 Turn 和接受时间。`host_delivery: "native_start_accepted"` 只证明该观察，
+不授予消费或外部效果权限，也不声称回合仍在运行。回执失败时先停止、不分发 operation 工具；
+后续回合保留首次观察。CLI/Inbox、Dashboard 和 Lark 区分原生续接接受、授权消费和真实结果。
+
+确认后的即时唤醒仍未实现。首次观察来自既有已准入 Turn/delegation，不能冒充
+即时 callback 触发；未观察前 `host_delivery: "not_attempted"` 保持真实。
+后续持久唤醒复用原调度/session owner，不启动平行 resumed 执行者；
+向原来源受众返回结果仍是独立交付义务。宣称投研最小闭环前，仍须证明安装、真实用户批准、
 绑定原生消费、垂域提交前检查与原系统证据、结果验收及原卡/受众读回。
 Core PR 仍须 owner review，不在合并前自行安装。

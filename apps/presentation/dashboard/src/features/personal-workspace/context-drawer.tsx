@@ -1102,7 +1102,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         {selection.kind === "proposal" ? (
           <>
             {selection.item.actionKind === "team.plan" && selection.item.status === "applied" ? <TeamPlanResult proposal={selection.item} t={t} /> : <section className="personal-proposal-card">
-              <small>{selection.item.actionKind} · {selection.item.status}</small>
+              <small>{selection.item.reviewPlan?.operationFrame?.kind === "pending"
+                ? t(`proposal.kind.${selection.item.actionKind}`)
+                : `${selection.item.actionKind} · ${selection.item.status}`}</small>
               <h3>{selection.item.title}</h3>
               {selection.item.impact ? <p>{selection.item.impact}</p> : null}
               {selection.item.reviewPlan && !selection.item.reviewPlan.retryOriginal && selection.item.actionKind !== "team.plan" ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown

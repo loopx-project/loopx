@@ -445,10 +445,23 @@ remain fail-closed before private reads or writes, even with matching
 `CODEX_THREAD_ID`, route flags, self-signed proof or an older runtime's actor
 success. No proof-import shortcut is exposed.
 
-Immediate confirmation-triggered host wakeup is not implemented:
-`host_delivery: "not_attempted"` remains truthful. Continue through the
-existing admitted Turn/delegation route; later durable wakeup must reuse its
-original scheduling/session owner, not start a parallel resumed executor.
+An admitted operation-enabled Turn now automatically includes canonical
+confirmed-operation locators for its exact Goal/Agent/Todo/session/profile,
+filtered before inbox pagination. After the native `turn/start` response is
+accepted, the existing action store records immutable first-start evidence:
+confirmation event/time, claim, LoopX Turn key, native Turn and acceptance time.
+`host_delivery: "native_start_accepted"` means that observation only; it grants
+no consumption or effect authority and does not claim the Turn is still live.
+Receipt failure aborts before operation-tool dispatch; later Turns preserve the
+first observation. CLI/Inbox, Dashboard and Lark distinguish accepted native
+continuation from consumed authorization and an actual outcome.
+
+Immediate confirmation-triggered wakeup is still not implemented. The first
+observation is from the existing admitted Turn/delegation route, not proof of
+an immediate callback-triggered wake. Before it exists, `host_delivery` remains
+`"not_attempted"`. Durable wakeup must reuse the original scheduling/session
+owner, not start a parallel resumed executor. Outcome return to the original
+source audience remains a separate delivery obligation.
 Before claiming the investment minimum loop, still prove installation,
 genuine human approval, bound native consumption, domain preflight and
 original-system evidence, accepted result and original-card/audience readback.

@@ -29,7 +29,8 @@ from test_loopx_turn_driver import _write_live_fixture
 FAKE_SERVER = """#!/usr/bin/env python3
 import json, sys
 thread = "owned-app-server-thread"
-turn = "native-app-server-turn"
+import os
+turn = os.environ.get("FAKE_OPERATION_TURN_ID", "native-app-server-turn")
 key = None
 def emit(value):
     print(json.dumps(value), flush=True)
@@ -58,6 +59,8 @@ for line in sys.stdin:
         if os.environ.get("FAKE_OPERATION_HANG") == "1":
             while True: time.sleep(.1)
         text = row["params"]["input"][0]["text"]
+        if os.environ.get("FAKE_OPERATION_PROMPT_FILE"):
+            pathlib.Path(os.environ["FAKE_OPERATION_PROMPT_FILE"]).write_text(text)
         import re
         key = re.search(r'"turn_key":"([^"]+)"', text).group(1)
         emit({"id": row["id"], "result": {"turn": {"id": turn}}})
@@ -75,6 +78,112 @@ for line in sys.stdin:
         emit({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": json.dumps(answer)}})
         emit({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
 """
+
+
+def _claimed_native_fixture(tmp_path: Path):
+    from examples import operation_action_fixtures as fixtures
+    from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+
+    service, store = fixtures.service(tmp_path, goal_id="fixture-goal")
+    executable = tmp_path / "fake-codex-operation"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+    request = _request()
+    request["turn_envelope"]["agent_id"] = "finance-fixture-agent"
+    request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo-managed"
+    options = dict(runtime_root=store.root.parent.parent, registry_path=service.registry_path,
+                   project=service.registry_path.parent.parent, codex_bin=str(executable),
+                   model="test-model", reasoning_effort="xhigh", timeout_seconds=5)
+    run_codex_operation_host(request, **options)
+    binding = load_codex_cli_session(options["runtime_root"], lineage=_lineage(request))
+    handler = operation_tool_handler(
+        runtime_root=options["runtime_root"], registry_path=service.registry_path,
+        lineage=_lineage(request), session_id=binding["session_id"],
+        profile_digest=binding["operation_profile_digest"], model="test-model", reasoning_effort="xhigh",
+    )
+    operation_request = fixtures.request(goal_id="fixture-goal",
+        payload={"schema_version": "qualification_v0", "marker": "synthetic"})
+    terms = operation_request["normalized_parameters"]
+    terms.pop("executor")
+    terms.update(domain="qualification", operation_kind="qualification.observe", operation_schema="qualification_v0")
+    terms["projection"].update(simulated=False, title="Synthetic qualification", focus="No external effect")
+    prepared = handler("loopx_operation", {"action": "prepare", "request": operation_request},
+                       {"thread_id": binding["session_id"], "host_turn_id": "preparing-native-turn"})
+    assert prepared["ok"], prepared
+    proposal = prepared["proposal"]
+    delivered = store.record_operation_delivery(proposal["proposal_id"], delivery=fixtures.delivery(proposal))
+    claimed = store.decide_operation(proposal["proposal_id"], decision="confirm", confirmation=fixtures.confirmation(delivered))
+    request["session"]["action"] = "resume"
+    request["turn_key"] = "sha256:" + "b" * 64
+    return store, claimed, request, options
+
+
+def test_confirmed_operation_is_automatically_carried_into_accepted_native_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    prompt = tmp_path / "native-prompt.txt"
+    monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(prompt))
+    result = run_codex_operation_host(request, **options)
+    assert result["result_kind"] == "wait"
+    stored = store.load(claimed["proposal_id"])
+    receipt = stored["operation"]["host_start"]
+    assert claimed["proposal_id"] in prompt.read_text()
+    assert claimed["operation"]["claim"]["claim_id"] in prompt.read_text()
+    assert receipt["confirmation_event_id"] == claimed["operation"]["confirmation"]["event_id"]
+    assert receipt["claim_id"] == claimed["operation"]["claim"]["claim_id"]
+    assert receipt["host_turn_id"] == "native-app-server-turn"
+    assert receipt["turn_key"] == request["turn_key"]
+    assert receipt["confirmed_at"] <= receipt["accepted_at"]
+    assert receipt["execution_allowed"] is False
+    assert stored["operation"].get("agent_handoff") is None
+    assert stored["operation"]["outcome"] is None
+    monkeypatch.setenv("FAKE_OPERATION_TURN_ID", "later-native-turn")
+    request["turn_key"] = "sha256:" + "c" * 64
+    run_codex_operation_host(request, **options)
+    assert store.load(claimed["proposal_id"])["operation"]["host_start"] == receipt
+
+
+def test_process_launch_without_native_acceptance_cannot_record_operation_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    monkeypatch.setenv("FAKE_OPERATION_HANG", "1")
+    with pytest.raises(BuiltInHostError):
+        run_codex_operation_host(request, **{**options, "timeout_seconds": 0.5})
+    assert store.load(claimed["proposal_id"])["operation"].get("host_start") is None
+
+
+def test_start_receipt_failure_aborts_before_operation_tool_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.chat_action_store import ChatActionStore
+    from loopx.control_plane.turn_driver import codex_operation_host
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    before = store.path.read_bytes()
+    calls = []
+    original = codex_operation_host.operation_tool_handler
+
+    def observe(**options):
+        handler = original(**options)
+
+        def record(*args):
+            calls.append(args)
+            return handler(*args)
+
+        return record
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic receipt write failure")
+
+    monkeypatch.setattr(codex_operation_host, "operation_tool_handler", observe)
+    monkeypatch.setattr(ChatActionStore, "record_agent_operation_host_start", fail)
+    with pytest.raises(BuiltInHostError) as error:
+        run_codex_operation_host(request, **options)
+    assert str(error.value) == "codex_operation_host_start_unrecorded"
+    assert calls == []
+    assert store.path.read_bytes() == before
+    assert store.load(claimed["proposal_id"])["operation"].get("agent_handoff") is None
 
 
 def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same_profile(

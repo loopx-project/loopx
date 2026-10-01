@@ -162,6 +162,11 @@ test("managed executor and source context use the same frame without turning app
   assert.equal(JSON.stringify(frame).includes("private-source-thread"), false);
   assert.equal(compileActionReviewPlan(proposal).canApply, false);
   assert.equal(compileActionReviewPlan(proposal).reason, "operation_authorization_pending");
+  proposal.operation.host_start = {schema_version: "loopx_operation_host_start_v0", host_turn_id: "native-turn"};
+  frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "pending" && frame.executionState, "managed_turn_started");
+  assert.equal(compileActionReviewPlan(proposal).canApply, false);
+  assert.equal(compileActionReviewPlan(proposal).reason, "operation_authorization_pending");
   proposal.operation.agent_handoff = {consumption_id: "managed-attempt"};
   frame = compileOperationReviewFrame(proposal);
   assert.equal(frame?.kind === "pending" && frame.executionState, "consumed_outcome_pending");

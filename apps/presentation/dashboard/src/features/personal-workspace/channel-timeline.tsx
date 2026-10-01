@@ -121,10 +121,12 @@ export function ChannelTimeline({
     }
     if (item.kind === "proposal") {
       const appliedTeamPlan = item.proposal.actionKind === "team.plan" && item.proposal.status === "applied";
+      const pendingOperation = item.proposal.reviewPlan?.operationFrame?.kind === "pending";
       return (
         <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
-          <span><small>{appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
+          <span><small>{pendingOperation ? t(`proposal.kind.${item.proposal.actionKind}`)
+            : appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
             : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
           <b>{item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review") : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
         </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan

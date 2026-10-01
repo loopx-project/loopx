@@ -1068,6 +1068,29 @@ class ChatActionStore:
         except EffectRuntimeRemoteError as exc:
             raise ActionConflictError(str(exc)) from exc
 
+    def record_agent_operation_host_start(
+        self, proposal_id: str, *, actor: Mapping[str, Any],
+        binding_current: bool, turn_key: str,
+    ) -> dict[str, Any]:
+        """Internal native transport observation; never a caller proof or permit."""
+        token = _opaque_id(proposal_id, field="proposal_id")
+        with exclusive_file_lock(self.path, operation="observe_operation_host_start"):
+            payload = self._read()
+            proposal = payload["proposals"].get(token)
+            if not isinstance(proposal, dict):
+                raise KeyError("typed operation was not found")
+            plan = self._agent_operation_plan(
+                proposal, action="observe_host_start", actor=dict(actor),
+                binding_current=binding_current, turn_key=turn_key,
+            )
+            receipt = plan.pop("write_host_start", None)
+            if receipt is not None:
+                proposal["operation"]["host_start"] = receipt
+                proposal["updated_at"] = _utc_now()
+                self._write(payload)
+                plan.update(host_start=receipt, host_delivery="native_start_accepted")
+            return plan
+
     def consume_agent_operation(
         self,
         proposal_id: str,

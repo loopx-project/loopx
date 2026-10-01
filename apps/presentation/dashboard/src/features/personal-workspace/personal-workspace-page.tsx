@@ -659,7 +659,8 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       ? operationFrame?.kind === "pending" && operationFrame.executionState
         ? t(operationFrame.executionState === "consumed_outcome_pending"
           ? "proposal.impact.operationConsumed" : operationFrame.executionState === "managed_turn_pending"
-          ? "proposal.impact.operationManagedPending" : "proposal.impact.operationAuthorized")
+          ? "proposal.impact.operationManagedPending" : operationFrame.executionState === "managed_turn_started"
+          ? "proposal.impact.operationManagedStarted" : "proposal.impact.operationAuthorized")
         : operationFrame?.kind === "result" && operationFrame.resultKind === "unknown"
         ? t("proposal.impact.operationUnknown") : t("proposal.impact.operation")
       : proposal.action_kind === "team.plan"

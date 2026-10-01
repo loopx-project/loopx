@@ -186,6 +186,13 @@ def test_authenticated_callback_hands_off_without_calling_any_executor_and_recon
             model="test-model",
             reasoning_effort="xhigh",
         )
+        start = agent_operation_action(
+            runtime, registry, proposal_id=proposal["proposal_id"], actor=actor,
+            action="observe_host_start", turn_key="sha256:" + "b" * 64,
+        )
+        assert start["recorded"] is True and start["execution_allowed"] is False
+        started_card = build_goal_channel_operation_result_card(store.load(proposal["proposal_id"]))
+        assert "原生续接已接受；授权仍待消费，尚无执行结果" in normalized_card_text(started_card)
     args = Namespace(
         goal_channel_command="consume-operation",
         goal_id=GOAL_ID,

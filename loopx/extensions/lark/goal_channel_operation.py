@@ -382,6 +382,8 @@ def build_goal_channel_operation_result_card(
         result_label = "执行授权已消费，等待真实结果"
     elif pending and frame.get("executionState") == "managed_turn_pending":
         result_label = "已确认，等待绑定的受管回合；尚未执行"
+    elif pending and frame.get("executionState") == "managed_turn_started":
+        result_label = "原生续接已接受；授权仍待消费，尚无执行结果"
     summary = str(frame.get("summary") or result_label)
     return {
         "schema": "2.0",

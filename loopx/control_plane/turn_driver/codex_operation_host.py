@@ -342,12 +342,58 @@ def run_codex_operation_host(
             reasoning_effort=reasoning_effort,
             goal_admission=goal_admission,
         )
+        route = {**lineage, "host_surface": "loopx-managed-codex",
+                 "thread_id": session.thread_id, "profile_digest": profile_digest}
+        continuations = []
+        if (runtime_root / "chat" / "actions" / "actions.json").is_file():
+            with collaboration_goal_scope(
+                registry_path, goal_id=lineage["goal_id"], agents=(lineage["agent_id"],),
+                caller_goal_ref=request.get("goal_ref"), require_active=True,
+            ) as scope:
+                pending = pending_operation_handoffs(
+                    runtime_root, lineage["goal_id"], lineage["agent_id"],
+                    registry_path=registry_path, scope=scope, executor_route=route,
+                    cursor_scope=hashlib.sha256(json.dumps(route, sort_keys=True).encode()).hexdigest(),
+                )
+            # Bounded canonical locators only. Private terms still require the
+            # existing authenticated inspect tool; these locators grant nothing.
+            continuations = [
+                {key: item[key] for key in ("operation_id", "payload_digest", "confirmation_digest", "claim_id")}
+                for item in pending["items"] if item["status"] == "authorized_pending"
+            ]
+
+        def on_event(kind: str, event: dict[str, Any]) -> None:
+            if kind != "turn.started":
+                return
+            # send emits this only after the native turn/start response. A
+            # launched process, callback ACK or model assertion cannot issue it.
+            for locator in continuations:
+                try:
+                    agent_operation_action(
+                        runtime_root, registry_path, proposal_id=locator["operation_id"],
+                        actor={**route, "model": model, "reasoning_effort": reasoning_effort,
+                               "host_turn_id": event.get("upstream_turn_id")},
+                        action="observe_host_start", turn_key=request["turn_key"],
+                    )
+                except (ValueError, KeyError, TypeError, RuntimeError) as exc:
+                    # Stop before dispatching operation tools if confirmation,
+                    # Goal or binding changed while native start was in flight.
+                    raise BuiltInHostError(
+                        "codex_operation_host_start_unrecorded", failure_kind="unknown",
+                        recovery_kind="resume_session",
+                    ) from exc
+
         return session.send(
             _prompt(request)
             + "\nUse loopx_operation for pending/prepare/inspect/consume/report. "
             "Source conversations are not executor identity. Execute only after the first receipt says execution_allowed=true. "
-            "Already consumed/unknown effects require evidence reconciliation, never retry. Never treat final-answer prose as an outcome receipt.",
+            "Already consumed/unknown effects require evidence reconciliation, never retry. Never treat final-answer prose as an outcome receipt."
+            + ("\nCanonical confirmed operation continuations for this exact binding: "
+               + json.dumps(continuations, sort_keys=True)
+               + ". Inspect these locators through loopx_operation and consume once before any effect."
+               if continuations else ""),
             output_schema=codex_cli_result_schema(request),
+            on_event=on_event,
         )
     except CodexChatAgentError as exc:
         raise BuiltInHostError(

@@ -42,7 +42,7 @@ export type OperationReviewFrame = OperationReviewFrameBase & (
       kind: "pending";
       attentionKind: "progress";
       interactionMode: "inform";
-      executionState?: "host_authentication_required" | "managed_turn_pending" | "consumed_outcome_pending";
+      executionState?: "host_authentication_required" | "managed_turn_pending" | "managed_turn_started" | "consumed_outcome_pending";
     }
   | {
       kind: "result";
@@ -332,7 +332,10 @@ export function compileOperationReviewFrame(proposalValue: unknown): OperationRe
       interactionMode: "inform",
       ...(["agent_session", "managed_turn"].includes(String(objectValue(parameters.executor)?.kind))
         ? {executionState: objectValue(operation.agent_handoff) ? "consumed_outcome_pending" as const
-          : objectValue(parameters.executor)?.kind === "managed_turn" ? "managed_turn_pending" as const : "host_authentication_required" as const}
+          : objectValue(parameters.executor)?.kind === "managed_turn"
+          ? objectValue(operation.host_start)?.schema_version === "loopx_operation_host_start_v0"
+            ? "managed_turn_started" as const : "managed_turn_pending" as const
+          : "host_authentication_required" as const}
         : {}),
     };
   }
