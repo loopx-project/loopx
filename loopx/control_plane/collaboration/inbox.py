@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from ...file_lock import exclusive_file_lock
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
+from ..todos.contract import TODO_ID_PATTERN
 
 if TYPE_CHECKING:
     from .goal_instance_scope import CollaborationGoalScope
@@ -454,7 +455,7 @@ def _receipt(root, lane, row):
             raise ValueError("invalid read receipt")
         if lane == "links":
             for key, pattern in [
-                ("todo_ids", re.compile(r"todo_[a-f0-9]{12}")),
+                ("todo_ids", TODO_ID_PATTERN),
                 ("evidence_ids", ENVELOPED_SHA256_PATTERN),
             ]:
                 refs = value.get(key)

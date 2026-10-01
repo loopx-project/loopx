@@ -175,9 +175,9 @@ def decide_collaboration_lifecycle(
     operation: str,
     record: dict[str, Any] | None = None,
     route: dict[str, Any] | None = None,
-    initial_delivery_proved: bool = False,
+    initial_delivery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not scope.exact:
+    if not scope.exact and operation not in {"original_return_admit", "original_return_settle", "original_request_inspect"}:
         return {"kind": "legacy"}
     result = effect_runtime_result(
         "collaboration.goal_instance.decide",
@@ -192,7 +192,7 @@ def decide_collaboration_lifecycle(
             "route_goal_ref": (
                 route.get("goal_ref") if isinstance(route, dict) else None
             ),
-            "initial_delivery_proved": initial_delivery_proved,
+            "initial_delivery": initial_delivery,
         },
     )
     if not isinstance(result, dict):

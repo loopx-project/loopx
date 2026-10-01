@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import PUBLIC_SAFE_REFERENCE_PATTERN as OPAQUE_REF_RE
 
 
 PROCEDURAL_EXPERIENCE_SCHEMA_VERSION = "procedural_experience_contract_v0"
@@ -20,7 +20,6 @@ PROCEDURAL_EXPERIENCE_FIELDS = {
     "evidence_refs",
 }
 FUTURE_BEHAVIOR_FIELDS = {"trigger", "action", "validation", "stop_condition"}
-OPAQUE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
 MAX_CONTEXT_ITEMS = 5
 MAX_EVIDENCE_REFS = 8
 

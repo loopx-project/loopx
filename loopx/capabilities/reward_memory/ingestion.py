@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
 from ..context_providers import build_context_provider
+from ...public_safe_text import (
+    MODULE_QUALIFIED_SURFACE_PATTERN as SURFACE_RE,
+    PUBLIC_SAFE_REFERENCE_PATTERN as TOKEN_RE,
+)
 from ..context_providers.base import (
     ContextProvider,
     canonical_context_text,
@@ -32,8 +35,6 @@ from .registry import IDENTITY_SCOPE_FIELDS, normalize_reward_memory_corpus
 REWARD_MEMORY_STANDING_POLICY_SCHEMA_VERSION = "reward_memory_standing_policy_v0"
 REWARD_MEMORY_INGEST_RECEIPT_SCHEMA_VERSION = "reward_memory_ingest_receipt_v0"
 
-TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
-SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
 MAX_POLICY_VALUES = 12
 
 _POLICY_FIELDS = {

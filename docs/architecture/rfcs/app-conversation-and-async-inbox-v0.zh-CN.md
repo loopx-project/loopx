@@ -217,6 +217,26 @@ Provider 认证、签名、外部事件解码、寻址、chat membership、rate 
 Notification/attention、Todo/lease、model admission 和 artifact acceptance 保留现有 owners。
 Dispatch 事件在准入范围内唤醒现有 driver，polling 修补缺口。Inbox 不授权启动另一个 automation。
 
+已提交委派的恢复复用现有 typed collaboration lifecycle。原请求 Turn 失败、超时或
+被打断，不会取消已经进入接收方 Inbox 的工作。该 Turn 结束后，即使调用方没能保存
+handoff 回答，接收方已保存的结果仍可沿同一可信路由返回。重新核验当前来源授权、
+已提交请求身份、路由与精确 Goal 实例；已有 handoff 回执冲突时拒绝恢复，不能忽略。
+保留原失败 Turn，只追加一次幂等回传。原 Turn 仍在运行时等待；来源撤权、entry
+缺失或路由变更都不能授权发送。Provider 的首次回复确认和发送后核验仍是独立门槛。
+
+GQ07/GQ09 的回归变体是“接着做，结果给我”。在 Inbox/route 已提交、调用方回答
+尚未保存时注入故障，重新打开真实 store，再由接收方提交结论。管家和 Goal 对话必须
+只显示一次结论，不重跑模型、不改写失败 Turn。合成数据下的生产 File/HTTP 路径与
+typed 反例验收此恢复边界，不证明真实负责人选择、接收方采用、原生 steering 或两轮
+真实团队协作。
+
+同一提交事实现在也为 owner-private App 提供回读：调用方仍在运行或回答丢失时，
+优先挂在已保存的回答；没有回答则挂在原用户消息，复用已有交办卡片，不伪造回答或
+改写失败 Turn。共享 typed lifecycle 分开准入观察与结果发送；等待读取、提供上下文、
+采用和结果回传仍是不同事实。核验原保存会话、client Turn、请求及 Goal 实例；路由
+有歧义或回执冲突时不生成卡片。外部会话不展示私有 brief 或接收方理由。路由发现
+保留现有有界历史扫描；完整积压索引及安装/真实旅程验收仍单独保留。
+
 Pending 回执检查点把“文件存在即结束”的分类迁入共享 `collaboration/inbox_receipts.ts` read model。
 Decision/result 缺失、不可读与身份冲突分别表达；损坏的结论不能静默清除接收方请求，
 也不能让原 App 对话的协作卡片消失。恢复原始记录后只回传一次，不重跑工作或更换受众。

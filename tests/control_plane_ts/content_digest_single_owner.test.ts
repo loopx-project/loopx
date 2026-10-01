@@ -88,6 +88,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/agents/supervisor_event_append.ts",
   "control_plane/capabilities/external_evidence.ts",
   "control_plane/collaboration/delegation.ts",
+  "control_plane/collaboration/goal_instance_lifecycle.ts",
   "control_plane/collaboration/return_delivery.ts",
   "control_plane/collaboration/semantic_request.ts",
   "control_plane/coordination/authority_archive_read.ts",
