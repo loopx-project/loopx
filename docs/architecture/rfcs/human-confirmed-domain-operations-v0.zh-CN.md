@@ -359,9 +359,25 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 不授予消费或外部效果权限，也不声称回合仍在运行。回执失败时先停止、不分发 operation 工具；
 后续回合保留首次观察。CLI/Inbox、Dashboard 和 Lark 区分原生续接接受、授权消费和真实结果。
 
-确认后的即时唤醒仍未实现。首次观察来自既有已准入 Turn/delegation，不能冒充
-即时 callback 触发；未观察前 `host_delivery: "not_attempted"` 保持真实。
-后续持久唤醒复用原调度/session owner，不启动平行 resumed 执行者；
-向原来源受众返回结果仍是独立交付义务。宣称投研最小闭环前，仍须证明安装、真实用户批准、
+认证确认 callback 现在可通过既有 delegation owner 请求一次续跑，前提是具有
+**独立且默认关闭的 operator 启动 grant**。grant 指定已有 requester/binding，
+不采用卡片提供的模型、工作树或执行者。操作 owner 核对精确
+Goal/Agent/Todo/session/profile、确认期限和未消费状态；普通 Turn 仍负责 quota、
+租约、验收及原生启动。原生适配器在恢复前重验完整生效配置，拒绝新建/替换会话。
+用户确认不授予启动配置或垂域执行权限。
+
+规范 operation id 固定唯一持久 delegation 身份。callback 重放只读原定位信息，
+不再次 spawn 或运行产物验收；丢失启动 ACK 仍由原 journal 恢复，不在回调自动续跑
+不确定的 worker。移除 operator grant 会在下一次 callback 边界读回生效，
+不追溯取消已经开始的工作。`delegation_requested` 不证明原生启动、完成验收或
+来源送达；原生接受前 `host_delivery: "not_attempted"` 保持真实。
+启用方式见[原配置入口](../../reference/local-delegation.md#confirmed-operation-callback-continuation)。
+
+File/SQLite 资格化使用合成认证确认夹具、真实 detached delegation worker 与
+CLI/Turn 路径，以及合成原生传输；证明原会话启动，但未消费批准或执行垂域操作。
+夹具故意等待，不冒充 Todo 完成。本增量未跑真实 Lark/模型或金融探针。
+前端 grant 编辑及经认证的原来源受众结果回传仍为独立的**部分交付**义务；
+目前只能通过 operator-owned collector 配置启用，不另建 UI 状态权威。
+宣称投研最小闭环前，仍须证明安装、真实用户批准、
 绑定原生消费、垂域提交前检查与原系统证据、结果验收及原卡/受众读回。
 Core PR 仍须 owner review，不在合并前自行安装。

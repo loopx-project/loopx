@@ -117,6 +117,76 @@ def _prepare_agent_handoff(
     )
 
 
+@pytest.mark.parametrize("fault", [None, "grant", "todo", "profile", "fresh", "stopped", "dispatch"])
+def test_callback_wake_uses_one_operator_granted_delegation_without_consuming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str | None,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.collaboration_mcp import Delegations
+
+    store, registry, runtime, channel, target = _fixture(tmp_path)
+    proposal = _prepare_agent_handoff(store, registry, managed=True)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("callback-requester")
+    if fault == "stopped":
+        data["goals"][0]["status"] = "stopped"
+    registry.write_text(json.dumps(data))
+    config = registry.parent / "delegations.json"
+    worker = tmp_path / "worker"
+    worker.mkdir()
+    binding = {"id": "confirmed-operation", "agent_id": AGENT_ID,
+               "todo_id": "other" if fault == "todo" else "todo-managed",
+               "requesters": [] if fault == "grant" else ["callback-requester"],
+               "workspace": str(worker), "timeout_seconds": 30, "output_refs": ["result.json"],
+               "host_args": ["--host", "codex-cli", "--codex-operation-tools", "--codex-model",
+                             "other" if fault == "profile" else "test-model", "--codex-reasoning-effort", "xhigh"]}
+    if fault == "fresh":
+        binding["host_args"] += ["--iteration-context", "fresh"]
+    config.write_text(json.dumps({"schema_version": "loopx_local_delegation_v0", "bindings": [binding]}))
+    launched = []
+    def spawn(self, operation_id):
+        launched.append(operation_id)
+        if fault == "dispatch":
+            raise RuntimeError("private argv must not be returned")
+    monkeypatch.setattr(Delegations, "_spawn", spawn)
+    cards = {}
+    runner = _runner([], cards)
+    deliver_goal_channel_operation_card(proposal_id=proposal["proposal_id"], action_store_root=store.root,
+        runtime_root=runtime, binding_path=channel, target_path=target, execute=True, runner=runner)
+    delivered = store.load(proposal["proposal_id"])
+    event = _event(delivered, cards[delivered["operation"]["delivery"]["message_id"]])
+    configuration = {"registry_path": str(registry), "goal_id": GOAL_ID,
+        "requester_agent_id": "callback-requester", "binding_id": binding["id"],
+        "project": str(registry.parent.parent), "execution_config": ".loopx/delegations.json"}
+    kwargs = dict(runtime_root=runtime, action_store_root=store.root, profile_app_id=APP_ID,
+                  cli_bin="lark-cli", profile="operation-bot", runner=runner, managed_turn_wake=configuration)
+    first = handle_goal_channel_operation_callback(event, **kwargs)
+    # Concurrent callback replay/lost ACK reuses the actual canonical journal.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replays = list(pool.map(lambda _: handle_goal_channel_operation_callback(event, **kwargs), range(2)))
+    assert first["ok"] and first["status"] == "authorization_pending"
+    assert first["managed_turn_wake"]["execution_allowed"] is False
+    assert first["managed_turn_wake"]["native_start_verified"] is False
+    assert "private argv" not in json.dumps(first)
+    stored = store.load(proposal["proposal_id"])
+    assert stored["operation"]["lifecycle_state"] == "claimed"
+    assert stored["operation"].get("agent_handoff") is None
+    assert stored["operation"].get("host_start") is None
+    assert stored["operation"]["outcome"] is None
+    if fault in {None, "dispatch"}:
+        assert len(launched) == 1
+        assert all(row["managed_turn_wake"]["state"] == "existing_delegation" for row in replays)
+        service = Delegations(runtime, registry, GOAL_ID, "callback-requester", config)
+        row = json.loads(service.path(launched[0]).read_text())
+        assert row["identity"]["confirmed_operation_id"] == proposal["proposal_id"]
+        argv = service._execution_arguments(binding, launched[0])
+        assert argv[-2:] == ["--codex-confirmed-operation-id", proposal["proposal_id"]]
+        assert first["managed_turn_wake"]["state"] == ("blocked" if fault else "delegation_requested")
+    else:
+        assert launched == []
+        assert first["managed_turn_wake"]["state"] == "blocked"
+
+
 @pytest.mark.parametrize("managed", [False, True])
 def test_authenticated_callback_hands_off_without_calling_any_executor_and_reconciles_original_result(
     tmp_path: Path,

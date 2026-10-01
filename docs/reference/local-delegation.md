@@ -694,3 +694,73 @@ member counts, model choices, workspaces and requester grants in the Goal's
 execution configuration; reuse machine authentication without copying another
 Goal's assignments. A configured credential does not prove the selected SDK,
 model, remote environment or task acceptance is ready.
+
+## Confirmed operation callback continuation
+
+This default-off adapter lets the existing authenticated Lark operation callback
+request a continuation through one existing delegation binding. Human operation
+confirmation and the operator's launch grant are separate authorities. In the
+original collector v1 configuration, explicitly set:
+
+```json
+{
+  "operation_callbacks": {
+    "enabled": true,
+    "managed_turn_wake": {
+      "registry_path": "/absolute/operator-registry.json",
+      "goal_id": "project-goal",
+      "requester_agent_id": "coordinator",
+      "execution_config": ".loopx/config/delegations.json",
+      "binding_id": "confirmed-operation"
+    }
+  }
+}
+```
+
+This is a fragment, not a complete collector configuration. `execution_config`
+is project-relative, without traversal or symlinks, and remains outside the
+member workspace. The selected binding must grant that registered requester
+the operation's exact Agent/Todo. Use `codex-cli`, `--codex-operation-tools`
+and the original pinned model/effort. Do not select `fresh`, change the owning
+home, binary, sandbox or effective MCP configuration, or retarget the Todo.
+Prepare the operation in this same managed session/profile. Existing delegation
+inspection and ordinary Turn admission still determine whether it can run.
+
+`lark-event-collector plan` and `inspect` expose
+`operation_callback_managed_wake_configured`, a configuration observation, not
+runtime qualification. An authenticated callback returns `managed_turn_wake`:
+`delegation_requested` gives the original operation locator;
+`existing_delegation` acknowledges replay without another spawn;
+`blocked` preserves the canonical confirmation but grants no launch. Read the
+locator through existing delegation read/recovery commands. Callback receipts
+never certify native start, consumption, Todo completion or original-audience
+result delivery. The internal `--codex-confirmed-operation-id` is only an exact
+resume fence, not a caller credential or domain permit.
+
+Remove `managed_turn_wake` or the exact delegation requester grant to stop new
+admission. The collector reloads the launch grant at each callback; already
+started work needs its ordinary stop/reconciliation path. Lost spawn ACKs do
+not trigger automatic callback resume. Retain the original journal and inspect
+it before recovery. No new scheduler, approval store or result owner is added.
+
+The existing Dashboard shows operation/host-start state through the shared
+frame, but does **not** edit this grant. Frontend grant editing and genuine
+original-source outcome delivery remain partial; synthetic startup tests do
+not establish an end-to-end user or trading loop.
+
+中文：此适配默认关闭。认证 Lark 确认只能请求既有 delegation 续跑，不能直接
+执行金融操作；启动 grant 与用户对不可变条款的批准独立。上例是原 collector v1
+配置片段，不是完整配置。`execution_config` 必须项目内相对路径、无穿越或符号
+链接，并位于成员工作树之外；精确 binding 必须授予已注册 requester 原 Agent/Todo。
+使用 `codex-cli`、operation tools 和原固定模型/深度；不能选 `fresh`、更换 home、
+binary、sandbox、生效 MCP 或任务。在相同受管 session/profile 准备操作，
+普通 Turn 的准入、quota、租约与验收仍全部生效。
+
+plan/inspect 的 `operation_callback_managed_wake_configured` 仅证明配置，
+不证明运行资格。callback 的 `delegation_requested` 返回原定位信息，
+`existing_delegation` 表示重放未重新 spawn，`blocked` 保留确认但不授予启动。
+通过既有 delegation 读回/恢复命令检查原记录；上述状态都不是原生启动、消费、
+完成或原受众送达回执。内部 operation-id 参数只做精确恢复保护，不是身份凭证。
+移除启动配置或原 requester grant 在下一 callback 生效，已开始工作须走原停止/
+对账流程；丢失 ACK 不自动重启。Dashboard 沿用共享 frame 展示状态，但尚不能编辑
+此 grant；前端配置与真实原来源结果送达仍为部分交付，不能据合成测试称交易闭环。

@@ -80,6 +80,40 @@ function nativeStartInput(): JsonObject {
   return value;
 }
 
+test("callback wake is an exact-session launch fence, never domain execution authority", () => {
+  const value = {...nativeStartInput(), action: "wake",
+    launch_context: {host: "codex-cli", operation_tools: true, iteration_context: "resume"}};
+  value.executor_route = value.actor;
+  const plan = planAgentOperationHandoff(value);
+  assert.equal(plan.wake_allowed, true);
+  assert.equal(plan.execution_allowed, false);
+  assert.equal(plan.host_delivery, "not_attempted");
+  assert.equal(plan.write_host_start, undefined);
+  assert.equal(plan.write_handoff, undefined);
+  const changes: Array<(row: JsonObject) => void> = [
+    row => {row.binding_current = false;},
+    row => {(row.executor_route as JsonObject).todo_id = "other";},
+    row => {(row.executor_route as JsonObject).thread_id = "replacement";},
+    row => {(row.executor_route as JsonObject).profile_digest = "b".repeat(64);},
+    row => {(row.executor_route as JsonObject).model = "different";},
+    row => {(row.executor_route as JsonObject).reasoning_effort = "high";},
+    row => {(row.launch_context as JsonObject).host = "dsh";},
+    row => {(row.launch_context as JsonObject).operation_tools = false;},
+    row => {(row.launch_context as JsonObject).iteration_context = "fresh";},
+    row => {operation(row).confirmation = null;},
+    row => {operation(row).host_start = {host_turn_id: "already-started"};},
+    row => {operation(row).agent_handoff = {consumption_id: "consumed"};},
+    row => {operation(row).outcome = {outcome: "submission_unknown"};},
+    row => {row.now = "2030-01-01T01:00:00Z";},
+  ];
+  for (const change of changes) {
+    const row = structuredClone(value); change(row);
+    assert.throws(() => planAgentOperationHandoff(row));
+  }
+  assert.throws(() => planAgentOperationHandoff({...input(), action: "wake",
+    executor_route: value.executor_route, launch_context: value.launch_context}));
+});
+
 test("transport accepted start joins the original confirmation and claim without granting execution", () => {
   const value = nativeStartInput();
   const plan = planAgentOperationHandoff(value);

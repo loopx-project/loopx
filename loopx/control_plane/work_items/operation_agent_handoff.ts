@@ -2,7 +2,7 @@
  * second approval store. Python supplies locked storage and registry facts;
  * this owner decides admission, one-shot consumption and result binding. */
 import type {JsonObject} from "../effect_program.ts";
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 
@@ -173,6 +173,25 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
   requireThat(confirmation?.decision === "confirm"
     && confirmation.confirmation_digest === operation.confirmation_digest && claim,
     "agent execution requires authenticated confirmation");
+  if (action === "wake") {
+    // A launch fence, never authentication or first-consumption authority.
+    // The existing delegation owner supplies its operator grant; the native
+    // host rechecks the complete effective profile immediately before resume.
+    const launch = requireJsonObject(input.launch_context, "operation wake launch context");
+    const selected = requireJsonObject(input.executor_route, "operation wake executor route");
+    requireThat(managed && input.binding_current === true
+      && launch.host === "codex-cli" && launch.operation_tools === true
+      && launch.iteration_context !== "fresh"
+      && Object.entries(route).every(([key, value]) => selected[key] === value)
+      && selected.model === executor.model && selected.reasoning_effort === executor.reasoning_effort,
+      "operation wake must resume the original managed session and profile");
+    requireThat(!hostStart && !handoff && !observed
+      && operation.lifecycle_state === "claimed" && proposal.status === "applying",
+      "operation wake requires an unstarted, unconsumed confirmed operation");
+    requireThat(now < expires && timestamp(confirmation.confirmed_at) <= now,
+      "operation wake is outside the confirmation lifetime");
+    return {...base, status: "wake_admitted", wake_allowed: true};
+  }
   if (action === "observe_host_start") {
     const actor = requireJsonObject(input.actor, "native start actor");
     requireThat(managed && Object.entries(route).every(([key, value]) => actor[key] === value)
@@ -180,7 +199,7 @@ export function planAgentOperationHandoff(input: JsonObject): JsonObject {
       && input.binding_current === true, "native start is not the original managed binding");
     const hostTurnId = id(actor.host_turn_id, "native host Turn");
     const turnKey = requireNonEmptyString(input.turn_key, "LoopX Turn key");
-    requireThat(/^sha256:[a-f0-9]{64}$/.test(turnKey), "native start requires a bound LoopX Turn key");
+    requireThat(ENVELOPED_SHA256_PATTERN.test(turnKey), "native start requires a bound LoopX Turn key");
     // This is first-start evidence, not a launch lock or execution permit.
     // A retry must preserve the original time and causal identity, never relabel
     // a later scheduled Turn as the first confirmation-triggered continuation.

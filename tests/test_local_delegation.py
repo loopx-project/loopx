@@ -149,6 +149,72 @@ def wait(service, operation="analysis-1"):
     pytest.fail(str(service.read(operation)))
 
 
+def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_turn(service):
+    """Real detached worker/CLI/Turn; synthetic native transport, no model/effect."""
+    from examples import operation_action_fixtures as fixtures
+    from loopx.chat_action_store import ChatActionStore
+    from loopx.control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
+    from loopx.control_plane.turn_driver.codex_cli import load_codex_cli_session
+    from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host, operation_tool_handler
+    from test_codex_operation_host import FAKE_SERVER
+    from test_loopx_turn_codex_cli import _request
+
+    root, runner = service
+    executable = root / "fixture-codex"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+    config = json.loads(runner.config.read_text())
+    binding = config["bindings"][0]
+    binding["host_args"] = ["--host", "codex-cli", "--codex-bin", str(executable),
+        "--codex-operation-tools", "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh"]
+    runner.config.write_text(json.dumps(config))
+    argv = runner._execution_arguments(binding, "preparation")
+    mcp_server = json.loads(argv[argv.index("--codex-mcp-server-json") + 1])
+    lineage = {"goal_id": runner.goal_id, "agent_id": binding["agent_id"], "todo_id": binding["todo_id"]}
+    request = _request()
+    request["turn_envelope"].update(goal_id=runner.goal_id, agent_id=binding["agent_id"])
+    request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = binding["todo_id"]
+    run_codex_operation_host(request, runtime_root=runner.root, registry_path=runner.registry,
+        project=Path(binding["workspace"]), codex_bin=str(executable), model="test-model",
+        reasoning_effort="xhigh", mcp_server=mcp_server, timeout_seconds=5)
+    session = load_codex_cli_session(runner.root, lineage=lineage)
+    handler = operation_tool_handler(runtime_root=runner.root, registry_path=runner.registry,
+        lineage=lineage, session_id=session["session_id"], profile_digest=session["operation_profile_digest"],
+        model="test-model", reasoning_effort="xhigh")
+    intent = fixtures.request(goal_id=runner.goal_id,
+        payload={"schema_version": "qualification_v0", "marker": "synthetic"})
+    terms = intent["normalized_parameters"]
+    terms.pop("executor")
+    terms.update(agent_id=binding["agent_id"], domain="qualification",
+        operation_kind="qualification.observe", operation_schema="qualification_v0")
+    terms["projection"].update(simulated=False, title="Synthetic native wake qualification")
+    prepared = handler("loopx_operation", {"action": "prepare", "request": intent},
+        {"thread_id": session["session_id"], "host_turn_id": "preparing-turn"})
+    assert prepared["ok"], prepared
+    store = ChatActionStore(runner.root / "chat" / "actions")
+    proposal = prepared["proposal"]
+    delivered = store.record_operation_delivery(proposal["proposal_id"], delivery=fixtures.delivery(proposal))
+    confirmed = store.decide_operation(proposal["proposal_id"], decision="confirm",
+                                     confirmation=fixtures.confirmation(delivered))
+    wake_config = {"registry_path": str(runner.registry), "goal_id": runner.goal_id,
+        "requester_agent_id": runner.agent_id, "project": str(root),
+        "execution_config": "delegations.json", "binding_id": binding["id"]}
+    receipt = dispatch_confirmed_operation_wake(confirmed, runtime_root=runner.root, configuration=wake_config)
+    assert receipt["state"] == "delegation_requested", receipt
+    result = wait(runner, receipt["operation_id"])
+    stored = store.load(proposal["proposal_id"])
+    assert stored["operation"]["host_start"] is not None, result
+    assert stored["operation"]["host_start"]["route"]["thread_id"] == session["session_id"]
+    assert stored["operation"].get("agent_handoff") is None
+    assert stored["operation"]["outcome"] is None
+    # Fixture deliberately waits: startup is not validated domain completion.
+    assert result["status"] == "rejected"
+    journal = json.loads(runner.path(receipt["operation_id"]).read_text())
+    assert stored["operation"]["host_start"]["turn_key"] == journal["turn_key"]
+    assert dispatch_confirmed_operation_wake(stored, runtime_root=runner.root,
+        configuration=wake_config)["state"] == "existing_delegation"
+
+
 def test_detached_result_reconnects_without_duplicate_execution(service):
     root, original = service
     (root / "hold").touch()

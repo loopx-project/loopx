@@ -144,6 +144,48 @@ def test_confirmed_operation_is_automatically_carried_into_accepted_native_turn(
     assert store.load(claimed["proposal_id"])["operation"]["host_start"] == receipt
 
 
+def test_confirmed_callback_launch_fence_resumes_only_the_original_native_session(tmp_path: Path) -> None:
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    run_codex_operation_host(request, confirmed_operation_id=claimed["proposal_id"], **options)
+    assert store.load(claimed["proposal_id"])["operation"]["host_start"]["turn_key"] == request["turn_key"]
+    assert store.load(claimed["proposal_id"])["operation"].get("agent_handoff") is None
+    # A callback/recovery cannot start another native Turn after acceptance.
+    with pytest.raises(Exception, match="unstarted"):
+        run_codex_operation_host(request, confirmed_operation_id=claimed["proposal_id"], **options)
+
+
+@pytest.mark.parametrize("drift", ["session", "todo", "profile", "fresh", "stopped", "missing"])
+def test_callback_launch_fence_rejects_drift_before_native_process_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
+) -> None:
+    from loopx.control_plane.turn_driver import codex_operation_host as owner
+    from loopx.control_plane.turn_driver.codex_cli import _store_codex_cli_session
+
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    if drift == "session":
+        original = load_codex_cli_session(options["runtime_root"], lineage=_lineage(request))
+        _store_codex_cli_session(options["runtime_root"], lineage=_lineage(request), session_id="replacement",
+            operation_profile_digest=original["operation_profile_digest"], operation_model="test-model",
+            operation_reasoning_effort="xhigh")
+    elif drift == "todo":
+        request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "other"
+    elif drift == "profile":
+        options["reasoning_effort"] = "high"
+    elif drift == "fresh":
+        request["session"]["context_policy"] = {"mode": "fresh"}
+    elif drift == "stopped":
+        data = json.loads(options["registry_path"].read_text())
+        data["goals"][0]["status"] = "stopped"
+        options["registry_path"].write_text(json.dumps(data))
+    def no_start(*args, **kwargs):
+        pytest.fail("the fenced callback must not start/rebind a native process")
+    monkeypatch.setattr(owner.CodexChatAgentSession, "start", no_start)
+    before = store.path.read_bytes()
+    with pytest.raises((ValueError, RuntimeError)):
+        run_codex_operation_host(request, confirmed_operation_id="missing" if drift == "missing" else claimed["proposal_id"], **options)
+    assert store.path.read_bytes() == before
+
+
 def test_dynamic_pending_filters_other_managed_tasks_before_pagination(
     tmp_path: Path,
 ) -> None:

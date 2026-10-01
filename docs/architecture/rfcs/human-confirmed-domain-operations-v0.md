@@ -461,12 +461,33 @@ Receipt failure aborts before operation-tool dispatch; later Turns preserve the
 first observation. CLI/Inbox, Dashboard and Lark distinguish accepted native
 continuation from consumed authorization and an actual outcome.
 
-Immediate confirmation-triggered wakeup is still not implemented. The first
-observation is from the existing admitted Turn/delegation route, not proof of
-an immediate callback-triggered wake. Before it exists, `host_delivery` remains
-`"not_attempted"`. Durable wakeup must reuse the original scheduling/session
-owner, not start a parallel resumed executor. Outcome return to the original
-source audience remains a separate delivery obligation.
+An authenticated confirmation callback may now request one continuation through
+the existing delegation owner, **only with a separate, default-off operator
+launch grant**. The grant selects one existing requester/binding, not a model,
+workspace or executor supplied by the card. The operation owner checks exact
+Goal/Agent/Todo/session/profile, confirmation lifetime and unconsumed state.
+The ordinary Turn still owns quota, lease, validation and native startup; its
+native adapter rechecks the complete effective profile before resuming the
+original session. A new/replacement session is refused. Confirmation does not
+grant launch configuration or domain execution authority.
+
+The canonical operation id determines one durable delegation identity. Callback
+replays read its locator without another spawn or artifact validation. A lost
+launch acknowledgement remains an original-journal recovery case; callbacks
+do not auto-resume an uncertain worker. Removing the operator grant is read at
+the next callback boundary. Already started work is not retroactively cancelled.
+`delegation_requested` does not prove native start, validated completion or
+source delivery; `host_delivery` remains `"not_attempted"` until native acceptance.
+See [operator activation](../../reference/local-delegation.md#confirmed-operation-callback-continuation).
+
+File/SQLite qualification uses authenticated synthetic confirmation fixtures,
+the real detached delegation worker and CLI/Turn path, and a synthetic native
+transport. It proves original-session startup without consumption or a domain
+effect; deliberate waiting is not accepted Todo completion. Genuine Lark/model
+and financial probes have not been run for this increment. Frontend grant
+editing and authenticated result return to the original source audience remain
+separate, **partial-delivery** obligations; current grant activation is through
+the operator-owned collector configuration, not a new UI authority.
 Before claiming the investment minimum loop, still prove installation,
 genuine human approval, bound native consumption, domain preflight and
 original-system evidence, accepted result and original-card/audience readback.

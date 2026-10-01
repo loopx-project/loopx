@@ -228,6 +228,31 @@ def test_operation_callback_plan_requires_pinned_runtime(tmp_path: Path) -> None
     assert plan["operation_callback_console_configuration_preflighted"] is False
 
 
+def test_callback_managed_wake_configuration_is_explicit_and_read_back(tmp_path: Path) -> None:
+    project, collector = _operation_callback_project(tmp_path)
+    data = json.loads(collector.read_text())
+    config = {"registry_path": str(tmp_path / "registry.json"), "goal_id": "goal-fixture",
+              "requester_agent_id": "requester", "execution_config": ".loopx/config/delegations.json",
+              "binding_id": "operation-worker"}
+    data["operation_callbacks"]["managed_turn_wake"] = config
+    collector.write_text(json.dumps(data))
+    loaded = event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+    assert loaded["operation_callbacks"]["managed_turn_wake"] == {**config, "project": str(project)}
+    plan = plan_lark_event_collector(project=project, config_path=collector, runtime_root=tmp_path / "runtime")
+    assert plan["operation_callback_managed_wake_configured"] is True
+    assert "registry_path" not in json.dumps(plan)
+    for patch in [{"registry_path": "relative.json"}, {"execution_config": "../outside.json"},
+                  {"binding_id": "bad\nvalue"}, {"requester_agent_id": None}, {"unexpected": True}]:
+        data["operation_callbacks"]["managed_turn_wake"] = {**config, **patch}
+        collector.write_text(json.dumps(data))
+        with pytest.raises(ValueError):
+            event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+    data["operation_callbacks"] = {"enabled": False, "managed_turn_wake": config}
+    collector.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="enabled"):
+        event_collector.load_lark_event_collector_config(project=project, config_path=collector)
+
+
 def test_operation_callback_status_separates_readiness_from_qualification(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -300,11 +325,21 @@ def test_operation_callback_status_separates_readiness_from_qualification(
     assert qualified["operation_callback_qualification_state"] == "callback_qualified"
 
 
+@pytest.mark.parametrize("wake_revocation", [False, True])
 def test_collector_runs_independent_operation_callback_consumer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    wake_revocation: bool,
 ) -> None:
     project, collector = _operation_callback_project(tmp_path)
+    if wake_revocation:
+        config = json.loads(collector.read_text())
+        config["operation_callbacks"]["managed_turn_wake"] = {
+            "registry_path": str(tmp_path / "registry.json"), "goal_id": "fixture-goal",
+            "requester_agent_id": "coordinator", "execution_config": "delegations.json",
+            "binding_id": "confirmed-operation",
+        }
+        collector.write_text(json.dumps(config))
     runtime_root = tmp_path / "runtime"
     cli = tmp_path / "lark-cli-fixture"
     cli.write_text(
@@ -327,6 +362,10 @@ def test_collector_runs_independent_operation_callback_consumer(
 
     def handle(payload: dict[str, object], **kwargs: object) -> dict[str, object]:
         captured.append({"payload": payload, **kwargs})
+        if wake_revocation and len(captured) == 1:
+            config = json.loads(collector.read_text())
+            del config["operation_callbacks"]["managed_turn_wake"]
+            collector.write_text(json.dumps(config))
         return {
             "ok": len(captured) > 1,
             "schema_version": "lark_operation_callback_receipt_v0",
@@ -364,6 +403,8 @@ def test_collector_runs_independent_operation_callback_consumer(
     assert result["operation_callback_verified_count"] == 1
     assert captured[0]["runtime_root"] == runtime_root.resolve()
     assert captured[0]["action_store_root"] == runtime_root / "chat" / "actions"
+    assert (captured[0]["managed_turn_wake"] is not None) is wake_revocation
+    assert captured[1]["managed_turn_wake"] is None
     status = json.loads(
         (
             project / ".loopx/runtime/lark-collector/operation-callback-status.json"

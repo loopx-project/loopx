@@ -228,6 +228,7 @@ def run_codex_operation_host(
     mcp_server: Mapping[str, Any] | None = None,
     timeout_seconds: float = 115,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    confirmed_operation_id: str | None = None,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
         raise ValueError("unsupported LoopX Turn host request schema")
@@ -286,6 +287,29 @@ def run_codex_operation_host(
     ):
         raise ValueError(
             "managed operation profile changed; explicitly select a fresh iteration and obtain fresh approval"
+        )
+    if confirmed_operation_id is not None:
+        # Final admission recheck before native resume. A queued delegation must
+        # not create/rebind a Session if approval, Todo, profile or lifetime
+        # changed after the callback. This grants no tool/effect authority.
+        from ..collaboration.operation_handoff import managed_operation_binding_current
+        from ..collaboration.operation_wake import require_current_operation_scope
+
+        store = ChatActionStore(runtime_root / "chat" / "actions")
+        proposal = store.load(confirmed_operation_id)
+        if proposal is None or binding is None or action != "resume":
+            raise ValueError("confirmed operation requires its original resumable session")
+        require_current_operation_scope(registry_path, proposal["normalized_parameters"])
+        store._agent_operation_plan(
+            proposal, action="wake",
+            binding_current=managed_operation_binding_current(
+                runtime_root, proposal["normalized_parameters"]
+            ),
+            launch_context={"host": "codex-cli", "operation_tools": True,
+                            "iteration_context": (session_plan.get("context_policy") or {}).get("mode")},
+            executor_route={**lineage, "host_surface": "loopx-managed-codex",
+                            "thread_id": binding["session_id"], "profile_digest": profile_digest,
+                            "model": model, "reasoning_effort": reasoning_effort},
         )
     host_config = (
         {

@@ -853,6 +853,12 @@ def run_lark_event_collector(
                             cli_bin=lark_cli_executable,
                             profile=str(config["profile"]),
                             runner=transport_runner,
+                            # Read the original operator owner at the event
+                            # boundary; removing a wake grant takes effect
+                            # without restarting a long-lived collector.
+                            managed_turn_wake=load_lark_event_collector_config(
+                                project=project, config_path=config_path
+                            )["operation_callbacks"]["managed_turn_wake"],
                         )
                         if receipt.get("ok") is not True:
                             raise RuntimeError(

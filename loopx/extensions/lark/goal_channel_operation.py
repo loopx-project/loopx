@@ -966,6 +966,7 @@ def handle_goal_channel_operation_callback(
     profile: str,
     runner: CommandRunner = default_subprocess_runner,
     executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    managed_turn_wake: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     action = _callback_action(event)
     callback_token = str(event.get("token") or "").strip()
@@ -1057,6 +1058,7 @@ def handle_goal_channel_operation_callback(
         },
     )
     dispatch_lock = store.root / f"{action['operation_id']}.dispatch.lock"
+    wake_receipt = None
     with exclusive_file_lock(
         dispatch_lock,
         agent_id="loopx-lark-operation",
@@ -1073,6 +1075,11 @@ def handle_goal_channel_operation_callback(
             # existing Inbox. No simulator, host resume or financial effect is
             # run in the callback process, and no outcome is manufactured.
             store._agent_operation_plan(current, action="project")
+            from ...control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
+
+            wake_receipt = dispatch_confirmed_operation_wake(
+                current, runtime_root=runtime_root, configuration=managed_turn_wake
+            )
         elif current_operation.get("lifecycle_state") == "claimed":
             outcome = dict(
                 executor(current)
@@ -1143,6 +1150,7 @@ def handle_goal_channel_operation_callback(
             else None
         ),
         "callback_ack_is_execution_receipt": False,
+        "managed_turn_wake": wake_receipt,
         "card_update_verified": update_verified,
         "status": (
             "authorization_pending"
