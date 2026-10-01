@@ -81,7 +81,7 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
 .goal-team-evidence { margin-block: 16px; padding: 16px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 12px; background: var(--pw-surface, #fff); }
 .goal-team-evidence h3, .goal-team-evidence h4 { margin: 0; font-size: 13px; }
 .goal-team-evidence article { margin-block: 16px; }
-.goal-team-evidence pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--font-mono, monospace); padding: 12px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; }
+.goal-team-evidence pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--font-mono, "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); padding: 12px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; }
 .goal-team-evidence label { display: grid; gap: 8px; font-weight: 500; }
 .goal-team-evidence textarea { box-sizing: border-box; resize: vertical; min-height: 88px; width: 100%; padding: 8px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; background: var(--pw-bg, #fafafa); color: inherit; font: inherit; }
 .goal-team-evidence textarea:focus-visible, .goal-team-evidence pre:focus-visible { outline: 2px solid #0070f3; outline-offset: 2px; }
@@ -145,7 +145,7 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
 .goal-team-results summary { cursor: pointer; padding: 12px 0; font-size: 12px; min-height: 44px; }
 .goal-team-results code { overflow-wrap: anywhere; }
 .goal-team-report table code { white-space: pre; overflow-wrap: normal; word-break: normal; }
-.goal-team-results pre { padding: 16px; max-height: 400px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.7 var(--font-mono, monospace); background: var(--pw-bg); }
+.goal-team-results pre { padding: 16px; max-height: 400px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.7 var(--font-mono, "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); background: var(--pw-bg); }
 .goal-team-results h3 { font-size: 20px; letter-spacing: -.02em; }
 .goal-team-results > header > button { display: inline-flex; align-items: center; gap: 8px; }
 .goal-team-results-layout { display: grid; grid-template-columns: minmax(150px, 190px) minmax(0, 1fr); margin-top: 24px; gap: 24px; }
@@ -154,7 +154,7 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
 .goal-team-result-list button > svg { flex-shrink: 0; margin-top: 2px; }
 .goal-team-result-list button > span { min-width: 0; display: grid; gap: 4px; }
 .goal-team-result-list button strong { font-size: 13px; font-weight: 500; }
-.goal-team-result-list button small { color: var(--pw-muted, #666); font: 11px/1.5 var(--font-mono, monospace); }
+.goal-team-result-list button small { color: var(--pw-muted, #666); font: 11px/1.5 var(--font-mono, "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace); }
 .goal-team-result-check { margin-left: auto; visibility: hidden; }
 .goal-team-result-list button[aria-pressed="true"] .goal-team-result-check { visibility: visible; }
 .goal-team-result-reader { min-width: 0; border-left: 1px solid var(--pw-line); padding-left: 24px; }

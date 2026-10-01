@@ -1,0 +1,4 @@
+/* The real key is defined by the style sink above; both ghosts are not. */
+.fixture-brace-live { color: var(--fixture-brace-live); }
+.fixture-brace-ghost-before { color: var(--fixture-brace-ghost-before); }
+.fixture-brace-ghost-after { color: var(--fixture-brace-ghost-after); }
