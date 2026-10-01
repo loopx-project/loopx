@@ -1,18 +1,25 @@
 """Check a review's declared evidence for consistency, never its truth."""
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from .review_contract import (
     COMPATIBILITY_ASSESSMENT,
     OUTCOME_IMPACT_ASSESSMENT,
+    REVIEWER_DECLARATION,
     SCOPE_COVERAGE_ASSESSMENT,
     SEMANTIC_CANDIDATE_DECISIONS,
+    SPEC_BASIS_ASSESSMENT,
     VALIDATION_FAILURE_ATTRIBUTION,
     build_review_execution_contract,
     build_review_plan,
 )
-from .review_body import check_review_body
+from .review_body import (
+    check_review_body,
+    reviewer_declaration_lines,
+    visible_review_text,
+)
 
 
 def _missing(value: object) -> bool:
@@ -206,6 +213,107 @@ def _check_outcome_impact(blockers: list[str], value: object) -> None:
                             fields=["acceptance_basis", "bounded_cost_and_recovery"])
 
 
+# The declaration names a product family, so the characters that mark a URL,
+# path, host:port, account or ARN have no place in it. This is a shape rule,
+# not a product-name denylist. Known false positive: router- or
+# version-qualified ids such as `vendor/model` or `model@version` are rejected;
+# declare the product-family name instead. A typed runtime-reported identity
+# would replace this text check once a host supplies one.
+_DECLARED_NAME_FORBIDDEN = re.compile(r"[/:@]")
+_PUBLISHED_LINE_FORBIDDEN = re.compile(r"://|@")
+
+
+def _reviewer_errors(value: object, body: str) -> list[str]:
+    key = "reviewer"
+    contract = REVIEWER_DECLARATION
+    if not isinstance(value, Mapping):
+        return [f"{key}:missing_declaration"]
+    actor_kind = value.get("actor_kind")
+    if actor_kind not in contract["actor_kinds"]:
+        return [f"{key}:invalid_actor_kind"]
+    errors: list[str] = []
+    if value.get("declaration_source") not in contract["declaration_sources"]:
+        errors.append(f"{key}:invalid_declaration_source")
+    declared: list[str] = [str(actor_kind)]
+    if actor_kind == "model_agent":
+        for field in contract["model_agent_fields"]:
+            text = value.get(field)
+            if not isinstance(text, str) or not text.strip():
+                errors.append(f"{key}:missing_field:{field}")
+            elif _DECLARED_NAME_FORBIDDEN.search(text):
+                errors.append(f"{key}:not_a_product_family_name:{field}")
+            else:
+                declared.append(text.strip())
+    lines = reviewer_declaration_lines(body)
+    if len(lines) != 1:
+        errors.append(f"{key}:body_line_missing_or_ambiguous")
+    elif _PUBLISHED_LINE_FORBIDDEN.search(lines[0]):
+        errors.append(f"{key}:body_line_carries_runtime_detail")
+    elif any(token.casefold() not in lines[0].casefold() for token in declared):
+        errors.append(f"{key}:body_line_disagrees_with_declaration")
+    return errors
+
+
+def _check_spec_basis(blockers: list[str], value: object) -> None:
+    key = "problem_context:spec_basis"
+    contract = SPEC_BASIS_ASSESSMENT
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["fields"])
+    if not isinstance(value, Mapping):
+        return
+    decision = value.get("decision")
+    if decision not in contract["decision_values"]:
+        blockers.append(f"{key}:invalid_decision")
+        return
+    source = value.get("spec_source")
+    if source not in contract["spec_source_values"]:
+        blockers.append(f"{key}:invalid_spec_source")
+    if decision in contract["blocking_decisions"]:
+        blockers.append(f"{key}:blocking_decision")
+    if decision == "no_spec" and source != "none":
+        blockers.append(f"{key}:no_spec_cannot_cite_a_source")
+    if decision != "mapped":
+        return
+    if source == "none":
+        blockers.append(f"{key}:mapped_without_spec_source")
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["mapped_fields"])
+    criteria = _require_items(
+        blockers, evidence_id=key, row=value,
+        requirement={"items_field": "criteria", "item_fields": contract["criterion_fields"],
+                     "item_count": {"minimum": 1}},
+    )
+    seen: set[object] = set()
+    for criterion in criteria:
+        criterion_id = criterion.get("criterion_id")
+        if criterion_id in seen:
+            blockers.append(f"{key}:duplicate_criterion:{criterion_id}")
+        seen.add(criterion_id)
+        disposition = criterion.get("disposition")
+        if disposition not in contract["disposition_fields"]:
+            blockers.append(f"{key}:invalid_disposition:{criterion_id}")
+            continue
+        _require_fields(blockers, evidence_id=f"{key}:{criterion_id}", value=criterion,
+                        fields=contract["disposition_fields"][disposition])
+        if disposition in contract["blocking_dispositions"]:
+            blockers.append(f"{key}:unmet_criterion:{criterion_id}")
+
+
+def _unpublished_spec_references(value: object, body: str) -> list[str]:
+    # The structured result stays local; another operator reads only the body.
+    if not isinstance(value, Mapping) or value.get("decision") != "mapped":
+        return []
+    text = visible_review_text(body).casefold()
+    references = [value.get("spec_ref")]
+    criteria = value.get("criteria")
+    if isinstance(criteria, list):
+        references += [item.get("criterion_id") for item in criteria if isinstance(item, Mapping)]
+    return [
+        f"review_body:spec_reference_not_published:{reference}"
+        for reference in references
+        if isinstance(reference, str) and reference.strip()
+        and reference.strip().casefold() not in text
+    ]
+
+
 def _check_scope_coverage(blockers: list[str], value: object) -> None:
     key = "observable_semantics:scope_coverage"
     contract = SCOPE_COVERAGE_ASSESSMENT
@@ -302,6 +410,7 @@ def check_review_result(
             requirement = requirements[key]
             if key == "problem_context":
                 _check_outcome_impact(blockers, row.get("outcome_impact"))
+                _check_spec_basis(blockers, row.get("spec_basis"))
             if key == "code_volume":
                 _check_compatibility_assessment(blockers, row.get("compatibility_assessment"))
             if key == "observable_semantics":
@@ -402,6 +511,13 @@ def check_review_result(
                              head_oid=str(matches[0].get("head_oid") or ""),
                              behavior_bearing=applicability.get("behavior_bearing_change") is True)
     errors.extend(f"review_body:{reason}" for reason in body["invalid_reasons"])
+    body_text = str(result.get("review_body") or "")
+    errors.extend(_reviewer_errors(result.get("reviewer"), body_text))
+    problem_context = evidence.get("problem_context")
+    errors.extend(_unpublished_spec_references(
+        problem_context.get("spec_basis") if isinstance(problem_context, Mapping) else None,
+        body_text,
+    ))
     if body["verdict"] is not None and body["verdict"] != verdict:
         errors.append("review_body:verdict_mismatch")
     if verdict not in {"APPROVE", "REQUEST_CHANGES"}:
