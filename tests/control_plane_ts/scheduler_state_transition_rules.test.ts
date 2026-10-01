@@ -26,6 +26,33 @@ const fixture = JSON.parse(
   }>;
 };
 
+test("settled replay preserves observed cadence without deciding a future schedule", () => {
+  for (const observed of [null, "FREQ=MINUTELY;INTERVAL=3", "FREQ=MINUTELY;INTERVAL=60"]) {
+    const request = { schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
+      operation: "settled_replay", observed_host_rrule: observed };
+    const before = structuredClone(request);
+    const result = evaluateSchedulerStateTransition(request);
+    assert.equal(result.operation, "settled_replay");
+    const hint = result.hint as Record<string, unknown>;
+    assert.equal(hint.action, "preserve_current_schedule");
+    assert.equal(hint.next_trigger, "fresh_turn_identity");
+    assert.equal(hint.reset_policy, undefined);
+    const host = hint.app_automation as Record<string, unknown>;
+    assert.equal(host.observed_host_rrule, observed);
+    assert.equal(host.host_action, "none");
+    assert.equal(host.ack_required, false);
+    for (const field of ["recommended_rrule", "recommended_interval_minutes", "stateful_backoff",
+                        "ack_hint", "failure_hint", "fallback_hint"]) {
+      assert.equal(host[field], undefined, field);
+    }
+    assert.deepEqual(request, before);
+  }
+  assert.throws(() => evaluateSchedulerStateTransition({
+    schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
+    operation: "settled_replay", observed_host_rrule: 3,
+  }), /observed_host_rrule must be a string/);
+});
+
 test("pinned Python scheduler transition characterization remains exact", () => {
   assert.equal(
     fixture.schema_version,

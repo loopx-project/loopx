@@ -512,7 +512,9 @@ def build_goal_runtime_continuation(
     frontier_recheck_after_seconds: int | None = None,
 ) -> dict[str, Any]:
     action = str(scheduler_hint.get("action") or "")
-    if action == "run_now":
+    if action in {"run_now", "preserve_current_schedule"}:
+        # Replay does not complete or block a native Goal. Its next iteration
+        # must consult quota with a fresh identity, not repeat this closed Turn.
         disposition = GoalRuntimeContinuationDisposition.CONTINUE_NOW
     elif action == "stop_until_explicit_resume":
         disposition = GoalRuntimeContinuationDisposition.COMPLETE

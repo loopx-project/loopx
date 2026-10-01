@@ -68,7 +68,8 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
 
 def _guard(call, turn: str = TURN):
     return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-                "--agent-id", AGENT, "--turn-instance-id", turn)
+                "--agent-id", AGENT, "--turn-instance-id", turn,
+                "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3")
 
 
 def _add(call, obligation_id: str):
@@ -137,12 +138,19 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     settled = _guard(call)
     assert settled["effective_action"] == "heartbeat_settled_skip"
     assert settled.get("selected_todo") is None
+    hint = settled["scheduler_hint"]
+    assert hint["action"] == "preserve_current_schedule"
+    assert hint["app_automation"]["host_action"] == "none"
+    assert "recommended_rrule" not in hint["app_automation"]
+    assert "ack_hint" not in hint["app_automation"]
     rows = [json.loads(line) for line in index.read_text().splitlines()]
     assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
     todo = call("todo", "list", "--goal-id", GOAL, "--todo-id", added["todo_id"])["todo"]
     assert todo["status"] == "open"
     fresh = _guard(call, "turn-independent-vision-review")
     assert fresh["effective_action"] != "heartbeat_settled_skip"
+    assert fresh["scheduler_hint"]["action"] == "run_now"
+    assert fresh["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 3
     assert fresh["goal_frontier_projection"]["acceptance_gaps"]
     assert fresh["goal_frontier_projection"]["vision_continuation_audit"]["decision"] == "acceptance_gap_open"
 

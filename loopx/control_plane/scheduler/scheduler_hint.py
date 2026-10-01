@@ -47,7 +47,7 @@ from .state import (
     rrule_for_minutes,
     scheduler_rrule_interval_minutes,
 )
-from .state_transition_rules import decide_scheduler_backoff_state
+from .state_transition_rules import decide_scheduler_backoff_state, project_settled_replay_schedule
 from .time import parse_scheduler_timestamp
 
 SCHEDULER_HINT_SCHEMA_VERSION = "scheduler_hint_v0"
@@ -1334,6 +1334,12 @@ def build_scheduler_hint(
             resume_trigger="explicit goal resume or newly projected work",
             ssh_goal_runtime_action="complete_host_goal",
             unchanged_spend_policy="no quota spend for terminal loop stop",
+        )
+
+    if arbitration.disposition == SchedulerDisposition.SETTLED_REPLAY:
+        return apply_scheduler_execution_context(
+            project_settled_replay_schedule(observed_host_rrule=codex_app_current_rrule),
+            execution_context,
         )
 
     builder = _SchedulerHintBuilder(

@@ -16,6 +16,7 @@ class SchedulerDisposition(str, Enum):
     PEER_COORDINATION_WAIT = "peer_coordination_wait"
     AGENT_MONITOR_ONLY_WAIT = "agent_monitor_only_wait"
     ACTIVE_WORK = "active_work"
+    SETTLED_REPLAY = "settled_replay"
     AGENT_SCOPE_WAIT = "agent_scope_wait"
     CONSISTENCY_REPAIR = "consistency_repair"
     HUMAN_GATE = "human_gate"
@@ -88,7 +89,7 @@ def _classify_disposition(
     if mode == "monitor_quiet_skip":
         return SchedulerDisposition.MONITOR_WAIT, "interaction_monitor_quiet_wait"
     if mode == "heartbeat_settled_skip":
-        return SchedulerDisposition.QUIET_WAIT, "interaction_heartbeat_settled_wait"
+        return SchedulerDisposition.SETTLED_REPLAY, "interaction_heartbeat_settled_replay"
     if mode == "successor_replan_required" and must_attempt:
         return SchedulerDisposition.ACTIVE_WORK, "interaction_successor_replan_required"
     if mode in agent_scope_modes:
@@ -168,6 +169,8 @@ def build_scheduler_arbitration(
         user_required or must_attempt or delivery_allowed or not quiet_noop_allowed
     ):
         errors.append("interaction_contract.terminal_conflicts_with_open_action")
+    if mode == "heartbeat_settled_skip" and (user_required or must_attempt or delivery_allowed):
+        errors.append("interaction_contract.settled_conflicts_with_open_action")
     disposition, reason_code = _classify_disposition(
         mode=mode,
         user_required=user_required,
