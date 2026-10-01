@@ -229,6 +229,11 @@ def register_turn_commands(
         help="Internal exact-operation resume fence for an operator-granted callback continuation. Requires operation tools; does not authenticate a caller or permit a domain effect.",
     )
     run_once.add_argument(
+        "--codex-operation-source-route-json",
+        type=json.loads,
+        help="Registered return audience {host_surface,thread_id} for operation proposals. Required when this Agent has several source routes; not executor authentication or execution permission.",
+    )
+    run_once.add_argument(
         "--codex-reasoning-effort",
         choices=list(REASONING_EFFORTS),
         help=(

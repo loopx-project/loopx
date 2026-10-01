@@ -27,6 +27,41 @@ function timestamp(value: unknown): number {
   return parsed;
 }
 
+/** Python supplies owner-normalized thread bindings and selector tokens. A
+ * return audience is not an executor ID: do not narrow the registry vocabulary.
+ * Select explicitly under ambiguity; never freeze an ambiguous null route. */
+export function resolveOperationSourceRoute(input: JsonObject): JsonObject {
+  const goal = id(input.goal_id, "goal_id");
+  const agent = id(input.agent_id, "agent_id");
+  const bindings = Array.isArray(input.bindings) ? input.bindings : [];
+  const routes = new Map<string, JsonObject>();
+  for (const raw of bindings) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const route = raw as JsonObject;
+    if (route.agent_id !== agent) continue;
+    const audience = {goal_id: goal, agent_id: agent,
+      host_surface: requireNonEmptyString(route.host_surface, "registered source host_surface"),
+      thread_id: requireNonEmptyString(route.thread_id, "registered source thread_id")};
+    routes.set(JSON.stringify(audience), audience);
+  }
+  if (input.selected_route != null) {
+    const selected = requireJsonObject(input.selected_route, "source route");
+    const keys = Object.keys(selected);
+    if (keys.length !== 2 || !keys.includes("host_surface") || !keys.includes("thread_id")) {
+      throw new EffectRuntimeRequestError("source route selects only host_surface and thread_id");
+    }
+    const audience = {goal_id: goal, agent_id: agent,
+      host_surface: requireNonEmptyString(selected.host_surface, "source host_surface"),
+      thread_id: requireNonEmptyString(selected.thread_id, "source thread_id")};
+    requireThat(routes.has(JSON.stringify(audience)), "operation source route is not registered for this Goal and Agent");
+    return {source_route: audience};
+  }
+  if (routes.size > 1) throw new EffectRuntimeRequestError(
+    "operation source route is ambiguous; select a registered return audience in the host invocation",
+    "operation_source_route_ambiguous");
+  return {source_route: routes.size === 1 ? routes.values().next().value : null};
+}
+
 /** Readback of an operator-selected transport. This is not a session binding,
  * a runtime qualification or an execution permit. Python supplies argv facts.
  * Accept the CLI's provider-neutral effort vocabulary; actual model support

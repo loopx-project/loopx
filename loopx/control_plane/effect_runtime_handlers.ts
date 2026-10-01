@@ -1,5 +1,5 @@
 import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
-import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgentOperationExecutor, planAgentOperationHandoff, projectAgentOperationInbox, projectManagedOperationTransport} from "./work_items/operation_agent_handoff.ts";
+import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgentOperationExecutor, planAgentOperationHandoff, projectAgentOperationInbox, projectManagedOperationTransport, resolveOperationSourceRoute} from "./work_items/operation_agent_handoff.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
@@ -632,6 +632,7 @@ export function createEffectRuntimeHandlers(
     ["presentation.action_review_plan.compile", (params) =>
       compileActionReviewPlan(params.proposal)],
     ["operation.agent_executor.normalize", normalizeAgentOperationExecutor],
+    ["operation.source_route.resolve", resolveOperationSourceRoute],
     ["operation.managed_binding.current", managedOperationBindingCurrent],
     ["operation.managed_transport.project", projectManagedOperationTransport],
     ["operation.agent_handoff.actor", deriveAgentOperationActor],

@@ -50,6 +50,7 @@ class ChatActionNormalizationMixin:
                     "expires_at",
                     "authorized_principals",
                     "executor",
+                    "source_route",
                 },
             )
             if values.get("schema_version") != "loopx_operation_request_v0":
@@ -233,26 +234,39 @@ class ChatActionNormalizationMixin:
                     field: _opaque(raw_executor.get(field), field=f"executor.{field}")
                     for field in ("extension_id", "protocol", "permission", "revision")
                 }
-            source_routes = [
-                route
-                for route in (goal.get("coordination") or {}).get(
-                    "thread_agent_bindings", []
+            managed_source = executor.get("kind") == "managed_turn"
+            if not managed_source and "source_route" in values:
+                raise ValueError("source route selection requires a managed executor")
+            source_route = None
+            if managed_source:
+                from .control_plane.effect_runtime import effect_runtime_result
+                from .thread_agent_binding import (
+                    collect_accepted_bindings,
+                    resolve_thread_agent_binding,
                 )
-                if isinstance(route, Mapping) and route.get("agent_id") == agent_id
-                and all(isinstance(route.get(key), str) and route[key]
-                        for key in ("host_surface", "thread_id"))
-            ]
-            source_route = (
-                {
-                    "goal_id": goal_id,
-                    **{
-                        key: source_routes[0][key]
-                        for key in ("agent_id", "host_surface", "thread_id")
+
+                selected_route = values.get("source_route")
+                if isinstance(selected_route, Mapping):
+                    selected_binding = resolve_thread_agent_binding(
+                        goal,
+                        host_surface=selected_route.get("host_surface"),
+                        thread_id=selected_route.get("thread_id"),
+                    )
+                    selected_route = {
+                        **selected_route,
+                        "host_surface": selected_binding["host_surface"],
+                        "thread_id": selected_binding["thread_id"],
+                    }
+
+                source_route = effect_runtime_result(
+                    "operation.source_route.resolve",
+                    {
+                        "goal_id": goal_id,
+                        "agent_id": agent_id,
+                        "bindings": collect_accepted_bindings([goal]),
+                        "selected_route": selected_route,
                     },
-                }
-                if len(source_routes) == 1
-                else None
-            )
+                )["source_route"]
             expires_at = parse_timestamp(
                 _text(values.get("expires_at"), field="expires_at", limit=80)
             )
