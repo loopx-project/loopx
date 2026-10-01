@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
-import re
 import subprocess
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -46,6 +45,11 @@ from .goal_channel_targets import (
     goal_channel_target_for_name,
     read_goal_channel_targets,
 )
+from .identity_shapes import (
+    LARK_CHAT_ID_PATTERN,
+    LARK_MESSAGE_ID_PATTERN,
+    require_card_callback_identity,
+)
 from .manager_reply_delivery import (
     TEAM_PLAN_DELIVERY_RECEIPT_SCHEMA_VERSION,
     validate_team_plan_delivery_receipt,
@@ -60,10 +64,6 @@ from .presentation.team_plan import (
 
 
 TEAM_PLAN_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_team_plan_callback_receipt_v0"
-_EVENT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,240}$")
-_MESSAGE_ID = re.compile(r"^om_[A-Za-z0-9_-]+$")
-_CHAT_ID = re.compile(r"^oc_[A-Za-z0-9_-]+$")
-_OPEN_ID = re.compile(r"^ou_[A-Za-z0-9_-]+$")
 _EVENT_DIAGNOSTIC_PREFIX = "[event] "
 
 ProcessFactory = Callable[[list[str]], Any]
@@ -141,7 +141,7 @@ def active_profile_chat_ids(snapshot: Mapping[str, Any], profile: str) -> list[s
         same_app = bool(app_ids) and str(identity.get("bot_app_id") or "") in app_ids
         if (
             same_app or str(identity.get("sender_profile") or "") == profile
-        ) and _CHAT_ID.fullmatch(chat_id):
+        ) and LARK_CHAT_ID_PATTERN.fullmatch(chat_id):
             chats.add(chat_id)
     return sorted(chats)
 
@@ -459,7 +459,8 @@ def _deliver_one(
             "submitted_card": card,
             "authorized_principal": authorized_principal,
         }
-        if not _MESSAGE_ID.fullmatch(str(recorded.get("message_id") or "")) or any(
+        recorded_message_id = str(recorded.get("message_id") or "")
+        if not LARK_MESSAGE_ID_PATTERN.fullmatch(recorded_message_id) or any(
             recorded.get(key) != value for key, value in expected.items()
         ):
             raise ActionConflictError(
@@ -691,14 +692,7 @@ def handle_team_plan_review_callback(
         or any(ord(character) < 32 for character in callback_token)
     ):
         raise ValueError("team plan callback update token is invalid")
-    for field, pattern in (
-        ("event_id", _EVENT_ID),
-        ("message_id", _MESSAGE_ID),
-        ("chat_id", _CHAT_ID),
-        ("operator_id", _OPEN_ID),
-    ):
-        if not pattern.fullmatch(str(event.get(field) or "")):
-            raise ValueError(f"team plan callback {field} is invalid")
+    require_card_callback_identity(event, error_prefix="team plan callback")
     if str(event.get("host") or "") != "im_message":
         raise ValueError("team plan callback host is unsupported")
     store = ChatActionStore(action_store_root)

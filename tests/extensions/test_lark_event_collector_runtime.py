@@ -18,6 +18,7 @@ from loopx.extensions.lark.event_collector_runtime import (
     _run_json_with_status,
     enrich_lark_event_reply_context,
     lark_event_requires_reply_context_lookup,
+    _reply_source_content,
     run_lark_event_collector,
 )
 
@@ -88,6 +89,27 @@ def test_reply_context_lookup_does_not_trust_unrelated_text_mentions() -> None:
         },
         bot_display_name=bot_name,
     )
+    assert lark_event_requires_reply_context_lookup(
+        {"mentions": [{"name": bot_name}], "mentioned": True, "parent_id": "om_parent"},
+        bot_display_name=bot_name,
+    )
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("A visible answer", "A visible answer"),
+    (json.dumps({"text": "A visible answer"}), "A visible answer"),
+    (json.dumps({"zh_cn": {"title": "", "content": [[{"tag": "text", "text": "A visible answer"}]]}}), "A visible answer"),
+    (json.dumps({"content": [[{"tag": "img", "image_key": "private_fixture_key"}]]}), ""),
+    (json.dumps({"operation": {"callback_token": "private_fixture_token"}}), ""),
+    (json.dumps({"schema": "2.0", "header": {"title": {"content": "Review"}},
+                 "body": {"elements": [{"tag": "button", "text": {"content": "Open"},
+                                           "value": {"callback_token": "private_fixture_token"}}]}}),
+     '<card title="Review">\n[Open]\n</card>'),
+])
+def test_reply_source_reads_visible_text_without_callback_payload(raw: str, expected: str) -> None:
+    content = _reply_source_content({"body": {"content": raw}})
+    assert content == expected
+    assert "private_fixture_" not in content
 
 
 def test_json_status_reads_nested_provider_code_from_stderr() -> None:
@@ -161,6 +183,54 @@ def test_reply_context_hydration_preserves_provider_sender_type() -> None:
 
     assert enriched["sender_type"] == "app"
     assert enriched["sender_id"] == "cli_fixture_bot"
+
+
+def test_reply_context_keeps_the_exact_parent_as_context_only() -> None:
+    messages = {
+        "om_question": {
+            "message_id": "om_question",
+            "chat_id": "oc_fixture",
+            "content": "Where is that card?",
+            "parent_id": "om_parent",
+            "sender": {"sender_type": "user", "id": "ou_fixture"},
+        },
+        "om_parent": {
+            "message_id": "om_parent",
+            "chat_id": "oc_fixture",
+            "content": "Dependency review is ready; the request is not approved.",
+            "sender": {"sender_type": "app", "id": "cli_fixture_bot"},
+        },
+    }
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        mid = argv[argv.index("--message-ids") + 1]
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps(
+                {
+                    "ok": True,
+                    "data": {"messages": [messages[mid]]},
+                }
+            ),
+            "",
+        )
+
+    enriched = enrich_lark_event_reply_context(
+        {"message_id": "om_question", "chat_id": "oc_fixture"},
+        runner=runner,
+        command_prefix=["lark-cli"],
+        profile="fixture-bot",
+        profile_app_id="cli_fixture_bot",
+        configured_chat_id="oc_fixture",
+        sleeper=lambda _seconds: None,
+    )
+    assert enriched["reply_to_bot"] is True
+    assert enriched["reply_context"] == {
+        "message_id": "om_parent",
+        "conversation_id": "oc_fixture",
+        "content": messages["om_parent"]["content"],
+    }
 
 
 def _operation_callback_project(tmp_path: Path) -> tuple[Path, Path]:

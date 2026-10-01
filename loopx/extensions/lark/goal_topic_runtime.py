@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+from ...control_plane.collaboration import conversation_reply_context
 from ...file_lock import exclusive_file_lock
 from .manager_routing import (
     has_manager_binding,
@@ -682,13 +683,22 @@ def answer_lark_goal_topic(
     if manager:
         objective = MANAGER_AGENT_OBJECTIVE
     resolved_work_dir = Path(work_dir).expanduser().resolve()
+    reply_context = (
+        str(conversation_reply_context(dict(route))["context_text"])
+        if route.get("parent_id")
+        else ""
+    )
     if manager:
-        message = manager_message(text, route.get("context_materials"))
+        message = manager_message(
+            text, route.get("context_materials"), reply_context=reply_context
+        )
     else:
         message = (
             "这是来自已绑定 Lark Goal Topic 的用户消息。请直接回答当前问题；"
             "任何 Goal、Todo 或其他持久状态修改只生成预览，等待用户在 LoopX 明确确认后应用。"
-            "\n\n用户消息：" + str(text or "").strip()
+            + ("\n\n" + reply_context if reply_context else "")
+            + "\n\n用户消息："
+            + str(text or "").strip()
         )
     client_turn_id = "lark." + _opaque_digest(
         route.get("message_id"),
@@ -991,6 +1001,7 @@ def _process_lark_goal_topic_event(
         else [],
         "reply_context_verified": event.get("reply_context_verified") is True,
         "reply_to_bot": event.get("reply_to_bot") is True,
+        "reply_context": event.get("reply_context"),
     }
     ingest = ingest_lark_event_inbox(
         project=root,
@@ -1108,9 +1119,16 @@ def _process_lark_goal_topic_event(
         if manager
         else []
     )
+    captured_event = next(
+        item for item in projection["items"] if item.get("message_id") == message_id
+    )
     route = {
         **route,
         "source_sender_id": str(canonical.get("sender_id") or ""),
+        "source_conversation_id": str(event.get("chat_id") or ""),
+        # The immutable captured event owns reply ancestry on delivery retries.
+        "parent_id": captured_event.get("parent_id", ""),
+        "reply_context": captured_event.get("reply_context"),
         **({"context_materials": context_materials} if context_materials else {}),
     }
     delivery_path: Path | None = None

@@ -87,11 +87,62 @@ export interface SchedulerMonitorScheduleResult extends JsonObject {
   cadence_seconds: number | null;
 }
 
+export interface SchedulerSettledReplayResult extends JsonObject {
+  schema_version: typeof SCHEDULER_STATE_TRANSITION_RESULT_SCHEMA;
+  operation: "settled_replay";
+  hint: JsonObject & {
+    action: "preserve_current_schedule";
+    cadence_class: "settled_turn";
+    next_trigger: "fresh_turn_identity";
+    app_automation: JsonObject & {
+      apply: "none";
+      host_action: "none";
+      ack_required: false;
+      observed_host_rrule: string | null;
+    };
+  };
+}
+
 export type SchedulerStateTransitionResult =
   | SchedulerCadenceTransitionResult
   | SchedulerHostTransitionResult
   | SchedulerBackoffTransitionResult
-  | SchedulerMonitorScheduleResult;
+  | SchedulerMonitorScheduleResult
+  | SchedulerSettledReplayResult;
+
+function projectSettledReplay(request: JsonObject): SchedulerSettledReplayResult {
+  const observedRrule = optionalRequestString(request.observed_host_rrule, "observed_host_rrule");
+  // A closed receipt owns this Turn only. It cannot classify the live frontier
+  // as waiting, reset a scheduler identity, or authorize another host effect.
+  return {
+    schema_version: SCHEDULER_STATE_TRANSITION_RESULT_SCHEMA,
+    operation: "settled_replay",
+    hint: {
+      schema_version: "scheduler_hint_v0",
+      source: "quota.should-run",
+      action: "preserve_current_schedule",
+      cadence_class: "settled_turn",
+      reason_code: "interaction_heartbeat_settled_replay",
+      reason: "This Turn is settled, not the Goal frontier. Preserve the existing schedule and evaluate work under a fresh Turn identity.",
+      spend_policy: "no quota spend for settled Turn replay",
+      next_trigger: "fresh_turn_identity",
+      app_automation: {
+        apply: "none",
+        host_action: "none",
+        ack_required: false,
+        observed_host_rrule: observedRrule || null,
+        no_spend_for_cadence_change: true,
+      },
+      unchanged_poll: {
+        limits: { local_scheduler: null, codex_cli_tui: null, claude_code_loop: null },
+        after_limits: { local_scheduler: "continue", codex_cli_tui: "continue", claude_code_loop: "continue" },
+        final_quota_replan_check_enabled: false,
+        final_quota_replan_check_action: null,
+        spend_policy: "no quota spend for settled Turn replay",
+      },
+    },
+  };
+}
 
 const MONITOR_CADENCE_PATTERN =
   /^\s*(?<count>[1-9][0-9]{0,4})\s*(?<unit>s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*$/i;
@@ -482,5 +533,6 @@ export function evaluateSchedulerStateTransition(
   if (request.operation === "monitor_schedule") {
     return evaluateMonitorSchedule(request);
   }
+  if (request.operation === "settled_replay") return projectSettledReplay(request);
   throw new EffectRuntimeRequestError("Scheduler state transition operation is unsupported");
 }

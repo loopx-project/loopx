@@ -27,6 +27,25 @@ public-safe map over the current repository contracts, especially:
   [`loopx/bootstrap.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/bootstrap.py) for project registration,
   read-only-map opt-in, global sync, and host-loop activation.
 
+## Composition Contract
+
+The diagrams below are explanatory views over cooperating owners, not one
+executable global state enum. A transition in one machine is input evidence to
+another only through its declared command, observation or receipt boundary.
+Keep domain state, derived decisions, settlement phase and projection conditions
+separate as defined in [the taxonomy](state-definitions.md#state-taxonomy-and-ownership).
+
+A pure decision selects a legal transition from explicit facts; the owning
+authority still revalidates current scope and commits it. Completing a Todo,
+settling a Turn and delivering its result have different commit points. A lost
+response or delayed display must not repeat an already committed effect.
+
+For changes crossing these machines, use the
+[composition verification contract](../../architecture/rfcs/composable-state-machines-recovery-verification-v0.md):
+name the causal receipts, safety invariants, conditional progress assumptions,
+fault sequences and affected real entrypoints. Preserve independent user and
+agent channels: a scoped user gate can coexist with runnable unrelated work.
+
 ## How The Machines Compose
 
 ```mermaid
@@ -98,7 +117,9 @@ stateDiagram-v2
   Suggested --> Open: promoted / todo add
   Open --> Claimed: claimed_by set
   Claimed --> Running: quota selects this todo
-  Running --> Done: validated evidence or blocker accepted
+  Running --> Done: terminal outcome accepted
+  Running --> Open: in-flight writeback accepted
+  Running --> Blocked: blocker recorded
   Done --> SuccessorOpen: successor or unblock relation exists
   Done --> Archived: no follow-up or archive policy
   Open --> Blocked: status=blocked / blocker reason
@@ -114,7 +135,7 @@ stateDiagram-v2
 | `Suggested` | Suggestion output or planning prompt | Candidate work that has not entered the durable todo list. | Promote to `Open` or drop it. |
 | `Open` | `status=open` or unchecked Markdown item | Durable backlog item. | Claim, block, defer, supersede, or complete. |
 | `Claimed` | `claimed_by=<agent_id>` | Soft ownership/routing signal. It is not a lock. | Run if quota selects it, reassign, block, or complete. |
-| `Running` | Derived from `quota should-run` plus run history | A bounded turn is currently attempting this item. | Write evidence/blocker, then complete or reopen. |
+| `Running` | Derived from `quota should-run` plus run history | A bounded turn is currently attempting this item. | Write back progress or blocker; complete only when the Todo terminal contract is satisfied. |
 | `Done` | `status=done` or checked item plus evidence | The item has a terminal outcome. | Archive, create successor, or expose handoff clearance. |
 | `Blocked` | `status=blocked`, `reason`, capability/gate fields | Known blocker, not vague waiting. | Repair, ask owner, supersede, or reopen. |
 | `Deferred` | `status=deferred`, `resume_when` | Waiting for a concrete condition. | `ResumeReady` when the condition is satisfied. |

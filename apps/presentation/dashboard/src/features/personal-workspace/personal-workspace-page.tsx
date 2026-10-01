@@ -1,5 +1,5 @@
 import { goalCreateRequest } from "./goal-create-request";
-import { persistComposerSteeringRequests, readComposerSteeringRequests, type ComposerSteeringRequest } from "./composer-steering-recovery";
+import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
@@ -838,8 +838,6 @@ export function PersonalWorkspacePage({
   });
   const [sending, setSending] = useState(false);
   const [steering, setSteering] = useState(false);
-  const [restoredSteeringRequests] = useState(readComposerSteeringRequests);
-  const steeringRequests = useRef(restoredSteeringRequests);
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -903,17 +901,6 @@ export function PersonalWorkspacePage({
   }
   function setComposer(value: string) {
     setComposerDraft(composerDraftKey, value);
-  }
-  function retainSteeringRequest(key: string, request: ComposerSteeringRequest) {
-    steeringRequests.current.set(key, request);
-    // Persist before sending: reload after provider acceptance must replay the
-    // original ingress, never silently submit another Turn.
-    persistComposerSteeringRequests(steeringRequests.current);
-  }
-  function retireSteeringRequest(key: string, id: string) {
-    if (steeringRequests.current.get(key)?.id !== id) return;
-    steeringRequests.current.delete(key);
-    persistComposerSteeringRequests(steeringRequests.current);
   }
   async function reviewGoalDraft(draft: GoalDraft, edit = false, draftId = "") {
     // Source message + reviewed contents survive retry without merging distinct requests.
@@ -1681,7 +1668,7 @@ export function PersonalWorkspacePage({
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
     if (!message || composerBlocked || conversationHistoryState?.sendBlocked) return;
-    const previousSteering = steeringRequests.current.get(composerDraftKey);
+    const previousSteering = readSteeringRequest(composerDraftKey);
     const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text === message
       ? previousSteering : undefined;
     if ((retry || steeringTurnId) && conversationSessionId && callbacks.onSteerConversationTurn) {
@@ -1986,7 +1973,7 @@ export function PersonalWorkspacePage({
             ) : !managerChatOpen ? (
               <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
-                onViewAllOperations={() => setManagerChatOpen(true)} />
+                onViewAllOperations={() => setSelectedGoalTab("chat")} />
             ) : (
               <ChannelTimeline onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={managerChatItems} onSelect={setSelection} selectedGoal={null} showManagerTeamResults
                 onSteerTurn={!readOnly && callbacks.onSteerConversationTurn

@@ -272,7 +272,9 @@ def register_todo_command(
         choices=["approve", "reject", "cancel"],
         help=(
             "For todo complete on a user_gate, record the explicit owner decision. "
-            "Only approve consumes authority and resumes linked work."
+            "For a user_action, only cancel is accepted; it closes the reminder "
+            "without approving or resuming linked work. Only gate approval "
+            "consumes decision authority."
         ),
     )
     todo_parser.add_argument(

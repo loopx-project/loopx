@@ -5,7 +5,7 @@
 - **Delivery maturity:** Partial (M0/M0.5 checks, M1 typed action domains and M2 Turn contract generation implemented; M3/M4 retirement remains incomplete)
 - **Authors / owners:** LoopX contributors; control-plane kernel maintainers own approval
 - **Created:** 2026-09-15
-- **Last normative revision:** 2026-09-17
+- **Last normative revision:** 2026-10-01
 - **Implementation baseline:** `1dc6ad8d8`
 - **Related contracts:** `loopx/semantics/vocabulary_v0.json`,
   `loopx/semantics/inventory.py`,
@@ -720,6 +720,32 @@ outputs, transitions, persistence version and finite test domain. This is the
 boundary between a useful proof skeleton and an uncheckable claim of
 whole-program semantic convergence.
 
+
+### State meaning, relationships and executable evidence
+
+Classify a selected vocabulary by its role in the [state taxonomy](../../product/core-control-plane/state-definitions.md):
+persistent domain state, derived decision, execution/settlement phase or read
+projection. Similar spelling across roles is not evidence for merging enums.
+For a real change, identify its owner symbol, producing condition, legal exits,
+required evidence and consumers that interpret it. Reuse existing owner and
+projection declarations; do not add an obligatory registry entry for every
+local type or make this registry a runtime authority.
+
+Prioritize consequential relationships over carrier counts. A full projection
+must map or explicitly reject each source alternative; a lossy projection must
+name the distinction it discards and cannot be fed back as authority. Derive
+mechanical vocabulary/transition tables from an executable owner where one
+exists. Independently reviewed invariants still supply the test oracle: code
+and documentation generated from the same wrong rule can agree.
+
+F3 consumer-domain and F6 persisted-reader compatibility work stays within its
+existing scope and evidence boundaries. For each selected persistent change,
+exercise the named supported readers and version transitions with legal,
+malformed and historical records. Count a declaration or a source scan only
+as that kind of evidence, never as executed compatibility or behavioral
+soundness. Sequence/recovery correctness belongs to the
+[composition verification RFC](composable-state-machines-recovery-verification-v0.md).
+No scanner coverage expansion or new blocking check is claimed by this revision.
 
 ### State model and schema
 

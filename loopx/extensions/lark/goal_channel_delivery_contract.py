@@ -6,9 +6,9 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .identity_shapes import LARK_CHAT_ID_PATTERN
 
 _GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
-_LARK_CHAT_ID_RE = re.compile(r"^oc_[A-Za-z0-9_-]+$")
 _LARK_APP_ID_RE = re.compile(r"^cli_[A-Za-z0-9_-]+$")
 _LARK_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
@@ -42,7 +42,7 @@ def goal_channel_delivery_route(
     if (
         identity.get("mode") != "project_bot"
         or sender_identity != "bot"
-        or not _LARK_CHAT_ID_RE.fullmatch(chat_id)
+        or not LARK_CHAT_ID_PATTERN.fullmatch(chat_id)
         or not _LARK_PROFILE_RE.fullmatch(sender_profile)
         or sender_profile.lower() == "default"
         or not _LARK_APP_ID_RE.fullmatch(bot_app_id)

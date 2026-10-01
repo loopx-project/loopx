@@ -5,7 +5,7 @@
 - **Delivery maturity：** Partial（M0/M0.5 检查、M1 类型化动作域与 M2 Turn 契约生成已实现；M3/M4 退休仍未完成）
 - **Authors / owners：** LoopX 贡献者；控制面内核维护者拥有批准权
 - **Created：** 2026-09-15
-- **Last normative revision：** 2026-09-17
+- **Last normative revision：** 2026-10-01
 - **Implementation baseline：** `1dc6ad8d8`
 - **Related contracts：** `loopx/semantics/vocabulary_v0.json`、
   `loopx/semantics/inventory.py`、
@@ -566,6 +566,25 @@ external_input | compatibility_only | unknown
 
 候选处置在此仅为建议性元数据。注册表只保存允许标签与默认值，不存储逐候选决策，
 也不在产品代码中强制执行候选处理；漂移 smoke 只验证标签合同。
+
+### 状态含义、关系与可执行证据
+
+按[状态分类](../../product/core-control-plane/state-definitions.md)区分所选词表：
+持久领域状态、派生决策、执行／结算阶段、读取投影。跨角色拼写相似不证明应该合并
+枚举。真实变更需明确 owner symbol、产生条件、合法出口、所需证据和解释消费者。
+复用既有 owner 与 projection 声明，不要求每个局部类型都登记，也不让注册表成为
+运行时权威。
+
+优先验证有实际影响的关系，不追求载体数量。完整投影必须映射或显式拒绝每个源
+分支；有损投影要声明丢失的区分，不能反向充当权威。已有可执行 owner 时，从它
+派生机械性的词表／转换表。独立审阅的不变量仍是 oracle：从同一错误规则生成的
+代码和文档也可能相互一致。
+
+F3 消费者定义域和 F6 持久化 reader 兼容工作保持既有范围与证据边界。每个选中
+持久化变更用合法、损坏和历史记录执行具名支持 reader 与版本转换。声明和源码
+扫描只算相应证据，不等于已经执行兼容性或行为健全性验证。序列／恢复正确性
+归[组合验证 RFC](composable-state-machines-recovery-verification-v0.zh-CN.md)。
+本修订不声称扩大扫描覆盖或交付新的阻断检查。
 
 ### 状态模型与 schema
 

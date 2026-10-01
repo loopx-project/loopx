@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Square } from "lucide-react";
 import { ChatApiError } from "../../data/chat.js";
+import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, type SteeringRequest } from "./steering-recovery";
 import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceMessage } from "./personal-workspace-model";
 
@@ -15,12 +16,23 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
   const zh = locale === "zh-CN";
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const cacheKey = message.sourceSessionId && message.sourceTurnId
+    ? JSON.stringify(["inline", message.sourceSessionId, message.sourceTurnId]) : null;
+  const [restoredRequest] = useState(() => cacheKey ? readSteeringRequest(cacheKey) : undefined);
+  const [editing, setEditing] = useState(Boolean(restoredRequest));
+  const [draft, setDraft] = useState(restoredRequest?.text ?? "");
   const [steering, setSteering] = useState(false);
   const [steerError, setSteerError] = useState<string | null>(null);
   const [steerReceipt, setSteerReceipt] = useState(false);
-  const request = useRef<{ text: string; id: string } | null>(null);
+  const request = useRef<SteeringRequest | null>(restoredRequest ?? null);
+  useEffect(() => {
+    const restored = cacheKey ? readSteeringRequest(cacheKey) : undefined;
+    request.current = restored ?? null;
+    setDraft(restored?.text ?? "");
+    setEditing(Boolean(restored));
+    setSteerError(null);
+    setSteerReceipt(false);
+  }, [cacheKey]);
   const activity = message.activity ?? [];
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -35,19 +47,43 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
     : `${Math.floor(elapsed / 60)}${zh ? "分" : "m "}${elapsed % 60}${zh ? "秒" : "s"}`;
   const quiet = message.updatedAt !== undefined && now - message.updatedAt >= 20000;
 
+  function updateDraft(text: string) {
+    setDraft(text);
+    const previous = request.current;
+    if (!text) {
+      if (cacheKey && previous) retireSteeringRequest(cacheKey, previous.id);
+      request.current = null;
+      return;
+    }
+    const next = { sessionId: message.sourceSessionId ?? "", turnId: message.sourceTurnId ?? "", text,
+      id: previous?.text.trim() === text.trim() ? previous.id : crypto.randomUUID() };
+    request.current = next;
+    if (cacheKey) retainSteeringRequest(cacheKey, next);
+  }
+
   async function steer() {
     const text = draft.trim();
     if (!text || !message.pending || !message.sourceTurnId || !onSteerTurn || steering) return;
     // Retain the operation identity after a lost response; retry cannot deliver twice.
-    if (request.current?.text !== text) request.current = { text, id: crypto.randomUUID() };
+    if (request.current?.text.trim() !== text) updateDraft(draft);
+    const sent = request.current!;
+    if (cacheKey) retainSteeringRequest(cacheKey, sent);
     setSteering(true);
     setSteerError(null);
     try {
-      await onSteerTurn(message.sourceTurnId, text, request.current.id);
-      setDraft(""); setEditing(false); setSteerReceipt(true); request.current = null;
+      await onSteerTurn(message.sourceTurnId, text, sent.id);
+      if (cacheKey) retireSteeringRequest(cacheKey, sent.id);
+      if (request.current?.id === sent.id) {
+        setDraft(""); setEditing(false); setSteerReceipt(true); request.current = null;
+      }
     } catch (cause) {
       const definitelyNotDelivered = cause instanceof ChatApiError && cause.payload.delivery_state === "not_delivered";
-      if (definitelyNotDelivered) request.current = null;
+      if (definitelyNotDelivered && request.current?.id === sent.id) {
+        // Preserve the draft; only confirmed non-delivery can renew retry identity.
+        const next = { ...sent, id: crypto.randomUUID() };
+        request.current = next;
+        if (cacheKey && readSteeringRequest(cacheKey)?.id === sent.id) retainSteeringRequest(cacheKey, next);
+      }
       const message = cause instanceof Error ? cause.message : (zh ? "未确认接收，草稿已保留。" : "Delivery unconfirmed. Draft retained.");
       setSteerError(definitelyNotDelivered
         ? (zh ? "本次未送达；请检查当前回合与执行器，条件恢复后可重试原文。" : "Not delivered; check the current turn and executor, then retry the unchanged draft.")
@@ -85,7 +121,7 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
       : "No new activity yet. Waiting for the executor to update."}</p> : null}
     {editing ? <form className="personal-message-steer" onSubmit={event => { event.preventDefault(); void steer(); }}>
       <label>{zh ? "追加给本轮的指令" : "Instructions for this turn"}<textarea value={draft} maxLength={12000} disabled={steering}
-        onChange={event => setDraft(event.target.value)} rows={3}/></label>
+        onChange={event => updateDraft(event.target.value)} rows={3}/></label>
       <span>{message.pending
         ? (zh ? "调整当前工作，保持原有任务与会话。" : "Adjust the current work in this conversation.")
         : (zh ? "本轮已结束，草稿已保留；可复制到输入框作为新消息发送。" : "This turn ended. Copy the retained draft to the composer to send a new message.")}</span>

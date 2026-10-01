@@ -5,6 +5,7 @@
 | Status | Accepted |
 | Supersedes / closes | none |
 | Date | 2026-08-08 |
+| Last normative revision | 2026-10-01 |
 | Author | LoopX maintainers |
 | Scope | Public control-plane docs, packet contracts, refactor direction, test strategy |
 
@@ -637,6 +638,52 @@ Example replacements:
   `effect_program_from_ordered_steps` before rendering or validation;
 - `turn_driver/executor` should derive result status and next phase through
   `interpret_turn_result_packet` before committing a receipt.
+
+## Semantic control and execution ownership
+
+LoopX's semantic control plane preserves work meaning across Turns, Agents and
+runtimes: intent, ownership, dependencies, authority, evidence and continuation.
+Its execution responsibility covers the typed transactions and settlement
+steps it actually owns. Agent/capability reasoning proposes domain outcomes;
+the kernel checks their binding, admission and lifecycle obligations. Domain
+verifiers and users still judge the substance of an outcome.
+
+| Boundary | Owner | Observable commitment |
+| --- | --- | --- |
+| Domain judgment | Agent and capability | Proposed action/outcome with scoped evidence |
+| Control decision | Existing typed domain kernel | Legal next action and required proof from explicit facts |
+| Internal execution | Owning transaction/effect adapter | Durable state transition and bound receipt |
+| External execution | Host/provider | Its actual model/tool/environment effect and factual readback |
+| Presentation | Read-model owner | Evidence-backed state and available actions, with freshness limits |
+
+Sharing an algebra does not transfer execution authority. Host continuation,
+sandbox snapshots, model/tool interception and external rollback require their
+own supported runtime contracts; an effect plan or transcript does not prove
+those capabilities. No generic executor or second permission owner is added.
+
+## Decision replay, effect recovery and simulation
+
+| Operation | Inputs and promise | Limit |
+| --- | --- | --- |
+| Pure decision replay | Fixed trusted facts, command and rule version reproduce a decision | Does not execute effects or restore current authority |
+| Committed-effect recovery | Same logical identity and verified durable receipts skip committed steps and resume the owning protocol | Does not prove an unknown external effect never happened |
+| Counterfactual simulation | Explicitly substituted facts and a controlled interpreter compare possible decisions | Not evidence that the real provider or model would produce that outcome |
+
+Record versions, identity, ordering and relevant outcomes at the existing
+receipt boundary. Never rerun a model and call its new output historical
+replay. `unknown`, permission denial, cancellation, budget rejection and
+committed success retain their different recovery meanings. Cancellation does
+not erase an in-flight external effect. Retry must retain identity and follow
+the provider's guarantees; unsupported readback remains unknown.
+
+Adapter conformance compares observable effect order, short-circuit point,
+receipts, authority rejection and recovery, not only equal return values.
+Identity and associativity apply to regrouping the same ordered program, not
+reordering or speculative parallel execution. Preserve the existing decision
+against a universal executor until a real shared authority boundary justifies
+one. Use [composition verification](composable-state-machines-recovery-verification-v0.md)
+for multi-domain sequences and [provider acceptance](provider-effect-acceptance-v0.md)
+for protected external effects; neither contract implies cross-system exactly-once.
 
 ## State Machine As Interpretation Table
 
