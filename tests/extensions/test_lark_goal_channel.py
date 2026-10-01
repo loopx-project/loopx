@@ -2698,3 +2698,100 @@ def test_gate_notice_redacts_and_bounds_additional_context() -> None:
     assert "synthetic_fixture_secret_123456789" not in message
     assert len(message) < 2000
     assert "Review the current request in LoopX" in message
+
+
+def test_notify_cli_compact_quota_joins_same_read_complete_request(tmp_path: Path, monkeypatch) -> None:
+    from copy import deepcopy
+    from loopx.control_plane.todos.quota_summary import compact_quota_todo_summary_for_payload
+
+    body = "Review public release evidence and independent checks. " * 7
+    body += "Learning only. Expires at 2026-10-01T07:00:00Z; do not execute after expiry."
+    canonical = {"todo_id": "todo_release_review", "role": "user", "task_class": "user_action",
+                 "done": False, "status": "open", "updated_at": "2026-10-01T06:00:00Z",
+                 "text": body, "note": "Version 2.0 release review; not execution authority.",
+                 "evidence": "https://example.org/release/2.0"}
+    status = {"attention_queue": {"items": [{"goal_id": GOAL_ID,
+               "user_todos": {"items": [canonical]}}]}}
+    before = deepcopy(status)
+    reads = []
+    monkeypatch.setattr(goal_channel_cli, "registry_project_root", lambda _: tmp_path)
+    monkeypatch.setattr(goal_channel_cli, "collect_status", lambda **kwargs: reads.append(kwargs) or status)
+    def quota_from_status(observed, **kwargs):
+        assert observed is status
+        return {"goal_id": GOAL_ID, "state": "operator_gate", "notify_user_on_gate": True,
+                "interaction_contract": {"user_channel": {"action_required": True, "notify": "NOTIFY"}},
+                "user_todo_summary": compact_quota_todo_summary_for_payload({"gate_open_items": [canonical]})}
+    monkeypatch.setattr(goal_channel_cli, "build_quota_should_run", quota_from_status)
+    quota = goal_channel_cli._quota_packet(registry_path=tmp_path / "registry.json", runtime_root_arg=None,
+                                           goal_id=GOAL_ID, agent_id="fixture-agent")
+    assert len(reads) == 1  # no second provider read or snapshot race
+    short = quota["user_todo_summary"]["gate_open_items"][0]
+    assert len(short["text"]) <= 180 and "note" not in short
+    message, _ = goal_channel_contracts.gate_message(goal_id=GOAL_ID, objective="Release", quota_packet=quota,
+                                                    kanban_url="https://example.org/loopx")
+    assert body in message and canonical["note"] in message and canonical["evidence"] in message
+    assert "Expires at 2026-10-01T07:00:00Z" in message
+    calls = []
+    binding_path = _gate_test_binding(tmp_path)
+    result = _notify_test_gate(tmp_path=tmp_path, binding_path=binding_path, quota_packet=quota, runner=_fake_runner(calls))
+    assert result["status"] == "sent_verified" and result["readback_verified"] is True
+    sent = next(args for args in calls if "+messages-send" in args)
+    binding = read_goal_channel_binding(binding_path)["bindings"][GOAL_ID]
+    expected, _ = goal_channel_contracts.gate_message(
+        goal_id=GOAL_ID, objective=_registry(tmp_path)["goals"][0]["objective"],
+        quota_packet=quota, kanban_url=binding["kanban"]["base_url"],
+    )
+    assert sent[sent.index("--text") + 1] == expected
+    assert status == before
+    # A trailing content/evidence change beyond scheduler bounds is material.
+    old_generation = goal_channel_contracts.quota_human_gate_state_generation(quota)
+    canonical["note"] += " Additional public counterevidence."
+    assert goal_channel_contracts.quota_human_gate_state_generation(quota) != old_generation
+
+
+@pytest.mark.parametrize("mismatch", ["missing", "other_goal", "revision", "lifecycle", "overflow"])
+def test_notify_complete_source_mismatch_or_overflow_is_not_decision_ready(mismatch: str) -> None:
+    canonical = {"todo_id": "todo_release_review", "role": "user", "task_class": "user_action",
+                 "done": False, "status": "open", "updated_at": "2026-10-01T06:00:00Z",
+                 "text": "Review public release evidence. " * 10 + "Expiry: 2026-10-01T07:00:00Z."}
+    selected = {**canonical, "text": canonical["text"][:177] + "..."}
+    snapshot = {"goal_id": GOAL_ID, "items": [canonical]}
+    if mismatch == "missing":
+        snapshot["items"] = []
+    if mismatch == "other_goal":
+        snapshot["goal_id"] = "other-goal"
+    if mismatch == "revision":
+        canonical["updated_at"] = "2026-10-01T06:01:00Z"
+    if mismatch == "lifecycle":
+        canonical["status"] = "deferred"
+    if mismatch == "overflow":
+        canonical["note"] = "x" * 451
+    message, _ = goal_channel_contracts.gate_message(
+        goal_id=GOAL_ID, objective="Release", kanban_url="https://example.org/loopx",
+        quota_packet={"user_todo_summary": {"gate_open_items": [selected]}, "request_snapshot": snapshot},
+    )
+    assert "not decision-ready" in message and "todo_release_review" in message
+    assert "https://example.org/loopx" in message
+    assert "Reply with" not in message and canonical["text"] not in message
+
+
+def test_refresh_auto_notify_uses_same_complete_snapshot(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane.todos.quota_summary import compact_quota_todo_summary_for_payload
+    _, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+    body = "Review public release evidence. " * 12 + "Learning only; expires at 2026-10-01T07:00:00Z."
+    todo = {"todo_id": "todo_release_review", "role": "user", "task_class": "user_action",
+            "done": False, "status": "open", "updated_at": "2026-10-01T06:00:00Z", "text": body,
+            "note": "Independent review, no execution authority."}
+    status = {"attention_queue": {"items": [{"goal_id": GOAL_ID, "user_todos": {"items": [todo]}}]}}
+    reads = []
+    monkeypatch.setattr(goal_channel_lifecycle, "collect_status", lambda **kwargs: reads.append(kwargs) or status)
+    monkeypatch.setattr(goal_channel_lifecycle, "build_quota_should_run", lambda *args, **kwargs: {
+        "goal_id": GOAL_ID, "state": "operator_gate", "notify_user_on_gate": True,
+        "user_todo_summary": compact_quota_todo_summary_for_payload({"gate_open_items": [todo]}),
+    })
+    calls = []
+    result = run(_fake_runner(calls))
+    assert result["status"] == "sent_verified" and result["readback_verified"] is True
+    assert len(reads) == 1
+    sent = next(args for args in calls if "+messages-send" in args)
+    assert body in sent[sent.index("--text") + 1] and todo["note"] in sent[sent.index("--text") + 1]

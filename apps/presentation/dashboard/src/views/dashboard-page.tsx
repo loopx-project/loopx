@@ -3,7 +3,7 @@ import { conversationReturnSessions, reconcileConversationHistory, reconcileConv
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
-import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
+import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
 import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -1045,7 +1045,7 @@ function buildPersonalHomeModel(
     return (personalTodosForQueueItem(item, "user")?.items ?? [])
       .map((todo, todoOrder): PersonalNeedsYouItem & { sourceOrder: number; todoOrder: number; projectedDone: boolean } => ({
         projectedDone: todo.done,
-        details: attentionDetails(todo),
+        details: attentionDetailsFromSnapshot(todo, item.user_todos?.items ?? [], item.goal_id),
         actionKind: todo.action_kind ?? null,
         blocking,
         goalId: item.goal_id,

@@ -1705,12 +1705,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(operatorMessage) ? 5000 : 1200));
     await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction, scriptedAnswer?.goal_draft), status: 200 });
   });
-  await page.route("**/api/actions?**", async (route) => {
+  await page.route(/\/api\/actions(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
     const matching = Array.from(actionProposals.values()).filter((proposal) => {
-      if (proposal.status === "cancelled") return false;
       if (goalId && (proposal.context?.goal_id ?? proposal.normalized_parameters?.goal_id) !== goalId) return false;
       return !contextKind || proposal.context?.kind === contextKind;
     });

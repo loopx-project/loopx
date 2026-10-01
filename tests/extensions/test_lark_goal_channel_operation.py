@@ -1123,6 +1123,22 @@ def test_card_is_one_bounded_non_forwardable_confirmation_projection(
     } == {"confirm", "reject"}
 
 
+def test_cancelled_request_card_does_not_claim_execution_completed(tmp_path: Path) -> None:
+    store, registry, _runtime, _binding, _target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    cancelled = store.cancel(proposal["proposal_id"])
+
+    card = build_goal_channel_operation_result_card(cancelled)
+
+    assert cancelled["operation"]["outcome"]["outcome"] == "cancelled_before_confirmation"
+    assert card["header"]["template"] == "orange"
+    tag = card["header"]["text_tag_list"][0]
+    assert tag["color"] == "orange"
+    assert tag["text"]["content"] == "确认请求已取消，未执行"
+    assert "已完成" not in card["config"]["summary"]["content"]
+    assert cancelled["operation"].get("authorization_consumed_at") is None
+
+
 def test_lark_cards_consume_one_shared_ts_frame_each(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

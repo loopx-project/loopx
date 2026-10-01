@@ -1,4 +1,5 @@
 import type { WorkspaceAttention } from "./personal-workspace-model";
+import { todoRequestContent } from "../../../../../../loopx/control_plane/presentation/todo_request_content.js";
 
 /** A display of existing Todo facts, never a gate or dependency evaluator. */
 export type AttentionDetails = {
@@ -37,6 +38,16 @@ export function attentionDetails(todo: Record<string, unknown>): AttentionDetail
     decisionScope: kind && granularity && scopeKey ? { kind, granularity, scopeKey } : null,
     supersededBy,
   };
+}
+
+export function attentionDetailsFromSnapshot(
+  todo: Record<string, unknown>, items: Record<string, unknown>[], goalId: string,
+): AttentionDetails {
+  const detail = attentionDetails(todo);
+  const content = todoRequestContent(todo, {goal_id: goalId, items}, goalId);
+  // A failed join remains a summary, never a purported complete request.
+  return {...detail, requestText: content?.text ?? null,
+    reason: content?.note ?? null, evidence: content?.evidence ?? null};
 }
 
 /** Stamp only the source/Goal being observed; unrelated failed reads cannot fence it. */

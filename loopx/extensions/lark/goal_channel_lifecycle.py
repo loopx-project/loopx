@@ -20,6 +20,7 @@ from .goal_channel_contracts import (
     human_gate_auto_notify_enabled,
     human_gate_auto_notify_marker_enabled,
     human_gate_auto_notify_marker_path,
+    notification_request_snapshot,
     read_goal_channel_binding,
 )
 from .goal_channel_runtime import auto_notify_lark_goal_channel_gate
@@ -354,6 +355,7 @@ def sync_human_gate_after_refresh(
                 goal_id=goal_id,
                 agent_id=agent_id,
             )
+            quota_packet["request_snapshot"] = notification_request_snapshot(status, goal_id)
         except Exception as error:
             return _with_failure(
                 goal_channel_gate_sync_failure(

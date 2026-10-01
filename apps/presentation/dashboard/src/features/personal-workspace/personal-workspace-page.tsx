@@ -575,7 +575,7 @@ function operationProposalFields(
         ? t("proposal.primary.operationDeliveryPending")
         : frame?.lifecycleState ?? proposal.status,
     },
-    ...(frame?.kind === "result" ? [{
+    ...(frame?.kind === "result" && frame.resultKind !== "cancelled" ? [{
       key: "result_delivery",
       label: t("proposal.field.resultDelivery"),
       value: frame.resultDeliveryVerified

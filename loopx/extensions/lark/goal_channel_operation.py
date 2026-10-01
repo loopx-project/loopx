@@ -360,11 +360,12 @@ def build_goal_channel_operation_result_card(
     pending = frame.get("kind") == "pending"
     unknown = result_kind == "unknown"
     not_executed = result_kind == "not_executed"
+    cancelled = result_kind == "cancelled"
     rejected = result_kind == "rejected"
     simulated = result_kind == "simulation_completed"
     template = (
         "orange"
-        if pending or unknown or not_executed
+        if pending or unknown or not_executed or cancelled
         else "red"
         if rejected
         else "green"
@@ -376,6 +377,8 @@ def build_goal_channel_operation_result_card(
         if unknown
         else "已结束，未执行"
         if not_executed
+        else "确认请求已取消，未执行"
+        if cancelled
         else "已拒绝"
         if rejected
         else "模拟完成"
@@ -408,7 +411,7 @@ def build_goal_channel_operation_result_card(
                     "tag": "text_tag",
                     "text": {"tag": "plain_text", "content": result_label},
                     "color": "orange"
-                    if pending or unknown or not_executed
+                    if pending or unknown or not_executed or cancelled
                     else "red"
                     if rejected
                     else "green",
