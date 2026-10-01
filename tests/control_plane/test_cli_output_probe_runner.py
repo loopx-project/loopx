@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import runpy
+import re
 from pathlib import Path
 
 import pytest
@@ -86,5 +87,6 @@ def test_runner_still_rejects_actual_stdout_growth(
         return rc, text + " " * 15_000
 
     monkeypatch.setattr(probe, "_invoke_cli", oversized_stdout)
-    with pytest.raises(AssertionError, match="baseline ceiling is 14500"):
+    ceiling = probe.CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"].max_chars["crowded"]["json"]
+    with pytest.raises(AssertionError, match=re.escape(f"baseline ceiling is {ceiling}")):
         crowded_turn_probe(probe, cli_output_semantics, tmp_path / "growth")
