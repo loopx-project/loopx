@@ -453,7 +453,14 @@ overhead；不存在 production authority。
 `packages/dsh-loopx-plugin`）落地：provider-neutral envelope 与 stats record、integrity receipt、
 read-only diagnostic projection、deterministic DSH-shaped fixture，以及首次写入 ledger 之前的
 producer 侧 public-safety 拒绝。P0 exit 之前仍未完成：在真实 `dsh` session 上的 eligible C1
-observer run、overhead 测量报告，以及下文 decision 4 的 ledger retention 与 deletion profile。
+observer run、overhead 测量报告，以及部署 owner 对下文 decision 4 的 ledger retention 与
+deletion profile 的接受决定。
+[本地 retention 参考方案（v0）](../../../loopx/capabilities/reliability_diagnostics/docs/local-retention-v0.md#中文)
+及其合成 CLI lifecycle smoke 提供 canonical 布局的离线导出／删除／恢复演练，包含实际 shell
+边界检查、安装包读回与负面证据保留；
+它们没有实现自动 retention，也未证明真实 observer 停写、文件名／租户隔离、C0/C1 或部署的
+删除 policy。实现 PR 和 milestone 证据继续归入
+[task #5211](https://github.com/loopx-project/loopx/issues/5211)。
 
 ### P1 — Benchmark-qualified diagnostic pilot
 

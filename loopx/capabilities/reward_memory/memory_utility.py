@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
+from ...public_safe_text import PUBLIC_SAFE_REFERENCE_PATTERN as _EXISTING_TOKEN_RE
 from .application import (
     APPLICATION_OUTCOMES,
     RECALL_MODES,
@@ -31,7 +32,6 @@ EVIDENCE_BASES = frozenset(
     }
 )
 
-_EXISTING_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
 _OPAQUE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 _MEMORY_REF_DIGEST_RE = re.compile(r"^(?:[0-9a-f]{16}|sha256:[0-9a-f]{64})$")
 _MAX_MEMORY_DIGESTS = 16

@@ -25,7 +25,8 @@
 
 按 `ce3862e33` 核对，#5054、#5140、#5144、#5156、#5173、#5175、#5169
 均已合并。事件退役、archive 恢复、managed 进程监督、reviewed 本地切换和 native
-drain 不再计作新待办 PR。#4931 仍是开放的 SQLite 优化，不是已完成 D2 验收。
+drain 不再计作新待办 PR。此后 SQLite 读取证明优化
+[#4931](https://github.com/loopx-project/loopx/pull/4931) 已在 `9482a9496` 合并；D2 资格化仍未完成。
 
 接下来并行验证整 Goal 执行／消费者集成和本地 profile，再统一新 Goal／安装／设置
 及受支持升级入口，切走最后调用方时同步删除对应旧 writer。保留必要 Host IO、
@@ -2512,8 +2513,8 @@ SQLite 证明与 provider-neutral 归档恢复共用持有私有状态的 TS 重
 
 **2026-09-24 基线核对。** 保留 claim 的 #4870、reviewed cutover #4888、shadow drain
 规划 #4920 已合并，快照分页 #4922、SQLite runtime 准入 #4960 与刷新显示恢复 #4961 也已
-合并，后续应验收组合 head，而不是继续沿用旧的 PR hold；SQLite 读取证明优化 #4931 仍在
-评审。#4224 实测 1 MiB receipt/scan 超预算，恢复和自然时间资格仍有缺项，不能将优化 PR
+合并，后续应验收组合 head，而不是继续沿用旧的 PR hold；SQLite 读取证明优化 #4931 当时仍在
+评审，此后已合并。#4224 实测 1 MiB receipt/scan 超预算，恢复和自然时间资格仍有缺项，不能将优化 PR
 当成 D2 通过。摘要规则收口推进投影恢复边界，但没有把其他调用方或默认切换标记完成；
 剩余工作按当前核对表归类，不再按 helper 迁移数量机械扣减。
 

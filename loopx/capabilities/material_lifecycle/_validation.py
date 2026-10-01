@@ -14,8 +14,8 @@ from ...control_plane.runtime.public_safety import (
     SECRET_LIKE_SURFACE_PATTERN,
     find_public_safe_local_path,
 )
+from ...public_safe_text import COMPACT_TOKEN_PATTERN as _TOKEN_RE
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 # Refs #5136, direction 3: "does this text carry a local path?" is decided once
 # by find_public_safe_local_path; this site keeps its own rejection message and
 # length limit for whatever the owner recognizes.

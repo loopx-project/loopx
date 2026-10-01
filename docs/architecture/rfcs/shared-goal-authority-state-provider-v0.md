@@ -29,7 +29,8 @@
 Audit `ce3862e33`: #5054, #5140, #5144, #5156, #5173, #5175 and #5169
 are merged. Do not count event retirement, archive recovery, managed process
 supervision, reviewed local cutover or native drain as new pending PRs.
-#4931 remains an open SQLite optimization, not a completed D2 qualification.
+The SQLite read-proof optimization [#4931](https://github.com/loopx-project/loopx/pull/4931)
+has since merged at `9482a9496`; D2 qualification remains incomplete.
 
 Next: qualify whole-Goal execution/consumer integration and matched local
 profiles in parallel; then unify new-Goal/install/settings and supported upgrade
@@ -3263,7 +3264,8 @@ new implementation work; changing languages or moving a helper is not an exit.
 **Earlier 2026-09-24 implementation context.** Display refresh advances
 projection recovery/client closure without claiming every consumer qualified. SQLite #4910 added the larger measurement axes; #4224 records
 failed 1 MiB receipt/scan budgets and still-missing recovery/soak evidence.
-#4931 is the in-review read-proof optimization, not proof that D2 passed.
+At that checkpoint #4931 was still in review. Its subsequent merge supplies
+read-proof optimization, not proof that D2 passed.
 Snapshot pagination #4922 has merged and still must be qualified at its accepted
 head. None of these PR statuses grants cutover or changes the selected profile.
 

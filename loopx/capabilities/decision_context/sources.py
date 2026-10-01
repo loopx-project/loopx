@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from ...public_safe_text import COMPACT_TOKEN_PATTERN as _TOKEN_RE
+
 DECISION_SOURCE_MANIFEST_SCHEMA_VERSION = "decision_source_manifest_v0"
 DECISION_SOURCE_SCAN_RECEIPT_SCHEMA_VERSION = "decision_source_scan_receipt_v0"
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SOURCE_KINDS = {
     "artifact",
     "conversation",

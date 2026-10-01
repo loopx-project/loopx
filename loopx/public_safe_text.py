@@ -147,6 +147,17 @@ SECRET_LIKE_SURFACE_PATTERN = re.compile(
     r"\btoken[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,})"
 )
 
+# Shared identifier shapes stay here with the sibling public-safe text shapes.
+# They express syntax only: each consuming contract retains its own field names,
+# error text, and any additional validation policy.
+PUBLIC_SAFE_REFERENCE_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$"
+)
+COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+MODULE_QUALIFIED_SURFACE_PATTERN = re.compile(
+    r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$"
+)
+
 
 # The text-owner rule set (feedback / authority / boundary_authority / the
 # TypeScript Vision checkpoint). Each entry carries an explicit category and a
