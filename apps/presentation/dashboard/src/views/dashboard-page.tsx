@@ -101,6 +101,7 @@ import {
   type WorkspaceAgentOption,
   type WorkspaceAttention,
   type WorkspaceGoal,
+  type WorkspaceGoalTab,
   type WorkspaceGoalUsage,
   type WorkspaceHomeLane,
   type WorkspaceImageAttachment,
@@ -1245,7 +1246,8 @@ function buildPersonalHomeModel(
 }
 function PersonalGoalHome({
   goalArchiveLoadState,
-  initialManagerChatOpen,
+  selectedView,
+  onSelectView,
   isLoading,
   onGoalActivationStateChange,
   onGoalDeleted,
@@ -1262,11 +1264,12 @@ function PersonalGoalHome({
   toggleTheme,
 }: {
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
-  initialManagerChatOpen: boolean;
+  selectedView?: WorkspaceGoalTab;
+  onSelectView: (view: WorkspaceGoalTab) => void;
   isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
-  onSelectGoal: (goalId: string) => void;
+  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   onRefresh: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
@@ -2619,18 +2622,8 @@ function PersonalGoalHome({
     setAgentMenuOpen(false);
   }
 
-  function openManagerChat() {
-    onSelectGoal("");
-    setMobilePanel("chat");
-  }
-
-  function openGoalList() {
-    onSelectGoal("");
-    setMobilePanel("goals");
-  }
-
   function openGoalChat(goalId: string) {
-    onSelectGoal(goalId);
+    onSelectGoal(goalId, "chat");
     setMobilePanel("chat");
   }
 
@@ -2966,7 +2959,6 @@ function PersonalGoalHome({
               return { ...current, [targetContextId]: [...messages, { id, sourceMessageId: `steer:${ingressId}`, sourceTurnId: turnId, lines: [], role: "user", text: message }] };
             });
           },
-          onOpenGoal: openGoalChat,
           onOpenRunSession: async (run) => {
             if (!run.sessionId) return;
             const sessionId = run.sessionId;
@@ -2975,7 +2967,6 @@ function PersonalGoalHome({
               ...current,
               [sessionId]: snapshot,
             }));
-            openGoalChat(run.goalId);
             setMessagesByContext((current) => ({
               ...current,
               [run.goalId]: snapshot.messages.map((message) => ({
@@ -2999,7 +2990,6 @@ function PersonalGoalHome({
               turnId: snapshot.session.active_turn_id ?? undefined,
             });
           },
-          onOpenOutput: (output) => openGoalChat(output.goalId),
           ...(goalSubagentConfigurationEnabled ? {
           onPreviewGoalSubagentConfiguration: async (request) => {
             const preview = await previewGoalSubagentConfiguration(request);
@@ -3085,14 +3075,15 @@ function PersonalGoalHome({
           },
           onRetryResumeRun: retryManagerSession,
           onSelectAgent: chooseAgent,
-          onSelectGoal: (goalId) => goalId ? openGoalChat(goalId) : openManagerChat(),
+          onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
+          onSelectView,
           onSendMessage: async (message, agentId, goalId, attachments) => sendManagerQuestion(message, { agentId, goalId, attachments }),
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, goalId, loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,
         }}
         goalArchiveLoadState={goalArchiveLoadState}
-        initialManagerChatOpen={initialManagerChatOpen}
+        selectedView={selectedView}
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
@@ -3303,12 +3294,16 @@ export function DashboardPage() {
     setPayload(nextPayload);
     setSource(nextSource);
     setStatusUrl(url);
-    await navigate({
-      search: (current) => ({
-        ...current,
-        statusUrl: url,
-      }),
-    });
+    // Loading the current source on reload must not add a duplicate history
+    // entry: Back should return to the user's previous workspace view.
+    if (search.statusUrl !== url) {
+      await navigate({
+        search: (current) => ({
+          ...current,
+          statusUrl: url,
+        }),
+      });
+    }
     if (!statusRequestIsCurrent(statusRequestFenceRef.current, request)) return false;
     statusRequestFenceRef.current.requestedUrl = null;
     setRequestedStatusUrl(null);
@@ -3549,11 +3544,12 @@ export function DashboardPage() {
     }
   }, [search.goalId, isLoading, progress, source]);
 
-  function selectGoal(goalId: string) {
+  function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
     void navigate({
       search: (current) => ({
         ...current,
         goalId,
+        view: view === "chat" ? "conversation" : view,
       }),
     });
   }
@@ -3574,7 +3570,10 @@ export function DashboardPage() {
   return (
     <PersonalGoalHome
       goalArchiveLoadState={goalArchiveLoadState}
-      initialManagerChatOpen={search.view === "conversation" && !search.goalId}
+      selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
+      onSelectView={(view) => {
+        void navigate({ search: current => ({ ...current, view: view === "chat" ? "conversation" : view }) });
+      }}
       isLoading={isLoading}
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;

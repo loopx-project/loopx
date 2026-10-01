@@ -15,6 +15,7 @@ import { chatRecoveryScenario } from "./personal-workspace-browser/chat-recovery
 import { composerSessionAdmissionScenario } from "./personal-workspace-browser/composer-session-admission.mjs";
 import { attachedHostFollowUpScenario } from "./personal-workspace-browser/attached-host-follow-up.mjs";
 import { conversationReturnContinuityScenario } from "./personal-workspace-browser/conversation-return-continuity.mjs";
+import { workspaceViewRecoveryScenario } from "./personal-workspace-browser/workspace-view-recovery.mjs";
 import { conversationHistoryRecoveryScenario } from "./personal-workspace-browser/conversation-history-recovery.mjs";
 import { executionChipScenario } from "./personal-workspace-browser/execution-chip.mjs";
 import {
@@ -55,6 +56,7 @@ import { conversationStartupScenario } from "./personal-workspace-browser/conver
 
 const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario];
 scenarioCatalog.push(confirmedOperationsScenario);
+scenarioCatalog.push(workspaceViewRecoveryScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
