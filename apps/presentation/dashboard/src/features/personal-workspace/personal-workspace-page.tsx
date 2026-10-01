@@ -1,4 +1,5 @@
 import { goalCreateRequest } from "./goal-create-request";
+import { persistComposerSteeringRequests, readComposerSteeringRequests, type ComposerSteeringRequest } from "./composer-steering-recovery";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
@@ -810,7 +811,8 @@ export function PersonalWorkspacePage({
   });
   const [sending, setSending] = useState(false);
   const [steering, setSteering] = useState(false);
-  const steeringRequests = useRef(new Map<string, { sessionId: string; turnId: string; text: string; id: string }>());
+  const [restoredSteeringRequests] = useState(readComposerSteeringRequests);
+  const steeringRequests = useRef(restoredSteeringRequests);
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -872,6 +874,17 @@ export function PersonalWorkspacePage({
   }
   function setComposer(value: string) {
     setComposerDraft(composerDraftKey, value);
+  }
+  function retainSteeringRequest(key: string, request: ComposerSteeringRequest) {
+    steeringRequests.current.set(key, request);
+    // Persist before sending: reload after provider acceptance must replay the
+    // original ingress, never silently submit another Turn.
+    persistComposerSteeringRequests(steeringRequests.current);
+  }
+  function retireSteeringRequest(key: string, id: string) {
+    if (steeringRequests.current.get(key)?.id !== id) return;
+    steeringRequests.current.delete(key);
+    persistComposerSteeringRequests(steeringRequests.current);
   }
   async function reviewGoalDraft(draft: GoalDraft, edit = false, draftId = "") {
     // Source message + reviewed contents survive retry without merging distinct requests.
@@ -1641,20 +1654,20 @@ export function PersonalWorkspacePage({
         return;
       }
       const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
-      steeringRequests.current.set(composerDraftKey, request);
+      retainSteeringRequest(composerDraftKey, request);
       setSteering(true);
       setActionFeedback(null);
       setImageAttachmentError(null);
       try {
         await callbacks.onSteerConversationTurn(selectedGoalId ?? "manager", request.turnId, message, request.id);
-        steeringRequests.current.delete(composerDraftKey);
+        retireSteeringRequest(composerDraftKey, request.id);
         if (!messageOverride) setComposerDraft(composerDraftKey, "", composer);
         setActionFeedback(locale === "zh-CN" ? "执行器已接收本轮追加指令。" : "The executor accepted instructions for this turn.");
       } catch (error) {
         // Unknown delivery retries the original Turn even after it completes.
         // A confirmed non-delivery may use a new ingress after recovery.
         if (error instanceof ChatApiError && error.payload.delivery_state === "not_delivered") {
-          steeringRequests.current.delete(composerDraftKey);
+          retireSteeringRequest(composerDraftKey, request.id);
         }
         setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
       } finally { setSteering(false); }

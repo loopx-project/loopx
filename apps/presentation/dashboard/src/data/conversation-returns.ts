@@ -31,8 +31,14 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
   createReply: (message: ChatVisibleMessage) => T,
 ): T[] {
   const byId = new Map(messages.map((row) => [row.message_id, row]));
-  const byTurn = new Map(messages.filter((row) => row.origin !== "manager_followup")
-    .map((row) => [`${row.turn_id}:${row.role === "user" ? "user" : "assistant"}`, row]));
+  const byTurn = new Map<string, ChatVisibleMessage>();
+  for (const row of messages) {
+    if (row.origin === "manager_followup") continue;
+    const key = `${row.turn_id}:${row.role === "user" ? "user" : "assistant"}`;
+    // The Turn starts with its user request. Later user instructions have their
+    // own message IDs; they must not hydrate that original optimistic request.
+    if (row.role !== "user" || !byTurn.has(key)) byTurn.set(key, row);
+  }
   const seen = new Set(previous.filter((row) => row.sourceSessionId === sessionId).map((row) => row.sourceMessageId));
   let changed = false;
   const updated = previous.map((row) => {

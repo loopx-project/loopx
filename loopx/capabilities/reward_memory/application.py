@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -10,6 +9,10 @@ from datetime import datetime
 from typing import Any, Literal, get_args
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import (
+    MODULE_QUALIFIED_SURFACE_PATTERN as SURFACE_RE,
+    PUBLIC_SAFE_REFERENCE_PATTERN as TOKEN_RE,
+)
 from ..context_providers import build_context_provider
 from ..context_providers.base import (
     ContextProvider,
@@ -50,8 +53,6 @@ DURABLE_RECALL_CLASSES = {
     "soft_preference",
     "procedural_experience",
 }
-TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
-SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
 MAX_QUERY_STEPS = 3
 MAX_RESULTS = 8
 MAX_SETUP_HINT = 500

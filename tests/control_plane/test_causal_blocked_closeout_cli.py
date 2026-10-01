@@ -20,10 +20,10 @@ MONITOR_ID = "todo_causal_monitor"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("kind", ["monitor_changed", "todo_done"])
+@pytest.mark.parametrize("kind,defer", [("monitor_changed", False), ("todo_done", False), ("todo_done", True)])
 def test_pending_causal_wait_settles_once_and_releases_independent_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-    provider: str, kind: str,
+    provider: str, kind: str, defer: bool,
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -67,8 +67,10 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     ))
     rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
+    if defer:
+        next(todo for todo in listed["todos"] if todo["todo_id"] == TODO_ID)["claimed_by"] = AGENT_ID
     initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="soft_claim", leases=[],
+        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="legacy" if defer else "soft_claim", leases=[],
     ), state_path=state, provider=provider)
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"causal-blocked-{kind}-{provider}")
@@ -83,6 +85,18 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
                        "--resume-when", f"{kind}:{MONITOR_ID}",
                        "--successor-todo-id", ALTERNATIVE_TODO_ID)
     assert rc == 0, wait
+    if defer:
+        rc, acquired = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                           "--owner", AGENT_ID, "--idempotency-key", "execution-wait", "--ttl-seconds", "900")
+        assert rc == 0, acquired
+        rc, suspended = cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                            "--agent-id", AGENT_ID, "--status", "deferred",
+                            "--resume-when", f"{kind}:{MONITOR_ID}", "--reason", "Dependency pending",
+                            "--task-lease-idempotency-key", "execution-wait",
+                            "--task-lease-expected-version", str(acquired["lease"]["version"]))
+        assert rc == 0, json.dumps(suspended, indent=2)
+        rc, lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        assert rc == 0 and lease["lease"]["status"] == "released", lease
     refresh_args = ("refresh-state", "--goal-id", GOAL_ID,
                     "--classification", "causal_wait_writeback", "--delivery-batch-scale", "single_surface",
                     "--delivery-outcome", "outcome_gap", *binding,
@@ -108,7 +122,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     rc, after = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, after
     todo = after["todos"][0]
-    assert todo["status"] == "open" and todo["resume_ready"] is False
+    assert todo["status"] == ("deferred" if defer else "open") and todo["resume_ready"] is False
     assert todo["resume_when"] == f"{kind}:{MONITOR_ID}"
     assert todo["completion_validation_sha256"] == digest
     rc, next_turn = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import PUBLIC_SAFE_REFERENCE_PATTERN as TOKEN_RE
 from .application import REWARD_MEMORY_APPLICATION_RECEIPT_SCHEMA_VERSION
 from .candidate_review import (
     REWARD_MEMORY_REVIEW_SCHEMA_VERSION,
@@ -31,7 +31,6 @@ APPLICATION_DISPOSITIONS = {"applied", "not_applied", "refuted"}
 UTILITY_EVALUATION_STATUSES = {"accepted", "rejected", "not_requested"}
 DOMAIN_FAMILIES = {"issue_fix", "loopx"}
 OPERATOR_ACTIONS = {"edit", "retire"}
-TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
 MAX_RECEIPTS = 24
 MAX_OPERATOR_CONTROLS = 8
 

@@ -473,6 +473,21 @@ Stage A 替换当前 Todo note，不提供不可变历史版本或私有 memory 
 
 [Golden-query 集](../../product/use-cases/steward/golden-queries.md)提供简短用户请求及独立的结果/注意力验收。GQ01/GQ02 验收创建与接入已有 Agent；GQ03/GQ04 验收找负责人派单；GQ05/GQ11–GQ13 验收两轮小团队协调，GQ07–GQ09 验收连续性；GQ06/GQ10/GQ14–GQ15 扩展材料、注意力和重排。GQ16/GQ17 保留为后续跨主机/规模验收。这些是既有 A1–A24 上的场景，不新增 Core 协议状态。
 
+GQ06 的[材料到实际改进试点](../../product/use-cases/steward/golden-queries.md#gq06-material-to-work-pilot--从材料到实际改进)
+沿同一 M2/M3 边界验收普通文章请求。来源身份、对当前工作的适用性与结果是否已经
+达成都要分别核验：已收录的来源或已写出的方案不能关闭未完成工作，只有字节变化
+的新版本也不构成重复派单的理由。先比较当前权威工件与接收方评估，再选择有依据
+的不改、已有相关工作、直接执行获准动作或有界的新请求。笔记/阅读回执不等于实现
+或采用。
+
+归属沿用既有 conversation/artifact owner 处理输入及来源，已配置的笔记工作流
+或显式激活的 Material Lifecycle 处理获授权知识写入，collaboration/work-items
+处理评估、执行与回传。普通阅读不激活 Material Lifecycle。共享决策与 effect
+语义放在现有 TypeScript owner，provider IO 留在适配器。不新增来源专用分类器、
+管家专属材料存储、强制 memory provider 或第二个 inbox。App 优先的 release 验收
+包含同来源但工作未完成、新来源却无增量、范围纠偏及丢失 ACK 后的重放；Lark 独立
+验收同一关系。这份规格使下一步实现/验收可执行，不代表 M2/M3 或 GQ06 已通过。
+
 路由失败要区分：来源未读/不可用、目录不完整/过期、没有职责匹配的注册人、未获授权、缺少绑定、runtime 可执行性未知、容量等待、接收者拒绝。先在许可范围刷新来源、探测和通过原 owner 修复合格绑定，再要求用户定位 Agent；注册本身既不授权，也不证明可达。没有现成接收者时可沿已有授权的创建路径处理；否则保留请求，只询问确实缺失的决定。不误投给唯一但不相关的候选，也不暗中替换用户指定模型。只给出好看的建议却没有执行用户要求的委派，仍是未交付。
 
 普通追问保留原负责人，简单查询直接处理；同一绑定只保留一个执行驱动。事件续接和延迟回传复用既有 request/outbox 与 continuous-monitor owner，不靠提高轮询频率补偿。通过有作用域的上下文复用约束，分别保存偏好、当前事实和动作授权；可选记忆 provider 不变成前置条件。GQ03 的 CI 例子要求查明因果和其他 review blocker，不是无条件 approve 政策。

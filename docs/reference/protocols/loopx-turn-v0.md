@@ -264,6 +264,18 @@ A Host leader exiting, its output pipes closing and its descendants stopping
 are distinct observations. On POSIX, LoopX starts a dedicated process group,
 sends TERM and escalates to KILL after 300 ms, **including when the leader has
 already exited**. Normal result return also cleans up leftover group members.
+After KILL, the supervisor uses a one-second observation budget for group absence or an
+all-zombie group, observed through signal zero and POSIX `ps` group/state output.
+Zombies cannot execute and need not have been reaped by init. Live, stopped or
+unknown states remain non-terminal. Missing/failed observation or deadline
+expiry fails supervision instead of returning a normal Host result; a sent
+signal is not a cleanup certificate. No command timeout is extended.
+
+KILL 后监督器以一秒观测预算核对进程组消失或只剩僵尸进程，通过零信号与 POSIX
+`ps` 的组号/状态观测判断。僵尸不能继续执行，不要求 init 已回收；存活、暂停或
+未知状态仍非终态。观测缺失/失败或超时会报监督失败，不返回普通 Host 结果；
+发出信号不等于清理完成，也不延长命令超时。
+
 Host commands must not use that group to launch intended persistent services.
 Windows retains Python command-launch compatibility (including batch entrypoints)
 through a transport-only relay, then attempts tree termination before killing

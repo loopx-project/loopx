@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import (
+    MODULE_QUALIFIED_SURFACE_PATTERN as SURFACE_RE,
+    PUBLIC_SAFE_REFERENCE_PATTERN as TOKEN_RE,
+)
 from .experience_quality import (
     normalize_procedural_experience,
     procedural_experience_quality,
@@ -34,8 +37,6 @@ ELIGIBLE_POLICY_ACTOR_ROLES = {
     "verified_repository_core_contributor",
     "verified_project_owner_or_operator",
 }
-TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$")
-SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
 MAX_SURFACES = 12
 MAX_ACTION_SCOPES = 12
 
