@@ -593,6 +593,8 @@ def handle_pr_review_command(
                 )
                 payload["request"]["local_checkpoint_write_performed"] = True
     except Exception as exc:
+        from ..usage_ping import capture_failure
+        capture_failure(exc)
         error = str(exc)
         if checkpoint_path is not None:
             path_candidates = {str(checkpoint_path)}

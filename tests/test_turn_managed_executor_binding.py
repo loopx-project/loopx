@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+from loopx.reasoning_effort import REASONING_EFFORTS
+
 from loopx.control_plane.turn_driver.host_binding import (
     DEFAULT_DSH_OUTPUT_TOKEN_LIMIT,
     DSH_OUTPUT_TOKEN_BUDGET_SCHEMA_VERSION,
@@ -108,17 +110,19 @@ def test_trusted_codex_binding_projects_its_independent_agent_profile():
     assert "unrelated-managed-credential" not in json.dumps(binding)
 
 
-def test_owned_operation_transport_is_opt_in_and_read_back_by_the_existing_host_owner():
+@pytest.mark.parametrize("effort", REASONING_EFFORTS)
+def test_owned_operation_transport_is_opt_in_and_read_back_by_the_existing_host_owner(effort):
     options = ["--host", "codex-cli", "--codex-operation-tools"]
     blocked = managed_executor_binding_from_host_args(options, environ={})
     assert blocked["available"] is False
     assert blocked["unavailable_reason"] == "operation_transport_profile_required"
     pinned = managed_executor_binding_from_host_args(
-        [*options, "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh"],
+        [*options, "--codex-model", "test-model", "--codex-reasoning-effort", effort],
         environ={},
     )
     assert pinned["available"] is None  # argv cannot qualify a real host
-    assert pinned["execution_profile"] == "test-model@xhigh"
+    assert pinned["execution_profile"] == f"test-model@{effort}"
+    assert pinned["operation_transport"]["configuration_valid"] is True
     assert pinned["operation_transport"]["identity_source"] == "native_thread_turn_metadata"
     assert pinned["operation_transport"]["runtime_qualified"] is False
     assert "operation_transport" not in managed_executor_binding("codex-cli")

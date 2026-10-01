@@ -29,7 +29,7 @@ from .control_plane.runtime.run_index_duplicates import (
     classify_index_duplicate_records,
     index_identity,
 )
-from .control_plane.runtime.file_text_reads import iter_utf8_file_reads
+from .control_plane.runtime.file_reads import iter_utf8_file_reads
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
 from .history import (

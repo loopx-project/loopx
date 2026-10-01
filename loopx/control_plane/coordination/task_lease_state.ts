@@ -1,3 +1,4 @@
+import {leaseWorkspace} from "../work_items/task_lease_workspace.ts";
 /** Full canonical facts shared by lease acquisition, maintenance and Todo claim. */
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError} from "./authority_store_codec.ts";
@@ -20,7 +21,7 @@ export function canonicalTaskLease(value: JsonObject, goalId: string, todoId: st
       normalizeOwner(value.owner) !== value.owner || normalizeIdempotencyKey(value.idempotency_key) !== value.idempotency_key) {
     throw new AuthorityStoreProtocolError("canonical lease owner and execution key must be normalized strings");
   }
-  leaseVersion(value); leaseEpoch(value);
+  leaseVersion(value); leaseEpoch(value); leaseWorkspace(value.write_workspace);
   try { leaseWriteRepository(value.write_repository); }
   catch { throw new AuthorityStoreProtocolError("canonical lease write_repository must be a canonical repository identity or null"); }
   if (value.write_scopes !== undefined && (!Array.isArray(value.write_scopes) ||
@@ -52,15 +53,15 @@ export function canonicalTaskLeaseAcquireFacts(index: ReturnType<typeof indexCoo
   const lease = current === null ? null : {present: true, active: leaseIsActive(current, now),
     status: String(current.status), owner: String(current.owner), idempotency_key: String(current.idempotency_key),
     version: leaseVersion(current), lease_epoch: leaseEpoch(current),
-    write_scopes: (current.write_scopes ?? []) as string[], write_repository: leaseWriteRepository(current.write_repository),
+    write_scopes: (current.write_scopes ?? []) as string[], write_repository: leaseWriteRepository(current.write_repository), write_workspace: leaseWorkspace(current.write_workspace),
     acquire_ttl_seconds: leaseInteger(current, "acquire_ttl_seconds")};
   const other_leases = [...index.leases].flatMap(([id, rawLease]) => {
     if (id === todoId) return [];
     const candidate = canonicalTaskLease(rawLease, goalId, id);
     const active = leaseIsActive(candidate, now);
-    return [{todo_id: id, active,
+    return [{todo_id: id, owner: String(candidate.owner), active,
       effective: active && leaseOwnerRejection(canonicalLeaseTodoFact(index.todos.get(id)), String(candidate.owner), registered) === null,
-      write_scopes: (candidate.write_scopes ?? []) as string[], write_repository: leaseWriteRepository(candidate.write_repository)}];
+      write_scopes: (candidate.write_scopes ?? []) as string[], write_repository: leaseWriteRepository(candidate.write_repository), write_workspace: leaseWorkspace(candidate.write_workspace)}];
   });
   return {todo, lease, other_leases, current};
 }

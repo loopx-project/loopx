@@ -568,6 +568,10 @@ def _write_exact_return_state(
             else:
                 result.pop("admission", None)
             _write(context["state_path"], result)
+            if (result.get("status") == "delivered" and result.get("reply_verified") is True
+                    and current.get("status") != "delivered"):
+                from ...usage_ping import observe_verified_return
+                observe_verified_return()
 
 
 def _retry_state(state, now, *, error):

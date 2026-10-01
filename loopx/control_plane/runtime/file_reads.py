@@ -1,4 +1,4 @@
-"""Bounded ordered UTF-8 reads; classification stays with the caller.
+"""Bounded ordered file reads; classification stays with the caller.
 
 This is a filesystem adapter, not an authorization or scan-result cache. The
 caller must exclude private inputs before submitting them. Every admitted path
@@ -8,11 +8,12 @@ is reopened on every call; concurrent I/O cannot turn an earlier scan into proof
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import chain, islice
 from pathlib import Path
+from typing import TypeVar
 
 
 @dataclass(frozen=True)
@@ -29,9 +30,40 @@ def _read_utf8(path: Path) -> Utf8FileRead:
         return Utf8FileRead(path, None, error)
 
 
+@dataclass(frozen=True)
+class BinaryFileRead:
+    path: Path
+    data: bytes | None
+    error: OSError | None
+
+
+def _read_bytes(path: Path) -> BinaryFileRead:
+    try:
+        return BinaryFileRead(path, path.read_bytes(), None)
+    except OSError as error:
+        return BinaryFileRead(path, None, error)
+
+
+_Read = TypeVar("_Read")
+
+
+def iter_binary_file_reads(
+    paths: Iterable[Path], *, max_workers: int = 8
+) -> Generator[BinaryFileRead, None, None]:
+    """Read original bytes without decoding or newline normalization."""
+    yield from _ordered_reads(paths, _read_bytes, max_workers)
+
+
 def iter_utf8_file_reads(
     paths: Iterable[Path], *, max_workers: int = 8
-) -> Iterator[Utf8FileRead]:
+) -> Generator[Utf8FileRead, None, None]:
+    """Read UTF-8 text with the same ordered, bounded filesystem lifetime."""
+    yield from _ordered_reads(paths, _read_utf8, max_workers)
+
+
+def _ordered_reads(
+    paths: Iterable[Path], read: Callable[[Path], _Read], max_workers: int
+) -> Generator[_Read, None, None]:
     """Overlap disk waits with at most ``max_workers`` pending reads.
 
     Results retain input order, including failures. Unlike ``Executor.map`` on
@@ -47,14 +79,14 @@ def iter_utf8_file_reads(
         return
     if max_workers == 1 or len(first_paths) == 1:
         for path in chain(first_paths, iterator):
-            yield _read_utf8(path)
+            yield read(path)
         return
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="loopx-file-read") as pool:
-        pending: deque[Future[Utf8FileRead]] = deque(
-            pool.submit(_read_utf8, path) for path in first_paths
+        pending: deque[Future[_Read]] = deque(
+            pool.submit(read, path) for path in first_paths
         )
         while pending:
             yield pending.popleft().result()
-            path = next(iterator, None)
-            if path is not None:
-                pending.append(pool.submit(_read_utf8, path))
+            next_path = next(iterator, None)
+            if next_path is not None:
+                pending.append(pool.submit(read, next_path))

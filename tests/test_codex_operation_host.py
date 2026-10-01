@@ -217,8 +217,11 @@ def test_owned_operation_host_reaps_descendants_on_success_and_timeout(
     not os.environ.get("LOOPX_QUALIFY_CODEX_OPERATION_HOST"),
     reason="explicit live-host release qualification only",
 )
+@pytest.mark.parametrize(
+    ("model", "effort"), [("gpt-6-sol", "xhigh"), ("gpt-6-luna", "max")]
+)
 def test_live_owned_app_server_native_tool_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str, effort: str
 ) -> None:
     from loopx.control_plane.turn_driver import codex_operation_host
 
@@ -247,8 +250,8 @@ def test_live_owned_app_server_native_tool_metadata(
         runtime_root=tmp_path / "runtime",
         registry_path=tmp_path / "registry.json",
         project=tmp_path,
-        model="gpt-6-sol",
-        reasoning_effort="xhigh",
+        model=model,
+        reasoning_effort=effort,
         timeout_seconds=120,
     )
     result = run_codex_operation_host(request, **options)

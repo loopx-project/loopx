@@ -2,7 +2,7 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 
 // An attached_host Session queues a follow-up while its host runs a Turn
 // (ChatRuntimeController.submit_turn -> enqueue_attached_agent_turn), whereas a
-// managed_runtime Session accepts one Turn at a time. The composer must follow
+// managed_runtime Session accepts one Turn at a time with native steering when supported. The composer must follow
 // the Session's typed mode, not read every running Turn as a rejected send.
 const attachedGoal = { id: "product-release", label: "Product Release" };
 const managedGoal = { id: "research-monitor", label: "Research Monitor" };
@@ -11,7 +11,7 @@ const sessionIdFor = (goalId) => `session-goal-${goalId}-codex`;
 
 function runningSession(goalId, mode) {
   return {
-    session_id: sessionIdFor(goalId), goal_id: goalId, agent_id: "codex", adapter_kind: "codex",
+    session_id: sessionIdFor(goalId), goal_id: goalId, agent_id: "codex", adapter_kind: "codex_app_server",
     channel_id: `goal.${goalId}`, status: "busy", active_turn_id: runningTurnId(goalId), last_error_code: null,
     created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z", last_activity_at: "2026-08-13T01:00:01Z",
     resumable: true, session_mode: mode, host_surface: mode === "attached_host" ? "codex_app" : null,
@@ -72,12 +72,12 @@ export const attachedHostFollowUpScenario = {
     };
     try {
       await openGoalChat(managedGoal);
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
-      await composer.fill("托管会话回合进行中不应发送");
-      if (!(await sendButton.isDisabled())) throw new Error("A managed_runtime composer stayed sendable while its Turn was running");
-      await sendButton.click({ force: true });
-      await page.waitForTimeout(300);
-      if (posts.length) throw new Error(`A managed_runtime Session was sent ${posts.length} message(s) into its running Turn`);
+      await page.locator(".personal-composer-status", { hasText: "发消息可调整当前工作" }).waitFor();
+      await composer.fill("当前工作先检查依赖");
+      if (await sendButton.isDisabled()) throw new Error("Managed Codex instructions were blocked");
+      // This scenario isolates attached queues; exact native steering and retry
+      // are checked by composer-session-admission. No new managed Turn is posted.
+      if (posts.length) throw new Error("Managed readback created another Turn");
       await composer.fill("");
 
       await openGoalChat(attachedGoal);
@@ -102,7 +102,7 @@ export const attachedHostFollowUpScenario = {
     }
     return {
       coverageEntries: context.coverageEntries,
-      note: "managed-runtime-running-turn: Send stays closed with the wait hint and no message reaches the running Turn. "
+      note: "managed-runtime-running-turn: native instructions stay available without creating another Turn. "
         + "attached-host-follow-up: while the host runs a Turn, Send stays open, one POST reaches the Session queue and the page follows the queued Turn.",
     };
   },

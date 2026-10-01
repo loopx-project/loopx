@@ -49,10 +49,12 @@ for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const)
     t.after(() => rm(root, {recursive: true, force: true}));
     const marker = join(root, "counter");
     // Ignore TERM so the test proves escalation and does not merely observe a
-    // cooperative child. Its marker is the semantic oracle, not a PID lookup.
+    // cooperative child. Publish the marker atomically: a kill during a write
+    // must not look like a surviving child, but each completed tick stays visible.
     const child = `const fs=require('fs');let n=0;process.on('SIGTERM',()=>{});
-      fs.writeFileSync(${JSON.stringify(marker)},String(n));
-      setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(++n)),10)`;
+      const marker=${JSON.stringify(marker)}, staged=marker+'.next';
+      const publish=()=>{fs.writeFileSync(staged,String(n));fs.renameSync(staged,marker)};
+      publish();setInterval(()=>{n++;publish()},10)`;
     const script = `const{spawn}=require('child_process');const fs=require('fs');
       spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:${JSON.stringify(mode === "closed_pipes" ? "ignore" : "inherit")}});
       const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){

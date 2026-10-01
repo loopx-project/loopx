@@ -10,7 +10,7 @@ await build({ configFile: false, logLevel: "silent", build: {
   lib: { entry: resolve("src/data/workspace-progressive-status.ts"), formats: ["es"], fileName: () => "loader.mjs" },
   rolldownOptions: { external: ["zod"] },
 } });
-const { loadWorkspaceGoalSnapshots, directoryStatusPayload, reusableGoalSnapshots } = await import(pathToFileURL(resolve(outDir, "loader.mjs")).href);
+const { loadWorkspaceGoalSnapshots, directoryStatusPayload, reusableGoalSnapshots, workspaceReadPlan } = await import(pathToFileURL(resolve(outDir, "loader.mjs")).href);
 const directory = { ok: true, schema_version: "loopx_workspace_directory_v1", registry_revision: "r1",
   goals: [{ id: "alpha", display_name: "Alpha", activation_state: "active", registry_member: true }] };
 
@@ -42,7 +42,17 @@ assert.deepEqual(Object.keys(reusableGoalSnapshots(earlier, {
 assert.deepEqual(reusableGoalSnapshots(null, paused), {}, "a first read has nothing to reuse");
 assert.deepEqual(Object.keys(reusableGoalSnapshots(earlier, paused, { invalidateGoalIds: ["alpha", "gamma"] })), [],
   "invalidating every Goal is a full re-read");
-const retentionChecks = 7;
+const fullRefresh = workspaceReadPlan(earlier, earlier.directory);
+assert.deepEqual(fullRefresh.snapshots, snapshots, "a full refresh keeps loaded content visible while reading");
+assert.deepEqual(fullRefresh.requestedDirectory.goals.map((goal) => goal.id), ["alpha", "beta", "gamma"],
+  "a full refresh reads peers whose lifecycle held, so external Todo writes become visible");
+const partial = workspaceReadPlan(earlier, paused, "missing", { invalidateGoalIds: ["gamma"] });
+assert.deepEqual(Object.keys(partial.snapshots), ["alpha"], "partial recovery keeps unaffected peers visible");
+assert.deepEqual(partial.requestedDirectory.goals.map((goal) => goal.id), ["beta", "gamma"],
+  "partial recovery reads moved and explicitly touched Goals");
+assert.deepEqual(workspaceReadPlan(null, earlier.directory, "missing").snapshots, {},
+  "a different source cannot retain the previous source's data");
+const retentionChecks = 12;
 const access = { error_code: "workspace_status_access_denied" };
 const original = { fetch, setTimeout, clearTimeout };
 const deadline = {};

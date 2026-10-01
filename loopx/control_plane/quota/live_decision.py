@@ -32,6 +32,7 @@ from ..scheduler.execution_context import (
 )
 from .unsettled_host_turn import (
     apply_unsettled_host_turn_recovery_if_required,
+    apply_receipt_bound_wait_recovery,
 )
 
 
@@ -672,6 +673,18 @@ def build_live_quota_should_run_decision(
             agent_id=agent_id,
             current_turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities,
+            scheduler_execution_context=resolved_context,
+        )
+    if (
+        receipt_bound_todo_id and agent_id and turn_instance_id
+        and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
+        and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
+        and (payload.get("selected_todo") or {}).get("todo_id") != receipt_bound_todo_id
+    ):
+        apply_receipt_bound_wait_recovery(
+            payload, registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, agent_id=agent_id, todo_id=receipt_bound_todo_id,
+            turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
         )
     if hook_dispatch["failures"]:

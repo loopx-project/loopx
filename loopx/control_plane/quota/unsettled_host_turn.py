@@ -256,6 +256,54 @@ def apply_unsettled_host_turn_recovery_if_required(
     )
     if verdict is None:
         return False
+    return _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
+        current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_execution_context)
+
+
+def apply_receipt_bound_wait_recovery(
+    payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
+    goal_id: str, agent_id: str, todo_id: str, turn_instance_id: str,
+    available_capabilities: list[str] | None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+) -> bool:
+    """Read full provider facts only when a replay lost its executable binding."""
+    from ...todos import list_goal_todos
+    from ..runtime.time import now_utc_iso
+
+    source = list_goal_todos(
+        registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
+    )
+    # Transport one coherent source read, narrowed by its typed dependency
+    # reference. TS revalidates the wait; unrelated Todo bodies never cross RPC.
+    bound: dict[str, Any] = next((row for row in source["todos"] if row.get("todo_id") == todo_id), {})
+    target_id = (bound.get("resume_condition") or {}).get("target_todo_id")
+    items = [row for row in source["todos"] if row.get("todo_id") in {todo_id, target_id}]
+    verdict = effect_runtime_result("quota.settlement.read", {
+        "schema_version": "loopx_quota_receipt_bound_wait_request_v0",
+        "todos": items, "todo_id": todo_id, "agent_id": agent_id,
+        "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
+    })
+    if verdict.get("status") == "none":
+        return False
+    if verdict.get("status") != "recovery_required":
+        raise RuntimeError("TypeScript bound wait recovery result shape mismatch")
+    # This Turn already has a committed Todo binding. A successor's action or
+    # replan projection cannot become part of its recovery contract. Prior-Turn
+    # recovery retains its separate semantic replan observation below.
+    from .settlement_precedence import clear_quota_action_projections
+
+    clear_quota_action_projections(payload)
+    return _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
+        current_turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_execution_context)
+
+
+def _apply_recovery_projection(
+    payload: dict[str, Any], *, verdict: Mapping[str, Any], registry_path: Path, runtime_root: Path,
+    current_turn_instance_id: str | None, available_capabilities: list[str] | None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+) -> bool:
     recovery = verdict["recovery"]
     obligation = verdict["obligation"]
     payload.pop("selected_todo", None)
@@ -271,6 +319,11 @@ def apply_unsettled_host_turn_recovery_if_required(
             "normal_delivery_allowed": False,
             "recovery_delivery_allowed": False,
             "self_repair_allowed": False,
+            "capability_repair_allowed": False,
+            "workspace_repair_allowed": False,
+            "safe_bypass_allowed": False,
+            "safe_bypass_kind": None,
+            "safe_bypass_policy": None,
             "reason": obligation["reason"],
             "recommended_action": obligation["recommended_action"],
             "unsettled_host_turn_recovery": recovery,
@@ -299,7 +352,7 @@ def apply_unsettled_host_turn_recovery_if_required(
                 "must_attempt_work": obligation["must_attempt_work"],
                 "reason_codes": [obligation["reason_code"]],
                 "monitor_policy": "typed_observation_only",
-                "action": "repair the prior Turn closeout without spending quota",
+                "action": obligation["recommended_action"],
             },
             "automation_liveness": {
                 "schema_version": "automation_liveness_v0",
@@ -317,6 +370,7 @@ def apply_unsettled_host_turn_recovery_if_required(
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=current_turn_instance_id,
         runtime_root=str(runtime_root),
+        registry_path=str(registry_path),
     )
     agent_channel = interaction_contract.get("agent_channel")
     if isinstance(agent_channel, dict):
@@ -325,6 +379,7 @@ def apply_unsettled_host_turn_recovery_if_required(
         agent_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     cli_channel = interaction_contract.get("cli_channel")
     if isinstance(cli_channel, dict):
+        cli_channel["spend_policy"] = obligation["spend_policy"]
         cli_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     payload["interaction_contract"] = interaction_contract
     return True

@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ...history import load_registry
+from ..projects.registry_codec import load_registry
 from ...paths import resolve_runtime_root
 from ..coordination.coordination_state_contract_generated import (
     LOCAL_AUTHORITY_SHADOW_BINDING_SCHEMA,
@@ -365,6 +365,7 @@ def execute_native_task_lease_acquire(
     ttl_seconds: int | None = None,
     write_scopes: list[str] | None = None,
     expected_version: int | None = None,
+    write_worktree: str | None = None,
     _legacy_provider_projection: bool = False,
 ) -> dict[str, Any]:
     """Transport one compact acquire request to the native TypeScript owner."""
@@ -392,6 +393,10 @@ def execute_native_task_lease_acquire(
             "idempotency_key": idempotency_key,
             "ttl_seconds": ttl_seconds,
             "write_scopes": list(write_scopes or []),
+            **({"write_worktree": (
+                str(Path(write_worktree).expanduser().absolute())
+                if write_worktree else write_worktree
+            )} if write_worktree is not None else {}),
             "expected_version": expected_version,
             "authority": authority,
         }

@@ -985,6 +985,7 @@ class CodexChatAgentSession:
         if on_event:
             on_event("turn.started", {"upstream_turn_id": turn_id})
         parts: list[str] = []
+        completed_structured_response: str | None = None
         display_filter = VisibleResponseStreamFilter(protected_paths=[self.work_dir])
         visible_delta_count = 0
         started_at = time.monotonic()
@@ -1069,6 +1070,18 @@ class CodexChatAgentSession:
                         on_event("answer.delta", {"text": visible})
             elif method == "item/completed":
                 item_text = _agent_item_text(message)
+                if output_schema is not None and isinstance(params, dict):
+                    item = params.get("item")
+                    if isinstance(item, dict) and item.get("type") == "agentMessage":
+                        # Completed items are authoritative. A structured Turn
+                        # may stream commentary before its final JSON; joining
+                        # all deltas would turn that valid answer into invalid
+                        # JSON (or promote commentary JSON as the result).
+                        phase = item.get("phase")
+                        if phase is None or phase == "final_answer":
+                            completed_structured_response = item_text
+                        elif phase != "commentary" or completed_structured_response is None:
+                            completed_structured_response = ""
                 if item_text and not parts:
                     parts.append(item_text)
                     visible = display_filter.feed(item_text)
@@ -1113,6 +1126,8 @@ class CodexChatAgentSession:
             on_event("answer.delta", {"text": visible_tail})
         raw_response = "".join(parts)
         if output_schema is not None:
+            if completed_structured_response is not None:
+                raw_response = completed_structured_response
             try:
                 result = json.loads(raw_response)
             except (ValueError, TypeError) as exc:

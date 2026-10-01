@@ -7,6 +7,8 @@ Usage:
   uv run python scripts/generate_semantic_inventory.py --output .local/inventory.json --check
   uv run python scripts/generate_semantic_inventory.py --report    # advisory consumer ranking + merge candidates
   uv run python scripts/generate_semantic_inventory.py --report --consumer-evidence   # + per-site consumer roles
+  uv run python scripts/generate_semantic_inventory.py --changed-from HEAD
+  uv run python scripts/generate_semantic_inventory.py --changed-from HEAD --include-untracked loopx/new.py
 """
 
 from __future__ import annotations
@@ -24,6 +26,12 @@ from loopx.semantics.consumer_report import (  # noqa: E402
     collect_consumer_evidence,
     render_consumer_evidence,
 )
+from loopx.semantics.development_probe import (  # noqa: E402
+    DevelopmentProbeError,
+    build_development_probe,
+    collect_changed_sources,
+    render_development_probe,
+)
 from loopx.semantics.inventory import (  # noqa: E402
     build_inventory,
     consumer_ranking,
@@ -34,6 +42,16 @@ from loopx.semantics.inventory import (  # noqa: E402
 )
 
 REGISTRY_RELATIVE = "loopx/semantics/vocabulary_v0.json"
+
+
+def load_semantic_registry(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise DevelopmentProbeError(f"cannot read semantic registry: {path}") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("vocabularies"), dict):
+        raise DevelopmentProbeError(f"semantic registry has no vocabularies map: {path}")
+    return payload
 
 
 def print_merge_candidates(inventory: dict) -> None:
@@ -70,6 +88,18 @@ def main() -> int:
         "--report", action="store_true",
         help="print the advisory consumer ranking and the merge candidates the registry does not explain",
     )
+    destination.add_argument(
+        "--changed-from",
+        metavar="REVISION",
+        help="advisory: inspect supported vocabulary carriers changed from a named Git revision",
+    )
+    parser.add_argument(
+        "--include-untracked",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="with --changed-from, explicitly include one untracked loopx/*.py or *.ts source",
+    )
     parser.add_argument(
         "--consumer-evidence", action="store_true",
         help="with --report, also classify each consuming site as read/interpret/pass-through/unknown "
@@ -80,9 +110,29 @@ def main() -> int:
     args = parser.parse_args()
     if args.consumer_evidence and not args.report:
         parser.error("--consumer-evidence extends --report; it is advisory evidence, not a check")
+    if args.include_untracked and args.changed_from is None:
+        parser.error("--include-untracked requires --changed-from")
     if args.check and args.output is None:
         parser.error("--check requires --output; inventories are no longer committed. "
                      "Run examples/semantic-vocabulary-drift-smoke.py for semantic validation.")
+
+    if args.changed_from is not None:
+        try:
+            baseline, changes = collect_changed_sources(
+                ROOT,
+                baseline=args.changed_from,
+                explicit_untracked=args.include_untracked,
+            )
+            report = build_development_probe(
+                baseline=baseline,
+                changes=changes,
+                registry=load_semantic_registry(ROOT / REGISTRY_RELATIVE),
+            )
+        except DevelopmentProbeError as error:
+            print(f"semantic coinage probe failed: {error}", file=sys.stderr)
+            return 1
+        print(render_development_probe(report), end="")
+        return 0
 
     inventory = build_inventory(ROOT)
     content = render_inventory(inventory)

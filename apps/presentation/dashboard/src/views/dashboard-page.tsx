@@ -5,7 +5,7 @@ import {compactWorkspaceText as compactShareText} from "../features/personal-wor
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
-import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, reusableGoalSnapshots, type WorkspaceProgress, type WorkspaceLoadError } from "../data/workspace-progressive-status";
+import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 
@@ -56,6 +56,7 @@ import {
   resumeChatTurnStreaming,
   sendChatTurnStreaming,
   chatSessionQueuesFollowUps,
+  chatSessionSupportsSteering,
   selectAvailableChatAgent,
   sessionInvalidatedByPayload,
   todoNoWriteReceiptFromPayload,
@@ -1267,7 +1268,7 @@ function PersonalGoalHome({
   onGoalDeleted: (goalId: string) => void;
   onSelectGoal: (goalId: string) => void;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
-  onRefresh: () => void | Promise<void>;
+  onRefresh: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
   payload: StatusPayload;
   progress: WorkspaceProgress | null;
@@ -1410,6 +1411,7 @@ function PersonalGoalHome({
   // Bound Sessions whose mode queues a message sent while a Turn runs, read
   // from the Session owner each time this page binds a Session.
   const [followUpQueueSessionIds, setFollowUpQueueSessionIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [steeringSessionIds, setSteeringSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [executionSessions, setExecutionSessions] = useState<ChatSessionSummary[]>([]);
   // Bumped when the service reports a running Turn this page did not know
   // about, so the Turn recovery effect re-reads the Session and adopts it.
@@ -1559,6 +1561,14 @@ function PersonalGoalHome({
 
   function recordSessionAdmission(session: ChatSessionSummary) {
     const queues = chatSessionQueuesFollowUps(session);
+    const supportsSteering = chatSessionSupportsSteering(session);
+    setSteeringSessionIds((current) => {
+      if (current.has(session.session_id) === supportsSteering) return current;
+      const next = new Set(current);
+      if (supportsSteering) next.add(session.session_id);
+      else next.delete(session.session_id);
+      return next;
+    });
     setFollowUpQueueSessionIds((current) => {
       if (current.has(session.session_id) === queues) return current;
       const next = new Set(current);
@@ -2939,9 +2949,9 @@ function PersonalGoalHome({
           },
           onSteerConversationTurn: async (targetContextId, turnId, message, ingressId) => {
             const binding = runtimeBindings[targetContextId];
-            if (!binding?.sessionId || binding.turnId !== turnId || activeTurnIds.current.get(targetContextId) !== turnId) {
-              throw new Error("本轮已结束或已被新的回合取代，追加指令未发送，草稿已保留。");
-            }
+            if (!binding?.sessionId) throw new Error("当前会话不可用，追加指令未发送，草稿已保留。");
+            // The service owns exact-turn admission and durable retry. A delivered
+            // ingress may be read back after completion; never retarget it locally.
             await steerChatTurn(binding.sessionId, turnId, message, ingressId);
             const id = managerMessageId.current++;
             setMessagesByContext(current => {
@@ -3063,8 +3073,8 @@ function PersonalGoalHome({
             anchor.click();
             URL.revokeObjectURL(url);
           },
-          onRefresh: async () => {
-            await onRefresh();
+          onRefresh: async (scope) => {
+            await onRefresh(scope);
             setCapabilityRevision((revision) => revision + 1);
           },
           onRetryResumeRun: retryManagerSession,
@@ -3081,6 +3091,7 @@ function PersonalGoalHome({
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
         conversationQueuesFollowUps={followUpQueueSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
+        conversationSupportsSteering={steeringSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
         conversationHistoryState={conversationHistory}
         model={workspaceModel}
         readOnly={readOnly}
@@ -3302,8 +3313,7 @@ export function DashboardPage() {
     url: string,
     options: {
       background?: boolean;
-      retryOnly?: boolean;
-      reuseSnapshots?: boolean;
+      readScope?: WorkspaceReadScope;
       invalidateGoalIds?: string[];
       resyncAttempt?: number;
       selectionRevision?: number;
@@ -3335,16 +3345,13 @@ export function DashboardPage() {
       const directory = await fetchWorkspaceDirectory(trimmed, window.location.href).catch(() => null);
       if (!statusRequestCanCommit(statusRequestFenceRef.current, request)) return;
       if (directory) {
-        // A refresh that keeps the same source only re-reads the Goals whose
-        // directory entry moved or that the caller just acted on. Dropping every
-        // snapshot here would send the whole workspace back to its loading lane
-        // after one Goal's pause, resume or open.
-        const retained = (options.retryOnly || options.reuseSnapshots)
-          && source.kind === "url" && source.label === trimmed
-          ? reusableGoalSnapshots(progress, directory, { invalidateGoalIds: options.invalidateGoalIds })
-          : {};
-        setProgress({ directory, snapshots: retained, errors: {} });
-        const requestedDirectory = { ...directory, goals: directory.goals.filter((goal) => !retained[goal.id]) };
+        // Keep valid snapshots on screen during a refresh. Only an explicit
+        // partial read may skip them; lifecycle identity is not data freshness.
+        const { snapshots, requestedDirectory } = workspaceReadPlan(
+          source.kind === "url" && source.label === trimmed ? progress : null,
+          directory, options.readScope, { invalidateGoalIds: options.invalidateGoalIds },
+        );
+        setProgress({ directory, snapshots, errors: {} });
         let directoryChanged = false;
         const initial = directoryStatusPayload(directory);
         if (background) setPayload(initial);
@@ -3353,11 +3360,14 @@ export function DashboardPage() {
         await loadWorkspaceGoalSnapshots(trimmed, window.location.href, requestedDirectory,
           (id, snapshot, error) => {
             if (error === "revision") directoryChanged = true;
-            setProgress((current) => current ? {
-            ...current,
-            snapshots: snapshot ? { ...current.snapshots, [id]: snapshot } : current.snapshots,
-            errors: error ? { ...current.errors, [id]: error } : current.errors,
-          } : current);
+            setProgress((current) => {
+              if (!current) return current;
+              const snapshots = { ...current.snapshots };
+              const errors = { ...current.errors };
+              if (snapshot) { snapshots[id] = snapshot; delete errors[id]; }
+              else if (error) { delete snapshots[id]; errors[id] = error; }
+              return { ...current, snapshots, errors };
+            });
           },
           () => statusRequestCanCommit(statusRequestFenceRef.current, request),
           () => preferredGoalRef.current,
@@ -3529,7 +3539,7 @@ export function DashboardPage() {
     if (!progress || isLoading || !search.goalId || source.kind !== "url") return;
     const goal = progress.directory.goals.find((item) => item.id === search.goalId);
     if (goal?.activation_state === "stopped" && !progress.snapshots[goal.id] && !progress.errors[goal.id]) {
-      void loadFromUrl(source.label, { retryOnly: true });
+      void loadFromUrl(source.label, { readScope: "missing" });
     }
   }, [search.goalId, isLoading, progress, source]);
 
@@ -3577,10 +3587,10 @@ export function DashboardPage() {
       onSelectGoal={selectGoal}
       onReconcileStatus={(options) => loadFromUrl(
         source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl),
-        { background: true, invalidateGoalIds: options?.invalidateGoalIds, reuseSnapshots: true },
+        { background: true, invalidateGoalIds: options?.invalidateGoalIds, readScope: "missing" },
       )}
       onRetryGoalArchive={retryGoalArchive}
-      onRefresh={() => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { retryOnly: Boolean(progress && Object.keys(progress.errors).length) })}
+      onRefresh={(readScope = "all") => loadFromUrl(source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl), { readScope })}
       payload={payload}
       progress={progress}
       rows={goalRows}

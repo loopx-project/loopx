@@ -2,6 +2,7 @@ import { configure, inspect, observe } from "./usage_statistics.ts";
 import { durationBucket, FEATURES, object } from "./usage_statistics_contract.ts";
 import type { Context } from "./usage_statistics.ts";
 import type { Counter } from "./usage_statistics_contract.ts";
+import { resultDiagnostic, usageContext } from "./usage_statistics_diagnostics.ts";
 
 import type { GoalObservation } from "./usage_statistics_goal_contract.ts";
 import { validGoalObservation, hostCategory } from "./usage_statistics_goal_contract.ts";
@@ -29,10 +30,18 @@ try {
     result = await observe(request.path, ctx, String(request.generation), null, undefined, { ...request.observation, host: hostCategory(request.observation.host) } as GoalObservation);
   } else if (request.action === "observe" && typeof request.feature === "string"
     && typeof request.elapsed_ms === "number" && Number.isFinite(request.elapsed_ms) && request.elapsed_ms >= 0) {
-    result = await observe(request.path, ctx, String(request.generation), {
-      feature: (FEATURES as readonly unknown[]).includes(request.feature) ? request.feature : "other", outcome: request.outcome, error: request.error,
-      duration: durationBucket(request.elapsed_ms), count: 1,
-    } as Counter);
+    const feature = (FEATURES as readonly unknown[]).includes(request.feature) ? request.feature : "other";
+    if (typeof request.exit_code === "number" && Number.isInteger(request.exit_code)) {
+      result = await observe(request.path, ctx, String(request.generation), null, undefined, undefined, undefined, {
+        feature: feature as Counter["feature"], ...resultDiagnostic(feature, request.operation, request.result_facts, request.exit_code, request.failure),
+        duration: durationBucket(request.elapsed_ms), count: 1, version: ctx.version,
+        activity_day: typeof request.activity_day === "string" ? request.activity_day : new Date().toISOString().slice(0, 10), context: usageContext(ctx.env.LOOPX_USAGE_CONTEXT),
+      });
+    } else {
+      result = await observe(request.path, ctx, String(request.generation), {
+        feature, outcome: request.outcome, error: request.error, duration: durationBucket(request.elapsed_ms), count: 1,
+      } as Counter);
+    }
   } else throw new Error("usage_request_invalid");
   process.stdout.write(JSON.stringify(result) + "\n");
 } catch {

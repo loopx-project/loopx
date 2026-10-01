@@ -14,6 +14,7 @@ const directorySchema = z.object({
 });
 export type WorkspaceDirectory = z.infer<typeof directorySchema>;
 export type WorkspaceLoadError = "timeout" | "network" | "service" | "access" | "revision" | "scope" | "invalid";
+export type WorkspaceReadScope = "all" | "missing";
 export type WorkspaceProgress = {
   directory: WorkspaceDirectory;
   snapshots: Record<string, StatusPayload>;
@@ -21,13 +22,13 @@ export type WorkspaceProgress = {
 };
 
 /**
- * Snapshots a same-source refresh may keep instead of re-reading.
+ * Snapshots a same-source read may keep visible while it reconciles.
  *
  * A directory entry is the cheap authoritative signal for "this Goal's
- * lifecycle did not move here": when the entry is unchanged, its snapshot still
- * describes the Goal, and re-reading it costs one full status collection per
- * Goal. Goals the caller just acted on are never reused, and a Goal that left
- * the directory loses its snapshot with it.
+ * lifecycle did not move here". It does not establish Todo freshness: a full
+ * refresh still re-reads retained Goals. A partial retry or known action may
+ * skip unaffected peers. Touched Goals and entries that moved or left the
+ * directory lose their snapshot.
  */
 export function reusableGoalSnapshots(
   previous: Pick<WorkspaceProgress, "directory" | "snapshots"> | null,
@@ -45,6 +46,22 @@ export function reusableGoalSnapshots(
       || earlier.activation_state !== goal.activation_state) return [];
     return [[goal.id, snapshot]];
   }));
+}
+
+/** Display retention and request selection are separate decisions. */
+export function workspaceReadPlan(
+  previous: Pick<WorkspaceProgress, "directory" | "snapshots"> | null,
+  directory: WorkspaceDirectory,
+  scope: WorkspaceReadScope = "all",
+  options: { invalidateGoalIds?: Iterable<string> } = {},
+) {
+  const snapshots = reusableGoalSnapshots(previous, directory, options);
+  return {
+    snapshots,
+    requestedDirectory: { ...directory, goals: directory.goals.filter(
+      (goal) => scope === "all" || !snapshots[goal.id],
+    ) },
+  };
 }
 
 function queryUrl(url: string, fields: Record<string, string>, base: string) {

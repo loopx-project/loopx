@@ -161,6 +161,36 @@ test("network failure is lossy and no-retry; no exception text enters local stat
   assert.equal((await observe(path, ctx, generation, row, async () => { throw new Error("SECRET:/private/path"); })).sent, false);
   await observe(path, ctx, generation, row, noPost);
   assert.ok(!(await readFile(path, "utf8")).includes("SECRET"));
+  assert.deepEqual((await inspect(path, ctx)).delivery_history.map(row => row.status), ["unavailable", "unavailable"]);
+});
+
+test("local delivery history is bounded, content-free and cleared by disable", async t => {
+  const { path, state } = await fixture(t); const ctx = context();
+  await configure(path, ctx, "enable"); const generation = (await state()).generation;
+  for (let i = 0; i < 24; i++) {
+    await observe(path, { ...ctx, now: new Date(ctx.now!.getTime() + i * 15 * 60000) }, generation, row, async () => 400);
+  }
+  const status = await inspect(path, ctx);
+  assert.equal(status.delivery_history.length, 20);
+  assert.equal(status.identity_scope, "persistent_machine_state_directory_not_person_or_session");
+  for (const entry of status.delivery_history) {
+    assert.deepEqual(Object.keys(entry).sort(), ["channel", "day", "rows", "status"]);
+    assert.equal(entry.status, "rejected");
+  }
+  await configure(path, ctx, "disable");
+  assert.deepEqual((await inspect(path, ctx)).delivery_history, []);
+});
+
+test("scope disclosure upgrades preserve installation ID; only explicit disable resets it", async t => {
+  const { path, state } = await fixture(t); const ctx = context();
+  await configure(path, ctx, "enable"); const original = await state();
+  await writeFile(path, JSON.stringify({ ...original, notice: { ...original.notice, version: 3 } }));
+  const pending = await inspect(path, ctx);
+  assert.equal(pending.sending, false);
+  assert.equal(pending.automatic_notice_required, true);
+  await configure(path, ctx, "acknowledge", pending.notice);
+  assert.equal((await state()).install_id, original.install_id);
+  assert.notEqual((await state()).generation, original.generation);
 });
 
 test("malformed state fails closed; disable is the explicit repair", async t => {

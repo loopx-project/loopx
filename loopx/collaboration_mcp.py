@@ -97,6 +97,31 @@ def _python_module_command(module: str) -> list[str]:
     return [sys.executable, "-P", "-m", module]
 
 
+def _observe_bound_workspace(path: Path) -> tuple[str, tuple[int, int, Path] | None]:
+    """Observe a directory and its target identity without exposing its path.
+
+    The binding is operator-owned, but a worktree or symlink can disappear or
+    change targets while a read-only Turn preview is running.  Identity is a
+    host fact; the shared TypeScript preflight still owns the readiness rule.
+    """
+
+    try:
+        observed = path.stat()
+        if not stat.S_ISDIR(observed.st_mode):
+            return "not_directory", None
+        resolved = path.resolve(strict=True)
+        target = resolved.stat()
+        if (observed.st_dev, observed.st_ino) != (target.st_dev, target.st_ino):
+            return "unavailable", None
+        return "available", (observed.st_dev, observed.st_ino, resolved)
+    except FileNotFoundError:
+        return "missing", None
+    except NotADirectoryError:
+        return "not_directory", None
+    except (OSError, RuntimeError):
+        return "unavailable", None
+
+
 def _pinned_module_command(module: str, *, interpreter: str | None = None) -> list[str]:
     """Build a self-contained module argv for hosts that sanitize env vars."""
 
@@ -369,33 +394,42 @@ class Delegations:
         binding = self.binding(binding_id, require_active=True)
         # Host filesystem facts only; the shared TS owner projects readiness.
         # Do not expose a path/error body or probe authority in a missing cwd.
-        try:
-            workspace_state = (
-                "available" if stat.S_ISDIR(Path(binding["workspace"]).stat().st_mode)
-                else "not_directory"
-            )
-        except FileNotFoundError:
-            workspace_state = "missing"
-        except NotADirectoryError:
-            workspace_state = "not_directory"
-        except OSError:
-            workspace_state = "unavailable"
-        if workspace_state != "available":
-            if self.binding(binding_id, require_active=True) != binding:
-                raise ValueError("delegation preflight source changed; retry inspection")
+        workspace_path = Path(binding["workspace"])
+        workspace_state, workspace_identity = _observe_bound_workspace(workspace_path)
+
+        def workspace_fault(state: str) -> dict[str, object]:
             return effect_runtime_result("collaboration.delegation.preflight", {
                 "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
-                "workspace": {"state": workspace_state},
+                "workspace": {"state": state},
                 "authority": None, "preview": None, "acceptance": None,
                 "validation_files_current": False,
             })
+
+        def recheck_workspace() -> dict[str, object] | None:
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            current_state, current_identity = _observe_bound_workspace(workspace_path)
+            if current_state == "available" and current_identity == workspace_identity:
+                return None
+            # A replacement directory is not the directory whose authority
+            # and acceptance were observed at entry.  No path or error leaks.
+            return workspace_fault(
+                current_state if current_state != "available" else "unavailable"
+            )
+
+        if workspace_state != "available":
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            return workspace_fault(workspace_state)
+        assert workspace_identity is not None
         try:
             acceptance = delegation_validation.capture(self, binding)
         except (OSError, ValueError) as exc:
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
             # Authority admission is a readiness observation, not a reason for
             # inspection to invent a provider launch or collapse into a raw CLI error.
-            if self.binding(binding_id, require_active=True) != binding:
-                raise ValueError("delegation preflight source changed; retry inspection")
             try:
                 promoted = local_authority_is_promoted(
                     runtime_root=self.root,
@@ -420,6 +454,9 @@ class Delegations:
                 },
                 "preview": None, "acceptance": None, "validation_files_current": False,
             })
+        fault = recheck_workspace()
+        if fault is not None:
+            return fault
         operation = "inspect-" + _hash(binding_id)[:32]
         arguments = ["turn", "run-once", "--goal-id", self.goal_id,
                      "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
@@ -435,7 +472,7 @@ class Delegations:
             selected = parser.parse_args(arguments)
         except SystemExit as exc:
             raise ValueError("invalid delegation Turn arguments") from exc
-        workspace = Path(binding["workspace"]).resolve()
+        workspace = workspace_identity[2]
         selected_project = Path(selected.project)
         selected_scan_root = Path(selected.scan_root)
         if not selected_project.is_absolute():
@@ -447,11 +484,32 @@ class Delegations:
                 != (self.goal_id, binding["agent_id"], binding["todo_id"], operation)
                 or selected_project.resolve() != workspace
                 or selected_scan_root.resolve() != workspace):
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
             raise ValueError("delegation inspection cannot execute or retarget bound work")
-        preview = self._cli(binding, *arguments)
+        try:
+            preview = self._cli(binding, *arguments)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
+            raise
+        fault = recheck_workspace()
+        if fault is not None:
+            return fault
         if preview.get("status") != "preview" and "selection_rejection" not in preview:
             raise ValueError(f"delegation Turn preflight unavailable: {preview.get('error') or preview.get('status')}")
-        current = delegation_validation.capture(self, binding)
+        try:
+            current = delegation_validation.capture(self, binding)
+        except (OSError, ValueError):
+            fault = recheck_workspace()
+            if fault is not None:
+                return fault
+            raise
+        fault = recheck_workspace()
+        if fault is not None:
+            return fault
         if acceptance != current or self.binding(binding_id, require_active=True) != binding:
             raise ValueError("delegation preflight source changed; retry inspection")
         return effect_runtime_result("collaboration.delegation.preflight", {

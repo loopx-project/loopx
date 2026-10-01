@@ -19,10 +19,15 @@ def render_usage_ping_markdown(payload: dict[str, object]) -> str:
              f"- Sending eligible: {payload['sending']}; blocked by: {payload['blocked_by'] or 'none'}",
              f"- Endpoint: {payload['endpoint'] or 'not configured'}",
              f"- Last heartbeat: {payload['last_sent_day'] or 'never'}",
-             str(payload['disclosure']), "", "Payload previews (aggregate sends after the UTC day closes):"]
+             str(payload['disclosure']), "", "Payload previews (first CLI result immediately; later activity at most every 15 minutes):"]
     import json
     lines.append(json.dumps({"heartbeat": payload.get("next_payload"),
-                             "aggregate": payload.get("aggregate_preview")}, indent=2))
+                             "aggregate": payload.get("aggregate_preview"),
+                             "diagnostics": payload.get("diagnostic_preview"),
+                             "goals": payload.get("goal_preview"),
+                             "diagnostic_dropped": payload.get("diagnostic_dropped", 0),
+                             "identity_scope": payload.get("identity_scope"),
+                             "delivery_history": payload.get("delivery_history", [])}, indent=2))
     lines.append("Details: docs/reference/usage-ping.md")
     return "\n".join(lines)
 

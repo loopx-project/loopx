@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 from typing import Any
 
 
@@ -79,10 +80,7 @@ def managed_executor_binding_revision(text: str) -> str | None:
     )
 
 _MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+.+$")
-_RUNTIME_ROOT_COMMAND_ROUTE = re.compile(
-    r"(?m)(?:^|[\"'`])[^\r\n\S]*loopx\s+--runtime-root\s+"
-    r"(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|\S+)"
-)
+
 
 
 def json_shape_paths(value: Any, *, path: str = "$") -> list[str]:
@@ -202,8 +200,65 @@ def markdown_headings(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if _MARKDOWN_HEADING.match(line)]
 
 
-def runtime_root_command_route_count(text: str) -> int:
-    return len(_RUNTIME_ROOT_COMMAND_ROUTE.findall(text))
+def command_route_counts(text: str) -> dict[str, int]:
+    """Measure well-formed rendered routes, never grant runtime authority.
+
+    Decode JSON strings before shell parsing, or read standalone/Markdown code
+    commands. Prose mentioning an option and malformed argv earn no allowance.
+    Both bindings are measured in one pass; duplicates within a command count once.
+    """
+    counts = {"runtime_root": 0, "registry": 0}
+    pending: list[Any] = [text]
+    commands: list[str] = []
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+        elif isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                for line in value.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("loopx "):
+                        commands.append(stripped)
+                        continue
+                    try:
+                        pending.append(json.loads(line))
+                    except ValueError:
+                        commands.extend(re.findall(r"`(loopx [^`\r\n]+)`", line))
+            else:
+                if isinstance(decoded, (dict, list, str)):
+                    pending.append(decoded)
+
+    for command in commands:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        bindings: set[str] = set()
+        index = 1
+        while index < len(argv) and argv[index].startswith("-"):
+            option = argv[index]
+            if (option not in {"--registry", "--runtime-root", "--format"}
+                    or index + 1 >= len(argv)
+                    or not argv[index + 1] or argv[index + 1].startswith("-")):
+                break
+            if option == "--format":
+                if argv[index + 1] not in {"json", "markdown"}:
+                    break
+            else:
+                bindings.add(option[2:].replace("-", "_"))
+            index += 2
+        # Reject an incomplete/invalid option prefix, or one with no subcommand.
+        if (index == len(argv) or not argv[index].strip()
+                or argv[index].startswith("-")):
+            continue
+        for binding in bindings:
+            counts[binding] += 1
+    return counts
 
 
 def projection_envelope_schema_versions(value: Any) -> list[str]:

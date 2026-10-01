@@ -568,7 +568,8 @@ def test_cli_rollback_previous_with_temp_home() -> None:
                 "previous",
             ],
             cwd=REPO_ROOT,
-            env={"HOME": str(home), "PATH": f"{home / '.local' / 'bin'}:{os.environ.get('PATH', '')}"},
+            env={"HOME": str(home), "PATH": f"{home / '.local' / 'bin'}:{os.environ.get('PATH', '')}",
+                 "LOOPX_USAGE_PING": "0"},
             text=True,
             capture_output=True,
         )

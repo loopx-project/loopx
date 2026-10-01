@@ -209,6 +209,9 @@ export const stewardJourneyScenario = {
         gate_prompt_sent: Boolean(chipTurn),
         composer_after_click: composerAfterChip,
       });
+      // A new question follows the chip response; an in-flight message would
+      // instead adjust the native Codex Turn through the ordinary composer.
+      await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
       await composer.fill(`${STEWARD_PROMPT}：请给我一份当前 Goal 的下一步。`);
       await page.getByRole("button", { name: "发送", exact: true }).click();
       let turn;

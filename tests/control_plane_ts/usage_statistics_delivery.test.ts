@@ -140,7 +140,7 @@ test("v3 upgrade waits for renewed notice, preserves pre-ack state and fences ol
       day: "2026-09-28", counters: [{ ...row, count: 7 }] }));
     const before = await readFile(path, "utf8");
     const status = await inspect(path, ctx);
-    assert.equal(status.notice.version, 4);
+    assert.equal(status.notice.version, 5);
     assert.equal(status.blocked_by, "notice_required");
     assert.equal(status.automatic_notice_required, true);
     let attempts = 0;

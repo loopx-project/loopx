@@ -397,6 +397,8 @@ def main(argv: list[str] | None = None) -> int:
         pass  # demo package absent in installed builds; no question rewrite
     parser = build_parser()
     args = parser.parse_args(raw_argv)
+    from .usage_ping import select_operation
+    select_operation(args)
     args.format = resolve_global_output_format(args)
     guard_result = enforce_native_controller_guard(args)
     if guard_result is not None:

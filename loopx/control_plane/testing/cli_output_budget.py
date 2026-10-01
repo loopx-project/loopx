@@ -169,12 +169,14 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # TurnEnvelope intentionally carries the complete authoring schema
             # that the validator accepts, plus the typed executor and selection
             # facts needed to decide whether execution is authorized. The
-            # latest-main fixture measures 14,159 chars, so 14,500 retains a
-            # narrow 341-char regression margin without relaxing Todo growth.
+            # Explicit registry routing adds 75 necessary command characters:
+            # the same fixture measured 14,482 before routing and 14,557 after.
+            # Keep the executable authority binding intact; 14,600 leaves a
+            # 43-character margin without relaxing line or per-Todo growth.
             # The over-target TurnEnvelope diagnostic remains visible instead
             # of hiding authority overflow; latest main renders it in 542
             # characters, leaving a narrow 58-character presentation margin.
-            "crowded": {"json": 14_500, "markdown": 600},
+            "crowded": {"json": 14_600, "markdown": 600},
             "multi_agent": {"json": 12_000, "markdown": 300},
         },
         max_lines={

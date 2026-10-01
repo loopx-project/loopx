@@ -36,6 +36,21 @@ dependency and why the boundary improves verification or rollback. Reuse or
 update an existing successor; do not create ceremonial follow-up tasks for a
 completed request. Real authorization, cost and operational stop gates remain.
 
+When a change introduces or extends a state classification, protocol literal,
+Enum, `Literal`, named closed set, or TypeScript `as const` vocabulary, answer
+whether it reuses an existing owner, extends a registered vocabulary, remains
+local, or creates a new shared contract. Before the full-tree semantic check,
+run the development-time advisory over the current diff:
+
+```bash
+uv run python scripts/generate_semantic_inventory.py --changed-from HEAD
+```
+
+Pass each intentional untracked source with `--include-untracked loopx/path.py`;
+the probe never scans untracked or ignored files automatically. Findings are
+review prompts, not a gate or proof of semantic equivalence, and an empty result
+does not cover dynamic construction or unsupported syntax.
+
 For multi-Agent changes, qualify the relationship the user needs: dependency
 artifacts, receiver adoption, claim/lease handling, independent acceptance and
 result return as applicable. Sending a message or registering workers does not

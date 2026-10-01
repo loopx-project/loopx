@@ -512,7 +512,7 @@
         "loopx/control_plane/quota/should_run_packet.py::_resolve_quota_should_run_route",
         "loopx/control_plane/quota/stall_repair.py::build_quota_stall_self_repair_hint",
         "loopx/control_plane/quota/stall_repair.py::build_runtime_capability_user_gate_repair_hint",
-        "loopx/control_plane/quota/unsettled_host_turn.py::apply_unsettled_host_turn_recovery_if_required",
+        "loopx/control_plane/quota/unsettled_host_turn.py::_apply_recovery_projection",
         "loopx/control_plane/todos/decision_scope.py::build_required_decision_scope_repair_hint",
         "loopx/control_plane/todos/user_gate.py::apply_scoped_user_gate_fallback_projection"
       ],

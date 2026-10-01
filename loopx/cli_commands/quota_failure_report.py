@@ -137,6 +137,18 @@ def quota_failure_payload(
         **verbose_debug,
         **lock_timeout_fields,
     }
+    if isinstance(error, HeartbeatReceiptIdentityConflictError):
+        payload.update({
+            "status": "heartbeat_receipt_identity_conflict",
+            "effective_action": EffectiveAction.QUOTA_SKIP.value,
+            "recommended_action": (
+                "Rerun quota should-run with the same --turn-instance-id and without "
+                "--todo-id or --replan-obligation-id to read the bound Turn's recovery "
+                "contract. Settle verified work or record its verified blocked closeout; "
+                "do not replace the committed binding, repair receipt storage, or invent "
+                "a new Turn id. Independent work belongs to the next real host Turn."
+            ),
+        })
     if isinstance(error, CloseoutQueryUnavailableError):
         payload.update({
             "status": error.diagnostic_code,

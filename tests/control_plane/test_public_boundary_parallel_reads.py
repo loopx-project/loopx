@@ -7,16 +7,18 @@ from threading import Event, Lock
 import pytest
 
 from loopx import contract
-from loopx.control_plane.runtime.file_text_reads import iter_utf8_file_reads
+from loopx.control_plane.runtime.file_reads import iter_binary_file_reads, iter_utf8_file_reads
 
 
+@pytest.mark.parametrize("binary", [False, True])
 def test_reads_overlap_but_results_remain_in_input_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binary: bool
 ) -> None:
     paths = [tmp_path / f"{index}.md" for index in range(4)]
     for index, path in enumerate(paths):
         path.write_text(str(index), encoding="utf-8")
-    original = Path.read_text
+    original = Path.read_bytes if binary else Path.read_text
+    reader = iter_binary_file_reads if binary else iter_utf8_file_reads
     release_first, other_completed = Event(), Event()
     calls: list[Path] = []
     lock = Lock()
@@ -31,9 +33,9 @@ def test_reads_overlap_but_results_remain_in_input_order(
             other_completed.set()
         return result
 
-    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(Path, "read_bytes" if binary else "read_text", read)
     with ThreadPoolExecutor(max_workers=1) as consumer:
-        result = consumer.submit(lambda: list(iter_utf8_file_reads(paths, max_workers=2)))
+        result = consumer.submit(lambda: list(reader(paths, max_workers=2)))
         try:
             assert other_completed.wait(5), "I/O is still serial"
             assert not result.done()
@@ -41,13 +43,17 @@ def test_reads_overlap_but_results_remain_in_input_order(
             release_first.set()
         reads = result.result(timeout=5)
     assert [item.path for item in reads] == paths
-    assert [item.text for item in reads] == ["0", "1", "2", "3"]
+    if binary:
+        assert [item.data for item in reads] == [b"0", b"1", b"2", b"3"]
+    else:
+        assert [item.text for item in reads] == ["0", "1", "2", "3"]
     assert all(item.error is None for item in reads)
     assert sorted(calls) == paths  # each path opened exactly once
 
 
+@pytest.mark.parametrize("reader", [iter_utf8_file_reads, iter_binary_file_reads])
 @pytest.mark.parametrize("workers", [1, 3, 8])
-def test_input_consumption_and_pending_results_are_bounded(tmp_path: Path, workers: int) -> None:
+def test_input_consumption_and_pending_results_are_bounded(tmp_path: Path, workers: int, reader) -> None:
     paths = [tmp_path / f"{index:02}.md" for index in range(20)]
     for path in paths:
         path.write_text("public", encoding="utf-8")
@@ -58,7 +64,7 @@ def test_input_consumption_and_pending_results_are_bounded(tmp_path: Path, worke
             submitted.append(path)
             yield path
 
-    reads = iter_utf8_file_reads(inputs(), max_workers=workers)
+    reads = reader(inputs(), max_workers=workers)
     try:
         assert next(reads).path == paths[0]
         assert submitted == paths[:workers]

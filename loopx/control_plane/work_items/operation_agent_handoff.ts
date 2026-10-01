@@ -28,12 +28,15 @@ function timestamp(value: unknown): number {
 }
 
 /** Readback of an operator-selected transport. This is not a session binding,
- * a runtime qualification or an execution permit. Python supplies argv facts. */
+ * a runtime qualification or an execution permit. Python supplies argv facts.
+ * Accept the CLI's provider-neutral effort vocabulary; actual model support
+ * remains a host qualification, not something this preflight can establish. */
 export function projectManagedOperationTransport(input: JsonObject): JsonObject {
   const reason = input.host !== "codex-cli" ? "operation_transport_host_unsupported"
     : !["read-only", "workspace-write"].includes(String(input.sandbox)) ? "operation_transport_sandbox_unsupported"
     : typeof input.model !== "string" || !ID.test(input.model)
-      || !["minimal", "low", "medium", "high", "xhigh"].includes(String(input.reasoning_effort))
+      || typeof input.reasoning_effort !== "string"
+      || !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(input.reasoning_effort)
       ? "operation_transport_profile_required" : null;
   return {reason, transport: {schema_version: "loopx_operation_transport_v0",
     kind: "owned_app_server", revision: "app-server-operation-tools-v0",
