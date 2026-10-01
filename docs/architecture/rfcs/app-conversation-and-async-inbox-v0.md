@@ -341,8 +341,18 @@ reopen the real store, then publish the receiver's conclusion. Steward and Goal
 conversations must show that conclusion once without rerunning the model or
 rewriting the failed Turn. Synthetic production File/HTTP and typed counterexamples
 qualify this recovery boundary; they do not establish live owner selection,
-receiver adoption, native steering or two real team cycles. Pending-work visibility
-without the original handoff response remains a distinct App read-model gap.
+receiver adoption, native steering or two real team cycles.
+
+The same commitment now supplies owner-private App readback while the caller is
+active or its answer is missing. Prefer the saved answer; otherwise attach the
+existing delegation card to the original user message, without appending a fake
+answer or rewriting the failed Turn. The shared typed lifecycle admits observation
+independently of result-return admission: pending/supplied/adopted/returned remain
+separate facts. Match the exact saved conversation, client Turn, request and Goal
+instance; ambiguous routes or conflicting receipts do not produce a card. External
+sessions do not receive private brief or receiver rationale. Route discovery retains
+the existing bounded historical scan; full backlog indexing and installed/live
+journey qualification remain separate acceptance work.
 
 App history recovery is a shared TS read boundary for steward and Goal channels.
 One unavailable older Session must not hide readable messages, lose their
