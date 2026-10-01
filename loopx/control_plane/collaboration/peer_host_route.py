@@ -36,6 +36,18 @@ PEER_HOST_ROUTE_SCHEMA_VERSION = "loopx_peer_host_route_v0"
 MAX_PUBLISHED_CANDIDATES = 3
 
 
+def _matching_bindings(
+    candidates: list[dict[str, str]], *, thread_id: str | None, host_surface: str | None,
+) -> list[dict[str, str]]:
+    return [
+        item for item in candidates
+        if (host_surface is None or item["host_surface"] == host_surface)
+        and (thread_id is None or (
+            item["thread_id"] == thread_id and item["host_surface"] in CODEX_THREAD_HOST_SURFACES
+        ))
+    ]
+
+
 def resolve_peer_host_route(
     registry_path: Path,
     *,
@@ -87,28 +99,17 @@ def resolve_peer_host_route(
     if withheld:
         result["withheld_candidate_count"] = withheld
 
+    thread_id = None
     if thread_link is not None:
         try:
             thread_id = codex_thread_deep_link_locator(thread_link)["thread_id"]
         except ValueError:
             result["reason"] = "invalid_thread_link"
             return result
-        matching = [
-            item
-            for item in candidates
-            if item["thread_id"] == thread_id
-            and item["host_surface"] in CODEX_THREAD_HOST_SURFACES
-            and (host_surface is None or item["host_surface"] == host_surface)
-        ]
-        if not matching:
-            result.update(status="not_authorized", reason="thread_not_bound_to_peer")
-            return result
-    else:
-        matching = [
-            item
-            for item in candidates
-            if host_surface is None or item["host_surface"] == host_surface
-        ]
+    matching = _matching_bindings(candidates, thread_id=thread_id, host_surface=host_surface)
+    if thread_link is not None and not matching:
+        result.update(status="not_authorized", reason="thread_not_bound_to_peer")
+        return result
 
     if not matching:
         return result
@@ -163,7 +164,20 @@ def resolve_peer_host_route(
         return result
     index = selection["selected_index"]
     selected = matching[index]
-    # Recheck the identity after host I/O, never trusting a stale registration.
+    # Host I/O must not hide a newly bound alternative or a revoked registration.
+    latest_goal = find_registry_goal(load_registry(registry_path), goal_id)
+    if latest_goal is None or agent_id not in registered_agent_ids_for_goal(latest_goal):
+        result.update(status="not_authorized", reason="peer_not_registered")
+        return result
+    latest = _matching_bindings(
+        summarize_agent_binding_routes([latest_goal], agent_id=agent_id)["candidates"],
+        thread_id=thread_id, host_surface=host_surface,
+    )
+    if {(item["host_surface"], item["thread_id"]) for item in latest} != {
+        (item["host_surface"], item["thread_id"]) for item in matching
+    }:
+        result.update(status="ambiguous", reason="binding_identity_conflict")
+        return result
     exact = resolve_registry_thread_agent_binding(
         registry_path=registry_path,
         host_surface=selected["host_surface"],

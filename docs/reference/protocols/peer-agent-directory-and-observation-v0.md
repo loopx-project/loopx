@@ -181,8 +181,10 @@ history no longer requires the owner to supply a link. It applies to the local
 CLI and `manager-inbox request --require-host-route`, including trusted steward
 and peer callers. Readable records are still neither fresh runtime liveness nor
 model/capacity qualification. Restricted Chat and remote hosts do not acquire a
-new observer or execution path. The selected registry identity is rechecked
-after host reads, and request replay keeps its original exact route.
+new observer or execution path. Registration, the scoped candidate set and the
+selected identity are rechecked after host reads; a changed set remains
+unresolved, while a mere reorder does not change the route. Request replay
+keeps its original exact route.
 
 ## Presence Vocabulary
 

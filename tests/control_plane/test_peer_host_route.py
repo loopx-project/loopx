@@ -120,6 +120,33 @@ def test_observation_cannot_rebind_the_selected_peer(tmp_path):
     assert route["selected_route"] is None
 
 
+@pytest.mark.parametrize("change", ["new_binding", "unregistered", "reordered"])
+def test_observation_rechecks_the_candidate_set_and_registration(tmp_path, change):
+    registry = _registry(tmp_path, [_binding("old"), _binding("current")])
+
+    def observe(ids):
+        content = json.loads(registry.read_text())
+        coordination = content["goals"][0]["coordination"]
+        if change == "new_binding":
+            coordination["thread_agent_bindings"].append(_binding("unobserved"))
+        elif change == "unregistered":
+            coordination["registered_agents"].remove("reviewer")
+        else:
+            coordination["thread_agent_bindings"].reverse()
+        registry.write_text(json.dumps(content))
+        return {i: HostThreadActivity(state=HostThreadState.ARCHIVED if i == "old" else HostThreadState.IDLE)
+                for i in ids}
+
+    route = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                    observers={"codex-app": observe})
+    expected = {"new_binding": "ambiguous", "unregistered": "not_authorized", "reordered": "resolved"}
+    assert route["status"] == expected[change]
+    assert route["selected_route"] == (
+        {"host_surface": "codex-app", "thread_id": "current"} if change == "reordered" else None
+    )
+    assert route["host_delivery"] == "not_attempted"
+
+
 def test_withheld_and_over_budget_candidates_cannot_hide_a_second_binding(tmp_path):
     private_id = "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz1234"
     registry = _registry(tmp_path, [_binding("current"), _binding(private_id)])
