@@ -422,6 +422,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
             self.lark_app_setup_manager.close()
         if hasattr(self, "manager_return_service"):
             self.manager_return_service.close()
+        if hasattr(self, "delegation_wake_service"):
+            self.delegation_wake_service.close()
         if hasattr(self, "lark_goal_topic_runtime"):
             self.lark_goal_topic_runtime.close()
         if hasattr(self, "runtime_controller"):
@@ -1570,6 +1572,21 @@ def serve_chat(
     server.lark_goal_topic_runtime.start()
     from .extensions.lark.manager_returns import start_return_service
     server.manager_return_service = start_return_service(server, runtime_root)
+    from .chat_loopx_mode import DelegationWakeService
+
+    def _wake_goal_context(session):
+        registry = load_registry(server.registry_path)
+        goal = next(
+            (item for item in registry_goals(registry) if str(item.get("id") or "") == str(session["goal_id"])),
+            None,
+        )
+        if goal is None:
+            raise ValueError("goal_id was not found in the active LoopX registry")
+        return _goal_public_context(registry, goal)
+
+    server.delegation_wake_service = DelegationWakeService(
+        server.runtime_controller, goal_context=_wake_goal_context
+    ).start()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
     print("Agent boundary: local adapters, read-only sandbox, approval policy never", flush=True)

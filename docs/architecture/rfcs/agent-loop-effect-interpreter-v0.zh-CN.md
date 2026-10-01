@@ -5,6 +5,7 @@
 | 状态 | 已接受 |
 | 替代 / 关闭 | 无 |
 | 日期 | 2026-08-08 |
+| 最近规范性修订 | 2026-10-01 |
 | 作者 | LoopX maintainers |
 | 范围 | 公开控制面文档、packet 合同、重构方向、测试策略 |
 
@@ -405,6 +406,45 @@ M7 只有在真实 vertical slice 满足 Product Outcome Contract、旧路径被
 
 - `bootstrap_command_pack` 应在 rendering 或 validation 前通过 `effect_program_from_ordered_steps` 读取 `ordered_steps`；
 - `turn_driver/executor` 应在提交 receipt 前通过 `interpret_turn_result_packet` 派生 result status 和 next phase。
+
+## 语义控制与执行归属
+
+LoopX 的语义控制面跨 Turn、Agent 与 runtime 保持工作含义：intent、ownership、
+dependency、authority、evidence 和 continuation。执行责任覆盖它实际拥有的 typed
+transaction 与 settlement step。Agent／capability 推理提出领域结果，kernel 核验
+绑定、准入和生命周期义务；领域 verifier 与用户仍判断成果内容。
+
+| 边界 | Owner | 可观察承诺 |
+| --- | --- | --- |
+| 领域判断 | Agent 与 capability | 带作用域证据的动作／结果提案 |
+| 控制决策 | 既有 typed domain kernel | 从显式 facts 得出的合法下一步与所需证明 |
+| 内部执行 | 所属 transaction／effect adapter | 持久状态转换与绑定 receipt |
+| 外部执行 | Host／provider | 实际 model／tool／environment effect 与事实回读 |
+| 展示 | Read-model owner | 带新鲜度边界的证据状态与可用动作 |
+
+共享 algebra 不转移执行权。Host continuation、sandbox snapshot、model/tool
+拦截和外部回滚需要各自受支持的 runtime 合同；effect plan 或 transcript 不证明
+这些能力。不新增通用 executor 或第二个 permission owner。
+
+## 决策回放、效果恢复与模拟
+
+| 操作 | 输入与承诺 | 边界 |
+| --- | --- | --- |
+| 纯决策回放 | 固定可信 facts、command 与规则版本，重现决策 | 不执行 effect、不恢复当前权限 |
+| 已提交效果恢复 | 相同逻辑身份与已验证持久 receipt，跳过已提交步骤并接续所属协议 | 不证明 unknown 外部效果没有发生 |
+| 假设模拟 | 显式替换 facts，用受控 interpreter 比较可能决策 | 不证明真实 provider 或模型会产生该结果 |
+
+在既有 receipt 边界记录版本、identity、顺序和相关 outcome。不能重跑模型后把新
+输出称为历史回放。Unknown、permission denial、cancellation、budget rejection
+和 committed success 保持各自恢复含义。取消不抹掉 in-flight 外部效果。Retry
+保留身份并遵守 provider 保证；不支持的 readback 仍是 unknown。
+
+Adapter conformance 比较可观察 effect 顺序、短路点、receipt、权限拒绝与恢复，
+不能只比较返回值。Identity／associativity 适用于同一有序程序的重新分组，不允许
+重排或投机并行。维持既有不建设万能 executor 的决定，直到真实共享权威边界能
+证明需要。跨域序列采用[组合验证](composable-state-machines-recovery-verification-v0.zh-CN.md)，
+受保护外部效果采用[provider acceptance](provider-effect-acceptance-v0.zh-CN.md)；
+两者都不意味着跨系统 exactly-once。
 
 ## 把状态机当作解释表
 

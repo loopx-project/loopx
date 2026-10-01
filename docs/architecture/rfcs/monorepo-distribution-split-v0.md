@@ -4,7 +4,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-09-26
-- **Last normative revision:** 2026-09-27
+- **Last normative revision:** 2026-10-01
 - **Implementation baseline:** `2f3d13ae9`
 - **Related contracts:** [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md), [Extensions reference](../../reference/extensions.md), [Capability catalog](../../../loopx/capabilities/README.md), [Overall Roadmap v0](loopx-overall-roadmap-v0.md) (S2, S8, S12), [import-boundary tests](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **Tracking issue:** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -31,7 +31,8 @@ defect.
    meta-package that depends on all of them.
 3. **Top-level regrouping happens before any packaging change.** `loopx/chat_*`
    moves to `loopx/chat/`, `loopx/*_goal_mode/` moves to `loopx/hosts/`, with
-   compatibility re-exports for at least one minor release.
+   compatibility re-exports for established public imports for at least one minor
+   release. Internal-only callers move together and the old internal entry is deleted.
 4. **A new architecture test pins top-level growth.** The number of `loopx/*.py`
    modules may only decrease. This joins the existing zero-exception
    import-boundary checks.
@@ -90,8 +91,10 @@ are optional without a repository-level rule.
 - I2. Kernel truth (Goal/Todo/claim/lease/quota/effect/receipt) has exactly one
   owner and one implementation path per transaction; packaging never introduces
   a second copy.
-- I3. `import loopx.<old_module>` keeps working for at least one minor release
-  after a move, with a documented deprecation.
+- I3. Established public `import loopx.<old_module>` contracts keep working for
+  at least one minor release after a move, with a documented deprecation.
+  Internal-only moves update all active callers and delete the old entry; retain
+  an internal bridge only for a named unmigrated caller and explicit exit condition.
 - I4. A missing optional distribution degrades to the same behaviour as the
   extension "off state": core commands work, absent capabilities are reported as
   unavailable, never silently substituted.
@@ -105,7 +108,7 @@ are optional without a repository-level rule.
 
 ### In scope
 
-- Directory regrouping of `loopx/` top-level modules with compatibility shims.
+- Directory regrouping of `loopx/` top-level modules with I3 compatibility.
 - An architecture test that pins the `loopx/*.py` count.
 - Definition of three distribution tiers and the rule for which code belongs
   where.
@@ -161,6 +164,20 @@ lease/quota/effect state. A capability package may only register providers,
 capability contracts and CLI subcommands through `CapabilityRegistry`; it never
 imports kernel-private modules.
 
+### Responsibility and installation acceptance
+
+Directory regrouping and distribution splitting have separate acceptance.
+For each move, show the rule's single owner and changed callers, import direction,
+remaining compatibility seams and the failure-to-owner diagnosis path. For each
+distribution, verify clean minimal installation, optional-package absence,
+upgrade and rollback through its supported commands. Use the TS migration
+payoff table for cross-runtime cost; do not introduce a parallel scorecard.
+
+The file-count ratchet remains an architectural guard, not the optimization
+objective. Moving a file while retaining its shim does not reduce that count;
+combining unrelated responsibilities to meet it is not a successful refactor.
+Measure representative change locality and installation cost separately.
+
 ### State model and schema
 
 No canonical record changes. The only new durable artefact is the architecture
@@ -184,9 +201,12 @@ Moves are executed per group with this fixed sequence:
 
 1. `git mv` the group into its package (`loopx/chat/`, `loopx/hosts/`, or
    `packages/loopx-capability-<name>/src/`).
-2. Leave a shim at the old path that re-exports the public names and emits
-   `DeprecationWarning` once per process.
-3. Lower `max_top_level_modules` by the number of moved files.
+2. Inventory public imports and active internal callers. Re-export established
+   public names at the old path with `DeprecationWarning` once per process.
+   Update internal-only callers and remove the old entry; name any necessary
+   migration bridge and its removal condition.
+3. Remeasure top-level files, including retained shims, and lower
+   `max_top_level_modules` only by the actual net reduction.
 4. Run the import-boundary tests, the budget test, `loopx check` on touched
    docs, and the package smoke lane.
 
@@ -208,7 +228,7 @@ retained core capability (D2).
 | --- | --- |
 | **Split into several Git repositories** | Violates I1 during the TS transaction cutover: kernel semantics change daily and downstream repos would break on every change. Multiplies CI, release and review cost while review capacity is the scarce resource. Reopen only when the kernel migration is complete and a package has independent maintainers (Appendix D). |
 | **Keep one wheel, add extras only** | Reduces install weight but leaves the flat namespace and the two packaging conventions in place; contributors still cannot find boundaries. |
-| **Move everything to `packages/` at once** | Breaks I3 for many callers simultaneously and mixes behavioural risk into a structural change. Per-group moves with shims are cheaper to review and to roll back. |
+| **Move everything to `packages/` at once** | Breaks I3 for many callers simultaneously and mixes behavioural risk into a structural change. Per-group moves with I3 compatibility are cheaper to review and to roll back. |
 | **Bundle Node into `loopx-core` unconditionally** | Solves I5 but makes the kernel wheel platform-specific and large. Kept as option D1 alongside the optional-extra approach. |
 
 ## 7. Safety, privacy, and compatibility
@@ -218,7 +238,7 @@ retained core capability (D2).
   silently falls back to another implementation.
 - **Public/private boundary:** unchanged. `loopx check` continues to scan every
   package; moving a file does not change its scan class.
-- **Legacy readers/writers:** import shims (I3) cover Python callers. Console
+- **Legacy readers/writers:** import shims (I3) cover established public Python imports. Console
   scripts keep their names; `loopx` meta-package keeps `pip install loopx`
   working identically for one minor release.
 - **Mixed versions:** the meta-package pins all tiers to one release train.
@@ -231,8 +251,8 @@ retained core capability (D2).
 | Step | Gate | Rollback |
 | --- | --- | --- |
 | Budget test added at current count | none; additive | delete fixture |
-| `chat_*` → `loopx/chat/` with shims | import-boundary + budget + smoke green | revert PR; shims make revert a no-op for callers |
-| `*_goal_mode` → `loopx/hosts/` with shims | same | same |
+| `chat_*` → `loopx/chat/` with I3 compatibility | import-boundary + budget + smoke green | revert PR and caller updates; retain required public shims |
+| `*_goal_mode` → `loopx/hosts/` with I3 compatibility | same | same |
 | Publish `loopx-core` / `loopx-workspace` / meta `loopx` | package-smoke lane installs each on a clean runner | unpublish pre-release; `loopx` meta keeps old layout one release |
 | Capability package moves | per capability, kernel-caller inventory resolved | revert one package |
 | Shim removal | one minor release after the move; deprecation recorded in update notes | not applicable; requires migration by callers |
@@ -261,7 +281,7 @@ qualification or performance claim is made by this RFC.
   mixed release trains.
 - `loopx capability list` distinguishes "not installed" from "installed, not
   ready".
-- Release notes name every moved module and its shim expiry release.
+- Release notes name public import moves and each retained shim’s expiry release.
 - No new daemon, storage or network surface is introduced.
 
 ## 11. Normative delivery plan
@@ -269,11 +289,11 @@ qualification or performance claim is made by this RFC.
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
 | M0 | Budget fixture and test at the current count; RFC index entry | this RFC accepted | budget test green; count pinned | delete test |
-| M1 | `loopx/chat_*` → `loopx/chat/` with shims; budget lowered | M0 | Section 9 rows 1–2 | revert |
-| M2 | `loopx/*_goal_mode` → `loopx/hosts/` with shims | M0 | rows 1–2 | revert |
+| M1 | `loopx/chat_*` → `loopx/chat/` with I3 compatibility; budget lowered by net reduction | M0 | Section 9 rows 1–2 | revert |
+| M2 | `loopx/*_goal_mode` → `loopx/hosts/` with I3 compatibility | M0 | rows 1–2 | revert |
 | M3 | `loopx-core` + `loopx-workspace` + meta `loopx` published as pre-release; Node as extra or bundle per D1 | M1, M2; D1 decided | rows 3–4, 7 | unpublish pre-release |
 | M4 | First capability without kernel callers moved to `packages/` | M3; D2 inventory | rows 5–6 | revert package |
-| M5 | Remaining eligible capabilities moved; shims from M1/M2 removed after one minor release | M4 | full smoke identical | not applicable |
+| M5 | Remaining eligible capabilities moved; public shims from M1/M2 removed after the documented compatibility window | M4 | full smoke identical | not applicable |
 
 ## 12. Open decisions
 

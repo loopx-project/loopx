@@ -223,7 +223,11 @@ than maintaining separate rules.
 
 This entrypoint does not create Agents, grant bindings or wake an idle Codex
 conversation. The existing host/LoopX continuation policy owns the next lead
-turn. The conversation remains persistent independently of whether autonomous
+turn; for a Goal Chat LoopX lead that is the Chat service's one-time wake after
+acceptance, described in [Goal Chat continuation](goal-chat-continuation.md).
+That wake returns to the conversation whose Turn started the operation, which
+the trusted Chat host records beside the operation; the model supplies no
+routing. The conversation remains persistent independently of whether autonomous
 LoopX mode is enabled. Dashboard, CLI/managed Turn and Lark keep their existing
 conversation and runtime owners; they may consume the shared bounded route
 projection described below, but they do not get another grant or scheduler.
@@ -400,7 +404,7 @@ of the new tool description, not injected into those older threads' shared promp
 仍显式调用 `resume --execute`。分页回读会重新核验 accepted，单条失效显示
 `unavailable`，不能当成失败重派或静默隐藏。`has_more` 表示还有下一页，
 `page_readback_complete` 只表示本页是否均成功读取；二者都不代表整个团队已完成。
-此入口不创建 Agent、不扩大授权，也不唤醒闲置的 Codex 对话。
+此入口不创建 Agent、不扩大授权，也不唤醒闲置的 Codex 对话。Goal Chat LoopX 模式的协调员由 Chat 服务在结果被接受后唤醒一次，且只回到「启动该操作的回合所属会话」——该绑定由受信任的 Chat 宿主写在操作记录旁，模型不提供路由；见 [Goal Chat 续跑](goal-chat-continuation.md)。
 
 ### Check a binding before new work
 

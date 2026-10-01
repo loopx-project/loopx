@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import hashlib
 import html
 import json
-import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -36,16 +35,13 @@ from .goal_channel_message_delivery import (
     GoalChannelMessageDeliverySession,
     resolve_bound_goal_channel,
 )
+from .identity_shapes import require_card_callback_identity
 from .presentation.kanban import CommandRunner, default_subprocess_runner
 
 
 OPERATION_CARD_ACTION_SCHEMA_VERSION = "loopx_operation_card_action_v0"
 OPERATION_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_operation_callback_receipt_v0"
 OPERATION_EXECUTOR_CAPABILITY_ID = "human-confirmed-operation-executor"
-_EVENT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,240}$")
-_MESSAGE_ID = re.compile(r"^om_[A-Za-z0-9_-]+$")
-_CHAT_ID = re.compile(r"^oc_[A-Za-z0-9_-]+$")
-_OPEN_ID = re.compile(r"^ou_[A-Za-z0-9_-]+$")
 
 
 def _digest(value: object) -> str:
@@ -990,14 +986,7 @@ def handle_goal_channel_operation_callback(
         or any(ord(character) < 32 for character in callback_token)
     ):
         raise ValueError("operation callback update token is invalid")
-    for field, pattern in (
-        ("event_id", _EVENT_ID),
-        ("message_id", _MESSAGE_ID),
-        ("chat_id", _CHAT_ID),
-        ("operator_id", _OPEN_ID),
-    ):
-        if not pattern.fullmatch(str(event.get(field) or "")):
-            raise ValueError(f"operation callback {field} is invalid")
+    require_card_callback_identity(event, error_prefix="operation callback")
     if str(event.get("host") or "") != "im_message":
         raise ValueError("operation callback host is unsupported")
     store = ChatActionStore(action_store_root)

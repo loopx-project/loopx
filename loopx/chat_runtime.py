@@ -75,6 +75,11 @@ STEERING_NOT_DELIVERED_CODES = frozenset({
     "live_steering_turn_not_started",
 })
 
+# The opaque payload an adapter forwards to its provider. Named here so the
+# worker signature that carries it between methods does not open another
+# module-level `Any`.
+AttachmentPayload = dict[str, Any]
+
 
 class ChatTurnAcceptanceUnavailableError(Exception):
     """The durable acceptance attempt can be retried with the same request."""
@@ -159,7 +164,7 @@ class CodexAppServerAdapter:
         self,
         message: str,
         event_sink: EventSink,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
     ) -> dict[str, Any]:
         return self.session.send(message, attachments=attachments, on_event=event_sink)
 
@@ -939,7 +944,7 @@ class ChatRuntimeController:
         session_id: str,
         client_turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]] | None = None,
+        attachments: list[AttachmentPayload] | None = None,
         work_dir: Path,
         objective: str,
         loopx_execution: bool = False,
@@ -975,11 +980,10 @@ class ChatRuntimeController:
                     message=message,
                     attachments=attachments,
                     display_message=(
-                        (
-                            "开启 LoopX 模式，持续推进当前 Goal。"
-                            if (loopx_request or {}).get("operation") == "start"
-                            else "恢复 LoopX 模式。"
-                        )
+                        {
+                            "start": "开启 LoopX 模式，持续推进当前 Goal。",
+                            "wake": "成员结果已验收，继续推进 LoopX 模式。",
+                        }.get(str((loopx_request or {}).get("operation")), "恢复 LoopX 模式。")
                         if loopx_execution
                         else None
                     ),
@@ -1025,7 +1029,7 @@ class ChatRuntimeController:
         session_id: str,
         turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
         adapter: ChatRuntimeAdapter,
         loopx_execution: bool,
     ) -> bool:
@@ -1386,7 +1390,7 @@ class ChatRuntimeController:
         session_id: str,
         turn_id: str,
         message: str,
-        attachments: list[dict[str, Any]],
+        attachments: list[AttachmentPayload],
         adapter: ChatRuntimeAdapter,
         done_event: threading.Event | None = None,
         loopx_execution: bool = False,
@@ -1398,21 +1402,53 @@ class ChatRuntimeController:
                 if done_event is None:
                     done_event = threading.Event()
                     self.turn_done_events[key] = done_event
-        started = utc_now()
-        started_turn = self.store.update_turn(
-            session_id,
-            turn_id,
-            expected_statuses={"queued"},
-            status="starting",
-            started_at=started,
-        )
-        if started_turn is None:
+        # Everything runs inside the terminal release. The start fact is the
+        # first durable write and is not guaranteed to land: if it raises, the
+        # Turn was never dispatched, so the single-flight guard must be given
+        # back here rather than left holding the key, which would make every
+        # later dispatch of this same Turn a silent no-op.
+        try:
+            started_turn = self.store.update_turn(
+                session_id,
+                turn_id,
+                expected_statuses={"queued"},
+                status="starting",
+                started_at=utc_now(),
+            )
+            if started_turn is None:
+                with self.lock:
+                    self.cancelled_turns.discard(key)
+                return
+            self._run_started_turn(
+                session_id=session_id,
+                turn_id=turn_id,
+                message=message,
+                attachments=attachments,
+                adapter=adapter,
+                loopx_execution=loopx_execution,
+            )
+        finally:
+            done_event.set()
             with self.lock:
-                self.cancelled_turns.discard((session_id, turn_id))
                 if self.turn_done_events.get(key) is done_event:
                     self.turn_done_events.pop(key, None)
-            done_event.set()
-            return
+
+    def _run_started_turn(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        message: str,
+        attachments: list[AttachmentPayload],
+        adapter: ChatRuntimeAdapter,
+        loopx_execution: bool,
+    ) -> None:
+        """The body of a Turn whose `queued -> starting` fact is already durable.
+
+        `_run_turn` owns the single-flight release, so nothing here needs the
+        done event.
+        """
+        key = (session_id, turn_id)
         event_buffer = _TurnEventBuffer(
             store=self.store,
             session_id=session_id,
@@ -1487,9 +1523,9 @@ class ChatRuntimeController:
                         return
                     execution_context = None
                     if loopx_execution:
-                        from .chat_loopx_mode import GUIDANCE
+                        from .chat_loopx_mode import execution_guidance
                         execution_lock = self.loopx_mode.prepare(session_id, turn_id, adapter, adapter.session.read_tool_handler, event_sink)
-                        execution_context = GUIDANCE + "\nFresh scoped evidence:\n" + json.dumps(context, ensure_ascii=False)
+                        execution_context = execution_guidance(self.store.load_turn(session_id, turn_id)) + "\nFresh scoped evidence:\n" + json.dumps(context, ensure_ascii=False)
                     response = adapter.goal_driver.run(native_command, event_sink, execution_context=execution_context)
                 finally:
                     if execution_lock is not None:
@@ -1598,9 +1634,6 @@ class ChatRuntimeController:
             event_buffer.close()
             with self.lock:
                 self.turn_event_buffers.pop(key, None)
-                if self.turn_done_events.get(key) is done_event:
-                    self.turn_done_events.pop(key, None)
-            done_event.set()
 
     def _fail_turn(
         self,

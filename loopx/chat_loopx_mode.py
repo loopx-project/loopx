@@ -7,15 +7,18 @@ identities, commands or filesystem roots. Task acceptance remains with Delegatio
 from __future__ import annotations
 
 import hashlib
+import logging
 import json
 from pathlib import Path
 import threading
 import time
+from typing import Any, Callable
 
 from .agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from .chat_codex_goal import CodexGoalDriver, validate_goal_chat
 from .control_plane.effect_runtime import effect_runtime_result
-from .file_lock import exclusive_file_lock, LockAcquisitionPolicy
+from .control_plane.collaboration.inbox import _read, _root
+from .file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
 from .orchestration import (
     compact_orchestration_policy,
     normalize_subagent_execution_config,
@@ -70,6 +73,24 @@ GUIDANCE = (
     "A missing report-writing grant must not prevent returning the complete analysis in this conversation. "
     "Pause/block when tools, authorization or evidence are insufficient."
 )
+
+# Owner operations; a host wake is admitted only through ``wake``.
+OWNER_OPERATIONS = {"configure", "start", "resume", "pause", "exit", "message"}
+
+
+def execution_guidance(turn: dict | None) -> str:
+    """GUIDANCE plus the exact reason a host-initiated Turn started."""
+    request = (turn or {}).get("loopx_request") or {}
+    wake = request.get("wake") if request.get("operation") == "wake" else None
+    if not isinstance(wake, dict) or not wake.get("operation_id"):
+        return GUIDANCE
+    return (
+        GUIDANCE
+        + "\nThis Turn started because delegated operation "
+        + str(wake["operation_id"])
+        + " returned an accepted result. Read it with action=read before continuing;"
+        " member acceptance is not Goal completion."
+    )
 
 
 class ChatLoopXMode:
@@ -288,6 +309,8 @@ class ChatLoopXMode:
             "delivery_mode",
         }:
             raise ValueError("unknown LoopX mode input")
+        if body.get("operation") not in OWNER_OPERATIONS:
+            raise ValueError("unknown LoopX mode operation")
         with self._lock(session_id):
             if body.get("operation") == "message":
                 return self.message(session_id, body)
@@ -426,6 +449,143 @@ class ChatLoopXMode:
                 self.store.update_session(session_id, loopx_mode=mode)
                 raise
             return {**self.snapshot(session_id), "turn_id": turn["turn_id"]}
+
+    def wake(self, session_id, path, *, goal_context):
+        """Continue the lead once a delegated result is accepted; the owner does not poll.
+
+        ``path`` is the accepted operation record; ``goal_context`` returns the
+        Turn's project and objective and is read only after admission.  The
+        session lock is taken before the record lock, the same order the
+        in-Turn tool uses, so an in-Turn observation and a host wake never
+        race.  The receipt written beside the result is a fact distinct from
+        the result itself.
+        """
+        from .collaboration_mcp import record_wake
+
+        with self._lock(session_id):
+            return record_wake(
+                path,
+                lambda intent: self._wake_decision(
+                    session_id, intent, goal_context=goal_context
+                ),
+            )
+
+    def _wake_decision(self, session_id, intent, *, goal_context):
+        from .collaboration_mcp import wake_receipt
+
+        intent_id = intent.get("intent_id")
+        if not isinstance(intent_id, str) or len(intent_id) < 32:
+            raise ValueError("invalid wake intent")
+        client_turn_id = "wake-" + intent_id[:32]
+        now = time.time()
+
+        def settled(state, reason, **facts):
+            if (
+                state == "pending"
+                and intent.get("reason") == reason
+                and all(intent.get(key) == value for key, value in facts.items())
+            ):
+                return None  # unchanged: no churn on the record
+            at = "refused_at" if state == "refused" else "checked_at"
+            return wake_receipt(intent, state, reason=reason, **facts, **{at: now})
+
+        session = self.store.load_session(session_id)
+        if not session:
+            return settled("refused", "no_wake_owner")
+        # The Turn this intent's client id already owns in the pinned
+        # conversation: a crash or lost receipt after acceptance recovers it.
+        existing = self.store.turn_for_client(session_id, client_turn_id)
+        wake_turn = None
+        if existing:
+            request = existing.get("loopx_request") or {}
+            wake_turn = {
+                "turn_id": existing.get("turn_id"),
+                "status": existing.get("status"),
+                # The provider-start fact. `started_at` is stamped before the
+                # provider is reached, so it cannot prove a dispatch.
+                "upstream_turn_id": existing.get("upstream_turn_id"),
+                "started_at": existing.get("started_at"),
+                "loopx_execution": existing.get("loopx_execution") is True,
+                "operation": request.get("operation"),
+                "intent_id": (request.get("wake") or {}).get("intent_id"),
+            }
+        mode = session.get("loopx_mode") or {}
+        settings = mode.get("settings") or {}
+        try:
+            goal = self._goal(session)
+        except ValueError:
+            goal = None
+        binding_valid = False
+        if goal is not None and settings.get("agent_id"):
+            try:
+                self._execution(session, settings)
+                binding_valid = True
+            except (ValueError, KeyError, OSError):
+                binding_valid = False
+        decision = effect_runtime_result(
+            "collaboration.chat_mode",
+            {
+                "session": session,
+                "origin": "host",
+                "operation": "wake",
+                "intent": intent,
+                "wake_turn": wake_turn,
+                "settings": settings,
+                "native": session.get("native_goal") or {},
+                "registered_agents": registered_agent_ids_for_goal(goal) if goal else [],
+                "goal_active": goal is not None
+                and goal.get("status") not in {"stopped", "archived"},
+                "execution_binding_valid": binding_valid,
+            },
+        )
+        if decision["state"] == "woken":
+            # The exact Turn already started; dispatch is not repeated. The
+            # session itself is an ordinary Goal Chat conversation (not an
+            # attached host, not another Goal), the same rule ``start`` uses.
+            validate_goal_chat(session, [])
+            return self._woken(intent, session_id, existing["turn_id"], created=False, now=now)
+        if decision["state"] != "admitted":
+            return settled(decision["state"], decision["reason"])
+        validate_goal_chat(session, [])
+        context = goal_context()
+        if decision["dispatch"] == "replay":
+            # Not yet started: the native acceptance owner repairs or replays
+            # the original request and dispatches that same Turn.
+            message = existing["message"]
+            loopx_request = existing["loopx_request"]
+        else:
+            message = f"/goal resume --tokens {settings['token_budget']}"
+            loopx_request = {
+                "operation": "wake",
+                "settings": settings,
+                "wake": {
+                    key: intent.get(key)
+                    for key in ("intent_id", "operation_id", "request_id")
+                },
+            }
+        turn, _created = self.controller.submit_turn(
+            session_id=session_id,
+            client_turn_id=client_turn_id,
+            message=message,
+            attachments=[],
+            work_dir=context["project"],
+            objective=str(context.get("objective") or context.get("title") or session["goal_id"]),
+            loopx_execution=True,
+            loopx_request=loopx_request,
+        )
+        # Accepted is not started.  ``submit_turn`` returning proves admission
+        # and an asynchronous dispatch, not that the start fact is durable, so
+        # the intent stays pending until a later tick reads it back.
+        return settled("pending", "wake_dispatch_pending", turn_id=turn["turn_id"])
+
+    @staticmethod
+    def _woken(intent, session_id, turn_id, *, created, now):
+        from .collaboration_mcp import wake_receipt
+
+        return wake_receipt(
+            intent, "woken", session_id=session_id, turn_id=turn_id,
+            created=created, woken_at=now,
+        )
 
     def recover(self, session_id, adapter):
         driver = CodexGoalDriver(adapter.session)
@@ -662,11 +822,14 @@ class ChatLoopXMode:
                 if set(arguments) != {"action", "operation_id", "consumer_operation_id"}:
                     raise ValueError("adopt requires source and consumer operation ids only")
                 result = service.adopt_result(operation_id, arguments["consumer_operation_id"])
+                # Adoption requires both results accepted: neither needs a wake now.
+                service.wake_observed_in_turn(arguments["consumer_operation_id"])
             elif action == "start":
                 result = service.start(
                     arguments.get("binding_id", ""),
                     operation_id,
                     arguments.get("brief", {}),
+                    conversation={"session_id": session_id, "turn_id": turn_id},
                 )
             elif action in {"read", "wait", "resume"}:
                 result = (
@@ -688,6 +851,9 @@ class ChatLoopXMode:
             else:
                 raise ValueError("unsupported collaboration action")
             if "status" in result:
+                if result["status"] == "accepted":
+                    # Seen inside this Turn: the pending wake would be redundant.
+                    result["wake"] = service.wake_observed_in_turn(operation_id) or result.get("wake")
                 summary = {
                     key: result.get(key)
                     for key in ("operation_id", "agent_id", "todo_id", "status")
@@ -739,3 +905,129 @@ def handle_loopx_request(handler, session_id: str, *, apply: bool = False) -> No
         handler._send_error(str(exc), status=409, error_code="loopx_mode_unavailable")
     except Exception:
         handler._send_error("LoopX mode could not access its configured executor or bindings. Check the local configuration and reconnect the conversation.", status=409, error_code="loopx_mode_unavailable")
+
+# Delegation wake pump.
+#
+# Continue a Chat LoopX lead once a delegated result is accepted.
+#
+# The accepted transition leaves a pending wake intent beside the result.  Each
+# tick scans this runtime's operation records for pending intents.  An intent
+# names the conversation whose Turn started the operation; only that
+# conversation is woken, and the existing Chat LoopX owner decides and records
+# the receipt.  Another conversation of the same Goal and coordinator is never
+# selected instead: an intent without a conversation, or whose conversation is
+# gone, closed or out of the mode, is refused with ``no_wake_owner`` and the
+# scheduler deadline recheck remains its continuation.  The pump never
+# unpauses a lead, never starts a native Goal and never settles canonical
+# work.  Stopping it leaves intents pending, which is its rollback.
+
+WAKE_INTERVAL_SECONDS = 3.0
+_LOG = logging.getLogger(__name__)
+
+
+def default_goal_context(controller, session: dict[str, Any]) -> dict[str, Any]:
+    """Project and objective for a host-initiated Turn when no richer reader exists."""
+    goal = load_goal_from_registry(controller.registry_path, session["goal_id"])
+    if not goal:
+        raise ValueError("Goal unavailable")
+    return {
+        "project": Path(str(goal.get("repo") or ".")).expanduser().resolve(),
+        "objective": str(goal.get("domain") or session["goal_id"]),
+    }
+
+
+def _pending_identity(record: Path) -> tuple[str, str, str, str | None] | None:
+    """Requester, operation and pinned conversation of a pending intent; an unlocked pre-check only."""
+    row = _read(record)
+    wake = row.get("wake")
+    if row.get("status") != "accepted" or not isinstance(wake, dict) or wake.get("state") != "pending":
+        return None
+    requester = wake.get("requester") or {}
+    identity = (requester.get("goal_id"), requester.get("agent_id"), wake.get("operation_id"))
+    if not all(isinstance(value, str) and value for value in identity):
+        return None
+    session_id = (wake.get("conversation") or {}).get("session_id")
+    return (*identity, session_id if isinstance(session_id, str) and session_id else None)  # type: ignore[return-value]
+
+
+def pump_delegation_wakes(
+    controller,
+    *,
+    goal_context: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    cancelled: Callable[[], bool] = lambda: False,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """One restart-safe tick; returns the receipts it changed."""
+    # Imported here: chat_runtime imports this module, and collaboration_mcp
+    # is already a lazy dependency of LoopXMode.
+    from .chat_runtime import ChatTurnAcceptanceUnavailableError
+    from .collaboration_mcp import execution_row_path, record_wake, wake_receipt
+
+    store = controller.store
+    root = store.root.parent
+    context_for = goal_context or (lambda session: default_goal_context(controller, session))
+    changed: list[dict[str, Any]] = []
+    for record in sorted((_root(root) / "executions").glob("*/*.json")):
+        if cancelled() or len(changed) >= limit:
+            break
+        try:
+            identity = _pending_identity(record)
+            if identity is None:
+                continue
+            goal_id, agent_id, operation_id, session_id = identity
+            if execution_row_path(root, goal_id, agent_id, operation_id) != record:
+                continue  # an intent must name the requester that owns its storage address
+            if session_id is None:
+                receipt = record_wake(record, lambda wake: wake_receipt(
+                    wake, "refused", reason="no_wake_owner", refused_at=time.time()))
+            else:
+                receipt = controller.loopx_mode.wake(
+                    session_id,
+                    record,
+                    goal_context=lambda session_id=session_id: context_for(
+                        store.load_session(session_id)
+                    ),
+                )
+        except LockAcquireTimeoutError:
+            continue  # a worker or decision holds the record; retry next tick
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+                ChatTurnAcceptanceUnavailableError) as exc:
+            # Isolate one record; the others still progress this tick.
+            _LOG.warning("Delegation wake unavailable for one operation (%s); retrying", type(exc).__name__)
+            continue
+        if receipt is not None:
+            changed.append(receipt)
+    return changed
+
+
+class DelegationWakeService:
+    """Cheap local pump hosted by the existing Chat server, beside the return service."""
+
+    def __init__(self, controller, *, goal_context=None, interval=WAKE_INTERVAL_SECONDS):
+        self.controller = controller
+        self.goal_context = goal_context
+        self.interval = interval
+        self.stop = threading.Event()
+        self.thread = threading.Thread(
+            target=self.run, daemon=True, name="loopx-delegation-wakes"
+        )
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def run(self):
+        while not self.stop.is_set():
+            try:
+                pump_delegation_wakes(
+                    self.controller,
+                    goal_context=self.goal_context,
+                    cancelled=self.stop.is_set,
+                )
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                _LOG.warning("Delegation wake receipts unavailable; retrying")
+            self.stop.wait(self.interval)
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=3)

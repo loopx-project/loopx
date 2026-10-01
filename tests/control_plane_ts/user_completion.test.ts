@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {planUserCompletion} from "../../loopx/control_plane/todos/user_completion.ts";
+import {evaluateUserCompletion, planUserCompletion, requireCompletionDecisionOutcome} from "../../loopx/control_plane/todos/user_completion.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const scope = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "publish"};
@@ -75,4 +75,40 @@ test("the newest exact-scope rejection replaces its prior outcome in place", () 
 test("malformed decision history cannot be treated as an empty approval history", () => {
   assert.throws(() => planUserCompletion(gate, [{...target, decision_scope_outcomes: "invalid"}], "approve"),
     /decision_scope_outcomes must be an array/);
+});
+
+test("ordinary User cancellation leaves the dependent and its authority untouched", () => {
+  const action = {...gate, task_class: "user_action", bound_agent: "agent-a"};
+  for (const current of [target, {...target, required_decision_scopes: []}]) {
+    const before = structuredClone(current);
+    const plan = planUserCompletion(action, [current], "cancel");
+    assert.deepEqual(plan.updates, {});
+    assert.equal(plan.decision_scope_resolution, null);
+    assert.equal(plan.unblock_resume?.state, "decision_cancelled");
+    assert.equal(plan.unblock_resume?.changed, false);
+    assert.deepEqual(current, before);
+  }
+});
+
+test("shared completion bridge permits action cancellation but not invented approval", () => {
+  const request = {schema_version: "todo_user_completion_request_v0", todos: [],
+    source: {...gate, task_class: "user_action"}, decision_outcome: "cancel"};
+  assert.doesNotThrow(() => evaluateUserCompletion(request));
+  for (const outcome of ["approve", "reject"]) {
+    assert.throws(() => evaluateUserCompletion({...request, decision_outcome: outcome}),
+      /user_gate or cancelling a user_action/);
+  }
+  assert.throws(() => evaluateUserCompletion({...request, source: gate, decision_outcome: null}),
+    /user_gate completion requires/);
+  assert.throws(() => evaluateUserCompletion({...request, source: gate, materialized: false}),
+    /must first materialize/);
+});
+
+test("native Gate closure without a decision preserves requirements and grants no approval", () => {
+  const before = structuredClone(target);
+  assert.equal(requireCompletionDecisionOutcome(gate, null), null);
+  assert.deepEqual(planUserCompletion(gate, [target, gate], null), {
+    updates: {}, unblock_resume: null, decision_scope_resolution: null,
+  });
+  assert.deepEqual(target, before);
 });

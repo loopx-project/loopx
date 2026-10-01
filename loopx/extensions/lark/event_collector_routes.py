@@ -12,7 +12,6 @@ from typing import Any
 
 from ...file_lock import exclusive_file_lock
 from .event_collector import (
-    CHAT_RE,
     CONFIG_SCHEMA_VERSION,
     MAX_ROUTE_COUNT,
     _project_config_path,
@@ -23,6 +22,7 @@ from .event_inbox import (
     ROUTE_KEY_PATTERN,
     load_lark_event_inbox_config,
 )
+from .identity_shapes import LARK_CHAT_ID_PATTERN
 
 ROUTE_RECONCILE_SCHEMA_VERSION = "lark_event_collector_route_reconcile_v0"
 
@@ -38,7 +38,7 @@ def _route_reconcile_candidate(
         raise ValueError("collector route reconcile requires a v1 collector config")
     if not ROUTE_KEY_PATTERN.fullmatch(route_key):
         raise ValueError("route_key must be a lowercase public-safe token")
-    if not CHAT_RE.fullmatch(chat_id):
+    if not LARK_CHAT_ID_PATTERN.fullmatch(chat_id):
         raise ValueError("chat_id must be a Lark oc_ chat id")
     root = Path(config["project"])
     inbox_ref, inbox_config_path = _relative_project_path(

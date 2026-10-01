@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-09-26
+- Last revised: 2026-10-01
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -1420,6 +1420,52 @@ Consumers treat a missing envelope as unknown freshness, and disclose an
 alerting one before stating any conclusion that depends on it. Field
 semantics and the consumer rule are in the
 [projection envelope contract](../../reference/contracts/projection-envelope-contract.md).
+
+### 2.7 Legal domain values and deterministic decisions
+
+Keep external/historical wire values separate from validated internal domain
+values. Decode `unknown`, preserve supported omitted/null/clear semantics, then
+construct a constrained domain value. Use products for independent dimensions
+and discriminated unions for alternatives whose fields depend on one another.
+For example, a settlement binding selects either a Todo or a replan obligation;
+a required user decision cannot simultaneously be a non-blocking notice. Do
+not remove persisted compatibility fields merely because they are redundant in
+the internal model. Keep their codec and migration owner explicit.
+
+The pure decision core receives an immutable snapshot, command and explicit
+facts supplied by the trusted authority, including time or allocated identity
+when required. It must not read a clock, environment, filesystem, network or
+mutable global. Local mutation is acceptable when it cannot change observable
+inputs or escape through shared aliases. The effect shell retains IO, current
+source/permission revalidation, CAS and durable receipts. Decoding once does
+not mean authorizing once: temporal validity is checked at the owning commit
+or effect-acceptance boundary.
+
+Use the existing runtime decoder/schema owner and exhaustive TypeScript
+branches. Brands distinguish identifiers or revision domains only where real
+callers confuse them; a brand never proves current authorization. Domain-local
+expected rejection should remain a typed result, distinct from malformed input
+and unexpected defects. No new FP dependency or universal `Result`/effect layer
+is required. Existing `AgentInteractionChannel` and `SettlementResult` provide
+bounded patterns to reuse; an open JSON carrier is appropriate at a transport
+boundary, not a substitute for known internal state relationships.
+
+A selected replacement must prove compile-time illegal-state rejection, runtime
+boundary rejection, supported wire compatibility and production caller readback.
+Use the [composition verification contract](composable-state-machines-recovery-verification-v0.md)
+for cross-domain recovery. These are acceptance requirements for future slices,
+not a claim that all existing TypeScript domains already satisfy them.
+
+### 2.8 Change locality as migration payoff
+
+Extend the existing payoff table for a representative changed rule: identify
+semantic owners and callers changed, cross-runtime requests per complete
+transaction, remaining compatibility branches and the path from a failure to
+its deciding owner. Compare the same base/head workload and record deleted
+rules as well as added bridge code. Do not impose arbitrary whole-tree counts
+or count more registered types as progress. A cohesive replacement should make
+the next rule change easier to localize, test and revert; directory moves alone
+do not establish that payoff.
 
 ## 3. Current baseline and phase transition
 

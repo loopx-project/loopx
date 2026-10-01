@@ -464,6 +464,23 @@ For shell/Git/API effects outside Core, use an effect-intent ID and the provider
 
 ### 5.11 Long-horizon continuation as a product contract
 
+Concise replies must carry their actual source message before unrelated recent
+context. The shared TS conversation projection joins the captured parent ID and
+conversation ID, bounds quoted text and exposes missing or truncated context.
+The Lark collector preserves its existing parent lookup as a private inbox
+observation; manager and ordinary Goal Topic Turns consume the same projection.
+A parent-bearing mention also requires lookup. No extra history sweep, text
+classifier or execution grant is introduced. A captured quote is not approval,
+fresh fact verification or a new instruction. Unknown ancestry stays unknown;
+recent material cannot silently substitute for it.
+
+This qualifies collector→inbox→real Chat store/protocol ingress with synthetic
+provider/model fixtures, including replay. It does not qualify live referent
+reasoning, deployed group adoption or the whole handoff. App conversation history
+continues through its existing owner; no App input or opening layout changes in
+this adapter slice. R3 next qualifies installed source readback and the receiver's
+actual interpretation/return, together with current-work recovery and R2 cycles.
+
 A persistent conversation is useful, but work must also survive losing that conversation's executable session. At each supported continuation point, compose the current accepted work state with unresolved request obligations, relevant decisions and changed evidence. Distinguish a dated research conclusion from a current fact. When a correction contradicts an accepted constraint, preserve both revisions and record the receiver's resolution before the affected effect. Do not replay an earlier rejected approach merely because its rejection fell out of the prompt.
 
 Obligation coverage is derived from source requests and receiver assessments, not a second checklist database. The manager identifies the substantive questions; the receiver records which it accepted, deferred or rejected and why, linking current Todo/Vision/evidence where applicable. A result covers those obligations or explicitly leaves a bounded remainder with an owner and resume condition. An acknowledgement, elapsed timer, successful routine invocation or completed subtask cannot silently discharge the whole request. A later session reconstructs that relationship from accepted state and references, without importing runtime-private history.
@@ -473,6 +490,18 @@ Artifact continuity is part of semantic continuity. Reuse the artifact owner to 
 Long-running work must remain legible in the existing conversation: what is being attempted, who owns the next step, what is actually blocking, and what conclusion is owed. Provide expandable tool/artifact activity and current semantic context in the frontend; Lark gets a concise equivalent and actionable results. Distinguish a queued worker, unavailable host, permission refusal, website login and undelivered answer. Do not expose raw protocol envelopes or claim fine-grained tool activity on adapters that cannot supply it.
 
 The App must also preserve the user's chosen work view across reload and browser history. Manager conversation and Goal overview/tasks/conversation/artifacts use the existing typed workspace route; source loading must not insert duplicate history entries. Preserve the source and Goal identity, retain an unsent draft under its existing owner, and never start or replay a Turn merely to restore navigation. Fresh-entry defaults remain distinct from restoring an explicit view. Packaged navigation recovery qualifies this presentation boundary only; actual receiver adoption, steering and owed-result return retain their independent acceptance requirements.
+The shared App activity control preserves an unsent or unconfirmed adjustment
+across view changes and reload. Composer and inline controls use one TS client
+cache; each inline draft is bound to its original session and Turn. Restoring a
+draft dispatches nothing. Retries of unchanged text retain the same ingress
+identity after unknown delivery or mismatched receipts; confirmed non-delivery
+allows a fresh identity. Editing the instruction starts a distinct request.
+Accepted delivery retires that exact entry without erasing another draft. An
+ended Turn keeps its unsent draft readable and cannot redirect it to newer work.
+Unavailable browser storage preserves page-memory recovery only, not reload
+recovery. Packaged browser transport and the real Chat steering/store tests
+qualify this bounded recovery behavior; live executor adoption, installed App
+readback and Lark steering remain separate acceptance.
 
 Reuse existing capability instructions, context hooks, memory and scheduling owners. Reusable methods may inform planning and handoff, with their source/version visible; remembered lessons do not replace accepted task state or current verification. Stable recurring work may use the existing schedule/event path after its task and replay behavior are understood. This RFC does not add a routine engine, compulsory method learning, a new hook family or business-specific automation.
 

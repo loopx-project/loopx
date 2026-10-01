@@ -52,6 +52,39 @@ function mutation(overrides: Record<string, unknown> = {}) {
   });
 }
 
+test("bound User action closure is administrative, not a fabricated execution lease", () => {
+  const todo = {...request().todo, role: "user", task_class: "user_action",
+    claimed_by: null, bound_agent: "agent-a"};
+  const base = request({todo, handoff_mode: "hard_lease", decision_outcome: "cancel"});
+  for (const status of ["open", "blocked", "deferred"]) {
+    const result = evaluateCoordinationTodoTerminalDecision({...base, todo: {...todo, status}});
+    assert.equal(result.outcome, "apply");
+    assert.equal(result.lease_fence, "not_required");
+    assert.equal(result.next_lease, null);
+  }
+  for (const [override, code] of [
+    [{actor_agent_id: null}, "actor_required"],
+    [{actor_agent_id: "unknown"}, "actor_not_registered"],
+    [{actor_agent_id: "agent-b"}, "bound_agent_mismatch"],
+    [{todo: {...todo, excluded_agents: ["agent-a"]}}, "actor_excluded"],
+    [{todo: {...todo, bound_agent: null}}, "handoff_mode_requires_lease"],
+    [{todo: {...todo, claimed_by: "agent-b"}}, "claim_owner_mismatch"],
+    [{lease_idempotency_key: "expired-key"}, "handoff_mode_requires_lease"],
+    [{command: "supersede", authority_action: "supersede"}, "handoff_mode_requires_lease"],
+  ] as const) assert.equal(evaluateCoordinationTodoTerminalDecision({...base, ...override}).code, code);
+  const lease = {present: true, active: true, status: "active", owner: "agent-a",
+    idempotency_key: "holder", version: 3, lease_epoch: 1, write_scopes: []};
+  assert.equal(evaluateCoordinationTodoTerminalDecision({...base, lease}).code, "lease_fence_required");
+  assert.equal(evaluateCoordinationTodoTerminalDecision({...base, lease,
+    lease_idempotency_key: "holder", lease_expected_version: 2}).code, "version_mismatch");
+  assert.equal(evaluateCoordinationTodoTerminalDecision({...base, lease: {...lease, owner: "agent-b"}}).outcome,
+    "rejected", "an active foreign holder cannot be bypassed");
+  assert.equal(evaluateCoordinationTodoTerminalDecision({...base, lease: {...lease, owner: "agent-b"},
+    lease_idempotency_key: "holder", lease_expected_version: 3}).code, "lease_cas_mismatch");
+  assert.equal(evaluateCoordinationTodoTerminalDecision({...base,
+    lease: {...lease, active: false, status: "expired"}}).next_lease?.status, "released");
+});
+
 test("update admission shares actor rules without inventing terminal effects", () => {
   const base = mutation({ todo: { ...request().todo as object, claimed_by: null } });
   for (const mode of ["legacy", "soft_claim", "hard_lease"]) {

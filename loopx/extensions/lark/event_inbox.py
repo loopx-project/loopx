@@ -29,15 +29,17 @@ from .goal_channel_transport import (
     OPEN_ID_PATTERN,
     lark_provider_mention_identities,
 )
+from .identity_shapes import (  # noqa: F401
+    LARK_CHAT_ID_PATTERN as CHAT_ID_PATTERN,
+    LARK_MESSAGE_ID_PATTERN as MESSAGE_ID_PATTERN,
+)
 
 EVENT_SCHEMA_VERSION = "lark_event_inbox_event_v0"
 CONFIG_SCHEMA_VERSION = "lark_event_inbox_config_v0"
 PROCESSED_SCHEMA_VERSION = "lark_event_inbox_processed_v0"
 MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION = "lark_material_review_ledger_v0"
-MESSAGE_ID_PATTERN = re.compile(r"om_[A-Za-z0-9_-]+")
 EVENT_ID_PATTERN = re.compile(r"[A-Za-z0-9:_-]{1,200}")
 SAFE_PROFILE_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,100}")
-CHAT_ID_PATTERN = re.compile(r"oc_[A-Za-z0-9_-]+")
 REACTION_EMOJI_PATTERN = re.compile(r"[A-Za-z0-9_]{1,64}")
 REPLY_PLACEMENT_POLICIES = {"source_thread", "source_context"}
 REPLY_EDITORIAL_STYLES = {"concise", "bullet_points_preferred"}
@@ -311,6 +313,19 @@ def _event_from_payload(
         and "parent_id" in event
         and payload.get("reply_to_bot") is True
     )
+    # Transport only bounded provider text and its source identifiers. The TS
+    # conversation owner checks the parent/conversation join before model use.
+    reply_context = payload.get("reply_context")
+    if isinstance(reply_context, Mapping):
+        reply_content = reply_context.get("content")
+        reply_content = reply_content if isinstance(reply_content, str) else ""
+        event["reply_context"] = {
+            "message_id": str(reply_context.get("message_id") or "")[:200],
+            "conversation_id": str(reply_context.get("conversation_id") or "")[:200],
+            "content": reply_content[:16000],
+            "content_truncated": len(reply_content) > 16000
+            or reply_context.get("content_truncated") is True,
+        }
     addressed_to_bot = bool(
         event["reply_to_bot"]
         or (

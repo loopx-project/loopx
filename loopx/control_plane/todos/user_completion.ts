@@ -3,7 +3,8 @@
  * under their existing lock/CAS; replay returns the original transaction receipt.
  */
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
+import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {decisionScopeCovers} from "./decision_scope.ts";
 import {normalizeTodoDecisionScope, normalizeTodoRequiredDecisionScopes} from "./decision_metadata.ts";
 
@@ -31,6 +32,28 @@ const unavailableSource = (todo: JsonObject): boolean => {
     !["open", "blocked", "deferred"].includes(status);
 };
 
+/** Shared outcome semantics with each caller's existing presence contract.
+ * Cancelling a reminder is not an owner approval or a decision-scope outcome.
+ * Native Gate closure may omit a decision; the legacy explicit bridge cannot.
+ */
+export function requireCompletionDecisionOutcome(
+  source: JsonObject, outcome: DecisionOutcome | null, materialized = true, gateOutcomeRequired = false,
+): DecisionOutcome | null {
+  if (source.role !== "user" || source.task_class !== "user_gate") {
+    if (outcome !== null && !(source.role === "user" &&
+        source.task_class === "user_action" && outcome === "cancel")) {
+      throw new EffectRuntimeRequestError("decision_outcome is only valid when completing a user_gate or cancelling a user_action");
+    }
+    return outcome;
+  }
+  if (outcome === null) {
+    if (gateOutcomeRequired) throw new EffectRuntimeRequestError("user_gate completion requires decision_outcome=approve, reject, or cancel");
+    return null;
+  }
+  if (!materialized) throw new EffectRuntimeRequestError("event-projected user_gate completion must first materialize the gate in active state so its decision outcome is durable");
+  return outcome;
+}
+
 export function planUserCompletion(
   source: JsonObject, todos: readonly JsonObject[], outcome: DecisionOutcome | null,
 ): UserCompletionPlan {
@@ -41,6 +64,10 @@ export function planUserCompletion(
   const id = source.unblocks_todo_id;
   const base = {schema_version: "todo_unblock_resume_v0", source_todo_id: source.todo_id,
     target_todo_id: id, changed: false};
+  // Ordinary cancellation closes only its source. It neither approves nor
+  // rejects a scope, and must not resume or otherwise edit its dependent.
+  if (!gate && outcome === "cancel") return {...empty,
+    unblock_resume: {...base, state: "decision_cancelled"}};
   const target = todos.find(row => row.todo_id === id && row.role === "agent" && row.archive_state !== "archive");
   const scope = gate ? normalizeTodoDecisionScope(source.decision_scope) : null;
   if (!target) return {...empty, unblock_resume: {...base,
@@ -101,7 +128,10 @@ export function evaluateUserCompletion(value: unknown): UserCompletionPlan {
   if (request.schema_version !== "todo_user_completion_request_v0" || !Array.isArray(request.todos)) {
     throw new TypeError("invalid user completion snapshot");
   }
-  return planUserCompletion(requireJsonObject(request.source, "source"),
-    request.todos.map(row => requireJsonObject(row, "todo")), request.decision_outcome == null ? null :
-      requireStringLiteral(request.decision_outcome, ["approve", "reject", "cancel"] as const, "decision_outcome"));
+  const source = requireJsonObject(request.source, "source");
+  const outcome = request.decision_outcome == null ? null :
+    requireStringLiteral(request.decision_outcome, ["approve", "reject", "cancel"] as const, "decision_outcome");
+  requireCompletionDecisionOutcome(source, outcome, request.materialized === undefined
+    ? true : requireBoolean(request.materialized, "materialized"), true);
+  return planUserCompletion(source, request.todos.map(row => requireJsonObject(row, "todo")), outcome);
 }

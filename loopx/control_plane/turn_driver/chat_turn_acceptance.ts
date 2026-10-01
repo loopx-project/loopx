@@ -35,6 +35,14 @@ const TERMINAL_TURN_STATUSES = new Set<TurnStatus>([
   "timed_out",
   "failed",
 ]);
+
+/** A terminal Turn can never be dispatched again under its client identity.
+ *
+ * Callers deciding whether a persisted Turn is still recoverable share this
+ * owner instead of restating the terminal set beside it. */
+export function isTerminalTurnStatus(value: unknown): boolean {
+  return TERMINAL_TURN_STATUSES.has(value as TurnStatus);
+}
 const OPAQUE_ID = /^[A-Za-z0-9._-]{1,160}$/;
 const SHA256 = ENVELOPED_SHA256_PATTERN;
 const EMPTY_OBJECT_SHA256 = sha256("{}");

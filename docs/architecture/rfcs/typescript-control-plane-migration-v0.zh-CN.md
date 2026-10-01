@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-09-26
+- Last revised：2026-10-01
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -1036,6 +1036,40 @@ envelope；§6 把这一条定为 promotion 门禁。
 消费者把缺失 envelope 视为新鲜度未知；envelope 告警时，必须先披露，再陈述依赖它的
 结论。字段语义与消费者规则见
 [projection envelope 合同](../../reference/contracts/projection-envelope-contract.md)（仅英文）。
+
+### 2.7 合法领域值与确定性决策
+
+将外部／历史 wire 值与已验证的内部领域值分开。先解码 `unknown`，保留支持的
+omitted/null/clear 语义，再构造受约束领域值。独立维度用积类型，字段相互依赖的
+互斥分支用判别联合。例如 settlement binding 选择 Todo 或 replan obligation；
+需要用户决定不能同时是非阻塞通知。内部模型不再需要某字段，不构成删除持久兼容
+字段的理由；codec 与迁移 owner 必须明确。
+
+纯决策内核接收不可变 snapshot、command 以及可信 authority 显式提供的 facts，
+包括需要的时间或已分配身份。不得读取时钟、环境、文件、网络或可变全局。局部
+mutation 只要不改变可观察输入、不经共享别名泄露即可。Effect shell 保留 IO、
+当前 source／permission 重验、CAS 与持久 receipt。解码一次不等于授权一次：
+时间有效性在所属 commit 或 effect acceptance 边界核验。
+
+复用现有 runtime decoder／schema owner 与穷尽 TypeScript 分支。只有真实 caller
+存在混淆时才用 brand 区分 identity 或 revision 域；brand 不证明当前权限。领域内
+预期拒绝保持 typed result，与非法输入及意外 defect 区分。不要求引入 FP 依赖或
+通用 `Result`／effect 层。已有 `AgentInteractionChannel` 与 `SettlementResult`
+提供可复用的有界模式；开放 JSON carrier 适合 transport 边界，不能代替已知的内部
+状态关系。
+
+每个选中替换都需证明编译期非法状态拒绝、运行时边界拒绝、支持的 wire 兼容及
+生产 caller 回读。跨域恢复采用
+[组合验证合同](composable-state-machines-recovery-verification-v0.zh-CN.md)。
+这是后续切片的验收要求，不声称全部既有 TypeScript 领域已满足。
+
+### 2.8 以修改局部性衡量迁移收益
+
+在既有兑现表中，为代表性规则列出变更涉及的语义 owner／caller、每笔完整事务的
+跨运行时请求数、剩余兼容分支，以及从失败定位到决策 owner 的路径。相同 base/head
+负载下比较，既记录新增 bridge 也记录删除的规则。不新增任意全仓计数门槛，也不把
+注册更多类型计为进展。完整替换应让下一条规则更容易定位、测试和回滚；移动目录
+本身不证明这项收益。
 
 ## 3. 当前基线与阶段转换
 

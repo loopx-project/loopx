@@ -22,10 +22,43 @@ states used by the interaction catalog and state machine.
 | Event Ledger | Append-only events | LoopX lifecycle commands | Ordered lifecycle facts for todos, gates, runs, evidence, quota, projections, and rollbacks. | A mutable note file. |
 | Projection | Status, quota, frontstage, review packet, dashboard | Projection builders | Read-only rendering of source facts for one consumer. | A write API or source of truth. |
 
-## Derived Runtime States
+## State Taxonomy And Ownership
 
-These states are derived from the state bodies above. They are useful for
-status, quota, scheduler, frontstage, review packets, and agent prompts.
+| Category | Examples | Ownership and lifetime |
+| --- | --- | --- |
+| Persistent domain state | Todo lifecycle, lease generation, gate scope | Its domain writer accepts transitions; storage preserves the accepted facts |
+| Derived decision | `eligible`, `successor_replan_required`, final interaction contract | A decision owner computes it from explicit source facts; consumers cannot promote a diagnostic hint into permission |
+| Execution or settlement phase | writeback pending, receipt-backed settlement, no-spend closeout | The effect owner advances it only on the required evidence; a plan alone is not a receipt |
+| Read projection condition | stale source, `projection_gap`, delivery pending | The read/delivery owner reports observation limits; a stale view does not roll back canonical state |
+
+The same word can occur in different domains. Always identify its owner and
+field rather than infer equivalence from spelling. Each changed state contract
+names its producing condition, legal exits, required evidence and interpreting
+consumers. Generate mechanical tables from existing typed owners where feasible;
+review the semantic explanation independently. This document is a map, not a
+second enum registry or writer.
+
+Todo completion, Turn settlement, Goal completion and result delivery are
+separate facts. A validated in-flight writeback can settle a Turn while its Todo
+remains open; a committed monitor observation can close without spending quota.
+A historical receipt records what happened and does not grant a new execution.
+`Running` remains derived from execution facts, not a new persisted Todo status.
+Legacy wire flags retain their codec semantics: for example, the canonical Todo
+record currently maps both `done` and `deferred` to `done=true`; callers must use
+the owning lifecycle interpretation rather than infer successful completion from
+that flag alone.
+
+Use products for independent dimensions and sums for dependent alternatives.
+Within a selected TS domain, decode wire input into a constrained internal value;
+retain runtime source/fence checks because legal shape is not current authority.
+See [typed values](../../architecture/rfcs/typescript-control-plane-migration-v0.md#27-legal-domain-values-and-deterministic-decisions)
+and [composition verification](../../architecture/rfcs/composable-state-machines-recovery-verification-v0.md).
+
+## Runtime Decisions, Phases, And Read Conditions
+
+The following names span the categories above; they are not members of one
+persisted lifecycle. They support status, quota, scheduler, frontstage, review
+packets and agent prompts. Their source field and owner determine their role.
 
 | Runtime State | Derived From | Meaning | Agent Behavior | User Behavior |
 | --- | --- | --- | --- | --- |

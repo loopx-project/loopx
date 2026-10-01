@@ -71,6 +71,33 @@ refreshed golden.
 行为，不授予其正确性；发现矛盾时应修复规则并增加反例或 mutation 覆盖，不得刷新
 golden 来让测试通过。
 
+### State Composition Qualification / 状态组合验证
+
+For a change spanning domain machines, select a bounded journey under the
+[composition verification RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.md).
+Reuse the quality catalog and existing validation matrix. Record independent
+invariants, explored actor/resource counts and trace bounds, fault orderings,
+real-entrypoint/readback evidence and conditional progress assumptions. A
+bounded sequence check is not an unbounded liveness proof. Existing deterministic
+checks, real-backend gates and required validation remain in force.
+
+跨领域状态机变更沿[组合验证 RFC](../architecture/rfcs/composable-state-machines-recovery-verification-v0.zh-CN.md)
+选择有界旅程，复用 quality catalog 与已有验证矩阵。记录独立不变量、探索的 actor／
+resource 数与轨迹上限、故障顺序、真实入口／回读证据及有条件推进前提。有界序列
+检查不等于无界活性证明；既有确定性检查、真实后端门禁与必需验证继续适用。
+
+For a selected typed-core replacement, check illegal combinations at compile
+time and malformed/historical input at runtime. Compare pinned base/head through
+the same public path. Prove sensitivity with a historical failure or deliberate
+semantic mutation; a golden generated from the candidate is not an oracle.
+Retain only durable counterexamples, and do not build a general harness when an
+existing conformance family can express the causal sequence.
+
+选中的 typed core 替换同时验证编译期非法组合与运行时损坏／历史输入。相同公开
+路径比较 pinned base/head，用历史失败或语义 mutation 证明敏感性；候选实现生成
+的 golden 不是 oracle。只保留持久反例；已有 conformance 测试族能表达因果序列时，
+不另建通用 harness。
+
 ## Pull-Request Baseline / PR 基线
 
 ### Synthetic Runs Must Not Report Adoption / 合成运行不计入使用遥测
