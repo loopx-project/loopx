@@ -78,3 +78,39 @@ test("output consumer failure cancels execution rather than leaving an orphan", 
     async () => { throw new Error("consumer left"); });
   assert.equal(result.outcome, "cancelled"); assert.equal(result.output_complete, false);
 });
+
+test("closed pipes do not turn asynchronous KILL delivery into completed cleanup", {skip: process.platform === "win32"}, async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-host-kill-fence-"));
+  const marker = join(root, "counter");
+  const descendant = `const fs=require('fs');process.on('SIGTERM',()=>{});let n=0;
+    const publish=()=>{fs.writeFileSync(${JSON.stringify(marker + ".next")},String(n++));
+      fs.renameSync(${JSON.stringify(marker + ".next")},${JSON.stringify(marker)})};
+    publish();setInterval(publish,10)`;
+  const leader = `const{spawn}=require('child_process');const fs=require('fs');
+    spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});
+    const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){
+      clearInterval(timer);process.stdout.write('ready');process.exit(0)}},5)`;
+  const kill = process.kill.bind(process);
+  let killDelivered = false;
+  let scheduled: Promise<void> | undefined;
+  t.mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+    if (pid < 0 && signal === "SIGKILL") {
+      // Model the kernel's asynchronous signal delivery deterministically.
+      // The old supervisor returns before this delivery and the marker changes.
+      scheduled ??= delay(100).then(() => {
+        try { kill(pid, "SIGKILL"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+        killDelivered = true;
+      });
+      return true;
+    }
+    return kill(pid, signal);
+  });
+  t.after(async () => { await scheduled; await rm(root, {recursive: true, force: true}); });
+  const result = await runHostProcess(request(leader), async () => {});
+  assert.equal(result.outcome, "exited");
+  assert.equal(killDelivered, true, "returned before KILL had stopped the group");
+  const counter = await readFile(marker, "utf8");
+  await delay(100);
+  assert.equal(await readFile(marker, "utf8"), counter);
+});
