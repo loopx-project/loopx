@@ -181,6 +181,18 @@ manual holds, and why the coverage is enough. One hand-picked smoke is not
 enough for runtime, quota/status, scheduler, todo, install, dashboard,
 benchmark-boundary, or public/private evidence changes.
 
+### Personal Feishu Release Guide
+
+Every named public release must include an illustrated Feishu release guide
+owned by the maintainer's verified personal user account. Follow the
+[release guide procedure](docs/product/release-readiness.md#personal-feishu-release-guide)
+before calling release communication complete. Verify account and document
+ownership, use public-safe screenshots of the released UI, teach upgrade and
+capability use, and read back the published text and images. Do not substitute a
+corporate account or bot, claim a candidate is released, or infer authorization
+for chat announcements or other social channels. Keep account identifiers,
+private reference documents, drafts, and validation logs out of the repository.
+
 ### Release Contributor Attribution
 
 Keep the shipped product changes as the primary release narrative. When the tag

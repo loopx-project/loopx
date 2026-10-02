@@ -16,6 +16,9 @@ rename or remove them.
 
 ## At a Glance
 
+**Illustrated release guide:** <Verified companion Feishu document URL, owned
+by the maintainer's personal user account.>
+
 <One outcome-led headline for the release, e.g. "更安全、更会收口、更容易被
 运营看见" / "Security hardening, semantic replan closeout, and a clearer
 operator surface." Keep this readable in 15 seconds.>
@@ -180,6 +183,8 @@ loopx doctor
 ```
 
 ## 中文摘要
+
+**图文发布指南：**<维护者个人飞书账号名下、已核验内容与图片的配套文档链接。>
 
 <把 `At a Glance` 的标题、升级、Highlights、Replan 修复与贡献者以中文镜像到
 本段开头，再进入详细分组。可以更短，但不能弱化。>
