@@ -329,7 +329,7 @@ def resolve_runtime_entrypoint(
     module = _file_identity(Path(spec.origin), executable=False)
     if module is None:
         return None
-    identity_payload = {
+    identity_payload: dict[str, Any] = {
         "kind": "python_module",
         "interpreter_identity": interpreter[1],
         "module": str(python_module),
@@ -425,6 +425,11 @@ def extension_doctor(
             identity_before.identity
             if verified and identity_before is not None
             else None
+        ),
+        # Observation, never admission evidence: failed probes revoke only this
+        # exact artifact, not another independently verified local runtime.
+        "probed_entrypoint_identity": (
+            identity_before.identity if identity_before is not None else None
         ),
         "failure_kind": failure_kind,
         "external_writes_performed": False,

@@ -1001,11 +1001,35 @@ def test_refresh_gate_noop_has_no_extra_provider_calls_or_failure(
         }
         monkeypatch.setattr(goal_channel_lifecycle, "build_quota_should_run",
                             lambda *args, **kwargs: packet)
+    def stale_extension(*args, **kwargs):
+        raise AssertionError("a safe no-op must not require extension admission")
+
+    monkeypatch.setattr(goal_channel_lifecycle, "resolve_extension_activation", stale_extension)
     calls: list[list[str]] = []
     result = run(_fake_runner(calls), authorized=mode != "suppressed")
     assert result["ok"] is True
     assert "failure" not in result and "failure_summary" not in result
     assert result["status"] == ("external_sink_suppressed" if mode == "suppressed" else mode)
+    assert calls == []
+
+
+def test_refresh_gate_already_sent_does_not_require_extension_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, run = _refresh_gate_fixture(tmp_path, monkeypatch)
+    calls: list[list[str]] = []
+    runner = _fake_runner(calls)
+    assert run(runner)["status"] == "sent_verified"
+    calls.clear()
+
+    def stale_extension(*args, **kwargs):
+        raise AssertionError("verified delivery replay must not re-admit transport")
+
+    monkeypatch.setattr(goal_channel_lifecycle, "resolve_extension_activation", stale_extension)
+    result = run(runner)
+    assert result["status"] == "already_sent"
+    assert result["delivery_postcondition"]["satisfied"] is True
+    assert "extension_activation" not in result
     assert calls == []
 
 
