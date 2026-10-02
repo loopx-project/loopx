@@ -167,7 +167,9 @@ def test_completion_renews_before_validation_and_replays_each_intent(completion_
 @pytest.mark.parametrize("authority_loss", ["expiry", "replacement"])
 def test_completion_renewal_receipt_cannot_revive_lost_execution(service, monkeypatch, authority_loss):
     root, runner = service
-    prepare_lease(root, runner, monkeypatch)
+    # Lose authority explicitly after the completion-renewal reply below.
+    # A short Host startup lease could stop execution before that boundary.
+    prepare_lease(root, runner, monkeypatch, ttl=None)
     cli = runner._cli
     dropped = False
     completions = []

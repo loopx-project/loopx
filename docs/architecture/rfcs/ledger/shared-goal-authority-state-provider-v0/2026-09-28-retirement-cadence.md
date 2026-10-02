@@ -1,6 +1,6 @@
 # Local authority: retirement cadence after integration
 
-- Current plan: October 2, 2026, `9b0486dc1`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
+- Current plan: October 2, 2026, `9ac4efa90`; historical audit: `ce3862e33`; adoption follow-up: `71525ab90`, September 28, 2026; [中文](2026-09-28-retirement-cadence.zh-CN.md).
 - Owners: overall roadmap R3/R4/R5/R6; shared authority D1–D3; TS migration T0–T4.
 - This replaces the **current inventory/estimates** in the September 27 recovery
   and Host-supervision ledgers, not their historical validation results.
@@ -74,7 +74,7 @@ contract readback. This does not certify every installed Host or D2.
 
 ## Current closeout: validation, migration and deletion (2026-10-02)
 
-Rechecked against main `9b0486dc1` and the linked PR heads. This is the current
+Rechecked against main `9ac4efa90` and the linked PR heads. This is the current
 execution plan for **R5 / D1–D3 / T0–T4**, replacing the previous A–D schedule;
 older measurements remain source-specific evidence. R6 is a separate successor.
 Storage format, authority selection and ownership policy are three distinct
@@ -88,23 +88,48 @@ retirement of the `legacy` handoff policy.
 | Merged: #4931, #5251 | SQLite replay/proof and allocation improvements. Reuse these implementations and retain their matched evidence; D2 is not certified by their merge. |
 | Merged: #5395, #5417 | Unused Python lease/handoff crossings and duplicate settlement admission/recovery decisions retired. Continue deletion at actual last callers; do not count these again. |
 | Merged: #5436 | Original delegated Host lease renewal. Final Todo validation and stop acknowledgement remain distinct boundaries. |
-| Review: [#5413](https://github.com/loopx-project/loopx/pull/5413), `2c99505c7` | Separate provider promotion from backed-up policy migration; reject fresh legacy configuration but recover historical operations. CLI recovery repair: 99 affected tests and actual old-to-new CLI experiments on File/SQLite pass; final-head independent review remains. Existing legacy Goals are not automatically migrated. |
-| Review: [#5466](https://github.com/loopx-project/loopx/pull/5466), `60a052383` | Preserve the original lease through final acceptance. Merge after independent review, then validate the installed execution path. |
-| Review: [#5283](https://github.com/loopx-project/loopx/pull/5283), `73d1fe663` | Reduce preflight projection cost without reducing decision inputs; final capture reports provider unavailability explicitly. Author reports 96 unchanged-source File/SQLite inspections and full projection parity; independent review and installed readback remain. Do not declare the historical transient open failure explained by a synthetic failure. |
+| Merged: [#5413](https://github.com/loopx-project/loopx/pull/5413), `4ce894ca1` | Separate provider promotion from backed-up policy migration; reject fresh legacy configuration but recover historical operations. Retain the prior 99-test and old-to-new CLI evidence. Existing legacy Goals are not automatically migrated. |
+| Merged: [#5466](https://github.com/loopx-project/loopx/pull/5466), `066b5bf26` | Preserve the original lease through final acceptance and retain the next controller replan. Installed candidate `9ac4efa90` passes the bounded File/SQLite matrix below; other Host lanes and stop acknowledgement retain their own exits. |
+| Open: [#5283](https://github.com/loopx-project/loopx/pull/5283), `1012d37f3` | Reduce preflight projection cost without reducing decision inputs; final capture reports provider unavailability explicitly. The earlier `73d1fe663` author report covered 96 File/SQLite inspections and full projection parity; it does not qualify this newer head. Independent review and installed readback remain. A synthetic failure does not explain the historical transient open failure. |
 | Affected-lane dependencies | [#5308](https://github.com/loopx-project/loopx/pull/5308) must prove child stop before settled acknowledgement; [#5398](https://github.com/loopx-project/loopx/pull/5398) preserves complete UI history/inspector facts. Scope these to consumers actually included in the trial. They are not SQLite-engine prerequisites or permission to ship a known broken journey. |
 
-There are **three prioritized open closeout PRs**, not three PRs to universal
-completion. The remaining implementation packages are creation/default adoption,
+Of these three closeout PRs, **#5413 and #5466 are merged; #5283 remains open**.
+Do not keep counting merged work as pending. The remaining implementation
+packages are creation/default adoption,
 policy migration plus legacy-policy retirement, and old-writer/capture retirement.
 They may combine only when caller ownership and rollback are coherent. Validation
 can expose concrete repairs; do not manufacture a fixed remaining-PR total or
 restart completed work to maintain one.
 
+### Installed delegation boundary at `9ac4efa90`
+
+A macOS arm64 installation from that merged source aligns the CLI, rebuilt App
+bundle and restarted Chat/Status services. The served HTML matches the installed
+bundle; both current entry assets and all 14 assets from the preceding delivery
+remain readable. This is process/HTTP readback, not a full GUI interaction test.
+
+An independently staged installation exercises real File/SQLite stores, actual
+CLI subprocesses and a deterministic generic Host process: six final-acceptance
+renewal/lost-reply cases, four expired/replaced-execution rejection cases, and
+four last-Todo completion→controller-replan cases pass. Loaded LoopX modules are
+checked against the installed snapshot. The first run had 9 passes and 5 failures:
+a short setup lease preempted one intended negative case; an extension of the
+Markdown fixture incorrectly expected a changed canonical completion intent to
+replay. The corrected fixture loses authority at the tested boundary, requires
+changed-intent rejection, and verifies original Turn resume without new effects.
+All affected cases were rerun; the failures are not counted as product successes.
+
+This closes this bounded installed #5466 path. It does not qualify live model
+providers, interrupted-Host stop acknowledgement, Windows, full Goal recovery,
+formal D2, release defaults or last-writer retirement. No active Goal provider or
+ownership mode changes are part of this installation. Keep those existing exits;
+#5490/#5494 remain review candidates for recovery observation and File decode cost.
+
 ### Ordered delivery packages and exits
 
 | Package / existing owner | Work and decisive exit | Dependency / deletion / schedule |
 | --- | --- | --- |
-| Close current heads; R3/R5 | Resolve exact-head findings in the three PRs above, inspect affected failures/conflicts, and present reviewed heads for maintainer merge. Record what is merged versus installed. | First target: 1–2 working days, subject to actual review/fix results. No unrelated optimization PR before closing these outcomes. |
+| Close current heads; R3/R5 | Finish #5283 on its current head, inspect affected failures/conflicts, and present its reviewed head for maintainer merge. Continue installed acceptance for merged changes instead of reopening their implementation. | First target: 1–2 working days, subject to actual review/fix results. No unrelated optimization PR before closing these outcomes. |
 | Installed recovery candidate; D1/D3, existing whole-Goal promotion task | Pin one merged source and actual CLI/App/Effect Node/SQLite identity. Independently restore a verified backup, run the matrix below on detached real data plus synthetic negatives, and complete File→SQLite→new writes→File. Then perform authorized per-Goal adoption and ordinary readback. | Begin immediately after relevant merges; target 1–2 working days for the bounded matrix. Keep the compatible recovery binary and archives. No live corruption/crash injection. |
 | Bounded opt-in cohort; D2/D3 | When installed recovery and relevant execution controls pass, offer a reversible trial to at most 20 core developers. Publish workload/platform limits, backup/migration/disable instructions, known gaps, stop conditions and reporting route. Collect real daily use and failed cases. | Does not wait for every formal D2 axis or a new ten-day certificate. No invitation until rollback retains new writes. Does not certify a release default. |
 | Canonical creation/default adoption; D3/T3 | Reuse `machine_configuration/goal_storage.py` and `local_authority_defaults.ts`. Current setting only chooses the **post-promotion target** (`promotion_performed: false`). Complete new-Goal initialization, retry and upgrade, settings plus packaged App/CLI/Lark readback; explicit existing selectors stay pinned. | Implement after the bounded candidate is useful; activate the release default only at the decision below. Remove replaced creation/selection decisions in this package. Changing `file` to `sqlite` in one setting is insufficient. |

@@ -1,6 +1,6 @@
 # 合并后的本地权威退役节奏
 
-- 当前计划：2026-10-02，`9b0486dc1`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
+- 当前计划：2026-10-02，`9ac4efa90`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
 - Owner：总 roadmap R3/R4/R5/R6、shared authority D1–D3、TS 迁移 T0–T4。
 - 本记录替代 9 月 27 日 recovery、Host supervision 记录的**当前清单和估算**，
   不替代其历史验证结果。
@@ -65,7 +65,7 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 
 ## 当前收尾：验证、迁移与删除（2026-10-02）
 
-按 main `9b0486dc1` 和所列 PR head 重新核对。本节是 **R5 / D1–D3 / T0–T4**
+按 main `9ac4efa90` 和所列 PR head 重新核对。本节是 **R5 / D1–D3 / T0–T4**
 的当前执行计划，替代旧 A–D 排期；历史测量仍只适用于原源码和负载。R6 单独推进。
 存储格式、权威选择、所有权策略是三种不同迁移：有 SQLite 数据库，不代表新 Goal
 已经默认使用 canonical authority，也不代表 `legacy` handoff 策略已经退役。
@@ -77,21 +77,40 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 | 已合并：#4931、#5251 | SQLite 重放／证明和分配优化；复用实现及匹配证据，合并不等于 D2 已验收。 |
 | 已合并：#5395、#5417 | 无调用方的 Python lease／handoff 跨界、重复结算准入／恢复决策已退役。继续按最后调用方删除，不重复计账。 |
 | 已合并：#5436 | 委派 Host 原租约续期；最终 Todo 验收和停止确认仍是不同边界。 |
-| 复审中：[#5413](https://github.com/loopx-project/loopx/pull/5413)，`2c99505c7` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。CLI 恢复修复的 99 项相关测试、File/SQLite 真实旧 CLI→新 CLI 演练通过，最终 head 独立复审待完成。没有自动迁移存量 legacy Goal。 |
-| 待审：[#5466](https://github.com/loopx-project/loopx/pull/5466)，`60a052383` | 原租约保持到最终验收；独立评审、维护者合并后验证安装态执行路径。 |
-| 待审：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`73d1fe663` | 不缩减决策输入地降低 preflight 投影成本，末次 capture 显式报告 provider 不可用。作者报告固定源码下 96 次 File/SQLite 检查及完整投影等价；仍需独立复审和安装后读回。合成故障不证明历史瞬态打开失败的根因。 |
+| 已合并：[#5413](https://github.com/loopx-project/loopx/pull/5413)，`4ce894ca1` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。保留先前 99 项测试和旧 CLI→新 CLI 的演练证据；没有自动迁移存量 legacy Goal。 |
+| 已合并：[#5466](https://github.com/loopx-project/loopx/pull/5466)，`066b5bf26` | 原租约保持到最终验收，并保留下一轮 controller replan。安装候选 `9ac4efa90` 通过下述有界 File/SQLite 矩阵；其他 Host 路径及停止确认仍有各自出口。 |
+| 仍开放：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`1012d37f3` | 不缩减决策输入地降低 preflight 投影成本，末次 capture 显式报告 provider 不可用。此前 `73d1fe663` 的作者报告覆盖 96 次 File/SQLite 检查及完整投影等价，不能认证这个新 head；仍需独立复审和安装后读回。合成故障不证明历史瞬态打开失败的根因。 |
 | 按实际路径建立依赖 | [#5308](https://github.com/loopx-project/loopx/pull/5308) 要证明子进程停止后才报告已结算；[#5398](https://github.com/loopx-project/loopx/pull/5398) 保留 UI 历史和 inspector 完整事实。只对纳入试用的相关消费者建依赖，不将其说成 SQLite 引擎前置，也不能发布已知损坏的用户路径。 |
 
-当前优先收尾的是 **3 个已存在的开放 PR**，不等于再合 3 个就全部结束。
+这三个收尾 PR 中，**#5413、#5466 已合并，#5283 仍开放**。不要继续把已合并的工作计为待实现。
 剩余实现包是 canonical 创建／默认接入、策略迁移与 legacy 策略删除、旧 writer／
 捕获退役。仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
 不再制造固定“剩余 PR 数”，也不为维持这个数字重做已完成的工作。
+
+### `9ac4efa90` 的安装态委派边界
+
+macOS arm64 上，以该合并源码对齐 CLI、重新构建的 App 和重启后的 Chat/Status
+服务。实际返回的 HTML 与安装包一致，当前两个入口资源及上一份交付的 14 个资源
+均可读取。这是进程和 HTTP 读回，不是完整 GUI 交互验收。
+
+独立安装副本通过真实 File/SQLite store、CLI 子进程和确定性的 generic Host 进程
+运行：6 个最终验收续租／回执丢失场景、4 个过期／替换执行拒绝场景，以及 4 个最后
+Todo 完成→controller replan 场景均通过；加载的 LoopX 模块确实来自安装快照。
+第一轮 9 通过、5 失败：一个负例被无关的短准备租约提前打断；从 Markdown 夹具扩展
+的检查错误地期待 canonical 完成请求改变意图后仍可重放。修正后在目标阶段主动撤销
+权威、要求不同意图被拒绝，并验证原 Turn 恢复不产生新效果。所有受影响场景已重跑，
+不把初次失败算成产品成功。
+
+该结果关闭 #5466 的这条有界安装路径，不认证真实模型 provider、中断 Host 停止确认、
+Windows、整 Goal 恢复、正式 D2、发布默认或最后 writer 退役。此次安装没有改变活跃
+Goal 的 provider 或所有权策略；继续保留这些已有出口。#5490/#5494 仍是恢复结果查询
+和 File 解码成本的待审候选。
 
 ### 有依赖顺序的交付包与出口
 
 | 交付包／既有 owner | 要做什么、凭什么完成 | 依赖／删除机会／节奏 |
 | --- | --- | --- |
-| 现有 head 收尾；R3/R5 | 修完上述 3 个 PR 的 exact-head finding，处理相关失败与冲突，提交已评审 head 给维护者合并；区分已合并和已安装。 | 第一目标为 1–2 个工作日，取决于真实评审／修复结果；收尾前不另开无关优化。 |
+| 现有 head 收尾；R3/R5 | 在当前 head 收尾 #5283，处理相关失败与冲突，提交已评审 head 给维护者合并；已合并工作继续安装态验收，不重新实现。 | 第一目标为 1–2 个工作日，取决于真实评审／修复结果；收尾前不另开无关优化。 |
 | 安装态恢复候选；D1/D3、整 Goal 晋升任务 | 固定合并源码和 CLI/App/Effect 实际 Node/SQLite 身份；独立恢复并验证备份，用隔离真实快照及合成负例执行下表，完成 File→SQLite→新增写入→File。之后按授权逐 Goal 采用并日常回读。 | 相关 PR 合并后立即开始，有界矩阵目标 1–2 个工作日；保留兼容的恢复版本和 archive，不对活跃 Goal 注入崩溃／损坏。 |
 | 有界自愿试用；D2/D3 | 安装态恢复及相关执行控制通过后，邀请不超过 20 位核心开发者。公开负载／平台范围、备份迁移关闭步骤、已知缺口、停止条件与反馈入口；观察真实日常使用和失败。 | 不必等待全部正式 D2 轴或一份新的十天证书；携带新写入回退未通过前不邀请。试用不认证发布默认值。 |
 | Canonical 创建／默认接入；D3/T3 | 复用 `machine_configuration/goal_storage.py` 和 `local_authority_defaults.ts`。当前设置只选择**晋升后的目标**，返回 `promotion_performed: false`。补齐新建初始化／重试、升级、设置及打包 App/CLI/Lark 读回，已有显式 selector 保持固定。 | 有界候选可用后实现，发布默认启用仍服从下方决策；同包删除被替代的创建／选择决策。只把设置里的 file 改成 sqlite 不够。 |
