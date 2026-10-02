@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import stat
+from enum import StrEnum
 from pathlib import Path
 
 
@@ -12,6 +14,16 @@ LEGACY_PROJECT_GOALS = Path(".codex") / "goals"
 GLOBAL_REGISTRY_FILENAME = "registry.global.json"
 SHELL_DEFAULT_GLOBAL_REGISTRY = '"$HOME/.loopx/registry.global.json"'
 SHELL_LEGACY_GLOBAL_REGISTRY = '"$HOME/.codex/loopx/registry.global.json"'
+
+
+class RuntimeRouteStatus(StrEnum):
+    """Local filesystem discovery vocabulary; never persisted Goal authority."""
+    FRESH = "fresh"
+    CURRENT = "current"
+    LEGACY = "legacy"
+    CONFLICT = "conflict"
+    INVALID = "invalid"
+    CONFIGURED = "configured"
 
 
 def default_goal_state_file(project: Path, goal_id: str) -> Path:
@@ -73,6 +85,17 @@ def default_registry_path() -> Path:
     return DEFAULT_PROJECT_REGISTRY
 
 
+def _is_redirected_path(path: Path) -> bool:
+    """Reject symlinks, junctions and other Windows reparse-point routes."""
+    if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        return True
+    try:
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except FileNotFoundError:
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
 def _runtime_root_has_machine_state(root: Path) -> bool:
     """Separate a HOME project's declared files from machine-owned state."""
 
@@ -80,7 +103,7 @@ def _runtime_root_has_machine_state(root: Path) -> bool:
         return False
     project_registry = root / DEFAULT_PROJECT_REGISTRY.name
     project_owned: set[str] = set()
-    if root == DEFAULT_RUNTIME_ROOT and project_registry.is_file() and not project_registry.is_symlink():
+    if root == DEFAULT_RUNTIME_ROOT and project_registry.is_file() and not _is_redirected_path(project_registry):
         from .control_plane.projects.registry_codec import load_registry
         from .file_lock import _lock_path, lock_holder_path, lock_incident_path
 
@@ -101,12 +124,51 @@ def _runtime_root_has_machine_state(root: Path) -> bool:
             state = state if state.is_absolute() else root.parent / state
             if state.name == "ACTIVE_GOAL_STATE.md" and state.parent.parent == goal_root:
                 declared_dirs.add(state.parent)
-        if goal_root.is_dir() and not goal_root.is_symlink() and all(
-            child in declared_dirs and child.is_dir() and not child.is_symlink()
+        if goal_root.is_dir() and not _is_redirected_path(goal_root) and all(
+            child in declared_dirs and child.is_dir() and not _is_redirected_path(child)
             for child in goal_root.iterdir()
         ):
             project_owned.add(goal_root.name)
-    return any(child.name not in project_owned for child in root.iterdir())
+    return any(
+        child.name not in project_owned and not _is_route_observation(child)
+        for child in root.iterdir()
+    )
+
+
+def _is_route_observation(path: Path) -> bool:
+    """Known host observations/leases do not declare a machine state route.
+
+    Keep every unknown file, directory or redirected entry authoritative for
+    discovery. This recognizes existing producer layouts, never deletes them.
+    """
+    from .rollout_event_log import DEFAULT_ROLLOUT_EVENT_LOG_NAME
+
+    if _is_redirected_path(path):
+        return False
+    if path.name == GLOBAL_REGISTRY_FILENAME + ".lock":
+        return path.is_file()
+    if path.name == "lark-consumers" and path.is_dir():
+        import re
+
+        return all(
+            not _is_redirected_path(child) and child.is_file()
+            and re.fullmatch(r"[0-9a-f]{32}\.lock", child.name)
+            for child in path.iterdir()
+        )
+    if path.name != "runtime" or not path.is_dir():
+        return False
+    for goals in path.iterdir():
+        if goals.name != "goals" or _is_redirected_path(goals) or not goals.is_dir():
+            return False
+        for goal in goals.iterdir():
+            if _is_redirected_path(goal) or not goal.is_dir():
+                return False
+            for entry in goal.iterdir():
+                if (_is_redirected_path(entry) or not entry.is_file()
+                        or entry.name not in {DEFAULT_ROLLOUT_EVENT_LOG_NAME,
+                                              DEFAULT_ROLLOUT_EVENT_LOG_NAME + ".lock"}):
+                    return False
+    return True
 
 
 def default_runtime_route() -> dict[str, object]:
@@ -117,13 +179,13 @@ def default_runtime_route() -> dict[str, object]:
     current_exists = current.exists() or current.is_symlink()
     legacy_exists = legacy.exists() or legacy.is_symlink()
     invalid = any(
-        path.is_symlink() or not path.is_file()
+        _is_redirected_path(path) or not path.is_file()
         for path, present in ((current, current_exists), (legacy, legacy_exists))
         if present
     )
     roots = (DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT)
     invalid = invalid or any(
-        root.is_symlink() or (root.exists() and not root.is_dir()) for root in roots
+        _is_redirected_path(root) or (root.exists() and not root.is_dir()) for root in roots
     )
     # Machine configuration and extension activation can predate the first
     # Goal registry. Preserve any existing state in an owned default root;
@@ -132,15 +194,15 @@ def default_runtime_route() -> dict[str, object]:
         _runtime_root_has_machine_state(root) for root in roots
     ) if not invalid else (False, False)
     if invalid:
-        status = "invalid"
+        status = RuntimeRouteStatus.INVALID
     elif current_state and legacy_state:
-        status = "conflict"
+        status = RuntimeRouteStatus.CONFLICT
     elif legacy_state:
-        status = "legacy"
+        status = RuntimeRouteStatus.LEGACY
     elif current_state:
-        status = "current"
+        status = RuntimeRouteStatus.CURRENT
     else:
-        status = "fresh"
+        status = RuntimeRouteStatus.FRESH
     selected = LEGACY_RUNTIME_ROOT if status == "legacy" else DEFAULT_RUNTIME_ROOT
     recommended_action = None
     if status == "conflict":
@@ -189,6 +251,30 @@ def select_default_runtime_root() -> Path:
     return Path(str(route["selected_runtime_root"]))
 
 
+def configured_runtime_route(
+    *, registry_path: Path | None = None, runtime_root_override: str | None = None,
+) -> dict[str, object]:
+    """Diagnose the caller's selected route, preserving default-route facts."""
+    route = default_runtime_route()
+    from .control_plane.projects.registry_codec import load_registry
+
+    try:
+        registry = load_registry(registry_path) if registry_path and registry_path.exists() else {}
+        if not runtime_root_override and not registry.get("common_runtime_root"):
+            return route
+        selected = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
+        invalid = _is_redirected_path(selected) or (selected.exists() and not selected.is_dir())
+        route.update(
+            default_status=route["status"],
+            status=RuntimeRouteStatus.INVALID if invalid else RuntimeRouteStatus.CONFIGURED,
+            selected_runtime_root=str(selected),
+            recommended_action="Configured runtime root must be an unlinked directory." if invalid else None,
+        )
+    except (OSError, ValueError) as error:
+        route.update(default_status=route["status"], status=RuntimeRouteStatus.INVALID, recommended_action=str(error))
+    return route
+
+
 def shell_selected_global_registry() -> str:
     selected = select_default_runtime_root()
     return (
@@ -223,7 +309,7 @@ def resolve_runtime_root(
     *,
     registry_path: Path | None = None,
 ) -> Path:
-    value = override
+    value: object = override
     if not value:
         value = registry.get("common_runtime_root") if isinstance(registry, dict) else None
     if not value:

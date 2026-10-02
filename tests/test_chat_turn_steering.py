@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from loopx.chat_agent import CodexChatAgentSession
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
@@ -62,6 +63,50 @@ def conversation(tmp_path):
     server.shutdown()
     server.server_close()
     thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "execution_mode,runtime_profile",
+    [(False, "restricted"), (False, "trusted_owner"), (True, "restricted")],
+)
+def test_steering_updates_the_existing_task_without_replaying_start_prompt(
+    conversation, monkeypatch, execution_mode, runtime_profile,
+):
+    store, runtime, session_id, start, post = conversation
+    session = runtime.adapters[session_id].session
+    session.execution_mode = execution_mode
+    session.runtime_profile = runtime_profile
+    writes = []
+    original_write = CodexChatAgentSession._write
+
+    def record_write(self, payload):
+        writes.append(json.loads(json.dumps(payload)))
+        return original_write(self, payload)
+
+    monkeypatch.setattr(CodexChatAgentSession, "_write", record_write)
+    turn_id = start("initial-task")
+    upstream_turn_id = store.load_turn(session_id, turn_id)["upstream_turn_id"]
+    correction = "  Keep the comparison.\n- Use the current releases.\n- Preserve this example:\n    value = 1\n  "
+    assert post(turn_id, text=correction)[0] == 200
+    completed = runtime.wait_for_turn(session_id=session_id, turn_id=turn_id, timeout_sec=5)
+    assert completed["status"] == "completed"
+    assert post(turn_id, text=correction)[1]["created"] is False
+
+    starts = [row["params"] for row in writes if row.get("method") == "turn/start"]
+    assert len(starts) == 1
+    initial_text = starts[0]["input"][0]["text"]
+    assert "LoopX context (supporting context only):" in initial_text
+    assert "Inspect a bounded task." in initial_text
+    assert initial_text.endswith("Current user message: wait for steer")
+    updates = [row["params"] for row in writes if row.get("method") == "turn/steer"]
+    assert updates == [{
+        "threadId": session.thread_id,
+        "expectedTurnId": upstream_turn_id,
+        "input": [{"type": "text", "text": correction.strip()}],
+    }]
+    users = [row["text"] for row in store.messages(session_id) if row["role"] == "user"]
+    assert users == ["wait for steer", correction]
+    assert len([row for row in store.messages(session_id) if row["role"] == "agent"]) == 1
 
 
 def test_http_steering_deduplicates_and_never_retargets(conversation):

@@ -31,6 +31,7 @@ import {
 import { navigationSortingScenario } from "./personal-workspace-browser/navigation-sorting.mjs";
 import { capabilityScopeScenario } from "./personal-workspace-browser/capability-scope.mjs";
 import { automationCadenceScenario } from "./personal-workspace-browser/automation-cadence.mjs";
+import { turnStepsScenario } from "./personal-workspace-browser/turn-steps.mjs";
 import { monitorReadbackScenario } from "./personal-workspace-browser/monitor-readback.mjs";
 import { teamEvidenceScenario } from "./personal-workspace-browser/team-evidence.mjs";
 import { managedGoalResultsScenario } from "./personal-workspace-browser/managed-goal-results.mjs";
@@ -47,6 +48,7 @@ import { newestDraftScenario } from "./personal-workspace-browser/newest-draft.m
 
 import { conversationInputScenario } from "./personal-workspace-browser/conversation-input.mjs";
 import { goalActivityScenario } from "./personal-workspace-browser/goal-activity.mjs";
+import { goalWorkMapScenario } from "./personal-workspace-browser/goal-work-map.mjs";
 
 import { stewardGroupTriggerScenario } from "./personal-workspace-browser/steward-group-trigger.mjs";
 
@@ -62,6 +64,8 @@ scenarioCatalog.push(confirmedOperationsScenario);
 scenarioCatalog.push(conversationImageRequestScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
 scenarioCatalog.push(monitorReadbackScenario);
+scenarioCatalog.push(turnStepsScenario);
+scenarioCatalog.push(goalWorkMapScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

@@ -65,6 +65,20 @@ function edgeKey(edge: GraphEdge): string {
   return [edge.from_todo_id, edge.to_todo_id, edge.source_relation].join("\0");
 }
 
+function decodeRows(request: JsonObject): { rows: GraphRow[]; byId: Map<string, GraphRow> } {
+  if (!Array.isArray(request.items)) throw new EffectRuntimeRequestError("graph items must be an array");
+  const rows = request.items.map(row);
+  const byId = new Map(rows.map(item => [item.todo_id, item]));
+  if (byId.size !== rows.length) throw new EffectRuntimeRequestError("Duplicate task graph Todo id");
+  return { rows, byId };
+}
+
+/** Every displayable relation in caller-independent order. */
+function relationEdges(rows: readonly GraphRow[]): GraphEdge[] {
+  const edges = projectRelations(rows).map(graphEdge).filter((edge): edge is GraphEdge => edge !== null);
+  return edges.sort((a, b) => edgeKey(a) < edgeKey(b) ? -1 : edgeKey(a) > edgeKey(b) ? 1 : 0);
+}
+
 /** Bounded read lens over one supplied snapshot. No provider reads or writes. */
 export function projectTaskGraphTopology(value: unknown): JsonObject {
   const request = requireJsonObject(value, "task graph topology request");
@@ -75,20 +89,12 @@ export function projectTaskGraphTopology(value: unknown): JsonObject {
   const limit = requireInteger(request.predecessor_limit, "predecessor_limit");
   if (limit < 0 || limit > 32) throw new EffectRuntimeRequestError("predecessor_limit must be in 0..32");
   const sourceTruncated = requireBoolean(request.source_truncated, "source_truncated");
-  if (!Array.isArray(request.items)) throw new EffectRuntimeRequestError("graph items must be an array");
-  const rows = request.items.map(row);
-  const byId = new Map(rows.map(item => [item.todo_id, item]));
-  if (byId.size !== rows.length) throw new EffectRuntimeRequestError("Duplicate task graph Todo id");
+  const { byId, rows } = decodeRows(request);
   const adjacency = new Map<string, GraphEdge[]>();
-  for (const relation of projectRelations(rows)) {
-    const edge = graphEdge(relation);
-    if (!edge) continue;
+  for (const edge of relationEdges(rows)) {
     const neighbors = adjacency.get(edge.from_todo_id) ?? [];
     neighbors.push(edge);
     adjacency.set(edge.from_todo_id, neighbors);
-  }
-  for (const edges of adjacency.values()) {
-    edges.sort((a, b) => edgeKey(a) < edgeKey(b) ? -1 : edgeKey(a) > edgeKey(b) ? 1 : 0);
   }
   const emitted = new Set<string>();
   const missing = new Set<string>();
@@ -123,6 +129,86 @@ export function projectTaskGraphTopology(value: unknown): JsonObject {
       predecessor_truncated: omitted.size > 0, source_truncated: sourceTruncated,
       missing_predecessor_count: missing.size,
       topology_complete: !sourceTruncated && missing.size === 0 && omitted.size === 0,
+    },
+  };
+}
+
+export const TASK_GRAPH_GOAL_TOPOLOGY_REQUEST = "task_graph_goal_topology_request_v0";
+export const TASK_GRAPH_GOAL_TOPOLOGY_RESULT = "task_graph_goal_topology_result_v0";
+const GOAL_NODE_LIMIT_MAX = 200;
+
+/**
+ * Whole-Goal read lens over one supplied snapshot. Unfinished work is admitted
+ * first, then completed direct prerequisites of that work, then remaining
+ * history, all in caller order. `depth` is the longest recorded prerequisite or
+ * lineage path below a Todo: a layout fact, not an execution order or readiness.
+ */
+export function projectGoalTaskGraphTopology(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "goal task graph topology request");
+  if (request.schema_version !== TASK_GRAPH_GOAL_TOPOLOGY_REQUEST) {
+    throw new EffectRuntimeRequestError("Goal task graph topology request schema mismatch");
+  }
+  const limit = requireInteger(request.node_limit, "node_limit");
+  if (limit < 1 || limit > GOAL_NODE_LIMIT_MAX) {
+    throw new EffectRuntimeRequestError(`node_limit must be in 1..${GOAL_NODE_LIMIT_MAX}`);
+  }
+  const sourceTruncated = requireBoolean(request.source_truncated, "source_truncated");
+  const { byId, rows } = decodeRows(request);
+  const edges = relationEdges(rows);
+  const admitted = new Set<string>();
+  const admit = (id: string) => { if (admitted.size < limit) admitted.add(id); };
+  for (const item of rows) if (!item.done) admit(item.todo_id);
+  const unfinished = new Set(admitted);
+  for (const edge of edges) {
+    if (unfinished.has(edge.from_todo_id) && byId.get(edge.to_todo_id)?.done) admit(edge.to_todo_id);
+  }
+  for (const item of rows) admit(item.todo_id);
+  const missing = new Set([...edges.flatMap(edge => [edge.from_todo_id, edge.to_todo_id])]
+    .filter(id => !byId.has(id)));
+  const emitted = edges.filter(edge => admitted.has(edge.from_todo_id) && admitted.has(edge.to_todo_id));
+  const order = rows.map(item => item.todo_id).filter(id => admitted.has(id));
+  // Dependencies order the map. Lineage carries no ordering obligation, so it
+  // only adds depth where it agrees with that order; a follow-up recorded in
+  // the opposite direction of a dependency is not a cycle.
+  const ordering = new Map<string, string[]>();
+  const link = (edge: GraphEdge) => ordering.set(edge.from_todo_id, [...ordering.get(edge.from_todo_id) ?? [], edge.to_todo_id]);
+  const reaches = (from: string, to: string) => {
+    const seen = new Set([from]);
+    const queue = [from];
+    while (queue.length) {
+      const current = queue.shift()!;
+      if (current === to) return true;
+      for (const next of ordering.get(current) ?? []) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+    }
+    return false;
+  };
+  const cycleEdges = new Set<string>();
+  for (const edge of emitted.filter(edge => edge.relation === "depends_on")) {
+    if (reaches(edge.to_todo_id, edge.from_todo_id)) cycleEdges.add(edgeKey(edge));
+    else link(edge);
+  }
+  for (const edge of emitted.filter(edge => edge.relation !== "depends_on")) {
+    if (!reaches(edge.to_todo_id, edge.from_todo_id)) link(edge);
+  }
+  const depth = new Map<string, number>();
+  const visit = (id: string): number => {
+    const known = depth.get(id);
+    if (known !== undefined) return known;
+    const result = Math.max(0, ...(ordering.get(id) ?? []).map(next => visit(next) + 1));
+    depth.set(id, result);
+    return result;
+  };
+  for (const id of order) visit(id);
+  const omitted = rows.length - order.length;
+  return {
+    schema_version: TASK_GRAPH_GOAL_TOPOLOGY_RESULT,
+    nodes: order.map(todo_id => ({ todo_id, depth: depth.get(todo_id)! })),
+    edges: emitted,
+    completeness: {
+      node_limit: limit, emitted_node_count: order.length, omitted_node_count: omitted,
+      source_truncated: sourceTruncated, missing_endpoint_count: missing.size,
+      cycle_edge_count: cycleEdges.size,
+      topology_complete: !sourceTruncated && omitted === 0 && missing.size === 0 && cycleEdges.size === 0,
     },
   };
 }

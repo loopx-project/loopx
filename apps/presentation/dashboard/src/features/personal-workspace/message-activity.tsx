@@ -4,6 +4,7 @@ import { ChatApiError } from "../../data/chat.js";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, type SteeringRequest } from "./steering-recovery";
 import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceMessage } from "./personal-workspace-model";
+import { currentTurnStepText, TurnStepsView } from "./turn-steps-view";
 
 // One work surface for the conversation timeline and compact overview receipt.
 export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCancelPreparation }: {
@@ -34,6 +35,7 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
     setSteerReceipt(false);
   }, [cacheKey]);
   const activity = message.activity ?? [];
+  const steps = message.steps ?? [];
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!message.pending) return;
@@ -101,7 +103,7 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
   return <div className="personal-message-work">
     {message.pending ? <div className="personal-message-work-current">
       <span className="personal-message-work-status">
-        <span className="personal-message-pending">{activity.at(-1) || (zh ? "等待执行器更新" : "Waiting for executor update")}</span>
+        <span className="personal-message-pending">{currentTurnStepText(steps, zh) || activity.at(-1) || (zh ? "等待执行器更新" : "Waiting for executor update")}</span>
         {duration ? <span className="personal-message-elapsed" aria-live="off">{zh ? "已用时 " : "Elapsed "}{duration}</span> : null}
       </span>
       <span className="personal-message-work-actions">
@@ -132,7 +134,7 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
     </form> : null}
     {steerReceipt ? <p className="personal-message-steer-receipt" role="status">{zh ? "执行器已接收本轮追加指令。" : "The executor accepted instructions for this turn."}</p> : null}
     {!message.pending && message.endedAt && duration ? <p className="personal-message-elapsed">{zh ? "已结束 · 用时 " : "Ended · Elapsed "}{duration}</p> : null}
-    {activity.length ? <details className="personal-message-activity">
+    {steps.length ? <TurnStepsView steps={steps} zh={zh} live={Boolean(message.pending)}/> : activity.length ? <details className="personal-message-activity">
       <summary>{zh ? "最近活动" : "Recent activity"}<span>{activity.length}</span></summary>
       <ol>{activity.map((label, index) => <li key={`${index}:${label}`}>{label}</li>)}</ol>
     </details> : null}

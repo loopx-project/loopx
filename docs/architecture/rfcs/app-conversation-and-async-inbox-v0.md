@@ -141,6 +141,15 @@ receipt → observed work or actionable failure → readable answer in the same 
   reusing an earlier snapshot or inserting another local copy of the instruction.
   History keeps the initial user request and later instructions as distinct messages
   even while the initial request is still being reconciled with its stored identity.
+  The Codex provider sends the correction itself through native `turn/steer`,
+  retaining multiline text and the exact active Turn identity. Replaying the
+  initial task/policy envelope incorrectly declares the correction to be a new
+  standalone task and can displace the original deliverable. Initial Turn
+  admission, policy and response framing stay in their existing owners; queued
+  messages and resume context keep their caller-supplied scope. This transport
+  repair serves steward and Goal Chat alike in the existing Python provider
+  adapter under the TS migration boundary. HTTP/store/protocol regressions
+  prove the payload and replay behavior, not model adoption or a first result.
   Unavailable browser storage keeps current-page retry behavior but cannot
   promise reload recovery. This tab-local cache is not delivery authority.
   Acceptance means the executor received the instructions, not that it adopted
@@ -544,9 +553,14 @@ skips rather than presenting an unqualified profile as passing. The suite uses
 the production prompt/parser and fixed public contexts. Its frozen outcomes
 cover new work, existing owners, ambiguity, stopped/ungranted recipients, scope
 correction, current-Goal follow-ups, quotes, negation and ordinary questions in
-Chinese/English. Output conflicts, omitted envelopes and truncated generations
-fail rather than being counted as successful intent recognition. Report model,
-prompt/case hashes, request settings, token usage and repeat count. This layer
+Chinese/English. An empty answer fails for either provider. The API lane also
+checks raw envelope conflicts, omitted tags and truncated generations; the
+Codex lane consumes adapter protocol warnings, including missing tags, rather
+than certifying its readable fallback. Codex raw envelope integrity beyond the
+adapter's warnings remains unqualified. Both receive the same fixture context
+and normalized request. Report model, template and per-case effective prompt
+hashes, case hash, request settings, available token usage and repeat count.
+Offline provider fixtures exercise the CLI and report without paid calls. This layer
 qualifies model interpretation of supplied evidence, not live discovery, actual
 dispatch, stop enforcement or full GQ01/GQ02 completion. Packaged browser and
 real collaboration transport tests qualify those separate boundaries.

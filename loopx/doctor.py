@@ -18,7 +18,7 @@ from .control_plane.runtime.promotion_readiness import (
 )
 from .control_plane.runtime.time import chronology_key
 from .install_contract import NO_CLONE_INSTALL_URL
-from .paths import default_runtime_route, global_registry_path
+from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import PythonInstallOwner, python_distribution_upgrade_command, resolve_python_install_owner
 from .capabilities.project_skill_delivery import discover_project_scoped_skill_ids
 from .registry_writability import probe_registry_write_path
@@ -692,6 +692,8 @@ def collect_doctor(
     deep: bool = False,
     agent_type: str | None = None,
     installation_only: bool = False,
+    registry_path: Path | None = None,
+    runtime_root_override: str | None = None,
 ) -> dict[str, Any]:
     if installation_only:
         from .release_candidate import collect_installation_doctor
@@ -702,7 +704,11 @@ def collect_doctor(
     )
     from .control_plane.effect_runtime import collect_effect_runtime_readiness
 
-    local_state_route = default_runtime_route()
+    local_state_route = (
+        configured_runtime_route(registry_path=registry_path, runtime_root_override=runtime_root_override)
+        if registry_path is not None or runtime_root_override is not None
+        else default_runtime_route()
+    )
     selected_runtime_root = Path(str(local_state_route["selected_runtime_root"]))
 
     from .host_loop_activation import (
@@ -901,7 +907,7 @@ def collect_doctor(
             registry_path=default_global_registry,
             runtime_root=selected_runtime_root,
         )
-        if default_global_registry.exists()
+        if default_global_registry.exists() and local_state_route["status"] not in {"conflict", "invalid"}
         else {
             "schema_version": "runtime_projection_route_diagnostics_v0",
             "registry": str(default_global_registry.resolve()),

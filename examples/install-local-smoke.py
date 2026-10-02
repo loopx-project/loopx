@@ -226,6 +226,7 @@ def main() -> int:
             "LOOPX_INSTALL_SKILL": "1",
             "LOOPX_PROMOTE_DEFAULT": "1",
             "LOOPX_PYTHON": sys.executable,
+            "LOOPX_USAGE_PING": "0",
             "PATH": os.environ.get("PATH", ""),
             "SHELL": "/bin/zsh",
         }
@@ -449,7 +450,7 @@ def main() -> int:
             "Never infer `verified` from metadata or CI",
             "formal `REQUEST_CHANGES`",
             "Read the published review back",
-            "Merge still routes through `loopx-pr-merge`",
+            "Merge routes through `loopx-pr-merge`",
         ):
             assert phrase in pr_review_text, phrase
         assert "Do not use this skill to approve" not in pr_review_text, pr_review_text

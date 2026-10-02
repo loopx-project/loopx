@@ -398,6 +398,25 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-message-activity summary span { margin-left: 6px; font-variant-numeric: tabular-nums; }
 .personal-message-activity ol { margin: 0; padding: 0 0 4px 20px; list-style: decimal; }
 .personal-message-activity li { display: list-item; margin: 4px 0; overflow-wrap: anywhere; }
+.personal-turn-steps .personal-turn-steps-failed { margin-left: 8px; color: var(--pw-red); }
+.personal-turn-steps ol { display: grid; gap: 2px; padding: 0 0 4px; list-style: none; }
+.personal-turn-steps li.personal-turn-step { margin: 0; }
+.personal-turn-step-head, .personal-turn-step summary { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 3px 4px; border-radius: 4px; }
+.personal-turn-step summary { cursor: pointer; list-style: none; }
+.personal-turn-step summary::-webkit-details-marker { display: none; }
+.personal-turn-step summary:hover { background: var(--pw-bg); }
+.personal-turn-step summary:focus-visible { outline: 2px solid var(--pw-blue-ink); outline-offset: 1px; }
+.personal-turn-step summary::after { content: "›"; margin-left: auto; padding-left: 6px; color: var(--pw-faint); }
+.personal-turn-step details[open] > summary::after { transform: rotate(90deg); }
+.personal-turn-step-icon { flex: none; align-self: center; display: inline-flex; color: var(--pw-faint); }
+.personal-turn-step-verb { flex: none; color: var(--pw-text); }
+.personal-turn-step-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pw-muted); }
+.personal-turn-step-title.is-code { font: 11px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+.personal-turn-step-meta { flex: none; color: var(--pw-faint); font-variant-numeric: tabular-nums; }
+.personal-turn-step[data-state="failed"] .personal-turn-step-meta, .personal-turn-step[data-state="failed"] .personal-turn-step-icon { color: var(--pw-red); }
+.personal-turn-step[data-state="running"] .personal-turn-step-icon { color: var(--pw-blue-ink); }
+.personal-turn-step pre { max-height: 240px; margin: 2px 0 6px 23px; padding: 8px 10px; overflow: auto; border-left: 2px solid var(--pw-line); color: var(--pw-muted); font: 11px/1.55 "SF Mono", ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.personal-turn-step pre.is-prose { font: 12px/1.6 inherit; font-family: inherit; }
 .personal-message-work .personal-message-work-error { color: var(--pw-red); font-size: 12px; }
 .personal-return-delivery { display: inline-block; margin-top: 7px; color: var(--pw-muted); font-size: 11px; font-weight: 600; }
 .personal-return-delivery.is-delivered { color: var(--pw-green); }

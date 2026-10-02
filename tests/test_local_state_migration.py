@@ -91,6 +91,84 @@ def test_default_route_keeps_one_existing_legacy_registry(monkeypatch: pytest.Mo
         paths.resolve_runtime_root({})
 
 
+def test_observations_and_consumer_locks_do_not_claim_a_second_runtime(tmp_path, monkeypatch):
+    source, target, _ = _fixture(tmp_path, projects=0)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    _write_json(target / "runtime/goals/observed/rollout-event-log.jsonl", {"event_kind": "validation"})
+    for relative in ["registry.global.json.lock", "lark-consumers/0123456789abcdef0123456789abcdef.lock",
+                     "runtime/goals/observed/rollout-event-log.jsonl.lock"]:
+        path = target / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    before = {p: p.read_bytes() for p in target.rglob("*") if p.is_file()}
+    assert paths.default_runtime_route()["status"] == "legacy"
+    assert paths.select_default_runtime_root() == source
+    assert before == {p: p.read_bytes() for p in target.rglob("*") if p.is_file()}
+    _write_json(target / "extensions/state.json", {"extensions": {}})
+    with pytest.raises(ValueError, match="Both default LoopX"):
+        paths.select_default_runtime_root()
+
+
+@pytest.mark.parametrize("relative", ["runtime/goals/observed/state.json", "lark-consumers/config.json"])
+def test_unrecognized_observation_entries_still_require_route_selection(tmp_path, monkeypatch, relative):
+    source, target, _ = _fixture(tmp_path, projects=0)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    _write_json(target / relative, {})
+    assert paths.default_runtime_route()["status"] == "conflict"
+
+
+def test_redirected_observations_are_not_ignored(tmp_path, monkeypatch):
+    source, target, _ = _fixture(tmp_path, projects=0)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    target.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (target / "runtime").symlink_to(outside, target_is_directory=True)
+    assert paths.default_runtime_route()["status"] == "conflict"
+
+
+@pytest.mark.parametrize("relative", ["runtime", "runtime/goals", "runtime/goals/observed",
+                                      "runtime/goals/observed/rollout-event-log.jsonl",
+                                      "lark-consumers", "lark-consumers/0123456789abcdef0123456789abcdef.lock",
+                                      "registry.global.json.lock"])
+def test_reparse_point_observations_are_not_ignored(tmp_path, monkeypatch, relative):
+    from types import SimpleNamespace
+
+    source, target, _ = _fixture(tmp_path, projects=0)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    _write_json(target / "runtime/goals/observed/rollout-event-log.jsonl", {})
+    for name in ["registry.global.json.lock", "lark-consumers/0123456789abcdef0123456789abcdef.lock"]:
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    redirected = target / relative
+    original_lstat = Path.lstat
+
+    def reparse_lstat(path, *args, **kwargs):
+        result = original_lstat(path, *args, **kwargs)
+        if path == redirected:
+            return SimpleNamespace(st_mode=result.st_mode, st_file_attributes=0x400)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", reparse_lstat)
+    assert paths.default_runtime_route()["status"] == "conflict"
+    assert paths.configured_runtime_route(runtime_root_override=str(redirected))["status"] == "invalid"
+
+
+def test_global_service_selector_keeps_a_registered_route_amid_real_conflict(tmp_path, monkeypatch):
+    from loopx.cli_commands.support_control_registry import explicit_global_registry
+    source, target, projects = _fixture(tmp_path, projects=1)
+    _write_json(target / "extensions/state.json", {"extensions": {}})
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    assert explicit_global_registry(None, registry_path=projects[0] / ".loopx/registry.json") == source / "registry.global.json"
+    assert explicit_global_registry(str(target), registry_path=projects[0] / ".loopx/registry.json") == target / "registry.global.json"
+
+
 def test_project_register_explicit_route_survives_two_default_runtimes(tmp_path: Path) -> None:
     home = tmp_path / "home"
     for root in (home / ".codex" / "loopx", home / ".loopx"):

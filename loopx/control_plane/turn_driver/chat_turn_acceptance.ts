@@ -271,6 +271,19 @@ function decodeActiveTurn(value: unknown): ActiveTurnFacts | null {
   };
 }
 
+/** Preparation and provider reads may outlive the runtime's interrupt wait.
+ * The persisted Turn and its current Session claim remain authoritative. */
+export function mayContinueChatTurn(input: JsonObject): { allowed: boolean } {
+  const session = decodeSession(input.session);
+  const turn = decodeActiveTurn(input.turn);
+  return {
+    allowed: session !== null && turn !== null
+      && session.status !== "closed"
+      && session.activeTurnId === turn.turnId
+      && (turn.status === "starting" || turn.status === "running"),
+  };
+}
+
 function decodeAcceptance(value: unknown): AcceptanceCapsuleFacts | null {
   if (value === null || value === undefined) return null;
   const acceptance = requireJsonObject(value, "matching_turn.acceptance");

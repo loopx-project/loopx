@@ -838,6 +838,8 @@ T3/D1 reader，未完成全部 Todo writer、retention/compaction 或 promotion�
 
 配额准入与结算消费者现在从统一 Todo reader 读取完整来源，在显示压缩前解析显式 Todo 选择。它删除直接追加 Markdown 候选的路径，保留 promote 前的事件适配；promote 后权威为空或不可读都不能复活展示行。结算进度由现有 TS 回执链归约，Python 负责完整身份命令及 JSON/Markdown 展示。现有幂等 writer 可补齐缺失的 spend 回执而不再次扣款。这关闭已复现的 T3 消费者缺口，不代表 D1–D3、provider promotion 或剩余 Python 事务适配已完成。操作语义见[结算进度契约](../../quota-allocation.md#receipt-backed-settlement-progress)。
 
+**Canonical claim 争抢。** TS claim 命令现在对明确的 provider revision CAS 拒绝最多重试两次，保持同一 operation 与 lease key；每次重新读取回执和完整权威，复核来源注册、Todo 资格、acceptance 和 lease 写范围。显式 provider revision 或 transfer grant 保持固定，写入结果不明确时沿用回执恢复。独立认领可以同时完成，同 Todo 或重叠写范围仍只接受一方。这让 canonical writer 采用 shared-authority 冲突契约，不预留推荐项、不改变本机 writer 串行化，也不证明持续多主机吞吐。CLI claim 调用方继承该行为，frontend／Lark 动作契约不变。
+
 **Scoped gate 动作回读。** 最终 quota 包在选择、能力、workspace、回执及通知决策之后，通过 TS quota 规则投影 scoped User gate/action override。可选 `selected_action` 只在 interaction 允许交付时取最终选中 Todo 的文字；待选择、修复和已结算包省略该字段。准入诊断与回执身份保留。这修正 peer gate 场景的 CLI JSON 误导，不代表剩余 route／primary-action builder 已迁移、推荐已成为预留，或 T3/D1–D3 已完成。
 
 **长历史传输边界。** Replan 历史仍由一个 TS owner 决策。小请求保留 inline

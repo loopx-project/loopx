@@ -823,7 +823,7 @@ class ChatLoopXMode:
                     raise ValueError("adopt requires source and consumer operation ids only")
                 result = service.adopt_result(operation_id, arguments["consumer_operation_id"])
                 # Adoption requires both results accepted: neither needs a wake now.
-                service.wake_observed_in_turn(arguments["consumer_operation_id"])
+                service.wake_observed_in_turn(arguments["consumer_operation_id"], session_id=session_id)
             elif action == "start":
                 result = service.start(
                     arguments.get("binding_id", ""),
@@ -853,7 +853,9 @@ class ChatLoopXMode:
             if "status" in result:
                 if result["status"] == "accepted":
                     # Seen inside this Turn: the pending wake would be redundant.
-                    result["wake"] = service.wake_observed_in_turn(operation_id) or result.get("wake")
+                    wake = service.wake_observed_in_turn(operation_id, session_id=session_id)
+                    if wake is not None:
+                        result["wake"] = wake
                 summary = {
                     key: result.get(key)
                     for key in ("operation_id", "agent_id", "todo_id", "status")

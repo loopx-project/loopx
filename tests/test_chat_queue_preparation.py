@@ -1,11 +1,14 @@
 """Accepted requests must settle even when the runtime cannot be prepared."""
 
+import json
 import threading
+import urllib.request
 
 import pytest
 
 from loopx.chat_agent import CodexChatAgentError
 from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
 from loopx.extensions.lark.goal_topic_runtime import (
     LarkGoalTopicTurnFailed, answer_lark_goal_topic,
@@ -109,6 +112,83 @@ def test_stop_wins_over_late_preparation_failure(tmp_path, monkeypatch):
     drain(runtime, sid, tmp_path)
     assert store.load_turn(sid, turn["turn_id"])["status"] == "interrupted"
     assert not any(e["kind"] == "turn.failed" for e in store.events_after(sid, turn["turn_id"], None))
+
+
+@pytest.mark.parametrize("delay_stage", ["context", "provider"])
+def test_http_stop_remains_effective_after_worker_wait_expires(tmp_path, monkeypatch, delay_stage):
+    """A late worker cannot dispatch or hand off after the stop receipt commits."""
+    import loopx.chat_coordination as coordination
+    from loopx.capabilities import manager_context
+
+    store, sid, runtime = session_runtime(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    dispatches, handoffs = [], []
+
+    class Adapter:
+        upstream_thread_id = "public-thread"
+
+        def healthcheck(self):
+            return True
+
+        def close_session(self):
+            pass
+
+        def interrupt_turn(self, *args):
+            pass  # Simulate an upstream read that outlives the bounded stop wait.
+
+        def start_turn(self, message, sink):
+            dispatches.append(message)
+            if delay_stage == "provider" and "Old request" in message:
+                entered.set()
+                assert release.wait(15)
+                return {"message": "Late response", "context_handoff": {"goal_id": "public-research", "agent_id": "worker"}}
+            return {"message": "Fresh result"}
+
+    def context(controller, adapter, session, turn_id, sink, **kwargs):
+        if delay_stage == "context" and store.load_turn(sid, turn_id)["message"] == "Old request":
+            entered.set()
+            assert release.wait(15)
+        return adapter, {"scope": "owner_goal"}
+
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **kw: Adapter())
+    monkeypatch.setattr(coordination, "prepare_turn_context", context)
+    monkeypatch.setattr(manager_context, "deliver", lambda *a, **kw: handoffs.append(kw) or {})
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.runtime_controller, server.chat_store, server.verbose = runtime, store, False
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        old, _ = runtime.submit_turn(session_id=sid, client_turn_id="old-request", message="Old request", work_dir=tmp_path, objective="Research")
+        tid = old["turn_id"]
+        assert entered.wait(3)
+        with runtime.lock:
+            old_worker_done = runtime.turn_done_events[(sid, tid)]
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/api/chat/sessions/{sid}/turns/{tid}/interrupt",
+            data=b"{}", headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+            assert json.load(response)["status"] == "interrupted"
+        assert not old_worker_done.is_set(), "the late worker must still be blocked"
+        assert (sid, tid) not in runtime.cancelled_turns
+        fresh, _ = runtime.submit_turn(session_id=sid, client_turn_id="fresh-request", message="Fresh request", work_dir=tmp_path, objective="Research")
+        assert runtime.wait_for_turn(session_id=sid, turn_id=fresh["turn_id"], timeout_sec=3)["response"]["message"] == "Fresh result"
+        replay, created = runtime.submit_turn(session_id=sid, client_turn_id="old-request", message="Old request", work_dir=tmp_path, objective="Research")
+        assert not created and replay["status"] == "interrupted"
+        release.set()
+        assert old_worker_done.wait(3)
+        assert len(dispatches) == (1 if delay_stage == "context" else 2)
+        assert handoffs == []
+        assert store.load_turn(sid, tid)["status"] == "interrupted"
+        assert store.load_session(sid)["status"] == "ready"
+        assert [row["kind"] for row in store.events_after(sid, tid, None)].count("turn.interrupted") == 1
+        assert not any(row["kind"] in {"turn.completed", "turn.failed"} for row in store.events_after(sid, tid, None))
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(2)
 
 
 def test_removed_manager_release_fails_before_starting_provider(tmp_path, monkeypatch):
