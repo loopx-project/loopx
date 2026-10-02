@@ -69,3 +69,19 @@ def test_stale_progress_does_not_strip_fresh_todo_details(monkeypatch, tmp_path)
     assert row['current_todos']['status'] == 'read'
     assert row['current_todos']['todos'][0]['title'] == 'Approve the corrected launch claims'
     assert calls == ['alpha']
+
+
+def test_responsible_actor_claimant_and_declared_cadence_remain_distinct(monkeypatch, tmp_path):
+    monkeypatch.setattr(details, "list_goal_todos", lambda **_: {
+        "ok": True, "source": "file_authority", "todos": [
+            {"todo_id": "monitor", "status": "open", "agent_id": "responsible-agent",
+             "claimed_by": "claiming-agent", "cadence": "4h", "text": "Inspect when due"},
+            {"todo_id": "unassigned", "status": "open", "text": "Await assignment"},
+        ],
+    })
+    result = details.read_manager_goal_details(tmp_path / "registry", tmp_path, "alpha", owner_scope=False)
+    rows = {row["todo_id"]: row for row in result["todos"]}
+    assert rows["monitor"]["agent_id"] == "responsible-agent"
+    assert rows["monitor"]["claimed_by"] == "claiming-agent"
+    assert rows["monitor"]["cadence"] == "4h"
+    assert all(key not in rows["unassigned"] for key in ["agent_id", "claimed_by", "cadence"])
