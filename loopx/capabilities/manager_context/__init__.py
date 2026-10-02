@@ -6,17 +6,17 @@ from pathlib import Path
 import re
 import shlex
 
-from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_file_lock
-from ...control_plane.collaboration.source_grants import (
+from ...control_plane.collaboration.source_grant_observation import (
     POLICY_SCHEMA as POLICY_SCHEMA,
+    registered_context_recipients,
     source_context_authority,
 )
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
 )
-from ...control_plane.goals.activation import goal_is_stopped
+from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...control_plane.projects.registry_codec import load_project_registry
 
 # Retained imports are the shipped manager-context API; the shared owner is neutral.
@@ -337,36 +337,16 @@ def configure_delivery_target(
     *,
     channel: str,
     goal_id: str,
-    agent_id: str,
+    agent_id: str | None = None,
     grant: bool,
     execute: bool = False,
 ) -> dict:
-    """Preview or change one sender-bound recipient on an existing external channel."""
+    """Observe registry/policy and persist a typed sender-bound recipient change."""
     if not re.fullmatch(r"manager\.external\.[a-f0-9]{24}", channel):
         raise ValueError("an exact external manager channel is required")
-    if not goal_id or not agent_id:
-        raise ValueError("an exact Goal and Agent are required")
-    target = {"goal_id": goal_id, "agent_id": agent_id}
-
-    def is_target(item: dict) -> bool:
-        return item.get("goal_id") == goal_id and item.get("agent_id") == agent_id
-
-    if grant:
-        registry = load_project_registry(registry_path)
-        goal = next(
-            (g for g in registry.get("goals", []) if isinstance(g, dict) and g.get("id") == goal_id),
-            None,
-        )
-        if (
-            goal is None
-            or goal_is_stopped(goal)
-            or agent_id not in registered_agent_ids_for_goal(goal)
-        ):
-            raise ValueError("delivery target must be a registered Agent in an active Goal")
-
     path = _root(runtime_root) / "policy.json"
 
-    def update() -> dict:
+    def update(*, apply: bool) -> dict:
         policy = _read(path)
         if policy.get("schema_version") != POLICY_SCHEMA or not isinstance(
             policy.get("sources"), dict
@@ -375,57 +355,32 @@ def configure_delivery_target(
         source = policy["sources"].get(channel)
         if not isinstance(source, dict):
             raise ValueError("external manager channel must already be configured")
-        senders = source.get("sender_ids")
-        if grant and (
-            not isinstance(senders, list)
-            or not senders
-            or any(not isinstance(sender, str) or not sender for sender in senders)
-        ):
-            raise ValueError("external manager channel has no valid sender grant")
-        if (
-            grant
-            and "evidence_goal_ids" in source
-            and goal_id not in (evidence_goal_scope(runtime_root, channel) or [])
-        ):
-            raise ValueError("target Goal is outside the channel read scope")
-        targets = source.get("targets", [])
-        if not isinstance(targets, list) or any(
-            not isinstance(item, dict)
-            or not isinstance(item.get("goal_id"), str)
-            or not isinstance(item.get("agent_id"), str)
-            for item in targets
-        ):
-            raise ValueError("invalid external manager delivery targets")
-        before = any(is_target(item) for item in targets)
-        if grant:
-            updated_targets = targets if before else [*targets, target]
-        else:
-            updated_targets = [item for item in targets if not is_target(item)]
-        changed = updated_targets != targets
-        if execute and changed:
-            source["targets"] = updated_targets
+        observed = (registered_context_recipients(load_project_registry(registry_path))
+                    if grant else {"active_goal_ids": [], "available": []})
+        try:
+            planned = effect_runtime_result("collaboration.source.configure_recipient", {
+                "source": source, "goal_id": goal_id, "agent_id": agent_id, "grant": grant,
+                **observed,
+            })
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if apply and planned["would_change"]:
+            policy["sources"][channel] = planned["source"]
             _write(path, policy)
         return {
+            **{k: v for k, v in planned.items() if k != "source"},
             "ok": True,
             "executed": execute,
-            "changed": changed if execute else False,
-            "would_change": changed,
+            "changed": planned["would_change"] if execute else False,
             "channel_id": channel,
-            "target": target,
-            "granted_before": before,
-            "granted_after": grant,
-            "existing_target_count": len(targets),
-            "resulting_target_count": len(updated_targets),
             "scope": "sender_bound_context_delivery",
             "execution_started": False,
         }
 
     if not execute:
-        return update()
+        return update(apply=False)
     with exclusive_file_lock(path.with_suffix(".lock")):
-        result = update()
-        saved = _read(path)
-        saved_targets = saved.get("sources", {}).get(channel, {}).get("targets", [])
-        if any(is_target(item) for item in saved_targets) != grant:
+        result = update(apply=True)
+        if update(apply=False)["granted_before"] != grant:
             raise ValueError("delivery target verification failed")
     return {**result, "readback_verified": True}

@@ -163,8 +163,14 @@ def external_scenario(scenario):
     return root, registry, brief, store, session, turn, receipt["request_id"]
 
 
-def test_granted_external_peer_request_returns_through_original_conversation(external_scenario):
+@pytest.mark.parametrize("whole_goal", [False, True])
+def test_granted_external_peer_request_returns_through_original_conversation(external_scenario, whole_goal):
     root, registry, brief, store, session, turn, parent = external_scenario
+    if whole_goal:
+        policy_path = _root(root) / "policy.json"
+        policy = json.loads(policy_path.read_text())
+        policy["sources"][session["channel_id"]]["targets"] = [{"goal_id": "delivery"}]
+        _write(policy_path, policy)
     path = root / "external-review.json"
     path.write_text(json.dumps(brief))
     args = ("--peer-agent-id", "reviewer", "--operation-id", "external-review",

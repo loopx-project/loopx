@@ -33,7 +33,7 @@ def require_parent_context_access(root, registry, parent, target_agent_id, *, sc
         # Use the original provider/store provenance and the existing source
         # authority owner. Reading must not recover or rewrite a return route.
         from ...chat_store import ChatSessionStore
-        from .source_grants import source_context_authority
+        from .source_grant_observation import source_context_authority
 
         try:
             route = _read(_root(root) / "roundtrips" / (original["request_id"] + ".json"))

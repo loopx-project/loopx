@@ -9,7 +9,7 @@ External channels need an owner-configured grant in
 {"schema_version":"loopx_manager_context_policy_v1","sources":{
   "manager.external.example":{
     "sender_ids":["exact-provider-sender"],
-    "targets":[{"goal_id":"research","agent_id":"worker"}]
+    "targets":[{"goal_id":"research"}]
   }
 }}
 ```
@@ -17,22 +17,38 @@ External channels need an owner-configured grant in
 Use the actual connection channel and provider sender identity. Keep this file
 private (0600); do not commit it. Missing grants disable external delivery.
 For an existing channel with an authorized sender, use the local operator CLI
-to preview, grant, or revoke one registered recipient without editing the
+to preview, grant, or revoke a managed Goal without editing the
 policy file by hand:
 
 ```sh
-loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --agent-id worker
-loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --agent-id worker --execute
+loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research
+loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --execute
 loopx manager-inbox revoke-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --agent-id worker --execute
+loopx manager-inbox revoke-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --execute
 ```
 
 Pass the same `--registry` and `--runtime-root` used by the manager connection.
 Without `--execute`, these commands only preview the target and count change.
-Grant requires an active registered Goal and Agent, an existing sender-bound
+Omitting `--agent-id` covers all current and future registered Agents in that
+Goal. Use this for the owner's managed scope; a newly registered Agent then needs
+no separate enrollment. Supplying `--agent-id` retains one-recipient enrollment
+or revocation. Individual revocation is stored in `blocked_targets`, overrides
+the Goal grant, and survives reapplying that Goal grant. Explicitly grant the
+Agent to restore it. Revoking a Goal removes both its broad and individual grants.
+Existing exact-recipient policies retain their scope until a trusted operator
+promotes them; evidence read scope alone never becomes delegation authority.
+
+Grant requires an active registered Goal (and a registered Agent when specified), an existing sender-bound
 channel, and membership in any explicit audience Goal read scope. The command
 does not create a sender grant, launch the Agent, or grant protected-operation
 authority. Revocation also works when the former Agent is no longer registered.
 Remove a source/target grant to revoke future delivery, including replay attempts.
+The shared TypeScript source-recipient owner resolves registration and exceptions
+for discovery, direct Chat handoff and later peer consultation. Provider adapters
+verify ingress and perform locked file IO. Missing, malformed or revoked grants
+do not record a request; stopped or unreadable Goals are excluded. This config
+slice has a CLI preview/apply/readback; the existing Chat uses its resulting
+catalog. Editing source grants in the packaged settings UI remains unqualified.
 Provider ingress receipts bind the current message digest, channel and sender;
 a model cannot create that provenance through its response.
 

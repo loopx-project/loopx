@@ -16,7 +16,7 @@ manager's conversation return adapter.
 | Retain requests, decisions and results | `inbox.py`, `peers.py` | Immutable identity, parent lineage, artifact versions, explicit result consumption |
 | Classify pending receiver receipts | `inbox_receipts.ts` | One bounded read model for CLI/MCP callers; missing, unreadable and conflicting results remain distinct |
 | Sandboxed Agent access | `loopx/collaboration_mcp.py` | Same tools and identity binding at every coordination level |
-| Source context authorization | `source_grants.py`, `peer_context.ts` | One existing sender-bound grant observer and typed peer admission; no execution authority |
+| Source context authorization | `source_grants.ts`, `source_grant_observation.py`, `peer_context.ts` | Typed sender/Goal/recipient rules, provider observations and peer admission; no execution authority |
 | Owner conversation and external audience | `capabilities/manager_context` | Intent extraction, Chat/Lark routing and display; no peer scheduling |
 
 The existing `manager-context` capability lifecycle, `manager-inbox` CLI and
@@ -40,10 +40,14 @@ independent local peer requests do not gain an external audience or work rights.
 
 `peer_context_observation.py` reads parent records and trusted source routes;
 `peer_context.ts` decides peer context admission. The existing provider-specific
-ingress and policy reader moves unchanged to `source_grants.py`; the Chat
+ingress and policy reader lives in `source_grant_observation.py`; the Chat
 capability retains its public `authority` API and supplies its own instruction.
 This removes a dependency from shared coordination to a product adapter without
-introducing a second policy writer, changing stored grants or migrating records.
+introducing a second policy writer or migrating existing records. The typed
+`source_grants.ts` owner resolves exact recipients and managed Goal targets;
+Goal grants include future registered Agents while explicit recipient exclusions
+remain effective. The existing operator configuration path delegates changes to
+that same owner. Read grants and executor permissions do not imply delegation.
 
 `inbox.py` adapts the existing private file stores; typed request validation stays
 in TypeScript. This does not promote a canonical shared-authority backend. General
