@@ -690,6 +690,9 @@ jobs:
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
 
+      - name: Check Windows collaboration lock sidecars
+        run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
+
       - name: Validate local-state routing and interruption recovery on Windows
         run: >-
           python -m pytest -q
