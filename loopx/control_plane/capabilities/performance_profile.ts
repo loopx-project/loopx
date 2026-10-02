@@ -1,19 +1,21 @@
 /** Browser-safe profile rules shared by CLI and local frontend inspection. */
+export class PerformanceProfileInputError extends Error {}
+
 type JsonObject = Record<string, unknown>;
 const object = (value: unknown, label: string): JsonObject => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new PerformanceProfileInputError(`${label} must be an object`);
   return value as JsonObject;
 };
 const text = (value: unknown, label: string): string => {
-  if (typeof value !== "string" || !value.trim() || value.includes("\0")) throw new Error(`${label} must be nonempty text without NUL`);
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")) throw new PerformanceProfileInputError(`${label} must be nonempty text without NUL`);
   return value;
 };
 const number = (value: unknown, label: string): number => {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`${label} must be finite and nonnegative`);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new PerformanceProfileInputError(`${label} must be finite and nonnegative`);
   return value;
 };
 const array = (value: unknown, label: string): unknown[] => {
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  if (!Array.isArray(value)) throw new PerformanceProfileInputError(`${label} must be an array`);
   return value;
 };
 
@@ -22,8 +24,8 @@ interface Observation {frame: Frame; self: number; inclusive: number}
 const frame = (value: unknown): Frame => {
   const raw = object(value, "frame");
   const result: Frame = {name: text(raw.name, "frame.name")};
-  if (raw.file !== undefined && raw.file !== "") result.file = text(raw.file, "frame.file");
-  if (raw.line !== undefined) result.line = number(raw.line, "frame.line");
+  if (raw.file != null && raw.file !== "") result.file = text(raw.file, "frame.file");
+  if (raw.line != null) result.line = number(raw.line, "frame.line");
   return result;
 };
 
@@ -32,34 +34,43 @@ export function summarizePerformanceProfile(input: unknown) {
   const request = object(input, "request");
   const raw = object(request.profile, "profile");
   const top = number(request.top ?? 15, "top");
-  if (!Number.isInteger(top) || top < 1 || top > 50) throw new Error("top must be an integer from 1 to 50");
+  if (!Number.isInteger(top) || top < 1 || top > 50) throw new PerformanceProfileInputError("top must be an integer from 1 to 50");
+  // One request-wide bound covers allocations and stack expansion, including
+  // shared frames reused by independent profiles. Byte/depth limits alone do not.
+  let work = 0;
+  const chargeWork = (units: number) => {
+    work += units;
+    if (work > 2_000_000) throw new PerformanceProfileInputError("profile exceeds 2000000 work limit; select a shorter capture or fewer profiles");
+  };
   // Shared frames may appear in many profiles and both rankings. Bound their
   // repeated display text before serializing or posting the complete summary.
   let displayedCharacters = 0;
   const reserveText = (value: string) => {
     displayedCharacters += value.length;
-    if (displayedCharacters > 1_048_576) throw new Error("profile summary text exceeds 1 Mi characters; select fewer profiles or a smaller top count");
+    if (displayedCharacters > 1_048_576) throw new PerformanceProfileInputError("profile summary text exceeds 1 Mi characters; select fewer profiles or a smaller top count");
   };
-  const summarize = (name: string, frames: Frame[], unit: string, build: (add: (stack: number[], weight: number) => void) => void) => {
+  const summarize = (name: string, frames: Frame[], unit: string, build: (add: (stack: number[], weight: number, count?: number) => void) => void) => {
     reserveText(name);
     const scale = ({nanoseconds: 1e-6, microseconds: 1e-3, milliseconds: 1, seconds: 1000} as Record<string, number>)[unit];
-    if (scale === undefined) throw new Error(`unsupported time unit: ${unit}`);
-    if (!frames.length || frames.length > 100_000) throw new Error("profile requires 1..100000 frames");
+    if (scale === undefined) throw new PerformanceProfileInputError(`unsupported time unit: ${unit}`);
+    if (!frames.length || frames.length > 100_000) throw new PerformanceProfileInputError("profile requires 1..100000 frames");
+    chargeWork(frames.length);
     const observations: Observation[] = frames.map(frame => ({frame, self: 0, inclusive: 0}));
     let weightTotal = 0, observationsCount = 0, stackWeight = 0;
-    build((stack, weight) => {
-      if (stack.length > 1024) throw new Error("profile stack exceeds 1024 frames");
-      for (const id of stack) if (!Number.isInteger(id) || id < 0 || id >= frames.length) throw new Error("unknown frame reference");
+    build((stack, weight, count = 1) => {
+      if (stack.length > 1024) throw new PerformanceProfileInputError("profile stack exceeds 1024 frames");
+      chargeWork(stack.length);
+      for (const id of stack) if (!Number.isInteger(id) || id < 0 || id >= frames.length) throw new PerformanceProfileInputError("unknown frame reference");
       const ms = number(weight, "sample weight") * scale;
-      weightTotal += ms; observationsCount++;
+      weightTotal += ms; observationsCount += count;
       if (!stack.length) return;
       stackWeight += ms;
       observations[stack.at(-1)!]!.self += ms;
       // Recursion does not make one stack sample multiple independent samples.
       for (const id of new Set(stack)) observations[id]!.inclusive += ms;
     });
-    if (!observationsCount || !weightTotal) throw new Error("profile contains no positive-duration observations");
-    if (!Number.isFinite(weightTotal)) throw new Error("profile time overflows finite milliseconds");
+    if (!observationsCount || !weightTotal) throw new PerformanceProfileInputError("profile contains no positive-duration observations");
+    if (!Number.isFinite(weightTotal)) throw new PerformanceProfileInputError("profile time overflows finite milliseconds");
     const rows = (kind: "self" | "inclusive") => observations.filter(row => row[kind] > 0)
       .sort((a, b) => b[kind] - a[kind]).slice(0, top).map(row => {
         reserveText(row.frame.name); reserveText(row.frame.file ?? "");
@@ -73,46 +84,52 @@ export function summarizePerformanceProfile(input: unknown) {
     format = "speedscope";
     const frames = array(object(raw.shared, "shared").frames, "frames").map(frame);
     const records = array(raw.profiles, "profiles");
-    if (!records.length || records.length > 256) throw new Error("profile requires 1..256 independent profiles");
+    if (!records.length || records.length > 256) throw new PerformanceProfileInputError("profile requires 1..256 independent profiles");
     profiles = records.map((record, index) => {
       const item = object(record, "profile record");
       const start = number(item.startValue, "startValue"), end = number(item.endValue, "endValue");
-      if (end < start) throw new Error("profile end precedes start");
+      if (end < start) throw new PerformanceProfileInputError("profile end precedes start");
       return summarize(typeof item.name === "string" ? item.name : `profile-${index}`, frames, text(item.unit, "unit"), add => {
         if (item.type === "sampled") {
           const samples = array(item.samples, "samples"), weights = array(item.weights, "weights");
-          if (samples.length !== weights.length) throw new Error("sample/weight counts differ");
+          if (samples.length !== weights.length) throw new PerformanceProfileInputError("sample/weight counts differ");
           let total = 0;
-          samples.forEach((sample, i) => {const weight = number(weights[i], "weight"); total += weight; add(array(sample, "stack") as number[], weight);});
-          if (total > end - start + Math.max(1e-9, (end - start) * 1e-6)) throw new Error("sample weights exceed declared duration");
+          samples.forEach((sample, i) => {chargeWork(1); const weight = number(weights[i], "weight"); total += weight; add(array(sample, "stack") as number[], weight);});
+          if (total > end - start + Math.max(1e-9, (end - start) * 1e-6)) throw new PerformanceProfileInputError("sample weights exceed declared duration");
         } else if (item.type === "evented") {
           const stack: number[] = []; let previous = start;
           for (const value of array(item.events, "events")) {
+            chargeWork(1);
             const event = object(value, "event"), at = number(event.at, "event.at");
-            if (at < previous || at > end) throw new Error("events must be ordered within the declared interval");
+            if (at < previous || at > end) throw new PerformanceProfileInputError("events must be ordered within the declared interval");
             if (at > previous) add([...stack], at - previous);
             const id = number(event.frame, "event.frame");
-            if (!Number.isInteger(id) || id >= frames.length) throw new Error("unknown event frame");
-            if (event.type === "O") stack.push(id);
+            if (!Number.isInteger(id) || id >= frames.length) throw new PerformanceProfileInputError("unknown event frame");
+            if (event.type === "O") {
+              if (stack.length >= 1024) throw new PerformanceProfileInputError("profile stack exceeds 1024 frames");
+              stack.push(id);
+            }
             else if (event.type === "C" && stack.at(-1) === id) stack.pop();
-            else throw new Error("unbalanced or unsupported profile event");
+            else throw new PerformanceProfileInputError("unbalanced or unsupported profile event");
             previous = at;
           }
-          if (stack.length) throw new Error("profile ends with an unclosed stack");
+          if (stack.length) throw new PerformanceProfileInputError("profile ends with an unclosed stack");
           if (end > previous) add([], end - previous);
-        } else throw new Error("unsupported speedscope profile type");
+        } else throw new PerformanceProfileInputError("unsupported speedscope profile type");
       });
     });
   } else if (Array.isArray(raw.nodes) && Array.isArray(raw.samples)) {
     format = "v8-cpu";
     const nodes = raw.nodes.map(value => object(value, "node"));
+    if (!nodes.length || nodes.length > 100_000) throw new PerformanceProfileInputError("profile requires 1..100000 frames");
     const ids = new Map<number, number>();
-    nodes.forEach((node, i) => {const id = number(node.id, "node.id"); if (!Number.isInteger(id) || ids.has(id)) throw new Error("invalid or duplicate node id"); ids.set(id, i);});
+    nodes.forEach((node, i) => {const id = number(node.id, "node.id"); if (!Number.isInteger(id) || ids.has(id)) throw new PerformanceProfileInputError("invalid or duplicate node id"); ids.set(id, i);});
     const parents = new Map<number, number>();
     nodes.forEach((node, parent) => {
       for (const childId of array(node.children ?? [], "children")) {
+        chargeWork(1);
         const child = ids.get(childId as number);
-        if (child === undefined || parents.has(child)) throw new Error("unknown or multiply-parented V8 node");
+        if (child === undefined || parents.has(child)) throw new PerformanceProfileInputError("unknown or multiply-parented V8 node");
         parents.set(child, parent);
       }
     });
@@ -122,24 +139,36 @@ export function summarizePerformanceProfile(input: unknown) {
         line: typeof call.lineNumber === "number" && call.lineNumber >= 0 ? call.lineNumber + 1 : undefined});
     });
     const samples = raw.samples, weights = array(raw.timeDeltas, "timeDeltas");
-    if (samples.length !== weights.length) throw new Error("sample/timeDelta counts differ");
+    if (samples.length !== weights.length) throw new PerformanceProfileInputError("sample/timeDelta counts differ");
     const start = number(raw.startTime, "startTime"), end = number(raw.endTime, "endTime");
-    if (end < start) throw new Error("profile end precedes start");
+    if (end < start) throw new PerformanceProfileInputError("profile end precedes start");
     profiles = [summarize("V8 CPU", frames, "microseconds", add => {
       let total = 0;
+      const leaves = new Map<number, {weight: number; count: number}>();
       samples.forEach((id, i) => {
-        let current = ids.get(id as number); const stack: number[] = [], visited = new Set<number>();
-        if (current === undefined) throw new Error("unknown V8 sample node");
+        chargeWork(1);
+        const current = ids.get(id as number);
+        if (current === undefined) throw new PerformanceProfileInputError("unknown V8 sample node");
+        const weight = number(weights[i], "timeDelta"); total += weight;
+        const previous = leaves.get(current);
+        if (previous) {previous.weight += weight; previous.count++;}
+        else leaves.set(current, {weight, count: 1});
+      });
+      if (total > end - start + Math.max(1, (end - start) * 1e-6)) throw new PerformanceProfileInputError("V8 samples exceed declared duration");
+      // Validate every sample above, but expand each distinct leaf just once.
+      // Keep the original observation count even for zero-weight samples.
+      for (const [leaf, {weight, count}] of leaves) {
+        let current: number | undefined = leaf;
+        const stack: number[] = [], visited = new Set<number>();
         while (current !== undefined) {
-          if (visited.has(current) || stack.length >= 1024) throw new Error("cyclic or overdeep V8 stack");
+          chargeWork(1);
+          if (visited.has(current) || stack.length >= 1024) throw new PerformanceProfileInputError("cyclic or overdeep V8 stack");
           visited.add(current); stack.push(current); current = parents.get(current);
         }
-        const weight = number(weights[i], "timeDelta"); total += weight;
-        add(stack.reverse(), weight);
-      });
-      if (total > end - start + Math.max(1, (end - start) * 1e-6)) throw new Error("V8 samples exceed declared duration");
+        add(stack.reverse(), weight, count);
+      }
     })];
-  } else throw new Error("unsupported profile: expected Speedscope or V8 CPU JSON");
+  } else throw new PerformanceProfileInputError("unsupported profile: expected Speedscope or V8 CPU JSON");
   return {schema_version: "performance_diagnosis_observation_v0", status: "observed", format,
     profiles, raw_evidence_boundary: "local_private",
     interpretation: "Weights describe recorded stack observations, not benchmark latency or proven root cause. Profiles may overlap; inclusive rows must not be summed.",

@@ -1,19 +1,20 @@
 /** Local profiling plans and observations, never execution or admission authority. */
 import {createHash} from "node:crypto";
 import {join} from "node:path";
-import {summarizePerformanceProfile as summarizeProfile} from "./performance_profile.ts";
+import {PerformanceProfileInputError, summarizePerformanceProfile as summarizeProfile} from "./performance_profile.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 
 type JsonObject = Record<string, unknown>;
 const object = (value: unknown, label: string): JsonObject => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new EffectRuntimeRequestError(`${label} must be an object`);
   return value as JsonObject;
 };
 const text = (value: unknown, label: string): string => {
-  if (typeof value !== "string" || !value.trim() || value.includes("\0")) throw new Error(`${label} must be nonempty text without NUL`);
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")) throw new EffectRuntimeRequestError(`${label} must be nonempty text without NUL`);
   return value;
 };
 const array = (value: unknown, label: string): unknown[] => {
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  if (!Array.isArray(value)) throw new EffectRuntimeRequestError(`${label} must be an array`);
   return value;
 };
 
@@ -22,19 +23,19 @@ const TOOLS = ["pyinstrument", "py-spy", "memray", "node-cpu", "node-heap"] as c
 export function planPerformanceDiagnosis(input: unknown) {
   const request = object(input, "request");
   const tool = text(request.tool, "tool");
-  if (!(TOOLS as readonly string[]).includes(tool)) throw new Error(`tool must be one of ${TOOLS.join(", ")}`);
+  if (!(TOOLS as readonly string[]).includes(tool)) throw new EffectRuntimeRequestError(`tool must be one of ${TOOLS.join(", ")}`);
   const command = array(request.command, "command").map((arg, index) => {
-    if (typeof arg !== "string" || arg.includes("\0")) throw new Error(`command[${index}] must be a string without NUL`);
+    if (typeof arg !== "string" || arg.includes("\0")) throw new EffectRuntimeRequestError(`command[${index}] must be a string without NUL`);
     return arg;
   });
-  if (!command.length) throw new Error("command requires an executable");
+  if (!command.length) throw new EffectRuntimeRequestError("command requires an executable");
   text(command[0], "command executable");
   const output = text(request.output_directory, "output_directory");
   const platform = text(request.platform, "platform");
   const executable = command[0]!;
   const target = command.slice(1);
   if ((tool === "pyinstrument" || tool === "memray") && (!target.length || (target[0]!.startsWith("-") && target[0] !== "-m"))) {
-    throw new Error("this recipe requires a Python script or -m module target, without interpreter flags");
+    throw new EffectRuntimeRequestError("this recipe requires a Python script or -m module target, without interpreter flags");
   }
   let argv: string[], artifact: string, observes: string, limits: string[];
   switch (tool) {
@@ -57,7 +58,7 @@ export function planPerformanceDiagnosis(input: unknown) {
       limits = ["Allocation instrumentation changes workload cost; use Memray's reporter for this binary, not the profile summarizer.", "Platform and allocator support must be checked locally."];
       break;
     default:
-      if (target.some(arg => /^--(cpu|heap)-prof(?:$|[=-])/.test(arg))) throw new Error("target already contains profiling flags; use an uninstrumented baseline command");
+      if (target.some(arg => /^--(cpu|heap)-prof(?:$|[=-])/.test(arg))) throw new EffectRuntimeRequestError("target already contains profiling flags; use an uninstrumented baseline command");
       artifact = join(output, tool === "node-cpu" ? "profile.cpuprofile" : "profile.heapprofile");
       const prefix = tool === "node-cpu" ? "cpu" : "heap";
       argv = [executable, `--${prefix}-prof`, `--${prefix}-prof-dir=${output}`, `--${prefix}-prof-name=${tool === "node-cpu" ? "profile.cpuprofile" : "profile.heapprofile"}`, ...target];
@@ -76,7 +77,12 @@ export function planPerformanceDiagnosis(input: unknown) {
 
 /** The transport digest hashes normalized JSON, not original capture bytes. */
 export function summarizePerformanceProfile(input: unknown) {
-  const result = summarizeProfile(input);
+  let result: ReturnType<typeof summarizeProfile>;
+  try {result = summarizeProfile(input);}
+  catch (error) {
+    if (error instanceof PerformanceProfileInputError) throw new EffectRuntimeRequestError(error.message);
+    throw error;
+  }
   const raw = object(input, "request").profile;
   return {...result, normalized_profile_sha256: createHash("sha256").update(JSON.stringify(raw)).digest("hex")};
 }
