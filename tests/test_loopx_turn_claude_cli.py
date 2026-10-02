@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from functools import partial
 
 import pytest
@@ -39,7 +40,7 @@ args=sys.argv[1:]
 prompt=sys.stdin.read()
 session=args[args.index('--resume' if '--resume' in args else '--session-id')+1]
 with open(os.environ['CLAUDE_FIXTURE_LOG'],'a') as f:
- f.write(json.dumps({'args':args,'goal':os.environ['LOOPX_TURN_GOAL_ID'],'agent':os.environ['LOOPX_TURN_AGENT_ID'],'todo':os.environ['LOOPX_TURN_TODO_ID']})+'\\n')
+ f.write(json.dumps({'args':args,'pid':os.getpid(),'goal':os.environ['LOOPX_TURN_GOAL_ID'],'agent':os.environ['LOOPX_TURN_AGENT_ID'],'todo':os.environ['LOOPX_TURN_TODO_ID']})+'\\n')
 print(json.dumps({'type':'system','subtype':'init','session_id':session}),flush=True)
 if os.environ.get('CLAUDE_FIXTURE_SLEEP'):time.sleep(30)
 if os.environ.get('CLAUDE_FIXTURE_ERROR'):
@@ -232,6 +233,9 @@ def test_timeout_reaps_child_and_retains_exact_recovery_binding(tmp_path, monkey
         runner(tmp_path, executable, timeout_seconds=0.3)(request)
     assert captured.value.failure_kind == "executor_timeout"
     assert captured.value.recovery_kind == "resume_session"
+    child_pid = json.loads(log.read_text().splitlines()[0])["pid"]
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
     assert claude_cli_session_binding(tmp_path / "runtime", request["turn_envelope"])
 
 
