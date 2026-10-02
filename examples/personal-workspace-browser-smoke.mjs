@@ -32,6 +32,7 @@ import { navigationSortingScenario } from "./personal-workspace-browser/navigati
 import { capabilityScopeScenario } from "./personal-workspace-browser/capability-scope.mjs";
 import { performanceDiagnosisScenario } from "./personal-workspace-browser/performance-diagnosis.mjs";
 import { automationCadenceScenario } from "./personal-workspace-browser/automation-cadence.mjs";
+import { turnStepsScenario } from "./personal-workspace-browser/turn-steps.mjs";
 import { monitorReadbackScenario } from "./personal-workspace-browser/monitor-readback.mjs";
 import { teamEvidenceScenario } from "./personal-workspace-browser/team-evidence.mjs";
 import { managedGoalResultsScenario } from "./personal-workspace-browser/managed-goal-results.mjs";
@@ -64,6 +65,7 @@ scenarioCatalog.push(confirmedOperationsScenario);
 scenarioCatalog.push(conversationImageRequestScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
 scenarioCatalog.push(monitorReadbackScenario);
+scenarioCatalog.push(turnStepsScenario);
 scenarioCatalog.push(goalWorkMapScenario);
 scenarioCatalog.push(performanceDiagnosisScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;

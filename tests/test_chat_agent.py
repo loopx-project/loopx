@@ -203,6 +203,43 @@ def test_turn_activity_does_not_invent_goal_reads_or_successful_checks(
     assert any(kind == "answer.delta" and p["text"] == "Ready." for kind, p in events)
 
 
+def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_path):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(),
+        messages=queue.Queue(),
+        thread_id="thread-fixture",
+        work_dir=tmp_path,
+    )
+    command = {"type": "commandExecution", "id": "exec-1", "status": "inProgress",
+               "command": f"/bin/zsh -lc 'cat {tmp_path}/notes.md'",
+               "commandActions": [{"type": "read", "command": "cat notes.md", "name": "notes.md", "path": str(tmp_path / "notes.md")}]}
+    upstream = iter([
+        {"method": "turn/started", "params": {"turn": {"id": "turn-fixture"}}},
+        {"method": "item/started", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": [], "content": []}}},
+        {"method": "item/reasoning/textDelta", "params": {"itemId": "rs_1", "delta": "Read the notes first.", "contentIndex": 0}},
+        {"method": "item/completed", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": [], "content": ["Read the notes first."]}}},
+        {"method": "item/started", "params": {"item": command}},
+        {"method": "item/completed", "params": {"item": {**command, "status": "completed", "exitCode": 0, "durationMs": 5,
+                                                         "aggregatedOutput": "private-output-fixture"}}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Ready."}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
+    events = []
+    session.send("Reply briefly.", on_event=lambda kind, payload: events.append((kind, payload)))
+    steps = [p["step"] for kind, p in events if kind == "agent.phase" and "step" in p]
+    assert [(s["id"], s["state"]) for s in steps] == [
+        ("rs_1", "running"), ("rs_1", "completed"), ("exec-1", "running"), ("exec-1", "completed")]
+    assert steps[1]["detail"] == "Read the notes first."
+    assert (steps[3]["verb"], steps[3]["title"], steps[3]["exit_code"]) == ("read", "notes.md", 0)
+    assert steps[3]["detail"] == "cat notes.md"
+    serialized = json.dumps(events)
+    assert str(tmp_path) not in serialized and "private-output-fixture" not in serialized
+    labels = [p["label"] for kind, p in events if kind == "agent.phase"]
+    assert labels[:3] == ["Agent 已开始处理", "Agent 正在思考", "Agent 返回了处理状态"], "Legacy labels stay for older clients"
+
+
 def test_codex_chat_pins_explicit_home_in_child_environment(monkeypatch, tmp_path):
     options = {}
 

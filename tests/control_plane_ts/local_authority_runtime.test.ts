@@ -1302,7 +1302,7 @@ for (const native of [false, true]) {
   });
 }
 
-test("receipt-only claims require head CAS and recover a lost commit response", async () => {
+test("receipt-only claims revalidate CAS contention and recover a lost commit response", async () => {
   for (const fault of ["conflict", "lost_response"] as const) {
     const root = await mkdtemp(join(tmpdir(), "loopx-claim-no-change-fault-"));
     const directory = join(root, "authority", "file-v0");

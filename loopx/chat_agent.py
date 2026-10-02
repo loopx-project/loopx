@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .chat_activity import CodexActivitySteps
 from .chat import (
     CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
     CHAT_REVIEW_CLOSE_TAG,
@@ -979,6 +980,7 @@ class CodexChatAgentSession:
         parts: list[str] = []
         completed_structured_response: str | None = None
         display_filter = VisibleResponseStreamFilter(protected_paths=[self.work_dir])
+        steps = CodexActivitySteps(protected_paths=[self.work_dir])
         visible_delta_count = 0
         started_at = time.monotonic()
         last_activity_at = started_at
@@ -1033,14 +1035,26 @@ class CodexChatAgentSession:
                     "item/completed": "Agent 返回了处理状态",
                     "turn/completed": "Agent 回合已结束",
                 }.get(method)
+                item = params.get("item") if isinstance(params, dict) else None
+                step = None
+                if method == "item/completed":
+                    step = steps.completed(item)
+                elif method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"} and isinstance(params, dict):
+                    step = steps.reasoning_delta(
+                        params.get("itemId"), params.get("delta"),
+                        summary=method.endswith("summaryTextDelta"),
+                        index=params.get("summaryIndex", params.get("contentIndex")),
+                    )
+                    if step:
+                        phase = "Agent 正在思考"
                 if method == "item/started":
-                    item = params.get("item") if isinstance(params, dict) else None
                     item_type = (
                         str(item.get("type") or "") if isinstance(item, dict) else ""
                     )
+                    step = steps.started(item)
                     # Transport activity does not prove a Goal read or a
-                    # successful check. Project only the typed activity; do
-                    # not expose arbitrary item text, command or tool inputs.
+                    # successful check. The label stays typed; the step names
+                    # the command, tool or path through redacted fields only.
                     phase = {
                         "userMessage": "Agent 已收到消息",
                         "agentMessage": "Agent 正在生成回答",
@@ -1049,9 +1063,10 @@ class CodexChatAgentSession:
                         "mcpToolCall": "Agent 正在调用工具",
                         "dynamicToolCall": "Agent 正在调用工具",
                         "webSearch": "Agent 正在检索",
+                        "fileChange": "Agent 正在修改文件",
                     }.get(item_type, "Agent 正在处理")
                 if phase:
-                    on_event("agent.phase", {"label": phase, "method": method})
+                    on_event("agent.phase", {"label": phase, "method": method, **({"step": step} if step else {})})
             if method == "item/agentMessage/delta" and isinstance(params, dict):
                 delta = params.get("delta")
                 if isinstance(delta, str):

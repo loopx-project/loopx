@@ -161,14 +161,17 @@ def preserve_heartbeat_receipt_bound_work_lane(
 ) -> dict[str, Any] | None:
     """Keep a committed same-turn Todo binding ahead of a newly due monitor."""
 
-    if not isinstance(contract, dict):
-        return contract
     if not isinstance(selected_todo, dict):
         return contract
     todo_id = normalize_todo_id(selected_todo.get("todo_id"))
     if not todo_id or selected_todo.get("selection_binding") != "heartbeat_receipt":
         return contract
     if selected_todo.get("task_class") == TODO_TASK_CLASS_MONITOR:
+        # An incomplete aggregate can omit its work lane. The exact bound
+        # Monitor still carries the TS-verified phase; preserve its projection
+        # without deriving execution authority from aggregate completeness.
+        if not isinstance(contract, dict):
+            contract = {}
         raw_monitor_phase = selected_todo.get("receipt_bound_monitor_phase")
         try:
             if not isinstance(raw_monitor_phase, str):
