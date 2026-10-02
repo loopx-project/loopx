@@ -121,8 +121,48 @@ credential facts:
 | shipped default host, credential configured | `dsh` (managed executor) |
 | shipped default host, no credential | `codex-cli` (individual executor) |
 | explicit default selector | `LOOPX_TURN_HOST` |
-| per-command override | `--host codex-cli\|claude-code\|dsh\|generic-cli` (plan), `codex-cli\|dsh\|generic-cli` (run-once) |
+| per-command override | `--host codex-cli\|claude-code\|dsh\|generic-cli` (plan and run-once) |
 | authenticating credential | `DEEPSEEK_API_KEY`, optional endpoint `DEEPSEEK_BASE_URL` |
+
+### Built-in Claude CLI host
+
+`run-once --host claude-code` invokes one native print-mode Turn. Select the
+operator's installed executable with `--claude-bin`, and optionally pin
+`--claude-model` and `--claude-effort`. No model name is inferred or substituted.
+The executor readback reports explicitly selected model/effort; absent values
+remain the host's own defaults. This does not change the shipped host default.
+
+```bash
+loopx turn run-once --goal-id example-goal --agent-id example-worker \
+  --host claude-code --project "$PWD" --claude-bin claude \
+  --claude-model YOUR_CONFIGURED_MODEL \
+  --validation-command-json '["./tools/verify-turn-postcondition"]'
+# Add --execute only after inspecting the dry-run route and authority.
+```
+
+The default tool set is `Read,Glob,Grep`. An admitted execution can explicitly
+add `--claude-workspace-write` to enable `Bash,Edit,Write` with `acceptEdits`.
+These are native tool/permission settings, not an OS sandbox or enforcement of
+every signed path pattern. The caller supplies process/filesystem isolation
+when required. The Turn suppresses ambient MCP servers and native slash-command
+loops; it returns one structured candidate, while the existing independent
+validator, Todo writeback, quota and scheduler owners govern settlement.
+
+Opaque Claude session UUIDs remain in owner-only local provider state, bound
+to the exact Goal/Agent/Todo and source Goal lifetime. New admitted Turns may
+resume that binding; `--iteration-context fresh` starts a clean session. A
+timeout retains an observed valid binding for the existing bounded same-Turn
+retry. Malformed bindings, mismatched output identities and native error results
+fail closed. A committed journal replay does not invoke Claude or spend again.
+These are one-Turn guarantees, not a claim of periodic supervision or native
+Goal-mode parity.
+
+To roll back, stop new admissions, retain journals and drain accepted work;
+select the prior qualified host explicitly for new Turns. Never reinterpret an
+existing Claude journal as a different host or run a native `/loop` and an outer
+Turn driver on the same binding.
+
+### Managed execution profile
 
 Selecting the host is not the same as choosing *what runs on it*. The managed
 host resolves one **managed execution profile** — provider, model, and reasoning
