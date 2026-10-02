@@ -140,6 +140,86 @@ def test_preview_does_not_generate_or_send(tmp_path):
     assert result["status"] == "preview_ready" and calls == []
 
 
+@pytest.mark.parametrize("sender", ["gate", "blocker"])
+@pytest.mark.parametrize("form,accepted", [
+    ("({id}).", True), ("（{id}）。", True), ("**{id}**", True),
+    ("`{id}`", True), ("[{id}](https://example.org/review)", True),
+    ("{id}", True), ("prefix_{id}", False), ("{id}_other", False),
+    ("prefix-{id}", False), ("{id}-other", False), ("x{id}x", False),
+    ("{id}2", False), ("X{id}", False), ("no reference", False),
+])
+def test_whole_reference_tokens_guard_both_senders(tmp_path, sender, form, accepted):
+    path = _gate_test_binding(tmp_path)
+    payload = read_goal_channel_binding(path)
+    payload["bindings"][GOAL_ID]["automation"] = {"blocked_notice_auto_notify_enabled": True}
+    write_goal_channel_binding(path, payload)
+    row = {**request(), "todo_id": "todo_abcdef0123456789abcdef01"}
+    calls = []
+    text = "Review the evidence before deciding: " + form.format(id=row["todo_id"])
+    common = dict(goal_id=GOAL_ID, binding_path=path, runner=_fake_runner(calls),
+                  synthesizer=lambda _: text)
+    if sender == "gate":
+        packet = quota()
+        packet["user_todo_summary"]["gate_open_items"] = [row]
+        packet["request_snapshot"]["items"] = [row]
+        result = notify_lark_goal_channel_gate(registry=_registry(tmp_path),
+            quota_packet=packet, execute=True, **common)
+    else:
+        result = deliver_blocked_notices(status={"attention_queue": {"items": [{
+            "goal_id": GOAL_ID, "user_todos": {"items": [row]}}]}},
+            quota_packet={}, external_sink_delivery_authorized=True, **common)
+    assert bool(result["readback_verified"]) is accepted
+    assert any("+messages-send" in args for args in calls) is accepted
+    if not accepted:
+        assert result["blocker"] == "steward_notice_unavailable"
+
+
+def test_every_complete_request_requires_its_own_whole_reference(tmp_path):
+    path = _gate_test_binding(tmp_path)
+    packet = quota()
+    second = {**request(), "todo_id": "todo_icon", "text": "Decide whether to adopt the reviewed icon."}
+    packet["user_todo_summary"]["gate_open_items"].append(second)
+    packet["request_snapshot"]["items"].append(second)
+    calls = []
+    result = notify_lark_goal_channel_gate(registry=_registry(tmp_path), goal_id=GOAL_ID,
+        binding_path=path, quota_packet=packet, execute=True, runner=_fake_runner(calls),
+        synthesizer=lambda _: "Decide on publication (todo_release) and the icon (todo_icon_other).")
+    assert result["blocker"] == "steward_notice_unavailable"
+    assert not any("+messages-send" in args for args in calls)
+
+
+@pytest.mark.parametrize("sender", ["gate", "blocker"])
+def test_prepared_invalid_reference_cannot_bypass_retry_validation(tmp_path, sender):
+    path = _gate_test_binding(tmp_path)
+    payload = read_goal_channel_binding(path)
+    payload["bindings"][GOAL_ID]["automation"] = {"blocked_notice_auto_notify_enabled": True}
+    write_goal_channel_binding(path, payload)
+    calls = []
+    runner = _fake_runner(calls)
+    def failed_send(args, cwd, timeout):
+        if "+messages-send" in args:
+            calls.append(args)
+            return {"returncode": 1, "stdout": "rejected"}
+        return runner(args, cwd, timeout)
+    def notify(send, synthesizer):
+        common = dict(goal_id=GOAL_ID, binding_path=path, runner=send, synthesizer=synthesizer)
+        if sender == "gate":
+            return notify_lark_goal_channel_gate(registry=_registry(tmp_path),
+                quota_packet=quota(), execute=True, **common)
+        return deliver_blocked_notices(status={"attention_queue": {"items": [{
+            "goal_id": GOAL_ID, "user_todos": {"items": [request()]}}]}},
+            quota_packet={}, external_sink_delivery_authorized=True, **common)
+    assert not notify(failed_send, lambda _: "Review publication (todo_release). ")["readback_verified"]
+    payload = read_goal_channel_binding(path)
+    next(iter(payload["bindings"][GOAL_ID]["receipts"].values()))["delivery_text"] = "Review publication (todo_release_other)."
+    write_goal_channel_binding(path, payload)
+    calls.clear()
+    def unexpected(_):
+        raise AssertionError("An attempted provider key must retain its cached body")
+    assert notify(runner, unexpected)["blocker"] == "steward_notice_unavailable"
+    assert not any("+messages-send" in args for args in calls)
+
+
 def test_legacy_ambiguous_blocker_attempt_keeps_its_body_identity(tmp_path):
     from tests.extensions.test_lark_goal_channel_blocked_notice import (
         GOAL_ID as blocked_goal, _binding, _runner, _status,

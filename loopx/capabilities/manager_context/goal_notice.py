@@ -35,14 +35,16 @@ def notice_prompt(facts: Mapping[str, Any]) -> str:
 
 
 def validated_notice(text: str, facts: Mapping[str, Any]) -> str:
+    from ...control_plane.effect_runtime import effect_runtime_result
+
     if not isinstance(text, str) or not text.strip() or len(text) > 8000:
         raise ValueError("steward notification body is unavailable or exceeds its transport bound")
     validate_public_safe_value(text)
-    # Exact opaque references protect reply routing. This is not a quality score.
-    for request in (facts.get("decision_notice") or {}).get("items", []):
-        request_id = request.get("request_id")
-        if request_id and request_id not in text:
-            raise ValueError("steward notification omitted a decision reference")
+    references = effect_runtime_result("presentation.decision_notice.validate_references", {
+        "text": text, "requests": (facts.get("decision_notice") or {}).get("items", []),
+    })
+    if references["valid"] is not True:
+        raise ValueError("steward notification omitted a complete decision reference")
     return text.strip()
 
 
