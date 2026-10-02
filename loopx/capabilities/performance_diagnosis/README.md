@@ -89,7 +89,7 @@ ancestor traversal, preserving sample counts and self/inclusive weights. One
 request has a 2,000,000-work-unit limit across frame allocation, sample/event
 visits and stack expansion, including shared frames reused by multiple profiles.
 Exceeding it returns an actionable input error: select a shorter capture or fewer
-profiles. This bounds synchronous inspection on the shared runtime without
+profiles or shallower stacks; no partial result is returned. This bounds synchronous inspection on the shared runtime without
 raising its request timeout; the browser still uses a cancellable worker.
 
 ## Complete the diagnosis

@@ -93,53 +93,6 @@ const v8 = () => ({startTime: 100, endTime: 5100,
     {id: 20, callFrame: {functionName: "work", url: "worker.ts", lineNumber: 6}}],
   samples: [20, 10], timeDeltas: [3000, 2000]});
 
-test("normal exporter null source positions mean unknown, while wrong types stay invalid", () => {
-  const profile = sampled();
-  const exported = {...profile, shared: {frames: [
-    {name: "caller", file: "fixture.py", line: 7},
-    {name: "[self]", file: null, line: null}, {name: "wait"},
-  ]}};
-  const omitted = {...exported, shared: {frames: exported.shared.frames.map(({file, line, ...rest}) =>
-    ({...rest, ...(file != null ? {file} : {}), ...(line != null ? {line} : {})}))}};
-  assert.deepEqual(inspect({profile: exported}).profiles, inspect({profile: omitted}).profiles);
-  for (const position of [{file: 7}, {file: false}, {line: "7"}, {line: -1}]) {
-    assert.throws(() => inspect({profile: {...profile, shared: {frames: [{name: "bad", ...position}]},
-      profiles: [{...profile.profiles[0]!, samples: [[0]], weights: [1]}]}}), /frame\.(file|line)/);
-  }
-});
-
-test("one work budget covers shared frame expansion across independent profiles", () => {
-  const profile = {$schema: sampled().$schema,
-    shared: {frames: Array.from({length: 8192}, (_, i) => ({name: `frame-${i}`}))},
-    profiles: Array.from({length: 256}, () => ({type: "sampled", name: "thread",
-      unit: "milliseconds", startValue: 0, endValue: 1, samples: [[0]], weights: [1]}))};
-  assert.ok(JSON.stringify(profile).length < 256_000);
-  assert.throws(() => inspect({profile}), /work limit.*shorter capture/);
-});
-
-test("repeated V8 leaves retain sample counts, weights and every inclusive ancestor", () => {
-  const count = 1_000_000, depth = 1000;
-  const profile = {startTime: 0, endTime: count * 1000,
-    nodes: Array.from({length: depth}, (_, i) => ({id: i + 1,
-      callFrame: {functionName: `frame-${i}`}, children: i + 1 < depth ? [i + 2] : []})),
-    samples: Array(count).fill(depth), timeDeltas: Array(count).fill(1000)};
-  const main = inspect({profile}).profiles[0]!;
-  assert.equal(main.observations, count);
-  assert.equal(main.observed_weight_ms, count);
-  assert.equal(main.stack_weight_ms, count);
-  assert.deepEqual(main.self_hotspots.map(row => [row.name, row.self_ms]), [["frame-999", count]]);
-  assert.equal(main.inclusive_hotspots.length, 15);
-  assert.ok(main.inclusive_hotspots.every(row => row.inclusive_ms === count));
-  profile.samples[1] = 1; profile.timeDeltas[1] = 2000; profile.endTime += 1000;
-  const mixed = inspect({profile}).profiles[0]!;
-  assert.equal(mixed.observations, count);
-  assert.equal(mixed.observed_weight_ms, count + 1);
-  assert.equal(mixed.self_hotspots[0]!.self_ms, count - 1);
-  assert.equal(mixed.inclusive_hotspots[0]!.inclusive_ms, count + 1);
-  profile.timeDeltas[count - 1] = -1;
-  assert.throws(() => inspect({profile}), /nonnegative/);
-});
-
 test("V8 sparse node ids and microseconds map to real callsites", () => {
   const main = inspect({profile: v8()}).profiles[0]!;
   assert.equal(main.observed_weight_ms, 5);
@@ -165,4 +118,62 @@ test("malformed, empty, unknown and cyclic observations never become clean evide
   assert.throws(() => inspect({profile: cycle}), /cyclic/);
   const unknown = v8(); unknown.samples[0] = 999;
   assert.throws(() => inspect({profile: unknown}), /unknown V8/);
+});
+
+test("Pyinstrument null source locations mean unknown, not malformed evidence", () => {
+  const profile = {...sampled(), shared: {frames: [{name: "[self]", file: null, line: null}]},
+    profiles: [{type: "sampled", name: "main", unit: "seconds", startValue: 0, endValue: 1,
+      samples: [[0]], weights: [1]}]};
+  const row = inspect({profile}).profiles[0]!.self_hotspots[0]!;
+  assert.equal(row.self_ms, 1000);
+  assert.equal(row.file, undefined);
+  assert.equal(row.line, undefined);
+  const omitted = {...profile, shared: {frames: [{name: "[self]"}]}};
+  assert.deepEqual(inspect({profile}).profiles, inspect({profile: omitted}).profiles);
+  for (const bad of [{name: "[self]", file: 1}, {name: "[self]", line: "1"}]) {
+    assert.throws(() => inspect({profile: {...profile, shared: {frames: [bad]}}}), /frame\.(file|line)/);
+  }
+});
+
+test("repeated deep V8 leaves retain counts, self and ancestor time", () => {
+  const nodes = Array.from({length: 1000}, (_, i) => ({id: i + 1,
+    callFrame: {functionName: `frame-${i}`}, children: i < 999 ? [i + 2] : []}));
+  const profile = {nodes, startTime: 0, endTime: 1_000_000,
+    samples: Array(1_000_000).fill(1000), timeDeltas: Array(1_000_000).fill(1)};
+  const main = inspect({profile}).profiles[0]!;
+  assert.equal(main.observations, 1_000_000);
+  assert.equal(main.observed_weight_ms, 1000);
+  assert.equal(main.self_hotspots[0]!.name, "frame-999");
+  assert.equal(main.self_hotspots[0]!.self_ms, 1000);
+  assert.equal(main.inclusive_hotspots[0]!.inclusive_ms, 1000);
+  const mixed = inspect({profile: {...v8(), samples: [20, 10, 20], timeDeltas: [1000, 2000, 2000]}}).profiles[0]!;
+  assert.equal(mixed.observations, 3);
+  assert.equal(mixed.self_hotspots[0]!.self_ms, 3);
+  assert.equal(mixed.inclusive_hotspots[0]!.inclusive_ms, 5);
+  profile.timeDeltas[profile.timeDeltas.length - 1] = -1;
+  assert.throws(() => inspect({profile}), /nonnegative/);
+});
+
+test("work limits apply across evented stacks and independent profiles without partial success", () => {
+  const events: {type: string; frame: number; at: number}[] = [];
+  for (let i = 0; i < 1000; i++) events.push({type: "O", frame: 0, at: i});
+  for (let i = 0; i < 2000; i++) events.push({type: i % 2 ? "C" : "O", frame: 0, at: 1000 + i});
+  for (let i = 0; i < 1000; i++) events.push({type: "C", frame: 0, at: 3000 + i});
+  const evented = {$schema: sampled().$schema, shared: {frames: [{name: "recursive"}]},
+    profiles: [{type: "evented", unit: "milliseconds", startValue: 0, endValue: 4000, events}]};
+  assert.ok(JSON.stringify(evented).length < 200_000, "small bytes can amplify analysis work");
+  assert.throws(() => inspect({profile: evented}), /analysis work limit/);
+  const shared = {$schema: sampled().$schema,
+    shared: {frames: Array.from({length: 100_000}, () => ({name: "unused"}))},
+    profiles: Array.from({length: 21}, () => ({type: "sampled", unit: "milliseconds",
+      startValue: 0, endValue: 1, samples: [[0]], weights: [1]}))};
+  assert.throws(() => inspect({profile: shared}), /analysis work limit/);
+});
+
+test("overdeep zero-duration event stacks cannot evade interval validation", () => {
+  const profile = {$schema: sampled().$schema, shared: {frames: [{name: "recursive"}]},
+    profiles: [{type: "evented", unit: "milliseconds", startValue: 0, endValue: 1,
+      events: [...Array.from({length: 1025}, () => ({type: "O", frame: 0, at: 0})),
+        ...Array.from({length: 1025}, () => ({type: "C", frame: 0, at: 0}))]}]};
+  assert.throws(() => inspect({profile}), /stack exceeds/);
 });

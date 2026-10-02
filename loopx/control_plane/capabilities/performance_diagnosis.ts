@@ -1,8 +1,8 @@
 /** Local profiling plans and observations, never execution or admission authority. */
 import {createHash} from "node:crypto";
 import {join} from "node:path";
-import {PerformanceProfileInputError, summarizePerformanceProfile as summarizeProfile} from "./performance_profile.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
+import {PerformanceProfileInputError, summarizePerformanceProfile as summarizeProfile} from "./performance_profile.ts";
 
 type JsonObject = Record<string, unknown>;
 const object = (value: unknown, label: string): JsonObject => {
@@ -77,12 +77,12 @@ export function planPerformanceDiagnosis(input: unknown) {
 
 /** The transport digest hashes normalized JSON, not original capture bytes. */
 export function summarizePerformanceProfile(input: unknown) {
-  let result: ReturnType<typeof summarizeProfile>;
-  try {result = summarizeProfile(input);}
-  catch (error) {
+  try {
+    const result = summarizeProfile(input);
+    const raw = object(input, "request").profile;
+    return {...result, normalized_profile_sha256: createHash("sha256").update(JSON.stringify(raw)).digest("hex")};
+  } catch (error) {
     if (error instanceof PerformanceProfileInputError) throw new EffectRuntimeRequestError(error.message);
     throw error;
   }
-  const raw = object(input, "request").profile;
-  return {...result, normalized_profile_sha256: createHash("sha256").update(JSON.stringify(raw)).digest("hex")};
 }
