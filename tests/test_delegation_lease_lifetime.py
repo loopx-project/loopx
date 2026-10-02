@@ -42,6 +42,8 @@ if(committed.status!=="applied") throw new Error(JSON.stringify(committed));
     binding = runner.binding("analysis")
     runner._acquire_delegation_lease(runner.path("lease-lifetime"), row, binding)
     lease = row["task_lease"]["lease"]
+    if ttl is None:
+        return lease
     renewed = runner._cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
         "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
         "--idempotency-key", lease["idempotency_key"], "--expected-version", str(lease["version"]),
@@ -59,13 +61,15 @@ def completion_service(tmp_path, request, monkeypatch):
     """Pin a real slow final acceptance command before preparing authority."""
     validator = tmp_path / "completion-validator.py"
     validator.write_text('''import sys, time, runpy
+from datetime import datetime
 from pathlib import Path
 root = Path(sys.argv[1])
 counter = root / 'validator-calls'
 calls = int(counter.read_text()) + 1 if counter.exists() else 1
 counter.write_text(str(calls))
 if calls == 2:
-    time.sleep(8)
+    deadline = datetime.fromisoformat((root / 'completion-prior-expiry').read_text())
+    time.sleep(max(0, deadline.timestamp() - time.time()) + 0.2)
     (root / 'completion-validation-ended').touch()
 actual = root / 'project/validation/acceptance.py'
 sys.path.insert(0, str(actual.parent))
@@ -79,7 +83,9 @@ runpy.run_path(str(actual), run_name='__main__')
             for criterion in value["document"]["criteria"]:
                 criterion["validation_timeout_seconds"] = 1
                 if criterion["id"] == "analyst-initial":
-                    criterion["validation_timeout_seconds"] = 15
+                    # 21 + four one-second criteria stays within the public
+                    # 25-second completion budget, including a 20s deadline.
+                    criterion["validation_timeout_seconds"] = 21
                     criterion["validation_argv"][1] = str(validator)
         return write(path, value)
 
@@ -90,7 +96,10 @@ runpy.run_path(str(actual), run_name='__main__')
 @pytest.mark.parametrize("lost_reply", [None, "renewal", "completion"])
 def test_completion_renews_before_validation_and_replays_each_intent(completion_service, monkeypatch, lost_reply):
     root, runner = completion_service
-    original = prepare_lease(root, runner, monkeypatch)
+    # This case shortens the lease at the completion boundary below. An
+    # unrelated short Host deadline can cancel execution before that boundary
+    # under load; the running-Host cases separately exercise that deadline.
+    original = prepare_lease(root, runner, monkeypatch, ttl=None)
     complete, cli = runner._complete_delegated_todo, runner._cli
     shortened = None
     renewal_calls, completion_calls = [], []
@@ -105,7 +114,11 @@ def test_completion_renews_before_validation_and_replays_each_intent(completion_
             shortened = cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
                 "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
                 "--idempotency-key", current["idempotency_key"],
-                "--expected-version", str(current["version"]), "--ttl-seconds", "6")["lease"]
+                "--expected-version", str(current["version"]), "--ttl-seconds", "20")["lease"]
+            # Cross the actual pre-renewal deadline, not an assumed amount of
+            # CLI startup time. Allow cold claim/renew commands to reach the
+            # boundary; the independent validator still outlives that lease.
+            (root / "completion-prior-expiry").write_text(shortened["expires_at"])
         return complete(row, binding)
 
     def observe_reply(binding, *args, **kwargs):
@@ -272,11 +285,24 @@ def test_real_revocation_or_new_execution_stops_nested_host_without_acceptance(s
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(runner.execute, "lease-lifetime")
         await_started(root, future, runner)
-        current = inspect(runner)["lease"]
         binding = runner.binding("analysis")
-        runner._cli(binding, "task-lease", "release", "--goal-id", runner.goal_id,
-                    "--todo-id", "todo_analyst-initial", "--owner", "analyst",
-                    "--idempotency-key", original["idempotency_key"], "--expected-version", str(current["version"]))
+        # The live supervisor may renew between inspection and revocation.
+        # Retry only that CAS race, never a replacement execution or rejection.
+        for _ in range(5):
+            current = inspect(runner)["lease"]
+            assert current["lease_epoch"] == original["lease_epoch"]
+            assert current["idempotency_key"] == original["idempotency_key"]
+            try:
+                runner._cli(binding, "task-lease", "release", "--goal-id", runner.goal_id,
+                            "--todo-id", "todo_analyst-initial", "--owner", "analyst",
+                            "--idempotency-key", original["idempotency_key"],
+                            "--expected-version", str(current["version"]))
+                break
+            except ValueError as exc:
+                if str(exc) != "canonical task lease release rejected: version_mismatch":
+                    raise
+        else:
+            pytest.fail("could not revoke the original execution during concurrent renewal")
         if reclaim:
             acquired = runner._cli(binding, "task-lease", "acquire", "--goal-id", runner.goal_id,
                 "--todo-id", "todo_analyst-initial", "--owner", "analyst", "--idempotency-key", "new-execution",
