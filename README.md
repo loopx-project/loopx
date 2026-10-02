@@ -7,11 +7,28 @@
 The open, local-first control plane for long-horizon agents and personal agent teams.<br>
 <sub>Keep goals, decisions and evidence across sessions. Work with Codex, Claude Code, DeepSeek Harness and other supported runtimes.</sub>
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
 
 <a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
 [Get started](#try-loopx) · [Workspace](#meet-the-personal-agent-workspace) · [LHTB results](#lhtb-results) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
+
+<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4"><img src="docs/assets/personal-workspace/workspace-hero.webp" alt="LoopX Personal Agent Workspace: a Work map showing task dependencies, responsible agents, progress and decisions waiting for the owner" width="960"></a><br>
+<sub>Source-built App on an authored <a href="demo/workspace/README.md">Workspace stories replay</a>; no live Agent execution · <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">watch the 32-second walkthrough</a></sub>
+
+**Start in Codex App in two steps.** Install once:
+
+```bash
+python3 -m pip install --upgrade loopx && loopx workflow-skills --install
+```
+
+Restart Codex App, then type this in a thread opened on your project:
+
+```text
+$loopx fix the open PR review feedback and keep the patch reviewable
+```
+
+<sub>LoopX connects the project, plans the work as Todos and sets up the heartbeat that keeps it moving. Claude Code uses <code>/loopx &lt;complex task&gt;</code> · <a href="#try-loopx">other Agent hosts</a></sub>
 
 **[LHTB](https://zli12321.github.io/LHTB/index.html) · 46 tasks · GPT-5.6 Sol:** LoopX 1.0.3 Heartbeat reaches **0.4948 mean reward** — **+17.3% vs Plain Codex**, **+10.6% vs native Codex Goal**.<br>
 <sub><a href="#lhtb-results">Results and pass rates ↓</a></sub>
@@ -29,7 +46,7 @@ accepted, and when to ask you.
 
 | What you want to do | Start here |
 | --- | --- |
-| Keep a coding or research agent working across sessions | [Install and connect](#try-loopx) |
+| Keep a coding or research agent working across sessions | [Install and start](#try-loopx) |
 | Manage personal projects, schedules and decisions in one place | [Personal Agent Workspace](#meet-the-personal-agent-workspace) |
 | Let agents collaborate and deliver verifiable results | [Agent collaboration guide](docs/product/use-cases/cross-runtime/README.md) |
 
@@ -39,10 +56,6 @@ Keep long-horizon goals in one local-first workspace. Goals, attention,
 conversations, tasks, files, schedules, and recovery stay durable across days,
 restarts, and harnesses. Reopen a project, inspect the previous turn’s state
 and evidence, and continue the next permitted action.
-
-<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">
-  <img src="docs/assets/personal-workspace/workspace-1.0.webp" alt="LoopX Workspace: owner decisions, Agent tasks, scheduled watches and completed work" width="960">
-</a>
 
 LoopX 1.0 brings these long-horizon control states into the Personal Workspace. It gives you one place to:
 
@@ -297,62 +310,38 @@ More inspectable surfaces:
 
 ## Try LoopX
 
-Requirements: Python 3.11+ and Node.js 22.22.3+; Node.js 24 LTS is recommended.
-Use an active Python environment whose console scripts are on `PATH`; macOS and
-Linux use a POSIX shell, while native Windows uses PowerShell 7. Node.js runs
-the managed, idle-exiting TypeScript Effect core; LoopX starts it automatically.
-Git is only needed for contributor clone/canary workflows.
-
-Install from PyPI without cloning:
+Install once:
 
 ```bash
-python3 -m pip install --upgrade loopx
-loopx workflow-skills --install
-loopx doctor
+python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 ```
-
-Existing installs can use `loopx update plan` and `loopx update apply`; LoopX
-keeps the detected pip, pipx, or archive owner instead of switching channels.
-
-On native Windows PowerShell 7, use the same PyPI release without a POSIX
-compatibility layer:
-
-```powershell
-py -3.11 -m pip install --upgrade loopx
-loopx workflow-skills --install
-loopx doctor
-```
-
-Restart your agent host after first install so it reloads the workflow skills.
-See [Installing LoopX](docs/guides/installing-loopx.md) for `pipx`, host
-command surfaces, native Windows checkout installation, upgrade, rollback,
-uninstall, and the archive fallback.
-
-Then connect from your project root:
-
-```bash
-cd /path/to/your-project
-loopx connect
-loopx status
-```
-
-If the project has not been initialized and `connect` tells you state is
-missing, use the guided path:
-
-```bash
-loopx start-goal --guided --project . --goal-text "Your long-running objective"
-```
-
-LoopX should reuse existing state rather than overwrite it. Keep `.loopx/`
-and `.local/` ignored; keep legacy `.codex/goals/` ignored until migration.
 
 ### Start From Your Agent
 
+Restart your Agent host, then start from a session opened on your project:
+
+| Host | Type |
+| --- | --- |
+| Codex App, Codex CLI | `$loopx <complex task>` |
+| Claude Code | `/loopx <complex task>` |
+| DeepSeek Harness | Install the [native DSH plugin](packages/dsh-loopx-plugin/README.md), select the `loopx` skill, then describe the task |
+
+LoopX reuses existing project state or connects the project, plans the work as
+Todos and sets up the host's loop. `loopx status` shows the goal, any decision
+waiting for you and the next Todo; `loopx doctor` diagnoses the install.
+
+Requires Python 3.11+ and Node.js 22.22.3+ (24 LTS recommended).
+[Installing LoopX](docs/guides/installing-loopx.md) covers native Windows,
+`pipx`, upgrades, rollback and uninstall.
+
+<details>
+<summary><b>Other hosts, loop drivers and custom runners</b></summary>
+
 | Host | Recommended start | Loop driver |
 | --- | --- | --- |
-| Codex App | Ask the agent to connect this project to LoopX, run `loopx doctor`, preserve existing state, and report the current gate and next todo. Then use `$loopx <complex task>` or choose `loopx` from `/skills`. | Codex App heartbeat automation, refreshed from `quota should-run.scheduler_hint` |
+| Codex App | `$loopx <complex task>`, or choose `loopx` from `/skills`, in a thread opened on the project. | Codex App heartbeat automation, refreshed from `quota should-run.scheduler_hint` |
 | Codex App over SSH | `loopx agent-onboard --agent-type codex-app-ssh --project .` | The returned visible `/goal <task_body>` |
-| Codex CLI | Start `codex` in the project, ask it to connect and diagnose LoopX, then use `$loopx <complex task>` or `/skills`. | Visible `/goal <task_body>`; no hidden headless execution by default |
+| Codex CLI | Start `codex` in the project, then `$loopx <complex task>` or `/skills`. | Visible `/goal <task_body>`; no hidden headless execution by default |
 | Claude Code | Install the opt-in adapter, then run `/loopx <task>` followed by `/loop`. | Native Claude Code `/loop` gated by LoopX |
 | KunlunCode | Run `loopx-kunluncode connect --project . --goal-id <goal-id> --agent-id <registered-agent-id>`, add a bounded todo, then run `loopx-kunluncode run --project .`. | Native Goal Pro through app-server; LoopX writes completion and quota only after strict verification |
 | OpenCode | Install the static command facade; opt in to `--with-goal-bridge` for recurring goals. | OpenCode command facade and explicit goal bridge |
@@ -361,7 +350,7 @@ and `.local/` ignored; keep legacy `.codex/goals/` ignored until migration.
 | Antigravity CLI (agy) | Install the skill facade with `loopx slash-commands --install --surface agy`, then invoke the `loopx` skill (or `/loopx <complex task>`) from an `agy` session in the project. | The session's native `/goal` loop (audited until `<!-- GOAL_COMPLETE -->`) with `schedule` self-wakes while the session lives; the facade instructs every turn/wake to re-enter through `quota should-run` — advisory pacing, not a host-enforced gate |
 | Kiro CLI | Install the skill facade with `loopx slash-commands --install --surface kiro-cli`, then run `/loopx <complex task>` from a `kiro-cli` session in the project. | The session's native `/goal --max <N> <task_body> Done when: <criteria>` loop, with the acceptance criteria stated inside the goal statement because the host derives them from it, bounded by the host's own iteration budget (default 5) and settled through the built-in `goal` completion contract; the facade instructs every turn and iteration to re-enter through `quota should-run` — advisory pacing, not a host-enforced gate |
 | DeepSeek Harness (dsh) | Install the [native DSH plugin](packages/dsh-loopx-plugin/README.md), select the `loopx` skill, and describe the task. The [dsh goal-mode adapter](loopx/dsh_goal_mode/README.md) remains available for headless turns. | Native same-session continuation and GoalBar, or headless dsh segments; both remain gated by LoopX authority |
-| Cursor, shell, or custom runner | Use the installer and `loopx doctor`; connect manually or call LoopX from your runner. | Your shell, scheduler, or runner |
+| Cursor, shell, or custom runner | `loopx start-goal --guided --project . --goal-text "<task>"`, or call LoopX from your runner. | Your shell, scheduler, or runner |
 
 The exact, copy-ready setup messages and host recovery paths live in
 [Getting Started](docs/guides/getting-started.md). Host integrations can inspect
@@ -392,6 +381,16 @@ loopx refresh-state         # what should the next turn see?
 loopx quota spend-slot      # account for a completed, validated slice
 ```
 
+Clone-based install is only for contributors who want the live canary wrapper:
+
+```bash
+git clone https://github.com/loopx-project/loopx ~/loopx
+~/loopx/scripts/install-local.sh
+loopx doctor
+```
+
+</details>
+
 ### First-Run Feedback
 
 If LoopX works for you, a one-minute public issue helps us learn what a real
@@ -409,23 +408,6 @@ heartbeat for platform support and continued use, plus separate ID-free CLI
 counts. No content is collected. Disable both in Settings → Capability Center
 or with `loopx usage-ping disable` / `LOOPX_USAGE_PING=0`; inspect payloads with
 `loopx usage-ping status`. See [Basic usage statistics](docs/reference/usage-ping.md).
-
-A successful connection has:
-
-- `loopx doctor` passing;
-- `.loopx/registry.json` and a projected active goal state;
-- `loopx status` showing the current objective, concrete user gate, and next
-  agent todo;
-- a visible loop driver or an exact activation instruction;
-- local runtime state ignored rather than committed.
-
-Clone-based install is only for contributors who want the live canary wrapper:
-
-```bash
-git clone https://github.com/loopx-project/loopx ~/loopx
-~/loopx/scripts/install-local.sh
-loopx doctor
-```
 
 <a id="capability-surface"></a>
 
