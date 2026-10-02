@@ -68,16 +68,15 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
 
 1. Record the packet's exact head, then follow `review_execution_contract.decision_procedure`:
    the current goal and `problem_context` delivery judgment first, including on re-review,
-   then `evidence_commands` and relevant repository-native validation.
+   then `evidence_commands` and repository-native validation.
 2. Fill `review_plan.result_template`; preserve missing evidence as `unverified` and never
    infer `verified` from metadata or CI. Execute its repository-reuse, default-off, authority
    and real-path counterfactuals rather than repeating them as prose. Fill `result.reviewer`
-   per `review_execution_contract.reviewer_declaration` and open the body with its
-   `body_marker` line. Read `problem_context.spec_basis`'s specification before the
-   implementation and satisfy it criterion by criterion.
+   per `review_execution_contract.reviewer_declaration`, open the body with its `body_marker`
+   line, and read `problem_context.spec_basis`'s specification before implementing it.
 3. Apply `completion_gate` literally: save final Markdown in `review_body`, then check
-   evidence and that exact body. Follow capability-owned floors and scope
-   counterfactuals; prose cannot replace missing execution:
+   evidence and that exact body. Follow capability-owned floors and scope counterfactuals;
+   prose cannot replace missing execution:
 
    ```bash
    loopx --format json pr-review --check-result review-result.json --packet review-packet.json
@@ -87,7 +86,7 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
    architecture, freshness or a relabeled old result.
 4. Publish the checked `review_body`; recheck after edits. Remote readback uses
    the same body rules. Headings and a verdict alone cannot certify a review.
-5. Re-read the remote head immediately before verdict and publication; restart the evidence pass if it changed.
+5. Re-read the remote head immediately before verdict and publication; restart evidence if it changed.
 
 Each PR needs independent evidence and a standalone card; a queue table is a preface only.
 
@@ -107,12 +106,11 @@ requested local-only/dry-run output or the finding is private or security-sensit
   avoid duplicating an equivalent exact-head result.
 
 Build public text from the exact reviewed head; remove local paths, private context, raw
-logs, credentials, and internal-only links. Read the published review back, verify state/body
-and return its URL. After APPROVE (also existing approval), execute
+logs, credentials and internal-only links. Read the published review back, verify state/body
+and return its URL. After APPROVE (incl. existing approval), execute
 `review_execution_contract.approval_closeout`; reconcile only verified obsolete blockers with
 owner/GitHub authority, preserving discussion and unresolved reviews. Merge routes through
-`loopx-pr-merge`; an `APPROVE` is not merge authority, and a public blocker belongs on the PR,
-not only in chat.
+`loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
 Immediately before every merge, run `loopx --format json pr-review --goal-id GOAL
 --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Its compact
