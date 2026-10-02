@@ -23,8 +23,6 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-from .chat import redact_local_paths
-
 STEP_KINDS = ("reasoning", "command", "tool", "search", "file_change")
 STEP_STATES = ("running", "completed", "failed")
 COMMAND_VERBS = ("read", "search", "list", "run")
@@ -47,12 +45,23 @@ _SHELL_WRAPPER = re.compile(r"^(?:/\S*/)?(?:ba|z|)sh\s+-l?c\s+(.+)$", re.DOTALL)
 # Commands are shown to their owner, but a pasted credential should still not
 # be replayed into the page. Masking is deliberately broad: hiding a harmless
 # value costs nothing, while a missed secret would be stored for replay.
+# A shell value may concatenate quoted, escaped and plain fragments. Consume
+# the whole value, including an unfinished quote, before truncating display text.
+_SHELL_VALUE = r"""(?:'[^']*(?:'|$)|"(?:\\.|[^"\\])*(?:"|$)|\\.|[^\s'"\\;&|])+"""
+_HEADER_VALUE = r"""(?:'[^']*(?:'|$)|"(?:\\.|[^"\\])*(?:"|$)|[^\s'";&|]+)"""
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)(\bauthorization\s*:\s*)(?:bearer\s+|basic\s+)?[^\s'\"]+"),
-    re.compile(r"(?i)(\bbearer\s+)[^\s'\"]+"),
-    re.compile(r"(?i)(--?[a-z0-9-]*(?:token|secret|password|passwd|api-?key)[a-z0-9-]*(?:=|\s+))[^\s'\"]+"),
-    re.compile(r"(?i)(\b[a-z0-9_]*(?:token|secret|password|passwd|api_?key)[a-z0-9_]*=)[^\s'\"]+"),
+    re.compile(r"(?i)(\bauthorization\s*:\s*)(?:bearer\s+|basic\s+)?" + _HEADER_VALUE),
+    re.compile(r"(?i)(\bbearer\s+)" + _HEADER_VALUE),
+    re.compile(r"(?i)(--?[a-z0-9-]*(?:token|secret|password|passwd|api-?key)[a-z0-9-]*(?:\s*=\s*|\s+))" + _SHELL_VALUE),
+    re.compile(r"(?i)(\b[a-z0-9_]*(?:token|secret|password|passwd|api_?key)[a-z0-9_]*\s*=\s*)" + _SHELL_VALUE),
     re.compile(r"()\b(?:sk|ghp|gho|ghs|github_pat|xox[abp])[-_][A-Za-z0-9_-]{12,}"),
+)
+# Network URLs and relative paths must survive. A complete path token, rather
+# than a directory-name denylist, determines whether it belongs to this project.
+_STEP_PATH = re.compile(
+    r"(?P<url>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s`'\"<>]+)"
+    r"|(?P<quote>['\"])(?P<quoted_path>(?:/|[A-Za-z]:[\\/]).*?)(?P=quote)"
+    r"|(?P<path>(?<![A-Za-z0-9_./\\])(?:/|[A-Za-z]:[\\/])[^\s`'\"<>;&|]*)"
 )
 
 
@@ -93,20 +102,36 @@ class CodexActivitySteps:
         protected_paths: Iterable[Path | str] = (),
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._protected = [str(path) for path in protected_paths]
+        self._protected = sorted(
+            (str(path).rstrip("/\\") for path in protected_paths if str(path).rstrip("/\\")),
+            key=len, reverse=True,
+        )
         self._clock = clock
         self._started: dict[str, float] = {}
         self._reasoning: dict[str, dict[str, list[str]]] = {}
         self._reasoning_emitted: dict[str, float] = {}
 
     def _clean(self, value: Any) -> str:
-        # Paths inside the project read as relative paths; every other local
-        # path is still withheld.
-        text = str(value or "")
-        for root in sorted((path.rstrip("/") for path in self._protected if path.rstrip("/")), key=len, reverse=True):
-            text = re.sub(re.escape(root) + "/", "", text)
-            text = re.sub(re.escape(root) + r"(?=[\s'\";&|)]|$)", ".", text)
-        return _mask_secrets(redact_local_paths(text, protected_paths=self._protected))
+        def clean_path(match: re.Match[str]) -> str:
+            url = match.group("url")
+            if url:
+                return "[local-path]" if url.lower().startswith("file://") else url
+            quoted = match.group("quoted_path")
+            raw = quoted if quoted is not None else match.group("path")
+            candidate = raw if quoted is not None else raw.rstrip(".,;:!?)]}")
+            suffix = raw[len(candidate):]
+            replacement = "[local-path]"
+            for root in self._protected:
+                if candidate == root:
+                    replacement = "."
+                    break
+                if candidate.startswith((root + "/", root + "\\")):
+                    replacement = candidate[len(root) + 1:]
+                    break
+            quote = match.group("quote") or ""
+            return f"{quote}{replacement}{suffix}{quote}"
+
+        return _STEP_PATH.sub(clean_path, _mask_secrets(str(value or "")))
 
     def _title(self, value: Any) -> str:
         return _limit(" ".join(self._clean(value).split()), TITLE_LIMIT)

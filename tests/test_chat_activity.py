@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
+import sys
+
+import pytest
 from pathlib import Path
 
 from loopx.chat_activity import (
@@ -147,3 +151,117 @@ def test_dashboard_reader_mirrors_the_step_vocabulary():
     assert mirrored("TURN_STEP_KINDS") == STEP_KINDS
     assert mirrored("TURN_STEP_STATES") == STEP_STATES
     assert mirrored("TURN_COMMAND_VERBS") == COMMAND_VERBS
+
+
+@pytest.mark.parametrize("value", [
+    "--token 'fixture value'", '--password="fixture value"',
+    'API_KEY="fixture value"', "--secret 'fixture'\\ value", "--token 'fixture 'value",
+    "--token 'fixture value", '--token "fixture value',
+])
+def test_quoted_credentials_are_masked_in_every_visible_text(value):
+    steps = CodexActivitySteps()
+    text = "curl " + value + " https://example.test/notes"
+    command = steps.started(_command(text, [{"type": "search", "query": text}]))
+    thought = steps.completed({"type": "reasoning", "id": "r", "content": [text]})
+    for step in (command, thought):
+        assert all(part not in step[field] for part in ("fixture", "value") for field in ("title", "detail"))
+        assert "***" in step["title"] and "***" in step["detail"]
+
+
+@pytest.mark.parametrize("path", [
+    "/opt/example/notes.md", "/etc/example/config", "/srv/example/data", "path:/etc/example/config",
+    '"/opt/example/private notes.md"', "'/etc/example/private notes.md'",
+    r"C:\example\notes.md", "file:///opt/example/notes.md", "/work/project-other/notes.md",
+])
+def test_nonproject_paths_are_withheld_across_commands_files_and_thoughts(path):
+    steps = CodexActivitySteps(protected_paths=["/work/project"])
+    text = "Inspect " + path
+    projections = [
+        steps.started(_command(text)),
+        steps.completed({"type": "reasoning", "id": "r", "summary": [text]}),
+        steps.completed({"type": "fileChange", "id": "f", "changes": [{"path": path}]}),
+    ]
+    for projection in projections:
+        visible = json.dumps(projection)
+        assert "example" not in visible and "project-other" not in visible
+        assert "[local-path]" in visible
+
+
+def test_step_redaction_preserves_urls_relative_paths_and_project_path_boundaries():
+    steps = CodexActivitySteps(protected_paths=["/work/project"])
+    text = "cat /work/project/docs/notes.md docs/relative.md ../notes.md https://example.test/work/project/notes"
+    assert steps.started(_command(text))["title"] == (
+        "cat docs/notes.md docs/relative.md ../notes.md https://example.test/work/project/notes"
+    )
+    assert steps.started(_command('cat "/work/project/private notes.md"'))["title"] == 'cat "private notes.md"'
+
+
+def test_private_step_text_is_clean_before_real_transport_store_and_reopened_replay(monkeypatch, tmp_path):
+    from loopx import chat_agent
+    from loopx.chat_store import ChatSessionStore
+
+    cases = [
+        _command("curl --token 'fixture value' https://example.test/notes"),
+        _command('API_KEY="fixture value" curl https://example.test/notes'),
+        _command("cat /opt/example/notes.md /etc/example/config"),
+        _command(f"cat {tmp_path}/notes.md docs/relative.md https://example.test/notes"),
+        {"type": "reasoning", "id": "r", "summary": ['Inspect /etc/example/config with --password "fixture value"']},
+        {"type": "fileChange", "id": "f", "changes": [{"path": "/opt/example/notes.md"}]},
+    ]
+    peer = tmp_path / "peer.py"
+    peer.write_text("import json, sys\ncases = " + repr(cases) + "\n" + r'''
+position = 0
+for raw in sys.stdin:
+    request = json.loads(raw)
+    if "id" not in request:
+        continue
+    def emit(value):
+        print(json.dumps(value), flush=True)
+    if request["method"] == "turn/start":
+        item = cases[position % len(cases)]
+        position += 1
+        turn = "turn-" + str(position)
+        emit({"id": request["id"], "result": {"turn": {"id": turn}}})
+        for phase in ("started", "completed"):
+            emit({"method": "item/" + phase, "params": {"threadId": "thread", "turnId": turn,
+                 "item": {**item, "status": "completed" if phase == "completed" else "inProgress"}}})
+        emit({"method": "item/agentMessage/delta", "params": {"delta": "Ready."}})
+        emit({"method": "turn/completed", "params": {"turn": {"id": turn, "status": "completed"}}})
+    else:
+        emit({"id": request["id"], "result": {"thread": {"id": "thread"}}})
+''', encoding="utf-8")
+    # Only select a portable fixture host; all stdio, event and file-store code is real.
+    popen = chat_agent.subprocess.Popen
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: sys.executable)
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, **kwargs:
+                        popen([sys.executable, str(peer), *command[1:]], **kwargs))
+    session = chat_agent.CodexChatAgentSession.start(
+        codex_bin="fixture-host", work_dir=tmp_path, goal_id="fixture",
+        objective="Inspect synthetic steps.", codex_home=tmp_path / "host-home",
+        idle_timeout_sec=5, hard_timeout_sec=10,
+    )
+    root = tmp_path / "store"
+    try:
+        for position in range(2 * len(cases)):
+            key = ("session", str(position))
+            store = ChatSessionStore(root)
+            events = []
+            def on_event(kind, payload):
+                events.append((kind, payload))
+                store.append_event(*key, kind=kind, payload=payload)
+            session.send("Inspect the synthetic fixture.", on_event=on_event)
+            replay = ChatSessionStore(root).events_after(*key, None)
+            assert [(row["kind"], row["payload"]) for row in replay] == events
+            steps = [row["payload"]["step"] for row in replay if row["kind"] == "agent.phase" and "step" in row["payload"]]
+            assert len(steps) == 2 and steps[0]["id"] == steps[1]["id"]
+            serialized = json.dumps(steps)
+            assert "fixture value" not in serialized and "/opt/example" not in serialized and "/etc/example" not in serialized
+            if position % len(cases) in (0, 1, 3):
+                assert "https://example.test/notes" in serialized
+            if position % len(cases) == 3:
+                assert "notes.md docs/relative.md" in serialized and str(tmp_path) not in serialized
+        # The file itself must already be clean, before a replay reader or UI can filter it.
+        logs = "\n".join(path.read_text() for path in root.rglob("*.events.jsonl"))
+        assert "fixture value" not in logs and "/opt/example" not in logs and "/etc/example" not in logs
+    finally:
+        session.close()
