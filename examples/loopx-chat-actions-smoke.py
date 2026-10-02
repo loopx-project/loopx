@@ -393,7 +393,8 @@ def assert_http_action_api(root: Path) -> None:
         )
         assert history_after_goal["goals"][0]["display_name"] == "New Goal", history_after_goal
         assert new_goal["coordination"]["registered_agents"] == ["codex"], new_goal
-        new_state = state_path.parent.parent / "new-goal" / "ACTIVE_GOAL_STATE.md"
+        assert new_goal["state_file"] == ".loopx/goals/new-goal/ACTIVE_GOAL_STATE.md", new_goal
+        new_state = registry_path.parent.parent / new_goal["state_file"]
         assert new_state.exists(), new_state
         new_state_text = new_state.read_text(encoding="utf-8")
         assert new_state_text.count("Verify the new Goal projection") == 1

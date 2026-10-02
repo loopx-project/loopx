@@ -47,7 +47,7 @@ def main() -> None:
     assert "Core Pattern Map" in docs["interaction-catalog.md"]
     assert "State Definitions" in docs["state-definitions.md"]
     assert "Canonical State Bodies" in docs["state-definitions.md"]
-    assert "Derived Runtime States" in docs["state-definitions.md"]
+    assert "Runtime Decisions, Phases, And Read Conditions" in docs["state-definitions.md"]
     assert "State Machines" in docs["state-machine.md"]
     for section in (
         "Todo Lifecycle Machine",
