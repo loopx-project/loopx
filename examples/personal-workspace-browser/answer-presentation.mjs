@@ -114,10 +114,15 @@ export const answerPresentationScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByRole("heading", { name: "Full answer" }).waitFor({ state: "visible" });
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
-      await page.getByRole("button", { name: "Back to conversation" }).click();
+      await page.getByRole("button", { name: "Back to Steward", exact: true }).click();
       await page.locator(".personal-channel-timeline .personal-message.is-assistant", {
         hasText: "建议先验证方案 A",
       }).waitFor({ state: "visible", timeout: 15_000 });
+      const returned = new URL(page.url());
+      if (returned.searchParams.get("goalId") !== "" || returned.searchParams.get("view") !== "conversation"
+        || returned.searchParams.has("reportMessageId") || returned.searchParams.has("reportSessionId")) {
+        throw new Error("Returning from a saved Steward answer lost its conversation scope");
+      }
       if (api.turnRequests.length !== originalTurnCount) {
         throw new Error("Returning to the Steward conversation replayed a Turn");
       }
@@ -140,6 +145,24 @@ export const answerPresentationScenario = {
       await short.waitFor({ state: "visible", timeout: 15_000 });
       if (await short.locator("a").count() !== 1 || await short.locator("h1,h2,h3,h4,table").count()) {
         throw new Error("Goal Chat lost a short direct sourced answer or forced a report layout");
+      }
+      await send(page, LONG_PROMPT);
+      const goalAnswer = page.locator(".personal-channel-timeline .personal-message.is-assistant", {
+        hasText: "建议先验证方案 A",
+      });
+      await goalAnswer.waitFor({ state: "visible" });
+      const goalReportHref = await goalAnswer.getByRole("link", { name: "单独阅读完整答复" }).getAttribute("href");
+      if (!goalReportHref) throw new Error("Goal answer has no stable reading link");
+      const goalId = new URL(page.url()).searchParams.get("goalId");
+      const goalTurnCount = api.turnRequests.length;
+      await page.goto(goalReportHref, { waitUntil: "networkidle" });
+      await page.locator(".answer-report-content", { hasText: "建议先验证方案 A" }).waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "返回对话", exact: true }).click();
+      await page.locator(".personal-channel-timeline .personal-message.is-assistant", {
+        hasText: "建议先验证方案 A",
+      }).waitFor({ state: "visible" });
+      if (new URL(page.url()).searchParams.get("goalId") !== goalId || api.turnRequests.length !== goalTurnCount) {
+        throw new Error("Returning from a saved Goal answer changed its Goal or replayed a Turn");
       }
       if (!api.turnRequests.some((turn) => turn.message === LONG_PROMPT)
         || !api.turnRequests.some((turn) => turn.message === SHORT_PROMPT)) {

@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -19,12 +20,12 @@ from loopx.control_plane.runtime.shared_runtime_refresh_projection import (  # n
     build_shared_runtime_projection,
     write_shared_runtime_projection,
 )
-from loopx.control_plane.runtime import runtime_projection_route as route_module  # noqa: E402
 from loopx.control_plane.runtime.runtime_projection_route import (  # noqa: E402
     compact_runtime_projection_route,
     resolve_runtime_projection_route,
 )
 from loopx import doctor as doctor_module  # noqa: E402
+from loopx import paths as paths_module  # noqa: E402
 from loopx.paths import global_registry_path  # noqa: E402
 from loopx.presentation.renderers.status_markdown import (  # noqa: E402
     render_status_markdown,
@@ -428,12 +429,15 @@ def main() -> None:
         lagging_markdown = render_status_markdown(lagging_status)
         assert "runtime_projection_routes: healthy=False" in lagging_markdown
         assert "details=loopx doctor" in lagging_markdown
-        default_runtime_root = doctor_module.DEFAULT_RUNTIME_ROOT
-        doctor_module.DEFAULT_RUNTIME_ROOT = shared_runtime
+        default_runtime_root = paths_module.DEFAULT_RUNTIME_ROOT
+        legacy_runtime_root = paths_module.LEGACY_RUNTIME_ROOT
+        paths_module.DEFAULT_RUNTIME_ROOT = shared_runtime
+        paths_module.LEGACY_RUNTIME_ROOT = Path(tmp) / "isolated-legacy-runtime"
         try:
             doctor = doctor_module.collect_doctor()
         finally:
-            doctor_module.DEFAULT_RUNTIME_ROOT = default_runtime_root
+            paths_module.DEFAULT_RUNTIME_ROOT = default_runtime_root
+            paths_module.LEGACY_RUNTIME_ROOT = legacy_runtime_root
         doctor_routes = doctor["runtime_projection_routes"]
         assert doctor_routes["healthy"] is False, doctor_routes
         assert doctor_routes["counts"]["lagging"] == 1, doctor_routes
@@ -525,16 +529,14 @@ def main() -> None:
             source_registry=standalone_registry,
             goal_id="unrelated-goal",
         )
-        original_default_runtime = route_module.DEFAULT_RUNTIME_ROOT
-        route_module.DEFAULT_RUNTIME_ROOT = unrelated_runtime
-        try:
+        with patch.object(paths_module, "DEFAULT_RUNTIME_ROOT", unrelated_runtime), patch.object(
+            paths_module, "LEGACY_RUNTIME_ROOT", Path(tmp) / "unused-legacy-runtime"
+        ):
             standalone_route = resolve_runtime_projection_route(
                 registry_path=standalone_registry,
                 goal_id=standalone_goal,
                 source_runtime_root=standalone_runtime,
             )
-        finally:
-            route_module.DEFAULT_RUNTIME_ROOT = original_default_runtime
         assert standalone_route["status"] == "single_runtime", standalone_route
         assert standalone_route["declaration_source"] == "source_runtime_fallback"
 

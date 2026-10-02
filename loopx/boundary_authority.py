@@ -7,7 +7,8 @@ from .control_plane.runtime.time import parse_timestamp as _parse_timestamp
 from .control_plane.todos.contract import normalize_required_write_scopes
 from .public_safe_text import (
     PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
-    find_private_text_match,
+    TEXT_OWNER_CATEGORIES,
+    classify_private_text,
 )
 
 
@@ -24,7 +25,10 @@ def _now() -> datetime:
 
 
 def _validate_public_safe_text(label: str, value: str | None) -> None:
-    if find_private_text_match(value) is not None:
+    # Checkpointed lease text is LoopX's own state, so it uses the internal-state
+    # policy: the words bearer/password/secret are recognized, not rejected, while
+    # every shape that carries a value still fails (Refs #5136, direction 2).
+    if classify_private_text(value, categories=TEXT_OWNER_CATEGORIES) is not None:
         raise ValueError(f"{label} contains a private-looking value; keep raw evidence in private payloads")
 
 

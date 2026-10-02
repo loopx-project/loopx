@@ -215,7 +215,7 @@ The proposed handoff read model composes the following; these are semantic slots
 
 Reuse immutable source messages, current work objects and artifact references. Store a concise semantic brief only for information not already represented, with revision and provenance. Machine authority comes from typed accepted commands; neither quoted material nor a model-written summary is an authority token. User requests inside source messages are distinguished from third-party quoted instructions.
 
-Do not put the entire handoff inside Goal Vision's bounded summary or expand every TurnEnvelope by the size of the source corpus. Keep the prompt projection small and task-adaptive; pin the brief and unresolved constraints, and provide real permitted drill-down to the full source. A projection must disclose omissions. Reject oversized writes explicitly or externalize them through the existing artifact owner; never silently remove a user constraint. This RFC does not change existing field budgets.
+Do not put the entire handoff inside Goal Vision's bounded summary or expand every TurnEnvelope by the size of the source corpus. Keep the prompt projection small and task-adaptive; pin the brief and unresolved constraints, and provide real permitted drill-down to the full source. A projection must disclose omissions. Reject oversized writes explicitly or externalize them through the existing artifact owner; never silently remove a user constraint. Source-message capacity below is independent of existing Vision and semantic-brief budgets.
 
 ### 5.5 Responsibility discovery and receiver-owned planning
 
@@ -464,22 +464,47 @@ For shell/Git/API effects outside Core, use an effect-intent ID and the provider
 
 ### 5.11 Long-horizon continuation as a product contract
 
-Concise replies must carry their actual source message before unrelated recent
-context. The shared TS conversation projection joins the captured parent ID and
-conversation ID, bounds quoted text and exposes missing or truncated context.
-The Lark collector preserves its existing parent lookup as a private inbox
-observation; manager and ordinary Goal Topic Turns consume the same projection.
-A parent-bearing mention also requires lookup. No extra history sweep, text
-classifier or execution grant is introduced. A captured quote is not approval,
-fresh fact verification or a new instruction. Unknown ancestry stays unknown;
-recent material cannot silently substitute for it.
+Conversation context is shared by manager and ordinary Agent Turns. Preserve
+explicit references and the authenticated event's ancestry when a formatted
+provider lookup omits it. A thread root is not a direct reply target. Its
+provider-expanded messages supply a separate ordered excerpt, with message
+identities, observed authors/times and coverage omissions; the shared TS owner
+checks conversation/thread/root/current identity, excludes current and later
+messages, and bounds the excerpt. This supplies information for natural
+reasoning rather than classifying “approve”, “continue” or “use the new version”.
+A missing reference does not establish delivery failure. Quoted/history text is
+context, not a new instruction or grant, and thread context does not silently
+replace an unknown explicit referent.
 
-This qualifies collector→inbox→real Chat store/protocol ingress with synthetic
-provider/model fixtures, including replay. It does not qualify live referent
-reasoning, deployed group adoption or the whole handoff. App conversation history
-continues through its existing owner; no App input or opening layout changes in
-this adapter slice. R3 next qualifies installed source readback and the receiver's
-actual interpretation/return, together with current-work recovery and R2 cycles.
+The Lark adapter transports the observation through the immutable inbox; Chat
+and receiver handoff consume the same projection. Keep unrelated recent
+materials and provider operating prompts out of the forwarded source. Reuse
+request identity, receiver assessment and original-return owners; no new
+workflow, trigger policy or execution grant is introduced. Root expansion reuses
+the existing exact-message lookup; it is not a group-history sweep. Excerpts are
+not complete history; oversized or unavailable provider observations remain a
+gap rather than an inferred parent. App history remains with its existing owner,
+so no frontend setting or opening layout changes in this adapter repair.
+
+Synthetic provider/model fixtures qualify collector→inbox→real Chat
+store/protocol→receiver assessment→original return, including replay and invalid
+lineage. Read-only live-provider validation separately checks context recovery;
+it does not certify model interpretation, deployed adoption or full R2/R3.
+Qualify the natural short follow-up and owner action through the installed path
+before advertising the golden query as passed.
+
+The inline original-request handoff budget is **32,000 Unicode characters and
+98,304 bytes for the JSON-encoded UTF-8 string**, increased from 20,000
+characters. A normal 12,000-character request plus a bounded preceding excerpt
+can exceed the old limit. The shared TS source-context owner validates before
+ingress persistence and receiver delivery, preserving the entire current request.
+The encoded bound reserves space for the semantic brief, identity and instructions
+inside the existing 128,000-byte inbox record; that reader limit and the 16,000-byte
+brief budget do not increase. Apply the same rule to steward and project-Chat
+handoffs. Thread excerpts keep their smaller encoded budget and disclose omissions;
+larger original material is rejected with scoped-artifact guidance, never silently
+truncated. Qualification includes Unicode/escaping boundaries and real receiver
+readback of a request plus history above the former limit.
 
 A persistent conversation is useful, but work must also survive losing that conversation's executable session. At each supported continuation point, compose the current accepted work state with unresolved request obligations, relevant decisions and changed evidence. Distinguish a dated research conclusion from a current fact. When a correction contradicts an accepted constraint, preserve both revisions and record the receiver's resolution before the affected effect. Do not replay an earlier rejected approach merely because its rejection fell out of the prompt.
 

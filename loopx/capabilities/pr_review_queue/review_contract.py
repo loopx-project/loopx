@@ -5,9 +5,10 @@ from copy import deepcopy
 from typing import Any
 
 from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
+from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 12
+REVIEW_POLICY_REVISION = 13
 
 # A red check is an observation, not evidence that the reviewed PR caused it.
 # This contract belongs to review judgment; merge readiness still owns whether
@@ -245,6 +246,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
     return {
         "schema_version": "pull_request_review_execution_contract_v2",
         "policy_revision": REVIEW_POLICY_REVISION,
+        "approval_closeout": approval_closeout_contract(),
         "purpose": (
             "Define the evidence that must exist before a detailed review verdict; "
             "host skills route this contract but must not reimplement it."
@@ -1344,6 +1346,7 @@ def build_agent_response_contract(*, wait_for_ci: bool = True) -> dict[str, Any]
             "Do not infer verified evidence from title, labels, changed-file counts, metadata_risk_hint, or green CI alone.",
             ("Observe final CI in addition to repository-native local validation, then attribute red checks before judging this PR; review approval and merge readiness are separate." if wait_for_ci else "Do not fetch, poll, or wait for CI for review or merge readiness. repository_required_checks means repository-native local validation; attribute base-equivalent failures and keep missing affected-invariant evidence blocking."),
             "Recheck the exact remote head before verdict and publication.",
+            "After publishing and reading back APPROVE, execute review_execution_contract.approval_closeout; approval alone does not clear another reviewer's effective blocking review.",
             "Render the verified result through a non-null pull_requests[].review_template; host skills must not maintain a competing depth checklist.",
         ],
     }

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..capabilities.benchmark_toolkit.experiment_identity import ARM_ROLE_CHOICES
 from ..capabilities.benchmark_toolkit import (
     admit_benchmark_case,
     build_benchmark_adaptive_concurrency_policy,
@@ -102,7 +103,7 @@ def register_benchmark_concurrency_commands(
     admit_parser.add_argument(
         "--arm-role",
         required=True,
-        choices=["baseline", "control", "treatment", "explore"],
+        choices=ARM_ROLE_CHOICES,
     )
     admit_parser.add_argument(
         "--resource-headroom-json",

@@ -338,7 +338,7 @@ git ls-files --others --exclude-standard
 | Product code | protocol policy、writer、projection | 若属于本 PR，提交 |
 | Public docs | protocol、contributor guide | 若解释当前行为，提交 |
 | Durable validation | contract test、public-safe smoke | 若保护本规则，提交 |
-| Local/private state | `.loopx/`、`.codex/goals/`、live state | 不提交 |
+| Local/private state | `.loopx/`、`.loopx/goals/`、live state | 不提交 |
 | Generated/raw evidence | logs、transcript、verifier tail | 不提交 |
 | Unrelated artifact | 其他实验或格式化 | 留在 PR 外 |
 
@@ -570,7 +570,7 @@ observed in target environment
 - [ ] Fake、fixture 与 snapshot 没有发明产品语义；
 - [ ] 验证失败被正确分类，没有把 infra failure 写成产品结论；
 - [ ] 所有变化路径已分类并通过显式 pathspec 暂存；
-- [ ] `.loopx/`、`.codex/goals/`、live state、凭据、私有链接、raw logs 和本机路径未提交；
+- [ ] `.loopx/`、`.loopx/goals/`、live state、凭据、私有链接、raw logs 和本机路径未提交；
 - [ ] Commit 与 PR 都以协议结果组织，不以函数列表组织；
 - [ ] Compatibility、recovery、未验证项和 owner gate 已明确；
 - [ ] PR 关联公开 Issue/任务，且未复制 maintainer-owned work；

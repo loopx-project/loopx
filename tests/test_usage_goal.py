@@ -9,7 +9,7 @@ from loopx import usage_goal, usage_ping
 
 
 def test_telemetry_failure_cannot_replace_host_exception(tmp_path, monkeypatch):
-    monkeypatch.setattr(usage_ping, "DEFAULT_RUNTIME_ROOT", tmp_path)
+    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
     usage_ping.state_path().write_text(json.dumps({"generation": "fixture", "consent": "enabled"}))
     for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING"):
         monkeypatch.delenv(name, raising=False)
@@ -27,7 +27,7 @@ def test_telemetry_failure_cannot_replace_host_exception(tmp_path, monkeypatch):
 
 
 def test_disabled_observer_starts_no_worker_or_process(tmp_path, monkeypatch):
-    monkeypatch.setattr(usage_ping, "DEFAULT_RUNTIME_ROOT", tmp_path)
+    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
     usage_ping.state_path().write_text(json.dumps({"generation": "fixture", "consent": "disabled"}))
     monkeypatch.setattr(threading.Thread, "start", lambda _: pytest.fail("disabled worker"))
     monkeypatch.setattr(usage_ping, "_detach", lambda _: pytest.fail("disabled process"))
@@ -36,7 +36,7 @@ def test_disabled_observer_starts_no_worker_or_process(tmp_path, monkeypatch):
 
 
 def test_periodic_observation_does_not_need_turn_completion(tmp_path, monkeypatch):
-    monkeypatch.setattr(usage_ping, "DEFAULT_RUNTIME_ROOT", tmp_path)
+    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
     usage_ping.state_path().write_text(json.dumps({"generation": "fixture", "consent": "enabled"}))
     for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING"):
         monkeypatch.delenv(name, raising=False)
@@ -131,7 +131,7 @@ def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters
     if header_characters:
         rollout.write_text(json.dumps({"type": "session_meta", "payload": {
             "id": "thread-a", "base_instructions": {"text": "i" * header_characters}}}) + "\n")
-    monkeypatch.setattr(usage_ping, "DEFAULT_RUNTIME_ROOT", tmp_path)
+    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
     for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")

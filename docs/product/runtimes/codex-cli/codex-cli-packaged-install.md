@@ -99,7 +99,7 @@ The update command reports the installation owner before mutation. For a pip
 or pipx PyPI distribution, apply delegates the package transaction to that
 same environment and then refreshes skills, slash commands, doctor, enabled
 extensions, and managed services. For an archive install, apply plans the
-source archive, preserves runtime state under `~/.codex/loopx`, and atomically
+source archive, preserves runtime state under `~/.loopx`, and atomically
 refreshes the executable and host material. It never rewrites a live source
 checkout.
 

@@ -30,7 +30,7 @@ export type GoalAcceptanceContractCopy = typeof goalAcceptanceContractCopy.en;
 
 const en = {
   contract: goalAcceptanceContractCopy.en,
-  title: "Delivery & evidence", scope: "Current work and a limited set of predecessors. Use Tasks for the full task inventory.",
+  title: "Delivery & evidence", scope: "The delivery chain covers current work, a few predecessors and their evidence. The work map covers every task that is not archived.",
   observed: "Snapshot read", chain: "Delivery chain", relations: "Relationships", acceptance: "Acceptance observations",
   acceptanceBoundary: "Completed tasks and recorded evidence do not certify Goal acceptance.",
   noGraph: "No delivery chain is available in this snapshot. This does not mean all work is complete.",
@@ -51,11 +51,28 @@ const en = {
   openTask: "Open task", openGate: "Review decision", openRun: "Open execution",
   sourceUnavailable: "The linked item is not in the current workspace. Use its reference in the task board or CLI.",
   omittedGates: "Decisions not expanded", missing: "Missing predecessors", clipped: "Expansion limited", sourceClipped: "Source truncated", yes: "Yes", no: "No", chainOnly: "Bounded chain", exportFailed: "Download failed. Please retry.",
+  updating: "Workspace facts changed. Updating this snapshot…",
+  workMap: {
+    title: "Work map", canvas: "Work map canvas", focus: "Map focus", current: "Current work", all: "Everything",
+    zoom: "Map zoom", zoomOut: "Zoom out", zoomIn: "Zoom in", fit: "Fit",
+    boundary: "Arrows follow recorded task links. The map shows relationships; it does not decide what can run or whether the Goal is accepted.",
+    tasksDone: "tasks done", blocked: "blocked", waiting: "waiting", decisions: "need your decision", watches: "watching",
+    hidden: "finished or deferred, hidden", unlinked: "Not linked to other work", empty: "This Goal has no tasks yet.",
+    owner: "Owner", showMore: "Show {count} more", showFewer: "Show fewer", doneBefore: "+{count} done before", noLinks: "No task links are recorded between these items yet.",
+    unavailable: "This source does not provide a work map.",
+    kind: { deliverable: "Task", gate: "Decision", monitor: "Watch" },
+    tone: { decision: "Needs you", blocked: "Blocked", open: "Open", waiting: "Waiting", done: "Done", unknown: "Unknown" },
+    before: "Before this", after: "After this", nothingBefore: "No recorded prerequisites.", nothingAfter: "Nothing recorded depends on this yet.",
+    relation: { depends_on: "Required", continues: "Follow-up", supersedes: "Replaces" },
+    legend: "Line styles", open: "Open details", noSource: "Details for this item are not loaded in the workspace.",
+    select: "Select an item to trace what it needs and what it leads to.", selected: "Selected item",
+    incomplete: "Some work is not on this map.", omitted: "Not shown", missingEnds: "Missing linked items", truncated: "Source truncated", cycles: "Circular links",
+  },
 } satisfies ReviewExportLabels & Record<string, unknown>;
 
 const zh: typeof en = {
   contract: goalAcceptanceContractCopy["zh-CN"],
-  title: "交付与依据", scope: "仅含当前工作及有限前序，完整任务清单见任务页。",
+  title: "交付与依据", scope: "交付链仅含当前工作、少量前序及其证据；工作地图包含全部未归档任务。",
   observed: "快照读取时间", chain: "交付链", relations: "关联关系", acceptance: "验收观察",
   acceptanceBoundary: "任务完成、已有证据均不等于 Goal 已通过验收。",
   noGraph: "当前快照没有可展示的交付链，这不代表工作已经全部完成。",
@@ -76,5 +93,22 @@ const zh: typeof en = {
   openTask: "打开任务", openGate: "查看决策", openRun: "打开执行",
   sourceUnavailable: "关联事项未出现在当前工作区，可使用其引用到任务看板或 CLI 查找。",
   omittedGates: "未展开决策", missing: "缺失前序", clipped: "展开受限", sourceClipped: "来源被裁剪", yes: "是", no: "否", chainOnly: "当前局部链", exportFailed: "下载失败，请重试。",
+  updating: "工作区状态已变化，正在更新此快照…",
+  workMap: {
+    title: "工作地图", canvas: "工作地图画布", focus: "地图范围", current: "当前工作", all: "全部",
+    zoom: "地图缩放", zoomOut: "缩小", zoomIn: "放大", fit: "适配",
+    boundary: "箭头来自已记录的任务关联。地图只展示关系，不决定哪些工作可以执行，也不代表 Goal 已通过验收。",
+    tasksDone: "项任务已完成", blocked: "受阻", waiting: "等待", decisions: "需你决策", watches: "持续监控",
+    hidden: "项已完成或延后的工作已隐藏", unlinked: "未与其他工作关联", empty: "此 Goal 还没有任务。",
+    owner: "负责人", showMore: "显示其余 {count} 项", showFewer: "收起", doneBefore: "另有 {count} 项已完成前序", noLinks: "这些事项之间还没有记录的任务关联。",
+    unavailable: "此来源不提供工作地图。",
+    kind: { deliverable: "任务", gate: "决策", monitor: "监控" },
+    tone: { decision: "需要你", blocked: "受阻", open: "待处理", waiting: "等待", done: "已完成", unknown: "未知" },
+    before: "之前", after: "之后", nothingBefore: "未记录前置工作。", nothingAfter: "暂无记录依赖此项的工作。",
+    relation: { depends_on: "必需", continues: "延续", supersedes: "替代" },
+    legend: "连线样式", open: "打开详情", noSource: "此事项的详情未加载到工作区。",
+    select: "选择一项，查看它依赖什么、又会带来什么。", selected: "选中事项",
+    incomplete: "部分工作未出现在此地图中。", omitted: "未显示", missingEnds: "关联事项未找到", truncated: "来源被裁剪", cycles: "循环关联",
+  },
 };
 export const deliveryReviewCopy = { en, "zh-CN": zh };

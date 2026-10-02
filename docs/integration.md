@@ -121,7 +121,7 @@ The default files are:
 
 ```text
 .loopx/registry.json
-.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md
+.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md
 ```
 
 The generated registry entry also includes an `execution_profile`. This is the
@@ -201,7 +201,7 @@ loopx connect \
 
 Both entries live in the same local `.loopx/registry.json`, but each goal
 must own its own ignored active state under
-`.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`.
+`.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`.
 Sharing the same `state_file` across two goal ids is treated as a registry
 health error because it lets one lane overwrite or summarize the other's state.
 Do not commit the live `ACTIVE_GOAL_STATE.md`; publish a sanitized template or
@@ -217,7 +217,7 @@ loopx quota should-run --goal-id side-bypass
 
 `read-only-map` is goal-aware for same-repo setups. In addition to the generic
 project inventory, it reports whether the selected goal has a local project
-registry, a `.codex/goals/<goal-id>/` state directory, and the declared active
+registry, a `.loopx/goals/<goal-id>/` state directory, and the declared active
 state file. A missing side-lane state directory produces
 `project_goal_state_dir_not_detected:<goal-id>` plus the legacy
 `project_local_goal_state_not_detected` risk, while a healthy main lane in the
@@ -316,7 +316,7 @@ work state or local evidence, add them to `.gitignore`:
 
 ```gitignore
 .loopx/
-.codex/goals/
+.loopx/goals/
 ```
 
 ## Project Adapter
@@ -422,7 +422,7 @@ parallel when scopes permit.
 All adapters should save compact run history under:
 
 ```text
-~/.codex/loopx/goals/<goal-id>/runs/index.jsonl
+~/.loopx/goals/<goal-id>/runs/index.jsonl
 ```
 
 This gives the app, CLI, heartbeats, and future UI one place to inspect goal
@@ -431,7 +431,7 @@ history.
 Project-local registries should also sync into the shared global registry:
 
 ```text
-~/.codex/loopx/registry.global.json
+~/.loopx/registry.global.json
 ```
 
 `loopx connect` and `loopx refresh-state` do this automatically.

@@ -591,6 +591,28 @@ state transition, author-owned conclusions use `COMMENTED` plus one exact title:
 The compact result is versioned as `pull_request_review_conclusion_v0` and
 reports a typed verdict and invalid-reason codes.
 
+After a published exact-head `APPROVE` is read back, the capability-owned
+`review_execution_contract.approval_closeout` requires effective-review
+reconciliation. This also works for an existing approval without a duplicate audit:
+
+```bash
+loopx --format json pr-review --repo OWNER/REPO --check-approval-closeout NUMBER@HEAD_OID
+```
+
+The read-only command paginates GitHub review history and uses the latest submitted
+opinion per reviewer; a comment/pending review does not erase a blocker, and a
+dismissed review does not resurrect older history. Its typed TS read model reports
+`clear`, `verification_required`, or `hold`; these are not merge decisions.
+Review age or a different commit only identifies a finding to inspect, never proof
+of resolution. The host independently verifies every old finding and inline comment,
+checks owner authorization and GitHub/branch dismissal permissions, rechecks the
+head/approval/target immediately before GitHub's native dismissal, and reads back
+`DISMISSED`, retained approval, unchanged head, and any remaining blockers.
+Unresolved/unverified reviews stay intact; a failed closeout does not revoke an
+earned approval. The command never dismisses, deletes, fetches CI, or merges, and
+raw review bodies remain transient. No new setting, UI, or automatic GitHub authority
+is introduced; normal review/merge policy is unchanged except this post-approval step.
+
 `pull_request_merge_readiness_v0` is a separate, read-only last-mile gate. It
 re-reads the named PR instead of trusting a saved review packet. In particular,
 GitHub may retain or reassociate an approval after an update-from-base commit;

@@ -110,22 +110,62 @@ const GOAL_VISION_STATE_ALIASES: Readonly<Record<string, string>> = {
 // corpus in tests/fixtures/public_safe_text_corpus.json: ordinary governance
 // prose such as "needs owner authorization" must pass, while the header,
 // assignment, and quoted-JSON key credential shapes must be rejected.
+// Refs #5136, direction 2 adds the second tier: a bare credential word is
+// recognized but no longer rejected by this owner, because a checkpoint reason
+// that says the bearer token expired describes a credential rather than carrying
+// one. The value and assignment arms below are what keep a real credential out.
+// The credential-value contract, mirrored from loopx/public_safe_text.py: four
+// independent signals, of which this file owns the two connector arms. A label
+// plus `:` or `=` carries whatever follows, including when the label is a quoted
+// object key (LABELED_CREDENTIAL_ASSIGNMENT below);
+// a label reached through a comma, dash, whitespace or copula carries a value only
+// when the next token looks assembled -- it holds a digit or a base64-only
+// character, or it is a quoted run, or it is an unbroken letter run at or above
+// OPAQUE_VALUE_MIN_LENGTH. An ordinary English word beside the label is prose.
+export const OPAQUE_VALUE_MIN_LENGTH = 16;
 const AUTHORIZATION_CREDENTIAL_SHAPE = /\bAuthorization["']?\s*[:=]/i;
 const BASIC_CREDENTIAL_VALUE =
   /[Bb]asic\s+(?=[A-Za-z0-9+/=]*[a-z])(?=[A-Za-z0-9+/=]*[A-Z])[A-Za-z0-9+/=]{16,}/;
-const PRIVATE_TEXT_PATTERNS = [
+// Literals, not `new RegExp` with interpolated parts: the digest guard
+// (`tests/control_plane_ts/content_digest_single_owner.test.ts`) requires every
+// construction whose pattern it cannot fold to be declared as a second owner of a
+// value shape. The tie between the quantifier and OPAQUE_VALUE_MIN_LENGTH is
+// asserted in the corpus test instead of built into the pattern here.
+export const CONNECTED_CREDENTIAL_VALUE_SHAPE =
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*(?:(?=[A-Za-z0-9._~+\/=-]*[0-9+\/=])[A-Za-z0-9._~+\/=-]+|[A-Za-z]{16,})/i;
+export const QUOTED_CREDENTIAL_VALUE_SHAPE =
+  /\b(?:Bearer|token|password|secret)(?:\s*[,;-]\s*|\s+(?:set\s+to|is|are|was|were|set|to|of|with)\b|\s+)\s*["'][^"'\n]+["']/i;
+const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)["']?\s*[:=]/i;
+// Ported from the Python owner's two in-policy shape detectors, so one corpus
+// yields one verdict in both runtimes (Refs #5136, direction 4). The third
+// Python detector -- a raw remote location -- is deliberately not ported: it is
+// outside the internal-state policy, and the per-face URL decision is the
+// caller-migration work still open in #5136.
+const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b(?:access|api|secret)[_-]?key[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
+const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/[^\\s`'\\\"<>]+|[A-Za-z]:[\\\\/][^\\s`'\\\"<>]+|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
+export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
+export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
   /\/Users\//,
   /\/ext_data\//,
   /lark[o]ffice/i, // Equivalent matcher avoids matching its own policy source.
   /docs\.internal/i,
   /\bt-20\d{12}-[a-z0-9]+\b/,
-  /\bBearer\b/i,
+  CONNECTED_CREDENTIAL_VALUE_SHAPE,
+  QUOTED_CREDENTIAL_VALUE_SHAPE,
   AUTHORIZATION_CREDENTIAL_SHAPE,
   BASIC_CREDENTIAL_VALUE,
-  /\btoken\s*=/i,
-  /\bpassword\b/i,
-  /\bsecret\b/i,
-] as const;
+  LABELED_CREDENTIAL_ASSIGNMENT,
+  ...CREDENTIAL_WORD_PATTERNS,
+];
+// This owner validates LoopX's own state, so it rejects every arm except the
+// words. The full PRIVATE_TEXT_PATTERNS list stays the publication-tier mirror of
+// the Python owner's ALL_CATEGORIES, and the corpus test asserts the two lists
+// differ by exactly these three arms so the tiers cannot drift apart silently.
+export const INTERNAL_STATE_SHAPE_PATTERNS: RegExp[] = [SECRET_LIKE_SHAPE, LOCAL_PATH_SHAPE];
+export const INTERNAL_STATE_PRIVATE_TEXT_PATTERNS: RegExp[] = [
+  ...PRIVATE_TEXT_PATTERNS.filter((pattern) => !CREDENTIAL_WORD_PATTERNS.includes(pattern)),
+  ...INTERNAL_STATE_SHAPE_PATTERNS,
+];
 
 interface VisionRefreshPrepareRequest {
   phase: "prepare";
@@ -260,7 +300,7 @@ function publicSafeTextGuidance(label: string): string {
 }
 
 function validatePublicSafeText(label: string, value: string): void {
-  for (const pattern of PRIVATE_TEXT_PATTERNS) {
+  for (const pattern of INTERNAL_STATE_PRIVATE_TEXT_PATTERNS) {
     if (pattern.test(value)) {
       throw new EffectRuntimeRequestError(
         `${label} contains a private-looking value; ${publicSafeTextGuidance(label)}`,

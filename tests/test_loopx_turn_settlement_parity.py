@@ -30,6 +30,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from loopx.control_plane.effect_program import (
     SettlementFailureKind,
     SettlementStepKind,
@@ -182,6 +184,48 @@ def test_same_key_replay_stays_idempotent_under_original_effect_id() -> None:
     ]
     assert all(receipt.effect_id == committed_effect_id for receipt in result.receipts)
     assert calls == {"writeback": 0, "spend": 0}
+
+
+@pytest.mark.parametrize("committed_steps", [0, 1, 2])
+@pytest.mark.parametrize("malformation", ["coerced_id", "binding_conflict", "unknown_schema"])
+def test_invalid_identity_never_dispatches_or_replays_receipts(
+    committed_steps: int, malformation: str
+) -> None:
+    transaction = _plan()["transaction"]
+    identity = transaction["settlement_plan"]["identity"]
+    if malformation == "coerced_id":
+        identity["goal_id"] = 42
+        identity["effect_id"] = identity["effect_id"].replace("fixture-goal:", "42:", 1)
+    elif malformation == "binding_conflict":
+        identity.update(binding_kind="autonomous_replan", binding_id="different-work")
+    else:
+        identity["schema_version"] = "unsupported_identity"
+    calls: list[str] = []
+
+    def effect(name: str):
+        def execute():
+            calls.append(name)
+            return dict(COMMITTED_PAYLOAD)
+
+        return execute
+
+    result = execute_turn_driver_settlement(
+        transaction,
+        transaction_phases=TRANSACTION_PHASES,
+        completed_phases=TRANSACTION_PHASES[: 3 + committed_steps],
+        writeback_payload=dict(COMMITTED_PAYLOAD) if committed_steps >= 1 else None,
+        quota_spend_payload=dict(COMMITTED_PAYLOAD) if committed_steps >= 2 else None,
+        writeback=effect("writeback"),
+        spend=effect("spend"),
+        checkpoint=lambda *_: calls.append("checkpoint"),
+        committed_effect_id=identity["effect_id"],
+    )
+
+    assert result.failure is not None
+    assert result.failure.kind is SettlementFailureKind.INVALID_IDENTITY
+    assert result.failure.step_kind is SettlementStepKind.VALIDATION
+    assert result.receipts == ()
+    assert calls == []
 
 
 def test_mismatch_check_is_opt_in_for_callers_without_journal_provenance() -> None:

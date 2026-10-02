@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ...domain_state import default_domain_state_file_path, upsert_domain_state_jsonl
+from .experiment_identity import (
+    ARM_ROLES,
+    experiment_token_text as _token,
+)
 from .factorial_contrast import (
     build_benchmark_factorial_contrasts,
     build_benchmark_metric_delta,
@@ -18,8 +21,6 @@ BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION = "benchmark_experiment_board_row_
 BENCHMARK_EXPERIMENT_BOARD_SCHEMA_VERSION = "benchmark_experiment_board_v0"
 BENCHMARK_EXPERIMENT_BOARD_LEDGER_FILENAME = "experiment-board.jsonl"
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}$")
-_ARM_ROLES = {"baseline", "control", "treatment", "explore"}
 _RUN_STATUSES = {"planned", "running", "completed", "runner_invalid", "cancelled"}
 _RUN_STATUS_TRANSITIONS = {
     "planned": _RUN_STATUSES,
@@ -76,13 +77,6 @@ def _reject_unknown_fields(
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError(f"{field} contains unsupported fields: {', '.join(unknown)}")
-
-
-def _token(value: Any, *, field: str) -> str:
-    text = str(value or "").strip()
-    if not _TOKEN_RE.fullmatch(text):
-        raise ValueError(f"{field} must be a compact public-safe token")
-    return text
 
 
 def _optional_token(value: Any, *, field: str) -> str | None:
@@ -267,7 +261,7 @@ def normalize_benchmark_experiment_board_row(
         raise ValueError("benchmark experiment board row schema mismatch")
 
     arm_role = _token(payload.get("arm_role"), field="arm_role")
-    if arm_role not in _ARM_ROLES:
+    if arm_role not in ARM_ROLES:
         raise ValueError("arm_role is unsupported")
     status = _token(payload.get("status"), field="status")
     if status not in _RUN_STATUSES:
@@ -744,12 +738,12 @@ def build_benchmark_experiment_board(
     ]
     role_counts = {
         role: sum(1 for row in normalized if row["arm_role"] == role)
-        for role in sorted(_ARM_ROLES)
+        for role in sorted(ARM_ROLES)
     }
     comparison_arm_role_counts = _comparison_lane_counts(
         comparisons,
         field="candidate_arm_role",
-        values=_ARM_ROLES - {"baseline"},
+        values=ARM_ROLES - {"baseline"},
     )
     comparison_claim_scope_counts = _comparison_lane_counts(
         comparisons,

@@ -414,6 +414,7 @@ def enrich_lark_event_reply_context(
 
     enriched = dict(event)
     enriched.pop("reply_context", None)
+    enriched.pop("thread_context", None)
     enriched["reply_context_verified"] = False
     enriched["reply_to_bot"] = False
     enriched["message_context_status"] = "message_context_unavailable"
@@ -448,21 +449,31 @@ def enrich_lark_event_reply_context(
     if current_sender_id:
         enriched["sender_id"] = current_sender_id
 
-    parent_id = str(current.get("parent_id") or "").strip()
-    root_id = str(current.get("root_id") or "").strip()
+    # The CLI's formatted mget can omit ancestry present in the authenticated
+    # event. Missing projection fields must not erase that exact event lineage.
+    parent_id = str(current.get("parent_id") or event.get("parent_id") or "").strip()
+    root_id = str(current.get("root_id") or event.get("root_id") or "").strip()
+    thread_id = str(current.get("thread_id") or "").strip()
+    if thread_id:
+        enriched["thread_id"] = thread_id
     if MESSAGE_ID_PATTERN.fullmatch(root_id):
         enriched["root_id"] = root_id
-    if not MESSAGE_ID_PATTERN.fullmatch(parent_id):
+    if _is_profile_self_message(current, profile_app_id=profile_app_id):
+        enriched["reply_context_verified"] = True
+        return enriched  # Self-message filtering needs no thread-history read.
+    source_id = parent_id if MESSAGE_ID_PATTERN.fullmatch(parent_id) else root_id
+    if not MESSAGE_ID_PATTERN.fullmatch(source_id):
         enriched["reply_context_verified"] = True
         enriched["message_context_status"] = "message_context_verified"
         return enriched
-    enriched["parent_id"] = parent_id
+    if MESSAGE_ID_PATTERN.fullmatch(parent_id):
+        enriched["parent_id"] = parent_id
 
     parent, parent_status = _read_message_with_status(
         runner=runner,
         command_prefix=command_prefix,
         profile=profile,
-        message_id=parent_id,
+        message_id=source_id,
         attempts=attempts,
         sleeper=sleeper,
     )
@@ -472,16 +483,47 @@ def enrich_lark_event_reply_context(
         return enriched
     # Keep the actual provider parent, including posts/cards, for the shared
     # typed context projection. This observation never changes turn admission.
-    enriched["reply_context"] = {
-        "message_id": str(parent.get("message_id") or ""),
-        "conversation_id": configured_chat_id,
-        "content": _reply_source_content(parent),
-    }
+    if source_id == parent_id:
+        enriched["reply_context"] = {
+            "message_id": str(parent.get("message_id") or ""),
+            "conversation_id": configured_chat_id,
+            "content": _reply_source_content(parent),
+        }
+    # A root lookup already expands provider thread replies. Preserve typed
+    # observations, including the current-position anchor; TS owns selection,
+    # ordering, scope checks and display bounds. Never invent a direct parent.
+    if source_id == root_id and thread_id:
+        replies = parent.get("thread_replies")
+        if isinstance(replies, list):
+            rows = [parent, *(row for row in replies if isinstance(row, Mapping)
+                              and row.get("message_id") != root_id)]
+            observations = []
+            for row in rows:
+                position = str(row.get("thread_message_position", ""))
+                if not re.fullmatch(r"-?[0-9]{1,12}", position):
+                    continue
+                text = _reply_source_content(row)
+                sender_type, sender_id = _sender_identity(row)
+                observations.append({
+                    "message_id": row.get("message_id"),
+                    "conversation_id": row.get("chat_id"),
+                    "thread_id": row.get("thread_id"),
+                    "position": int(position), "content": text[:16000],
+                    "content_truncated": len(text) > 16000,
+                    "sender": {"id": sender_id[:200], "kind": sender_type[:80]},
+                    "created_at": str(row.get("create_time") or "")[:80],
+                })
+            if len(observations) <= 64:
+                enriched["thread_context"] = {
+                    "root_message_id": root_id, "conversation_id": configured_chat_id,
+                    "thread_id": thread_id, "messages": observations,
+                }
     parent_sender_type, parent_sender_id = _sender_identity(parent)
     enriched["reply_context_verified"] = True
     enriched["message_context_status"] = "message_context_verified"
     enriched["reply_to_bot"] = bool(
         current_sender_type == "user"
+        and source_id == parent_id
         and parent_sender_type == "app"
         and parent_sender_id == profile_app_id
     )

@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...control_plane.runtime.public_safety import SECRET_LIKE_SURFACE_PATTERN
+from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
 
 
 REQUEST_SCHEMA = "periodic_report_run_request_v0"
 RUN_SCHEMA = "periodic_report_v0"
 TRIGGER_DECISION_SCHEMA = "periodic_report_trigger_decision_v0"
 
-_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _SOURCE_STATUSES = {"complete", "partial", "failed", "unknown"}
 _ARTIFACT_STATUSES = {"pending", "rendered", "failed", "unknown"}
 _SINK_STATUSES = {"pending", "sent", "failed", "skipped", "unknown"}
@@ -88,7 +88,7 @@ def _optional_text(
 
 def _token(value: object, label: str) -> str:
     token = _text(value, label, maximum=128).lower()
-    if not _TOKEN_RE.fullmatch(token):
+    if not PUBLIC_SAFE_SLUG_PATTERN.fullmatch(token):
         raise ValueError(f"{label} must be a lower-snake-like public token")
     return token
 

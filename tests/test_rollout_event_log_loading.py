@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -13,6 +16,44 @@ from loopx.rollout_event_log import (
     iter_rollout_events,
     load_rollout_events,
 )
+
+
+@pytest.mark.parametrize("legacy_runtime", [False, True])
+def test_rollout_script_keeps_one_default_route_and_explicit_overrides(
+    tmp_path: Path, legacy_runtime: bool,
+) -> None:
+    home = tmp_path / "home"
+    current, legacy = home / ".loopx", home / ".codex" / "loopx"
+    if legacy_runtime:
+        legacy.mkdir(parents=True)
+        (legacy / "registry.global.json").write_text('{"goals": []}', encoding="utf-8")
+    selected = legacy if legacy_runtime else current
+    script = Path(__file__).resolve().parents[1] / "scripts" / "goal_rollout_event_log.py"
+    env = dict(os.environ, HOME=str(home), LOOPX_USAGE_PING="0")
+    command = [sys.executable, str(script), "append", "--goal-id", "fixture",
+               "--event-kind", "quota_should_run"]
+
+    def run(*extra: str):
+        return subprocess.run([*command, *extra], env=env, capture_output=True,
+                              text=True, encoding="utf-8", timeout=15)
+
+    written = run()
+    assert written.returncode == 0, written.stderr
+    log = selected / "goals" / "fixture" / "rollout-event-log.jsonl"
+    before = log.read_bytes()
+    for root in (current, legacy):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "registry.global.json").write_text('{"goals": []}', encoding="utf-8")
+    refused = run()
+    assert refused.returncode != 0
+    assert "Both default LoopX registries exist" in refused.stderr
+    assert log.read_bytes() == before
+    explicit = tmp_path / "explicit-runtime"
+    assert run("--runtime-root", str(explicit)).returncode == 0
+    assert (explicit / "goals/fixture/rollout-event-log.jsonl").exists()
+    explicit_log = tmp_path / "explicit-log.jsonl"
+    assert run("--log-path", str(explicit_log)).returncode == 0
+    assert explicit_log.exists()
 
 
 def test_limited_rollout_event_load_keeps_only_a_bounded_window(

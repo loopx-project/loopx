@@ -61,6 +61,15 @@ for the responsibility boundary, receiver readback and remaining execution work.
 A project conversation is not a registered coordinator; delivery does not launch
 one. Existing manager commands and stored receipts remain compatible.
 
+Inline original-request context accepts up to 32,000 Unicode characters and
+98,304 JSON-encoded UTF-8 bytes, replacing the former 20,000-character limit.
+The shared typed collaboration owner applies this to steward and project-Chat
+handoffs before persistence and delivery. The current request is never silently
+truncated; preceding-thread excerpts disclose their own omissions. The byte bound
+keeps source text plus the existing brief/identity/instructions within the inbox
+reader's 128,000-byte record boundary. Larger material needs an authorized scoped
+artifact reference; delivery still grants no execution or publication authority.
+
 ## Audience-authorized Goal summaries
 
 An external manager's connection anchor is not its entire portfolio. The local

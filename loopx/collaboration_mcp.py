@@ -800,17 +800,38 @@ class Delegations:
             # re-reads the current state and the observation remains readable.
             return None
 
-    def _cli(self, binding: dict, *args: str, timeout: int = 60) -> dict:
-        completed = subprocess.run([*_python_module_command("loopx.cli"),
+    def _cli(self, binding: dict, *args: str, timeout: int = 60,
+             delegated_lease: dict | None = None) -> dict:
+        arguments = [
             "--registry", str(self.registry),
             "--runtime-root", str(self.root), "--format", "json", *args,
-        ], cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
-            timeout=timeout, env=_pinned_release_environment())
+        ]
+        if delegated_lease is None:
+            completed = subprocess.run([*_python_module_command("loopx.cli"), *arguments],
+                cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
+                timeout=timeout, env=_pinned_release_environment())
+            stdout, returncode = completed.stdout, completed.returncode
+        else:
+            from .control_plane.turn_driver.host_process_transport import run_host_process
+
+            chunks = []
+            try:
+                observation = run_host_process(
+                    [*_python_module_command("loopx.control_plane.turn_driver.delegated_cli"), *arguments],
+                    project=Path(binding["workspace"]), input_text="", timeout_seconds=timeout,
+                    environment=_pinned_release_environment(), delegated_lease=delegated_lease,
+                    on_stdout=chunks.append,
+                )
+            except RuntimeError as exc:
+                raise ValueError("delegation managed CLI supervision unavailable; reconcile the original Turn") from exc
+            if observation["outcome"] != "exited" or not observation["output_complete"]:
+                raise ValueError(f"delegation lease supervision stopped ({observation['outcome']}); reconcile the original Turn")
+            stdout, returncode = "".join(chunks), observation["returncode"]
         try:
-            value = json.loads(completed.stdout)
+            value = json.loads(stdout)
         except ValueError as exc:
             raise ValueError("delegation CLI returned no structured result") from exc
-        if completed.returncode and "turn" not in args:
+        if returncode and "turn" not in args:
             raise ValueError(
                 str(
                     value.get("error")
@@ -1041,6 +1062,8 @@ class Delegations:
             runtime_root=self.root,
             goal_id=self.goal_id,
         ):
+            if row.get("task_lease", {}).get("required") is True:
+                raise ValueError("delegation canonical authority disappeared; reconcile the original execution")
             row["task_lease"] = {"required": False, "handoff_mode": "legacy"}
             _write(path, row)
             return row["task_lease"]
@@ -1050,6 +1073,8 @@ class Delegations:
             goal_id=self.goal_id,
         )["handoff_mode"]
         if handoff_mode != "hard_lease":
+            if row.get("task_lease", {}).get("required") is True:
+                raise ValueError("delegation authority mode changed; reconcile the original execution")
             row["task_lease"] = {
                 "required": False,
                 "handoff_mode": handoff_mode,
@@ -1057,23 +1082,8 @@ class Delegations:
             _write(path, row)
             return row["task_lease"]
         lease_key = self._turn_instance_id(row)
-        result = self._cli(
-            binding,
-            "todo",
-            "claim",
-            "--goal-id",
-            self.goal_id,
-            "--todo-id",
-            binding["todo_id"],
-            "--claimed-by",
-            binding["agent_id"],
-            "--agent-id",
-            binding["agent_id"],
-            "--claim-operation-id",
-            "delegation-claim-" + row["identity"]["request_id"][:32],
-            "--task-lease-idempotency-key",
-            lease_key,
-        )
+        claim = self._delegation_claim_arguments(row, binding)
+        result = self._cli(binding, *claim)
         lease = result.get("lease")
         if (
             result.get("ok") is not True
@@ -1093,11 +1103,44 @@ class Delegations:
         row["task_lease"] = {
             "required": True,
             "handoff_mode": "hard_lease",
-            "idempotency_key": lease_key,
-            "version": lease["version"],
+            "lease": lease,
         }
         _write(path, row)
         return row["task_lease"]
+
+    def _delegation_claim_arguments(self, row: dict, binding: dict) -> list[str]:
+        return [
+            "todo",
+            "claim",
+            "--goal-id",
+            self.goal_id,
+            "--todo-id",
+            binding["todo_id"],
+            "--claimed-by",
+            binding["agent_id"],
+            "--agent-id",
+            binding["agent_id"],
+            "--claim-operation-id",
+            "delegation-claim-" + row["identity"]["request_id"][:32],
+            "--task-lease-idempotency-key",
+            self._turn_instance_id(row),
+        ]
+
+    def _delegated_lease_context(self, row: dict, binding: dict) -> dict | None:
+        """Private commands carry the original claim intent, never a model grant."""
+        lease = row.get("task_lease", {})
+        if lease.get("required") is not True:
+            return None
+        prefix = [*_python_module_command("loopx.cli"), "--registry", str(self.registry),
+                  "--runtime-root", str(self.root), "--format", "json"]
+        selected = ["--goal-id", self.goal_id, "--todo-id", binding["todo_id"]]
+        return {
+            "lease": lease["lease"],
+            "ttl_seconds": lease["lease"].get("acquire_ttl_seconds"),
+            "renew_argv": [*prefix, "task-lease", "renew", *selected, "--owner", binding["agent_id"],
+                           "--idempotency-key", lease["lease"]["idempotency_key"]],
+            "read_argv": [*prefix, *self._delegation_claim_arguments(row, binding)],
+        }
 
     def _complete_delegated_todo(self, row: dict, binding: dict) -> None:
         lease = row.get("task_lease")
@@ -1120,11 +1163,26 @@ class Delegations:
             "Bounded delegated work; requester owns synthesis.",
         ]
         if lease.get("required") is True:
+            # Atomic claim replay verifies current eligibility and the original
+            # key/epoch; it cannot reacquire an expired execution. Renewal has
+            # changed its version, so the historical acquisition is not CAS.
+            if "completion_lease_version" not in row:
+                proof = self._cli(binding, *self._delegation_claim_arguments(row, binding))
+                current = proof.get("lease", {})
+                if (proof.get("ok") is not True or current.get("owner") != binding["agent_id"]
+                        or current.get("idempotency_key") != lease["lease"]["idempotency_key"]
+                        or current.get("lease_epoch") != lease["lease"].get("lease_epoch")):
+                    raise ValueError("delegation current execution proof lost before completion")
+                # Persist the exact terminal intent before crossing the effect
+                # boundary. A lost completion reply must replay its receipt,
+                # even after that legitimate completion released the lease.
+                row["completion_lease_version"] = current["version"]
+                _write(self.path(row["identity"]["operation_id"]), row)
             arguments += [
                 "--task-lease-idempotency-key",
-                str(lease["idempotency_key"]),
+                str(lease["lease"]["idempotency_key"]),
                 "--task-lease-expected-version",
-                str(lease["version"]),
+                str(row["completion_lease_version"]),
             ]
         # A bounded member task returns to its requester; it is not terminal
         # Goal intent. Ordinary completion may precede its original Turn's
@@ -1149,6 +1207,10 @@ class Delegations:
                 self._write_delegation_bootstrap(row, binding)
                 self._acquire_delegation_lease(path, row, binding)
                 self._observe(path, row, "running")
+            if row.get("task_lease", {}).get("required") is True and "lease" not in row["task_lease"]:
+                # Upgrade a still-current operation record by replaying its
+                # original claim, not by inventing a replacement execution.
+                self._acquire_delegation_lease(path, row, binding)
             if row["status"] == "running":
                 turn_key = self._matching_turn_key(row, binding)
                 selector = (
@@ -1162,7 +1224,8 @@ class Delegations:
                     ]
                 )
                 result = self._cli(binding, "turn", "run-once", *common, *selector, *execution,
-                                   "--execute", timeout=binding["timeout_seconds"] + 60)
+                                   "--execute", timeout=binding["timeout_seconds"] + 60,
+                                   delegated_lease=self._delegated_lease_context(row, binding))
                 self._record_turn_result(path, row, result)
         finally:
             # The compatibility bootstrap is private host input.  Keeping it

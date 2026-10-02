@@ -14,6 +14,7 @@ import type {
   AuthorityStoreHead,
   AuthorityStoreReadFailure,
   AuthorityStoreReceiptResult,
+  AuthorityStoreReceiptBatchResult,
   AuthorityStoreScanResult,
 } from "./authority_store.ts";
 import {
@@ -467,19 +468,28 @@ export class FileAuthorityStore implements AuthorityStore {
         reason: error instanceof Error ? error.message : "invalid operation id",
       };
     }
+    const batch = await this.readReceipts([normalized]);
+    return batch.status === "receipts" ? batch.results[0]! : batch;
+  }
+
+  /** One exact-byte/identity proof per bounded batch. Look up every requested
+   * operation in that verified index; do not replace receipt proof with a scan.
+   * Returned items own their bodies, including duplicate operation IDs. */
+  async readReceipts(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult> {
     try {
-      const transaction = (await this.readVerified())?.receipts.get(normalized);
-      return transaction
-        ? {
-          status: "found",
-          cursor: transaction.cursor,
+      if (!Array.isArray(operationIds) || operationIds.length < 1 || operationIds.length > 64) {
+        throw new AuthorityStoreProtocolError("receipt batch requires 1..64 operations");
+      }
+      const normalized = Array.from({length: operationIds.length}, (_, i) =>
+        requireAuthorityStoreId(operationIds[i], "operation id"));
+      const verified = await this.readVerified();
+      return {status: "receipts", results: normalized.map((id): AuthorityStoreReceiptResult => {
+        const transaction = verified?.receipts.get(id);
+        return transaction ? {status: "found", cursor: transaction.cursor,
           provider_revision: transaction.providerRevision,
-          receipts: structuredClone([...transaction.receipts]),
-        }
-        : { status: "missing" };
-    } catch (error) {
-      return readFailure(error);
-    }
+          receipts: structuredClone([...transaction.receipts])} : {status: "missing"};
+      })};
+    } catch (error) { return readFailure(error); }
   }
 
   async scanCommitted(afterCursor: string | null, limit: number): Promise<AuthorityStoreScanResult> {

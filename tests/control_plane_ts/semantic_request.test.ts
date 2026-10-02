@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeCollaborationRequest } from "../../loopx/control_plane/collaboration/semantic_request.ts";
+import { normalizeCollaborationRequest, normalizeCollaborationSourceContext } from "../../loopx/control_plane/collaboration/semantic_request.ts";
 
 const target = { goal_id: "allocation", agent_id: "reviewer" };
 const brief = {
@@ -30,4 +30,13 @@ for (const patch of [{sha256: undefined}, {delegation: {...dependency.delegation
   {delegation: {...dependency.delegation, ref: "/private/other"}},
   {delegation: {...dependency.delegation, agent_id: "different-requester"}}]) {
   assert.throws(() => normalizeCollaborationRequest({...target, brief: {...brief, inputs: [{...dependency, ...patch}]}}));
+}
+
+// Source text uses the same budget for every caller; Unicode characters are
+// counted consistently with Python, while encoded bytes protect record reads.
+for (const source_message of [" x \n", "x".repeat(32000), "字".repeat(32000), "😀".repeat(24000)]) {
+  assert.deepEqual(normalizeCollaborationSourceContext({source_message}), {source_message});
+}
+for (const source_message of [" ", "x".repeat(32001), "😀".repeat(26000), "\u0000".repeat(17000)]) {
+  assert.throws(() => normalizeCollaborationSourceContext({source_message}), /source_message|source context exceeds/);
 }

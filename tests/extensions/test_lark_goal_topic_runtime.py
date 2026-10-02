@@ -3468,8 +3468,9 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
 
 
 @pytest.mark.parametrize("manager", [False, True])
+@pytest.mark.parametrize("thread", [False, True])
 def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
-    tmp_path: Path, manager: bool,
+    tmp_path: Path, manager: bool, thread: bool,
 ) -> None:
     """Real inbox/controller/store; only the external provider/model are fixtures."""
     import runpy
@@ -3500,6 +3501,20 @@ def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
             "sender": {"sender_type": "app", "id": "cli_public_fixture"},
         },
     }
+    if thread:
+        # Real formatted provider shape: ancestry is on the event, while mget
+        # supplies a thread position and root expansion rather than parent_id.
+        question = messages["om_question"]
+        question.pop("parent_id")
+        question.pop("root_id")
+        question.update(thread_id="omt_fixture", thread_message_position="2",
+                        mentions=[{"name": "linkmacbot", "id": "cli_public_fixture"}])
+        root = {"message_id": "om_topic_alpha", "chat_id": "oc_public_fixture",
+                "thread_id": "omt_fixture", "thread_message_position": "-1",
+                "content": "Review the initial draft."}
+        revised = {**root, "message_id": "om_revision", "thread_message_position": "1",
+                   "content": parent_text}
+        messages["om_topic_alpha"] = {**root, "thread_replies": [revised, question]}
 
     def provider(argv: list[str], **_kwargs: Any):
         mid = argv[argv.index("--message-ids") + 1]
@@ -3509,7 +3524,8 @@ def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
 
     event = enrich_lark_event_reply_context(
         {"schema_version": "lark_event_inbox_event_v0", "message_id": "om_question",
-         "event_id": "evt_question", "chat_id": "oc_public_fixture"},
+         "event_id": "evt_question", "chat_id": "oc_public_fixture",
+         **({"root_id": "om_topic_alpha"} if thread else {})},
         runner=provider, command_prefix=["lark-cli"], profile="mew",
         profile_app_id="cli_public_fixture", configured_chat_id="oc_public_fixture",
     )

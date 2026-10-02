@@ -379,6 +379,15 @@ M7.2：用一个 typed plan/receipt algebra 替换核心 settlement truth。plan
 
 M7.3：在两个 M7.2 adapter 都消费经过验证的 plan/receipt 语义后，比较它们的执行所有权。2026-08-21 的 cutover qualification 发现，settlement identity、bind/short-circuit、replay seeding、next-action selection 与 commit reduction 仍在 adapter 间重复。因此重新打开 M7.3，引入一个 bounded TypeScript Effect runtime。Runtime 拥有共享 algebra 和第一个内部 effect——atomic Turn-journal checkpoint。它的 server 只是临时 Python-to-TypeScript transport；一个静态 typed handler registry 把粗粒度 transaction 路由给 domain owner。它不是通用组合框架，也不会把 model、user、host scheduler、credential 或第三方 authority 藏到万能 executor 后面。每条被替代的 Python 语义路径都必须在同一 cutover PR 删除。
 
+**2026-10-01 identity 边界切片：** `effect_program.ts` 统一解码可执行 Todo／replan
+身份，Turn settlement 与 journal 验证复用这一 owner。内部判别联合排除双 target
+与字段修改；可执行值排除 `unbound`。支持的 v0、scoped v1 和无 schema adapter
+输入保持 effect ID。非字符串 ID、不支持的声明版本与矛盾 binding metadata 在
+provider dispatch 或 receipt replay 前失败。Journal reader 删除独立的 v1 binding
+比较。证据复用 effect-program、settlement-parity、journal-effect 与 inspect-journal
+CLI 测试，包含真实 File 回读。此处只验收 identity 边界；跨域 crash／lease 恢复及
+完整 provider conformance 仍需单独验收。
+
 M7.4：只有在移除重复知识并切换真实生产 caller 时，才一次扩展一个 bounded 状态族。Todo、monitor、capability、scheduler 和 gate 状态机保留自己的 domain transition invariants。它们迁移后可以通过同一个 managed runtime 执行，但不能仅仅因为 packet 字段相似就移到一个通用状态协议后面。CLI 原生迁到 TypeScript 后，CLI-only 在进程内 import kernel；daemon 只在 App/多 client 共享 authority 时可选保留，而不是每个状态族一个必选 server。
 
 #3208 的 replan semantic-exit 修复明确不是候选：`refresh-state` 已经会重新推导当前 obligation 并记录 typed semantic ACK，实际缺陷是 goal-frontier 中一个额外的 settlement 条件在 acceptance gaps 仍存在时忽略了合法的 non-successor ACK。这是 domain-local reducer/ACK invariant，不是第二个 multi-step executor，应继续由 replan/goal-frontier owner 持有。只有第二个真实 runtime 场景（例如具有相同 plan/receipt lifecycle 的 quota/status read ACK）出现，并且能在两个 adapter 间删除重复编排时，才重新评估 Effect Program 迁移。

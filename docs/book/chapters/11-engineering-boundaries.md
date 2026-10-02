@@ -158,7 +158,7 @@ loopx check \
 
 - credentials、token、cookie；
 - 本机绝对路径；
-- `.loopx/`、`.codex/goals/` 或 runtime state；
+- `.loopx/`、`.loopx/goals/` 或 runtime state；
 - raw Agent transcript、trajectory、verifier output；
 - 私有 issue、内部链接和未经脱敏的组织叙事；
 - 临时探针和生成日志。

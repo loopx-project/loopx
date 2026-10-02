@@ -15,6 +15,7 @@ import { useWorkspaceI18n } from "./i18n";
 import { ReturnDeliveryStatus } from "./return-delivery-status";
 import {ManagerTeamResult} from "./manager-team-result";
 import { compareProposalRecency } from "./proposal-recency";
+import { conversationOrder } from "./conversation-order";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string) {
@@ -61,7 +62,7 @@ export function ChannelTimeline({
     );
   }
 
-  const latestAnnounceable = [...items].reverse().find((item) =>
+  const latestAnnounceable = conversationOrder(items).reverse().find((item) =>
     (item.kind === "message" && item.message.role !== "user")
     || (item.kind === "proposal" && ["applied", "stale", "error", "gated"].includes(item.proposal.status))
     || (item.kind === "run" && item.run.status === "completed"));
@@ -165,7 +166,6 @@ export function ChannelTimeline({
           <summary><Activity size={16} aria-hidden="true"/><strong>{t("timeline.background")}</strong><span>{activitySummary}</span></summary>
           <div>{scheduleItems.map(renderItem)}{routineRuns.map(renderItem)}</div>
         </details> : null}
-        {primaryItems.map(renderItem)}
         {gatedItems.length ? (
           <details className="personal-gated-summary">
             <summary><span><Sparkles size={16} /></span><strong>{t("timeline.waitingConfirmation")}</strong><small>{t("timeline.gateHistory", { count: gatedItems.length })}</small></summary>
@@ -178,7 +178,7 @@ export function ChannelTimeline({
             <div>{foldedProposalItems.map(renderItem)}</div>
           </details>
         ) : null}
-        {visibleProposalItems.map(renderItem)}
+        {conversationOrder([...primaryItems, ...visibleProposalItems]).map(renderItem)}
       </div>
     </>
   );

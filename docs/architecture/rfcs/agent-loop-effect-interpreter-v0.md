@@ -588,6 +588,18 @@ It is not a generic composition framework and does not move model, user, host
 scheduler, credential, or third-party authority behind a universal executor.
 Every replaced Python semantic path is deleted in the same cutover PR.
 
+**2026-10-01 identity-boundary slice:** `effect_program.ts` now owns one decoder
+for executable Todo/replan identities consumed by Turn settlement and journal
+validation. The internal discriminated union excludes dual targets and mutation;
+executable values exclude `unbound`. Supported v0, scoped v1 and schema-less
+adapter inputs preserve effect IDs. Non-string IDs, unsupported declared
+versions and contradictory binding metadata fail before provider dispatch or
+receipt replay. The journal reader reuses this rule instead of maintaining its
+own v1 binding comparison. Evidence lives in the existing effect-program,
+settlement-parity, journal-effect and inspect-journal CLI tests, including real
+File readback. This qualifies the identity boundary only; composite crash/lease
+recovery and full provider conformance remain separate acceptance.
+
 M7.4: expand one bounded family at a time only when it removes duplicate
 knowledge and switches a real production caller. Todo, monitor, capability,
 scheduler, and gate state machines keep their domain transition invariants.

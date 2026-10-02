@@ -1,3 +1,4 @@
+import {registerClaimContentionConformance} from "./claim_contention_conformance.ts";
 import {registerMonitorGateScopeConformance} from "./monitor_gate_scope_conformance.ts";
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/source_projection.ts";
 import {registerCanonicalSnapshotConformance} from "./canonical_snapshot_conformance.ts";
@@ -290,6 +291,7 @@ export function registerAuthorityStoreConformance(
   registerLeaseAcquisitionConformance(providerName, factory);
   registerCommandObservationConformance(providerName, factory);
   registerClaimAcquisitionProofConformance(providerName, factory);
+  registerClaimContentionConformance(providerName, factory);
   registerAuthorityScanConformance(providerName, factory);
   registerOwnershipObservationConformance(providerName, factory);
   registerSuccessionReadConformance(providerName, factory);
@@ -1398,7 +1400,7 @@ export function registerAuthorityStoreConformance(
       assert.deepEqual(afterIdempotent.head, loaded.head);
       assert.equal((await store.readReceipt("claim-and-acquire-idempotent")).status, "found");
     });
-    test(`${providerName} conformance: competing ownership transactions cannot split claim and lease (${native ? "native" : "v0"})`, async (t) => {
+    test(`${providerName} conformance: competing ownership revalidates the winning claim and lease (${native ? "native" : "v0"})`, async (t) => {
       const {store, contender} = await factory(t);
       const goalId = "goal-competing-ownership";
       const projection = {
@@ -1435,8 +1437,9 @@ export function registerAuthorityStoreConformance(
       ]));
       assert.deepEqual(
         results.map((result) => result.status).sort(),
-        ["applied", "conflict"],
+        ["applied", "failed"],
       );
+      assert.equal(results.find(result => result.status === "failed")?.reason_code, "claim_owner_mismatch");
       const winnerIndex = results.findIndex((result) => result.status === "applied");
       assert.notEqual(winnerIndex, -1);
       const winner = winnerIndex === 0 ? "agent-a" : "agent-b";
@@ -1543,7 +1546,7 @@ export function registerAuthorityStoreConformance(
       assert.deepEqual(await store.loadAuthority(), transferred);
     });
     for (const fault of ["lease_replaced", "lost_response"] as const) {
-      test(`${providerName} conformance: hard-lease claim ${fault} (${native ? "native" : "v0"})`, async (t) => {
+      test(`${providerName} conformance: hard-lease claim revalidation ${fault} (${native ? "native" : "v0"})`, async (t) => {
         const {store, contender} = await factory(t);
         const goalId = "goal-claim";
         const projection = {...todoClaimProjection(goalId, native), handoff_mode: "hard_lease"};
@@ -1596,7 +1599,8 @@ export function registerAuthorityStoreConformance(
           },
         };
         const result = await executeCoordinationTodoClaim(intercepted, request);
-        assert.equal(result.status, fault === "lease_replaced" ? "conflict" : "recovered");
+        assert.equal(result.status, fault === "lease_replaced" ? "failed" : "recovered");
+        if (fault === "lease_replaced") assert.equal(result.reason_code, "handoff_mode_requires_lease");
         assert.equal((await store.readReceipt(request.operation_id)).status,
           fault === "lease_replaced" ? "missing" : "found");
         const after = await store.loadAuthority();

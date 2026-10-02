@@ -1532,6 +1532,15 @@ def _build_quota_should_run_payload(
         interaction_contract=payload.get("interaction_contract"),
         scheduler_hint=payload.get("scheduler_hint"),
     )
+    if prepared.agent_scoped_user_todo_override:
+        # Admission is decided earlier; expose an action only from the final
+        # selected Todo and interaction authority, including cooldown changes.
+        kind = str(prepared.agent_scoped_user_todo_override["kind"])
+        payload[kind] = effect_runtime_result("quota.scoped_override.project", {
+            "override": payload[kind],
+            "selected_todo": payload.get("selected_todo"),
+            "interaction_contract": payload["interaction_contract"],
+        })
     return payload
 
 

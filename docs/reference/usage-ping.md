@@ -175,11 +175,17 @@ rotates the ID. Redirects are never followed.
 
 ## Delivery, local state and withdrawal
 
-State remains in `~/.codex/loopx/usage-ping.json`, mode `0600`. It is not copied
-into Goal state, backups of authority providers, or public projections. Normal
+Fresh installations keep machine-local state in `~/.loopx/usage-ping.json`,
+mode `0600`. An existing default global registry under `.codex/loopx` keeps
+that machine's usage state on the legacy route until explicit local-state
+migration. Two default registries reject implicit settings writes. The route
+is independent of a Goal runtime root. It is not copied into Goal state,
+backups of authority providers, or public projections. Normal
 CLI invocation reads only a small local hint; a detached Node process owns
 measurement, locks and network I/O. A first-use/settings operation may wait for
 local Node execution, never for a collector connection.
+Offline `migrate-local-state` commands do not schedule these observations,
+because their previews and rollback receipts bind the machine-state bytes.
 
 Each installation attempts at most one heartbeat per UTC day. The first measured
 CLI result attempts an aggregate send immediately, including a failed result.

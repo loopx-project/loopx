@@ -89,8 +89,7 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
    missing material evidence needs a concrete request-changes reason.
 4. Publish the checked `review_body`; recheck after edits. Remote readback uses
    the same body rules. Headings and a verdict alone cannot certify a review.
-5. Re-read the remote head immediately before verdict and publication. Restart
-   the evidence pass if it changed.
+5. Re-read the remote head immediately before verdict and publication; restart the evidence pass if it changed.
 
 Each PR needs independent evidence and a standalone card; a queue table is only a preface.
 
@@ -106,14 +105,15 @@ requested local-only/dry-run output or the finding is private or security-sensit
   when the account is the author and self-approval is rejected, record the same
   conclusion as a `COMMENTED` review titled `Approval conclusion (author-owned PR; GitHub blocks formal self-approval)`.
 - Non-blocking P2 suggestions: still `APPROVE`; keep them in the body.
-- Merged PR: publish a post-merge audit comment only for a new actionable
-  finding; avoid duplicating an equivalent exact-head result.
+- Merged PR: publish a post-merge audit comment only for a new actionable finding;
+  avoid duplicating an equivalent exact-head result.
 
-Build public text from the exact reviewed head. Remove local paths, private
-context, raw logs, credentials, and internal-only links. Read the published
-review back, verify its state and rendered body, and return its URL. Merge
-still routes through `loopx-pr-merge`; an `APPROVE` is not merge authority.
-Do not leave a public blocker only in chat.
+Build public text from the exact reviewed head; remove local paths, private context,
+raw logs, credentials, and internal-only links. Read the published review back,
+verify state/body and return its URL. After APPROVE (also existing approval), execute
+`review_execution_contract.approval_closeout`; reconcile only verified obsolete
+blockers with owner/GitHub authority, preserving discussion and unresolved reviews.
+Merge routes through `loopx-pr-merge`; an `APPROVE` is not merge authority.
 
 Immediately before every merge, run `loopx --format json pr-review --goal-id GOAL
 --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`.

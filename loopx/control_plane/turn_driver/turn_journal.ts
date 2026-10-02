@@ -132,6 +132,32 @@ export const supportedJournalStatuses: ReadonlySet<string> = new Set([
   "stopped",
   "failed",
 ]);
+/** Snapshot constraints shared by write admission and historical readback. */
+export function journalPhaseViolation(
+  status: string, completedPhases: readonly string[], failedPhase: string | null,
+): string | null {
+  if (status === "committed" && completedPhases.length !== transactionPhases.length) {
+    return "Committed Turn journal must contain the complete transaction prefix";
+  }
+  if (status === "stopped" && completedPhases.length !== 3) {
+    return "Stopped Turn journal must end after validation";
+  }
+  if (status === "scheduler_action_required" && completedPhases.length !== 5) {
+    return "Scheduler-pending Turn journal must end after quota spend";
+  }
+  if (status === "in_progress" && completedPhases.length > 5) {
+    return "In-progress Turn journal cannot claim scheduler completion";
+  }
+  if (status === "failed") {
+    const nextPhase = transactionPhases[completedPhases.length] ?? null;
+    const terminalCloseoutFailure = failedPhase === "terminal_closeout" && completedPhases.length === 5;
+    if (!failedPhase || (failedPhase !== nextPhase && !terminalCloseoutFailure)) {
+      return "Failed Turn journal must name the next uncompleted phase";
+    }
+  }
+  return null;
+}
+
 const hostFailureKinds: ReadonlySet<string> = new Set([
   "auth_failed",
   "contract_rejected",
@@ -247,15 +273,6 @@ function typedSettlementIdentityState(
   }
   const parsed = settlementIdentityFromPlan(transaction);
   if (parsed.failure !== null || parsed.value === null) {
-    return [false, false, false];
-  }
-  if (
-    identity.schema_version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION &&
-    (
-      identity.binding_kind !== parsed.value.binding_kind ||
-      identity.binding_id !== parsed.value.binding_id
-    )
-  ) {
     return [false, false, false];
   }
   const expectedTurnInstance = isValidIdentity(transaction.turn_instance_id)
@@ -670,6 +687,11 @@ export function interpretTurnJournalEffect(
   }
 
   const journalStatus = journal.status ? String(journal.status) : "";
+  const statusViolation = journalPhaseViolation(
+    journalStatus, completedPhases,
+    typeof receipt.failed_phase === "string" ? receipt.failed_phase : null,
+  );
+  if (statusViolation !== null) violations.push("journal_status_phase_mismatch");
   const tombstoneRetained = ["committed", "stopped", "failed"].includes(
     journalStatus,
   );
@@ -692,7 +714,7 @@ export function interpretTurnJournalEffect(
     settlementBindingMatches &&
     turnKeyMatches &&
     phasesFormOrderedPrefix &&
-    supportedJournalStatuses.has(journalStatus);
+    supportedJournalStatuses.has(journalStatus) && statusViolation === null;
   const attemptViolation = preparedAttemptViolation(journal, {
     status: journalStatus,
     completedPhases,

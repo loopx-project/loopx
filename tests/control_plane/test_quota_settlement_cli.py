@@ -30,6 +30,7 @@ from loopx.control_plane.scheduler.state import (
     load_scheduler_state,
 )
 from loopx.heartbeat_prompt import build_heartbeat_prompt
+from loopx.paths import shell_selected_global_registry
 from loopx.rollout_event_log import build_rollout_event
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -642,8 +643,9 @@ def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("legacy_runtime", [False, True])
 def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, legacy_runtime: bool,
 ) -> None:
     # Production quota CLI -> detached Python discovery -> TS cycle owner.
     # The isolated home also proves telemetry never reads the operator's sessions.
@@ -664,8 +666,13 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
         raise AssertionError(f"public quota/spend CLI did not observe cycle finished={finished}")
 
     home = tmp_path / "isolated-home"
-    machine = home / ".codex" / "loopx"
+    machine = home / (".codex/loopx" if legacy_runtime else ".loopx")
     machine.mkdir(parents=True)
+    if legacy_runtime:
+        (machine / "registry.global.json").write_text(
+            json.dumps({"common_runtime_root": str(machine), "goals": []}),
+            encoding="utf-8",
+        )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
@@ -2222,6 +2229,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
+    original_ack_hint = guard["scheduler_hint"]["codex_app"]["ack_hint"]
 
     complete_args = (
         "todo",
@@ -2365,9 +2373,12 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
     assert _spend_run_count(runtime) == 1
 
-    settled_ack_hint = settled_replay["scheduler_hint"]["codex_app"]["ack_hint"]
-    assert settled_ack_hint["args"]["turn_instance_id"] == TURN_ID
-    assert settled_ack_hint["cli_args"][-3:] == [
+    # A historical settlement receipt cannot issue a new scheduler operation.
+    assert settled_replay["scheduler_hint"]["action"] == "preserve_current_schedule"
+    for surface in ("app_automation", "codex_app"):
+        assert "ack_hint" not in settled_replay["scheduler_hint"][surface]
+    assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
+    assert original_ack_hint["cli_args"][-3:] == [
         "--turn-instance-id",
         TURN_ID,
         "--execute",
@@ -2375,7 +2386,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,
-        *settled_ack_hint["cli_args"],
+        *original_ack_hint["cli_args"],
     )
     # The intervening fresh_guard superseded this Turn for host writeback,
     # even though its original delivery settlement still replays correctly.
@@ -2887,7 +2898,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
         thin=True,
     )
     guard_command = prompt["quota_guard_command"].replace(
-        "$HOME/.codex/loopx/registry.global.json",
+        shell_selected_global_registry().strip('"'),
         str(registry_path),
     )
 
@@ -2950,7 +2961,7 @@ def test_visible_goal_capability_reentry_preserves_turn_through_selection(
         thin=True,
     )
     guard_command = prompt["quota_guard_command"].replace(
-        "$HOME/.codex/loopx/registry.global.json",
+        shell_selected_global_registry().strip('"'),
         str(registry_path),
     )
 
@@ -3151,7 +3162,7 @@ def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     # The thin body tells the agent to mint LOOPX_TURN per iteration.
     guard_command = (
         prompt["quota_guard_command"]
-        .replace("$HOME/.codex/loopx/registry.global.json", str(registry_path))
+        .replace(shell_selected_global_registry().strip('"'), str(registry_path))
         .replace('"${LOOPX_TURN:?}"', turn_instance_id)
     )
     assert f"--runtime-profile {runtime_profile}" in guard_command
