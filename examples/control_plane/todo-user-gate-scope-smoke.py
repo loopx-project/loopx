@@ -49,6 +49,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
     registry.write_text(
         json.dumps(
             {
+                "common_runtime_root": str(root / "runtime"),
                 "goals": [
                     {
                         "id": GOAL_ID,
