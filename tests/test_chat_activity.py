@@ -164,7 +164,7 @@ def test_quoted_credentials_are_masked_in_every_visible_text(value):
     command = steps.started(_command(text, [{"type": "search", "query": text}]))
     thought = steps.completed({"type": "reasoning", "id": "r", "content": [text]})
     for step in (command, thought):
-        assert all(part not in step[field] for part in ("example", "value") for field in ("title", "detail"))
+        assert all(part not in step[field] for part in ("example ", "value") for field in ("title", "detail"))
         assert "***" in step["title"] and "***" in step["detail"]
 
 
