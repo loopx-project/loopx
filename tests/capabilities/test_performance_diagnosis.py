@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -74,3 +75,65 @@ def test_real_cli_reads_profile_larger_than_inline_transport(tmp_path: Path) -> 
     assert len(result.stdout) < 4096
     assert not [path for path in tmp_path.glob("loopx-effect-*")
                 if not path.name.startswith("loopx-effect-runtime-")]  # Only the shared runtime persists.
+
+
+def test_real_cli_normalizes_exporter_unknown_source_and_reports_wrong_types(tmp_path: Path) -> None:
+    profile = tmp_path / "exporter.json"
+    payload = {
+        "$schema": "https://www.speedscope.app/file-format-schema.json",
+        "shared": {"frames": [{"name": "[self]", "file": None, "line": None}]},
+        "profiles": [{"type": "sampled", "name": "main", "unit": "milliseconds",
+                      "startValue": 0, "endValue": 3, "samples": [[0]], "weights": [3]}],
+    }
+    profile.write_text(json.dumps(payload), encoding="utf-8")
+    result = command(tmp_path, "performance-diagnosis", "inspect", "--profile-json", str(profile))
+    assert result.returncode == 0, result.stdout + result.stderr
+    row = json.loads(result.stdout)["profiles"][0]["self_hotspots"][0]
+    assert row == {"name": "[self]", "self_ms": 3, "inclusive_ms": 3}
+    payload["shared"]["frames"][0]["file"] = 7
+    profile.write_text(json.dumps(payload), encoding="utf-8")
+    rejected = command(tmp_path, "performance-diagnosis", "inspect", "--profile-json", str(profile))
+    assert rejected.returncode == 1
+    assert "frame.file" in json.loads(rejected.stdout)["error"]
+    assert "failed unexpectedly" not in rejected.stdout
+    assert "durable receipt" not in rejected.stdout
+
+
+def test_real_shared_cli_bounds_deep_repeated_samples_and_serves_light_work(tmp_path: Path) -> None:
+    argv = tmp_path / "argv.json"
+    argv.write_text(json.dumps(["node", "-e", "1"]), encoding="utf-8")
+    plan_args = ("performance-diagnosis", "plan", "--tool", "node-cpu",
+                 "--command-json", str(argv), "--output-directory", str(tmp_path))
+    warm = command(tmp_path, *plan_args)
+    assert warm.returncode == 0, warm.stderr + warm.stdout
+    count, depth = 1_000_000, 1000
+    profile = tmp_path / "deep.cpuprofile"
+    profile.write_text(json.dumps({
+        "nodes": [{"id": i + 1, "callFrame": {"functionName": f"frame-{i}"},
+                   "children": [i + 2] if i + 1 < depth else []} for i in range(depth)],
+        "startTime": 0, "endTime": count * 1000,
+        "samples": [depth] * count, "timeDeltas": [1000] * count,
+    }, separators=(",", ":")), encoding="utf-8")
+    assert profile.stat().st_size < cli.MAX_INPUT_BYTES
+    # Both CLI processes use the same private runtime locator. The original
+    # per-sample ancestor expansion exceeded its unchanged 10s request budget.
+    heavy = subprocess.Popen(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", "performance-diagnosis",
+         "inspect", "--profile-json", str(profile)], env={**os.environ, "TMPDIR": str(tmp_path)},
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        time.sleep(0.1)
+        light = command(tmp_path, *plan_args)
+        stdout, stderr = heavy.communicate(timeout=45)
+        assert light.returncode == 0, light.stderr + light.stdout
+        assert json.loads(light.stdout)["execution_performed"] is False
+        assert heavy.returncode == 0, stderr + stdout
+        main = json.loads(stdout)["profiles"][0]
+        assert main["observations"] == count
+        assert main["observed_weight_ms"] == count
+        assert main["self_hotspots"][0]["self_ms"] == count
+    finally:
+        if heavy.poll() is None:
+            heavy.kill()
+            heavy.wait()

@@ -20,15 +20,18 @@ export const performanceDiagnosisScenario = {
       const input = panel.locator('input[type="file"]');
       const capture = {
         $schema: "https://www.speedscope.app/file-format-schema.json",
-        shared: { frames: [{ name: marker }, { name: "readSnapshot", file: "fixture.ts", line: 7 }] },
+        shared: { frames: [{ name: marker }, { name: "readSnapshot", file: "fixture.ts", line: 7 },
+          { name: "[self]", file: null, line: null }] },
         profiles: [
-          { type: "sampled", name: "main thread", unit: "milliseconds", startValue: 0, endValue: 100, samples: [[0, 1]], weights: [100] },
+          { type: "sampled", name: "main thread", unit: "milliseconds", startValue: 0, endValue: 100,
+            samples: [[0, 1], [0, 2]], weights: [75, 25] },
           { type: "evented", name: "worker thread", unit: "milliseconds", startValue: 0, endValue: 150,
             events: [{ type: "O", at: 0, frame: 0 }, { type: "C", at: 150, frame: 0 }] },
         ],
       };
       await input.setInputFiles({ name: "capture.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(capture)) });
       await panel.getByRole("status").filter({ hasText: "已解析 2 份独立采样" }).waitFor();
+      if (!await panel.locator("tbody").first().getByText("[self]", { exact: true }).count()) throw new Error("Exporter unknown source frame disappeared");
       if (!await panel.getByText("main thread · 100.00 ms", { exact: true }).count()
         || !await panel.getByText("worker thread · 150.00 ms", { exact: true }).count()) throw new Error("Independent capture weights changed");
       await panel.getByLabel("热点排序").selectOption("inclusive");

@@ -93,6 +93,53 @@ const v8 = () => ({startTime: 100, endTime: 5100,
     {id: 20, callFrame: {functionName: "work", url: "worker.ts", lineNumber: 6}}],
   samples: [20, 10], timeDeltas: [3000, 2000]});
 
+test("normal exporter null source positions mean unknown, while wrong types stay invalid", () => {
+  const profile = sampled();
+  const exported = {...profile, shared: {frames: [
+    {name: "caller", file: "fixture.py", line: 7},
+    {name: "[self]", file: null, line: null}, {name: "wait"},
+  ]}};
+  const omitted = {...exported, shared: {frames: exported.shared.frames.map(({file, line, ...rest}) =>
+    ({...rest, ...(file != null ? {file} : {}), ...(line != null ? {line} : {})}))}};
+  assert.deepEqual(inspect({profile: exported}).profiles, inspect({profile: omitted}).profiles);
+  for (const position of [{file: 7}, {file: false}, {line: "7"}, {line: -1}]) {
+    assert.throws(() => inspect({profile: {...profile, shared: {frames: [{name: "bad", ...position}]},
+      profiles: [{...profile.profiles[0]!, samples: [[0]], weights: [1]}]}}), /frame\.(file|line)/);
+  }
+});
+
+test("one work budget covers shared frame expansion across independent profiles", () => {
+  const profile = {$schema: sampled().$schema,
+    shared: {frames: Array.from({length: 8192}, (_, i) => ({name: `frame-${i}`}))},
+    profiles: Array.from({length: 256}, () => ({type: "sampled", name: "thread",
+      unit: "milliseconds", startValue: 0, endValue: 1, samples: [[0]], weights: [1]}))};
+  assert.ok(JSON.stringify(profile).length < 256_000);
+  assert.throws(() => inspect({profile}), /work limit.*shorter capture/);
+});
+
+test("repeated V8 leaves retain sample counts, weights and every inclusive ancestor", () => {
+  const count = 1_000_000, depth = 1000;
+  const profile = {startTime: 0, endTime: count * 1000,
+    nodes: Array.from({length: depth}, (_, i) => ({id: i + 1,
+      callFrame: {functionName: `frame-${i}`}, children: i + 1 < depth ? [i + 2] : []})),
+    samples: Array(count).fill(depth), timeDeltas: Array(count).fill(1000)};
+  const main = inspect({profile}).profiles[0]!;
+  assert.equal(main.observations, count);
+  assert.equal(main.observed_weight_ms, count);
+  assert.equal(main.stack_weight_ms, count);
+  assert.deepEqual(main.self_hotspots.map(row => [row.name, row.self_ms]), [["frame-999", count]]);
+  assert.equal(main.inclusive_hotspots.length, 15);
+  assert.ok(main.inclusive_hotspots.every(row => row.inclusive_ms === count));
+  profile.samples[1] = 1; profile.timeDeltas[1] = 2000; profile.endTime += 1000;
+  const mixed = inspect({profile}).profiles[0]!;
+  assert.equal(mixed.observations, count);
+  assert.equal(mixed.observed_weight_ms, count + 1);
+  assert.equal(mixed.self_hotspots[0]!.self_ms, count - 1);
+  assert.equal(mixed.inclusive_hotspots[0]!.inclusive_ms, count + 1);
+  profile.timeDeltas[count - 1] = -1;
+  assert.throws(() => inspect({profile}), /nonnegative/);
+});
+
 test("V8 sparse node ids and microseconds map to real callsites", () => {
   const main = inspect({profile: v8()}).profiles[0]!;
   assert.equal(main.observed_weight_ms, 5);
