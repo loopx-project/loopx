@@ -475,8 +475,13 @@ Renewal uses the latest proved version, one unchanged-intent retry for a lost
 transport reply, and the last proved expiry even when renewal hangs. A rejected
 proof cancels the CLI; its TERM adapter unwinds nested managed Hosts before
 returning. Ordinary non-hard delegation keeps the existing subprocess route.
-Completion reads the current claim, persists its terminal CAS intent before the
-effect, and replays that exact completion after an ambiguous reply. Canonical
+After the supervised CLI returns, completion renews the original execution
+using its acquisition TTL before starting independent Todo acceptance. It
+journals the renewal version before the effect, then proves current authority
+and freezes the terminal CAS version. Lost renewal and completion replies each
+replay their original intent; neither replay can revive an expired or replaced
+execution. The validation phase makes no lease writes that would invalidate
+its provider-revision witness. Canonical
 completion releases the execution lease; subsequent original-Turn accounting
 uses its terminal receipt rather than reacquiring an open-work lease.
 
@@ -492,7 +497,11 @@ their own runtime instead of inheriting operator state.
 The acceptance slice uses disposable File/SQLite providers, real CLI/Turn
 execution and a synthetic model process: crossing the initial expiry, canonical
 release, a new execution epoch, lost completion/renewal replies and rejected or
-hung renewal, including control-pipe loss with a TERM-resistant process. It
+hung renewal, including control-pipe loss with a TERM-resistant process. Final
+Todo acceptance also crosses a short remaining lease deadline, with lost-reply,
+expiry and replacement controls. The Python delegation adapter only sequences
+the existing TS-owned claim, renew and terminal contracts; no provider rule,
+public setting or frontend permission changes. It
 does not qualify a paid model, remote job cancellation or
 Windows process-tree cleanup. Stop acknowledgements and interrupted-Turn
 no-progress settlement remain with the existing delegation-stop work (#5308);
