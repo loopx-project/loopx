@@ -84,8 +84,8 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
 
    Fix contradictory verdicts, not evidence labels. It cannot verify evidence truth,
    architecture, freshness or a relabeled old result.
-4. Publish the checked `review_body`; recheck after edits. Remote readback uses
-   the same body rules. Headings and a verdict alone cannot certify a review.
+4. Publish the checked `review_body`; recheck after edits. Replace `result.review_body`
+   with the remote readback and rerun `--check-result`; matching does not certify reasoning.
 5. Re-read the remote head immediately before verdict and publication; restart evidence if it changed.
 
 Each PR needs independent evidence and a standalone card; a queue table is a preface only.
@@ -136,7 +136,7 @@ Publish two artifacts:
    parser matches that token as a keyword, so `English verdict: Approved at ...` is invalid
    and leaves the head without a merge-ready approval; write `English verdict: APPROVE - ...`.
 
-Do not publish before the Chinese section covers the entire PR. Read both artifacts back.
+Do not publish before the Chinese section covers the entire PR. Follow the packet's `problem_context` publication rule for an understandable opening. Read both artifacts back.
 
 ## Example / Walkthrough / Smoke-Only PRs
 

@@ -106,10 +106,91 @@ def _review(*, area="product_runtime"):
         f"{REVIEWER_LINE}\n\n"
         + body.replace("HEAD_OID", "a" * 40).replace("VERDICT", "APPROVE")
     )
+    result["evidence"]["problem_context"].update(
+        affected_caller_or_operator="维护者需要阅读一份能单独理解的评审。",
+        before_after_scenario="此前仅有格式检查，解释可能留在内部证据中；现在正文展示场景和前后变化，减少反复询问。",
+        observable_outcome="此合成用例检查已声明解释与公开正文的一致性，不代表真实 PR 的验证结果。",
+        non_goals="检查的范围是正文可见性和一致性；理解是否正确仍由审查者判断。",
+    )
+    _publish_problem_explanation(result)
     return {"pull_requests": [item]}, result
 
 
 REVIEWER_LINE = "Reviewer: model_agent · Example Model 1 · Example Provider"
+
+
+def _publish_problem_explanation(result):
+    context = result["evidence"]["problem_context"]
+    fields = ["affected_caller_or_operator", "before_after_scenario",
+              "observable_outcome", "non_goals"]
+    if context["verdict"] == "justified_increment":
+        fields.append("remaining_gap")
+    body = result["review_body"]
+    start, end = body.index("## 动机"), body.index("## 改动思路")
+    explanation = "\n\n".join(context[field] for field in fields)
+    result["review_body"] = body[:start] + "## 动机\n\n" + explanation + "\n\n" + body[end:]
+
+
+def _reader_review():
+    packet, result = _review()
+    result["evidence"]["problem_context"].update(
+        affected_caller_or_operator="维护者在导出中断后重新执行同一条命令。",
+        before_after_scenario="以前响应丢失后，重试会重复导出数据；修复后读回上次结果，避免重复数据和人工清理。",
+        observable_outcome="本 PR 让原命令在重试时返回已经保存的导出结果，失败时给出可继续处理的错误。",
+        non_goals="本次范围是已有命令的重试，不增加自动调度；完成范围内修复不等于完成整个产品计划。",
+    )
+    _publish_problem_explanation(result)
+    return packet, result
+
+
+@pytest.mark.parametrize("field", ["affected_caller_or_operator", "before_after_scenario",
+                                  "observable_outcome", "non_goals"])
+@pytest.mark.parametrize("placement", ["evidence_only", "comment", "code", "later_section"])
+def test_problem_explanation_must_reach_visible_motivation(field, placement):
+    packet, result = _reader_review()
+    assert check_review_result(packet, result)["ok"]
+    text = result["evidence"]["problem_context"][field]
+    replacement = {"evidence_only": "", "comment": f"<!-- {text} -->",
+                   "code": f"```text\n{text}\n```", "later_section": ""}[placement]
+    result["review_body"] = result["review_body"].replace(text, replacement)
+    if placement == "later_section":
+        result["review_body"] += "\n\n" + text
+    checked = check_review_result(packet, result)
+    assert f"review_body:problem_explanation_not_published:{field}" in checked["errors"]
+    assert not checked["approval_consistent"]
+
+
+def test_markdown_emphasis_and_line_wrapping_preserve_published_explanation():
+    packet, result = _reader_review()
+    text = result["evidence"]["problem_context"]["before_after_scenario"]
+    result["review_body"] = result["review_body"].replace(text, "**" + text[:10] + "**\n" + text[10:])
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_reader_explanation_shape_does_not_certify_comprehension():
+    packet, result = _reader_review()
+    checked = check_review_result(packet, result)
+    assert checked["ok"]
+    assert not checked["evidence_truth_verified"]
+
+
+@pytest.mark.parametrize("value", [None, {}, ["hidden explanation"], " \n "])
+def test_reader_explanation_requires_public_prose(value):
+    packet, result = _reader_review()
+    result["evidence"]["problem_context"]["before_after_scenario"] = value
+    checked = check_review_result(packet, result)
+    assert "review_body:problem_explanation_not_text:before_after_scenario" in checked["errors"]
+
+
+def test_partial_delivery_must_publish_remaining_gap():
+    packet, result = _reader_review()
+    result["evidence"]["problem_context"].update(
+        verdict="justified_increment", remaining_gap="自动重试仍需已有调度任务接入。",
+        next_step="Existing task #43 owns scheduled retries.",
+        boundary_reason="The retry command can be independently verified and reverted.")
+    assert "review_body:problem_explanation_not_published:remaining_gap" in check_review_result(packet, result)["errors"]
+    _publish_problem_explanation(result)
+    assert check_review_result(packet, result)["ok"]
 
 
 def _mapped_spec_basis():
@@ -846,6 +927,9 @@ def _delivery_review(*, area="product_runtime", verdict="goal_achieved"):
         observable_outcome="The real command reuses the committed receipt; regression fails on base.",
         verdict=verdict,
     )
+    if verdict == "justified_increment":
+        result["evidence"]["problem_context"]["remaining_gap"] = "Scheduled retries remain in the owning scheduler task."
+    _publish_problem_explanation(result)
     return packet, result
 
 
@@ -890,6 +974,7 @@ def test_qualified_increment_does_not_have_to_finish_the_parent_goal(area):
         next_step="Existing recovery task #43 consumes this writer; its owner retains scheduling.",
         boundary_reason="Durability is independently testable and revertible; coupling scheduler behavior would obscure this contract.",
     )
+    _publish_problem_explanation(result)
     assert check_review_result(packet, result)["approval_consistent"]
     for field in ("remaining_gap", "next_step", "boundary_reason"):
         incomplete = copy.deepcopy(result)
@@ -905,6 +990,7 @@ def test_completed_scoped_task_does_not_require_invented_followup():
         observable_outcome="The documented command succeeds on the supported release.",
         non_goals="No claim of implementing the broader product roadmap.",
     )
+    _publish_problem_explanation(result)
     assert check_review_result(packet, result)["approval_consistent"]
     assert not check_review_result(packet, result)["evidence_truth_verified"]
 

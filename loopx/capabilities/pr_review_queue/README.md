@@ -586,6 +586,26 @@ Chinese review carries the depth and evidence; the English verdict carries the
 machine-readable state and validation summary. A findings-only or blocker-only
 body is not a complete PR review.
 
+The opening `动机` must stand alone for a reader unfamiliar with the repository:
+who encounters the problem, one triggering task and concrete before/after
+example, the old failure's practical cost, the proposed improvement, and this
+PR's scope. Define necessary terms when they first appear. Keep symbols,
+specification criteria, test counts and the detailed verdict in the later
+sections; they support the explanation rather than replace it.
+
+Reuse `problem_context.affected_caller_or_operator`, `before_after_scenario`,
+`observable_outcome` and `non_goals` as concise public-safe sentences and publish
+their wording in `动机`. For `justified_increment`, also publish `remaining_gap`.
+For example: a maintainer retries an interrupted export; previously a lost
+response caused duplicate rows and manual cleanup; the proposed change returns
+the saved result; automatic scheduling remains outside the command repair.
+Separate intended behavior from reviewer-verified behavior and remaining
+defects. `--check-result` rejects explanations confined to structured evidence,
+HTML comments, code fences or later sections, while allowing ordinary Markdown
+emphasis and line wrapping. Read the remote body back into the same result and
+rerun the check. Matching proves visibility and consistency; the reviewer still
+judges whether the scenario is supported and the explanation understandable.
+
 Each complete PR review must also include whole-PR interpretation depth:
 per-file responsibility mapping, 2-5 key symbol explanations with exact-head
 references, one positive runtime walkthrough, one negative/fail-closed
