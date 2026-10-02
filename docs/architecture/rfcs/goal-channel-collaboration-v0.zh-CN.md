@@ -336,7 +336,9 @@ Agent 自行恢复的工作留在后台；用户决定保留对象、条款、�
 已准入的外部通知使用配置的管家执行器 / 模型，在独立、restricted Chat Turn 中生成
 （启动最多 30 秒，推理最多 90 秒）。读取限定本 Goal 与 audience，不增加宿主、
 委托或发布授权。生成前后核验 canonical 请求内容与 blocker revision；正文保留精确
-请求引用以保护回复路由。执行 / fallback 未评估时保持未知，建议不证明 worker 正在运行。
+请求引用以保护回复路由：新生成与缓存正文均须包含每个完整编号的独立 token，周围
+允许标点与 Markdown，带前缀或后缀的编号不满足该投递义务。执行 / fallback 未评估
+时保持未知，建议不证明 worker 正在运行。
 
 生成正文在发送前保存到已有私有 effect receipt；重试沿用相同正文与 provider key。
 已核验 gate 消息记录覆盖的阻塞版本，blocker adapter 不再重复发送同一事实。
