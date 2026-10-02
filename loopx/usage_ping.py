@@ -17,7 +17,7 @@ from .paths import select_default_runtime_root
 
 STATE_FILENAME = "usage-ping.json"
 # Scheduling hint only; keep aligned with the TypeScript notice revision.
-_NOTICE_VERSION = 5
+_NOTICE_VERSION = 6
 _ENTRY = Path(__file__).parent / "control_plane/runtime/usage_statistics_cli.ts"
 _observation: ContextVar[dict[str, Any] | None] = ContextVar("usage_observation", default=None)
 

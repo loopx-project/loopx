@@ -23,6 +23,11 @@ class UsageStatisticsRequestMixin:
     def _usage_statistics_update(self) -> None:
         try:
             body = self._read_json()
+            if set(body) == {"context"} and isinstance(body["context"], str):
+                if body["context"] not in {"unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"}:
+                    raise ValueError("invalid deployment context")
+                self._usage_statistics_request("context", context=body["context"])
+                return
             if set(body) == {"notice"} and isinstance(body["notice"], dict):
                 self._usage_statistics_request("acknowledge", notice=body["notice"])
                 return
