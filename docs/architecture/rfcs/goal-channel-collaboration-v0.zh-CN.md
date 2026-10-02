@@ -335,7 +335,8 @@ Agent 自行恢复的工作留在后台；用户决定保留对象、条款、�
 已有 human gate 与 blocked notice sender 共用管家生成适配器，替换两套固定消息模板。
 已准入的外部通知使用配置的管家执行器 / 模型，在独立、restricted Chat Turn 中生成
 （启动最多 30 秒，推理最多 90 秒）。读取限定本 Goal 与 audience，不增加宿主、
-委托或发布授权。生成前后核验 canonical 请求内容与 blocker revision；正文保留精确
+委托或发布授权。生成前后核验选中请求内容、生命周期、blocker revision 与引用的
+继续工作依据；仍完整读取 canonical 来源，无关 Todo 更新或新增不使本通知失效。正文保留精确
 请求引用以保护回复路由：新生成与缓存正文均须包含每个完整编号的独立 token，周围
 允许标点与 Markdown，带前缀或后缀的编号不满足该投递义务。执行 / fallback 未评估
 时保持未知，建议不证明 worker 正在运行。

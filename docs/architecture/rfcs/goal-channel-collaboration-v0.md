@@ -386,8 +386,10 @@ adapter instead of separate message templates. An admitted external notification
 uses the configured steward executor/model in an isolated, restricted Chat Turn
 (startup up to 30 seconds, reasoning up to 90 seconds). Read authority is limited
 to this Goal and audience; no host, delegation or publication grant is added.
-Canonical request content and blocker revisions are checked before and after
-synthesis. Exact request references protect reply routing: fresh and cached bodies
+Canonical request content, lifecycle, blocker revisions and referenced continuation
+facts are checked before and after synthesis. Full canonical reads remain required;
+unrelated Todo updates or creation do not invalidate the selected notice. Exact
+request references protect reply routing: fresh and cached bodies
 must contain each complete identifier as a whole token. Punctuation and Markdown
 may surround it; a prefixed or suffixed identifier does not satisfy this delivery
 obligation. Unknown execution or fallback remains unknown; advice is not proof
