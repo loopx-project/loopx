@@ -300,6 +300,23 @@ on September 14 at `e98191faa`; its final result and applicability to the curren
 candidate still need evidence. Do not call it unstarted or restart its clock
 solely because an unrelated source revision changed.
 
+At source `613180ae`, the matched 64 KiB macOS run passes 13 rows, fails
+cold CLI status p95 (4.39 s against 2 s), and leaves 11 missing. The Linux
+storage-only run passes 12 rows with 13 missing; its smaller CLI rehearsal is
+not the formal CLI axis. Opt-in `performance-diagnosis` captures Python wall
+time, independent Node CPU, and Linux thread stacks on disposable targets.
+Startup, candidate scanning and waits are hypotheses to test with unchanged
+uninstrumented workloads; profile weights do not replace this admission failure.
+
+[#5283](https://github.com/loopx-project/loopx/pull/5283) is the adjacent
+read-only delegation preflight optimization, not a provider implementation.
+Its current process-reuse candidate reports paired File/SQLite warm gains with
+an explicit cold-start cost; retain it for exact-head review, installed readback
+and real requester adoption. Qualify that repeated consumer independently from
+the cold-only status workload above. Keep decisions fresh at the existing TS/CLI
+owners; the pinned Python worker remains transport, not a new decision cache.
+Retire Python rules only when their TS replacement and last callers are proven.
+
 Last-caller Python decision retirement can proceed independently where the TS
 replacement and affected real callers are proven. Whole Markdown writer removal
 still requires C's new-Goal/upgrade/recovery exits. Complete consumer metadata,

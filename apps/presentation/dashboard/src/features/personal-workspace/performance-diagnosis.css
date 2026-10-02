@@ -1,0 +1,11 @@
+.personal-capability-scope-note.personal-performance-diagnosis { max-height: min(440px, 40dvh); font-size: 12px; }
+.personal-performance-diagnosis > summary { position: sticky; top: 0; padding: 8px 0; background: var(--pw-bg); z-index: 1; }
+.personal-capability-scope-note.personal-performance-diagnosis p { padding-left: 0; }
+.personal-performance-diagnosis label { display: grid; gap: 6px; margin-block: 10px; }
+.personal-performance-diagnosis input, .personal-performance-diagnosis select { width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 1px solid var(--pw-line-strong); border-radius: 6px; color: var(--pw-text); background: var(--pw-card); font: inherit; }
+.personal-performance-diagnosis [role="alert"] { color: var(--pw-red); }
+.personal-performance-hotspots { overflow-x: auto; }
+.personal-performance-hotspots table { width: 100%; border-collapse: collapse; margin-block: 10px; }
+.personal-performance-hotspots th, .personal-performance-hotspots td { padding: 8px; text-align: left; border-bottom: 1px solid var(--pw-line); }
+.personal-performance-hotspots td:first-child { overflow-wrap: anywhere; }
+.personal-performance-hotspots small { display: block; color: var(--pw-muted); }

@@ -67,6 +67,21 @@ def _visible_lines(body: str) -> Iterator[str]:
         yield visible
 
 
+def visible_review_text(body: str) -> str:
+    return "\n".join(_visible_lines(body))
+
+
+def reviewer_declaration_lines(body: str) -> list[str]:
+    # Same visibility rule as the English verdict: a comment or fenced block
+    # cannot carry the declaration a reader is meant to see.
+    lines: list[str] = []
+    for line in _visible_lines(body):
+        match = re.match(r"(?i)^reviewer\s*:\s*(.+)$", line.strip().replace("**", ""))
+        if match:
+            lines.append(match.group(1).strip())
+    return lines
+
+
 def _prose_size(lines: list[str]) -> int:
     prose = "\n".join(dict.fromkeys(lines))
     prose = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", prose)

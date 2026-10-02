@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-import loopx.cli_commands.turn as turn_command
+import loopx.cli_commands.turn_run_once as turn_run_once_command
 from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
@@ -1651,7 +1651,15 @@ def test_turn_cli_projects_explicit_fresh_iteration_context(
 
 def test_turn_cli_binds_advisory_primary_without_hiding_portfolio(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        turn_run_once_command,
+        "execute_turn_run_once",
+        lambda *_args, **_kwargs: pytest.fail(
+            "turn plan must not call the run-once execution owner"
+        ),
+    )
     project, runtime, registry = _write_live_fixture(
         tmp_path,
         todo_metadata_extra="successor_todo_ids=todo_fixture0002",
@@ -2290,7 +2298,7 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
         host_script,
         validation_script,
     )
-    real_completion = turn_command.write_turn_validated_completion
+    real_completion = turn_run_once_command.write_turn_validated_completion
     committed_results: list[dict[str, object]] = []
 
     def crash_after_canonical_completion(**kwargs: object) -> dict[str, object]:
@@ -2301,7 +2309,7 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
         return result
 
     monkeypatch.setattr(
-        turn_command,
+        turn_run_once_command,
         "write_turn_validated_completion",
         crash_after_canonical_completion,
     )
@@ -2454,7 +2462,7 @@ def test_turn_run_once_cli_repairs_committed_quota_spend_after_receipt_crash(
         host_script,
         validation_script,
     )
-    append_rollout_event = turn_command.append_cli_rollout_event
+    append_rollout_event = turn_run_once_command.append_cli_rollout_event
 
     def crash_before_quota_receipt(
         payload: dict[str, object],
@@ -2465,7 +2473,7 @@ def test_turn_run_once_cli_repairs_committed_quota_spend_after_receipt_crash(
         return append_rollout_event(payload, **kwargs)
 
     monkeypatch.setattr(
-        turn_command,
+        turn_run_once_command,
         "append_cli_rollout_event",
         crash_before_quota_receipt,
     )
@@ -2498,7 +2506,7 @@ def test_turn_run_once_cli_repairs_committed_quota_spend_after_receipt_crash(
     assert quota_rows[0]["agent_id"] == "codex-fixture"
 
     monkeypatch.setattr(
-        turn_command,
+        turn_run_once_command,
         "append_cli_rollout_event",
         append_rollout_event,
     )
@@ -3096,8 +3104,8 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     monkeypatch: pytest.MonkeyPatch,
     result_kind: str,
 ) -> None:
-    from loopx.cli_commands.turn import (
-        build_turn_envelope as real_build_turn_envelope,
+    from loopx.cli_commands.turn import build_turn_envelope as real_build_turn_envelope
+    from loopx.cli_commands.turn_run_once import (
         refresh_state_run as real_refresh_state_run,
         spend_quota_slot as real_spend_quota_slot,
     )
@@ -3186,17 +3194,20 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
             "summary": "One public fixture advanced.",
         }
 
-    monkeypatch.setattr("loopx.cli_commands.turn.run_codex_cli_host", fake_codex_host)
+    monkeypatch.setattr(
+        "loopx.cli_commands.turn_run_once.run_codex_cli_host",
+        fake_codex_host,
+    )
     monkeypatch.setattr(
         "loopx.cli_commands.turn.build_turn_envelope",
         adaptive_turn_envelope,
     )
     monkeypatch.setattr(
-        "loopx.cli_commands.turn.refresh_state_run",
+        "loopx.cli_commands.turn_run_once.refresh_state_run",
         recording_refresh_state_run,
     )
     monkeypatch.setattr(
-        "loopx.cli_commands.turn.spend_quota_slot",
+        "loopx.cli_commands.turn_run_once.spend_quota_slot",
         recording_spend_quota_slot,
     )
     monkeypatch.setattr(
@@ -3346,11 +3357,14 @@ def test_turn_run_once_codex_cli_wires_validated_reflection_post_settlement(
         }
 
     monkeypatch.setattr(
-        "loopx.cli_commands.turn.run_codex_cli_host",
+        "loopx.cli_commands.turn_run_once.run_codex_cli_host",
         fake_codex_host,
     )
     monkeypatch.setattr(
-        "loopx.cli_commands.turn.run_configured_turn_outcome_ingest_fail_open",
+        (
+            "loopx.cli_commands.turn_run_once."
+            "run_configured_turn_outcome_ingest_fail_open"
+        ),
         fake_ingest,
     )
     output = io.StringIO()
@@ -3452,7 +3466,11 @@ def test_turn_run_once_cli_resumes_session_from_recoverable_failed_turn(
         fake_session_binding,
     )
     monkeypatch.setattr(
-        "loopx.cli_commands.turn.run_codex_cli_host",
+        "loopx.cli_commands.turn_run_once.codex_cli_session_binding",
+        fake_session_binding,
+    )
+    monkeypatch.setattr(
+        "loopx.cli_commands.turn_run_once.run_codex_cli_host",
         fake_codex_host,
     )
     argv = [

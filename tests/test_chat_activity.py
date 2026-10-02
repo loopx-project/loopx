@@ -7,7 +7,7 @@ import sys
 import pytest
 from pathlib import Path
 
-from loopx.chat_activity import (
+from loopx.presentation.codex_activity import (
     COMMAND_VERBS,
     REASONING_UPDATE_INTERVAL_SEC,
     STEP_KINDS,

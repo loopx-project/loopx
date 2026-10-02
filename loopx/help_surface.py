@@ -331,6 +331,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             {"command": "loopx multi-agent", "purpose": "Launch visible role-scoped Codex TUI agents."},
             {"command": "loopx canary", "purpose": "Plan or run catalog-informed smoke profiles."},
             {
+                "command": "loopx performance-diagnosis --help",
+                "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
+            },
+            {
                 "command": "loopx promotion-readiness",
                 "purpose": "Record release-scoped canary readiness evidence in the shared runtime ledger.",
             },

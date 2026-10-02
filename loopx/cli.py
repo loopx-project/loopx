@@ -92,6 +92,10 @@ from .capabilities.external_research.cli import (
     handle_external_evidence_command,
     register_external_evidence_commands,
 )
+from .capabilities.performance_diagnosis.cli import (
+    handle_performance_diagnosis_command,
+    register_performance_diagnosis_commands,
+)
 from .cli_commands import (
     handle_benchmark_command,
     handle_bootstrap_connect_command,
@@ -329,6 +333,7 @@ def build_parser() -> LoopXArgumentParser:
     register_connector_commands(sub, add_subcommand_format)
 
     register_external_evidence_commands(sub, add_subcommand_format)
+    register_performance_diagnosis_commands(sub, add_subcommand_format)
 
     register_ml_experiment_commands(sub, add_subcommand_format)
 
@@ -699,6 +704,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     if external_evidence_result is not None:
         return external_evidence_result
+
+    performance_diagnosis_result = handle_performance_diagnosis_command(
+        args, output_format=output_format, print_payload=print_payload,
+    )
+    if performance_diagnosis_result is not None:
+        return performance_diagnosis_result
 
     registry_admin_result = handle_registry_admin_command(
         args,

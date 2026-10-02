@@ -394,6 +394,29 @@ offline transport/state cases; real semantic/model and installed-channel
 acceptance run on a pinned release candidate under the existing paid-evaluation
 policy. This pilot remains unqualified until those observations exist.
 
+The [fixed-context material suite](../../../../examples/evaluations/chat-material.public.json)
+executes these seven intake counterfactuals with the existing release-only
+runner. Its attachment, notes and checks are synthetic public fixtures; its
+source digests identify the supplied text. Run it explicitly at release time:
+
+```sh
+uv run --extra test python examples/evaluations/chat-intake.py --live \
+  --provider codex --model MODEL --cases examples/evaluations/chat-material.public.json \
+  --output .local/evaluation/material-intake.json
+```
+
+Review each saved `review_response` against the variant facts, especially the
+receiver brief's App-only/no-publish constraints, supported uncertainty and
+claims about note writes or completion. `passed` counts structural checks;
+`review_required` keeps factual judgment separate. The local report includes
+visible answers and parsed briefs, so inspect it before sharing. It does not
+store raw provider payloads, tool events or provider error text. This explicitly
+selected suite leaves the default intake suite and its paid request budget
+unchanged. It qualifies supplied-context reasoning only; note writes, dynamic
+discovery, receiver adoption, installed App/Lark and original return still need
+the whole pilot above. Routine checks exercise provider doubles without model
+calls or credentials.
+
 ## Small-team acceptance: coordination must change the result
 
 GQ11 starts from the same frozen public reports as GQ05, with a shared question,

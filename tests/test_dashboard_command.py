@@ -862,6 +862,11 @@ def test_dashboard_launcher_discovers_agent_bins_outside_restricted_path(
     fake_bin.mkdir()
     npm_global.mkdir(parents=True)
     nvm_bin.mkdir(parents=True)
+    # Keep shell utilities available without admitting host-installed agents.
+    for utility in ("bash", "dirname", "sort", "uniq"):
+        executable = shutil.which(utility)
+        assert executable is not None
+        (fake_bin / utility).symlink_to(executable)
     _copy_dashboard_launcher(scripts_dir)
     (dashboard_dir / "node_modules" / ".bin").mkdir(parents=True)
     (dashboard_dir / "node_modules" / ".bin" / "vite").touch()
@@ -899,7 +904,7 @@ def test_dashboard_launcher_discovers_agent_bins_outside_restricted_path(
         env={
             **os.environ,
             "HOME": str(home),
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "PATH": str(fake_bin),
             "NVM_DIR": str(home / ".nvm"),
             "NVM_BIN": str(nvm_bin),
             "LOOPX_COMMAND_LOG": str(command_log),
