@@ -576,7 +576,7 @@ async function auxiliaryMonitorAllowed(
   if (!request.runtime_root || !request.turn_instance_id || !decision.agent_id ||
       observation.actor_agent_id !== decision.agent_id ||
       todo === null || todo.todo_id !== settlementTodo || todo.task_class !== "advancement_task" ||
-      !["open", "done"].includes(String(todo.status)) ||
+      !["open", "done", "blocked"].includes(String(todo.status)) ||
       (todo.claimed_by != null && todo.claimed_by !== decision.agent_id) ||
       (todo.excluded_agents != null && (!Array.isArray(todo.excluded_agents) ||
         todo.excluded_agents.some(value => typeof value !== "string") ||
@@ -589,6 +589,11 @@ async function auxiliaryMonitorAllowed(
     if (settlement?.found !== true || jsonObject(jsonObject(settlement.identity)?.result)?.failure !== null ||
         progress?.schema_version !== "quota_settlement_progress_v0" ||
         progress.state === "identity_required") throw conflict();
+    // A later lifecycle hold cannot invalidate an already settled Turn's
+    // independent observation. An unsettled hold still requires recovery;
+    // neither case grants execution of the held advancement Todo.
+    if (todo.status === "blocked" &&
+        progress.state !== "settled") throw conflict();
   }
   const monitor = decision.registry_due_monitor;
   // Retain ordinary quota/due-work admission and capability/gate projections;

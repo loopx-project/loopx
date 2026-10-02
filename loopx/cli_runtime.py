@@ -303,7 +303,7 @@ def _dispatch_common_command(
 	if args.command == "doctor":
 		from .cli_commands.doctor import handle_doctor_command
 
-		return handle_doctor_command(args, print_payload)
+		return handle_doctor_command(args, print_payload, registry_path=registry_path)
 	if args.command == "commands":
 		from .help_surface import (
 			build_command_reference_payload, render_command_reference_markdown,

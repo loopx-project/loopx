@@ -1,4 +1,5 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import type { TurnStep } from "../../data/turn-steps";
 import type { CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
@@ -299,6 +300,7 @@ export type WorkspaceMessage = {
   createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
+  steps?: TurnStep[];
   collaboration?: CollaborationReadback;
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];

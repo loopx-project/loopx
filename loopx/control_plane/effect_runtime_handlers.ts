@@ -19,13 +19,13 @@ import {evaluateUserCompletion} from "./todos/user_completion.ts";
 import {projectTodoSuccession} from "./todos/succession.ts";
 import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {sealProjectionEnvelope} from "./projection_envelope.ts";
-import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationWakeObservation, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {resolveConversationTrigger} from "./collaboration/conversation_trigger.ts";
 import {admitGoalDraft} from "./collaboration/goal_draft.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {projectConversationReplyContext} from "./collaboration/conversation_reply_context.ts";
-import {planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
+import {mayContinueChatTurn, planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
 import {commitLocalTeamPlan} from "./work_items/team_plan_authority.ts";
 import {inspectLocalGoalAcceptance, commitLocalGoalAcceptance,
@@ -762,7 +762,9 @@ export function createEffectRuntimeHandlers(
     ["collaboration.conversation.scope", resolveConversationScope],
     ["collaboration.conversation.reply_context", projectConversationReplyContext],
     ["chat.turn.accept", planChatTurnAcceptance],
+    ["chat.turn.execution_allowed", mayContinueChatTurn],
     ["collaboration.delegation.observe", transitionDelegationObservation],
+    ["collaboration.delegation.observe_wake", decideDelegationWakeObservation],
     ["collaboration.delegation.recover_validated_settlement", recoverValidatedDelegationSettlement],
     ["collaboration.delegation.adoption", recordDelegationAdoption],
     [

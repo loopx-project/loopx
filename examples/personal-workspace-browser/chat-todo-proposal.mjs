@@ -124,13 +124,16 @@ export const chatTodoProposalScenario = {
       await composer.fill(RECOVERY_PROMPT);
       await page.getByRole("button", { name: "发送", exact: true }).click();
       await waitFor(() => api.turnRequests.length > turnsBeforeRecovery, "The recovery prompt was not sent");
+      // Arm the transient failure before reload: on a slow page, recovery can
+      // finish while the Goal Chat tab is reopening.
+      api.failNextActionPreview = true;
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await openGoalChat();
-      api.failNextActionPreview = true;
       await page.locator(".personal-channel-timeline").getByText("恢复后给出一个步骤。", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
       const recoveredCard = page.locator(".personal-proposal-row", { hasText: RECOVERY_TEXT });
-      await recoveredCard.waitFor({ state: "visible", timeout: 5_000 });
+      await recoveredCard.waitFor({ state: "visible", timeout: 15_000 });
+      if (api.failNextActionPreview) throw new Error("Recovery did not exercise the transient preview failure");
       await waitFor(() => new Set(previewsWithText(RECOVERY_TEXT).map((item) => item.idempotency_key)).size === 1,
         "The recovered proposal did not map to exactly one Todo preview");
       const [recoveredPreview] = previewsWithText(RECOVERY_TEXT);

@@ -206,6 +206,9 @@ profile's promotion status.
 Use existing domain tasks and roadmap checkpoints for execution; this plan does
 not require unrelated migrations before a bounded repair can ship.
 
+The [quiet-to-due Monitor checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-monitor-quiet-due-recovery.md)
+records bounded CLI replay/successor evidence and its explicit M2/M3 limits.
+
 ## 12. Open decisions
 
 The first M2 implementation must choose its smallest sufficient exploration

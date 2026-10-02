@@ -167,6 +167,9 @@ provider 会使相应前提不成立；必须暴露这个事实，不能判定�
 
 执行沿用领域任务与总路线 checkpoint，不要求无关迁移先于有界修复完成。
 
+[Monitor 静默到到期 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-monitor-quiet-due-recovery.zh-CN.md)
+记录有界 CLI 重放／successor 证据，并明确 M2／M3 尚未覆盖的部分。
+
 ## 12. 未决事项
 
 首个 M2 实现由测试与领域维护者选择足够小的探索方法及边界。优先复用 fixture

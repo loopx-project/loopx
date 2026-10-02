@@ -271,9 +271,24 @@ Scale characterization with 4,101 synthetic Agent Todos still hits the existing
 repair for File/SQLite. The repaired contract API can read that collection;
 this does not qualify the remaining whole-command payload boundary.
 
-The next B work is SQLite admission on a frozen source/runtime profile: rerun
-the existing reference capacity axes, reconcile concurrency/recovery/consumer-lag
-evidence, and verify the applicability of retained natural-time soak results.
+B distinguishes a bounded provider PR, a recoverable opt-in developer cohort,
+and the release default, as specified in Section 7.2 of the owning RFC. Proposed
+absolute latency budgets do not veto every merge or trial: use matched current
+release measurements, disclose absolute and relative regressions, and inspect
+their consumer impact. Correctness, original receipts, complete metadata and
+recoverable migrations remain hard requirements. Frozen reports retain their
+original budgets and failed/missing rows; revising a decision does not rewrite
+past evidence.
+
+[PR #5251](https://github.com/loopx-project/loopx/pull/5251) refines strict JSON
+materialization behind the existing codec owner. It preserves persisted
+canonical encoding while avoiding repeated immutable primitive allocation in
+historical projections. Its historical formal reports are source-specific:
+the author reports 8 passed / 6 failed / 10 missing on `d767b06f1`, then
+14 passed / 0 failed / 10 missing on `02d3dee83`; neither report qualifies a
+later head, nor completes the missing axes. The next qualification reconciles
+changed-path measurements and affected real providers/callers, then verifies
+concurrency, recovery, consumer lag and retained natural-time soak applicability.
 The comparison runner's former conflict expectation contradicted merged #5169:
 an identical historical intent must return its original applied revision/cursor.
 The runner now checks that result, independently rejects projection/event/receipt

@@ -15,4 +15,21 @@ for (const cards of [[older, newDraft, undated], [undated, newDraft, older]]) {
 }
 assert.deepEqual(conversationOrder([message("user", "2026-10-01T00:00:00Z"), message("reply", "2026-10-01T00:00:00Z")]).map(i => i.id), ["user", "reply"]);
 assert.deepEqual(conversationOrder([current, proposal("invalid", "invalid")]).map(i => i.id), ["invalid", "question"]);
-console.log("Conversation creation order passed");
+
+// The service stores its user message after admitting the Turn. An optimistic
+// work row must follow its request even when that durable timestamp is newer.
+const inTurn = (id, role, createdAt, pending = false, session = "one") => ({
+  id, kind: "message", message: {id, role, createdAt, pending,
+    sourceSessionId: session, sourceTurnId: "turn", text: id},
+});
+const request = inTurn("request", "user", "2026-10-01T02:00:00.050Z");
+const working = inTurn("working", "assistant", "2026-10-01T02:00:00.000Z", true);
+const correction = inTurn("correction", "user", "2026-10-01T02:00:01Z");
+for (const input of [[working, request, correction], [correction, request, working]]) {
+  assert.deepEqual(conversationOrder(input).map(i => i.id), ["request", "working", "correction"]);
+}
+const otherSession = inTurn("other-session", "user", "2026-10-01T02:00:02Z", false, "two");
+assert.deepEqual(conversationOrder([otherSession, working]).map(i => i.id), ["working", "other-session"], "Turn ids alone never cross session boundaries");
+const finished = {...working, message: {...working.message, pending: false, createdAt: "2026-10-01T02:00:03Z"}};
+assert.deepEqual(conversationOrder([finished, correction, request]).map(i => i.id), ["request", "correction", "working"], "The stored completion follows its correction");
+console.log("Conversation request, work and correction order passed");

@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import shutil
-import stat
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -26,6 +25,7 @@ from ...paths import (
     LEGACY_PROJECT_GOALS,
     LEGACY_RUNTIME_ROOT,
     GLOBAL_REGISTRY_FILENAME,
+    _is_redirected_path,
 )
 from ...runtime import validate_goal_id_path_segment
 
@@ -48,22 +48,6 @@ def _absolute(path: Path) -> Path:
 
 def _within(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
-
-
-def _is_redirected_path(path: Path) -> bool:
-    is_junction = getattr(path, "is_junction", lambda: False)()
-    # Python 3.11 lacks Path.is_junction; Windows exposes reparse-point
-    # attributes through lstat, so reject those as well.
-    reparse_point = False
-    if os.name == "nt":
-        try:
-            attributes = getattr(path.lstat(), "st_file_attributes", 0)
-        except FileNotFoundError:
-            attributes = 0
-        reparse_point = bool(
-            attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        )
-    return path.is_symlink() or is_junction or reparse_point
 
 
 def _require_unlinked_directory_chain(path: Path, *, label: str) -> None:

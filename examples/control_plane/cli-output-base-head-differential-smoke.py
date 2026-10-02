@@ -62,8 +62,19 @@ def _run_probe(
 ) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(source_root)
+    # Both revisions measure the same fixture, including implicit machine
+    # defaults. Never let the operator's registry/configuration select a host.
+    isolated_current = str(fixture_root / "host-runtime")
+    isolated_legacy = str(fixture_root / "legacy-runtime")
+    bootstrap = (
+        "import pathlib, runpy, sys; from loopx import paths; "
+        f"paths.DEFAULT_RUNTIME_ROOT=pathlib.Path({isolated_current!r}); "
+        f"paths.LEGACY_RUNTIME_ROOT=pathlib.Path({isolated_legacy!r}); "
+        "sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+    )
+    env["LOOPX_RUNTIME_ROOT"] = isolated_current
     command = [
-            sys.executable,
+            sys.executable, "-c", bootstrap,
             str(probe_runner),
             "--test-source",
             str(probe_test),

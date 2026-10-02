@@ -780,14 +780,21 @@ class Delegations:
             "conversation": row.get("conversation"),
         }
 
-    def wake_observed_in_turn(self, operation_id: str) -> dict | None:
+    def wake_observed_in_turn(self, operation_id: str, *, session_id: str) -> dict | None:
         """The requester read this accepted result inside its own Turn; no wake follows."""
         path = self.path(require_operation_id(operation_id))
         if not path.exists():
             return None
+        def observe(wake: dict) -> dict | None:
+            decision = effect_runtime_result("collaboration.delegation.observe_wake", {
+                "intent": wake,
+                "observer": {"session_id": session_id, "goal_id": self.goal_id,
+                             "agent_id": self.agent_id, "goal_ref": self._caller_goal_ref()},
+            })
+            return (wake_receipt(wake, "observed_in_turn", observed_at=time.time())
+                    if decision["observed"] else None)
         try:
-            return record_wake(path, lambda wake: wake_receipt(
-                wake, "observed_in_turn", observed_at=time.time()))
+            return record_wake(path, observe)
         except LockAcquireTimeoutError:
             # The worker or another decision still holds the record; the pump
             # re-reads the current state and the observation remains readable.

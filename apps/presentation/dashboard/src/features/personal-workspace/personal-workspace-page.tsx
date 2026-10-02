@@ -1108,7 +1108,7 @@ export function PersonalWorkspacePage({
     const frame = window.requestAnimationFrame(scrollToLatestMessage);
     return () => window.cancelAnimationFrame(frame);
   }, [conversationOpen, selectedGoalId, selectedAgentId, conversationMessages.length,
-    latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length]);
+    latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length, latestMessage?.steps]);
   const drawerSelection = useMemo<Exclude<WorkspaceDrawerSelection, { kind: "settings" }> | null>(() => {
     if (selection?.kind === "settings") return null;
     if (selection?.kind === "proposal") {

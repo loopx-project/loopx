@@ -20,6 +20,10 @@ import argparse
 import json
 from collections.abc import Callable
 from pathlib import Path
+from functools import partial
+
+from ..history import load_registry
+from ..paths import resolve_runtime_root
 
 from ..self_update import (
     UpdateAction,
@@ -156,6 +160,8 @@ def handle_update_command(
                 archive_url=args.archive_url,
                 action=update_action,
                 doctor_payload=doctor_payload,
+                registry_path=registry_path,
+                runtime_root=args.runtime_root,
             )
             payload["installed_doctor_source"] = (
                 "explicit_json" if doctor_payload is not None else "current_runtime"
@@ -166,10 +172,19 @@ def handle_update_command(
                 from ..control_plane.heartbeat.installed_prompt_update import (
                     update_with_prompts,
                 )
+                selected_registry = registry_path if registry_was_supplied else explicit_global_registry(
+                    args.runtime_root, registry_path=registry_path,
+                )
+                selected_runtime = resolve_runtime_root(
+                    load_registry(selected_registry) if selected_registry.exists() else {},
+                    args.runtime_root, registry_path=selected_registry,
+                )
                 payload = update_with_prompts(
-                    payload, registry=(registry_path if registry_was_supplied else explicit_global_registry(args.runtime_root)),
+                    payload, registry=selected_registry,
                     runtime_root=args.runtime_root,
-                    timeout_seconds=args.timeout_seconds, runtime_update=execute_update_plan,
+                    timeout_seconds=args.timeout_seconds, runtime_update=partial(
+                        execute_update_plan, registry_path=selected_registry, runtime_root=str(selected_runtime),
+                    ),
                 )
     except Exception as exc:
         payload = {

@@ -101,7 +101,7 @@ def _target_binding(registry_path: Path) -> dict[str, Any]:
     return target
 
 
-def test_refresh_lifecycle_checks_extension_before_private_opt_in(
+def test_refresh_lifecycle_unconfigured_does_not_require_extension(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -129,7 +129,7 @@ def test_refresh_lifecycle_checks_extension_before_private_opt_in(
     assert result["ok"] is True
     assert result["enabled"] is False
     assert result["status"] == "not_configured"
-    assert calls == [tmp_path / "runtime" / "extensions" / "state.json"]
+    assert calls == []
 
 
 def test_refresh_lifecycle_shared_registry_without_source_binding_is_safe_noop(
@@ -167,7 +167,7 @@ def test_refresh_lifecycle_shared_registry_without_source_binding_is_safe_noop(
     assert result["status"] == "project_binding_unavailable"
 
 
-def test_refresh_lifecycle_suppression_checks_extension_but_skips_quota(
+def test_refresh_lifecycle_suppression_skips_extension_and_quota(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -198,10 +198,10 @@ def test_refresh_lifecycle_suppression_checks_extension_but_skips_quota(
     assert result["ok"] is True
     assert result["enabled"] is True
     assert result["status"] == "external_sink_suppressed"
-    assert activation_calls == 1
+    assert activation_calls == 0
 
 
-def test_refresh_lifecycle_no_gate_checks_extension_without_delivery(
+def test_refresh_lifecycle_no_gate_does_not_require_extension(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -241,13 +241,13 @@ def test_refresh_lifecycle_no_gate_checks_extension_without_delivery(
     assert result["ok"] is True
     assert result["enabled"] is True
     assert result["status"] == "not_selected"
-    assert result["extension_activation"] == {"status": "active"}
+    assert "extension_activation" not in result
     assert len(status_reads) == 1
     assert status_reads[0]["goal_id"] == GOAL_ID
     assert status_reads[0]["include_public_boundary_scan"] is False
 
 
-def test_refresh_lifecycle_extension_failure_prevents_private_binding_read(
+def test_refresh_lifecycle_unconfigured_binding_failure_does_not_require_extension(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -272,7 +272,7 @@ def test_refresh_lifecycle_extension_failure_prevents_private_binding_read(
 
     assert result["ok"] is True
     assert result["enabled"] is False
-    assert result["status"] == "extension_unavailable"
+    assert result["status"] == "not_configured"
 
 
 def test_refresh_lifecycle_unconfigured_malformed_binding_is_safe_noop(
@@ -357,6 +357,11 @@ def test_refresh_lifecycle_configured_extension_failure_blocks_delivery(
         ),
     )
 
+    _target_binding(registry_path)
+    monkeypatch.setattr(goal_channel_lifecycle, "collect_status", lambda **kwargs: {})
+    monkeypatch.setattr(goal_channel_lifecycle, "build_quota_should_run",
+                        lambda *args, **kwargs: {"state": "operator_gate"})
+
     result = goal_channel_lifecycle.sync_human_gate_after_refresh(
         registry_path=registry_path,
         runtime_root_override=None,
@@ -404,6 +409,7 @@ def test_refresh_lifecycle_reads_quota_then_delivers_selected_gate(
     )
 
     def deliver(**kwargs: Any) -> dict[str, Any]:
+        kwargs["admit_delivery"]()
         captured.update(kwargs)
         return {
             "schema_version": "loopx_goal_channel_gate_auto_delivery_v0",
@@ -473,6 +479,7 @@ def test_refresh_lifecycle_resolves_shared_provider_target(
     )
 
     def deliver(**kwargs: Any) -> dict[str, Any]:
+        kwargs["admit_delivery"]()
         captured.update(kwargs)
         return {
             "ok": True,
