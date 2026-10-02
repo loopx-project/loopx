@@ -120,8 +120,8 @@ Do not bypass a newer permission or lifecycle check just to make an older exampl
 
 ## Version baseline
 
-This book targets LoopX release `v1.2.3`. Local command examples were checked against
-the public `loopx 1.2.3` CLI and protocol surface. It requires Python 3.11+ and Node.js 22.22.3+.
+This book targets LoopX release `v1.2.4`. Local command examples were checked against
+the public `loopx 1.2.4` CLI and protocol surface. It requires Python 3.11+ and Node.js 22.22.3+.
 LoopX starts and reuses its managed, idle-exiting TypeScript Effect runtime automatically; users do not
 operate that runtime as a manual daemon.
 
