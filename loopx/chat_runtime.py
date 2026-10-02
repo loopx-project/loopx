@@ -481,12 +481,16 @@ class ChatRuntimeController:
                 ) else None,
             )
         if agent_id == "claude-code":
+            model_config = executor_model or {}
             return ClaudeCodeAdapter.start(
                 claude_bin=self.claude_bin,
                 work_dir=work_dir,
                 resume_thread_id=resume_thread_id,
                 tool_scope="read_only",
                 context_summary=f"{goal_id}: {objective}".strip(),
+                execution_mode=execution_mode,
+                model=model_config.get("model"),
+                reasoning_effort=model_config.get("reasoning_effort"),
             )
         if agent_id == MANAGED_TURN_HOST:
             # The managed host has no interactive session transport, so this

@@ -294,6 +294,8 @@ export type WorkspaceActionPreview = {
   sourceRequest?: WorkspaceActionPreviewRequest;
   updatedAt?: string;
   workspaceCandidates?: Array<{ label: string; workspaceRef: string }>;
+  bindingEndpointId?: string;
+  bindingAgentCandidates?: string[];
 };
 
 export type WorkspaceMessage = {
@@ -472,6 +474,8 @@ export type PersonalWorkspaceCallbacks = {
   onRefresh?: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive?: () => void | Promise<void>;
   onPreviewAction?: (request: WorkspaceActionPreviewRequest) => WorkspaceActionPreview | Promise<WorkspaceActionPreview>;
+  onBindAgentPrerequisite?: (proposal: WorkspaceActionPreview) => void | Promise<void>;
+  onSelectExistingAgentPrerequisite?: (proposal: WorkspaceActionPreview, agentId: string) => void | Promise<void>;
   onRequestGoalCreate?: () => WorkspaceActionPreview | Promise<WorkspaceActionPreview | void> | void;
   onRequestScheduleConfig?: (kind: WorkspaceScheduleKind, goalId: string | null) => WorkspaceActionPreview | Promise<WorkspaceActionPreview | void> | void;
   onRetryResumeRun?: (run: WorkspaceRun) => void | Promise<void>;

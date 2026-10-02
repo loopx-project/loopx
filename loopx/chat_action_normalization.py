@@ -739,7 +739,13 @@ class ChatActionNormalizationMixin:
             if values.get("endpoint_id"):
                 endpoint_id = _opaque(values["endpoint_id"], field="endpoint_id")
                 result["endpoint_id"] = endpoint_id
-                result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
+                # The explicit registered task actor and the executable
+                # endpoint are separate identities. Selecting a runtime must
+                # not replace an existing monitor's responsible Agent.
+                if result["agent_id"] in registered_agent_ids_for_goal(self._goal(goal_id)):
+                    self._agent_eligibility(endpoint_id)
+                else:
+                    result["agent_id"] = self._resolve_goal_agent(goal_id, endpoint_id)
             if values.get("target"):
                 result["target"] = _text(values["target"], field="target", limit=400)
             if values.get("target_key"):

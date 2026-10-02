@@ -120,6 +120,9 @@ class ClaudeCodeAdapter:
     session_id: str
     tool_scope: str = "read_only"
     context_summary: str = ""
+    execution_mode: bool = False
+    model: str | None = None
+    reasoning_effort: str | None = None
     resumed: bool = False
     current_process: subprocess.Popen[str] | None = field(default=None, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -137,6 +140,9 @@ class ClaudeCodeAdapter:
         resume_thread_id: str | None = None,
         tool_scope: str = "read_only",
         context_summary: str = "",
+        execution_mode: bool = False,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> "ClaudeCodeAdapter":
         resolved = shutil.which(claude_bin)
         if not resolved:
@@ -146,12 +152,17 @@ class ClaudeCodeAdapter:
             )
         if tool_scope not in {"read_only", "disabled"}:
             raise ValueError("Claude Code tool_scope must be read_only or disabled")
+        if tool_scope == "disabled" and execution_mode:
+            raise ValueError("Claude Code execution requires an enabled tool scope")
         return cls(
             claude_bin=resolved,
             work_dir=work_dir.resolve(),
             session_id=resume_thread_id or str(uuid.uuid4()),
             tool_scope=tool_scope,
             context_summary=context_summary,
+            execution_mode=execution_mode,
+            model=model,
+            reasoning_effort=reasoning_effort,
             resumed=bool(resume_thread_id),
         )
 
@@ -162,10 +173,13 @@ class ClaudeCodeAdapter:
             "resume": True,
             "interrupt": True,
             "tool_calls": self.tool_scope != "disabled",
-            "tool_scope": self.tool_scope,
+            "tool_scope": "workspace_write" if self.execution_mode else self.tool_scope,
+            "execution_mode": self.execution_mode,
+            "model": self.model,
         }
 
     def start_turn(self, message: str, event_sink: EventSink) -> dict[str, Any]:
+        writable = self.execution_mode
         command = [
             self.claude_bin,
             "--print",
@@ -174,16 +188,29 @@ class ClaudeCodeAdapter:
             "--verbose",
             "--include-partial-messages",
             "--permission-mode",
-            "plan",
+            "acceptEdits" if writable else "plan",
             "--tools",
-            "Read,Glob,Grep" if self.tool_scope == "read_only" else "",
+            "Read,Glob,Grep,Bash,Edit,Write" if writable else (
+                "Read,Glob,Grep" if self.tool_scope == "read_only" else ""
+            ),
             "--disable-slash-commands",
         ]
+        if writable:
+            # Only an explicitly admitted task opts into shell tools. Ordinary
+            # Chat keeps its read-only tool set.
+            command.extend(["--allowedTools", "Read,Glob,Grep,Bash,Edit,Write"])
+        if self.model:
+            command.extend(["--model", self.model])
+        if self.reasoning_effort:
+            command.extend(["--effort", self.reasoning_effort])
         if self.resumed:
             command.extend(["--resume", self.session_id])
         else:
             command.extend(["--session-id", self.session_id])
-        command.append(_turn_prompt(message, context_summary=self.context_summary))
+        command.append(_turn_prompt(
+            message, context_summary=self.context_summary,
+            execution_mode=self.execution_mode,
+        ))
         event_sink("turn.started", {"upstream_turn_id": self.session_id})
         event_sink("agent.phase", {"label": "正在连接 Claude Code"})
         try:
@@ -201,6 +228,7 @@ class ClaudeCodeAdapter:
             self.current_process = process
         parts: list[str] = []
         result_text = ""
+        result_error = False
         display_filter = VisibleResponseStreamFilter(protected_paths=[self.work_dir])
         visible_delta_count = 0
         try:
@@ -234,8 +262,9 @@ class ClaudeCodeAdapter:
                                 event_sink("answer.delta", {"text": visible})
                 elif payload.get("type") == "result":
                     result_text = str(payload.get("result") or "")
+                    result_error = payload.get("is_error") is True
             return_code = process.wait()
-            if return_code != 0:
+            if return_code != 0 or result_error:
                 raise _provider_error("Claude Code", "Sign in to Claude Code and retry this session.")
         finally:
             with self.lock:

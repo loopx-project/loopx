@@ -172,7 +172,12 @@ class ChatMonitorActionMixin:
                 client_turn_id=f"action-{proposal_id}",
                 message=(
                     f"Run continuous monitor Todo {parameters['todo_id']} now and "
-                    "write back only verified material change."
+                    "write back only verified material change. "
+                    f"Goal identity: {goal_id}; responsible Agent identity: {parameters['agent_id']}. "
+                    "The selected runtime is the executor, not a new Goal Agent. "
+                    "Read this Todo and the Goal's current execution contract before acting; "
+                    "respect its claim, quota, write scope and settlement requirements. "
+                    "Do not complete the continuous monitor merely because this check finished."
                 ),
                 work_dir=project,
                 objective=str(goal.get("domain") or goal_id),

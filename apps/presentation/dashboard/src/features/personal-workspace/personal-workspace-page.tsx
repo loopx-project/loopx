@@ -862,6 +862,7 @@ export function PersonalWorkspacePage({
   // Goal conversation stays in that Goal's timeline and never joins Manager Chat.
   const [managerSessionProposalIds, setManagerSessionProposalIds] = useState<string[]>([]);
   const restoredProposalIdsRef = useRef(new Set<string>());
+  const bindingResumeRequestsRef = useRef(new Map<string, WorkspaceActionPreviewRequest>());
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<WorkspaceTheme>(readWorkspaceTheme);
   const [goalContexts, setGoalContexts] = useState<Record<string, GoalRepositoryContext>>({});
@@ -1250,8 +1251,16 @@ export function PersonalWorkspacePage({
       const gateKind = String(rawGate.kind ?? "workspace_selection_required");
       const requiresAgentBinding = gateKind === "agent_binding_required"
         || gateKind === "agent_identity_selection_required";
+      const bindingGoalId = typeof rawGate.goal_id === "string" ? rawGate.goal_id
+        : typeof request.normalizedParameters.goal_id === "string" ? request.normalizedParameters.goal_id : undefined;
+      const existingMonitorActors = requiresAgentBinding && request.actionKind === "monitor.update"
+        ? workspaceGoals.find(goal => goal.goalId === bindingGoalId)?.agentLanes?.map(lane => lane.agentId) ?? [] : [];
       local = {
         actionKind: request.actionKind,
+        goalId: bindingGoalId,
+        bindingAgentCandidates: existingMonitorActors,
+        bindingEndpointId: gateKind === "agent_binding_required" && typeof rawGate.endpoint_id === "string"
+          ? rawGate.endpoint_id : undefined,
         fields: workspaceCandidates.map((candidate) => ({
           key: `workspace_ref:${candidate.workspaceRef}`,
           label: candidate.label,
@@ -1259,16 +1268,18 @@ export function PersonalWorkspacePage({
         })),
         gate: {
           kind: gateKind,
-          nextAction: typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
+          nextAction: existingMonitorActors.length ? t("proposal.workspaceGate.chooseExistingAgentImpact")
+            : typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
           summary: String(rawGate.summary ?? t("proposal.workspaceGate.defaultSummary")),
         },
-        impact: requiresAgentBinding
+        impact: existingMonitorActors.length ? t("proposal.workspaceGate.chooseExistingAgentImpact") : requiresAgentBinding
           ? t("proposal.workspaceGate.agentImpact")
           : t("proposal.workspaceGate.selectionImpact"),
         previewId: `workspace-choice-${Date.now().toString(36)}`,
         sourceRequest: request,
         status: "gated",
-        title: requiresAgentBinding ? t("proposal.workspaceGate.agentTitle") : t("proposal.workspaceGate.selectionTitle"),
+        title: existingMonitorActors.length ? t("proposal.workspaceGate.chooseExistingAgent")
+          : requiresAgentBinding ? t("proposal.workspaceGate.agentTitle") : t("proposal.workspaceGate.selectionTitle"),
         workspaceCandidates,
       };
     }
@@ -1497,6 +1508,16 @@ export function PersonalWorkspacePage({
         return;
       }
       setActionFeedback(t("feedback.completed", { title: applied.title }));
+      const resumeRequest = bindingResumeRequestsRef.current.get(proposal.previewId);
+      if (applied.actionKind === "agent.bind" && resumeRequest) {
+        bindingResumeRequestsRef.current.delete(proposal.previewId);
+        await reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
+        // Binding acceptance is not acceptance of the original operation.
+        // Obtain a fresh server preview and retain its ordinary confirmation.
+        await createPreview({ ...resumeRequest,
+          idempotencyKey: `${resumeRequest.idempotencyKey}-bound-${proposal.previewId}` });
+        return;
+      }
       // Keep the success receipt visible for reviewed actions. Direct actions
       // surface the same result through the persistent feedback receipt.
       if (applied.actionKind === "todo.create") {
@@ -1629,6 +1650,24 @@ export function PersonalWorkspacePage({
       });
     },
     onPreviewAction: createPreview,
+    onSelectExistingAgentPrerequisite: async (proposal, agentId) => {
+      if (!proposal.sourceRequest || !proposal.bindingAgentCandidates?.includes(agentId)) return;
+      await createPreview({ ...proposal.sourceRequest,
+        idempotencyKey: `${proposal.sourceRequest.idempotencyKey}-actor-${agentId}`,
+        normalizedParameters: { ...proposal.sourceRequest.normalizedParameters, agent_id: agentId },
+      });
+    },
+    onBindAgentPrerequisite: async (proposal) => {
+      if (!proposal.bindingEndpointId || !proposal.goalId || !proposal.sourceRequest) return;
+      const binding = await createPreview({
+        actionKind: "agent.bind",
+        context: { kind: "goal", goal_id: proposal.goalId },
+        idempotencyKey: `${proposal.sourceRequest.idempotencyKey}-bind-${proposal.bindingEndpointId}`,
+        normalizedParameters: { goal_id: proposal.goalId, agent_id: proposal.bindingEndpointId },
+        summary: t("proposal.workspaceGate.bindCurrentRuntime"),
+      });
+      bindingResumeRequestsRef.current.set(binding.previewId, proposal.sourceRequest);
+    },
     onRequestScheduleConfig: (kind, goalId) => prepareScheduleDraft(kind, goalId),
     onOpenNotificationSettings: (goalId) => openSettings({ goalId, kind: "settings", tab: "lark" }),
     onFetchNotificationTargets: () => fetchGoalChannelTargets(),
