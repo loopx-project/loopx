@@ -12,6 +12,36 @@ from tests.control_plane.test_monitor_followthrough_contract import (
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli
 from loopx.todos import add_goal_todo, list_goal_todos
+from loopx.control_plane.effect_program import ReceiptBoundMonitorPhase
+from loopx.control_plane.quota.should_run import build_quota_should_run
+from loopx.control_plane.testing.quota_fixtures import (
+    quota_status_payload, quota_todo_item, quota_todo_summary,
+)
+
+
+def test_incomplete_frontier_cannot_erase_settled_monitor_receipt():
+    monitor = quota_todo_item(todo_id="todo_monitor", title="Observe a public target",
+        task_class="continuous_monitor", claimed_by="agent-a",
+        next_due_at="2099-01-01T00:00:00Z", watch_only=True)
+    summary = quota_todo_summary([monitor], claim_scope_agent_id="agent-a")
+    # An incomplete legacy source cannot establish a monitor-only schedule.
+    # This changes aggregate coverage, not the exact persisted poll receipt.
+    summary["work_counts"]["complete"] = False
+    status = quota_status_payload(goal_id="compact-monitor", status="active",
+        quota_state="operator_gate", recommended_action="Wait for an owner decision",
+        agent_todos=summary, user_todo_items=[quota_todo_item(
+            todo_id="todo_peer_gate", title="Choose peer destination", role="user",
+            task_class="user_gate", blocks_agent="agent-b")],
+        coordination={"agent_model": "peer_v1", "registered_agents": ["agent-a", "agent-b"]})
+    replay = build_quota_should_run(status, goal_id="compact-monitor", agent_id="agent-a",
+        receipt_bound_todo_id="todo_monitor",
+        receipt_bound_monitor_phase=ReceiptBoundMonitorPhase.SETTLED)
+    assert replay["selected_todo"]["todo_id"] == "todo_monitor"
+    assert replay["should_run"] is False
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["safe_bypass_allowed"] is False
+    assert replay["execution_obligation"]["must_attempt_work"] is False
+    assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
 
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])

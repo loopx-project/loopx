@@ -31,11 +31,13 @@ from loopx.todos import add_goal_todo, list_goal_todos
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 @pytest.mark.parametrize("material", [False, True], ids=["unchanged", "material"])
+@pytest.mark.parametrize("peer_gate", [False, True], ids=["no-gate", "peer-gate"])
 def test_quiet_turn_binds_due_monitor_and_recovers_lost_response(
     tmp_path,
     monkeypatch,
     provider,
     material,
+    peer_gate,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state = _write_fixture(tmp_path)
@@ -126,6 +128,18 @@ def test_quiet_turn_binds_due_monitor_and_recovers_lost_response(
     )
     assert selected["execution_obligation"]["must_attempt_work"] is True
     assert polls() == [quiet_poll]
+
+    if peer_gate:
+        call(
+            "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
+            "--task-class", "user_gate", "--blocks-agent", "codex-main-control",
+            "--text", "Choose the peer's destination",
+        )
+        call(
+            "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
+            "--task-class", "user_action", "--bound-agent", AGENT_ID,
+            "--text", "Read the optional guide",
+        )
 
     poll = (
         "quota",
