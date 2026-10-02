@@ -259,7 +259,7 @@ def test_journal_committed_effect_id_is_none_for_legacy_journal() -> None:
     assert _journal_committed_effect_id(journal) is None
 
 
-def test_new_turn_settlement_reduces_between_each_provider_effect() -> None:
+def test_new_turn_settlement_admits_each_return_before_checkpoint() -> None:
     plan = _plan(todo_id="todo_fixture0002")
     transaction = plan["transaction"]
     assert isinstance(transaction, dict)
@@ -283,11 +283,8 @@ def test_new_turn_settlement_reduces_between_each_provider_effect() -> None:
         )
 
     assert result.failure is None
-    assert calls == [
-        "turn.settlement.reduce",
-        "turn.settlement.reduce",
-        "turn.settlement.reduce",
-    ]
+    # Preflight + admission/checkpoint acknowledgement for each of two providers.
+    assert calls == ["turn.settlement.reduce"] * 5
 
 
 def test_replayed_turn_settlement_uses_one_runtime_request() -> None:

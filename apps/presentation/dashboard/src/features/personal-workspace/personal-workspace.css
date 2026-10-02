@@ -904,6 +904,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-capability-editor-status.is-read-only { background: #fff5e8; color: #9a5a10; }
 .personal-capability-linked-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; margin: 0 24px 20px; padding: 14px; border: 1px solid var(--pw-line); border-radius: 10px; background: var(--pw-bg); }
 .personal-capability-linked-setting > div { display: grid; gap: 4px; }
+.personal-capability-linked-controls { min-width: 0; justify-items: start; }
 .personal-capability-linked-setting strong { font-size: 12px; }
 .personal-capability-linked-setting .personal-notification-toggle { justify-self: end; min-height: 44px; }
 .personal-capability-linked-setting .personal-notification-error { grid-column: 1 / -1; }

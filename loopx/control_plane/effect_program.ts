@@ -186,6 +186,7 @@ export interface SettlementStep {
 export interface SettlementPlan {
   identity: SettlementIdentity;
   steps: readonly SettlementStep[];
+  goal_ref?: JsonObject;
 }
 
 export type SettlementBindGate<Value = unknown> =

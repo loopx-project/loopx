@@ -87,6 +87,7 @@ def assert_untrusted_checkout_is_canary_only() -> None:
             "loopx-pr-review",
             "loopx-project",
             "loopx-self-repair",
+            "loopx-performance-diagnosis",
         }
         assert {
             path.parent.name for path in skills_dir.glob("*/SKILL.md")
@@ -190,6 +191,20 @@ def assert_explicit_promotion_is_auditable() -> None:
         doctor_payload = json.loads(doctor.stdout)
         default_release = doctor_payload["release_provenance"]["default_release"]
         assert default_release["promotion_mode"] == "explicit_override", default_release
+        # Doctor starts a managed runtime in this synthetic HOME. Stop that
+        # installed revision before TemporaryDirectory removes its files.
+        shutdown = subprocess.run(
+            [sys.executable, "-c", (
+                "import json; from loopx.control_plane.effect_runtime import "
+                "restart_effect_runtime; print(json.dumps(restart_effect_runtime()))"
+            )],
+            cwd=release_root,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads(shutdown.stdout)["status"] != "shutdown_pending", shutdown.stdout
 
 
 def assert_skill_preflight_failure_preserves_default() -> None:

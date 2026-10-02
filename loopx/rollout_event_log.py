@@ -173,6 +173,24 @@ def _normalized_event_kind(event_kind: str) -> str:
     return text
 
 
+def _safe_goal_ref(
+    value: Mapping[str, Any] | None,
+    *,
+    goal_id: str,
+) -> dict[str, str] | None:
+    if value is None:
+        return None
+    from .control_plane.goals.source_session_registry_state import exact_goal_ref
+
+    goal_ref = exact_goal_ref(
+        str(value.get("goal_id") or ""),
+        str(value.get("goal_instance_id") or ""),
+    )
+    if goal_ref["goal_id"] != goal_id:
+        raise ValueError("rollout event goal_ref does not match goal_id")
+    return goal_ref
+
+
 def _event_id(payload: Mapping[str, Any]) -> str:
     """Identify one event occurrence, including its observation timestamp."""
 
@@ -249,6 +267,7 @@ def build_rollout_event(
     *,
     goal_id: str,
     event_kind: str,
+    goal_ref: Mapping[str, Any] | None = None,
     agent_id: str | None = None,
     todo_id: str | None = None,
     case_id: str | None = None,
@@ -323,6 +342,9 @@ def build_rollout_event(
             "absolute_paths_recorded": False,
         },
     }
+    safe_goal_ref = _safe_goal_ref(goal_ref, goal_id=safe_goal_id)
+    if safe_goal_ref is not None:
+        payload["goal_ref"] = safe_goal_ref
     optional_scalars = {
         "agent_id": agent_id,
         "todo_id": todo_id,
@@ -454,7 +476,11 @@ def append_rollout_event_once(
     fields = tuple(str(field).strip() for field in identity_fields if str(field).strip())
     if not fields:
         raise ValueError("rollout idempotency identity_fields are required")
-    missing = [field for field in fields if payload.get(field) in {None, ""}]
+    missing = [
+        field
+        for field in fields
+        if payload.get(field) is None or payload.get(field) == ""
+    ]
     if missing:
         raise ValueError(
             "rollout idempotency fields must be populated: " + ", ".join(missing)

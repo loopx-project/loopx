@@ -76,6 +76,7 @@ def attach_reward_memory_ingest_after_spend(
     todo_id: str | None,
     turn_instance_id: str,
     replan_obligation_id: str | None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> None:
     if not execute or payload.get("ok") is not True:
         return
@@ -86,6 +87,8 @@ def attach_reward_memory_ingest_after_spend(
         todo_id=todo_id,
         turn_instance_id=turn_instance_id,
         replan_obligation_id=replan_obligation_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     identity = readback.identity.value if readback else None
     writeback_event = readback.writeback_event if readback else None

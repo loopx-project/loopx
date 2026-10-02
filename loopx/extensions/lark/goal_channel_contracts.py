@@ -25,6 +25,8 @@ GOAL_CHANNEL_CONNECTION_SET_SCHEMA_VERSION = "loopx_goal_channel_connection_set_
 # now own repeat-notification timing.
 DEFAULT_GATE_COOLDOWN_SECONDS = 3600
 HUMAN_GATE_AUTO_NOTIFY_SETTING = "human_gate_auto_notify_enabled"
+BLOCKED_NOTICE_AUTO_NOTIFY_SETTING = "blocked_notice_auto_notify_enabled"
+BLOCKED_NOTICE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION = "loopx_goal_channel_blocked_notice_marker_v0"
 HUMAN_GATE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION = (
     "loopx_goal_channel_auto_notify_marker_v0"
 )
@@ -41,6 +43,39 @@ PRIVATE_PACKET_KEYS = {
 GATE_ACTION_PREFIX = re.compile(
     r"^(?:(?:[-*•]|\d+[.)])\s*)?(?:\[[ xX]\]\s*)?(?:\[P\d+\]\s*)?"
 )
+
+
+class BlockedNoticeReceiptState(str, Enum):
+    """Provider delivery lifecycle; it does not mutate canonical Todo state."""
+
+    PENDING = "pending"
+    SENT_UNVERIFIED = "sent_unverified"
+    DELIVERED = "delivered"
+    RESUMED = "resumed"
+    RESOLVED = "resolved"
+    SUPERSEDED = "superseded"
+
+
+BLOCKED_NOTICE_RETIRED_STATES = frozenset({
+    BlockedNoticeReceiptState.RESUMED,
+    BlockedNoticeReceiptState.RESOLVED,
+    BlockedNoticeReceiptState.SUPERSEDED,
+})
+
+
+def blocked_notice_receipt_matches_target(
+    key: str, receipt: Mapping[str, Any], *, goal_id: str, chat_id: str,
+) -> bool:
+    if not chat_id or receipt.get("kind") != "blocked_notice":
+        return False
+    if receipt.get("chat_id"):
+        return receipt["chat_id"] == chat_id
+    # Older initial receipts encode the destination in their semantic key.
+    # An unbound historical/reopened receipt cannot prove this target's delivery.
+    return key == semantic_key(
+        goal_id, "lark", "blocked_notice", str(receipt.get("blocker_identity") or ""),
+        str(receipt.get("blocker_revision") or ""), chat_id,
+    )
 
 
 class LarkTopicEventDecisionReason(str, Enum):
@@ -302,6 +337,16 @@ def human_gate_auto_notify_enabled(binding: Mapping[str, Any] | None) -> bool:
     return automation.get(HUMAN_GATE_AUTO_NOTIFY_SETTING) is True
 
 
+def blocked_notice_auto_notify_enabled(binding: Mapping[str, Any] | None) -> bool:
+    automation = (
+        binding.get("automation")
+        if isinstance(binding, Mapping)
+        and isinstance(binding.get("automation"), Mapping)
+        else {}
+    )
+    return automation.get(BLOCKED_NOTICE_AUTO_NOTIFY_SETTING) is True
+
+
 def human_gate_auto_notify_marker_path(
     binding_path: Path,
     goal_id: str,
@@ -346,6 +391,46 @@ def write_human_gate_auto_notify_marker(path: Path) -> None:
 
 
 def clear_human_gate_auto_notify_marker(path: Path) -> None:
+    path.expanduser().unlink(missing_ok=True)
+
+
+def blocked_notice_auto_notify_marker_path(binding_path: Path, goal_id: str) -> Path:
+    human_marker = human_gate_auto_notify_marker_path(binding_path, goal_id)
+    return human_marker.with_name(
+        human_marker.name.replace(
+            ".human-gate-auto-notify.json", ".blocked-notice-auto-notify.json"
+        )
+    )
+
+
+def blocked_notice_auto_notify_marker_enabled(path: Path) -> bool:
+    marker_path = path.expanduser()
+    if not marker_path.exists():
+        return False
+    try:
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # A damaged enabled marker must leave the sink visibly failed.
+        return True
+    return bool(
+        isinstance(payload, Mapping)
+        and payload.get("schema_version")
+        == BLOCKED_NOTICE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION
+        and payload.get("enabled") is True
+    )
+
+
+def write_blocked_notice_auto_notify_marker(path: Path) -> None:
+    write_private_json_atomic(
+        path,
+        {
+            "schema_version": BLOCKED_NOTICE_AUTO_NOTIFY_MARKER_SCHEMA_VERSION,
+            "enabled": True,
+        },
+    )
+
+
+def clear_blocked_notice_auto_notify_marker(path: Path) -> None:
     path.expanduser().unlink(missing_ok=True)
 
 

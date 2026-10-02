@@ -1,6 +1,5 @@
 import {
   commitStepPayload,
-  isCommittedPayload,
   requireMatchingEffectId,
   seedCommittedSteps,
   settlementFailed,
@@ -18,15 +17,29 @@ import {
   optionalNonEmptyString,
   requireBoolean,
   requireJsonObject,
-  requireNonEmptyString,
   requireStringArray,
   requireStringLiteral,
 } from "../runtime_decode.ts";
 
+import {
+  decodeProviderAttemptResult,
+  decodeProviderRecord,
+  decodePreparedAttempt,
+  decodeProviderObservation,
+  settlementProviderAction,
+  providerPayloadMatchesRef,
+  type PreparedEffectAttempt,
+  type ProviderObservation,
+  type ProviderAttemptResult,
+  type ProviderEffect,
+  type ProviderEffectContext,
+  type ProviderStepKind,
+} from "./settlement_provider.ts";
+
 export const TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION =
-  "loopx_turn_settlement_transaction_v0";
+  "loopx_turn_settlement_transaction_v1";
 export const TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION =
-  "loopx_turn_settlement_reduction_v0";
+  "loopx_turn_settlement_reduction_v1";
 export const TURN_SETTLEMENT_OUTCOME_SCHEMA_VERSION =
   "loopx_turn_settlement_outcome_v0";
 
@@ -35,16 +48,6 @@ const BASE_SETTLEMENT_STEPS = [
   "durable_writeback",
   "quota_spend",
 ] as const satisfies readonly SettlementStepKind[];
-
-const PROVIDER_STEP_KINDS = [
-  "durable_writeback",
-  "quota_spend",
-  "terminal_closeout",
-] as const;
-type ProviderStepKind = (typeof PROVIDER_STEP_KINDS)[number];
-
-const PROVIDER_RESOLUTION_KINDS = ["committed", "absent", "unknown"] as const;
-type ProviderResolutionKind = (typeof PROVIDER_RESOLUTION_KINDS)[number];
 
 /** Compatibility exports; definitions are generated from the shared contract. */
 import { TURN_RESULT_KINDS, type TurnResultKind } from "./turn_contract_generated.ts";
@@ -58,43 +61,6 @@ const FAILED_TURN_RESULT_KINDS = [
   "terminal_closeout_failed",
 ] as const satisfies readonly TurnResultKind[];
 
-interface PreparedEffectAttempt {
-  status: "prepared";
-  effect_ref: string;
-}
-
-interface ProviderObservation {
-  kind: ProviderResolutionKind;
-  payload: JsonObject | null;
-  reason: string | null;
-}
-
-interface FailedProviderAttempt {
-  step_kind: ProviderStepKind;
-  payload: JsonObject;
-}
-
-interface ProviderExecutionEffect {
-  step_kind: ProviderStepKind;
-  action: "prepare_and_execute";
-  effect_ref: string;
-  completed_phases: readonly string[];
-}
-
-interface ProviderResolutionEffect {
-  step_kind: ProviderStepKind;
-  action: "resolve_prepared";
-  effect_ref: string;
-  completed_phases: readonly string[];
-  resolution_policy: {
-    committed: "checkpoint";
-    absent: "execute";
-    unknown: "fail_closed";
-  };
-}
-
-type ProviderEffect = ProviderExecutionEffect | ProviderResolutionEffect;
-
 interface TurnSettlementRequest {
   schema_version: typeof TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION;
   transaction_plan: JsonObject;
@@ -105,7 +71,8 @@ interface TurnSettlementRequest {
   quota_spend_payload: JsonObject | null;
   terminal_closeout_required: boolean;
   terminal_closeout_payload: JsonObject | null;
-  failed_provider_attempt: FailedProviderAttempt | null;
+  failed_provider_attempt: ProviderAttemptResult | null;
+  returned_provider_attempt: ProviderAttemptResult | null;
   effect_attempts: Partial<Record<ProviderStepKind, PreparedEffectAttempt>>;
   provider_observations: Partial<Record<ProviderStepKind, ProviderObservation>>;
   turn_result_kind: TurnResultKind | null;
@@ -140,74 +107,6 @@ export type TurnSettlementReduction =
 function optionalObject(value: unknown, label: string): JsonObject | null {
   if (value === null || value === undefined) return null;
   return requireJsonObject(value, label);
-}
-
-function decodeFailedProviderAttempt(
-  value: unknown,
-): FailedProviderAttempt | null {
-  if (value === null || value === undefined) return null;
-  const attempt = requireJsonObject(value, "failed_provider_attempt");
-  return {
-    step_kind: requireStringLiteral(
-      attempt.step_kind,
-      PROVIDER_STEP_KINDS,
-      "failed_provider_attempt.step_kind",
-    ),
-    payload: requireJsonObject(
-      attempt.payload,
-      "failed_provider_attempt.payload",
-    ),
-  };
-}
-
-function decodeProviderRecord<Value>(
-  value: unknown,
-  label: string,
-  decode: (value: unknown, label: string) => Value,
-): Partial<Record<ProviderStepKind, Value>> {
-  if (value === null || value === undefined) return {};
-  const record = requireJsonObject(value, label);
-  const decoded: Partial<Record<ProviderStepKind, Value>> = {};
-  for (const [rawStep, rawValue] of Object.entries(record)) {
-    const step = requireStringLiteral(
-      rawStep,
-      PROVIDER_STEP_KINDS,
-      `${label} step`,
-    );
-    decoded[step] = decode(rawValue, `${label}.${step}`);
-  }
-  return decoded;
-}
-
-function decodePreparedAttempt(
-  value: unknown,
-  label: string,
-): PreparedEffectAttempt {
-  const attempt = requireJsonObject(value, label);
-  return {
-    status: requireStringLiteral(
-      attempt.status,
-      ["prepared"] as const,
-      `${label}.status`,
-    ),
-    effect_ref: requireNonEmptyString(attempt.effect_ref, `${label}.effect_ref`),
-  };
-}
-
-function decodeProviderObservation(
-  value: unknown,
-  label: string,
-): ProviderObservation {
-  const observation = requireJsonObject(value, label);
-  return {
-    kind: requireStringLiteral(
-      observation.kind,
-      PROVIDER_RESOLUTION_KINDS,
-      `${label}.kind`,
-    ),
-    payload: optionalObject(observation.payload, `${label}.payload`),
-    reason: optionalNonEmptyString(observation.reason, `${label}.reason`),
-  };
 }
 
 function decodeRequest(value: unknown): TurnSettlementRequest {
@@ -251,8 +150,11 @@ function decodeRequest(value: unknown): TurnSettlementRequest {
       request.terminal_closeout_payload,
       "terminal_closeout_payload",
     ),
-    failed_provider_attempt: decodeFailedProviderAttempt(
-      request.failed_provider_attempt,
+    failed_provider_attempt: decodeProviderAttemptResult(
+      request.failed_provider_attempt, "failed_provider_attempt",
+    ),
+    returned_provider_attempt: decodeProviderAttemptResult(
+      request.returned_provider_attempt, "returned_provider_attempt",
     ),
     effect_attempts: decodeProviderRecord(
       request.effect_attempts,
@@ -501,38 +403,18 @@ function providerFailure(
   });
 }
 
-function pendingProviderEffects(
+function baseProviderContext(
   request: TurnSettlementRequest,
   identity: BoundSettlementIdentity,
   firstStep: ProviderStepKind,
-): readonly ProviderEffect[] {
-  const completed = new Set(request.completed_phases);
-  const effects: ProviderEffect[] = [];
-  for (const step of BASE_SETTLEMENT_STEPS) {
-    if (step === "validation" || completed.has(step)) continue;
-    const phaseIndex = request.transaction_phases.indexOf(step);
-    if (phaseIndex < 0) {
-      throw new Error(`transaction phases do not contain ${step}`);
-    }
-    effects.push({
-      step_kind: step,
-      action: "prepare_and_execute",
-      effect_ref: `${identity.effect_id}#${step}`,
-      completed_phases: request.transaction_phases.slice(0, phaseIndex + 1),
-    });
-  }
-  if (effects[0]?.step_kind !== firstStep) {
-    throw new Error(`Turn settlement next provider is not ${firstStep}`);
-  }
-  if (request.terminal_closeout_required) {
-    effects.push({
-      step_kind: "terminal_closeout",
-      action: "prepare_and_execute",
-      effect_ref: `${identity.effect_id}#terminal_closeout`,
-      completed_phases: [...request.completed_phases],
-    });
-  }
-  return effects.slice(0, 1);
+): ProviderEffectContext {
+  const phaseIndex = request.transaction_phases.indexOf(firstStep);
+  if (phaseIndex < 0) throw new Error(`transaction phases do not contain ${firstStep}`);
+  return {
+    step_kind: firstStep,
+    effect_ref: `${identity.effect_id}#${firstStep}`,
+    completed_phases: request.transaction_phases.slice(0, phaseIndex + 1),
+  };
 }
 
 function terminalCloseoutRequestFailure(
@@ -559,9 +441,9 @@ function reduceBaseProviderAction(
   stepKind: ProviderStepKind,
   receipts: SettlementResult<unknown>["receipts"],
 ): TurnSettlementReduction {
-  const effects = pendingProviderEffects(request, identity, stepKind);
+  const effect = baseProviderContext(request, identity, stepKind);
   return request.failed_provider_attempt === null
-    ? providerExecution(request, identity, stepKind, effects, receipts)
+    ? providerExecution(request, identity, effect, receipts)
     : providerFailure(identity, request, stepKind, receipts);
 }
 
@@ -591,21 +473,17 @@ function reduceTerminalCloseout(
   }
 
   if (request.terminal_closeout_payload === null) {
-    const effects: readonly ProviderEffect[] = [
-      {
-        step_kind: "terminal_closeout",
-        action: "prepare_and_execute",
-        effect_ref: `${identity.effect_id}#terminal_closeout`,
-        completed_phases: [...request.completed_phases],
-      },
-    ];
+    const effect: ProviderEffectContext = {
+      step_kind: "terminal_closeout",
+      effect_ref: `${identity.effect_id}#terminal_closeout`,
+      completed_phases: [...request.completed_phases],
+    };
     return {
       outcome: request.failed_provider_attempt === null
         ? providerExecution(
             request,
             identity,
-            "terminal_closeout",
-            effects,
+            effect,
             receipts,
           )
         : providerFailure(identity, request, "terminal_closeout", receipts),
@@ -646,134 +524,64 @@ function reduceTerminalCloseout(
 function providerExecution(
   request: TurnSettlementRequest,
   identity: BoundSettlementIdentity,
-  firstStep: ProviderStepKind,
-  effects: readonly ProviderEffect[],
+  effect: ProviderEffectContext,
   receipts: SettlementResult<unknown>["receipts"],
 ): TurnSettlementReduction {
-  const attempts = Object.entries(request.effect_attempts) as Array<
-    [ProviderStepKind, PreparedEffectAttempt]
-  >;
-  const observations = Object.entries(request.provider_observations) as Array<
-    [ProviderStepKind, ProviderObservation]
-  >;
-  if (attempts.length === 0) {
-    if (observations.length > 0) {
-      return reduction(
-        settlementFailed({
-          kind: "receipt_missing",
-          step_kind: observations[0][0],
-          reason: "Turn settlement has a provider observation without a prepared effect",
-          receipts,
-        }),
-      );
+  const firstStep = effect.step_kind;
+  const next = settlementProviderAction(
+    effect,
+    request.effect_attempts,
+    request.provider_observations,
+    request.returned_provider_attempt,
+  );
+  if (next.failure !== null) {
+    return reduction(settlementFailed({ ...next.failure, receipts }));
+  }
+  // Admission precedes checkpoint: an invalid committed payload must leave the
+  // prepared operation recoverable, never fabricate a committed journal prefix.
+  if (next.effect.action === "checkpoint") {
+    const validateCompletion = firstStep === "terminal_closeout" &&
+        request.turn_result_kind !== null
+      ? terminalCompletionError
+      : firstStep === "durable_writeback" &&
+          request.turn_result_kind === "validated_completion" &&
+          !request.terminal_closeout_required
+      ? nonTerminalCompletionError
+      : null;
+    if (validateCompletion !== null) {
+      const error = validateCompletion(identity, next.effect.payload);
+      if (error !== null) {
+        return reduction(settlementFailed({
+          kind: "receipt_missing", step_kind: firstStep, reason: error, receipts,
+        }));
+      }
+      // Preserve the lifecycle adapter's compact public completion projection.
+      const completion = next.effect.payload.completion as JsonObject;
+      return execution([{
+        ...next.effect,
+        payload: {
+          ...next.effect.payload,
+          completion: {
+            todo_id: completion.todo_id,
+            continuation: completion.continuation,
+            ...(completion.continuation === "successor"
+              ? { successor_todo_ids: [...completion.successor_todo_ids as string[]] }
+              : {}),
+          },
+        },
+      }]);
     }
-    return execution(effects);
   }
-
-  const unexpected = attempts.find(([step]) => step !== firstStep);
-  if (attempts.length !== 1 || unexpected) {
-    const step = unexpected?.[0] ?? attempts[1]?.[0] ?? attempts[0][0];
-    return reduction(
-      settlementFailed({
-        kind: "receipt_missing",
-        step_kind: step,
-        reason: "Prepared settlement effects do not match the next ordered provider",
-        receipts,
-      }),
-    );
-  }
-
-  const attempt = attempts[0][1];
-  const expectedRef = `${identity.effect_id}#${firstStep}`;
-  if (attempt.effect_ref !== expectedRef) {
-    return reduction(
-      settlementFailed({
-        kind: "identity_mismatch",
-        step_kind: firstStep,
-        reason:
-          `Prepared settlement effect does not match the current operation: ` +
-          `journal effect is ${attempt.effect_ref} but plan effect is ${expectedRef}`,
-        receipts,
-      }),
-    );
-  }
-
-  const strayObservation = observations.find(([step]) => step !== firstStep);
-  if (strayObservation) {
-    return reduction(
-      settlementFailed({
-        kind: "receipt_missing",
-        step_kind: strayObservation[0],
-        reason: "Provider observation does not match the prepared settlement effect",
-        receipts,
-      }),
-    );
-  }
-  const observation = request.provider_observations[firstStep];
-  if (observation?.kind === "unknown") {
-    return reduction(
-      settlementFailed({
-        kind: "effect_outcome_unknown",
-        step_kind: firstStep,
-        reason:
-          observation.reason ??
-          "Provider could not resolve the prepared settlement effect",
-        receipts,
-      }),
-    );
-  }
-  if (
-    observation?.kind === "committed" &&
-    !isCommittedPayload(observation.payload)
-  ) {
-    return reduction(
-      settlementFailed({
-        kind: "receipt_missing",
-        step_kind: firstStep,
-        reason:
-          "Provider reported a committed settlement effect without a durable committed payload",
-        receipts,
-      }),
-    );
-  }
-  if (observation !== undefined) {
-    return reduction(
-      settlementFailed({
-        kind: "effect_outcome_unknown",
-        step_kind: firstStep,
-        reason:
-          "Prepared provider observation was not durably checkpointed by the adapter",
-        receipts,
-      }),
-    );
-  }
-
-  const effect = effects.find((candidate) => candidate.step_kind === firstStep);
-  if (!effect) {
-    throw new Error(`Turn settlement has no provider effect for ${firstStep}`);
-  }
-  return execution([
-    {
-      step_kind: firstStep,
-      action: "resolve_prepared",
-      effect_ref: expectedRef,
-      completed_phases: effect.completed_phases,
-      resolution_policy: {
-        committed: "checkpoint",
-        absent: "execute",
-        unknown: "fail_closed",
-      },
-    },
-    ...effects.filter((candidate) => candidate.step_kind !== firstStep),
-  ]);
+  return execution([next.effect]);
 }
 
 /**
  * Reduce one complete Turn settlement snapshot.
  *
  * The first reduction validates identity, replay, and the committed journal
- * prefix before authorizing still-Python provider effects. The second reduces
- * their checkpointed outcomes into the canonical receipt chain and result.
+ * prefix before authorizing still-Python provider effects. Each provider return
+ * or readback is admitted before a checkpoint is
+ * authorized; only its persisted acknowledgement advances to the next provider.
  * A replay that needs no provider effect completes in one reduction.
  */
 function reduceTurnSettlementRequest(
@@ -788,6 +596,28 @@ function reduceTurnSettlementRequest(
     identity.effect_id,
   );
   if (matching.failure !== null) return failedState(matching);
+
+  for (const [step, payload] of [
+    ["durable_writeback", request.writeback_payload],
+    ["quota_spend", request.quota_spend_payload],
+    ["terminal_closeout", request.terminal_closeout_payload],
+  ] as const) {
+    if (!providerPayloadMatchesRef(payload, `${identity.effect_id}#${step}`)) {
+      return reduction(settlementFailed({
+        kind: "identity_mismatch", step_kind: step,
+        reason: "Journal provider payload does not match the current operation", receipts: [],
+      }));
+    }
+  }
+  if (request.failed_provider_attempt !== null && (
+    Object.keys(request.effect_attempts).length || Object.keys(request.provider_observations).length ||
+    request.returned_provider_attempt !== null
+  )) {
+    return reduction(settlementFailed({
+      kind: "receipt_missing", step_kind: request.failed_provider_attempt.step_kind,
+      reason: "Rejected provider attempt has not been durably aborted", receipts: [],
+    }));
+  }
 
   const terminalRequestFailure = terminalCloseoutRequestFailure(request);
   if (terminalRequestFailure !== null) return reduction(terminalRequestFailure);
@@ -876,6 +706,13 @@ function reduceTurnSettlementRequest(
         receipts,
       }),
     );
+  }
+
+  if (Object.keys(request.provider_observations).length || request.returned_provider_attempt !== null) {
+    return reduction(settlementFailed({
+      kind: "receipt_missing", step_kind: "quota_spend",
+      reason: "Turn settlement has provider evidence after its provider phase", receipts,
+    }));
   }
 
   if (request.failed_provider_attempt !== null) {

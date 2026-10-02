@@ -188,6 +188,7 @@ def register_quota_command(
             "refresh-state, spend, and retries."
         ),
     )
+    quota_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
     quota_parser.add_argument(
         "--scheduler-host-facts-chunk",
         dest="scheduler_host_facts_chunks",

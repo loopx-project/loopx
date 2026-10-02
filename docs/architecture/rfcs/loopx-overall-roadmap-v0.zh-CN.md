@@ -359,6 +359,22 @@ P0 首批是负责人路由和真实 2–3-worker 协调：两轮并行汇合、
 
 验收集在运行前冻结成对基线/候选任务、结果与注意力指标、反例和逐入口证据；所有真实运行初始都未验收。沿用 R/G/M/A 编号和 canonical Todo，不另建路线图、调度器或成绩账本。发布主张依据实际结果，不能以规划或前置 PR 合并代替。
 
+### 创建与小团队交付中的 Goal 生命周期
+
+R1–R3/G1 通过既有 [golden-query 生命周期变体](../../product/use-cases/steward/golden-queries.md#goal-lifetime-creation-collaboration-and-recovery)
+接入 [Goal-instance RFC 的产品集成路径](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md#通过既有-roadmap-旅程接入产品)。
+优先将 GQ01/02 的创建与 Agent 复用、GQ05/11/12 的依赖交付与复核、GQ08/09 的
+纠偏/停止/恢复串成一条小团队旅程。区分同一 Goal 的正常继续和明确退役后的同名重建；
+注册 Agent、host session/执行代次、工作尝试仍是独立身份。旧工作不能结算继任者的
+额度、完成其工作或进入其已验收汇总；当前工作和无关工作仍须推进并返回发起会话。
+
+R5 生命周期/恢复交付继续归 #5206；R1–R3 保留入口、接收方采用、独立验收和返回。
+#5389 资格化 quota owner，不代表整条旅程完成。普通试点使用已支持 profile；隔离的
+重建变体须满足所选 profile 的 M2/M3 门槛，涉及恢复时还需 M4。保留 activation 与
+`execution_authority: false` hold。P1 增加 GQ15 预算分配及创建/接入时的孤儿恢复；
+P2 增加 GQ16 的认证跨主机恢复。先做 packaged App 与独立 CLI 回读，Lark 单独资格化。
+这些细化既有验收，不新增 roadmap 里程碑，也不把前置 PR 合并记为产品完成。
+
 ## 6. 核心交付路径：R1–R7 执行卡
 
 | 卡 | 优先级 / 可验收结果 | 硬前置 | 可同时推进但无需等待 |
@@ -515,11 +531,14 @@ L3 检查点：独立领取/接管、原子 claim 准入与维护共用 typed le
 - **退出：** 相关真实 CLI/backend、不可变 baseline 与候选对照、负例/mutation、三臂演练及适用 D2 至少十日 soak；D3 切换保留明确批准。此次审计没有执行新的 soak，也未晋升 provider。
 - **回滚：** 按已审阅的 fenced export/import 和 schema-aware downgrade，不能靠替换二进制恢复旧写权威。
 
-[Goal instance/recovery 提案](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)
-为 R2/R3 retirement 和迟到结果安全提供有界 R5 依赖。M0 codec 已交付，lifetime
-admission、commit fence 和 recovery 尚未交付。复用 TS transaction 与既有 provider
-owner，先资格化本地路径；R6 service identity、D1–D3 promotion 独立验收。本检查点
-不激活 identity，也不要求所有 R1–R4 改动等待完整 lifecycle。
+[Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)
+为 R2/R3 retirement 和迟到结果安全提供有界 R5 依赖。Codec 和 source-session lifetime
+transaction 已存在；attached Chat、handoff、Turn journal 的 fence 已分别资格化，
+#5389 补充 quota settlement。第一方 host enforcement 仍为部分实现；其余 inventory
+owner、旧 writer/effect-drain 资格、M4 恢复、M5 产品验收继续在 #5206 保持开放。
+复用这些 TS/provider owner 和前述创建/协作旅程；R6 service identity 与 D1–D3
+promotion 独立验收。本检查点不激活 identity，也不要求所有 R1–R4 改动等待完整
+lifecycle。
 
 ### R6：本地与云端汇合
 

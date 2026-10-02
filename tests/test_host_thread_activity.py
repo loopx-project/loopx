@@ -289,7 +289,8 @@ def test_app_status_route_attaches_codex_thread_activity(tmp_path: Path, monkeyp
         path = "/status.json"
         server = SimpleNamespace(
             selected_goal_id=None, registry_path=tmp_path / "registry.json", runtime_root_override=None,
-            scan_roots=[], limit=10, goal_subagent_configuration_enabled=False,
+            scan_roots=[], runtime_root=tmp_path / "runtime", limit=10,
+            goal_subagent_configuration_enabled=False,
         )
 
         def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:

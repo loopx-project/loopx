@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.quota.accounting_admission import quota_accounting_admission
 from ...control_plane.quota.settlement import read_heartbeat_settlement
 from ...control_plane.runtime.public_safety import validate_public_safe_value
 from ...rollout_event_log import (
@@ -64,20 +65,33 @@ def _details(event: Mapping[str, Any]) -> dict[str, Any]:
 
 def _events_for_turn(
     events: Sequence[Mapping[str, Any]], *, goal_id: str, agent_id: str, turn_instance_id: str,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     return [dict(event) for event in events
             if event.get("event_kind") in EVENT_KINDS.values()
             and event.get("goal_id") == goal_id
             and event.get("agent_id") == agent_id
-            and event.get("run_id") == turn_instance_id]
+            and event.get("run_id") == turn_instance_id
+            and (
+                event.get("goal_ref") == dict(goal_ref)
+                if goal_ref is not None
+                else "goal_ref" not in event
+            )]
 
 
 def native_child_activity(
     events: Sequence[Mapping[str, Any]], *, goal_id: str, agent_id: str,
     turn_instance_id: str, configured_limit: int,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One read model for CLI, agent-context and product projections."""
-    rows = _events_for_turn(events, goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id)
+    rows = _events_for_turn(
+        events,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
+    )
     operations: dict[str, dict[str, Any]] = {}
     for event in rows:
         details = _details(event)
@@ -134,32 +148,80 @@ def native_child_activity(
 def load_native_child_activity(
     runtime_root: Path, *, goal_id: str, agent_id: str,
     turn_instance_id: str, configured_limit: int,
+    goal_ref: Mapping[str, Any] | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
-    source = iter_rollout_events(rollout_event_log_path(runtime_root, goal_id))
-    events = [event for event in source
-              if event.get("event_kind") in EVENT_KINDS.values()
-              and event.get("agent_id") == agent_id
-              and event.get("run_id") == turn_instance_id]
-    return native_child_activity(
-        events, goal_id=goal_id, agent_id=agent_id,
-        turn_instance_id=turn_instance_id, configured_limit=configured_limit,
-    )
+    with quota_accounting_admission(
+        runtime_root=runtime_root,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        goal_ref=goal_ref,
+        operation="native-child-read",
+        lock_legacy_index=False,
+    ) as source_admission:
+        if source_admission is not None:
+            readback = read_heartbeat_settlement(
+                runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                todo_id=None,
+                turn_instance_id=turn_instance_id,
+                resolve_original_binding=True,
+                registry_path=registry_path,
+                goal_ref=goal_ref,
+                source_admission=source_admission,
+                borrow_source_admission=True,
+            )
+            if readback is None or readback.identity.value is None:
+                raise ValueError(
+                    "native child read requires an admitted, settlement-bound Turn guard"
+                )
+        source = iter_rollout_events(
+            rollout_event_log_path(runtime_root, goal_id)
+        )
+        events = [
+            event
+            for event in source
+            if event.get("event_kind") in EVENT_KINDS.values()
+            and event.get("agent_id") == agent_id
+            and event.get("run_id") == turn_instance_id
+            and (
+                event.get("goal_ref") == dict(goal_ref)
+                if goal_ref is not None
+                else "goal_ref" not in event
+            )
+        ]
+        return native_child_activity(
+            events,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            turn_instance_id=turn_instance_id,
+            configured_limit=configured_limit,
+            goal_ref=goal_ref,
+        )
 
 
 def latest_native_child_activity(
     events: Sequence[Mapping[str, Any]], *, goal_id: str, configured_limit: int,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Expose only the latest reported Turn in existing Goal status surfaces."""
     observations = [event for event in events
                     if event.get("goal_id") == goal_id
                     and event.get("event_kind") in EVENT_KINDS.values()
-                    and event.get("agent_id") and event.get("run_id")]
+                    and event.get("agent_id") and event.get("run_id")
+                    and (
+                        event.get("goal_ref") == dict(goal_ref)
+                        if goal_ref is not None
+                        else "goal_ref" not in event
+                    )]
     if not observations:
         return None
     latest = max(observations, key=lambda event: str(event.get("recorded_at") or ""))
     return native_child_activity(
         events, goal_id=goal_id, agent_id=str(latest["agent_id"]),
         turn_instance_id=str(latest["run_id"]), configured_limit=configured_limit,
+        goal_ref=goal_ref,
     )
 
 
@@ -212,13 +274,16 @@ def _normalized_fields(
     raise ValueError("stage must be decision, result or review")
 
 
-def record_native_child(
+def _record_native_child(
     *, runtime_root: Path, goal_id: str, agent_id: str,
     turn_instance_id: str, operation_id: str, configured_limit: int,
     stage: str, outcome: str, operation: str | None = None,
     entrypoint_id: str | None = None, reason_code: str | None = None,
     evidence_ref: str | None = None, validation_ref: str | None = None,
     execute: bool = False,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Preview or append a typed report; never launch a child or spend quota."""
     goal_id = _id(goal_id, field="goal_id")
@@ -233,7 +298,13 @@ def record_native_child(
     )
     log_path = rollout_event_log_path(runtime_root, goal_id)
     events = load_rollout_events(log_path)
-    prior = _events_for_turn(events, goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id)
+    prior = _events_for_turn(
+        events,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
+    )
     existing = next((event for event in prior
                      if event.get("case_id") == operation_id
                      and event.get("event_kind") == EVENT_KINDS[stage]), None)
@@ -244,6 +315,9 @@ def record_native_child(
         readback = read_heartbeat_settlement(
             runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=None,
             turn_instance_id=turn_instance_id, resolve_original_binding=True,
+            registry_path=registry_path, goal_ref=goal_ref,
+            source_admission=source_admission,
+            borrow_source_admission=source_admission is not None,
         )
         if readback is None or readback.identity.value is None or readback.identity.failure is not None:
             reason = (readback.identity.failure.reason
@@ -261,7 +335,8 @@ def record_native_child(
     def validate_transition(observed: Sequence[Mapping[str, Any]]) -> None:
         admission = report_admission()
         current = _events_for_turn(observed, goal_id=goal_id, agent_id=agent_id,
-                                   turn_instance_id=turn_instance_id)
+                                   turn_instance_id=turn_instance_id,
+                                   goal_ref=goal_ref)
         decisions = {str(item.get("case_id")): item for item in current
                      if item.get("event_kind") == EVENT_KINDS["decision"]}
         if stage == "decision":
@@ -293,12 +368,20 @@ def record_native_child(
         goal_id=goal_id, event_kind=EVENT_KINDS[stage], agent_id=agent_id,
         run_id=turn_instance_id, case_id=operation_id, status=fields["outcome"],
         details=fields, recorded_at=(existing or {}).get("recorded_at"),
+        goal_ref=goal_ref,
     )
     appended = False
     if execute:
         stored, appended = append_rollout_event_once(
             log_path, event,
-            identity_fields=("goal_id", "event_kind", "agent_id", "run_id", "case_id"),
+            identity_fields=(
+                "goal_id",
+                "event_kind",
+                "agent_id",
+                "run_id",
+                "case_id",
+                *(("goal_ref",) if goal_ref is not None else ()),
+            ),
             precondition=lambda: validate_transition(load_rollout_events(log_path)),
         )
         if _details(stored) != fields:
@@ -318,5 +401,46 @@ def record_native_child(
             events if execute or existing else [*events, event], goal_id=goal_id,
             agent_id=agent_id, turn_instance_id=turn_instance_id,
             configured_limit=configured_limit,
+            goal_ref=goal_ref,
         ),
     }
+
+
+def record_native_child(
+    *, runtime_root: Path, goal_id: str, agent_id: str,
+    turn_instance_id: str, operation_id: str, configured_limit: int,
+    stage: str, outcome: str, operation: str | None = None,
+    entrypoint_id: str | None = None, reason_code: str | None = None,
+    evidence_ref: str | None = None, validation_ref: str | None = None,
+    execute: bool = False, registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview or append one report under its exact quota owner."""
+
+    with quota_accounting_admission(
+        runtime_root=runtime_root,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        goal_ref=goal_ref,
+        operation="native-child-report",
+        lock_legacy_index=False,
+    ) as source_admission:
+        return _record_native_child(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            turn_instance_id=turn_instance_id,
+            operation_id=operation_id,
+            configured_limit=configured_limit,
+            stage=stage,
+            outcome=outcome,
+            operation=operation,
+            entrypoint_id=entrypoint_id,
+            reason_code=reason_code,
+            evidence_ref=evidence_ref,
+            validation_ref=validation_ref,
+            execute=execute,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
+            source_admission=source_admission,
+        )

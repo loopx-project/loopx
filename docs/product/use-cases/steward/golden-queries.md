@@ -451,6 +451,48 @@ capacity/fairness, per-cohort cost/latency budgets and a problem with enough
 independent work to justify the cohort. These two are roadmap targets, not
 ready-to-run scale fixtures or a reason to spawn idle workers now.
 
+### Goal lifetime: creation, collaboration and recovery
+
+This planned variant composes GQ01/02, GQ05/11/12 and GQ08/09 for R1–R3/G1 and
+[Goal-instance RFC M5](../../../architecture/rfcs/goal-instance-identity-and-orphan-recovery-v0.md#product-integration-through-existing-roadmap-journeys).
+Reuse the existing public research question or one bounded engineering delivery;
+the user asks for an outcome, not instance IDs or lifecycle protocol fields.
+Keep implementation tracking in #5206 and the existing R1–R3 owners under #4574.
+
+1. **Create/connect.** Retain the original request, create its Goal and reuse a
+   qualified responsible Agent; create additional workers only within the
+   existing authorization. Lose the creation response and retry/reload. Verify
+   one committed operation and no duplicate Goal, Agent, session or driver.
+2. **Collaborate.** Use 2–3 real workers for two artifact/adoption/review cycles,
+   with one owner correction and an independent reviewer. Observe the producer,
+   exact consumed version, receiver decision, acceptance and synthesized return.
+3. **Resume the same lifetime.** Interrupt one worker while another progresses.
+   Resume through the qualified binding and current claim/lease. GoalRef stays
+   unchanged; a stale execution generation cannot commit twice. A correction,
+   model change or reconnect does not create a new Goal.
+4. **Retire and recreate.** In a separate disposable variant, pause old Goal A
+   before a result/settlement returns, retire it through its lifecycle owner,
+   then create B with the same alias and a different instance. Preserve A's
+   attachments and deliver the late result and a duplicate callback. A remains
+   inspectable as history; its work cannot debit B, complete B's Todo or satisfy
+   B's join. Historical accepted A effects remain A's; rejection is not erasure.
+5. **Recover and return.** B independently completes valid work and returns its
+   accepted result to its initiating conversation; an unrelated Goal progresses.
+   Check source state, settlement and original-route return independently of
+   the UI. Show an actionable stale-binding/reconnection outcome without asking
+   the user to relay results. If orphan state is introduced, exercise M4's
+   preview, backup, explicit disposition, interrupted apply/resume and readback.
+
+The same-lifetime pilot uses an already supported profile. The live recreation
+variant requires the selected source profile's full M2/M3 qualification;
+orphan recovery additionally requires M4. Isolated component tests can run
+earlier but do not authorize activation or certify this real-model journey.
+#5389 covers the quota-settlement owner only. Keep App, CLI, Lark and provider
+results separate, with passed/failed/untested evidence; existing release-only
+paid-evaluation and frozen-budget rules apply. GQ15 later checks that a team
+allowance is not multiplied across members; GQ16 separately qualifies remote
+identity, revocation, network recovery and old-executor fencing.
+
 ## Required variants and independent observations
 
 | Boundary | Fixture or intervention | What the observer must establish |

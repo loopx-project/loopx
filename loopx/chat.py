@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .todos import add_goal_todo
+from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
 from .control_plane.work_items.governed_transition_proposal import (
     STEWARD_TEAM_PLAN_PREVIEW_KIND,
 )
@@ -23,9 +24,35 @@ CHAT_PROTECTED_ACTION_OPERATIONS = frozenset(
     {"merge", "release", "deploy", "delete", "payment"}
 )
 
+# Keep the existing action-admission contract separate from display redaction.
 _ABSOLUTE_LOCAL_PATH = re.compile(
     r"(?<![A-Za-z0-9])(?:/(?:Users|home|private|tmp|var)/[^\s`'\"<>]+|[A-Za-z]:[\\/][^\s`'\"<>]+)"
 )
+
+
+def _protected_path_replacements(
+    protected_paths: Iterable[Path | str],
+) -> list[tuple[str, str]]:
+    replacements = []
+    for index, value in enumerate(protected_paths):
+        raw = str(value).rstrip("/\\")
+        if raw:
+            label = "[project]" if index == 0 else "[local-path]"
+            # Status redacts serialized JSON as well as ordinary response text.
+            for spelling in {raw, json.dumps(raw, ensure_ascii=False)[1:-1]}:
+                replacements.append((spelling, label))
+    return sorted(replacements, key=lambda item: len(item[0]), reverse=True)
+
+
+def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
+    if not replacements:
+        return LOCAL_PATH_SURFACE_PATTERN
+    roots = "|".join(re.escape(raw) for raw, _ in replacements)
+    return re.compile(
+        r"(?<![:/A-Za-z0-9_.\\])(?:" + roots + r")"
+        r"(?=$|[/\\\s`'\"<>.,;:!?)}\]])(?:[/\\][^\s`'\"<>]*)?"
+        + "|(?i:" + LOCAL_PATH_SURFACE_PATTERN.pattern + ")"
+    )
 
 
 class TodoReviewPreviewConflict(ValueError):
@@ -81,25 +108,18 @@ def _stable_digest(payload: dict[str, Any], *, length: int = 24) -> str:
 
 def redact_local_paths(text: str, *, protected_paths: Iterable[Path | str] = ()) -> str:
     redacted = str(text or "")
-    replacements: list[tuple[str, str]] = []
-    for index, value in enumerate(protected_paths):
-        raw = str(value).rstrip("/")
-        if raw:
-            replacements.append((raw, "[project]" if index == 0 else "[local-path]"))
+    replacements = _protected_path_replacements(protected_paths)
 
     def replace_absolute_path(match: re.Match[str]) -> str:
         matched = match.group(0)
         candidate = matched.rstrip(".,;:!?)]}")
         suffix = matched[len(candidate) :]
-        for raw, label in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
+        for raw, label in replacements:
             if candidate == raw or candidate.startswith(f"{raw}/") or candidate.startswith(f"{raw}\\"):
                 return f"{label}{suffix}"
         return f"[local-path]{suffix}"
 
-    redacted = _ABSOLUTE_LOCAL_PATH.sub(replace_absolute_path, redacted)
-    for raw, label in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
-        redacted = redacted.replace(raw, label)
-    return redacted
+    return _local_path_pattern(replacements).sub(replace_absolute_path, redacted)
 
 
 class VisibleResponseStreamFilter:
@@ -114,6 +134,8 @@ class VisibleResponseStreamFilter:
 
     def __init__(self, *, protected_paths: Iterable[Path | str] = ()) -> None:
         self.protected_paths = tuple(protected_paths)
+        self._protected = _protected_path_replacements(self.protected_paths)
+        self._local_path_pattern = _local_path_pattern(self._protected)
         self.marker_pending = ""
         self.visible_pending = ""
         self.envelope_started = False
@@ -131,10 +153,21 @@ class VisibleResponseStreamFilter:
                 boundary = index + 2
         if boundary < 0 and len(pending) >= self._MAX_PENDING_CHARS:
             prefix = pending[: self._MAX_PENDING_CHARS + 1]
-            whitespace = max(prefix.rfind(" "), prefix.rfind("\t"))
+            paths = list(self._local_path_pattern.finditer(pending))
+            whitespace = max(
+                (index for index, character in enumerate(prefix)
+                 if character in " \t"
+                 and not any(match.start() <= index < match.end() for match in paths)),
+                default=-1,
+            )
+            # A declared root itself can span several chunks or contain spaces.
+            # Hold its prefix until it becomes a complete path token.
+            partial_root = any(raw.startswith(pending) for raw, _ in self._protected)
             if whitespace >= 0:
                 boundary = whitespace + 1
-            elif _ABSOLUTE_LOCAL_PATH.search(prefix) is None:
+            elif partial_root:
+                return -1
+            elif not any(match.start() < self._MAX_PENDING_CHARS for match in paths):
                 boundary = self._MAX_PENDING_CHARS
             else:
                 for index, character in enumerate(

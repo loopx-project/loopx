@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
 
@@ -9,6 +10,10 @@ import {
   settlementIdentity,
   type JsonObject,
 } from "../../loopx/control_plane/effect_program.ts";
+import {
+  acquireFileMutationLock,
+  releaseFileMutationLock,
+} from "../../loopx/control_plane/effect_runtime_io.ts";
 import {
   ACCEPTED_CLOSEOUTS,
   PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
@@ -153,6 +158,58 @@ function preflight(runtimeRoot: string, exclude: string | null = "current-turn")
   });
 }
 
+async function withSourceAdmission<T>(
+  runtimeRoot: string,
+  instanceId: string,
+  run: (binding: JsonObject) => Promise<T>,
+): Promise<T> {
+  const indexPath = join(runtimeRoot, "goals", GOAL, "runs", "index.jsonl");
+  const registryPath = join(runtimeRoot, "project", ".loopx", "registry.json");
+  const guardPath = join(
+    dirname(registryPath),
+    ".loopx",
+    "lifecycle",
+    "goal-instance",
+    "guards",
+    `${createHash("sha256").update(GOAL, "utf8").digest("hex")}.guard`,
+  );
+  const indexLock = await acquireFileMutationLock(indexPath);
+  const guardLock = await acquireFileMutationLock(guardPath);
+  try {
+    const goalRef = {
+      goal_id: GOAL,
+      goal_instance_id: instanceId,
+    };
+    return await run({
+      goal_ref: goalRef,
+      source_admission: {
+        schema_version: "loopx_quota_source_admission_v0",
+        profile_id: "source_session_v1",
+        registry_path: registryPath,
+        planned_goal_ref: goalRef,
+        authority: {kind: "present", goal_ref: goalRef},
+        locks: [
+          {
+            role: "run_index",
+            target: indexPath,
+            pid: process.pid,
+            token: indexLock.token,
+          },
+          {
+            role: "source_guard",
+            target: guardPath,
+            pid: process.pid,
+            token: guardLock.token,
+          },
+        ],
+      },
+    });
+  } finally {
+    await releaseFileMutationLock(guardPath, guardLock.token, null, true);
+    await releaseFileMutationLock(indexPath, indexLock.token, null, true);
+  }
+}
+
 function candidateFrom(result: JsonObject): JsonObject {
   assert.equal(result.status, "candidate");
   return result.candidate as JsonObject;
@@ -213,6 +270,60 @@ test("the preflight reads the persisted receipts and names the newest required c
       "durable_writeback_receipt",
       "quota_spend_receipt",
     ]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("exact preflight filters stale owners before selecting the newest Turn", async () => {
+  const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const instanceB = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const runtime = await runtimeWith([
+    receipt("turn-b", closeoutRequired("turn-b", "todo_current"), {
+      goal_ref: {goal_id: GOAL, goal_instance_id: instanceB},
+    }),
+    receipt("turn-delayed-a", closeoutRequired("turn-delayed-a", "todo_stale"), {
+      goal_ref: {goal_id: GOAL, goal_instance_id: instanceA},
+    }),
+  ]);
+  try {
+    const result = await withSourceAdmission(
+      runtime.root,
+      instanceB,
+      async (binding) => await preflightPriorHostTurnCloseout({
+        schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+        runtime_root: runtime.root,
+        goal_id: GOAL,
+        agent_id: AGENT,
+        exclude_turn_instance_id: "current-turn",
+        ...binding,
+      }),
+    );
+    assert.equal(candidateFrom(result).prior_turn_instance_id, "turn-b");
+
+    const onlyStale = await runtimeWith([
+      receipt("turn-a", closeoutRequired("turn-a", "todo_stale"), {
+        goal_ref: {goal_id: GOAL, goal_instance_id: instanceA},
+      }),
+    ]);
+    try {
+      const none = await withSourceAdmission(
+        onlyStale.root,
+        instanceB,
+        async (binding) => await preflightPriorHostTurnCloseout({
+          schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+          runtime_root: onlyStale.root,
+          goal_id: GOAL,
+          agent_id: AGENT,
+          exclude_turn_instance_id: "current-turn",
+          ...binding,
+        }),
+      );
+      assert.equal(none.status, "none");
+      assert.equal(none.reason, "no_prior_turn_requires_closeout");
+    } finally {
+      await onlyStale.close();
+    }
   } finally {
     await runtime.close();
   }

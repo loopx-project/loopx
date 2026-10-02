@@ -301,6 +301,37 @@ delivery persistently with:
 loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-human-gates --execute
 ```
 
+Blocked Todo notices use a separate, default-off opt-in. They carry the task,
+cause, impact, responsible party, recovery condition, and next action. A blocked
+primary Todo remains visible when safe fallback work continues. Enable or
+remove this delivery through the same private Goal Channel binding:
+
+```bash
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices --execute
+loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-blocked-notices --execute
+```
+
+A material refresh sends only through the authorized Lark sink. Deduplication
+binds blocker identity, revision, destination chat, and delivery generation.
+An explicitly observed open Todo retires the old blocker as resumed; terminal
+or superseding canonical facts retire it separately. Missing or paginated rows
+never prove recovery. Repeated recovery works even within one timestamp.
+
+Each refresh attempts at most eight pending effects, prioritizing unattempted
+notices before retries. Verified receipts do not consume that budget; the full
+frontier and deferred pending receipts remain available for later refreshes.
+A batch with pending work is not reported as fully verified. Switching channels
+requires independent send/readback for the new destination and retains the old
+history. Public status counts refer to the current target and exclude retired
+receipts from active delivery totals.
+
+The private binding records pending, sent-but-unverified, delivered, resumed,
+resolved, and superseded receipts. Provider failure or a missing sink leaves
+notices pending without stopping safe fallback. `status.json` exposes only
+public-safe counts and the two opt-ins. Chat replies do not approve or recover
+Todos; recovery remains a canonical Todo fact.
+
 The opt-in is stored only in the project-local private Goal Channel binding.
 It does not grant repository or LoopX transition authority. Chat replies can
 provide context, but a gate changes only after LoopX validates and records the

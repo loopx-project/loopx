@@ -27,7 +27,20 @@ def _heartbeat_receipt_events(
     goal_id: str,
     agent_id: str,
     turn_instance_id: str,
+    goal_ref: Mapping[str, object] | None,
 ) -> list[dict[str, object]]:
+    from ..goals.source_session_registry_state import exact_goal_ref
+
+    expected_goal_ref = (
+        exact_goal_ref(
+            str(goal_ref.get("goal_id") or ""),
+            str(goal_ref.get("goal_instance_id") or ""),
+        )
+        if goal_ref is not None
+        else None
+    )
+    if expected_goal_ref is not None and expected_goal_ref["goal_id"] != goal_id:
+        raise ValueError("heartbeat receipt GoalRef does not match goal_id")
     return [
         event
         for event in events
@@ -35,6 +48,11 @@ def _heartbeat_receipt_events(
         and str(event.get("goal_id") or "") == goal_id
         and str(event.get("agent_id") or "") == agent_id
         and str(event.get("run_id") or "") == turn_instance_id
+        and (
+            event.get("goal_ref") == expected_goal_ref
+            if expected_goal_ref is not None
+            else "goal_ref" not in event
+        )
     ]
 
 
@@ -154,6 +172,7 @@ def find_heartbeat_receipt(
     goal_id: str,
     agent_id: str,
     turn_instance_id: str,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
     return _effective_heartbeat_receipt(
@@ -162,6 +181,7 @@ def find_heartbeat_receipt(
             goal_id=goal_id,
             agent_id=agent_id,
             turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
         )
     )
 
@@ -172,6 +192,7 @@ def ensure_turn_heartbeat_settlement_receipt(
     *,
     semantic_replan_guard_scoped: bool,
     semantic_replan_obligation_id: str | None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Idempotently bind a Turn-created quota guard to its settlement identity.
 
@@ -199,6 +220,7 @@ def ensure_turn_heartbeat_settlement_receipt(
             goal_id=identity.goal_id,
             agent_id=identity.agent_id,
             turn_instance_id=identity.turn_instance_id,
+            goal_ref=goal_ref,
         )
         effective = _effective_heartbeat_receipt(matching)
         expected = (
@@ -261,6 +283,7 @@ def ensure_turn_heartbeat_settlement_receipt(
         receipt = build_rollout_event(
             goal_id=identity.goal_id,
             event_kind="quota_should_run",
+            goal_ref=goal_ref,
             agent_id=identity.agent_id,
             todo_id=identity.todo_id,
             run_id=identity.turn_instance_id,
@@ -282,6 +305,7 @@ def retain_pending_heartbeat_action_selection(
     turn_instance_id: str,
     todo_id: str,
     reason: str,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], bool]:
     """Append an identity-less revision retaining one explicit Todo choice.
 
@@ -306,6 +330,7 @@ def retain_pending_heartbeat_action_selection(
             goal_id=goal_id,
             agent_id=agent_id,
             turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
         )
         effective = _effective_heartbeat_receipt(matching)
         if effective is None:
@@ -341,6 +366,7 @@ def retain_pending_heartbeat_action_selection(
         retained = build_rollout_event(
             goal_id=goal_id,
             event_kind="quota_should_run",
+            goal_ref=goal_ref,
             agent_id=agent_id,
             run_id=turn_instance_id,
             status="action_selection_deferred",
@@ -368,6 +394,7 @@ def upgrade_identityless_heartbeat_receipt(
     status: str,
     summary: str,
     details: Mapping[str, object],
+    goal_ref: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], bool]:
     """Append one settlement-bound receipt after an identity-less same-turn guard.
 
@@ -414,6 +441,7 @@ def upgrade_identityless_heartbeat_receipt(
             goal_id=goal_id,
             agent_id=agent_id,
             turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
         )
         effective = _effective_heartbeat_receipt(matching)
         if effective is None:
@@ -467,6 +495,7 @@ def upgrade_identityless_heartbeat_receipt(
         corrected = build_rollout_event(
             goal_id=goal_id,
             event_kind="quota_should_run",
+            goal_ref=goal_ref,
             agent_id=agent_id,
             todo_id=normalized_todo_id or None,
             run_id=turn_instance_id,

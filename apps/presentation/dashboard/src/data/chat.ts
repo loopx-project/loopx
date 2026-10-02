@@ -1508,12 +1508,12 @@ export async function setupGoalChannel(options: { execute: boolean; goalId: stri
   );
 }
 
-export async function configureGoalChannelAutoNotify(options: { autoNotify: boolean; goalId: string }) {
+export async function configureGoalChannelAutoNotify(options: { autoNotify: boolean; goalId: string; kind?: "human_gate" | "blocked_notice" }) {
   return goalChannelOperationSchema.parse(
     await requestJson<unknown>("/api/chat/goal-channel/configure", {
       method: "POST",
       body: JSON.stringify({
-        auto_notify_human_gates: options.autoNotify,
+        ...(options.kind === "blocked_notice" ? { auto_notify_blocked_notices: options.autoNotify } : { auto_notify_human_gates: options.autoNotify }),
         goal_id: options.goalId,
       }),
     }),

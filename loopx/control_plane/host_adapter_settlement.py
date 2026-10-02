@@ -62,6 +62,7 @@ class HostTodoSettlementRequest:
     vision_path: str | None = None
     vision_unchanged_reason: str | None = None
     checkpoint_read_context_id: str | None = None
+    goal_ref: Mapping[str, str] | None = None
 
 
 class HostCliRunner(Protocol):
@@ -102,6 +103,8 @@ def _request_payload(
     }
     if provider_outcomes is not None:
         payload["provider_outcomes"] = provider_outcomes
+    if request.goal_ref is not None:
+        payload["goal_ref"] = dict(request.goal_ref)
     if request.vision_path or request.vision_unchanged_reason or phase in {"vision_refresh", "vision_context"}:
         payload.update(
             schema_version="loopx_host_todo_completion_transaction_v1",

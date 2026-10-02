@@ -4,6 +4,7 @@ import {
   settlementIdentity, type JsonObject, type SettlementIdentityInput,
   type SettlementPlan, type SettlementStep,
 } from "../effect_program.ts";
+import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {
@@ -13,6 +14,18 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const commands = requireJsonObject(params.command_templates, "command_templates");
   const writeback = requireNonEmptyString(commands.durable_writeback, "durable_writeback");
   const spend = requireNonEmptyString(commands.quota_spend, "quota_spend");
+  const parsedGoalRef = params.goal_ref === undefined
+    ? null
+    : parseExactGoalRef(params.goal_ref);
+  if (
+    parsedGoalRef !== null
+    && (
+      parsedGoalRef.kind === "invalid"
+      || parsedGoalRef.value.goalId.value !== identity.goal_id
+    )
+  ) {
+    throw new Error("settlement plan GoalRef is invalid or does not match identity");
+  }
   const inFlight = params.delivery_boundary === "in_flight_continuation";
   const validation: SettlementStep = {
     kind: "validation", owner: "agent", idempotency_key_ref: "$.identity.effect_id",
@@ -52,5 +65,14 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     command_template: requireNonEmptyString(commands.terminal_closeout, "terminal_closeout"),
     conditional: true,
   });
-  return {identity, steps};
+  return {
+    identity,
+    steps,
+    ...(parsedGoalRef === null ? {} : {
+      goal_ref: {
+        goal_id: parsedGoalRef.value.goalId.value,
+        goal_instance_id: parsedGoalRef.value.goalInstanceId.value,
+      },
+    }),
+  };
 }

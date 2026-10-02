@@ -272,6 +272,31 @@ loopx goal-channel configure --goal-id <goal-id> --auto-notify-human-gates --exe
 loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-human-gates --execute
 ```
 
+受阻 Todo 通知有独立的 opt-in，默认关闭。通知包含任务、原因、影响、解除责任人、
+恢复条件和下一步；安全回退继续时，主要受阻任务仍会显式呈现。通过同一个私有
+Goal Channel binding 开启或关闭：
+
+```bash
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices --execute
+loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-blocked-notices --execute
+```
+
+实际刷新只向已授权的 Lark sink 发送。去重同时绑定阻塞身份、修订、目标群和投递世代。
+明确观察到 canonical Todo 恢复为 open 时，旧阻塞回执标记为 resumed；终结及被取代
+事实分别退休旧回执。缺失或分页省略的任务不能证明恢复；同一时间戳内多次恢复也会
+产生不同投递世代。
+
+每次刷新最多尝试八条待发送效果，未尝试的通知优先于重试，已核验回执不占用额度。
+完整候选与延后的 pending 回执保留到后续刷新；仍有待处理通知时不能宣称全部核验。
+切换目标群必须独立发送并回读，旧群历史继续保留。公开计数只针对当前目标群，已退休
+回执不计入当前已送达数量。
+
+私有 binding 保存待发送、已发送但未核验、已核验、已恢复、已解除及被取代状态。
+发送失败或没有可用 sink 时保持待发送状态，安全回退不受阻。`status.json` 只公开计数
+与两个 opt-in，不公开私有消息身份。群聊回复不构成 Todo 批准或解除；恢复须由
+canonical Todo 状态确认。
+
 该 opt-in 只保存在项目本地私有的 Goal Channel binding 中，不授予仓库或 LoopX
 状态迁移权限。群聊回复可以补充 context，但只有经过 LoopX 校验并记录的 decision
 才能改变 gate 状态。

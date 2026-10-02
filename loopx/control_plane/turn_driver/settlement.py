@@ -42,8 +42,8 @@ class TurnSettlementState:
     quota_spend: Mapping[str, Any] | None = None
 
 
-TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION = "loopx_turn_settlement_transaction_v0"
-TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION = "loopx_turn_settlement_reduction_v0"
+TURN_SETTLEMENT_TRANSACTION_SCHEMA_VERSION = "loopx_turn_settlement_transaction_v1"
+TURN_SETTLEMENT_REDUCTION_SCHEMA_VERSION = "loopx_turn_settlement_reduction_v1"
 
 
 def _invoke_turn_effect(effect: TurnEffect, effect_ref: str) -> Mapping[str, Any]:
@@ -204,27 +204,6 @@ class TurnSettlementJournalAdapter:
             self.journal.pop("effect_attempts", None)
 
 
-def completion_writeback_outcome(
-    payload: Mapping[str, Any],
-    *,
-    plan: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    """Return the selected Todo's validated durable completion outcome."""
-
-    completion = payload.get("completion")
-    if not isinstance(completion, Mapping):
-        return None
-    envelope = plan.get("turn_envelope")
-    selected = selected_turn_todo(envelope) if isinstance(envelope, Mapping) else {}
-    try:
-        return require_loopx_turn_completion_outcome(
-            completion,
-            expected_todo_id=str(selected.get("todo_id") or ""),
-        )
-    except ValueError:
-        return None
-
-
 def terminal_closeout_requirement(
     *,
     plan: Mapping[str, Any],
@@ -259,77 +238,23 @@ def terminal_closeout_requirement(
     return outcome["continuation"] == "no_followup", None
 
 
-def verified_terminal_closeout_effect(
-    effect: ResultEffect,
-    *,
-    result: Mapping[str, Any],
-    plan: Mapping[str, Any],
-) -> TurnEffect:
-    """Wrap terminal closeout with its durable no-followup postcondition."""
-
-    def verified(effect_ref: str) -> Mapping[str, Any]:
-        callback_payload = invoke_result_effect(effect, result, effect_ref)
-        outcome = completion_writeback_outcome(callback_payload, plan=plan)
-        if outcome is None or outcome.get("continuation") != "no_followup":
-            return {
-                "ok": False,
-                "appended": False,
-                "reason": (
-                    "terminal closeout adapter did not durably record the "
-                    "selected Todo as no_followup"
-                ),
-            }
-        return {**callback_payload, "completion": outcome}
-
-    return verified
-
-
-def _resolve_prepared_effect(
+def _read_prepared_effect(
     resolvers: Mapping[SettlementStepKind, TurnEffectResolver],
     step_kind: SettlementStepKind,
     effect_ref: str,
-) -> tuple[bool, Mapping[str, Any] | None, Mapping[str, Any] | None]:
-    """Return execute, committed payload, or a fail-closed observation."""
+) -> Mapping[str, Any]:
+    """Transport provider evidence; TypeScript decides whether it permits IO."""
 
     resolver = resolvers.get(step_kind)
     if resolver is None:
-        return (
-            False,
-            None,
-            {
-                "kind": "unknown",
-                "reason": "provider readback is unavailable",
-            },
-        )
+        return {"kind": "unknown", "reason": "provider readback is unavailable"}
     try:
-        resolution = dict(resolver(effect_ref))
+        return dict(resolver(effect_ref))
     except Exception as exc:
-        return (
-            False,
-            None,
-            {
-                "kind": "unknown",
-                "reason": f"provider readback raised {type(exc).__name__}",
-            },
-        )
-    kind = str(resolution.get("kind") or "unknown")
-    if kind == "absent":
-        return True, None, None
-    if kind != "committed":
-        observation = (
-            resolution
-            if kind == "unknown"
-            else {
-                "kind": "unknown",
-                "reason": f"unsupported provider readback kind: {kind}",
-            }
-        )
-        return False, None, observation
-    raw_payload = resolution.get("payload")
-    observed = dict(raw_payload) if isinstance(raw_payload, Mapping) else {}
-    if observed.get("ok") is True and observed.get("appended") is True:
-        return False, observed, None
-    return False, None, resolution
+        return {
+            "kind": "unknown",
+            "reason": f"provider readback raised {type(exc).__name__}",
+        }
 
 
 def execute_turn_driver_settlement(
@@ -356,9 +281,9 @@ def execute_turn_driver_settlement(
     """Run external effect providers and reduce one complete Turn settlement.
 
     TypeScript first validates identity, replay, and the committed journal
-    prefix, then authorizes the still-Python providers in order. Python invokes
-    and checkpoints those opaque outcomes before a final TypeScript reduction
-    owns failure classification, receipts, and the canonical result. A replay
+    prefix, then authorizes the still-Python providers in order. Python transports
+    provider returns and readbacks to TypeScript before executing its checkpoint
+    or retry decision. Only a persisted checkpoint advances the next provider. A replay
     with no pending provider completes in the first reduction.
     """
     phases = tuple(str(phase) for phase in completed_phases)
@@ -366,6 +291,7 @@ def execute_turn_driver_settlement(
     spend_value = quota_spend_payload
     terminal_value = terminal_closeout_payload
     failed_attempt: tuple[SettlementStepKind, Mapping[str, Any]] | None = None
+    returned_attempt: Mapping[str, Any] | None = None
     attempts = {
         (step.value if isinstance(step, SettlementStepKind) else str(step)): dict(
             attempt
@@ -374,12 +300,6 @@ def execute_turn_driver_settlement(
     }
     observations: dict[str, Mapping[str, Any]] = {}
     resolvers = dict(effect_resolvers or {})
-
-    def committed(payload: Mapping[str, Any]) -> bool:
-        # This transport guard only prevents a later provider from running
-        # after an earlier provider rejected. TS remains authoritative for the
-        # typed failure kind, receipt chain, and final settlement result.
-        return payload.get("ok") is True and payload.get("appended") is True
 
     def reduce() -> Mapping[str, Any]:
         payload = effect_runtime_result(
@@ -412,6 +332,7 @@ def execute_turn_driver_settlement(
                     if failed_attempt is not None
                     else None
                 ),
+                "returned_provider_attempt": returned_attempt,
                 "effect_attempts": attempts,
                 "provider_observations": observations,
                 "turn_result_kind": turn_result_kind,
@@ -440,66 +361,64 @@ def execute_turn_driver_settlement(
             step_kind = SettlementStepKind(str(raw_effect.get("step_kind") or ""))
             action = str(raw_effect.get("action") or "")
             effect_ref = str(raw_effect.get("effect_ref") or "")
-            if action not in {"prepare_and_execute", "resolve_prepared"}:
-                raise RuntimeError("TypeScript Turn settlement action mismatch")
             if not effect_ref:
                 raise RuntimeError("TypeScript Turn settlement effect ref is empty")
-            raw_phases = raw_effect.get("completed_phases")
-            if not isinstance(raw_phases, list):
-                raise RuntimeError("TypeScript Turn settlement phases shape mismatch")
-            authorized_phases = tuple(str(phase) for phase in raw_phases)
-            should_execute = action == "prepare_and_execute"
-            if action == "prepare_and_execute":
-                if prepare is not None:
-                    prepare(step_kind, effect_ref)
-                attempts[step_kind.value] = {
-                    "status": "prepared",
-                    "effect_ref": effect_ref,
-                }
-            else:
-                should_execute, observed, observation = _resolve_prepared_effect(
+            if action == "resolve_prepared":
+                observations[step_kind.value] = _read_prepared_effect(
                     resolvers, step_kind, effect_ref
                 )
-                if observation is not None:
-                    observations[step_kind.value] = observation
-                    break
-
-            if step_kind is SettlementStepKind.TERMINAL_CLOSEOUT:
-                if terminal_closeout is None or terminal_checkpoint is None:
-                    raise ValueError(
-                        "terminal closeout requires an effect provider and checkpoint"
-                    )
-                if should_execute:
-                    observed = dict(_invoke_turn_effect(terminal_closeout, effect_ref))
-                assert observed is not None
-                if committed(observed):
-                    terminal_value = observed
-                    terminal_checkpoint(observed)
-                    attempts.pop(step_kind.value, None)
-                else:
-                    if abort is not None:
-                        abort(step_kind, effect_ref)
-                    attempts.pop(step_kind.value, None)
-                    failed_attempt = (step_kind, observed)
-                    break
                 continue
-
-            if should_execute:
-                observed = dict(_invoke_turn_effect(providers[step_kind], effect_ref))
-            assert observed is not None
-            if not committed(observed):
+            if action in {"prepare_and_execute", "execute_prepared"}:
+                if action == "prepare_and_execute":
+                    if prepare is not None:
+                        prepare(step_kind, effect_ref)
+                    attempts[step_kind.value] = {
+                        "status": "prepared",
+                        "effect_ref": effect_ref,
+                    }
+                provider = (
+                    terminal_closeout
+                    if step_kind is SettlementStepKind.TERMINAL_CLOSEOUT
+                    else providers[step_kind]
+                )
+                if provider is None:
+                    raise ValueError("terminal closeout requires an effect provider")
+                returned_attempt = {
+                    "step_kind": step_kind.value,
+                    "payload": dict(_invoke_turn_effect(provider, effect_ref)),
+                }
+                observations.pop(step_kind.value, None)
+                continue
+            if action not in {"checkpoint", "abort_prepared"}:
+                raise RuntimeError("TypeScript Turn settlement action mismatch")
+            observed = raw_effect.get("payload")
+            if not isinstance(observed, Mapping):
+                raise RuntimeError("TypeScript Turn settlement payload shape mismatch")
+            if action == "abort_prepared":
                 if abort is not None:
                     abort(step_kind, effect_ref)
-                attempts.pop(step_kind.value, None)
                 failed_attempt = (step_kind, observed)
-                break
-            phases = authorized_phases
-            checkpoint(step_kind, observed, phases)
-            attempts.pop(step_kind.value, None)
-            if step_kind is SettlementStepKind.DURABLE_WRITEBACK:
-                writeback_value = observed
+            elif step_kind is SettlementStepKind.TERMINAL_CLOSEOUT:
+                if terminal_checkpoint is None:
+                    raise ValueError("terminal closeout requires a checkpoint")
+                terminal_checkpoint(observed)
+                terminal_value = observed
             else:
-                spend_value = observed
+                raw_phases = raw_effect.get("completed_phases")
+                if not isinstance(raw_phases, list):
+                    raise RuntimeError(
+                        "TypeScript Turn settlement phases shape mismatch"
+                    )
+                authorized_phases = tuple(str(phase) for phase in raw_phases)
+                checkpoint(step_kind, observed, authorized_phases)
+                phases = authorized_phases
+                if step_kind is SettlementStepKind.DURABLE_WRITEBACK:
+                    writeback_value = observed
+                else:
+                    spend_value = observed
+            attempts.pop(step_kind.value, None)
+            observations.pop(step_kind.value, None)
+            returned_attempt = None
         reduction = reduce()
         decision = str(reduction.get("decision") or "")
 

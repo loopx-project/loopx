@@ -449,6 +449,29 @@ Keep existing R/G/M/A identifiers and canonical Todos; do not create a parallel
 roadmap, scheduler or achievement ledger. Release claims require observed
 results, not this plan or merged prerequisite PRs.
 
+### Goal lifetime across creation and small-team delivery
+
+R1–R3/G1 adopt the [Goal-instance RFC's product integration path](goal-instance-identity-and-orphan-recovery-v0.md#product-integration-through-existing-roadmap-journeys)
+through the existing [golden-query lifecycle variant](../../product/use-cases/steward/golden-queries.md#goal-lifetime-creation-collaboration-and-recovery).
+Prioritize GQ01/02 creation and Agent reuse, GQ05/11/12 dependent delivery and
+review, then GQ08/09 correction/stop/resume as one small-team journey. Distinguish
+ordinary continuation within one Goal from explicit retirement and same-alias
+recreation: registered Agent, host session/execution generation and work attempt
+remain separate identities. Old work must not settle a successor's quota,
+complete its work or enter its accepted synthesis; current and unrelated work
+must still progress and return to the initiating conversation.
+
+R5 lifetime/recovery delivery stays with #5206; R1–R3 retain entry, receiver
+adoption, independent acceptance and return. #5389 qualifies the quota owner,
+not the whole journey. Run the ordinary pilot on a supported profile; qualify
+the isolated recreation variant only after the selected profile's M2/M3 gates,
+plus M4 where recovery is used. Activation and `execution_authority: false`
+holds remain. P1 adds GQ15 budget allocation and orphan recovery at create/connect;
+P2 adds GQ16 authenticated cross-host recovery. Packaged App and independent CLI
+readback come first, with Lark separately qualified. These refine existing
+acceptance, without adding a roadmap milestone or treating a prerequisite merge
+as product completion.
+
 ### Collaboration and Handoff Between LoopX Agents
 
 Participants are long-running LoopX Agents with their own goals, commitments, frontiers and execution bindings, not merely temporary subtasks inside the steward process. Manager→worker and worker→worker share one collaboration contract. Workers can request help, provide results, challenge dependencies and propose replanning without asking the steward to relay every message. The steward owns overall progress and synthesis, not a serial transit point for every message or commit.
@@ -708,12 +731,16 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 - **Exit:** affected real CLI/backend, immutable baseline versus candidate comparison, negative/mutation coverage, three-arm rehearsal and applicable D2 soak of at least ten days. D3 retains explicit cutover approval. This audit runs no new soak and promotes no provider.
 - **Rollback:** reviewed fenced export/import and schema-aware downgrade; replacing a binary cannot restore old write authority.
 
-The [Goal instance/recovery proposal](goal-instance-identity-and-orphan-recovery-v0.md)
-adds a bounded R5 dependency for R2/R3 retirement and late-result safety. Its M0
-codec is shipped; lifetime admission, commit fencing and recovery are not. Reuse
-TS transaction and existing provider owners, qualify the local path first, and
-keep R6 service identity and D1–D3 promotion separate. This checkpoint does not
-activate identity or require every R1–R4 change to wait for the full lifecycle.
+The [Goal instance/recovery RFC](goal-instance-identity-and-orphan-recovery-v0.md)
+adds a bounded R5 dependency for R2/R3 retirement and late-result safety. The
+codec and source-session lifetime transaction exist; attached Chat, handoff and
+Turn-journal fences have individual qualification, and #5389 adds quota
+settlement. First-party host enforcement is partial; remaining inventory owners,
+old-writer/effect-drain qualification, M4 recovery and M5 product acceptance stay
+open in #5206. Reuse those TS/provider owners and the creation/collaboration
+journey above. R6 service identity and D1–D3 promotion remain separate. This
+checkpoint does not activate identity or make every R1–R4 change wait for the
+full lifecycle.
 
 ### R6: Local/Cloud Convergence
 

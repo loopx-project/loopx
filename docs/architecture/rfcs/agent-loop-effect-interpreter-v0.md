@@ -600,6 +600,27 @@ settlement-parity, journal-effect and inspect-journal CLI tests, including real
 File readback. This qualifies the identity boundary only; composite crash/lease
 recovery and full provider conformance remain separate acceptance.
 
+The 2026-10-01 Turn recovery cutover moves provider-return, completion-result and readback
+classification into the Turn TypeScript owner. Each reduction authorizes one
+of prepare/execute, resolve, execute-prepared, checkpoint or abort-prepared;
+checkpoint acknowledgement precedes the next provider. Invalid completion or
+an explicit mismatched payload effect ref is held before journal advancement.
+Unknown readback retains prepared intent; confirmed absence permits execution
+with the same ref. Existing explicit failed-turn retry gates still apply.
+
+The transient request/reduction contract advances to v1 and rejects v0 callers
+before provider authorization. Upgrade or roll back the Python interpreter and
+TypeScript reducer together. Persisted journal and receipt schemas, effect
+identity, public CLI flags and legacy provider payloads without an explicit
+ref remain compatible. The existing Turn-local provider step/resolution sets
+are relocated, and the internal action union is extended; no new shared state
+vocabulary is introduced. Fresh two-provider settlement uses five RPCs (preflight,
+return admission and persisted acknowledgement per provider), versus three
+previously; fully committed replay remains one. This is an explicit correctness
+cost while Python hosts IO, not a latency optimization. PR evidence compares the
+same base/head workload. See the [bounded recovery checkpoint](composable-state-machines-recovery-verification-v0.md#turn-settlement-qualification-boundary)
+for qualification boundaries.
+
 M7.4: expand one bounded family at a time only when it removes duplicate
 knowledge and switches a real production caller. Todo, monitor, capability,
 scheduler, and gate state machines keep their domain transition invariants.

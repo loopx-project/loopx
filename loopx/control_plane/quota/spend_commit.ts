@@ -20,6 +20,12 @@ import {
   requireNonEmptyString as requiredString,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaGoalRef,
+  withQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 export const QUOTA_SPEND_COMMIT_REQUEST_SCHEMA =
   "loopx_quota_spend_commit_request_v0";
@@ -92,6 +98,7 @@ interface QuotaSpendCommitRequest {
   before: CompactQuotaDecision;
   after: CompactQuotaDecision;
   resolved_agent_id: string | null;
+  owner: QuotaAccountingOwner;
 }
 
 interface QuotaSpendReplayRequest {
@@ -102,6 +109,7 @@ interface QuotaSpendReplayRequest {
   effect_id: string;
   resolved_agent_id: string | null;
   read_only: boolean;
+  owner: QuotaAccountingOwner;
 }
 
 type SpendDisposition =
@@ -224,11 +232,12 @@ function replayRequestObject(value: unknown): QuotaSpendReplayRequest {
   if (!isAbsolute(runtimeRoot)) {
     throw new EffectRuntimeRequestError("runtime_root must be absolute");
   }
+  const goalId = safeGoalId(request.goal_id);
   return {
     schema_version: QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
     operation: "replay",
     runtime_root: runtimeRoot,
-    goal_id: safeGoalId(request.goal_id),
+    goal_id: goalId,
     effect_id: requiredString(request.effect_id, "effect_id").trim(),
     resolved_agent_id: optionalString(
       request.resolved_agent_id,
@@ -237,6 +246,12 @@ function replayRequestObject(value: unknown): QuotaSpendReplayRequest {
     read_only: request.read_only === undefined
       ? false
       : requiredBoolean(request.read_only, "read_only"),
+    owner: parseQuotaAccountingOwner({
+      goalRefValue: request.goal_ref,
+      sourceAdmissionValue: request.source_admission,
+      runtimeRoot,
+      goalId,
+    }),
   };
 }
 
@@ -261,6 +276,12 @@ function requestObject(value: unknown): QuotaSpendCommitRequest {
     `quota slot spend source must be one of: ${QUOTA_SPEND_SOURCES.join(", ")}`,
   );
   const requestedEffectId = optionalString(request.effect_id, "effect_id")?.trim();
+  const owner = parseQuotaAccountingOwner({
+    goalRefValue: request.goal_ref,
+    sourceAdmissionValue: request.source_admission,
+    runtimeRoot: runtimeRoot ?? "",
+    goalId,
+  });
   return {
     schema_version: QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
     effect_id: requestedEffectId || derivedEffectId(
@@ -286,6 +307,7 @@ function requestObject(value: unknown): QuotaSpendCommitRequest {
       request.resolved_agent_id,
       "resolved_agent_id",
     )?.trim() ?? null,
+    owner,
   };
 }
 
@@ -321,6 +343,7 @@ function derivedEffectId(
 }
 
 function requestDigest(request: QuotaSpendCommitRequest): string {
+  const goalRef = quotaGoalRef(request.owner);
   return sha256(canonicalJson({
     schema_version: request.schema_version,
     effect_id: request.effect_id,
@@ -334,6 +357,7 @@ function requestDigest(request: QuotaSpendCommitRequest): string {
     before: request.before,
     after: request.after,
     resolved_agent_id: request.resolved_agent_id,
+    ...(goalRef === null ? {} : { goal_ref: goalRef }),
   }));
 }
 
@@ -495,6 +519,11 @@ function buildSpendRecord(
     quota_event: quotaEvent,
     quota_spend_commit: commit,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) {
+    record.goal_ref = goalRef;
+    quotaEvent.goal_ref = goalRef;
+  }
   if (request.resolved_agent_id) {
     record.agent_id = request.resolved_agent_id;
     quotaEvent.agent_id = request.resolved_agent_id;
@@ -535,11 +564,17 @@ async function evaluateQuotaSpendReplay(
     "runs",
     "index.jsonl",
   );
-  const lookup = await lookupQuotaAccountingReplay(
-    "spend",
-    indexPath,
-    request.effect_id,
-    request.read_only,
+  const goalRef = quotaGoalRef(request.owner);
+  const lookup = await withQuotaAccountingOwner(
+    request.owner,
+    async (indexLockHeld) => await lookupQuotaAccountingReplay(
+      "spend",
+      indexPath,
+      request.effect_id,
+      request.read_only,
+      goalRef,
+      indexLockHeld,
+    ),
   );
   const requestFingerprint = sha256(canonicalJson(value));
   if (lookup.resolution.kind === "conflict") {
@@ -563,7 +598,7 @@ async function evaluateQuotaSpendReplay(
         effect_ref: request.effect_id,
         reason: lookup.resolution.reason,
       },
-      reason_code: "effect_id_conflict",
+      reason_code: lookup.resolution.reasonCode,
     };
   }
   const candidate = lookup.resolution.kind === "matched"
@@ -662,6 +697,8 @@ function indexRecordFor(
       request_digest: fingerprint,
     },
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) indexRecord.goal_ref = goalRef;
   for (const field of [
     "agent_id",
     "effect_ref",
@@ -711,6 +748,8 @@ function payloadFor(
       : `${request.execute ? "appended" : "dry-run preview"} quota slot spend event: ` +
         `${request.goal_id} ${request.before.spent_slots}->${request.after.spent_slots} slots`,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) payload.goal_ref = goalRef;
   if (request.execute) {
     payload.before = request.before;
     payload.after = request.after;
@@ -800,40 +839,46 @@ export async function evaluateQuotaSpendCommit(
     );
   }
 
-  const outcome = await commitQuotaAccountingArtifactTransaction({
-    kind: "spend",
-    runsDir,
-    generatedAt: request.generated_at,
-    effectId: request.effect_id,
-    requestDigest: fingerprint,
-    expectedIndexDigest: request.expected_index_digest,
-    prepare: ({ jsonPath, markdownPath, indexPath: lockedIndexPath }) => {
-      const payload = payloadFor(
-        request,
-        record,
-        jsonPath,
-        markdownPath,
-        lockedIndexPath,
-        { appended: true, replayed: false, repaired: false },
-      );
-      return {
-        kind: "prepared",
-        record,
-        indexRecord: indexRecordFor(
+  const goalRef = quotaGoalRef(request.owner);
+  const outcome = await withQuotaAccountingOwner(
+    request.owner,
+    async (indexLockHeld) => await commitQuotaAccountingArtifactTransaction({
+      kind: "spend",
+      runsDir,
+      generatedAt: request.generated_at,
+      effectId: request.effect_id,
+      requestDigest: fingerprint,
+      expectedIndexDigest: request.expected_index_digest,
+      ...(goalRef === null ? {} : { goalRef }),
+      indexLockHeld,
+      prepare: ({ jsonPath, markdownPath, indexPath: lockedIndexPath }) => {
+        const payload = payloadFor(
           request,
           record,
           jsonPath,
           markdownPath,
-          fingerprint,
-        ),
-        markdown: renderQuotaSlotMarkdown(
+          lockedIndexPath,
+          { appended: true, replayed: false, repaired: false },
+        );
+        return {
+          kind: "prepared",
+          record,
+          indexRecord: indexRecordFor(
+            request,
+            record,
+            jsonPath,
+            markdownPath,
+            fingerprint,
+          ),
+          markdown: renderQuotaSlotMarkdown(
+            payload,
+            QUOTA_SLOT_SPENT_CLASSIFICATION,
+          ),
           payload,
-          QUOTA_SLOT_SPENT_CLASSIFICATION,
-        ),
-        payload,
-      };
-    },
-  });
+        };
+      },
+    }),
+  );
 
   if (outcome.status === "conflict") {
     return result(

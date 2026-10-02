@@ -99,13 +99,14 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="loopx-retention-smoke-") as tmp:
         root = Path(tmp)
-        cases = ("degraded", "invalid", "symlink", "foreign", "mixed", "malformed",
+        cases = ("degraded", "invalid", "symlink", "namespace-symlink", "foreign", "mixed", "malformed",
                  "collision", "copy-tamper", "source-tamper", "restore-tamper", "occupied")
         for case in cases:
             base = root / case
             runtime = base / "runtime"
             goal = "goal:alias" if case == "collision" else FIXTURE_GOAL_ID
-            case_ref = ledger_ref(goal)
+            case_ref = ("reliability_diagnostics/goal_alias.ndjson"
+                        if case == "collision" else ledger_ref(goal))
             ledger = runtime / case_ref
             ledger.parent.mkdir(parents=True)
             seed = json.loads(json.dumps(fixture["ledger_records"]))
@@ -122,7 +123,8 @@ def main() -> int:
                 rows = json.loads(json.dumps(fixture["ledger_records"]))
                 foreign_id = "foreign-goal" if case != "collision" else "goal_alias"
                 if case == "collision":
-                    assert ledger_ref(foreign_id) == case_ref
+                    assert ledger_ref(foreign_id) != ledger_ref(goal)
+                    assert foreign_id == goal.replace(":", "_")
                 for row in rows:
                     row["goal_id"] = foreign_id
                 if case == "foreign":
@@ -137,9 +139,13 @@ def main() -> int:
             if case == "symlink":
                 ledger.rename(backing)
                 ledger.symlink_to(backing)
+            elif case == "namespace-symlink":
+                backing = base / "outside-ledgers"
+                ledger.parent.rename(backing)
+                ledger.parent.symlink_to(backing, target_is_directory=True)
             sentinel = runtime / "authority-sibling.json"
             sentinel.write_bytes(b'{"synthetic":"unchanged"}\n')
-            case_env = shell_env(base, runtime, ledger.parent, goal)
+            case_env = shell_env(base, runtime, runtime / "reliability_diagnostics", goal)
             bindir = base / "bin"
             if case == "copy-tamper":
                 executable(bindir / "cp", f"#!{sys.executable}\nimport pathlib,subprocess,sys\n"
@@ -179,6 +185,10 @@ def main() -> int:
                 if case == "symlink":
                     assert ledger.is_symlink() and backing.read_bytes() == content
                     assert not any(p.exists() for p in exports)
+                elif case == "namespace-symlink":
+                    assert "symlink ledger namespace" in result.stderr
+                    assert (backing / ledger.name).read_bytes() == content
+                    assert ledger.parent.is_symlink() and not archives
                 elif case in {"foreign", "mixed", "malformed", "collision"}:
                     assert ledger.read_bytes() == content and not any(p.exists() for p in exports)
                 elif case == "source-tamper":

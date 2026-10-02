@@ -9,6 +9,7 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { normalizeVisionUnchangedReason } from "../goals/vision_checkpoint.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { projectMcpInteraction } from "./host_interaction.ts";
 import {
   requireBoolean,
@@ -55,6 +56,7 @@ interface HostTodoCompletionRequest {
   vision_path: string | null;
   vision_unchanged_reason: string | null;
   checkpoint_read_context_id: string | null;
+  goal_instance_id: string | null;
   provider_outcomes: readonly ProviderOutcome[];
 }
 
@@ -148,9 +150,24 @@ function decodeRequest(
   if (readContextId && phase !== "vision_refresh") {
     throw new EffectRuntimeRequestError("checkpoint read context belongs only to vision recovery");
   }
+  const goalId = requireNonEmptyString(value.goal_id, "goal_id");
+  const parsedGoalRef = value.goal_ref === undefined
+    ? null
+    : parseExactGoalRef(value.goal_ref);
+  if (parsedGoalRef?.kind === "invalid") {
+    throw new EffectRuntimeRequestError("host Todo completion GoalRef is malformed");
+  }
+  if (
+    parsedGoalRef?.kind === "parsed"
+    && parsedGoalRef.value.goalId.value !== goalId
+  ) {
+    throw new EffectRuntimeRequestError(
+      "host Todo completion GoalRef does not match goal_id",
+    );
+  }
   const request: HostTodoCompletionRequest = {
     phase,
-    goal_id: requireNonEmptyString(value.goal_id, "goal_id"),
+    goal_id: goalId,
     agent_id: requireNonEmptyString(value.agent_id, "agent_id"),
     todo_id: todoId,
     runtime_profile: requireNonEmptyString(
@@ -177,6 +194,9 @@ function decodeRequest(
     vision_path: visionPath,
     vision_unchanged_reason: unchanged,
     checkpoint_read_context_id: readContextId,
+    goal_instance_id: parsedGoalRef?.kind === "parsed"
+      ? parsedGoalRef.value.goalInstanceId.value
+      : null,
     provider_outcomes: [],
   };
   if (phase === "finalize") {
@@ -344,6 +364,9 @@ function writebackArgs(request: HostTodoCompletionRequest, identity: JsonObject)
     "--classification", "mcp_completed_turn_writeback",
     "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
     "--todo-id", request.todo_id, "--turn-instance-id", String(identity.turn_instance_id),
+    ...(request.goal_instance_id
+      ? ["--goal-instance-id", request.goal_instance_id]
+      : []),
     "--completion-todo-id", request.todo_id, "--completion-turn-key", String(identity.effect_id),
     "--no-global-sync", "--suppress-external-sinks",
     ...(request.vision_path ? ["--agent-vision-json", request.vision_path] : []),
@@ -368,10 +391,16 @@ function providerSteps(
     request.todo_id,
     "--turn-instance-id",
     turnId,
+    ...(request.goal_instance_id
+      ? ["--goal-instance-id", request.goal_instance_id]
+      : []),
   ];
   const lifecycleArgs = request.completion_args.filter(
     (arg) => arg !== "--no-follow-up",
   );
+  if (request.goal_instance_id) {
+    lifecycleArgs.push("--goal-instance-id", request.goal_instance_id);
+  }
   const steps: ProviderStep[] = [
     {
       step_kind: "guard",
@@ -417,6 +446,9 @@ function providerSteps(
         request.todo_id,
         "--turn-instance-id",
         turnId,
+        ...(request.goal_instance_id
+          ? ["--goal-instance-id", request.goal_instance_id]
+          : []),
       ],
       legacy_args: null,
       continue_when: request.no_follow_up
@@ -427,7 +459,14 @@ function providerSteps(
   if (request.no_follow_up) {
     steps.push({
       step_kind: "terminal_closeout",
-      args: [...request.completion_args, "--turn-instance-id", turnId],
+      args: [
+        ...request.completion_args,
+        "--turn-instance-id",
+        turnId,
+        ...(request.goal_instance_id
+          ? ["--goal-instance-id", request.goal_instance_id]
+          : []),
+      ],
       legacy_args: null,
       continue_when: null,
     });
@@ -981,7 +1020,10 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
       schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION,
       phase, identity, args: ["checkpoint-context", "--goal-id", request.goal_id,
         "--agent-id", request.agent_id, "--todo-id", request.todo_id,
-        "--turn-instance-id", String(identity.turn_instance_id)],
+        "--turn-instance-id", String(identity.turn_instance_id),
+        ...(request.goal_instance_id
+          ? ["--goal-instance-id", request.goal_instance_id]
+          : [])],
     };
   }
   if (phase === "vision_refresh") {

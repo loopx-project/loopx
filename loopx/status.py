@@ -1090,6 +1090,8 @@ def build_attention_queue(
     include_stopped_goal_context: bool = False,
     events_for_goal: EventsForGoal | None = None,
     todo_snapshot: _CanonicalTodoSnapshot | None = None,
+    current_registry: dict[str, Any] | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1189,9 +1191,25 @@ def build_attention_queue(
                 and int(orchestration.get("max_children") or 0) > 0
             ):
                 continue
+            goal_ref = None
+            if (current_registry or {}).get("profile_id") == "source_session_v1":
+                matches = [
+                    goal
+                    for goal in (current_registry or {}).get("goals") or []
+                    if isinstance(goal, dict)
+                    and goal.get("id") == goal_id
+                    and goal.get("status") == "active"
+                    and isinstance(goal.get("goal_instance_id"), str)
+                ]
+                if len(matches) == 1:
+                    goal_ref = {
+                        "goal_id": goal_id,
+                        "goal_instance_id": matches[0]["goal_instance_id"],
+                    }
             native_activity = latest_native_child_activity(
                 events, goal_id=goal_id,
                 configured_limit=int(orchestration["max_children"]),
+                goal_ref=goal_ref,
             )
             if native_activity:
                 # The shared status snapshot is bounded for Todo work. Once it
@@ -1203,6 +1221,8 @@ def build_attention_queue(
                     agent_id=native_activity["agent_id"],
                     turn_instance_id=native_activity["turn_instance_id"],
                     configured_limit=int(orchestration["max_children"]),
+                    goal_ref=goal_ref,
+                    registry_path=registry_path,
                 )
     return queue
 

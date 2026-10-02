@@ -147,6 +147,7 @@ def handle_turn_command(
             runtime_root=runtime_root,
             runtime_root_arg=runtime_root_arg,
             turn_start_hook_dispatch=turn_start_hook_dispatch,
+            goal_ref=goal_ref,
         )
         operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
         scheduler_context = decision_owner.scheduler_execution_context
@@ -272,6 +273,12 @@ def handle_turn_command(
                 strict_goal_admission = goal_admission if goal_admission.enabled else None
                 if strict_goal_admission is not None:
                     strict_goal_admission.require_current()
+                resumed_goal_ref = payload.get("goal_ref")
+                goal_ref = (
+                    dict(resumed_goal_ref)
+                    if isinstance(resumed_goal_ref, Mapping)
+                    else None
+                )
             if payload.get("route", {}).get("kind") == "capability_action_required":
                 # The normal host transaction forbids Core mutations. A
                 # capability may prepare artifacts and require authored input;
@@ -289,6 +296,7 @@ def handle_turn_command(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
                 runtime_root_arg=runtime_root_arg,
+                goal_ref=goal_ref,
                 goal_admission=strict_goal_admission,
                 operator_environ=operator_environ,
                 operator_inbox_urgency_projector=operator_inbox_urgency_projector,

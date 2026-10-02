@@ -15,6 +15,9 @@ from ..runtime import default_extension_state_file, resolve_extension_activation
 from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .goal_channel_contracts import (
     binding_for_goal,
+    blocked_notice_auto_notify_enabled,
+    blocked_notice_auto_notify_marker_enabled,
+    blocked_notice_auto_notify_marker_path,
     default_goal_channel_binding_path,
     human_gate_auto_notify_enabled,
     human_gate_auto_notify_marker_enabled,
@@ -23,6 +26,7 @@ from .goal_channel_contracts import (
     read_goal_channel_binding,
 )
 from .goal_channel_runtime import auto_notify_lark_goal_channel_gate
+from .goal_channel_blocked_notice import deliver_blocked_notices
 from .goal_channel_message_delivery import delivery_send_failure
 from .identity_shapes import LARK_MESSAGE_ID_SEARCH as MESSAGE_ID_PATTERN
 from .goal_channel_transport import (
@@ -430,3 +434,116 @@ def sync_human_gate_after_refresh(
     if activation is not None:
         result["extension_activation"] = activation
     return result
+
+
+def blocked_notice_sync_failure(
+    *, registry_path: Path, goal_id: str, exception: Exception
+) -> dict[str, Any]:
+    configured = False
+    try:
+        registry = load_registry(registry_path)
+        route = resolve_goal_source_runtime_route(
+            registry_path=registry_path, goal_id=goal_id, registry=registry
+        )
+        source_registry = Path(str(route["source_registry"]))
+        if source_registry.parent.name == ".loopx":
+            binding_path = default_goal_channel_binding_path(source_registry)
+            configured = blocked_notice_auto_notify_enabled(
+                binding_for_goal(read_goal_channel_binding(binding_path), goal_id)
+            ) or blocked_notice_auto_notify_marker_enabled(
+                blocked_notice_auto_notify_marker_path(binding_path, goal_id)
+            )
+    except (OSError, ValueError):
+        pass
+    return {
+        "schema_version": "loopx_goal_channel_blocked_notice_delivery_v0",
+        "ok": not configured,
+        "enabled": configured,
+        "status": "failed" if configured else "not_configured",
+        "external_write_performed": False,
+        "external_write_status": "unknown" if configured else "not_attempted",
+        "readback_verified": False,
+        "blocker": "blocked_notice_sync_failed" if configured else None,
+        "failure_reason": _exception_reason(exception) if configured else None,
+        "delivery_postcondition": {
+            "satisfied": not configured,
+            "blocks_delivery": False,
+        },
+    }
+
+
+def sync_blocked_notice_after_refresh(
+    *,
+    registry_path: Path,
+    runtime_root_override: str | None,
+    goal_id: str,
+    agent_id: str | None,
+    external_sink_delivery_authorized: bool,
+    runner: CommandRunner = default_subprocess_runner,
+) -> dict[str, Any]:
+    invoked_registry = load_registry(registry_path)
+    source_route = resolve_goal_source_runtime_route(
+        registry_path=registry_path, goal_id=goal_id, registry=invoked_registry
+    )
+    source_registry_path = Path(str(source_route["source_registry"]))
+    if source_registry_path.parent.name != ".loopx":
+        return {
+            "schema_version": "loopx_goal_channel_blocked_notice_delivery_v0",
+            "ok": True,
+            "enabled": False,
+            "status": "project_binding_unavailable",
+            "external_write_performed": False,
+            "readback_verified": False,
+            "delivery_postcondition": {"satisfied": True, "blocks_delivery": False},
+        }
+    runtime_root = (
+        Path(runtime_root_override).expanduser().resolve()
+        if runtime_root_override
+        else Path(str(source_route["source_runtime_root"]))
+    )
+    binding_path = default_goal_channel_binding_path(source_registry_path)
+    payload = read_goal_channel_binding(binding_path)
+    raw_binding = binding_for_goal(payload, goal_id)
+    if not blocked_notice_auto_notify_enabled(raw_binding):
+        return {
+            "schema_version": "loopx_goal_channel_blocked_notice_delivery_v0",
+            "ok": True,
+            "enabled": False,
+            "status": "not_configured" if raw_binding is None else "disabled",
+            "external_write_performed": False,
+            "readback_verified": False,
+            "delivery_postcondition": {"satisfied": True, "blocks_delivery": False},
+        }
+    if blocked_notice_auto_notify_enabled(raw_binding):
+        resolve_extension_activation(
+            LARK_EXTENSION_ID,
+            state_file=default_extension_state_file(runtime_root),
+            required_permissions=(LARK_GOAL_CHANNEL_PERMISSION,),
+        )
+    target_name = str((raw_binding or {}).get("target_ref") or "")
+    target = (
+        goal_channel_target_for_name(
+            read_goal_channel_targets(default_goal_channel_target_path(runtime_root)),
+            target_name,
+        )
+        if target_name
+        else None
+    )
+    status = collect_status(
+        registry_path=source_registry_path,
+        runtime_root_override=str(runtime_root),
+        scan_roots=[registry_project_root(source_registry_path)],
+        limit=20,
+        goal_id=goal_id,
+        include_public_boundary_scan=False,
+    )
+    quota_packet = build_quota_should_run(status, goal_id=goal_id, agent_id=agent_id)
+    return deliver_blocked_notices(
+        goal_id=goal_id,
+        binding_path=binding_path,
+        status=status,
+        quota_packet=quota_packet,
+        provider_target=target,
+        external_sink_delivery_authorized=external_sink_delivery_authorized,
+        runner=runner,
+    )

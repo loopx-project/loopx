@@ -21,7 +21,14 @@ from ...control_plane.runtime.runtime_projection_route import (
 from ...history import load_registry
 from ...registry import registry_goals
 from .goal_channel_contracts import (
+    BLOCKED_NOTICE_RETIRED_STATES,
+    BlockedNoticeReceiptState,
     assert_public_packet,
+    binding_for_goal,
+    blocked_notice_receipt_matches_target,
+    blocked_notice_auto_notify_enabled,
+    blocked_notice_auto_notify_marker_enabled,
+    blocked_notice_auto_notify_marker_path,
     default_goal_channel_binding_path,
     human_gate_auto_notify_enabled,
     human_gate_auto_notify_marker_enabled,
@@ -31,6 +38,11 @@ from .goal_channel_contracts import (
     read_goal_channel_binding,
 )
 from .goal_channel_transport import CHAT_ID_PATTERN, MESSAGE_ID_PATTERN
+from .goal_channel_targets import (
+    default_goal_channel_target_path,
+    goal_channel_target_for_name,
+    read_goal_channel_targets,
+)
 
 
 GOAL_CHANNEL_NOTIFICATION_PROJECTION_SCHEMA_VERSION = (
@@ -53,6 +65,7 @@ def _unconfigured_goal_row(goal_id: str) -> dict[str, Any]:
         "configured": False,
         "enabled": False,
         "human_gate_auto_notify_enabled": False,
+        "blocked_notice_auto_notify_enabled": False,
         "receipt_count": 0,
     }
 
@@ -77,9 +90,9 @@ def _goal_notification_row(
     binding_path: Path,
     binding_payload: Mapping[str, Any],
     goal_id: str,
+    runtime_root: Path | None = None,
 ) -> dict[str, Any]:
-    bindings = binding_payload.get("bindings")
-    binding = bindings.get(goal_id) if isinstance(bindings, Mapping) else None
+    binding = binding_for_goal(binding_payload, goal_id)
     if not isinstance(binding, Mapping):
         return _unconfigured_goal_row(goal_id)
     row: dict[str, Any] = {
@@ -90,6 +103,12 @@ def _goal_notification_row(
             human_gate_auto_notify_enabled(binding)
             or _auto_notify_marker_state(binding_path, goal_id)
         ),
+        "blocked_notice_auto_notify_enabled": bool(
+            blocked_notice_auto_notify_enabled(binding)
+            or blocked_notice_auto_notify_marker_enabled(
+                blocked_notice_auto_notify_marker_path(binding_path, goal_id)
+            )
+        ),
     }
     target_ref = _public_text(binding.get("target_ref"))
     if target_ref:
@@ -97,9 +116,49 @@ def _goal_notification_row(
     receipts = binding.get("receipts")
     receipts = receipts if isinstance(receipts, Mapping) else {}
     row["receipt_count"] = len(receipts)
+    resolved_binding = binding
+    has_blocked_receipts = any(
+        isinstance(receipt, Mapping) and receipt.get("kind") == "blocked_notice"
+        for receipt in receipts.values()
+    )
+    if binding.get("target_ref") and has_blocked_receipts:
+        target = None
+        try:
+            if runtime_root is not None:
+                target = goal_channel_target_for_name(
+                    read_goal_channel_targets(default_goal_channel_target_path(runtime_root)),
+                    str(binding["target_ref"]),
+                )
+            resolved_binding = (
+                binding_for_goal(binding_payload, goal_id, provider_target=target) if target else {}
+            )
+        except (OSError, ValueError):
+            resolved_binding = {}
+    channel = resolved_binding.get("channel") if resolved_binding else None
+    chat_id = str(channel.get("chat_id") or "") if isinstance(channel, Mapping) else ""
+    blocked_receipts = [
+        receipt for key, receipt in receipts.items()
+        if isinstance(receipt, Mapping)
+        and blocked_notice_receipt_matches_target(key, receipt, goal_id=goal_id, chat_id=chat_id)
+    ]
+    row["blocked_notice_delivery"] = {
+        "delivered_count": sum(
+            r.get("readback_verified") is True and r.get("state") == BlockedNoticeReceiptState.DELIVERED
+            for r in blocked_receipts
+        ),
+        "unverified_count": sum(
+            r.get("state") in {BlockedNoticeReceiptState.PENDING, BlockedNoticeReceiptState.SENT_UNVERIFIED}
+            for r in blocked_receipts
+        ),
+        "resolved_count": sum(r.get("state") in BLOCKED_NOTICE_RETIRED_STATES for r in blocked_receipts),
+    }
     verified: list[tuple[Any, str]] = []
-    for receipt in receipts.values():
+    for key, receipt in receipts.items():
         if not isinstance(receipt, Mapping):
+            continue
+        if receipt.get("kind") == "blocked_notice" and not blocked_notice_receipt_matches_target(
+            key, receipt, goal_id=goal_id, chat_id=chat_id,
+        ):
             continue
         moment = parse_time(receipt.get("verified_at"))
         if moment is not None:
@@ -162,6 +221,7 @@ def build_goal_channel_notification_projection(
                     binding_path=cached_path,
                     binding_payload=cached_payload,
                     goal_id=current_goal_id,
+                    runtime_root=(Path(str(route["source_runtime_root"])) if route.get("source_runtime_root") else None),
                 )
         except (OSError, ValueError):
             row = None

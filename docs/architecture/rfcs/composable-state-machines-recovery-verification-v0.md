@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal; existing local conformance is not composition qualification
+- **Delivery maturity:** Partial implementation; bounded Turn recovery coverage, full M2 remains open
 - **Authors / owners:** Control-plane domain maintainers and testing maintainers
 - **Created:** 2026-10-01
 - **Last normative revision:** 2026-10-01
@@ -208,6 +208,35 @@ not require unrelated migrations before a bounded repair can ship.
 
 The [quiet-to-due Monitor checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-monitor-quiet-due-recovery.md)
 records bounded CLI replay/successor evidence and its explicit M2/M3 limits.
+
+### Turn settlement qualification boundary
+
+The Turn owner now admits provider returns and readback in TypeScript before
+Python may checkpoint, abort a rejected attempt, or retry an absent effect.
+`settlement_provider.ts` owns these pure rules within the existing Turn bounded
+context. Python retains callback invocation and journal IO. This replaces its
+commit/readback classification and completion-result wrappers; it does not add a capability, provider or
+universal effect executor.
+
+The bounded exploration covers three ordered effects (writeback, quota spend,
+terminal closeout), one interruption before/after effect commit or checkpoint,
+one unresolved readback hold, explicit failed-turn retry, resolution and exact
+replay. `tests/test_loopx_turn_settlement_recovery.py` drives the production Turn
+entrypoint and real File journal with a durable **synthetic** provider ledger.
+The independent oracle requires one commit per logical effect, ordered phases,
+retained prepared intent during uncertainty, no repeated host execution and
+conditional progress after readback clears. Four invalid-completion/identity
+cases fail on the pinned pre-change implementation before checkpoint admission.
+
+`tests/test_loopx_turn_driver.py` also exercises actual CLI writeback and quota
+providers against disposable File state, including lost journal checkpoints and
+independent run-index readback. The TypeScript tests enumerate legal/illegal
+provider evidence for each step. Exceptions model process interruption, not
+power-loss durability. These checks qualify the Turn/provider/journal slice;
+lease transfer, stale-owner races, PostgreSQL authority, successor scheduling
+and App/Lark delivery remain outside it. M2 therefore remains open. Its next
+owning work is the existing ownership-to-settlement acceptance with a real
+lease/GoalRef fence, followed by M3's actual delivery callers.
 
 ## 12. Open decisions
 
