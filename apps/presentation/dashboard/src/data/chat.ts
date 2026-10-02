@@ -2251,6 +2251,7 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
   );
 }
 
+export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract";
 const usageStatisticsSchema = z.object({
   consent: z.enum(["default", "enabled", "disabled"]),
   sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
@@ -2259,12 +2260,18 @@ const usageStatisticsSchema = z.object({
   automatic_notice_required: z.boolean(),
   next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
   diagnostic_preview: z.unknown().optional(), diagnostic_dropped: z.number().optional(),
+  stored_context: z.string().optional(), effective_context: z.string().optional(), context_source: z.string().optional(),
+  installation_preview: z.unknown().optional(),
   identity_scope: z.string().optional(), delivery_history: z.array(z.object({
-    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal"]), rows: z.number(),
+    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal", "installation"]), rows: z.number(),
     status: z.enum(["accepted", "rejected", "unavailable"]),
   })).optional(),
 });
 export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
+export async function setUsageContext(context: string): Promise<UsageStatistics> {
+  return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
+    { method: "POST", body: JSON.stringify({ context }) }));
+}
 export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {
   return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
     enabled === undefined ? undefined : { method: "POST", body: JSON.stringify({ enabled }) }));

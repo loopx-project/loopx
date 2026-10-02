@@ -1204,7 +1204,11 @@ def _build_active_quota_payload(
     execution_obligation = _execution_obligation(
         should_run=route.should_run,
         effective_action=route.effective_action,
-        heartbeat_recommendation=route.heartbeat_recommendation,
+        heartbeat_recommendation=(
+            {**route.heartbeat_recommendation, "replan_obligation": prepared.replan_obligation}
+            if route.replan_decision_allowed
+            else route.heartbeat_recommendation
+        ),
         work_lane_contract=route.payload_work_lane_contract,
         external_evidence_observation=route.external_evidence_observation,
         user_gate_owns_frontier=_user_action_owns_empty_agent_lane(

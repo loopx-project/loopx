@@ -3,7 +3,7 @@ import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { GoalObservation, Host } from "./usage_statistics_goal_contract.ts";
 import { object } from "./usage_statistics_contract.ts";
-export type CodexCursor = { offset: number; inode: string; since: number; seen: number; skipping?: boolean; open?: { id: string; start: number; confirmed: number } };
+export type CodexCursor = { offset: number; inode: string; since: number; seen: number; skipping?: boolean; open?: { id: string; start: number } };
 const BUDGET = 1024 * 1024;
 // The first line is not a short id record: Codex's recorder writes
 // `base_instructions` and the dynamic tool list into `session_meta`, and the
@@ -13,7 +13,13 @@ const BUDGET = 1024 * 1024;
 const HEADER_CHUNK = 65536;
 const HEADER_BUDGET = 2 * 1024 * 1024;
 type HeaderLine = { line: string } | { error: "incomplete" | "too_large" };
-function timestamp(value: unknown): number { return typeof value === "string" ? Date.parse(value) : NaN; }
+function timestamp(value: unknown): number {
+  // Codex provider envelopes use Unix seconds; older envelopes use ISO dates.
+  // The recorder timestamp is not a substitute for a supplied provider time.
+  const milliseconds = typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value * 1000) : typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isSafeInteger(milliseconds) && milliseconds >= 0 ? milliseconds : NaN;
+}
 /**
  * Read the opening record whole, framed by LF, up to a fixed budget.
  *
@@ -78,8 +84,9 @@ export async function readCodexTiming(path: string, thread: string, previous: Co
     const observations: GoalObservation[] = [];
     const emit = (start: number, end: number) => {
       start = Math.max(start, cursor.since);
-      if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && end > start && end <= now + 1000 && end - start <= 7 * 86400000)
+      if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && end > start && end <= now + 1000 && end - start <= 7 * 86400000) {
         observations.push({ key, start, end, measurement: "codex_turn", host });
+      }
     };
     for (const line of body.split("\n")) {
       if (!line) continue;
@@ -90,7 +97,7 @@ export async function readCodexTiming(path: string, thread: string, previous: Co
       const id = typeof payload.turn_id === "string" && payload.turn_id.length <= 128 ? payload.turn_id : "";
       if (payload.type === "task_started" && id) {
         const start = timestamp(payload.started_at ?? event.timestamp);
-        if (Number.isFinite(start)) cursor.open = { id, start, confirmed: Math.max(start, cursor.since) };
+        if (Number.isFinite(start) && start <= now + 1000) cursor.open = { id, start };
       } else if (["task_complete", "task_completed", "turn_aborted"].includes(String(payload.type)) && id) {
         const start = timestamp(payload.started_at);
         const end = timestamp(payload.completed_at ?? event.timestamp);
@@ -98,13 +105,11 @@ export async function readCodexTiming(path: string, thread: string, previous: Co
         // the matching open Turn. Never pair an unrelated terminal by proximity.
         const matched = cursor.open?.id === id ? cursor.open : undefined;
         if (Number.isFinite(start)) emit(start, end);
-        else if (matched) emit(matched.confirmed, end);
+        else if (matched && payload.started_at == null) emit(matched.start, end);
         if (matched) cursor.open = undefined;
-      } else if (cursor.open && payload.type === "token_count") {
-        const confirmed = timestamp(event.timestamp);
-        emit(cursor.open.confirmed, confirmed);
-        if (Number.isFinite(confirmed)) cursor.open.confirmed = Math.max(cursor.open.confirmed, confirmed);
       }
+      // token_count timestamps describe recording, not provider execution.
+      // They can arrive after completed_at, so they cannot confirm a prefix.
     }
     return { cursor, observations };
   } finally { await file.close(); }

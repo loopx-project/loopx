@@ -69,23 +69,26 @@ nav:
   - 第一部分：控制面基础:
       - 1. 从一次会话到长程任务: chapters/01-from-session-to-loop.md
       - 2. 会话、Codex Goal 与 LoopX: chapters/02-session-goal-loopx.md
-      - 3. 持久状态与只读投影: chapters/state-substrate.md
-      - 4. 工作图、权限与 Peer 协作: chapters/work-graph-and-authority.md
+      - 3. 长程运行提出的四个要求: chapters/02b-long-horizon-requirements.md
+      - 4. 持久状态与只读投影: chapters/state-substrate.md
+      - 5. 工作图、权限与 Peer 协作: chapters/work-graph-and-authority.md
       - 专题：主要状态机与流转: chapters/core-state-machines.md
-      - 5. 一轮受治理的工作: chapters/03-one-turn.md
-      - 6. 恢复、自修复与运行边界: chapters/04-runtime-boundaries.md
+      - 6. 一轮受治理的工作: chapters/03-one-turn.md
+      - 7. 恢复、自修复与运行边界: chapters/04-runtime-boundaries.md
+      - 8. 预算、准入与观察: chapters/04b-budget-and-admission.md
   - 第二部分：接入现有项目:
-      - 7. 连接你的 Git 项目: chapters/05-connect-existing-project.md
-      - 8. 从 Codex App 启动: chapters/06-codex-app.md
-      - 9. 从 Codex CLI 启动: chapters/07-codex-cli.md
+      - 9. 连接你的 Git 项目: chapters/05-connect-existing-project.md
+      - 10. 从 Codex App 启动: chapters/06-codex-app.md
+      - 11. 从 Codex CLI 启动: chapters/07-codex-cli.md
+      - 12. 什么时候 LoopX 不是答案: chapters/07b-when-loopx-is-not-the-answer.md
   - 第三部分：开发者贡献:
-      - 10. 开发者贡献地图与协议入口: chapters/source-protocol-map.md
-      - 11. 沿一条协议链定位实现: chapters/source-trace-protocol-chain.md
-      - 12. 修改一条 Control-Plane 规则: chapters/source-change-control-plane-rule.md
-      - 13. 从聚焦验证到 PR: chapters/source-validation-to-pr.md
-      - 14. 先选择正确的放置位置: chapters/08-extension-placement.md
-      - 15. 创建 standalone Extension: chapters/09-extension-scaffold.md
-      - 16. 生命周期与 managed runtime: chapters/10-extension-lifecycle.md
+      - 13. 开发者贡献地图与协议入口: chapters/source-protocol-map.md
+      - 14. 沿一条协议链定位实现: chapters/source-trace-protocol-chain.md
+      - 15. 修改一条 Control-Plane 规则: chapters/source-change-control-plane-rule.md
+      - 16. 从聚焦验证到 PR: chapters/source-validation-to-pr.md
+      - 17. 先选择正确的放置位置: chapters/08-extension-placement.md
+      - 18. 创建 standalone Extension: chapters/09-extension-scaffold.md
+      - 19. 生命周期与 managed runtime: chapters/10-extension-lifecycle.md
   - 第四部分：工程边界:
-      - 17. 验证、兼容与安全: chapters/11-engineering-boundaries.md
+      - 20. 验证、兼容与安全: chapters/11-engineering-boundaries.md
       - 附录：术语与命令入口: chapters/appendix-reference.md

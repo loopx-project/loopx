@@ -73,11 +73,11 @@ export function UsageStatisticsNotice({ onDetails }: { onDetails: () => void }) 
           : state.automatic_notice_required ? (zh ? "基础使用统计 · 告知后自动开启" : "Basic usage statistics · enabled after this notice")
             : (zh ? "基础使用统计当前不发送，请查看详情" : "Basic usage statistics are not sending; see details")}</strong>
       <p>{zh
-        ? "用于改进平台支持与使用体验。发送随机安装标识和环境信息，另行汇总 CLI 子操作、版本/活动日期、结果/耗时与回执信号，以及 Goal 时长。环境类型自愿声明，默认未知；不采集对话、代码、路径或参数值。可随时关闭。"
-        : "Helps improve platform support and usage. Sends a random installation ID and environment information, plus separate CLI sub-operation, release/activity day, result/timing, receipt signals and Goal duration summaries. Deployment context is voluntary, unknown by default. No conversations, code, paths or argument values. You can turn it off at any time."}</p>
+        ? "用于改进平台支持与使用体验。随机安装标识会关联每日 CLI 功能计数、版本、日期、自愿环境标签与已观测运行分钟。区间按安装去重；不同计时口径不能相加，不代表机器在线或任务完成。不采集对话、代码、路径或参数值。可随时关闭。"
+        : "Helps improve platform support and usage. A random installation ID links to daily CLI counts, version, date, voluntary context and observed runtime minutes. Overlapping intervals are deduplicated per installation; different clocks cannot be added, and are not uptime or task completion. No conversations, code, paths or argument values. You can turn it off at any time."}</p>
       <p>{zh
-        ? "首个已测量的 CLI 结果立即上报，后续由使用活动触发，至少间隔 15 分钟发送一批。CLI 汇总不含安装标识。"
-        : "The first measured CLI result is sent immediately; later activity sends buffered counts at most once every 15 minutes. CLI summaries contain no installation ID."}</p>
+        ? "独立无 ID 的 CLI 汇总保留；新增安装级概要由活动触发，至少间隔 15 分钟发送。关闭会清除本机标识和测量记录，已发送的记录不能撤回。"
+        : "ID-free CLI summaries remain supported. New installation profiles are activity-triggered, at least 15 minutes apart. Disabling clears local ID and measurement history; it cannot recall already-sent records."}</p>
       <p className="personal-usage-recipient">{zh ? "接收方：" : "Recipient: "}{state.endpoint}</p>
       {error ? <p role="alert">{zh ? "设置未能保存，请打开详情重试。" : "Could not save this setting. Open details to retry."}</p> : null}
     </div>

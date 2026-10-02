@@ -96,7 +96,7 @@ test("one heartbeat per UTC day; same-day aggregates stay separate and identifie
   const { path, state } = await fixture(t); const ctx = context();
   await configure(path, ctx, "enable"); const generation = (await state()).generation;
   const sent: { url: string; payload: unknown }[] = [];
-  const post: Post = async (url, payload) => { sent.push({ url, payload }); return 204; };
+  const post: Post = async (url, payload) => { if (!url.endsWith("/installation")) sent.push({ url, payload }); return 204; };
   await observe(path, ctx, generation, row, post); await observe(path, ctx, generation, row, post);
   assert.equal(sent.length, 2); assert.ok(validPing(sent[0].payload));
   assert.deepEqual(sent[1].payload, { schema: AGGREGATE_SCHEMA, counters: [row] });
@@ -161,7 +161,7 @@ test("network failure is lossy and no-retry; no exception text enters local stat
   assert.equal((await observe(path, ctx, generation, row, async () => { throw new Error("SECRET:/private/path"); })).sent, false);
   await observe(path, ctx, generation, row, noPost);
   assert.ok(!(await readFile(path, "utf8")).includes("SECRET"));
-  assert.deepEqual((await inspect(path, ctx)).delivery_history.map(row => row.status), ["unavailable", "unavailable"]);
+  assert.deepEqual((await inspect(path, ctx)).delivery_history.map(row => row.status), ["unavailable", "unavailable", "unavailable"]);
 });
 
 test("local delivery history is bounded, content-free and cleared by disable", async t => {
@@ -219,7 +219,7 @@ test("real HTTP sender does not follow redirects to another recipient", async t 
   ctx.env.LOOPX_USAGE_PING_ENDPOINT = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/ping`;
   await configure(path, ctx, "enable");
   assert.equal((await observe(path, ctx, (await state()).generation, row)).sent, false);
-  assert.equal(requests, 2, "heartbeat and aggregate must each stop at the redirect");
+  assert.equal(requests, 3, "heartbeat, aggregate and installation profile each stop at the redirect");
 });
 
 test("startup heartbeat does not invent a successful command result", async t => {
@@ -231,7 +231,7 @@ test("startup heartbeat does not invent a successful command result", async t =>
   assert.equal((await inspect(path, ctx)).aggregate_preview, null);
 });
 
-test("a real unresponsive collector aborts both requests without retaining error details", { timeout: 30_000 }, async t => {
+test("a real unresponsive collector aborts all three channels without retaining error details", { timeout: 30_000 }, async t => {
   const server = createServer(() => {});
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   t.after(() => { server.closeAllConnections(); server.close(); });
@@ -250,7 +250,7 @@ test("a real unresponsive collector aborts both requests without retaining error
     return signal;
   });
   assert.equal((await observe(path, ctx, (await state()).generation, row)).sent, false);
-  assert.deepEqual(deadlines, [3000, 3000]);
+  assert.deepEqual(deadlines, [3000, 3000, 3000]);
   assert.ok(signals.every(signal => signal.aborted && signal.reason.name === "TimeoutError"));
   const saved = await state();
   assert.doesNotMatch(JSON.stringify(saved), /TimeoutError|aborted due to timeout/);
@@ -258,5 +258,6 @@ test("a real unresponsive collector aborts both requests without retaining error
   assert.deepEqual(saved.deliveries, [
     { day: "2026-09-26", channel: "heartbeat", rows: 1, status: "unavailable" },
     { day: "2026-09-26", channel: "cli", rows: 1, status: "unavailable" },
+    { day: "2026-09-26", channel: "installation", rows: 1, status: "unavailable" },
   ]);
 });

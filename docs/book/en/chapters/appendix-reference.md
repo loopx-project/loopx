@@ -1,111 +1,111 @@
 # Terms and command entrypoints
 
-This appendix routes readers; it does not replace the LoopX CLI reference. Run
-`loopx <command> --help` for complete arguments in the installed version.
+Use this appendix with an actual problem; the source course is not a prerequisite. Current installed `--help` owns command arguments. This page gives entrypoints and judgment conditions, not a complete CLI reference or automatic mutation permission.
 
-## Core terms
+## Read before deciding to change state {#read-before-change}
 
-| Term | Meaning in this book |
-| --- | --- |
-| Agent | Executor that plans and performs one bounded action in a Host/runtime |
-| Host | Product or runtime that owns sessions, model turns, and wake-up surfaces |
-| Goal | Long-running project outcome and state boundary identified by a stable `goal_id` |
-| Agent identity | Peer or lane identified by `agent_id`; it is not the Goal and does not prove the Host |
-| Vision | A bounded execution-routing contract for one `agent_id`, including role scope, direction, acceptance summary, and replan trigger |
-| Acceptance | Observable conditions that prove the Goal is complete |
-| Todo | Schedulable work item with identity |
-| Frontier | Todos currently runnable after dependency, Gate, capability, and boundary checks |
-| Claim | Soft ownership of a Todo |
-| Lease | Time-bound exclusive reservation that prevents conflicting execution |
-| Gate | Blocking decision with explicit scope and authority |
-| Evidence | Verifiable material that supports a judgment |
-| Receipt | Durable record of an accepted action or lifecycle transition |
-| Projection | Read model derived from canonical state |
-| Quota | Contract that decides whether a turn may run and records validated spend |
-| Monitor | Todo that observes an external condition on a cadence and advances only on material change |
-| Capability | Caller-facing outcome contract |
-| Provider | Implementation or external-system caller that returns a bounded result |
-| Extension | Installation, activation, upgrade, rollback, and compatibility lifecycle for a Provider or package |
-| Kernel | Core that accepts transitions and owns durable control-plane state |
-
-## Core protocol index
-
-Choose a protocol from the developer job rather than reading the full directory alphabetically:
-
-| Problem | Start with |
-| --- | --- |
-| `/loopx <goal text>`, Goal selection, fresh Agent identity, and Host activation | [`loopx_goal_command_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-goal-command-v0.md) |
-| Long-running Agent sources, projections, concurrent lanes, and lifecycle | [`long_horizon_agent_state_protocol_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/long-horizon-agent-state-protocol-v0.md) |
-| Agent-scoped chronology before replan or handoff | [`agent_scoped_evidence_ledger_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/agent-scoped-evidence-ledger-v0.md) |
-| Canonical events, replay, and privacy | [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md) |
-| Typed read model over the active-state workbench | [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md) |
-| Todo, Gate, dependency, and handoff graph | [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md) |
-| Gate coverage and scoped authority | [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md) |
-| Per-Agent Vision and replan | [`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md) |
-| Equal peers, claims, and continuation | [`peer_agent_runtime_v1`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md) |
-| One governed execution transaction, currently experimental | [`loopx_turn_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md) |
-| Opt-in bounded projection for an already-arbitrated decision | [`turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md) |
-| Host capability, controlled write, and fallback | [`host_integration_surface_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md) |
-| Read-only first-screen projection for a session runtime | [`session_runtime_loopx_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/session-runtime-loopx-projection-v0.md) |
-| Controlled session-runtime metadata writeback, currently draft | [`session_runtime_controlled_writeback_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/session-runtime-controlled-writeback-v0.md) |
-| Revision, idempotency, and local write correctness | [`local_state_write_correctness_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md) |
-
-Use the official
-[Protocol Contracts index](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/README.md)
-for the complete current set.
-
-## Common read-only entrypoints
+Identify the exact existing registry, runtime root, Goal and Todo. Do not guess from display names or substitute teaching labels T1/M1 for real IDs. These commands do not request completion, acquisition or settlement. Set four variables first; absence stops the commands:
 
 ```bash
-loopx doctor
-loopx registry
-loopx status
-loopx todo list --goal-id <goal-id>
-loopx todo list --goal-id <goal-id> --thin --format json
-loopx history --goal-id <goal-id>
-loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30
-loopx quota should-run --goal-id <goal-id> --agent-id <agent-id>
-loopx extension list --format json
+: "${REGISTRY:?Set the existing registry path}"
+: "${RUNTIME:?Set the existing runtime root}"
+: "${GOAL:?Set the exact goal id}"
+: "${TODO:?Set the exact todo id}"
+loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
+  todo list --goal-id "$GOAL" --todo-id "$TODO"
+loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
+  task-lease inspect --goal-id "$GOAL" --todo-id "$TODO"
 ```
 
-The `todo list --thin` option added in `v0.5.4` is an explicit bounded projection. It compacts fields and
-the number of returned items per lane without changing default selection, ordering, quota, or lifecycle
-semantics. Use the command without `--thin`, or an exact `todo_id`, when you need full detail.
+Reads can start the managed runtime; separate responses are not one atomic snapshot. Check identity, source, time and available revision in each. Report missing information instead of inventing approved, open or zero. To determine what happened to an actual operation, consult its own receipt too.
 
-## Project onboarding entrypoints
+Relevant `quota should-run --codex-app` paths can create heartbeat receipts. `refresh-state` writes back; acquisition, renewal, settlement and scheduler ACK have execution conditions. They are not the two observational commands above and do not belong in an unbounded diagnostic retry loop.
+
+## Route symptoms to an owner {#diagnostic-routing}
+
+Find the first relationship lacking evidence rather than clearing the Goal. This is a reading route, not a new automatic repair machine.
+
+| Symptom | Facts to obtain first | Rule and operating entrypoint | Completion or stopping condition |
+| --- | --- | --- | --- |
+| Page and Todo disagree | Same object's source, mode, revision/time and projection | [State](state-substrate.md), [projection repair](04-runtime-boundaries.md#projection-repair) | Restore the source and reread; display does not take over authority |
+| HTTP succeeded; execution is unclear | Original request, operation receipt and current source | [Workspace pause case](workspace-v1.md#pause-readback) | Confirm that operation; disagreement alone does not prove cause |
+| Earlier acquire succeeded; writes now fail | Current owner/key/version, mode and Todo state | [Authority](work-graph-and-authority.md#authority-layers) | Obtain legal current proof, or stop if work ended |
+| External request timed out | Original operation identity and provider readback | [Recovery](04-runtime-boundaries.md#recovery-or-new-execution) | Act on supported committed/absent results; retain unknown responsibility |
+| Writeback exists; records remain incomplete | Original settlement state and outstanding action | [Settlement](03-one-turn.md#settlement-recovery) | Complete missing records without repeating artifact or debit |
+| Independent work appears during an original-Turn wait | Original binding, blocked writeback and later candidates | [Wait closeout](03-one-turn.md#wait-closeout) | Follow the installed contract to close out before new selection |
+| Quiet Monitor or repeated replan | Due state, target, current lane, selectable work and Host | [Observation](04b-budget-and-admission.md#observation-owners) | Explain actual waiting or restore its execution surface |
+| Old CI is green; current code changed | Actual artifact revision, affected requirements and evidence | [Changed evidence](04-runtime-boundaries.md#changed-evidence) | Support current conclusions without erasing history |
+| Green branches cannot be delivered together | Artifacts, recipient-adopted revisions and integration checks | [Handoff and integration](work-graph-and-authority.md#handoff-to-integration) | Close integration and acceptance responsibility |
+| Artifact generated; recipient did not receive it | Target, route, send/delivery readback and authority | [First delivery](05-connect-existing-project.md#first-delivery) | Complete required return or identify remaining responsibility |
+
+Public feedback should retain minimal reproducible versions, error codes and public-safe references, not live registries, credentials, raw transcripts or private run records. When evidence is insufficient, name the unknown conclusion, missing readback and confirming owner. Destructive test injection is not a live recovery procedure.
+
+## Requirement one: state outlives context {#requirement-one-state-outlives-context}
+
+| Term | Distinction to preserve |
+| --- | --- |
+| Goal / Acceptance | Objective identity and observable acceptance, not one Todo's status |
+| Source / Projection | Owning facts and rebuildable views; legacy Markdown's role depends on mode |
+| Evidence / Receipt | Support for a conclusion versus an accepted-operation record; both need correct binding |
+| Kernel | Generic transition owner, not the owner of every external system's reality |
+
+See [state](state-substrate.md). Information in a prompt alone does not prove durable lifecycle writeback. Persisted chat also does not automatically become current authority.
+
+## Requirement two: identify interrupted work {#requirement-two-interruption-stops-at-identifiable-points}
+
+A Todo identifies work; the frontier supplies candidates under current constraints; Turn/operation identity binds execution and recovery. Historical receipts differ from new execution eligibility. Artifact revision, provider revision and lease version/epoch cannot substitute for one another; see [revision bases](04-runtime-boundaries.md#revision-bases).
+
+## Requirement three: current executor and scope {#requirement-three-one-accountable-actor}
+
+Agent identity denotes a lane, not a Host. Vision describes an applicable per-Agent route. Claim expresses assignment; leases participate in proof on applicable writers and modes; Gates cover named decisions; Hosts supply execution and waking. These do not imply one executor for the whole system or an OS sandbox. See [work graphs](work-graph-and-authority.md).
+
+## Requirement four: bounded, observable consumption {#requirement-four-bounded-externally-observable-spend}
+
+Quota participates in admission and internal accounting. Monitors retain targets and observations. Scheduler/backoff arranges timing; Hosts or integrated event channels perform waking. Replan changes the route, not just an interval. No-spend is not free actual resources. See [observation ownership](04b-budget-and-admission.md#observation-owners).
+
+## Words outside the four requirements {#words-outside-the-four-requirements}
+
+Capability describes a caller outcome contract; Provider supplies implementation or external access; Extension manages independent package installation, activation and versions. Installed, doctor-ready, Goal-configured and currently authorized are different facts. See [placement](08-extension-placement.md) and [lifecycle](10-extension-lifecycle.md).
+
+## Core command quick index {#core-command-quick-index}
+
+| Need | Entrypoint | Boundary |
+| --- | --- | --- |
+| Inspect installation and prerequisites | `loopx --version`, `loopx doctor` | Does not prove a delivery succeeded |
+| Inspect connection and status | `loopx registry`, `loopx status`, `loopx history` | Verify actual registry/Goal; display may be bounded |
+| Read an exact Todo | `loopx todo list --goal-id <goal-id> --todo-id <todo-id>` | Absence from a display is not absence of work |
+| Compact a work list | `loopx todo list --goal-id <goal-id> --thin --format json` | Bounded display is not the whole candidate set |
+| Inspect a lease | `loopx task-lease inspect` | Observation does not acquire new proof |
+| Read Agent evidence | `loopx evidence-log --goal-id <goal-id> --agent-id <agent-id> --thin --limit 30` | Separate history from current facts |
+| Request admission | `loopx quota should-run` | Read the full contract; relevant Host paths can record receipts |
+| Inspect a managed Turn journal | `loopx turn inspect-journal` | Preserve original Turn key; diagnosis does not recover |
+| Discover configuration and capabilities | `loopx capability list/show`, `loopx configure-goal` | Separate reads without setting flags from execution |
+| List independent packages | `loopx extension list --format json` | Visibility is not current run eligibility |
+
+The `todo list --thin` option added in `v0.5.4` is an explicit bounded projection without changing default selection, ordering, quota, or lifecycle semantics. Use exact reads for details instead of changing display limits to bypass business checks.
+
+## Project onboarding and actual delivery
 
 ```bash
-loopx connect
-
+loopx connect --dry-run
 loopx start-goal --guided --project . \
-  --goal-id <goal-id> \
-  --agent-id <agent-id> \
-  --goal-text "<goal text>" \
-  --host-surface codex-app
-
-loopx start-goal --guided --project . \
-  --goal-id <goal-id> \
-  --agent-id <agent-id> \
-  --goal-text "<goal text>" \
-  --host-surface codex-cli-tui
+  --goal-id <goal-id> --agent-id <agent-id> \
+  --goal-text "<goal text>" --host-surface codex-app
 ```
 
-On first run, omit `--goal-id`, `--agent-id`, or `--host-surface` to receive the corresponding read-only
-Goal, fresh-Agent, or Host selection Gate. Rerun the exact command provided by the packet. Do not infer a
-Goal from similar text or take over the only existing Agent automatically. Register a new identity with a
-`register-agent --goal-id <goal-id> --agent-id <new-agent-id>` preview followed by atomic `--execute`; use
-an existing identity only for an explicitly authorized takeover.
+These are preview entrypoints. Confirm actual connection writes and subsequent packet actions separately. Select `codex-cli-tui` for that actual Host, not an invented one. Omitted identities may lead to selection gates; an existing lane is not implicit takeover. Follow [onboarding](05-connect-existing-project.md#three-completions) and [first delivery](05-connect-existing-project.md#first-delivery).
 
-## Safe upgrade runbook
+## Scheduler convergence entry {#scheduler-entry}
 
-For a no-clone installation, `loopx update` is the primary path. Do not overwrite a release snapshot by
-hand:
+When a packet requires Host apply, apply its current recommendation and read the result before executing the bound ACK:
 
-Run `loopx update check` for a read-only freshness and installation-owner
-check, then `loopx update plan` for the install preview. Neither command
-installs.
+```text
+loopx quota scheduler-ack-current <packet-bound-args...>
+```
 
-A normal upgrade needs only:
+This is a command shape, not copy-ready arguments. Use full `ack_hint.cli_args`. Do not fabricate success after failure or unknown outcome; use the applicable `failure_hint.cli_args`. A Host already confirmed to match the desired cadence may only need ACK, not a redundant update. See [budget and observation](04b-budget-and-admission.md).
+
+## Safe updates and rollback
 
 ```bash
 loopx update check
@@ -114,115 +114,39 @@ loopx update apply
 loopx doctor
 ```
 
-Use the full flow below when you need pre-upgrade evidence, Host or Extension migration checks, or a
-rollback path.
+Confirm installation owner, target release and plan before authorizing apply. Ordinary users should not default to `--ref main`. Updating the CLI does not establish that every Host, Provider and existing Goal migrated. Recheck skills, state, Host readback and enabled Extension readiness for the surfaces actually used.
 
-```bash
-# 1. Record current facts
-command -v loopx
-loopx --version
-loopx --format json doctor > /tmp/loopx-doctor-before.json
-
-# 2. Inspect stable ref, freshness, and the recommendation
-loopx update check
-
-# 3. Preview the ref, release id, and rollback target
-loopx update plan
-
-# 4. Run the archive installer and post-update doctor
-loopx update apply
-
-# 5. Recheck commands, skills, Host integration, and project state
-loopx --version
-loopx doctor
-loopx slash-commands
-loopx slash-commands --install
-loopx status
-```
-
-The public `stable` ref is the default archive source. `--ref main` is a maintainer or development
-qualification path, not the ordinary user default. `update apply` preserves the active installation
-owner: pip and pipx keep the PyPI environment, archive installs keep the release snapshot, and live
-checkouts remain explicit. A successful exit does not prove that every Host automation, Goal migration,
-or Extension Provider is updated.
-
-Once the runtime install and its core `doctor` readback pass, `update apply` also restarts the
-LaunchAgent-managed `status` and `chat` services so the installed behavior actually serves. A blocked
-enabled Extension Provider is reported for repair instead of preventing that activation, because a
-stale service would otherwise keep serving the previous release.
-
-Validate the surfaces you use:
-
-- `loopx doctor`: wrapper, release manifest, Python import, skill delivery, and Host integration;
-- `loopx slash-commands --install`: updates only LoopX-managed command files and skips user-owned
-  collisions;
-- `loopx quota should-run` or `loopx upgrade-plan`: peer-runtime and heartbeat-prompt migrations;
-- `loopx extension list` plus executed `extension doctor`: readiness for each active revision;
-- `loopx status` and `history`: registry, Goal, Todo, and projection continuity.
-
-Before a risky migration, scheduler change, or runtime repair, preview and create a private local backup:
+For backup, preview before execution:
 
 ```bash
 loopx backup-state --project .
 loopx backup-state --project . --execute
 ```
 
-The archive contains local runtime and project state. It is private recovery material and must not be
-committed or published.
+Backups are private recovery material and may contain sensitive runtime state; do not commit them. Before `loopx update --rollback previous`, inspect current help and verify that the installation supports that recovery. Reverting the program does not necessarily revert independent packages, written state formats or external effects. Those retain their own owners; see [recovery and compensation](04-runtime-boundaries.md).
 
-When a new release blocks normal work, inspect current `loopx update --help`, then select a recorded release
-id or use:
+## Extension lifecycle
 
-```bash
-loopx update --rollback previous
-loopx doctor
+```text
+init → install package → install preview → install --execute → doctor/readback
+     → run valid input → disable/enable → upgrade/rollback → reread
 ```
 
-Rollback restores the LoopX release snapshot only. Project state already written by the new version,
-external effects, and separately installed Extension packages may need their own migrations or rollback.
-Do not describe wrapper rollback as whole-system rollback.
+Do not reinstall an already installed Extension. Use an isolated state file and one Python environment for the [complete scaffold](09-extension-scaffold.md) and [lifecycle exercise](10-extension-lifecycle.md). `rollback_available=false` differs from a valid target whose doctor fails. Retaining old activation metadata does not guarantee the old entrypoint remains executable.
 
-## Scheduler convergence entrypoint
+## Protocol index
 
-When a Codex App packet reports `stateful_backoff.apply_needed=true`, have the Host apply
-`recommended_rrule`, read back the actual result, and then run the packet's full `ack_hint.cli_args`.
-The current route is typically:
+| Topic | Primary entrypoint |
+| --- | --- |
+| Goal, identity and Host activation | [Goal command](/loopx/docs/reference/protocols/loopx-goal-command-v0/) |
+| Source/projection and long-running work | [Long-horizon state](/loopx/docs/reference/protocols/long-horizon-agent-state-protocol-v0/) |
+| Agent-scoped history | [Evidence ledger](/loopx/docs/reference/protocols/agent-scoped-evidence-ledger-v0/) |
+| Retired Todo event API | [Retired event source](/loopx/docs/reference/protocols/event-sourced-state-contract-v0/) |
+| Active-state read model | [Structured projection](/loopx/docs/reference/protocols/active-state-structured-projection-v0/) |
+| Work graphs, Gates and peers | [Task graph](/loopx/docs/reference/protocols/task-graph-projection-v0/), [Decision scope](/loopx/docs/reference/protocols/decision-scope-v0/), [Peer runtime](/loopx/docs/reference/protocols/peer-agent-runtime-v1/) |
+| Vision and route changes | [Vision/replan](/loopx/docs/reference/protocols/goal-vision-replan-contract-v0/) |
+| Explicit managed turns | [LoopX Turn](/loopx/docs/reference/protocols/loopx-turn-v0/), [Turn envelope](/loopx/docs/reference/protocols/turn-envelope-v0/) |
+| Host, Session and writeback | [Host integration](/loopx/docs/reference/protocols/host-integration-surface-v0/), [Session projection](/loopx/docs/reference/protocols/session-runtime-loopx-projection-v0/), [Controlled writeback](/loopx/docs/reference/protocols/session-runtime-controlled-writeback-v0/) |
+| Concurrent write bases | [Local write correctness](/loopx/docs/reference/protocols/local-state-write-correctness-v0/) |
 
-```bash
-loopx quota scheduler-ack-current <packet-bound-args...>
-```
-
-After an apply failure or timeout, do not ACK; run `failure_hint.cli_args` once. When
-`apply_needed=false` and `ack_needed=true`, exact Host readback already matches the target cadence, so skip
-the no-op update and run the bound ACK. Proposal, Host apply, readback, and ACK are all required for
-convergence, and cadence changes do not consume delivery spend.
-
-## Extension lifecycle entrypoints
-
-```bash
-loopx extension init <extension-id>
-loopx extension install --manifest <extension.toml>
-loopx extension doctor <extension-id>
-loopx extension run <extension-id> --input-json <request.json>
-loopx extension disable <extension-id>
-loopx extension enable <extension-id>
-loopx extension upgrade --manifest <extension.toml>
-loopx extension rollback <extension-id>
-```
-
-Lifecycle commands normally preview by default. Inspect current `--help` and add `--execute` only when you
-intend to mutate state or invoke the Provider.
-
-## Source contribution entrypoints
-
-- [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
-- [Contributing](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md)
-- [Control-Plane Developer Course](https://github.com/huangruiteng/loopx/tree/main/docs/development/control-plane-course)
-- [Core Control-Plane Graphs](https://github.com/huangruiteng/loopx/tree/main/docs/product/core-control-plane)
-- [Testing and Quality](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md)
-
-## Official sources
-
-- [LoopX repository](https://github.com/huangruiteng/loopx)
-- [Getting Started](https://github.com/huangruiteng/loopx/blob/main/docs/guides/getting-started.md)
-- [Extensions and Capabilities](https://github.com/huangruiteng/loopx/blob/main/docs/reference/extensions.md)
+Protocol pages have versions and implementation status. Accepted RFCs, experimental contracts and shipped behavior are not interchangeable. Advanced source comparisons use fixed commits; verify that your checkout contains the implementation before running it. Enter [Course exercises](12-control-plane-course.md#reader-checkpoints) and the [contribution path](source-protocol-map.md) when preparing a rule change.

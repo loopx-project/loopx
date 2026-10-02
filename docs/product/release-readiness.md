@@ -970,6 +970,47 @@ also record:
   language. Keep each group shorter than its English counterpart while
   preserving direct PR attribution and compatibility boundaries.
 
+### Personal Feishu Release Guide
+
+Each named public release needs a companion illustrated Feishu document in the
+maintainer's personal user account. This is part of completing the release,
+alongside the GitHub release body; a changelog link alone is insufficient.
+Use the existing release-communication and document-authoring workflows when
+available, with the following durable procedure:
+
+1. Verify the personal account through an authoritative account mapping or
+   email, and explicitly use user identity for every document operation. A
+   matching display name or a profile named "personal" is insufficient. Never
+   fall back to a corporate account or bot; if personal access is unavailable,
+   keep the draft and report the access gap.
+2. Derive claims from the previous-tag-to-release-tag range and the verified
+   release snapshot. Organize the guide around ordinary user tasks: who should
+   upgrade, what they can now do, where to find it, and how to verify the result.
+   Distinguish released behavior, experimental capabilities, simulated examples,
+   and failed or unavailable validation. A candidate draft must remain labeled
+   as such until the release and its artifacts are verified.
+3. Include legible screenshots of the actual released interface with public-safe
+   data. Label isolated demo data and any annotations; retain capture provenance
+   privately. Place concise explanations beside the relevant images and inspect
+   mobile readability. Do not fabricate UI, expose private workspaces, or use
+   an older screenshot as evidence of changed behavior.
+4. Teach the minimum upgrade and readback commands, compatibility or migration
+   behavior, and each highlighted optional capability's activation, validation,
+   disable or rollback path, and authority/privacy boundary. Link canonical
+   documentation at the release tag and the complete GitHub release body.
+   Preserve concrete community contribution credit from the same tag range.
+5. Create one document under the verified personal user identity, then repair
+   that document in place if content or media fails. Read back its ownership,
+   title, text, image blocks, and rendered presentation before declaring success.
+   Add the verified guide URL to the final GitHub release body in both languages,
+   and repeat the existing remote-body validation after that update.
+
+Record the guide URL and verified ownership/readback in the existing private
+release checkpoint. Credentials, account identifiers, private reference URLs,
+drafts, and raw evidence do not belong in public repository changes. This
+procedure authorizes neither chat/group announcements nor posts to other
+social channels; those retain their own authorization boundaries.
+
 ### Final Release Body Usage Gate
 
 The release-note PR is not sufficient evidence. Before publishing, save the
