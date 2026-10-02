@@ -28,7 +28,8 @@ def score(case, response):
         errors.append("missing_answer")
     if observed != case["expected"]:
         errors.append(f"expected_{case['expected']}_got_{observed}")
-    if response.get("proposals") or response.get("protected_action"):
+    if (response.get("proposals") or response.get("protected_action")
+            or (response.get("goal_draft") and response.get("context_handoff"))):
         errors.append("unrequested_action")
     if case["expected"] in {"draft", "handoff"} and response.get("gate"):
         errors.append("redundant_gate")
@@ -45,7 +46,12 @@ def score(case, response):
     for ref in case.get("required_evidence_refs", []):
         if ref not in str(response.get("message") or ""):
             errors.append("missing_evidence_ref")
-    return {"id": case["id"], "passed": not errors, "observed": observed, "errors": errors}
+    # Keep the visible answer and parsed handoff for factual review. Never save
+    # raw provider payloads, tool events, credentials or provider error text.
+    # Structural success alone cannot establish the correctness of these claims.
+    review_response = {k: response[k] for k in ("message", "context_handoff", "goal_draft") if k in response}
+    return {"id": case["id"], "passed": not errors, "observed": observed, "errors": errors,
+            "review_response": review_response}
 
 
 def main():
@@ -141,6 +147,7 @@ def main():
               "prompt_sha256": hashlib.sha256(_turn_prompt("").encode()).hexdigest(),
               "request_settings": {"reasoning_effort": "high", "runtime_profile": "restricted"} if args.provider == "codex" else {"temperature": 0, "max_tokens": 8192, "thinking": "provider_default"},
               "passed": sum(row["passed"] for row in rows), "total": len(rows), "results": rows,
+              "review_required": True,
               "boundary": "Fixed public context with production prompt/parser; synthetic authoritative observations test intake, not real fact lookup. Top-level prompt_sha256 identifies the template; each result hashes its effective prompt including context and normalized request. Scoring requires a nonempty answer and checks effects, recipients and evidence pointers; review factual conclusions separately. Codex uses the real restricted Chat adapter and fails on its protocol warnings; operator-api also checks raw envelope integrity. No dynamic discovery, dispatch or work completion qualification."}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
