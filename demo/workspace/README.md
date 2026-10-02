@@ -46,4 +46,22 @@ The demo does not import personal registries, session history or credentials, an
 
 This remains a source-checkout demo under `demo/`, outside the installed wheel and capability catalog. Screenshots and recordings belong in ignored `output/playwright/`. Keep real operating statistics separately timestamped with their counting scope.
 
+## README hero
+
+The repository README hero is rendered from the packaged App on this demo. With the dashboard dependencies installed, build the App and start a fresh isolated demo:
+
+```bash
+uv run --extra test python scripts/chat_bundle.py build --install
+uv run --extra test python -m demo.workspace serve --root /tmp/workspace-hero --port 8791
+```
+
+In another terminal:
+
+```bash
+node demo/workspace/readme-hero/render.mjs --url http://127.0.0.1:8791 \
+  --demo-root /tmp/workspace-hero --out docs/assets/personal-workspace
+```
+
+The hero shows the real packaged Work map: recorded task relations, responsible agents, progress and pending owner decisions. These come from the authored scenario replay; the capture runs no live Agent task and adds no mocked conversation or team record. The renderer requires a complete map and a fresh v3 demo, prepares a pending venue approval through the existing typed action preview API, and verifies its confirmation button in both languages without applying it. All projected Todo states must remain unchanged after capture. It fails on older Apps, incomplete maps or advanced decisions. Intermediate frames stay in ignored `output/playwright/readme-hero/frames/`.
+
 Validation: `python -m pytest tests/test_workspace_story_demo.py -q` exercises real state, directory isolation, repeatable prepare, computed artifacts and decision-scoped transitions. The normal Workspace browser smoke covers the shared Board/List and completed-history behavior, including #3961.
