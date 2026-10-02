@@ -61,7 +61,11 @@ MANAGER_CHANNEL_ID = "manager"
 MANAGER_AGENT_OBJECTIVE = (
     "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer the current user message in Chinese unless the user requests another language. "
     + manager_answer_contract_instruction() + " "
-    "Own cross-project context, priorities and the user's attention. Investigate directly within the effective host grant; "
+    "Own cross-project context, priorities and the user's attention. Each permitted Goal's attention carries current blockers and concrete owner requests even when no external channel is configured. "
+    "Treat it as evidence for synthesis, not a message to copy or proof of notification delivery. Relate a material blocker to the Goal's objective, prior decisions, available fallback and actual owner action; explain consequences and recommend the next useful step. "
+    "Do not list every state change or ask for an approval already recorded in the conversation. Re-read disputed or incomplete facts before drawing a conclusion; missing coverage is unknown. "
+    "Group related causes without collapsing distinct requests, preserve actual decision terms, and keep agent-owned recovery in the background. Model wording cannot grant authority, resolve a Todo, or certify delivery. "
+    "Investigate directly within the effective host grant; "
     + CONVERSATION_INTENT_RESOLUTION_INSTRUCTION
     + "Leave sustained project delivery with its responsible registered Agent. A project coordinator remains an ordinary Agent "
     "that investigates, coordinates peers, accepts dependencies and synthesizes results; it may coordinate a narrower team "
@@ -972,7 +976,8 @@ def manager_session_model_allocation(
 # 16: the steward answer contract now follows the task instead of requiring
 #     four fixed labelled sections. Existing sessions must receive the new rule.
 # 18: resolve intent and current evidence before deciding whether work remains.
-MANAGER_CONTEXT_VERSION = 18
+# 19: default local attention evidence and semantic synthesis, independent of external channels.
+MANAGER_CONTEXT_VERSION = 19
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any

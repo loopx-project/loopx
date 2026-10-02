@@ -18,6 +18,7 @@ from .history import decode_registry_snapshot
 from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
 from .chat import redact_local_paths
 from .control_plane.collaboration import conversation_scope
+from .control_plane.effect_runtime import effect_runtime_result
 
 
 # A progress question needs a bounded window, not a single day. One day of
@@ -460,6 +461,7 @@ def manager_turn_context(
         # so the lifecycle projection the status collector already derived
         # travels with the row instead of being reconstructed from todos.
         include_goal_lifecycle=True,
+        include_goal_attention=True,
     )
     labels: dict[str, str] = {}
     try:
@@ -508,6 +510,9 @@ def manager_turn_context(
                 "agent_coverage": row.get("agent_coverage"),
                 "description": labels.get(row["goal_id"]),
                 "quality": row.get("quality"),
+                "attention": row.get("attention") or {
+                    "status": "unavailable", "items": [], "reason": "goal_not_read",
+                },
                 "progress": row.get("progress", "unknown"),
                 "source": row.get("source"),
                 "warnings": row.get("warnings", []),
@@ -537,6 +542,7 @@ def manager_turn_context(
                 ) if read_details else {"status": "not_read", "todos": []},
             }
         )
+    rows = effect_runtime_result("presentation.goal_attention.bound", {"goals": rows})["goals"]
     result = {
         "schema_version": "manager_turn_context_v1",
         "scope": "owner_goal" if local_goal else "owner_global" if owner_scope else "external_goal_scope",

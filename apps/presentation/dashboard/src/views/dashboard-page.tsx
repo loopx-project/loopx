@@ -1196,6 +1196,7 @@ function buildPersonalHomeModel(
       configured: row.configured,
       enabled: row.enabled,
       humanGateAutoNotifyEnabled: row.human_gate_auto_notify_enabled,
+      stewardNoticeDelivery: row.steward_notice_delivery,
       blockedNoticeAutoNotifyEnabled: row.blocked_notice_auto_notify_enabled,
       blockedNoticeDelivery: row.blocked_notice_delivery ? {
         deliveredCount: row.blocked_notice_delivery.delivered_count,

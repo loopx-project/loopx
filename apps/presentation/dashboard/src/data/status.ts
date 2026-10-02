@@ -233,6 +233,10 @@ export const goalChannelNotificationRowSchema = z.object({
   enabled: z.boolean().optional().default(false),
   human_gate_auto_notify_enabled: z.boolean().optional().default(false),
   blocked_notice_auto_notify_enabled: z.boolean().optional().default(false),
+  steward_notice_delivery: z.object({
+    pending_count: z.number(),
+    failed_count: z.number(),
+  }).optional(),
   blocked_notice_delivery: z.object({
     delivered_count: z.number(),
     unverified_count: z.number(),

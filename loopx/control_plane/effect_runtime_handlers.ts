@@ -1,6 +1,7 @@
 import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
 import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgentOperationExecutor, planAgentOperationHandoff, projectAgentOperationInbox, projectManagedOperationTransport, resolveOperationSourceRoute} from "./work_items/operation_agent_handoff.ts";
-import {projectDecisionNotice} from "./presentation/decision_notice.ts";
+import {projectDecisionNotice, validateDecisionNoticeReferences} from "./presentation/decision_notice.ts";
+import {boundGoalAttention, projectGoalAttention} from "./presentation/goal_attention.ts";
 import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {projectTodoContextPage} from "./todos/context_projection.ts";
@@ -640,6 +641,9 @@ export function createEffectRuntimeHandlers(
     ["task_lease.write_scopes.overlap", evaluateTaskLeaseWriteScopesOverlap],
     ["quota.monitor_poll.commit", evaluateQuotaMonitorPollCommit],
     ["presentation.decision_notice.project", projectDecisionNotice],
+    ["presentation.decision_notice.validate_references", validateDecisionNoticeReferences],
+    ["presentation.goal_attention.project", projectGoalAttention],
+    ["presentation.goal_attention.bound", boundGoalAttention],
     ["presentation.action_review_plan.compile", (params) =>
       compileActionReviewPlan(params.proposal, params.now_ms === undefined
         ? undefined : requireInteger(params.now_ms, "now_ms"))],
