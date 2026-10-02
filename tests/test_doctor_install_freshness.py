@@ -16,6 +16,7 @@ from loopx.doctor import (
     python_distribution_install,
 )
 from loopx.doctor_git import git_revision_relation, trusted_release_ref_for_root
+from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
 
 
 class _FakeDistributionFile:
@@ -62,10 +63,11 @@ def _commit(root: Path, text: str) -> str:
 
 
 def _write_required_skills(root: Path) -> None:
-    for skill_name, phrases in REQUIRED_INSTALLED_SKILL_PHRASES.items():
+    for skill_name in PACKAGED_HOST_SKILL_IDS:
+        phrases = REQUIRED_INSTALLED_SKILL_PHRASES.get(skill_name, ())
         skill_path = root / skill_name / "SKILL.md"
         skill_path.parent.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text("\n".join(phrases) + "\n", encoding="utf-8")
+        skill_path.write_text("\n".join(phrases) + f"\n# {skill_name}\n", encoding="utf-8")
 
 
 def _freshness(

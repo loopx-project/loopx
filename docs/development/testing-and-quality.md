@@ -693,6 +693,15 @@ backend capacity, retention and cutover qualification belong to the
 Use the existing task/PR evidence and update its owning checkpoint when warranted;
 this adds no approval, receipt or requirement to complete unrelated milestones.
 
+For a demonstrated slow command, the opt-in
+[performance diagnosis workflow](../../loopx/capabilities/performance_diagnosis/README.md)
+selects language-appropriate capture recipes and reads local Speedscope/V8 CPU
+stacks. Measure the original workload without instrumentation, profile the
+actual owning process, then test the proposed cause and repeat the original
+semantic/latency checks. Tool plans, overlapping thread weights and inclusive
+hotspots are not elapsed-time, root-cause or admission proof. Raw profiles remain
+local-private; the workflow adds no profiler service or receipt gate.
+
 - **Locate the cost before selecting an abstraction.** Separate caller repeats,
   output/context expansion, process/bridge/serialization cost, shared semantic
   work, and backend IO/verification/contention. A display filter does not reduce

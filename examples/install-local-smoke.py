@@ -220,6 +220,8 @@ def main() -> int:
             **os.environ,
             "HOME": str(home),
             "CODEX_HOME": str(codex_home),
+            "LOOPX_REGISTRY": str(home / ".loopx" / "registry.global.json"),
+            "LOOPX_RUNTIME_ROOT": str(home / ".loopx"),
             "OPENCODE_CONFIG_DIR": str(home / ".config" / "opencode"),
             "LOOPX_BIN_DIR": str(bin_dir),
             "LOOPX_SHELL_PROFILE": str(profile),

@@ -18,11 +18,18 @@ def review(identity, state, *, login="other", head=OLD):
 
 
 def request(reviews):
+    reviews = [*reviews, review(50, "APPROVED", login="maintainer", head=HEAD)]
     return {"expected_exact_head": f"42@{HEAD}", "repository": "owner/repo",
             "pull_request": {"number": 42, "headRefOid": HEAD, "state": "OPEN",
                              "reviewDecision": "CHANGES_REQUESTED"},
             "readback_head": HEAD, "reviews_complete": True, "reviews": reviews,
-            "approval_conclusion": {"valid": True, "verdict": "APPROVE"}}
+            "review_conclusions": [conclusion(row) for row in reviews]}
+
+
+def conclusion(row):
+    return {"valid": row["state"] == "APPROVED", "verdict": "APPROVE",
+            "review_id": row["id"], "reviewer": row["user"].get("login"),
+            "state": row["state"], "submitted_at": row["submitted_at"]}
 
 
 def test_other_reviewer_blocker_survives_own_approval_and_comments():
@@ -70,12 +77,15 @@ def test_only_latest_blocker_per_reviewer_needs_reconciliation():
 @pytest.mark.parametrize("field,value,reason", [
     ("readback_head", OLD, "head_changed"),
     ("reviews_complete", False, "review_source_incomplete"),
-    ("approval_conclusion", {"valid": False, "verdict": "APPROVE"}, "exact_head_approval_missing"),
-    ("approval_conclusion", {"valid": True, "verdict": "REQUEST_CHANGES"}, "exact_head_approval_missing"),
+    ("approval_valid", False, "exact_head_approval_missing"),
+    ("approval_verdict", "REQUEST_CHANGES", "exact_head_approval_missing"),
 ])
 def test_unverified_closeout_is_a_hold_not_clear(field, value, reason):
     data = request([review(1, "CHANGES_REQUESTED")])
-    data[field] = value
+    if field.startswith("approval_"):
+        data["review_conclusions"][-1][field.removeprefix("approval_")] = value
+    else:
+        data[field] = value
     result = plan_approval_closeout(data)
     assert result["status"] == "hold"
     assert reason in result["hold_reasons"]
@@ -92,6 +102,55 @@ def test_malformed_history_fails_closed(change):
         plan_approval_closeout(request([row]))
 
 
+@pytest.mark.parametrize("superseding", ["CHANGES_REQUESTED", "DISMISSED"])
+def test_effective_foreign_opinion_not_authentication_selects_approval(superseding):
+    data = request([])
+    foreign = review(1, "APPROVED", login="foreign", head=HEAD)
+    data["reviews"] = [foreign]
+    data["review_conclusions"] = [conclusion(foreign)]
+    data["pull_request"]["reviewDecision"] = "REVIEW_REQUIRED"
+    assert plan_approval_closeout(data)["approval_snapshot"]["reviewer"] == "foreign"
+    later = review(2, superseding, login="FOREIGN", head=HEAD)
+    data["reviews"].append(later)
+    data["review_conclusions"].append(conclusion(later))
+    result = plan_approval_closeout(data)
+    assert result["status"] == "hold"
+    assert result["approval_snapshot"]["review_id"] is None
+    assert "exact_head_approval_missing" in result["hold_reasons"]
+
+
+def test_ordinary_comment_does_not_retire_approval_or_override_another_blocker():
+    data = request([review(1, "CHANGES_REQUESTED")])
+    comment = review(51, "COMMENTED", login="maintainer", head=HEAD)
+    data["reviews"].append(comment)
+    data["review_conclusions"].append(conclusion(comment))
+    result = plan_approval_closeout(data)
+    assert result["status"] == "verification_required"
+    assert result["approval_snapshot"]["review_id"] == 50
+    assert [row["review_id"] for row in result["blocking_reviews"]] == [1]
+
+
+def test_author_commented_fallback_can_be_read_by_another_operator():
+    author = review(1, "COMMENTED", login="contributor", head=HEAD)
+    data = request([])
+    data["pull_request"].update(author={"login": "contributor"}, reviewDecision=None)
+    data["reviews"] = [author]
+    data["review_conclusions"] = [conclusion(author) | {"valid": True}]
+    assert plan_approval_closeout(data)["approval_snapshot"]["state"] == "COMMENTED"
+    rejection = review(2, "COMMENTED", login="contributor", head=HEAD)
+    data["reviews"].append(rejection)
+    data["review_conclusions"].append(conclusion(rejection) | {"valid": True, "verdict": "REQUEST_CHANGES"})
+    assert plan_approval_closeout(data)["status"] == "hold"
+
+
+@pytest.mark.parametrize("change", [{"review_id": 99}, {"reviewer": "forged"}, {"state": "COMMENTED"}])
+def test_conclusion_cannot_rebind_history_identity(change):
+    data = request([])
+    data["review_conclusions"][-1].update(change)
+    with pytest.raises(ValueError):
+        plan_approval_closeout(data)
+
+
 def test_capability_owns_closeout_and_preserves_authority_boundary():
     closeout = build_agent_response_contract()["review_execution_contract"]["approval_closeout"]
     assert "--check-approval-closeout NUMBER@HEAD_OID" in closeout["readback_command"]
@@ -103,7 +162,8 @@ def test_capability_owns_closeout_and_preserves_authority_boundary():
     assert "target_dismissed_approval_preserved_head_unchanged" in closeout["readback_requires"]
 
 
-def test_live_adapter_paginates_history_without_ci_or_mutations(monkeypatch, capsys):
+@pytest.mark.parametrize("authenticated_login", ["maintainer", "observer"])
+def test_live_adapter_paginates_history_without_ci_or_mutations(monkeypatch, capsys, authenticated_login):
     from loopx.cli import main
     import loopx.pr_review as pr_module
     from loopx.capabilities.pr_review_queue import github_source
@@ -124,7 +184,7 @@ def test_live_adapter_paginates_history_without_ci_or_mutations(monkeypatch, cap
                 "files": [{"path": "loopx/runtime.py"}], "changedFiles": 1}
 
     monkeypatch.setattr(github_source, "run_gh_json", read)
-    monkeypatch.setattr(pr_module, "resolve_current_github_login", lambda: "maintainer")
+    monkeypatch.setattr(pr_module, "resolve_current_github_login", lambda: authenticated_login)
     assert main(["--format", "json", "pr-review", "--repo", "owner/repo",
                  "--check-approval-closeout", f"42@{HEAD}"]) == 0
     result = json.loads(capsys.readouterr().out)
