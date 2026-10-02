@@ -25,7 +25,7 @@ from .inbox import (
     _write,
     normalize_request,
 )
-from .peer_context import require_parent_context_access
+from .peer_context_observation import require_parent_context_access
 from .goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,

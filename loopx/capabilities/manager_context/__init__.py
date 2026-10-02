@@ -8,7 +8,10 @@ import shlex
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_file_lock
-from ...control_plane.collaboration import conversation_scope
+from ...control_plane.collaboration.source_grants import (
+    POLICY_SCHEMA as POLICY_SCHEMA,
+    source_context_authority,
+)
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
@@ -32,7 +35,6 @@ from ...control_plane.collaboration.inbox import (
     pending as pending,
 )
 
-POLICY_SCHEMA = "loopx_manager_context_policy_v1"
 INSTRUCTION = (
     "Read this owner-supplied context before choosing work. Assess it against the current "
     "Goal, evidence, commitments and costs; honor explicit owner constraints and decide the plan. "
@@ -80,66 +82,9 @@ def register_ingress(
 def authority(
     runtime_root: Path, registry_path: Path, session: dict, turn: dict
 ) -> dict:
-    """Return only a write-only recipient catalog; no cross-audience Goal evidence."""
-    if registry_path is None:
-        return {"mode": "unavailable", "targets": []}
-    try:
-        registry = load_project_registry(registry_path)
-        if not isinstance(registry, dict):
-            raise ValueError("invalid registry")
-    except (OSError, ValueError, TypeError):
-        return {"mode": "unavailable", "targets": []}
-    available = set()
-    for goal in registry.get("goals", []):
-        if not isinstance(goal, dict) or not goal.get("id"):
-            continue
-        try:
-            if goal_is_stopped(goal):
-                continue
-        except ValueError:
-            # An unreadable activation state cannot grant a new handoff.
-            continue
-        available.update((goal["id"], agent) for agent in registered_agent_ids_for_goal(goal))
-    scope = conversation_scope(session, origin=turn.get("origin", "unknown"))
-    if scope["private_conversation"] and turn.get("origin") == "web":
-        allowed = {target for target in available
-                   if scope["goal_ids"] is None or target[0] in scope["goal_ids"]}
-        source_id = "web:" + _hash([session["session_id"], turn["client_turn_id"]])
-    else:
-        if scope["kind"] != "external_audience":
-            return {"mode": "unavailable", "targets": []}
-        try:
-            ingress = _read(
-                _root(runtime_root)
-                / "ingress"
-                / (_hash([session["session_id"], turn["client_turn_id"]]) + ".json")
-            )
-            if (
-                ingress["channel"] != session.get("channel_id")
-                or ingress["message_digest"] != _hash(turn.get("message"))
-                or turn.get("origin") != "lark"
-            ):
-                raise ValueError("source mismatch")
-            policy = _read(_root(runtime_root) / "policy.json")
-            if policy.get("schema_version") != POLICY_SCHEMA:
-                raise ValueError("invalid policy")
-            grants = policy.get("sources", {}).get(ingress["channel"], {})
-            if ingress["sender_id"] not in grants.get("sender_ids", []):
-                raise ValueError("sender not authorized")
-            allowed = {(v["goal_id"], v["agent_id"]) for v in grants.get("targets", [])}
-            source_id = ingress["source_id"]
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            return {"mode": "unavailable", "targets": []}
-    targets = [
-        {"goal_id": g, "agent_id": a} for g, a in sorted(allowed & available)
-    ]
-    return {
-        "mode": "context_only",
-        "targets": targets,
-        "source_id": source_id,
-        "instruction": INSTRUCTION,
-    }
-
+    """Compatibility API adds the Chat adapter's instruction to the shared grant."""
+    grant = source_context_authority(runtime_root, registry_path, session, turn)
+    return {**grant, "instruction": INSTRUCTION} if grant["mode"] == "context_only" else grant
 
 def deliver(
     runtime_root: Path, registry_path: Path, *, session: dict, turn: dict, request: dict
