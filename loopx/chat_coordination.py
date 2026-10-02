@@ -35,6 +35,7 @@ PROJECT_CONTEXT_VERSION = 2
 def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope):
     """Prepare the same evidence/handoff path for each supported conversation."""
     from .chat_runtime import CodexAppServerAdapter, CodexChatAgentError
+    from .chat_providers import ClaudeCodeAdapter
     from .chat_manager import (MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE,
                                manager_workspace)
     from .capabilities.manager_runtime import manager_runtime_session_fields
@@ -44,11 +45,11 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
     event_sink("agent.phase", {"phase": "manager_context", "label": "正在读取当前 Goal 的工作与协作" if scope["kind"] == "owner_goal" else "正在读取授权范围内的 Goal 状态"})
     context = collect_manager_turn_context(
         controller.registry_path, session, controller.store.root.parent, controller.manager_scope_resolver,
-        **({"include_details": False} if isinstance(adapter, CodexAppServerAdapter) else {}),
+        **({"include_details": False} if isinstance(adapter, (CodexAppServerAdapter, ClaudeCodeAdapter)) else {}),
         # An interactive endpoint reads the declared sources on
         # demand, but a prompt-only segment can only receive them,
         # so it gets the bounded read inline.
-        remote_evidence=not isinstance(adapter, CodexAppServerAdapter),
+        remote_evidence=not isinstance(adapter, (CodexAppServerAdapter, ClaudeCodeAdapter)),
     )
     controller.store.append_event(session_id, turn_id, kind="manager.context", payload=context)
     if scope["kind"] == "external_audience":
@@ -100,7 +101,7 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
         controller.store.root.parent, controller.registry_path, session,
         controller.store.load_turn(session_id, turn_id) or {},
     )
-    if isinstance(adapter, CodexAppServerAdapter):
+    if isinstance(adapter, (CodexAppServerAdapter, ClaudeCodeAdapter)):
         from .capabilities.manager_context.inspection import ManagerInspection, manager_index
         from .chat_manager_context import manager_authorization_scope_id
         expected_scope_id = context.get("authorization_scope_id")
@@ -133,7 +134,8 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 session_id, turn_id, kind="manager.evidence_read", payload=result,
             ),
         )
-        adapter.session.read_tool_handler = inspection.read
+        reader_owner = adapter.session if isinstance(adapter, CodexAppServerAdapter) else adapter
+        reader_owner.read_tool_handler = inspection.read
         context["evidence_sources"] = inspection.sources()
         context = manager_index(context)
     return adapter, context

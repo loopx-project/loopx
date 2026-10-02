@@ -411,10 +411,10 @@ class ChatRuntimeController:
         if (
             manager_runtime is not None
             and manager_runtime.get("runtime_profile") == "trusted_owner"
-            and agent_id != "codex"
+            and agent_id not in {"codex", "claude-code"}
         ):
             raise CodexChatAgentError(
-                "The trusted owner manager profile requires the Codex endpoint.",
+                "The trusted owner manager profile requires a Codex or Claude Code endpoint.",
                 error_code="manager_runtime_endpoint_unsupported",
                 gate={
                     "kind": "host_tool_gate",
@@ -423,7 +423,7 @@ class ChatRuntimeController:
                         "runtime profile."
                     ),
                     "next_action": (
-                        "Select the Codex Agent or change Manager runtime to restricted."
+                        "Select a Codex or Claude Code Agent or change Manager runtime to restricted."
                     ),
                 },
             )
@@ -481,16 +481,37 @@ class ChatRuntimeController:
                 ) else None,
             )
         if agent_id == "claude-code":
-            model_config = executor_model or {}
+            from .capabilities.manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
+            manager_profile = (
+                dict(manager_runtime or self.manager_runtime_profile())
+                if goal_id == MANAGER_AGENT_GOAL_ID else None
+            )
+            if manager_profile is not None:
+                objective = manager_agent_objective(str(manager_profile["runtime_profile"]))
+            model_config = (
+                executor_model or manager_model_config(
+                    endpoint=agent_id, machine_defaults=self.steward_executor_defaults(),
+                )
+                if manager_profile is not None and not execution_mode else executor_model or {}
+            )
             return ClaudeCodeAdapter.start(
                 claude_bin=self.claude_bin,
                 work_dir=work_dir,
                 resume_thread_id=resume_thread_id,
-                tool_scope="read_only",
-                context_summary=f"{goal_id}: {objective}".strip(),
+                tool_scope="disabled" if manager_profile is not None else "read_only",
+                runtime_profile=str(manager_profile["runtime_profile"]) if manager_profile is not None else "restricted",
+                context_summary=self._session_objective(
+                    goal_id=goal_id, objective=objective, history=history,
+                    project_coordination=project_coordination and not execution_mode,
+                ),
                 execution_mode=execution_mode,
                 model=model_config.get("model"),
                 reasoning_effort=model_config.get("reasoning_effort"),
+                dynamic_tools=(
+                    [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID else [CONTEXT_READ_TOOL]
+                ) if not execution_mode and (
+                    goal_id == MANAGER_AGENT_GOAL_ID or project_coordination
+                ) else None,
             )
         if agent_id == MANAGED_TURN_HOST:
             # The managed host has no interactive session transport, so this
@@ -1496,13 +1517,14 @@ class ChatRuntimeController:
             session = self.store.load_session(session_id) or {}
             from .chat_coordination import prepare_turn_context
             scope = conversation_scope(session, origin=str((self.store.load_turn(session_id, turn_id) or {}).get("origin") or "unknown"))
-            if isinstance(adapter, CodexAppServerAdapter):
+            if isinstance(adapter, (CodexAppServerAdapter, ClaudeCodeAdapter)):
                 # Handlers are bound per Turn. An external input sharing a Goal
                 # session must not inherit the preceding local owner's reader.
                 # The upstream thread still advertises its project read tool.
                 # Return a scope denial if called instead of misclassifying a
                 # read request as host approval and failing the conversation.
-                adapter.session.read_tool_handler = (
+                reader_owner = adapter.session if isinstance(adapter, CodexAppServerAdapter) else adapter
+                reader_owner.read_tool_handler = (
                     (lambda _tool, _arguments: {
                         "ok": False, "error": "conversation_scope_unavailable",
                     })

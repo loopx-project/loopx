@@ -126,6 +126,9 @@ class ClaudeCodeAdapter:
     resumed: bool = False
     current_process: subprocess.Popen[str] | None = field(default=None, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    dynamic_tools: list[dict[str, Any]] = field(default_factory=list)
+    read_tool_handler: Callable[[str, Any], dict[str, Any]] | None = field(default=None, repr=False)
+    runtime_profile: str = "restricted"
 
     @property
     def upstream_thread_id(self) -> str:
@@ -143,6 +146,8 @@ class ClaudeCodeAdapter:
         execution_mode: bool = False,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        dynamic_tools: list[dict[str, Any]] | None = None,
+        runtime_profile: str = "restricted",
     ) -> "ClaudeCodeAdapter":
         resolved = shutil.which(claude_bin)
         if not resolved:
@@ -154,6 +159,8 @@ class ClaudeCodeAdapter:
             raise ValueError("Claude Code tool_scope must be read_only or disabled")
         if tool_scope == "disabled" and execution_mode:
             raise ValueError("Claude Code execution requires an enabled tool scope")
+        if runtime_profile not in {"restricted", "trusted_owner"}:
+            raise ValueError("unknown manager runtime profile")
         return cls(
             claude_bin=resolved,
             work_dir=work_dir.resolve(),
@@ -164,6 +171,8 @@ class ClaudeCodeAdapter:
             model=model,
             reasoning_effort=reasoning_effort,
             resumed=bool(resume_thread_id),
+            dynamic_tools=list(dynamic_tools or []),
+            runtime_profile=runtime_profile,
         )
 
     def capabilities(self) -> dict[str, Any]:
@@ -172,14 +181,17 @@ class ClaudeCodeAdapter:
             "streaming": True,
             "resume": True,
             "interrupt": True,
-            "tool_calls": self.tool_scope != "disabled",
-            "tool_scope": "workspace_write" if self.execution_mode else self.tool_scope,
+            "tool_calls": self.tool_scope != "disabled" or bool(self.dynamic_tools) or self.runtime_profile == "trusted_owner",
+            "tool_scope": "workspace_write" if self.execution_mode or self.runtime_profile == "trusted_owner" else self.tool_scope,
+            "runtime_profile": self.runtime_profile,
             "execution_mode": self.execution_mode,
             "model": self.model,
         }
 
     def start_turn(self, message: str, event_sink: EventSink) -> dict[str, Any]:
         writable = self.execution_mode
+        trusted = self.runtime_profile == "trusted_owner"
+        allowed_tools = ["Read", "Glob", "Grep", "Bash", "Edit", "Write"] if writable else []
         command = [
             self.claude_bin,
             "--print",
@@ -188,21 +200,37 @@ class ClaudeCodeAdapter:
             "--verbose",
             "--include-partial-messages",
             "--permission-mode",
-            "acceptEdits" if writable else "plan",
+            "bypassPermissions" if trusted else "acceptEdits" if writable else "plan",
             "--tools",
-            "Read,Glob,Grep,Bash,Edit,Write" if writable else (
+            "default" if trusted else "Read,Glob,Grep,Bash,Edit,Write" if writable else (
                 "Read,Glob,Grep" if self.tool_scope == "read_only" else ""
             ),
             "--disable-slash-commands",
         ]
-        if writable:
-            # Only an explicitly admitted task opts into shell tools. Ordinary
-            # Chat keeps its read-only tool set.
-            command.extend(["--allowedTools", "Read,Glob,Grep,Bash,Edit,Write"])
         if self.model:
             command.extend(["--model", self.model])
         if self.reasoning_effort:
             command.extend(["--effort", self.reasoning_effort])
+        bridge = None
+        if self.dynamic_tools:
+            from .chat_native_tool_bridge import NativeChatToolBridge
+            # The reader is rebound by the application for every Turn. A
+            # cached native session never keeps a preceding audience's grant.
+            def read(tool: str, arguments: Any) -> dict[str, Any]:
+                if self.read_tool_handler is None:
+                    return {"ok": False, "error": "conversation_scope_unavailable"}
+                return self.read_tool_handler(tool, arguments)
+            # These are the application's scoped Core readers, not execution
+            # tools. Claude plan mode requires the standard MCP read-only hint.
+            read_tools = [{**tool, "annotations": {"readOnlyHint": True,
+                          "destructiveHint": False}} for tool in self.dynamic_tools]
+            bridge = NativeChatToolBridge(read_tools, read).__enter__()
+            if not trusted:
+                command.append("--strict-mcp-config")
+            command.extend(["--mcp-config", json.dumps(bridge.mcp_configuration())])
+            allowed_tools.extend("mcp__loopx__" + tool["name"] for tool in self.dynamic_tools)
+        if allowed_tools:
+            command.extend(["--allowedTools", ",".join(allowed_tools)])
         if self.resumed:
             command.extend(["--resume", self.session_id])
         else:
@@ -223,6 +251,8 @@ class ClaudeCodeAdapter:
                 bufsize=1,
             )
         except OSError as exc:
+            if bridge is not None:
+                bridge.__exit__()
             raise _provider_error("Claude Code", "Check the local Claude Code installation.") from exc
         with self.lock:
             self.current_process = process
@@ -269,6 +299,8 @@ class ClaudeCodeAdapter:
         finally:
             with self.lock:
                 self.current_process = None
+            if bridge is not None:
+                bridge.__exit__()
         streamed_response = "".join(parts)
         raw_response = streamed_response if streamed_response.strip() else result_text
         if not raw_response.strip():

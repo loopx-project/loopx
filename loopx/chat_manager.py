@@ -216,6 +216,7 @@ MANAGER_EXECUTOR_KIND_INDIVIDUAL = "individual"
 MANAGER_EXECUTOR_KIND_MANAGED = EXECUTOR_KIND_MANAGED
 MANAGER_ENDPOINT_KINDS = {
     MANAGER_ENDPOINT_INDIVIDUAL: MANAGER_EXECUTOR_KIND_INDIVIDUAL,
+    "claude-code": MANAGER_EXECUTOR_KIND_INDIVIDUAL,
     # The managed host is billed to the operator's own endpoint, not to one
     # person's CLI login, so it is reached only by selecting it.
     MANAGER_ENDPOINT_MANAGED: MANAGER_EXECUTOR_KIND_MANAGED,
@@ -852,6 +853,10 @@ def manager_model_resolution(
     if MANAGER_ENDPOINT_KINDS.get(resolved_endpoint) == MANAGER_EXECUTOR_KIND_MANAGED:
         profile = managed_execution_profile(environ)
         return str(profile["model"]), MANAGER_MODEL_SOURCE_MANAGED_PROFILE
+    if resolved_endpoint == "claude-code":
+        # Claude's supported vendor alias, never a Codex model. Explicit host
+        # or machine selections retain priority and are persisted on Sessions.
+        return "sonnet", MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
     return MANAGER_MODEL_DEFAULT, MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
 
 
