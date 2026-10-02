@@ -331,6 +331,23 @@ export async function executeCoordinationTodoClaim(
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
 ): Promise<CoordinationTodoClaimResult> {
+  // Retry only a conclusive provider CAS rejection. Each attempt rereads the
+  // original receipt and the complete head, then rechecks source authorization,
+  // claim ownership, acceptance and lease/write-scope exclusion. Pinned revisions
+  // (including handoff grants) must return to their caller for a fresh observation.
+  for (let attempt = 0; ; attempt++) {
+    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent);
+    if (attempt >= 2 || rawInput.expected_provider_revision !== undefined ||
+        rawInput.transfer_grant !== undefined || result.status !== "conflict" ||
+        result.conflict_kind !== "provider_revision_mismatch") return result;
+  }
+}
+
+async function executeClaimAttempt(
+  store: AuthorityStore,
+  rawInput: CoordinationTodoClaimInput,
+  authoritySourcesCurrent: AuthoritySourceCheck,
+): Promise<CoordinationTodoClaimResult> {
   let input: CoordinationTodoClaimInput;
   try {
     input = {

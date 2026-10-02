@@ -534,12 +534,15 @@ def bootstrap_project(
                 if frozen is not None:
                     goal_entry["coordination"]["storage_target"] = frozen
 
-            previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
-            if previous_root != runtime_root:
-                for previous_goal in current_registry.get("goals", []):
-                    if isinstance(previous_goal, dict) and previous_goal.get("id"):
-                        require_legacy_state_replacement_allowed(runtime_root=previous_root,
-                            goal_id=str(previous_goal["id"]), goal=previous_goal)
+            # A first explicit bootstrap has no previous Goal authority to fence.
+            # Existing Goals still resolve and authorize their original route.
+            if current_registry.get("goals"):
+                previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
+                if previous_root != runtime_root:
+                    for previous_goal in current_registry["goals"]:
+                        if isinstance(previous_goal, dict) and previous_goal.get("id"):
+                            require_legacy_state_replacement_allowed(runtime_root=previous_root,
+                                goal_id=str(previous_goal["id"]), goal=previous_goal)
             original = state_file.read_text(encoding="utf-8") if state_file.exists() else ""
             if force or not state_file.exists():
                 require_legacy_state_replacement_allowed(runtime_root=runtime_root,

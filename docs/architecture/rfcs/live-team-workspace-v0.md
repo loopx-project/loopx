@@ -450,6 +450,25 @@ The [near-term local-agent launch](loopx-overall-roadmap-v0.md#near-term-local-a
 | L2 Continuous research | Original research Agent completes V4 and the user replays correction→adoption→next cycle | Runtime credential/admission repairs and usable L1; qualify each host profile, then V4 | Existing R2/R3 owners; stop new admission and retain results |
 | L3 Semantic zoom and scale | Subteams, source/conclusion version comparison and focused replay at measured 10/30/100 display load | Typed lineage producers and L2; V5/V7 and approved first-screen composition | Presentation + evidence owner; reduce detail/revert renderer |
 
+**Work-scale map track.** Semantic zoom needs a whole-Goal Work view to zoom
+from. This track renders existing typed Todo relations only. It runs beside L1
+and never advances L1, V4 or G1:
+
+- **W1 Goal work map** (checkpoint 2026-10-01): the Overview draws every
+  non-archived Todo of one Goal with its recorded relations
+  ([`goal_task_map_v0`](../../reference/protocols/task-graph-projection-v0.md#goal-work-map-goal_task_map_v0)).
+  It switches between current work and everything, traces selected lineage
+  (interaction 5), opens Todo details in place, discloses omitted/missing/cyclic
+  coverage and becomes a list on phones. A packaged synthetic scenario covers the
+  desktop, 390px and keyboard paths of V3. A disposable demo Goal exercises the
+  real cold delivery-review read; live team Goals remain unqualified.
+- **W2 Live state on the map:** show running turns, owed returns and stale
+  observations on the same nodes from the existing execution observation owner,
+  without a new polling loop; disconnection shows age, not activity.
+- **W3 Outputs on the map:** attach produced artifacts, acceptance and adoption
+  from the L1 evidence owners to their Todo, with version comparison. L3 then
+  collapses W-maps by subteam.
+
 The next executable implementation is **L1**, a complete observation-to-user
 vertical with the complete Section 9 correction episode. Include missing
 version/adoption producers, source collection, typed projection, reconnect
@@ -493,7 +512,8 @@ It launches no Agents and reads no private research data. It is not shipped in
 the product or used as live runtime evidence.
 
 **Current checkpoint:** L0 design is merged; Section 9 records the open L1
-implementation candidate. Full L1 and L2–L3 remain unqualified. V1/V3 may be
+implementation candidate. W1 of the Work-scale map track is proposed in Section
+11; W2–W3 are planned. Full L1 and L2–L3 remain unqualified. V1/V3 may be
 explored with the synthetic study; V2/V4/V5/V6/V7 remain unqualified until their
 required production or measured evidence exists. No G1/G3/G4 promotion follows.
 The exact delivery PR carries validation and review; roadmap pointers retain

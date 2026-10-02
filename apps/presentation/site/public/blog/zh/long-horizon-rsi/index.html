@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fafafa">
+  <title>通用长程能力，是 RSI 的先决条件 · LoopX</title>
+  <meta name="description" content="从早期 Meta Goal 到 Personal Workspace，LoopX 的四个月自举历史：6,848 个非合并提交、三个演进阶段，以及让改进进入下一轮工作的长程能力。">
+  <link rel="canonical" href="https://loopx-project.github.io/loopx/blog/zh/long-horizon-rsi/">
+  <link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/long-horizon-rsi/">
+  <link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/long-horizon-rsi/">
+  <link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/long-horizon-rsi/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="LoopX">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:title" content="通用长程能力，是 RSI 的先决条件">
+  <meta property="og:description" content="从早期 Meta Goal 到 Personal Workspace，LoopX 的四个月自举历史：6,848 个非合并提交、三个演进阶段，以及让改进进入下一轮工作的长程能力。">
+  <meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/long-horizon-rsi/">
+  <meta property="article:published_time" content="2026-10-02">
+  <meta property="og:image" content="https://loopx-project.github.io/loopx/blog/assets/long-horizon-rsi-zh.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="通用长程能力，是 RSI 的先决条件 · 6,848 个非合并提交">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="通用长程能力，是 RSI 的先决条件">
+  <meta name="twitter:description" content="从早期 Meta Goal 到 Personal Workspace，LoopX 的四个月自举历史：6,848 个非合并提交、三个演进阶段，以及让改进进入下一轮工作的长程能力。">
+  <meta name="twitter:image" content="https://loopx-project.github.io/loopx/blog/assets/long-horizon-rsi-zh.png">
+  <meta name="twitter:image:alt" content="通用长程能力，是 RSI 的先决条件">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../../blog/blog.css">
+</head>
+<body>
+<a class="skip-link" href="#main">跳至正文</a>
+<header class="site-header">
+  <a class="brand" href="../../../?lang=zh" aria-label="LoopX 首页"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a>
+  <nav aria-label="主导航"><a href="../../../blog/zh/" aria-current="true">Blog</a><a href="../../../docs/book/">文档</a></nav>
+  <div class="header-actions"><a class="language" href="../../../blog/long-horizon-rsi/" lang="en" hreflang="en" aria-label="Read in English">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub <span aria-hidden="true">↗</span></a></div>
+</header>
+<main id="main">
+<div class="article-heading">
+  <a class="back" href="../../../blog/zh/">← 全部文章</a>
+  <p class="eyebrow">设计观点 · 系统级自迭代</p>
+  <h1>通用长程能力，是 RSI 的先决条件</h1>
+  <p class="lead">智能不只是被调用，而是开始形成复利。用改善后的系统，继续改善系统。</p>
+  <div class="byline"><a href="https://github.com/huangruiteng">Ruiteng Huang</a><span aria-hidden="true">·</span><time datetime="2026-10-02">2026 年 10 月 2 日</time></div>
+</div>
+<div class="article-layout">
+  <aside class="toc"><details open><summary>本文目录</summary><nav aria-label="文章目录">
+<a href="#prerequisites">为什么先决条件是“通用长程”？</a>
+<a href="#recursive-work">从“用 AI 做项目”，到“用改善后的系统继续改善系统”</a>
+<a href="#early-history">LoopX 从早期就把自己作为一个长期任务</a>
+<a href="#development-rhythm">四个月的公开迭代节奏</a>
+<a href="#continuity">长程系统的价值，不只是“多跑一会儿”</a>
+<a href="#human-feedback">人在回路，不是递归性的反面</a>
+<a href="#outlook">我想把它推进到哪里？</a>
+<a href="#sources">数据与进一步阅读</a>
+  </nav></details></aside>
+  <article class="prose" aria-label="通用长程能力，是 RSI 的先决条件">
+<section id="intro">
+<p>我对 RSI（Recursive Self-Improvement，递归自我改进）有一个判断：<strong>通用长程能力，是 RSI 的先决条件。</strong></p>
+<p>AI 能修改自己的代码，并不是最难想象的部分。真正值得期待的是：这一轮工作，让它拥有更好的工具、更可靠的执行方式和更有效的经验；这些变化又参与下一轮工作，帮助它继续改善自己。</p>
+<p><strong>智能不只是被调用，而是开始形成复利。</strong></p>
+<p>这里讨论的是 Agent 系统对自身代码、工具和工作方式的持续改进，不是模型权重训练。它不必从一个完全无人参与的超级智能开始，也可以先出现在真实项目中：人定义方向、提供反馈和验收，Agent 持续参与改进自己的运行环境。</p>
+<p>LoopX 正是我沿着这条路径做的实践。它既是我用来推进项目的长程 Agent meta-harness，也是 LoopX Agent 持续开发、验证和维护的对象。</p>
+</section>
+<section id="prerequisites">
+<h2>为什么先决条件是“通用长程”？</h2>
+<p>“递归”意味着，下一轮改进建立在上一轮的结果上。</p>
+<p>如果每一轮都要重新解释目标、重建环境、寻找上次的结论，那么系统可以反复产生改动，却很难积累能力。一次优秀的推理，未必能变成一个持续变好的系统。</p>
+<p>长程能力的意义，是让目标、工作状态、验证结果和经验跨越上下文、会话、执行者以及系统版本。换一个 Agent，工作仍是同一份工作；重启一次环境，改进仍能成为下一轮的起点。</p>
+<p>这并不要求一个模型独自思考几个月。许多短会话、不同模型和不同执行者，也可以共同组成一个长程系统。<strong>连续性属于系统，不必属于某一次推理。</strong></p>
+<p>而“通用”同样重要。真实的自我改进不会只发生在一个固定题型里：今天可能是发现工具的缺陷，明天是改进研究方法，后天是调整协作方式，再后来要重新验证这些变化对整体产出的影响。系统需要把研究、实现、评估与采用连起来，而不是只让某个专用脚本重复跑分。</p>
+<p>所以，我说的先决条件，不是“在线时间足够长”，而是：<strong>系统能持续推进开放的目标，并把已经取得的改进带入后续工作。</strong></p>
+</section>
+<section id="recursive-work">
+<h2>从“用 AI 做项目”，到“用改善后的系统继续改善系统”</h2>
+<p>模型提供智能，runtime 提供工具与执行环境，长程系统负责把一次次执行连接成持续的工作。</p>
+<p>在这个结构里，自我改进的对象可以比模型权重更广：工具、上下文组织、工作流、验证机制、记忆，以及人与 Agent 的协作方式，都可能成为改进的空间。</p>
+<p><a href="https://sakana.ai/dgm/">Sakana AI 的 Darwin Gödel Machine</a>已经展示过这条研究路径：让 Agent 修改自身代码，通过任务评估保留候选，再从已有候选继续探索。它使我更确信，系统层面的演进值得认真对待。</p>
+<p><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">Anthropic 对长程 Agent harness 的研究</a>则从另一个角度指出：有限上下文下，工作要依靠增量执行与可接续的材料跨会话延续。</p>
+<p>我的理解是，这两件事最终会合到一起：<strong>自我改进负责产生变化，通用长程能力让变化得以累积。</strong> 前者提供新的台阶，后者让系统真正沿着台阶往上走。</p>
+</section>
+<section id="early-history">
+<h2>LoopX 从早期就把自己作为一个长期任务</h2>
+<p>这段历史不应只从最近几周算起。</p>
+<p><strong>前期：goal-harness 的 meta 自举。</strong> 2026 年 5 月 31 日，公开仓库的第一个提交建立了 goal-harness 的小型控制面。到了 <strong>6 月 1 日</strong>，仓库便加入了一个 <a href="https://github.com/loopx-project/loopx/blob/9bc8c22ca31f22782f4d3f6a6187155156abafd2/goals/goal-harness-meta/ACTIVE_GOAL_STATE.md">Goal Harness Meta Goal</a>：把自己的项目作为目标，持续检查可运行性、工作接续与验证，再推进下一段改进。</p>
+<p>这意味着，自举并不是项目成熟以后才添加的功能。它从很早就开始用自己管理自己的研发。随着系统暴露出新的问题，目标状态、后续工作和验证机制也在同一过程中生长。</p>
+<p>到 <strong>6 月 19 日</strong>，公开仓库已有专门的<a href="https://github.com/loopx-project/loopx/blob/b9b758ca4dfc30d0d610b45398fc31acd62781f6/docs/showcases/cases/0619-loopx-self-iteration.md">仓库级自迭代案例</a>。该案例采用的 <strong>6 月 20 日固定快照</strong>记录了 <strong>801 个提交</strong>，描述的不是单个功能，而是控制面、规划、验证、界面与多条研发线的并行推进。当时它甚至还没有正式改名为 LoopX。</p>
+<p><strong>中期：从自举工具，发展为通用长程系统。</strong> <strong>6 月 21 日</strong>，goal-harness <a href="https://github.com/loopx-project/loopx/commit/320fbedaa4d90bd02e5149a8fd9a46c9a498c650">更名为 LoopX</a>。此后，工作从个人开发循环扩展到多 Agent、跨 runtime 和社区协作。7 月的 peer runtime 与 <a href="https://github.com/loopx-project/loopx/releases/tag/v0.2.0">v0.2 控制面</a>，把工作归属、执行边界与交接继续推进为产品契约。</p>
+<p>这阶段最有意义的，不是多接入了几个模型，而是让不同执行者能够围绕同一份持久工作状态推进。负责实现、审阅与验证的角色可以不同，工作仍然需要被接住、被验收。</p>
+<p><strong>后期：从工程控制面，走向个人工作区与社区共同演进。</strong> <strong>9 月 6 日，<a href="https://github.com/loopx-project/loopx/releases/tag/v1.0.0">LoopX 1.0</a> 发布 Personal Workspace。</strong> 状态内核之外，工作终于有了更完整的日常操作入口。人可以在工作区与 IM 参与目标、决策和结果；Agent 则继续参与底层系统、工具和产品表面的改进。这个阶段，系统自举与社区贡献交织，LoopX 已不再只是一个人的开发循环。</p>
+<p>三段历史连起来，才是我更想讲的自迭代过程：<strong>先把自己作为长期目标，再把长程工作做成通用能力，最后让更多人和 Agent 在同一个产品上持续演进。</strong></p>
+</section>
+<section id="development-rhythm">
+<h2>四个月的公开迭代节奏</h2>
+<p>我把同一份公开 Git 历史按上面的两个转折点分期，统一排除 merge commits：</p>
+<div class="table-scroll" role="region" aria-label="固定公开历史 · 北京时间 · 非合并提交" tabindex="0"><table class="benchmark-table" style="min-width: 720px"><caption>固定公开历史 · 北京时间 · 非合并提交</caption><thead><tr><th scope="col">阶段</th><th scope="col">时间范围</th><th scope="col">非合并提交</th><th scope="col">日均提交</th><th scope="col">00:00–08:00 提交</th><th scope="col">凌晨占比</th></tr></thead><tbody>
+<tr><th scope="row">前期 · meta 自举</th><td>5 月 31 日—6 月 20 日</td><td><strong>739</strong></td><td><strong>35.2</strong></td><td><strong>298</strong></td><td><strong>40.3%</strong></td></tr>
+<tr><th scope="row">中期 · 通用长程系统</th><td>6 月 21 日—9 月 5 日</td><td><strong>3,870</strong></td><td><strong>50.3</strong></td><td><strong>1,399</strong></td><td><strong>36.1%</strong></td></tr>
+<tr><th scope="row">后期 · 工作区与社区</th><td>9 月 6 日—10 月 1 日</td><td><strong>2,239</strong></td><td><strong>86.1</strong></td><td><strong>556</strong></td><td><strong>24.8%</strong></td></tr>
+</tbody></table></div>
+<p>整个公开历史快照共有 <strong>8,613 个提交，其中 6,848 个为非合并提交</strong>。上表三阶段合计就是这 6,848 个，统计时区统一为北京时间。</p>
+<figure class="architecture-figure"><div class="architecture-viewport" role="region" aria-label="LoopX 从 meta 自举到长程系统、工作区与社区的演进" tabindex="0"><a href="../../images/long-horizon-rsi/history-zh.svg" target="_blank" rel="noopener"><img src="../../images/long-horizon-rsi/history-zh.svg" alt="LoopX 从 meta 自举到长程系统、工作区与社区的演进" width="1600" height="1220" loading="lazy" decoding="async"></a></div><figcaption>三段历史与一个递归反馈环。窄屏可横向滑动；<a href="../../images/long-horizon-rsi/history-zh.svg" target="_blank" rel="noopener">打开原图 ↗</a></figcaption></figure>
+<p>最近 <strong>14 个完整自然日（9 月 18 日—10 月 1 日）</strong>，节奏达到日均 <strong>96.9 个非合并提交</strong>，总计 <strong>1,356 个</strong>，单日最高 <strong>144 个</strong>；凌晨 <strong>384 个，占 28.3%</strong>，14 天每天凌晨都有提交。</p>
+<p>这些数据给我的启发，并不是“凌晨占比必须越来越高”。事实上，阶段占比在下降，而日均提交在增加。更值得观察的是：工作能否跨昼夜延续，改进是否进入下一轮环境，以及多人、多 Agent 的加入能否形成持续产出。</p>
+<p>这里统计的是整个项目的开发活动，包含社区贡献，不是“全自动 RSI”的比例，也不是能力提升的计量。其价值是把持续演进的规模和时间分布变得可复核；<strong>自迭代的核心证据，仍是系统在真实工作中被使用、反馈、改进，再用于后续工作。</strong></p>
+</section>
+<section id="continuity">
+<h2>长程系统的价值，不只是“多跑一会儿”</h2>
+<p>LoopX 从外置目标与任务状态出发，逐渐把工作接续、授权、资源预算、验证和经验积累组织到同一个控制面，再通过 Personal Workspace 与 IM 让人参与其中。模型和 runtime 可以不同，但一份工作的目标、约束和验收依据需要延续。<a href="https://github.com/loopx-project/loopx/tree/b9b758ca4dfc30d0d610b45398fc31acd62781f6">公开架构与产品入口</a>。</p>
+<p>我最在意的是三个能力：</p>
+<p><strong>目标延续。</strong> 局部任务做完，不意味着整体目标达成。系统需要根据验收结果重新规划，让工作继续向真正的目标推进。</p>
+<p><strong>反馈累积。</strong> 用户的纠正、有效的改进和失败的尝试，不只存在于某一次聊天里，而要改变后续执行所处的环境。</p>
+<p><strong>改进接续。</strong> 研究结论不能停在文档里，代码修改不能停在分支里。它们需要被验证、采用，并继续接受真实工作的检验。</p>
+<p>这三者连起来，才有机会把更多时间、更多算力和更多并行 Agent，转化成逐渐积累的能力，而不是更多彼此独立的输出。</p>
+<p>我把 LoopX 在真实工程里形成的、人在回路的自举过程，视为早期的系统级 RSI。它的意义不是给普通开发换一个名字，而是让“执行工作的系统”也成为持续改进的对象，并用改善后的系统推进下一轮改进。</p>
+</section>
+<section id="human-feedback">
+<h2>人在回路，不是递归性的反面</h2>
+<p>我并不认为早期 RSI 必须从完全排除人类开始。</p>
+<p>高质量的 human reward 可以帮助系统识别什么值得做、什么真的有效。人提供方向和关键判断，系统承担持续执行与接续；人的反馈不必变成下一次从头解释，而可以成为环境、工作状态和验证要求的一部分。</p>
+<p>递归性取决于：<strong>改进后的系统，是否参与了后续改进。</strong> 它不取决于每一轮有没有人说话。</p>
+<p>与此同时，候选改动不能靠放松自己的评价标准来获得“成功”。真实采用、独立验证和可回滚的工作阶段，是这个反馈环能够积累价值的基础。</p>
+</section>
+<section id="outlook">
+<h2>我想把它推进到哪里？</h2>
+<p>模型越来越强，token 越来越便宜，个人能够组织的 Agent 数量也会越来越多。</p>
+<p>接下来值得探索的，不只是让 Agent 完成更多任务，而是让一个数字团队在长期工作中逐渐形成自己的方法：更好的工具、更有效的协作、更扎实的验证，以及能被后续工作真正使用的经验。</p>
+<p><strong>单次智能解决一个问题，长程智能积累解决问题的能力。</strong></p>
+<p>这也是我对 LoopX 的期待：一个人定义目标、提供关键判断，数字团队持续推进；它不仅完成工作，也在工作中改善完成工作的系统。</p>
+<p>最大化 Agent 的有效产出，最小化人的注意力投入。通用长程能力是这条路的地基，也是我认为 RSI 绕不过去的先决条件。</p>
+</section>
+<section id="sources">
+<h2>数据与进一步阅读</h2>
+<p>统计固定于 main 在北京时间 2026 年 10 月 1 日结束前的最后一个主线提交 <a href="https://github.com/loopx-project/loopx/commit/b9b758ca4dfc30d0d610b45398fc31acd62781f6">b9b758c</a>。按 Git committer timestamp 划分自然日，时区为 Asia/Shanghai；凌晨定义为 00:00（含）至 08:00（不含）。统计该快照可达的全部提交，主指标排除多父提交（merge commits）；三阶段按首个公开提交、更名为 LoopX、1.0 工作区发布划分；日均分母分别为 21、77、26 个自然日（第一天为不足一日的公开起点）。全历史另有 1,765 个 merge commits，不混入 6,848 的主指标。提交对象不是独立功能或验收结果，时间戳也不识别作者是否使用 AI。</p>
+<p>公开采用与后续修正的例子，见 <a href="https://github.com/loopx-project/loopx/blob/b9b758ca4dfc30d0d610b45398fc31acd62781f6/docs/research/agent-workflow-audits/rsi-harness-adoption-v0.zh-CN.md">RSI-Harness 采用审计</a>、<a href="https://github.com/loopx-project/loopx/pull/4984">PR #4984</a> 与 <a href="https://github.com/loopx-project/loopx/pull/5119">后续修正 #5119</a>。它们用于查看改进如何进入实际路径；细节不作为本文的主叙事。</p>
+<p>项目：<a href="https://github.com/loopx-project/loopx">LoopX</a>。 </p>
+<p><a href="../../images/long-horizon-rsi/statistics.json">下载分期统计与口径（JSON）</a> · 按日期分期，不按事件当天的具体时刻分割。</p>
+<details><summary>在完整 Git 克隆中复核</summary><pre><code>git rev-list --count b9b758ca4dfc30d0d610b45398fc31acd62781f6
+git rev-list --count --no-merges b9b758ca4dfc30d0d610b45398fc31acd62781f6
+TZ=Asia/Shanghai git log --no-merges b9b758ca4dfc30d0d610b45398fc31acd62781f6 \
+  --format='%cI'  # committer timestamps; group by the stated calendar intervals</code></pre></details>
+</section>
+
+  </article>
+</div>
+</main>
+<footer class="site-footer"><a class="brand" href="../../../">LoopX</a><p>Keep the loop moving. Keep the judgment human.</p><a href="../../../blog/zh/">全部文章 ↑</a></footer>
+</body>
+</html>

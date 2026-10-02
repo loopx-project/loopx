@@ -204,9 +204,9 @@ def pending(
         batch.clear()
 
     for path in paths:
-        if path.suffix != ".json":
-            continue
-        if BARE_SHA256_PATTERN.fullmatch(path.stem) and path.stem <= after:
+        if path.suffix != ".json" or not BARE_SHA256_PATTERN.fullmatch(path.stem):
+            continue  # Ignore lock holder sidecars and other non-entry files.
+        if path.stem <= after:
             continue
         try:
             batch.append(_pending_entry(path, goal_id, agent_id, scope))

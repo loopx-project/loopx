@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: "Geist"; src: url("../../../apps/presentation/dashboard/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; }
+  @font-face { font-family: "Geist Mono"; src: url("../../../apps/presentation/dashboard/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1280px; height: 940px; overflow: hidden; background: transparent; }
+  body { font-family: "Geist", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", Arial, sans-serif; color: #171717; -webkit-font-smoothing: antialiased; }
+  .stage { position: relative; width: 1280px; height: 940px; overflow: hidden; border-radius: 24px; background: #fafafa; box-shadow: inset 0 0 0 1px rgba(23,23,23,.06); }
+  .mesh { position: absolute; inset: -80px; filter: blur(48px); opacity: .65;
+    background: radial-gradient(38% 44% at 12% 15%, rgba(0,124,240,.24), transparent 70%), radial-gradient(32% 34% at 88% 10%, rgba(121,40,202,.22), transparent 70%); }
+  header { position: absolute; top: 28px; left: 24px; right: 24px; text-align: center; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px; border-radius: 9999px; background: rgba(255,255,255,.8); box-shadow: 0 0 0 1px #ebebeb;
+    font: 500 12px/16px "Geist Mono", monospace; letter-spacing: .06em; text-transform: uppercase; color: #4d4d4d; }
+  .eyebrow b { width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #007cf0, #7928ca); }
+  h1 { margin-top: 16px; font-size: 40px; line-height: 48px; font-weight: 600; letter-spacing: -.045em; }
+  html[lang="zh-CN"] h1 { letter-spacing: -.01em; }
+  h1 em { display: block; margin-top: 4px; font-size: 34px; line-height: 42px; font-style: normal; background: linear-gradient(90deg, #007cf0, #7928ca 70%); -webkit-background-clip: text; color: transparent; }
+  .window { position: absolute; left: 48px; top: 184px; width: 1184px; border-radius: 14px; overflow: hidden; background: #fff;
+    box-shadow: 0 0 0 1px rgba(23,23,23,.08), 0 20px 60px -20px rgba(23,23,23,.18); }
+  .chrome { height: 36px; display: flex; align-items: center; gap: 7px; padding: 0 14px; background: #fafafa; border-bottom: 1px solid #ebebeb; position: relative; }
+  .chrome i { width: 10px; height: 10px; border-radius: 50%; background: #e3e3e3; }
+  .chrome span { position: absolute; left: 50%; transform: translateX(-50%); padding: 4px 14px; border-radius: 6px; background: #f2f2f2;
+    font: 500 11px/16px "Geist Mono", monospace; color: #8f8f8f; }
+  .window img { display: block; width: 1184px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="mesh"></div>
+  <header><span class="eyebrow"><b></b><span data-copy="eyebrow"></span></span>
+    <h1><span data-copy="headline"></span><em data-copy="subline"></em></h1></header>
+  <figure class="window"><div class="chrome"><i></i><i></i><i></i><span data-copy="chrome"></span></div><img data-shot="workspace" alt=""></figure>
+</div>
+</body>
+</html>

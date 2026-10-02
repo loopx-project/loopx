@@ -161,7 +161,7 @@ import {
   reconcileRetainedActionSelection,
 } from "./work_items/action_portfolio.ts";
 import { projectQuotaPlanningHorizon } from "./work_items/planning_horizon.ts";
-import { projectTaskGraphTopology } from "./work_items/task_graph.ts";
+import { projectGoalTaskGraphTopology, projectTaskGraphTopology } from "./work_items/task_graph.ts";
 import { projectDeliveryHistory, projectDeliveryResponse } from "./work_items/delivery_history.ts";
 import { validateDeliveryClaim } from "./work_items/delivery_outcome.ts";
 import {
@@ -542,6 +542,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["work_item.planning_horizon.project", projectQuotaPlanningHorizon],
     ["work_item.task_graph.topology", projectTaskGraphTopology],
+    ["work_item.task_graph.goal_topology", projectGoalTaskGraphTopology],
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],
     ["work_item.planning_inventory.detail", projectTodoPlanningInventoryDetail],
     ["work_item.refresh_recommendation.resolve", resolveRefreshRecommendation],

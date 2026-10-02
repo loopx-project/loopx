@@ -174,6 +174,7 @@ def resolve_cli_registry(
 		registry_path = Path(args.knowledge_root).expanduser() / ".loopx" / "registry.json"
 	if (
 		args.command not in _REGISTRY_OPTIONAL_COMMANDS
+		and not (args.command == "canary" and not getattr(args, "goal_id", None))
 		and not project_register_uses_default_registry
 		and not registry_was_configured
 		and not registry_path.exists()

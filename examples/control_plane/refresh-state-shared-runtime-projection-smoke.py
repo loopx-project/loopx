@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +20,6 @@ from loopx.control_plane.runtime.shared_runtime_refresh_projection import (  # n
     build_shared_runtime_projection,
     write_shared_runtime_projection,
 )
-from loopx.control_plane.runtime import runtime_projection_route as route_module  # noqa: E402
 from loopx.control_plane.runtime.runtime_projection_route import (  # noqa: E402
     compact_runtime_projection_route,
     resolve_runtime_projection_route,
@@ -529,16 +529,14 @@ def main() -> None:
             source_registry=standalone_registry,
             goal_id="unrelated-goal",
         )
-        original_default_runtime = route_module.select_default_runtime_root
-        route_module.select_default_runtime_root = lambda: unrelated_runtime
-        try:
+        with patch.object(paths_module, "DEFAULT_RUNTIME_ROOT", unrelated_runtime), patch.object(
+            paths_module, "LEGACY_RUNTIME_ROOT", Path(tmp) / "unused-legacy-runtime"
+        ):
             standalone_route = resolve_runtime_projection_route(
                 registry_path=standalone_registry,
                 goal_id=standalone_goal,
                 source_runtime_root=standalone_runtime,
             )
-        finally:
-            route_module.select_default_runtime_root = original_default_runtime
         assert standalone_route["status"] == "single_runtime", standalone_route
         assert standalone_route["declaration_source"] == "source_runtime_fallback"
 

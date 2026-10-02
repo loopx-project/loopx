@@ -138,12 +138,41 @@ Dark mode is an inverse of the same system, not a separate visual identity:
 Use **Geist Sans** for UI and prose and **Geist Mono** for code, data, compact
 technical labels, and section eyebrows.
 
-Fallbacks:
+Fallbacks are owned per surface, because each bundles its own font files. A
+stylesheet must reference the token rather than repeat the stack, and the token
+must be defined on the surface that uses it — a bare `var(--font-mono)` with no
+fallback drops the whole declaration when the token is missing, and the element
+silently inherits the body face instead of failing visibly.
+
+Dashboard (`apps/presentation/dashboard/src/styles.css`):
 
 ```css
---font-sans: "Geist", "Inter", "Helvetica Neue", Arial, sans-serif;
+--font-sans:
+  "Geist Variable", "Geist", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  sans-serif;
+--font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+```
+
+Marketing site (`apps/presentation/site/src/styles.css`):
+
+```css
 --font-mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", monospace;
 ```
+
+`scripts/check-css-custom-properties.mjs` rejects Dashboard CSS bare references
+whose custom property has no definition in the surface inventory. Run `npm ci`
+at the repository root and `npm ci --prefix apps/presentation/dashboard`, then
+`npm run check:css-custom-properties --prefix apps/presentation/dashboard`.
+The check uses the existing TypeScript parser for
+JSX style objects, `CSSProperties`-typed objects and literal
+`element.style.setProperty` calls. Comments, string examples and ordinary data
+keys do not define tokens. PostCSS and its declared value parser distinguish
+stylesheet declarations and variable functions from quoted examples, comments
+and other declaration values. Parse errors fail the check.
+
+This is a syntactic inventory: it does not prove runtime reachability, resolve
+object spreads or aliases, or model CSS inheritance and selector scope. Tokens
+that are genuinely optional may keep a fallback (`var(--pw-surface, #fff)`).
 
 ### Type Scale
 

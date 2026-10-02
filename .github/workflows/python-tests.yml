@@ -324,6 +324,12 @@ jobs:
           npm ci --ignore-scripts
           npm ci --ignore-scripts --prefix apps/presentation/dashboard
 
+      - name: Check the CSS custom-property classifier contract
+        run: node scripts/check-css-custom-properties.test.mjs
+
+      - name: Reject undefined CSS custom properties
+        run: node scripts/check-css-custom-properties.mjs dashboard
+
       - name: Measure Dashboard unit and browser interactions
         env:
           LOOPX_DASHBOARD_COVERAGE: "1"
@@ -683,6 +689,9 @@ jobs:
           tests/test_self_update_runtime_activation.py
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
+
+      - name: Check Windows collaboration lock sidecars
+        run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
 
       - name: Validate local-state routing and interruption recovery on Windows
         run: >-
