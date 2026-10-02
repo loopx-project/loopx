@@ -70,6 +70,7 @@ def execute_turn_run_once(
     registry_path: Path,
     runtime_root: Path,
     runtime_root_arg: str | None,
+    goal_ref: Mapping[str, object] | None,
     goal_admission: FirstPartyHostGoalAdmission | None,
     operator_environ: Mapping[str, str],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
@@ -196,6 +197,7 @@ def execute_turn_run_once(
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
                 event_kind=event_kind,
+                goal_ref=goal_ref,
                 agent_id=settlement_identity.agent_id,
                 todo_id=settlement_identity.todo_id,
                 run_id=settlement_identity.turn_instance_id,
@@ -211,6 +213,7 @@ def execute_turn_run_once(
                     "agent_id",
                     "todo_id",
                     "run_id",
+                    *(("goal_ref",) if goal_ref is not None else ()),
                     *(("status",) if event_kind == "todo_complete" else ()),
                 ],
             )
@@ -296,6 +299,7 @@ def execute_turn_run_once(
                 completion_turn_key=completion_turn_key,
                 dry_run=False,
                 sync_global=not bool(args.no_global_sync),
+                goal_ref=goal_ref,
             )
             if refresh.get("ok") and (
                 refresh.get("appended")
@@ -477,6 +481,8 @@ def execute_turn_run_once(
                 ),
                 operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                 effect_ref=effect_ref,
+                registry_path=registry_path,
+                goal_ref=goal_ref,
             )
             if spent.get("ok") and (
                 spent.get("appended")
@@ -490,6 +496,8 @@ def execute_turn_run_once(
                     todo_id=settlement_identity.todo_id,
                     turn_instance_id=settlement_identity.turn_instance_id,
                     replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
                 )
                 if readback is None:
                     raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
@@ -580,6 +588,8 @@ def execute_turn_run_once(
                     todo_id=settlement_identity.todo_id,
                     turn_instance_id=settlement_identity.turn_instance_id,
                     replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
                 )
                 if readback is None:
                     raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
@@ -622,6 +632,8 @@ def execute_turn_run_once(
                     todo_id=settlement_identity.todo_id,
                     turn_instance_id=settlement_identity.turn_instance_id,
                     replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
                 )
                 if readback is None:
                     raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
@@ -668,6 +680,8 @@ def execute_turn_run_once(
                     todo_id=settlement_identity.todo_id,
                     turn_instance_id=settlement_identity.turn_instance_id,
                     replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path,
+                    goal_ref=goal_ref,
                 )
                 if readback is None:
                     raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
@@ -726,6 +740,7 @@ def execute_turn_run_once(
                 bounded_research_frontier_projector=(
                     project_live_explore_composition_frontier
                 ),
+                goal_ref=goal_ref,
             )
             hint = (
                 latest.get("scheduler_hint")
@@ -829,6 +844,7 @@ def execute_turn_run_once(
                 settlement_identity,
                 semantic_replan_guard_scoped=replan_guard_scoped,
                 semantic_replan_obligation_id=replan_obligation_id,
+                goal_ref=goal_ref,
             )
 
         managed_cadence = managed_cadence_start(

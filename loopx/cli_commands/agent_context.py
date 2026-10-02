@@ -1,8 +1,14 @@
 """Read-only lifecycle context for hosts whose native tools bypass LoopX Turn."""
 
+import argparse
+
 from ..agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ..capabilities.multi_subagent.native_child_receipts import load_native_child_activity
 from ..control_plane.agent_context import project_goal_agent_context
+from ..control_plane.goals.first_party_host_admission import (
+    capture_first_party_host_goal_ref,
+)
+from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..orchestration import compact_orchestration_policy
 
 
@@ -37,9 +43,29 @@ def register_agent_context(subparsers, add_format):
         "--turn-instance-id",
         help="Read durable native child activity for this exact admitted Turn.",
     )
+    parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
 
 
 def handle_agent_context(args, registry_path, runtime_root, print_payload, output_format):
+    goal_instance_id = str(
+        getattr(args, "goal_instance_id", None) or ""
+    ).strip()
+    try:
+        goal_ref = (
+            exact_goal_ref(args.goal_id, goal_instance_id)
+            if goal_instance_id
+            else capture_first_party_host_goal_ref(
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+            )
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        print_payload(
+            {"ok": False, "error": str(exc)},
+            output_format(args),
+            render_agent_context,
+        )
+        return 1
     goal = load_goal_from_registry(registry_path, args.goal_id)
     if goal is None or args.agent_id not in registered_agent_ids_for_goal(goal):
         print_payload(
@@ -118,6 +144,8 @@ def handle_agent_context(args, registry_path, runtime_root, print_payload, outpu
             runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
             turn_instance_id=args.turn_instance_id,
             configured_limit=int(orchestration["max_children"]),
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         observations["native_child_activity"] = native_activity
     context = project_goal_agent_context(

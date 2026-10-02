@@ -56,6 +56,7 @@ PARTIALLY_ENFORCED_OWNER_IDS = {
 QUALIFIED_OWNER_IDS = {
     "attached_host_chat_session",
     "handoff_inbox_outbox",
+    "quota_settlement",
     "turn_journal",
 }
 TYPESCRIPT_DECLARATION = re.compile(

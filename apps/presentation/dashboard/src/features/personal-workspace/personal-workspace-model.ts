@@ -355,6 +355,8 @@ export type WorkspaceGoalNotification = {
   configured: boolean;
   enabled: boolean;
   humanGateAutoNotifyEnabled: boolean;
+  blockedNoticeAutoNotifyEnabled?: boolean;
+  blockedNoticeDelivery?: { deliveredCount: number; unverifiedCount: number; resolvedCount: number };
   lastNotifiedAt?: string | null;
   receiptCount: number;
   targetRef?: string | null;
@@ -493,7 +495,7 @@ export type PersonalWorkspaceCallbacks = {
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
-  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string; kind?: "human_gate" | "blocked_notice" }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
 };
 
 // What one send hands back for review: at most one decision the owner reviews

@@ -1195,6 +1195,12 @@ function buildPersonalHomeModel(
       configured: row.configured,
       enabled: row.enabled,
       humanGateAutoNotifyEnabled: row.human_gate_auto_notify_enabled,
+      blockedNoticeAutoNotifyEnabled: row.blocked_notice_auto_notify_enabled,
+      blockedNoticeDelivery: row.blocked_notice_delivery ? {
+        deliveredCount: row.blocked_notice_delivery.delivered_count,
+        unverifiedCount: row.blocked_notice_delivery.unverified_count,
+        resolvedCount: row.blocked_notice_delivery.resolved_count,
+      } : undefined,
       lastNotifiedAt: row.last_notified_at ?? null,
       receiptCount: row.receipt_count,
       targetRef: row.target_ref ?? null,

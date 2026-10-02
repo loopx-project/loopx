@@ -10,6 +10,7 @@ import {
   atomicWriteText,
   withFileMutationLock,
 } from "../effect_runtime_io.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {
   jsonObject,
   optionalNonEmptyString as optionalString,
@@ -65,12 +66,17 @@ export interface QuotaAccountingArtifactReceipt extends JsonObject {
   index_record: JsonObject;
   markdown: string;
   payload: JsonObject;
+  goal_ref?: JsonObject;
 }
 
 export type QuotaAccountingEffectResolution =
   | { kind: "absent" }
   | { kind: "matched"; record: JsonObject }
-  | { kind: "conflict"; reason: string };
+  | {
+    kind: "conflict";
+    reason: string;
+    reasonCode: "effect_id_conflict" | "goal_instance_conflict";
+  };
 
 export interface QuotaAccountingArtifactPrepareContext {
   jsonPath: string;
@@ -101,6 +107,8 @@ export interface QuotaAccountingArtifactCommitRequest {
   effectId: string;
   requestDigest: string;
   expectedIndexDigest: string | null;
+  goalRef?: JsonObject;
+  indexLockHeld?: boolean;
   prepare: (
     context: QuotaAccountingArtifactPrepareContext,
   ) =>
@@ -117,7 +125,10 @@ export type QuotaAccountingArtifactCommitOutcome =
   | {
     status: "conflict";
     reason: string;
-    reasonCode: "effect_id_conflict" | "index_digest_conflict";
+    reasonCode:
+      | "effect_id_conflict"
+      | "goal_instance_conflict"
+      | "index_digest_conflict";
     indexDigest: string | null;
   }
   | {
@@ -154,6 +165,42 @@ function sha256(value: string): string {
 
 function sha256Bytes(value: Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function exactGoalRef(value: unknown, label: string): JsonObject | null {
+  if (value === undefined) return null;
+  const parsed = parseExactGoalRef(value);
+  if (parsed.kind === "invalid") {
+    throw new EffectRuntimeRequestError(
+      `${label} must be an exact GoalRef`,
+      "malformed_transaction_receipt",
+    );
+  }
+  return {
+    goal_id: parsed.value.goalId.value,
+    goal_instance_id: parsed.value.goalInstanceId.value,
+  };
+}
+
+function sameGoalRef(left: JsonObject | null, right: JsonObject | null): boolean {
+  return left?.goal_id === right?.goal_id
+    && left?.goal_instance_id === right?.goal_instance_id;
+}
+
+function ownerConflict(
+  existing: JsonObject | null,
+  requested: JsonObject | null,
+  label: string,
+): string | null {
+  if (existing === null && requested === null) return null;
+  if (sameGoalRef(existing, requested)) return null;
+  if (existing === null) {
+    return `${label} belongs to a legacy Goal alias and cannot authorize an exact Goal instance`;
+  }
+  if (requested === null) {
+    return `${label} belongs to an exact Goal instance and cannot be consumed without GoalRef admission`;
+  }
+  return `${label} belongs to a different Goal instance`;
 }
 
 function runStem(generatedAt: string): string {
@@ -384,6 +431,7 @@ function resolveEffectIdentity(
   contract: QuotaAccountingArtifactContract,
   record: JsonObject,
   expectedEffectId: string,
+  expectedGoalRef: JsonObject | null,
 ): QuotaAccountingEffectResolution {
   const rawMetadata = record[contract.metadataField];
   const recordEffect = effectIdentityValue(record.effect_ref);
@@ -395,6 +443,7 @@ function resolveEffectIdentity(
     return {
       kind: "conflict",
       reason: `${contract.label} index row has malformed effect metadata`,
+      reasonCode: "effect_id_conflict",
     };
   }
   const metadataEffect = effectIdentityValue(metadata?.effect_id);
@@ -409,6 +458,7 @@ function resolveEffectIdentity(
     return {
       kind: "conflict",
       reason: `${contract.label} index row has malformed effect identity`,
+      reasonCode: "effect_id_conflict",
     };
   }
   if (
@@ -419,6 +469,19 @@ function resolveEffectIdentity(
     return {
       kind: "conflict",
       reason: `${contract.label} index row has conflicting effect identities`,
+      reasonCode: "effect_id_conflict",
+    };
+  }
+  const goalConflict = ownerConflict(
+    exactGoalRef(record.goal_ref, `${contract.label} index row goal_ref`),
+    expectedGoalRef,
+    `${contract.label} effect identity`,
+  );
+  if (goalConflict) {
+    return {
+      kind: "conflict",
+      reason: goalConflict,
+      reasonCode: "goal_instance_conflict",
     };
   }
   return { kind: "matched", record };
@@ -428,11 +491,17 @@ export function resolveQuotaAccountingEffect(
   kind: QuotaAccountingArtifactKind,
   records: readonly JsonObject[],
   effectId: string,
+  goalRef: JsonObject | null = null,
 ): QuotaAccountingEffectResolution {
   const contract = contractFor(kind);
   for (const record of [...records].reverse()) {
     if (record.classification !== contract.classification) continue;
-    const resolution = resolveEffectIdentity(contract, record, effectId);
+    const resolution = resolveEffectIdentity(
+      contract,
+      record,
+      effectId,
+      goalRef,
+    );
     if (resolution.kind !== "absent") return resolution;
   }
   return { kind: "absent" };
@@ -443,6 +512,8 @@ export async function lookupQuotaAccountingReplay(
   indexPath: string,
   effectId: string,
   readOnly: boolean,
+  goalRef: JsonObject | null = null,
+  indexLockHeld = false,
 ): Promise<{
   resolution: QuotaAccountingEffectResolution;
   indexDigest: string | null;
@@ -454,11 +525,14 @@ export async function lookupQuotaAccountingReplay(
         kind,
         parseQuotaAccountingIndex(content),
         effectId,
+        goalRef,
       ),
       indexDigest: await quotaAccountingIndexDigest(indexPath),
     };
   };
-  return readOnly ? await lookup() : await withFileMutationLock(indexPath, lookup);
+  return readOnly || indexLockHeld
+    ? await lookup()
+    : await withFileMutationLock(indexPath, lookup);
 }
 
 function receiptObject(
@@ -480,6 +554,10 @@ function receiptObject(
   const expectedIndexBytes = requiredInteger(
     receipt.expected_index_bytes,
     "receipt.expected_index_bytes",
+  );
+  const goalRef = exactGoalRef(
+    receipt.goal_ref,
+    "transaction receipt goal_ref",
   );
   if (expectedIndexBytes < 0) {
     throw new EffectRuntimeRequestError(
@@ -503,6 +581,7 @@ function receiptObject(
     index_record: requiredObject(receipt.index_record, "receipt.index_record"),
     markdown: requiredString(receipt.markdown, "receipt.markdown"),
     payload: requiredObject(receipt.payload, "receipt.payload"),
+    ...(goalRef === null ? {} : { goal_ref: goalRef }),
   };
 }
 
@@ -573,6 +652,28 @@ function validateReceiptPaths(
     receipt.index_record[contract.metadataField],
     `receipt.index_record.${contract.metadataField}`,
   );
+  const receiptGoalRef = receipt.goal_ref ?? null;
+  const quotaEvent = requiredObject(
+    receipt.record.quota_event,
+    "receipt.record.quota_event",
+  );
+  for (const [label, value] of [
+    ["record", receipt.record.goal_ref],
+    ["quota event", quotaEvent.goal_ref],
+    ["index record", receipt.index_record.goal_ref],
+    ["payload", receipt.payload.goal_ref],
+  ] as const) {
+    const projected = exactGoalRef(
+      value,
+      `receipt ${label} goal_ref`,
+    );
+    if (!sameGoalRef(projected, receiptGoalRef)) {
+      throw new EffectRuntimeRequestError(
+        `${contract.label} transaction receipt ${label} GoalRef does not match its owner`,
+        "malformed_transaction_receipt",
+      );
+    }
+  }
   for (const [label, projection, expected] of [
     ["record classification", receipt.record.classification, contract.classification],
     ["index classification", receipt.index_record.classification, contract.classification],
@@ -740,11 +841,12 @@ async function ensureReceiptArtifacts(
     kind,
     index.records,
     receipt.effect_id,
+    receipt.goal_ref ?? null,
   );
   if (matchResolution.kind === "conflict") {
     throw new EffectRuntimeRequestError(
       matchResolution.reason,
-      "effect_id_conflict",
+      matchResolution.reasonCode,
     );
   }
   const match = matchResolution.kind === "matched"
@@ -794,11 +896,28 @@ export async function commitQuotaAccountingArtifactTransaction(
 ): Promise<QuotaAccountingArtifactCommitOutcome> {
   const contract = contractFor(request.kind);
   const indexPath = join(request.runsDir, "index.jsonl");
-  return await withFileMutationLock(indexPath, async () => {
+  const requestedGoalRef = exactGoalRef(
+    request.goalRef,
+    `${contract.label} request goal_ref`,
+  );
+  const commit = async (): Promise<QuotaAccountingArtifactCommitOutcome> => {
     await rejectSymlinkPath(indexPath, `${contract.label} run index`);
     const receiptPath = transactionPath(contract, request.runsDir, request.effectId);
     const existingReceipt = await readReceipt(contract, receiptPath, request.runsDir);
     if (existingReceipt) {
+      const conflict = ownerConflict(
+        existingReceipt.goal_ref ?? null,
+        requestedGoalRef,
+        `${contract.label} transaction`,
+      );
+      if (conflict) {
+        return {
+          status: "conflict",
+          reason: conflict,
+          reasonCode: "goal_instance_conflict",
+          indexDigest: await quotaAccountingIndexDigest(indexPath),
+        };
+      }
       if (
         existingReceipt.effect_id !== request.effectId ||
         existingReceipt.request_digest !== request.requestDigest
@@ -849,12 +968,13 @@ export async function commitQuotaAccountingArtifactTransaction(
       request.kind,
       currentRecords,
       request.effectId,
+      requestedGoalRef,
     );
     if (duplicateResolution.kind === "conflict") {
       return {
         status: "conflict",
         reason: duplicateResolution.reason,
-        reasonCode: "effect_id_conflict",
+        reasonCode: duplicateResolution.reasonCode,
         indexDigest: currentDigest,
       };
     }
@@ -902,6 +1022,7 @@ export async function commitQuotaAccountingArtifactTransaction(
       index_record: preparation.indexRecord,
       markdown: preparation.markdown,
       payload: preparation.payload,
+      ...(requestedGoalRef === null ? {} : { goal_ref: requestedGoalRef }),
     } satisfies QuotaAccountingArtifactReceipt;
     validateReceiptPaths(contract, request.runsDir, prepared);
     await atomicWriteJson(receiptPath, prepared);
@@ -916,5 +1037,8 @@ export async function commitQuotaAccountingArtifactTransaction(
       receipt: committedReceipt,
       indexDigest: await quotaAccountingIndexDigest(indexPath),
     };
-  });
+  };
+  return request.indexLockHeld
+    ? await commit()
+    : await withFileMutationLock(indexPath, commit);
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   readFile,
   mkdir,
@@ -13,12 +14,32 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
+  acquireFileMutationLock,
+  releaseFileMutationLock,
+} from "../../loopx/control_plane/effect_runtime_io.ts";
+import {
+  EffectRuntimeConflictError,
+  EffectRuntimeLockTimeoutError,
+  EffectRuntimeRequestError,
+} from "../../loopx/control_plane/effect_runtime_errors.ts";
+import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
+import {
+  parseQuotaAccountingOwner,
+  withQuotaAccountingOwner,
+} from "../../loopx/control_plane/quota/source_admission.ts";
+import {
   evaluateQuotaSpendCommit,
   quotaSpendIndexDigest,
   QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/quota/spend_commit.ts";
 
 const goalId = "quota-spend-transaction";
+const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const instanceB = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+interface TestSourceAdmission extends Record<string, unknown> {
+  locks: [Record<string, unknown>, Record<string, unknown>];
+}
 
 function decision(
   spentSlots: number,
@@ -92,6 +113,76 @@ async function tempRuntime(t: test.TestContext): Promise<string> {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-quota-spend-commit-"));
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
   return runtimeRoot;
+}
+
+function sourceGuardPath(registryPath: string): string {
+  const digest = createHash("sha256").update(goalId, "utf8").digest("hex");
+  return join(
+    dirname(registryPath),
+    ".loopx",
+    "lifecycle",
+    "goal-instance",
+    "guards",
+    `${digest}.guard`,
+  );
+}
+
+async function withSourceAdmission<T>(
+  runtimeRoot: string,
+  plannedInstanceId: string,
+  currentInstanceId: string,
+  run: (binding: Record<string, unknown>) => Promise<T>,
+  mutateAdmission?: (admission: TestSourceAdmission) => void,
+  ownerPid = process.pid,
+): Promise<T> {
+  const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
+  const registryPath = join(runtimeRoot, "project", ".loopx", "registry.json");
+  const guardPath = sourceGuardPath(registryPath);
+  const indexLock = await acquireFileMutationLock(indexPath, ownerPid);
+  const guardLock = await acquireFileMutationLock(guardPath, ownerPid);
+  const admission: TestSourceAdmission = {
+    schema_version: "loopx_quota_source_admission_v0",
+    profile_id: "source_session_v1",
+    registry_path: registryPath,
+    planned_goal_ref: {
+      goal_id: goalId,
+      goal_instance_id: plannedInstanceId,
+    },
+    authority: {
+      kind: "present",
+      goal_ref: {
+        goal_id: goalId,
+        goal_instance_id: currentInstanceId,
+      },
+    },
+    locks: [
+      {
+        role: "run_index",
+        target: indexPath,
+        pid: ownerPid,
+        token: indexLock.token,
+      },
+      {
+        role: "source_guard",
+        target: guardPath,
+        pid: ownerPid,
+        token: guardLock.token,
+      },
+    ],
+  };
+  mutateAdmission?.(admission);
+  try {
+    return await run({
+      goal_ref: {
+        goal_id: goalId,
+        goal_instance_id: plannedInstanceId,
+      },
+      source_admission: admission,
+    });
+  } finally {
+    await releaseFileMutationLock(guardPath, guardLock.token, null, true);
+    await releaseFileMutationLock(indexPath, indexLock.token, null, true);
+  }
 }
 
 function replayRequest(runtimeRoot: string, effectId: string) {
@@ -250,6 +341,287 @@ test("commit owns JSON, Markdown, index, and exact-effect replay", async (t) => 
   assert.equal(replayed.replayed, true);
   assert.equal(replayed.payload.appended, false);
   assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 1);
+});
+
+test("source owner rejects stale Goal A before writes and stamps Goal B", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await assert.rejects(
+    withSourceAdmission(runtimeRoot, instanceA, instanceB, async (binding) =>
+      await evaluateQuotaSpendCommit({
+        ...request(runtimeRoot),
+        ...binding,
+      })
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeConflictError);
+      assert.equal(error.code, "stale_goal_instance");
+      return true;
+    },
+  );
+  const runsDir = join(runtimeRoot, "goals", goalId, "runs");
+  await assert.rejects(readFile(join(runsDir, "index.jsonl")), { code: "ENOENT" });
+  await assert.rejects(readdir(join(runsDir, ".transactions")), { code: "ENOENT" });
+
+  const written = await withSourceAdmission(
+    runtimeRoot,
+    instanceB,
+    instanceB,
+    async (binding) => await evaluateQuotaSpendCommit({
+      ...request(runtimeRoot),
+      ...binding,
+    }),
+  );
+  const expectedGoalRef = {
+    goal_id: goalId,
+    goal_instance_id: instanceB,
+  };
+  assert.deepEqual(written.payload.goal_ref, expectedGoalRef);
+  const record = requireJsonObject(
+    JSON.parse(await readFile(String(written.payload.json_path), "utf8")),
+    "quota spend record",
+  );
+  const event = requireJsonObject(record.quota_event, "quota spend event");
+  const row = requireJsonObject(
+    JSON.parse(await readFile(String(written.payload.index_path), "utf8")),
+    "quota spend index row",
+  );
+  const receiptDirectory = join(runsDir, ".transactions", "quota-spend");
+  const [receiptName] = await readdir(receiptDirectory);
+  const receipt = requireJsonObject(
+    JSON.parse(await readFile(join(receiptDirectory, receiptName), "utf8")),
+    "quota spend receipt",
+  );
+  assert.deepEqual(record.goal_ref, expectedGoalRef);
+  assert.deepEqual(event.goal_ref, expectedGoalRef);
+  assert.deepEqual(row.goal_ref, expectedGoalRef);
+  assert.deepEqual(receipt.goal_ref, expectedGoalRef);
+});
+
+test("source owner validates every witness target before claiming locks", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  await assert.rejects(
+    withSourceAdmission(
+      runtimeRoot,
+      instanceA,
+      instanceA,
+      async (binding) => await evaluateQuotaSpendCommit({
+        ...request(runtimeRoot),
+        ...binding,
+      }),
+      (admission) => {
+        admission.locks[1].target = join(runtimeRoot, "wrong-source.guard");
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "quota_source_admission_invalid");
+      return true;
+    },
+  );
+  await assert.rejects(
+    readFile(join(runtimeRoot, "goals", goalId, "runs", "index.jsonl")),
+    { code: "ENOENT" },
+  );
+});
+
+test("source owner rejects an expired lock handoff", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
+  const registryPath = join(runtimeRoot, "project", ".loopx", "registry.json");
+  const guardPath = sourceGuardPath(registryPath);
+  const indexLock = await acquireFileMutationLock(indexPath);
+  const guardLock = await acquireFileMutationLock(guardPath);
+  await releaseFileMutationLock(guardPath, guardLock.token, null, true);
+  await releaseFileMutationLock(indexPath, indexLock.token, null, true);
+
+  await assert.rejects(
+    evaluateQuotaSpendCommit({
+      ...request(runtimeRoot),
+      goal_ref: {
+        goal_id: goalId,
+        goal_instance_id: instanceA,
+      },
+      source_admission: {
+        schema_version: "loopx_quota_source_admission_v0",
+        profile_id: "source_session_v1",
+        registry_path: registryPath,
+        planned_goal_ref: {
+          goal_id: goalId,
+          goal_instance_id: instanceA,
+        },
+        authority: {
+          kind: "present",
+          goal_ref: {
+            goal_id: goalId,
+            goal_instance_id: instanceA,
+          },
+        },
+        locks: [
+          {
+            role: "run_index",
+            target: indexPath,
+            pid: process.pid,
+            token: indexLock.token,
+          },
+          {
+            role: "source_guard",
+            target: guardPath,
+            pid: process.pid,
+            token: guardLock.token,
+          },
+        ],
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeConflictError);
+      assert.equal(error.code, "quota_source_admission_expired");
+      return true;
+    },
+  );
+});
+
+test("source owner keeps both claims through durable completion after parent loss", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
+  const registryPath = join(runtimeRoot, "project", ".loopx", "registry.json");
+  const guardPath = sourceGuardPath(registryPath);
+  const durableResult = join(runtimeRoot, "durable-result.json");
+  const deadOwnerPid = 2_147_483_647;
+
+  await withSourceAdmission(
+    runtimeRoot,
+    instanceA,
+    instanceA,
+    async (binding) => {
+      const owner = parseQuotaAccountingOwner({
+        goalRefValue: binding.goal_ref,
+        sourceAdmissionValue: binding.source_admission,
+        runtimeRoot,
+        goalId,
+      });
+      await withQuotaAccountingOwner(owner, async (indexLockHeld) => {
+        assert.equal(indexLockHeld, true);
+        await writeFile(durableResult, "{\"status\":\"committed\"}\n", "utf8");
+        for (const target of [indexPath, guardPath]) {
+          await assert.rejects(
+            acquireFileMutationLock(target, process.pid, 0),
+            EffectRuntimeLockTimeoutError,
+          );
+        }
+      });
+    },
+    undefined,
+    deadOwnerPid,
+  );
+
+  assert.deepEqual(
+    JSON.parse(await readFile(durableResult, "utf8")),
+    { status: "committed" },
+  );
+  const reacquiredIndex = await acquireFileMutationLock(indexPath);
+  const reacquiredGuard = await acquireFileMutationLock(guardPath);
+  await releaseFileMutationLock(
+    guardPath,
+    reacquiredGuard.token,
+    null,
+    true,
+  );
+  await releaseFileMutationLock(
+    indexPath,
+    reacquiredIndex.token,
+    null,
+    true,
+  );
+});
+
+test("unscoped replay cannot consume an exact source-owned spend", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request(runtimeRoot);
+  await withSourceAdmission(
+    runtimeRoot,
+    instanceA,
+    instanceA,
+    async (binding) => await evaluateQuotaSpendCommit({
+      ...params,
+      ...binding,
+    }),
+  );
+
+  const replay = await evaluateQuotaSpendCommit(params);
+
+  assert.equal(replay.status, "conflict");
+  assert.equal(replay.reason_code, "goal_instance_conflict");
+});
+
+test("native replay requires the exact source GoalRef", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const effectId = "quota-spend-source-replay";
+  await withSourceAdmission(
+    runtimeRoot,
+    instanceA,
+    instanceA,
+    async (binding) =>
+      await evaluateQuotaSpendCommit({
+        ...request(runtimeRoot, { effect_id: effectId }),
+        ...binding,
+      }),
+  );
+
+  const unscoped = await evaluateQuotaSpendCommit(
+    replayRequest(runtimeRoot, effectId),
+  );
+  assert.equal(unscoped.status, "conflict");
+  assert.equal(unscoped.reason_code, "goal_instance_conflict");
+
+  const replayed = await withSourceAdmission(
+    runtimeRoot,
+    instanceA,
+    instanceA,
+    async (binding) =>
+      await evaluateQuotaSpendCommit({
+        ...replayRequest(runtimeRoot, effectId),
+        ...binding,
+      }),
+  );
+  assert.equal(replayed.status, "replayed");
+  assert.equal(replayed.payload.replay_found, true);
+});
+
+test("legacy spend artifacts keep the alias-only wire shape", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const written = await evaluateQuotaSpendCommit(request(runtimeRoot));
+  const record = requireJsonObject(
+    JSON.parse(await readFile(String(written.payload.json_path), "utf8")),
+    "quota spend record",
+  );
+  const event = requireJsonObject(record.quota_event, "quota spend event");
+  const row = requireJsonObject(
+    JSON.parse(await readFile(String(written.payload.index_path), "utf8")),
+    "quota spend index row",
+  );
+  const receiptDirectory = join(
+    runtimeRoot,
+    "goals",
+    goalId,
+    "runs",
+    ".transactions",
+    "quota-spend",
+  );
+  const [receiptName] = await readdir(receiptDirectory);
+  const receipt = requireJsonObject(
+    JSON.parse(await readFile(join(receiptDirectory, receiptName), "utf8")),
+    "quota spend receipt",
+  );
+
+  for (const value of [
+    written.payload,
+    record,
+    event,
+    row,
+    receipt,
+  ]) {
+    assert.equal(Object.hasOwn(value, "goal_ref"), false);
+  }
 });
 
 test("native replay validates legacy rows by goal and agent", async (t) => {
@@ -438,6 +810,96 @@ test("prepared transaction repairs partial artifacts exactly once", async (t) =>
 
   const replayed = await evaluateQuotaSpendCommit(params);
   assert.equal(replayed.status, "replayed");
+});
+
+test("prepared source transaction repairs only for its current GoalRef", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request(runtimeRoot);
+  const written = await withSourceAdmission(
+    runtimeRoot,
+    instanceA,
+    instanceA,
+    async (binding) =>
+      await evaluateQuotaSpendCommit({
+        ...params,
+        ...binding,
+      }),
+  );
+  const indexPath = String(written.payload.index_path);
+  const markdownPath = String(written.payload.markdown_path);
+  const transactionDir = join(
+    dirname(indexPath),
+    ".transactions",
+    "quota-spend",
+  );
+  const [receiptName] = await readdir(transactionDir);
+  assert.ok(receiptName);
+  const receiptPath = join(transactionDir, receiptName);
+  const receipt = requireJsonObject(
+    JSON.parse(await readFile(receiptPath, "utf8")),
+    "prepared quota spend receipt",
+  );
+  receipt.status = "prepared";
+  await Promise.all([
+    writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8"),
+    unlink(markdownPath),
+  ]);
+
+  const repaired = await withSourceAdmission(
+    runtimeRoot,
+    instanceA,
+    instanceA,
+    async (binding) =>
+      await evaluateQuotaSpendCommit({
+        ...params,
+        ...binding,
+      }),
+  );
+  assert.equal(repaired.status, "repaired");
+  assert.match(await readFile(markdownPath, "utf8"), /quota_slot_spent/);
+
+  receipt.status = "prepared";
+  await Promise.all([
+    writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8"),
+    unlink(markdownPath),
+  ]);
+  await assert.rejects(
+    withSourceAdmission(
+      runtimeRoot,
+      instanceA,
+      instanceB,
+      async (binding) =>
+        await evaluateQuotaSpendCommit({
+          ...params,
+          ...binding,
+        }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeConflictError);
+      assert.equal(error.code, "stale_goal_instance");
+      return true;
+    },
+  );
+  await assert.rejects(readFile(markdownPath), { code: "ENOENT" });
+
+  const foreign = await withSourceAdmission(
+    runtimeRoot,
+    instanceB,
+    instanceB,
+    async (binding) =>
+      await evaluateQuotaSpendCommit({
+        ...params,
+        ...binding,
+      }),
+  );
+  assert.equal(foreign.status, "conflict");
+  assert.equal(foreign.reason_code, "goal_instance_conflict");
+  await assert.rejects(readFile(markdownPath), { code: "ENOENT" });
+  const foreignReceipt = requireJsonObject(
+    JSON.parse(await readFile(receiptPath, "utf8")),
+    "foreign quota spend receipt",
+  );
+  assert.equal(foreignReceipt.status, "prepared");
 });
 
 test("prepared transactions keep artifact paths reserved across later spends", async (t) => {

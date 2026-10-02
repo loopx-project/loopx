@@ -1054,27 +1054,50 @@ class ChatRequestHandler(
     def _goal_channel_configure(self) -> None:
         try:
             body = self._read_json()
-            if set(body) - {"goal_id", "auto_notify_human_gates"}:
+            if set(body) - {
+                "goal_id",
+                "auto_notify_human_gates",
+                "auto_notify_blocked_notices",
+            }:
                 raise ValueError("unknown Goal Channel configure field")
             goal_id = _compact_text(body.get("goal_id"), limit=160)
             auto_notify = body.get("auto_notify_human_gates")
-            if not goal_id or not isinstance(auto_notify, bool):
-                raise ValueError("goal_id and auto_notify_human_gates are required")
+            blocked_notify = body.get("auto_notify_blocked_notices")
+            if (
+                not goal_id
+                or (isinstance(auto_notify, bool) == isinstance(blocked_notify, bool))
+                or (auto_notify is not None and not isinstance(auto_notify, bool))
+                or (blocked_notify is not None and not isinstance(blocked_notify, bool))
+            ):
+                raise ValueError(
+                    "goal_id and exactly one boolean notification setting are required"
+                )
             source_registry, binding_path = self._goal_channel_context(goal_id)
-            if auto_notify:
+            if auto_notify is True or blocked_notify is True:
                 extension_blocker = self._goal_channel_extension_ready()
                 if extension_blocker is not None:
-                    self._send_error(extension_blocker, status=400, error_code="extension_unavailable")
+                    self._send_error(
+                        extension_blocker,
+                        status=400,
+                        error_code="extension_unavailable",
+                    )
                     return
             packet = configure_lark_goal_channel_automation(
                 registry=source_registry,
                 goal_id=goal_id,
                 binding_path=binding_path,
-                human_gate_auto_notify=auto_notify,
+                human_gate_auto_notify=auto_notify
+                if isinstance(auto_notify, bool)
+                else None,
+                blocked_notice_auto_notify=blocked_notify
+                if isinstance(blocked_notify, bool)
+                else None,
                 execute=True,
             )
         except ValueError as exc:
-            self._send_error(str(exc), status=400, error_code="invalid_goal_channel_configure")
+            self._send_error(
+                str(exc), status=400, error_code="invalid_goal_channel_configure"
+            )
             return
         except Exception:
             self._send_error(
@@ -1085,7 +1108,9 @@ class ChatRequestHandler(
             return
         if not packet.get("ok"):
             packet["error"] = _compact_text(
-                packet.get("public_summary") or packet.get("blocker") or "Goal Channel configure failed"
+                packet.get("public_summary")
+                or packet.get("blocker")
+                or "Goal Channel configure failed"
             )
         self._send_json(packet, status=200 if packet.get("ok") else 400)
 

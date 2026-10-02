@@ -622,6 +622,24 @@ The complete public sweep remains explicit and bounded:
 loopx canary smoke-suite --suite full-public --jobs 4 --timeout-seconds 120
 ```
 
+The smoke runner gives every check a disposable HOME, host configuration and
+temporary directory, removes inherited registry/runtime routes, disables usage
+telemetry, and stops only that fixture's managed Effect process before cleanup.
+Serial and parallel checks have the same isolation. It preserves the caller's
+PATH: grouped checks append discovery fallbacks rather than overriding an
+explicitly selected toolchain. Prepare Python 3.11+, Node 24, jq and zsh before
+a complete release sweep, and record their versions with the exact-source
+receipts. A missing tool is an environment gap, not a product regression or a
+passing skip. Installed-host expected sets remain explicit so a missing bundled
+skill still fails; update their owning fixtures when the shipped contract changes.
+
+每项 smoke 都使用独立的一次性 HOME、宿主配置和临时目录，清除继承的 registry/runtime
+路由，关闭 usage telemetry，并在清理前只停止该 fixture 的 Effect 进程；串行、并行隔离
+一致。分组检查保留调用方 PATH 的优先级，只在末尾补充发现路径。完整发布验证前准备
+Python 3.11+、Node 24、jq 和 zsh，并随精确源码回执记录版本。缺工具属于环境缺口，
+不能记成产品失败或成功 skip。宿主材料期待集合保持明确，缺少已发货 skill 仍应失败；
+正式契约变化时同步更新其归属 fixture。
+
 `full-public-smokes.yml` runs on `main`, daily, and by manual dispatch. It is
 not a required PR check. This separation protects repository quality without
 making every small patch wait for the broadest suite.

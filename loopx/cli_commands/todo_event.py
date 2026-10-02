@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ..control_plane.coordination.local_authority import (
@@ -87,11 +87,17 @@ def append_todo_rollout_event(
         or (payload.get("idempotent_replay") and not turn_instance_id)
     ):
         return
+    goal_ref = (
+        payload.get("goal_ref")
+        if isinstance(payload.get("goal_ref"), Mapping)
+        else None
+    )
     append_cli_rollout_event(
         payload,
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
         event_kind=TODO_EVENT_KINDS.get(args.todo_command, "todo_update"),
+        goal_ref=goal_ref,
         agent_id=args.agent_id or args.claimed_by,
         todo_id=args.todo_id or str(payload.get("todo_id") or "").strip() or None,
         run_id=turn_instance_id,
@@ -138,6 +144,7 @@ def append_todo_rollout_event(
                 "agent_id",
                 "todo_id",
                 "run_id",
+                *(["goal_ref"] if goal_ref is not None else []),
                 *(["status"] if terminal_closeout else []),
             ]
             if turn_instance_id

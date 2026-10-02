@@ -374,6 +374,25 @@ def goal_quota_with_spend_ledger(
             continue
         if str(run.get("goal_id") or goal_id) != goal_id:
             continue
+        goal_instance_id = (
+            str(goal.get("goal_instance_id") or "").strip()
+            if goal is not None
+            else ""
+        )
+        run_goal_ref = (
+            run.get("goal_ref")
+            if isinstance(run.get("goal_ref"), Mapping)
+            else None
+        )
+        if goal_instance_id:
+            if (
+                run_goal_ref is None
+                or run_goal_ref.get("goal_id") != goal_id
+                or run_goal_ref.get("goal_instance_id") != goal_instance_id
+            ):
+                continue
+        elif run_goal_ref is not None:
+            continue
         generated_at = _parse_timestamp(run.get("generated_at"))
         if (
             generated_at is None
@@ -894,6 +913,7 @@ def build_quota_should_run(
     receipt_bound_replan_guard_scoped: bool = False,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -919,6 +939,7 @@ def build_quota_should_run(
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
+        goal_ref=goal_ref,
     )
 
 
@@ -962,6 +983,8 @@ def build_quota_slot_preview(
     turn_instance_id: str | None = None,
     effect_ref: str | None = None,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     basis_available, expected_index_digest = _quota_spend_index_basis(
@@ -997,6 +1020,8 @@ def build_quota_slot_preview(
         replan_obligation_id=replan_obligation_id,
         turn_instance_id=turn_instance_id,
         source=source,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if preview.get("ok") and basis_available:
         preview["expected_index_digest"] = expected_index_digest
@@ -1114,6 +1139,7 @@ def record_quota_monitor_poll(
         Callable[..., Mapping[str, Any] | None] | None
     ) = None,
     status_reloader: Callable[[], dict[str, Any]] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     normalized_requested_todo_id = normalize_todo_id(todo_id) if todo_id else None
@@ -1161,6 +1187,7 @@ def record_quota_monitor_poll(
             scheduler_execution_context=scheduler_execution_context,
             operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             receipt_bound_todo_id=normalized_receipt_todo_id,
+            goal_ref=goal_ref,
         )
 
     before = should_run(status_payload)
@@ -1221,6 +1248,7 @@ def record_quota_monitor_poll(
         use_current_task_lease=use_current_task_lease,
         turn_instance_id=turn_instance_id,
         status_reloader=status_reloader,
+        goal_ref=goal_ref,
     )
     continuation = result.get("turn_continuation") or {}
     if (
@@ -1244,6 +1272,8 @@ def record_quota_monitor_poll(
             agent_id=agent_id,
             todo_id=normalized_receipt_todo_id,
             turn_instance_id=turn_instance_id,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         if readback is None or readback.identity.value is None:
             raise RuntimeError(
@@ -1251,6 +1281,7 @@ def record_quota_monitor_poll(
             )
         attach_settlement_progress(
             result, readback, registry_path=registry_path, runtime_root=runtime_root,
+            goal_ref=goal_ref,
         )
         identity = readback.identity.value
         prefix = "loopx"
@@ -1273,6 +1304,7 @@ def record_quota_monitor_poll(
             scoped_cli_args=scoped_args,
             lifecycle_actor_args="",
             quota_spend_source=readback.progress["quota_spend_source"],
+            goal_ref=goal_ref,
         )
         result["settlement_resume"] = {
             "schema_version": "auxiliary_monitor_settlement_resume_v0",
@@ -1337,6 +1369,8 @@ def void_quota_slot(
     reason_summary: str | None = None,
     agent_id: str | None = None,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _normalize_quota_void_goal_id(goal_id)
     before = build_quota_should_run(
@@ -1353,6 +1387,8 @@ def void_quota_slot(
         execute=execute,
         source=source,
         reason_summary=reason_summary,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
 
 
@@ -1374,6 +1410,8 @@ def spend_quota_slot(
     replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
     effect_ref: str | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     normalized_effect_ref = str(effect_ref or "").strip()
@@ -1404,6 +1442,8 @@ def spend_quota_slot(
             effect_ref=normalized_effect_ref,
             agent_id=agent_id,
             read_only=not execute,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         if replay.get("replay_found"):
             if not replay.get("ok"):
@@ -1428,6 +1468,11 @@ def spend_quota_slot(
                 "agent_id": replay.get("agent_id"),
                 "effect_ref": normalized_effect_ref,
                 "reason": "quota spend replayed for the same provider effect",
+                **(
+                    {"goal_ref": dict(goal_ref)}
+                    if goal_ref is not None
+                    else {}
+                ),
             }
     if turn_instance_id and source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
         return {
@@ -1463,6 +1508,8 @@ def spend_quota_slot(
             turn_instance_id=None,
             infer_turn_instance_id=True,
             allow_unbound_binding=recover_unbound_visible_goal,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
         )
         inferred_result = (
             settlement_readback.identity
@@ -1499,6 +1546,8 @@ def spend_quota_slot(
                 todo_id=todo_id,
                 turn_instance_id=turn_instance_id,
                 replan_obligation_id=replan_obligation_id,
+                registry_path=registry_path,
+                goal_ref=goal_ref,
             )
         if settlement_readback is None:
             raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -1534,6 +1583,11 @@ def spend_quota_slot(
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
                 "reason": "quota spend receipt replayed for the same settlement identity",
+                **(
+                    {"goal_ref": dict(goal_ref)}
+                    if goal_ref is not None
+                    else {}
+                ),
             }
         prior_spend_run = settlement_readback.spend_run
         if prior_spend_run is not None:
@@ -1551,6 +1605,11 @@ def spend_quota_slot(
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
                 "reason": "quota spend run exists; repair its missing settlement receipt",
+                **(
+                    {"goal_ref": dict(goal_ref)}
+                    if goal_ref is not None
+                    else {}
+                ),
             }
     preview = build_quota_slot_preview(
         status_payload,
@@ -1566,6 +1625,8 @@ def spend_quota_slot(
         turn_instance_id=turn_instance_id,
         effect_ref=normalized_effect_ref or None,
         source=source,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if not preview.get("ok"):
         return preview
@@ -1576,4 +1637,6 @@ def spend_quota_slot(
         goal_id=safe_goal_id,
         execute=execute,
         source=source,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )

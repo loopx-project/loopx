@@ -11,9 +11,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
+import {
+  acquireFileMutationLock,
+  releaseFileMutationLock,
+} from "../../loopx/control_plane/effect_runtime_io.ts";
+import { EffectRuntimeConflictError } from "../../loopx/control_plane/effect_runtime_errors.ts";
+import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
 import {
   evaluateQuotaVoidCommit,
   quotaVoidIndexDigest,
@@ -21,8 +27,15 @@ import {
 } from "../../loopx/control_plane/quota/void_commit.ts";
 
 const goalId = "quota-void-transaction";
+const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const instanceB = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const targetGeneratedAt = "2026-08-25T11:59:00+08:00";
 const voidGeneratedAt = "2026-08-25T12:00:00+08:00";
+
+interface GoalRef {
+  goal_id: string;
+  goal_instance_id: string;
+}
 
 interface TargetFixture {
   runtimeRoot: string;
@@ -56,8 +69,11 @@ function beforeDecision(spentSlots: unknown = 5): Record<string, unknown> {
   };
 }
 
-function quotaSpendEvent(slots: unknown): Record<string, unknown> {
-  return {
+function quotaSpendEvent(
+  slots: unknown,
+  goalRef?: GoalRef,
+): Record<string, unknown> {
+  const event: Record<string, unknown> = {
     event_type: "quota_slot_spent",
     source: "heartbeat",
     slots,
@@ -65,6 +81,8 @@ function quotaSpendEvent(slots: unknown): Record<string, unknown> {
     before: { spent_slots: 3 },
     after: { spent_slots: 5 },
   };
+  if (goalRef) event.goal_ref = goalRef;
+  return event;
 }
 
 async function tempRuntime(t: test.TestContext): Promise<string> {
@@ -80,6 +98,7 @@ async function targetFixture(
     slots?: unknown;
     generatedAt?: string;
     jsonPath?: string;
+    goalRef?: GoalRef;
   } = {},
 ): Promise<TargetFixture> {
   const runtimeRoot = await tempRuntime(t);
@@ -91,13 +110,14 @@ async function targetFixture(
     runsDir,
     "20260825-115900-quota-slot-spent.json",
   );
-  const event = quotaSpendEvent(options.slots ?? 2);
+  const event = quotaSpendEvent(options.slots ?? 2, options.goalRef);
   const indexRecord: Record<string, unknown> = {
     generated_at: generatedAt,
     goal_id: goalId,
     classification: "quota_slot_spent",
     json_path: targetJsonPath,
   };
+  if (options.goalRef) indexRecord.goal_ref = options.goalRef;
   if (options.inline !== false) {
     indexRecord.quota_event = event;
   } else {
@@ -108,6 +128,7 @@ async function targetFixture(
         goal_id: goalId,
         classification: "quota_slot_spent",
         quota_event: event,
+        ...(options.goalRef ? { goal_ref: options.goalRef } : {}),
       }, null, 2)}\n`,
       "utf8",
     );
@@ -115,6 +136,81 @@ async function targetFixture(
   const indexContent = `${JSON.stringify(indexRecord)}\n`;
   await writeFile(indexPath, indexContent, "utf8");
   return { runtimeRoot, runsDir, indexPath, indexContent, targetJsonPath };
+}
+
+function sourceGuardPath(registryPath: string): string {
+  const digest = createHash("sha256").update(goalId, "utf8").digest("hex");
+  return join(
+    dirname(registryPath),
+    ".loopx",
+    "lifecycle",
+    "goal-instance",
+    "guards",
+    `${digest}.guard`,
+  );
+}
+
+async function withSourceAdmission<T>(
+  fixture: TargetFixture,
+  plannedInstanceId: string,
+  currentInstanceId: string,
+  run: (binding: Record<string, unknown>) => Promise<T>,
+): Promise<T> {
+  const registryPath = join(
+    fixture.runtimeRoot,
+    "project",
+    ".loopx",
+    "registry.json",
+  );
+  const guardPath = sourceGuardPath(registryPath);
+  const indexLock = await acquireFileMutationLock(fixture.indexPath);
+  const guardLock = await acquireFileMutationLock(guardPath);
+  try {
+    return await run({
+      goal_ref: {
+        goal_id: goalId,
+        goal_instance_id: plannedInstanceId,
+      },
+      source_admission: {
+        schema_version: "loopx_quota_source_admission_v0",
+        profile_id: "source_session_v1",
+        registry_path: registryPath,
+        planned_goal_ref: {
+          goal_id: goalId,
+          goal_instance_id: plannedInstanceId,
+        },
+        authority: {
+          kind: "present",
+          goal_ref: {
+            goal_id: goalId,
+            goal_instance_id: currentInstanceId,
+          },
+        },
+        locks: [
+          {
+            role: "run_index",
+            target: fixture.indexPath,
+            pid: process.pid,
+            token: indexLock.token,
+          },
+          {
+            role: "source_guard",
+            target: guardPath,
+            pid: process.pid,
+            token: guardLock.token,
+          },
+        ],
+      },
+    });
+  } finally {
+    await releaseFileMutationLock(guardPath, guardLock.token, null, true);
+    await releaseFileMutationLock(
+      fixture.indexPath,
+      indexLock.token,
+      null,
+      true,
+    );
+  }
 }
 
 async function rawIndexDigest(indexPath: string): Promise<string> {
@@ -326,6 +422,71 @@ test("commit atomically owns the JSON, Markdown, and index artifacts", async (t)
     rows.map((line) => (JSON.parse(line) as Record<string, unknown>).classification),
     ["quota_slot_spent", "quota_slot_voided"],
   );
+});
+
+test("source Goal B voids only a spend owned by B", async (t) => {
+  const goalRefA = { goal_id: goalId, goal_instance_id: instanceA };
+  const goalRefB = { goal_id: goalId, goal_instance_id: instanceB };
+  for (const targetOwner of [goalRefA, undefined]) {
+    const fixture = await targetFixture(t, { goalRef: targetOwner });
+    await assert.rejects(
+      withSourceAdmission(
+        fixture,
+        instanceB,
+        instanceB,
+        async (binding) =>
+          await evaluateQuotaVoidCommit({
+            ...await request(fixture),
+            ...binding,
+          }),
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof EffectRuntimeConflictError);
+        assert.equal(error.code, "goal_instance_conflict");
+        return true;
+      },
+    );
+    assert.equal(await readFile(fixture.indexPath, "utf8"), fixture.indexContent);
+    await assert.rejects(
+      readdir(join(fixture.runsDir, ".transactions")),
+      { code: "ENOENT" },
+    );
+  }
+
+  const fixture = await targetFixture(t, { goalRef: goalRefB });
+  const written = await withSourceAdmission(
+    fixture,
+    instanceB,
+    instanceB,
+    async (binding) =>
+      await evaluateQuotaVoidCommit({
+        ...await request(fixture),
+        ...binding,
+      }),
+  );
+
+  assert.equal(written.status, "written");
+  assert.deepEqual(written.payload.goal_ref, goalRefB);
+  const record = requireJsonObject(
+    JSON.parse(await readFile(String(written.payload.json_path), "utf8")),
+    "quota void record",
+  );
+  const event = requireJsonObject(record.quota_event, "quota void event");
+  const rows = (await readFile(fixture.indexPath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => requireJsonObject(
+      JSON.parse(line),
+      "quota void index row",
+    ));
+  const receipt = await transactionReceipt(
+    fixture.runsDir,
+    String(written.effect_id),
+  );
+  assert.deepEqual(record.goal_ref, goalRefB);
+  assert.deepEqual(event.goal_ref, goalRefB);
+  assert.deepEqual(rows[1]?.goal_ref, goalRefB);
+  assert.deepEqual(receipt.value.goal_ref, goalRefB);
 });
 
 test("the same effect replays without appending a second void", async (t) => {

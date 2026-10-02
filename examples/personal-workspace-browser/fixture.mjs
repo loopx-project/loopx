@@ -301,7 +301,7 @@ server.serve_forever()
       server.stderr.on("data", (chunk) => { diagnostic = (diagnostic + chunk).slice(-8000); });
       server.stdout.on("data", (chunk) => {
         output += chunk;
-        if (output.includes("loopx-packaged-smoke-ready\n")) {
+        if (/loopx-packaged-smoke-ready\r?\n/u.test(output)) {
           clearTimeout(timer);
           resolveReady();
         }
@@ -391,7 +391,7 @@ function filterStatusFixtureToScope(fixture, matchesScope) {
   }
 }
 
-export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
+export async function installApi(page, { goalSubagentConfigurationEnabled = true, initialActionProposals = [], managerChannelBinding = null, notificationProjection = null, progressiveWorkspace = false, runtimeAgents = null } = {}) {
   let turnCounter = 0;
   const runtime = page.__loopxRuntime ??= { actionProposals: new Map(), goalSubagentConfigurations: new Map(), larkConnections: [], messages: new Map(), sessions: new Map(), turnMessages: new Map() };
   const actionProposals = runtime.actionProposals;
@@ -506,6 +506,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     }
     if (progressiveWorkspace && requestedGoalId) state.goalStatusRequests.push(requestedGoalId);
     const fixture = structuredClone(require(resolve(repoRoot, "examples/status.example.json")));
+    if (notificationProjection) fixture.goal_channel_notification_projection = structuredClone(notificationProjection);
     const defaultSubagentConfiguration = { mode: "default", spawn_allowed: false, max_children: 0, allowed_domains: [] };
     const projectedSubagentConfiguration = (goalId, fallback) => state.freezeGoalSubagentStatusProjection
       ? fallback ?? defaultSubagentConfiguration

@@ -80,6 +80,7 @@ next_real_step = "Keep explicit enablement bounded."
         "public-safe-outbound",
         "connector-registry",
         "external-evidence-research",
+        "performance-diagnosis",
         "reliability-diagnostics",
         "progress-review-sentinel",
     ]

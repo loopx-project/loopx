@@ -1472,6 +1472,7 @@ def _build_quota_should_run_payload(
     turn_instance_id: str | None = None,
     include_agent_todo_detail: bool = False,
     runtime_root: str | Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     if prepared.receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED:
         payload = _build_settled_quota_payload(prepared, route)
@@ -1479,6 +1480,8 @@ def _build_quota_should_run_payload(
         payload = _build_active_quota_payload(
             prepared, route, include_agent_todo_detail=include_agent_todo_detail,
         )
+    if goal_ref is not None:
+        payload["goal_ref"] = dict(goal_ref)
     apply_settled_monitor_precedence(payload)
     cadence_root = _interaction_runtime_root(runtime_root, prepared.status_payload)
     if cadence_root:

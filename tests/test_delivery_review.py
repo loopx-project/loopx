@@ -56,6 +56,7 @@ def workspace(tmp_path):
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path = registry
     server.runtime_root_override = str(runtime)
+    server.runtime_root = runtime
     server.scan_roots = []
     server.limit = 20
     server.selected_goal_id = None

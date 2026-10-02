@@ -2,10 +2,10 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Identity/recovery proposal; codec prerequisite shipped in #4917
+- **Delivery maturity:** Partial source-session lifetime and binding-owner implementation; quota settlement qualified in #5389; activation, orphan recovery and product acceptance remain held
 - **Authors / owners:** LoopX contributors
 - **Created:** 2026-09-23
-- **Last normative revision:** 2026-09-23
+- **Last normative revision:** 2026-10-02
 - **Implementation baseline:** `23edcb19c70394480e3a9ebe8a960f5a320c5342`
 - **Related contracts:** [Issue #4801](https://github.com/loopx-project/loopx/issues/4801), [orphan fence slice #4808](https://github.com/loopx-project/loopx/pull/4808)
 - **Language mirror:** [Chinese semantic mirror](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)
@@ -718,12 +718,49 @@ already prevents execution.
 | M4: orphan recovery | Reuse fence/diagnosis/path/backup owners; journaled file-state resolution with exact legacy cleanup | Preview, destructive/retry/rollback negatives and original-entry readback. Archive/delete can ship earlier without identity creation; native-provider adoption stays blocked. |
 | M5: migration and product acceptance | M2–M4 plus multi-Goal quiescence/reconnection; packaged frontend and qualified Lark | 2–3 workers, dependency artifact, interrupted A, recreated B and late A return; unrelated Goal progresses; B accepted independently. No duplicate protected effect. |
 
-M0 is a prerequisite checkpoint, not the next unstarted task. The next slice
-owns M1 compatibility/consumer characterization and the M2 local lifecycle seam;
-do not ship a field-only milestone as the ABA outcome. M2 and M3 describe
+M0 is shipped; retain the implemented source-session lifetime transaction and
+qualified binding owners. Continue from the remaining owner/compatibility gaps
+in the binding inventory and the M4 recovery path tracked by #5206; do not
+restart the codec or count fields as the ABA outcome. M2 and M3 describe
 implementation order, not permission to activate a partially fenced system.
 R2/R3 consume the completed local slice; R6 service adoption and D1–D3 provider
 promotion retain their own acceptance. No new paid cohort or soak is authorized.
+
+### Product integration through existing roadmap journeys
+
+Use [#5206](https://github.com/loopx-project/loopx/issues/5206) for lifetime and
+recovery delivery and the existing R1–R3/G1 owners under
+[#4574](https://github.com/loopx-project/loopx/issues/4574) for product adoption.
+The [golden-query lifecycle variant](../../product/use-cases/steward/golden-queries.md#goal-lifetime-creation-collaboration-and-recovery)
+is the common scenario specification. These are planned integration exits, not
+claims that the source profile is activated or that G1/M5 has passed.
+
+| Priority / existing journey | Lifetime contribution and companion owner | Decisive observable result |
+| --- | --- | --- |
+| P0 · GQ01/02, R1/R2: create a Goal and create/reuse an Agent | Source lifecycle publishes the exact GoalRef; registry/onboarding and session owners reconcile creation retries and bind authorized work | Lost responses and repeated clicks create no duplicate Goal, Agent or executor; an old same-alias attachment cannot attach itself to the new Goal |
+| P0 · GQ05/11/12, R2/R3/G1: dependent artifacts and independent review | Collaboration carries instance identity through request, adoption, result and original-conversation return; Todo/lease and quota retain their own acceptance/effect checks | Two real cycles use exact artifact versions; late A work cannot complete, debit or enter B's accepted synthesis; B and unrelated work still progress |
+| P0 · GQ08/09, R2/R3: stop, correct and resume | Session/execution generation and claim/lease fence stale execution within one Goal; this RFC fences a retired Goal lifetime | Ordinary correction/reconnect/resume retains the GoalRef; explicit retirement/recreation changes it; both paths preserve the owed result without duplicate effects |
+| P1 · GQ15, S7/R2/R3: mixed team within an agreed budget | #5389 isolates quota spend/replay/repair/void/readback by instance; existing quota and scheduler owners enforce team allocation | Replay does not double-charge or charge a successor; the team allowance is not copied to each worker. Instance accounting alone does not qualify shared-budget allocation |
+| P1 · R5/M4/M5: recover orphaned work at create/connect entry | Existing diagnosis and lifecycle resolution drive preview, backup, apply/resume and explicit reconnection | The packaged App and CLI show the selected disposition and recovery result; no guessed candidate or silent adoption of old authority |
+| P2 · GQ16, R6/G3: local/cloud work and reconnect | Authenticated service, remote binding, revocation and lease owners consume exact identity after their own qualification | A returning remote executor cannot commit or debit a successor; local-file evidence does not qualify a remote provider |
+
+Keep Goal lifetime, registered Agent identity, host session/execution generation
+and work request/attempt identity distinct. Reusing an Agent grants no new Goal
+authority; changing its model, reconnecting or opening a Turn does not mint a
+Goal instance. Intent corrections and artifact revisions retain their existing
+R4/work-graph owners. Identity matching neither transfers a lease nor accepts an
+artifact. No new Agent factory, scheduler or parallel task ledger is needed.
+
+First qualify creation/reuse, two collaboration cycles and same-lifetime
+interruption on an already supported profile. In an isolated qualification
+environment, add the M5 retirement/recreation variant only after the selected
+source profile's M2/M3 owner, old-writer and effect-drain gates are satisfied;
+include M4 if orphan resolution is exercised. Component fixtures may run before
+that gate but cannot certify the live journey. Use the packaged App with
+independent CLI/source readback; Lark retains separate transport/audience
+qualification. Record entry/retry, receiver adoption, artifact acceptance,
+instance-scoped settlement and original-route return separately. #5389 qualifies
+only `quota_settlement`; missing companion owners remain open in #5206.
 
 ## 12. Open decisions and holds
 
@@ -839,6 +876,33 @@ promotion retain their own acceptance. No new paid cohort or soak is authorized.
   does not complete `first_party_host_runtime`, downstream external-effect
   drain, unsupported/warm binary coverage, or any other M3 row.
   `execution_authority: false` and the overall activation hold remain.
+
+### 2026-09-30: M3 quota settlement owner candidate
+
+- **Baseline:** `3ec049e13`.
+- **Proposed:** Bind source-profile quota spend, replay, receipt repair, void,
+  settlement readback, and rolling-window accounting to the caller-captured
+  exact GoalRef. Python hands the ordered run-index and Goal-lifecycle lock
+  witnesses to the TypeScript accounting owner. TypeScript validates both
+  witnesses and reuses `decideFirstPartyHostRuntime(require_current)`.
+  Single-phase accounting adopts the witnesses through artifact commit;
+  multi-phase monitor accounting borrows them while Python retains the
+  enclosing lock scope across preflight, provider writeback, and commit.
+- **Evidence:** TypeScript and Python integration tests publish same-alias Goal
+  B after Goal A capture and prove that stale A writes nothing. They also cover
+  B-only spend and void, cross-instance replay and prepared-receipt repair
+  rejection, exact settlement readback, per-instance rolling-window accounting,
+  mixed alias/exact fallback history, and exact auxiliary monitor preflight,
+  exception, commit, and replay under one admission.
+- **Compatibility:** Non-source spend, replay, void, and readback requests omit
+  GoalRef and source admission. Their persisted records, receipts, response
+  payloads, and lock behavior retain the legacy shape.
+- **Remaining hold:** This qualifies only the `quota_settlement` inventory row.
+  The source-profile provider journey remains behind its existing activation
+  gate; the native monitor evidence does not claim that route is activated.
+  Unsupported and warm binaries, downstream external-effect drain, and every
+  other unqualified M3 owner remain blocked. `execution_authority: false` and
+  the overall activation hold remain unchanged.
 
 ## Appendix B: Decision log
 

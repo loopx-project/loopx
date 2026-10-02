@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from loopx import windows_install
-from loopx.doctor import REQUIRED_INSTALLED_SKILL_PHRASES
 from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
 
 
@@ -340,7 +339,7 @@ def test_windows_installer_preserves_externally_managed_skills(tmp_path: Path) -
     home = tmp_path / "home"
     codex_skills = home / ".codex" / "skills"
     agents_skills = home / ".agents" / "skills"
-    for skill_id in REQUIRED_INSTALLED_SKILL_PHRASES:
+    for skill_id in PACKAGED_HOST_SKILL_IDS:
         shutil.copytree(repo_root / "skills" / skill_id, agents_skills / skill_id)
 
     env = dict(os.environ)

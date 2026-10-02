@@ -85,6 +85,7 @@ def register_todo_command(
             "turn-scoped quota guard and reuse it on retries."
         ),
     )
+    todo_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
     todo_parser.add_argument(
         "--completion-identity-key",
         help=(

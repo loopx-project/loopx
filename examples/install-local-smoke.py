@@ -449,7 +449,7 @@ def main() -> int:
             "pull_requests[review_action_kind!=null].evidence_commands",
             "Do not pipe the only copy through `jq`",
             "completion_gate",
-            "Never infer `verified` from metadata or CI",
+            "never infer `verified` from metadata or CI",
             "formal `REQUEST_CHANGES`",
             "Read the published review back",
             "Merge routes through `loopx-pr-merge`",

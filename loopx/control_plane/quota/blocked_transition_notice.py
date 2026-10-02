@@ -14,13 +14,11 @@ required, while an owner gate asks one concrete question.
 
 Each notice also carries a ``blocker_revision`` digest over the cause, evidence,
 recovery condition, responsible party and supersession marker. The digest is the
-dedup key a later ledger needs — unchanged means "already told", changed means
-"tell again" — but this module does not decide emission: that decision, the
-persisted delivery/readback state and the reconciliation of resolved and
-superseded blockers arrive with the successor that owns a real caller. Until
-then every notice reports ``delivery.state == "pending"``: no delivery surface
-has been authorized, so nothing has reached anybody, and a NOTIFY intent must
-not be reported as a delivery.
+dedup key used by an authorized delivery adapter — unchanged means "already
+told", changed means "tell again". This transport-neutral builder does not
+decide emission: it reports ``delivery.state == "pending"`` until a delivery
+adapter records a separate receipt. The Lark Goal Channel adapter owns
+send/readback state in its private binding; a NOTIFY intent is not delivery.
 """
 
 from __future__ import annotations
@@ -50,9 +48,8 @@ from ..todos.resume_condition import (
 BLOCKED_TRANSITION_NOTICE_SCHEMA_VERSION = "blocked_transition_notice_v0"
 BLOCKED_TRANSITION_NOTICE_KIND = "blocked_transition_notice"
 
-# The only delivery state this slice can honestly report: no surface has been
-# authorized yet. "delivered" and "readback_verified" arrive with the successor
-# that records an actual handover.
+# The transport-neutral notice remains pending until an authorized adapter
+# records delivery/readback in its own receipt store.
 NOTICE_DELIVERY_PENDING = "pending"
 
 RESPONSIBLE_AGENT = "agent"
@@ -168,7 +165,7 @@ def build_blocked_transition_notice(
     ``blocker_revision`` digest so a later ledger can dedup "same blocker, same
     cause" from "same blocker, materially changed cause", but it does not itself
     decide whether to emit: emission, delivery recording and reconciliation need
-an authorized delivery surface and belong to the successor slice.
+    an authorized delivery surface and belong to the delivery adapter.
 
 The module also owns how a notice is rendered for the owner
 (:func:`blocked_priority_fallback_owner_reason`), so the projection that shows

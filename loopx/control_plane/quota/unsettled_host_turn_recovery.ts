@@ -39,9 +39,15 @@ import {
 import {
   committedMonitorPollFromSnapshot,
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
-  readQuotaSettlementFromSnapshot,
+  readAdmittedQuotaSettlementFromSnapshot,
   readQuotaSettlementSnapshot,
 } from "./settlement_readback.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaOwnerOwnsProjection,
+  withQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 export const PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA =
   "loopx_prior_host_turn_closeout_preflight_request_v0";
@@ -83,6 +89,8 @@ interface PreflightRequest {
   goal_id: string;
   agent_id: string;
   exclude_turn_instance_id: string | null;
+  owner: QuotaAccountingOwner;
+  owner_projection: JsonObject;
 }
 
 function decodePreflightRequest(value: unknown): PreflightRequest {
@@ -92,13 +100,31 @@ function decodePreflightRequest(value: unknown): PreflightRequest {
       "Prior host Turn closeout preflight request schema mismatch",
     );
   }
+  const runtimeRoot = requireNonEmptyString(request.runtime_root, "runtime_root");
+  const goalId = requireNonEmptyString(request.goal_id, "goal_id");
+  const owner = parseQuotaAccountingOwner({
+    goalRefValue: request.goal_ref,
+    sourceAdmissionValue: request.source_admission,
+    runtimeRoot,
+    goalId,
+  });
   return {
-    runtime_root: requireNonEmptyString(request.runtime_root, "runtime_root"),
-    goal_id: requireNonEmptyString(request.goal_id, "goal_id"),
+    runtime_root: runtimeRoot,
+    goal_id: goalId,
     agent_id: requireNonEmptyString(request.agent_id, "agent_id"),
     exclude_turn_instance_id: optionalHeartbeatString(
       request.exclude_turn_instance_id,
     ),
+    owner,
+    owner_projection: owner.kind === "alias"
+      ? {}
+      : {
+        goal_ref: requireJsonObject(request.goal_ref, "goal_ref"),
+        source_admission: requireJsonObject(
+          request.source_admission,
+          "source_admission",
+        ),
+      },
   };
 }
 
@@ -186,6 +212,7 @@ function settlementReadbackRequest(
       : null,
     infer_turn_instance_id: false,
     allow_unbound_binding: false,
+    ...request.owner_projection,
   };
 }
 
@@ -209,10 +236,9 @@ function bundleFailed(readback: JsonObject, step: string): boolean {
  * Turn's settlement so a Turn that already settled never makes the caller read
  * bound facts.
  */
-export async function preflightPriorHostTurnCloseout(
-  value: unknown,
+async function preflightPriorHostTurnCloseoutForOwner(
+  request: PreflightRequest,
 ): Promise<JsonObject> {
-  const request = decodePreflightRequest(value);
   const rolloutSnapshot = await readGoalRolloutEventSnapshot(
     request.runtime_root,
     request.goal_id,
@@ -221,6 +247,8 @@ export async function preflightPriorHostTurnCloseout(
     rolloutSnapshot,
     request.goal_id,
     request.agent_id,
+  )?.filter((event) =>
+    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
   );
   const { candidates, turnsValidated } = selectCloseoutCandidates(
     receipts ?? [],
@@ -244,7 +272,7 @@ export async function preflightPriorHostTurnCloseout(
   let newestSettledTurn: string | null = null;
   let newestAcceptedCloseout: AcceptedCloseout = "validated_writeback_and_quota_spend";
   for (const selected of candidates) {
-    const readback = readQuotaSettlementFromSnapshot(
+    const readback = readAdmittedQuotaSettlementFromSnapshot(
       settlementReadbackRequest(request, selected),
       settlementSnapshot,
     );
@@ -273,7 +301,7 @@ export async function preflightPriorHostTurnCloseout(
         goal_id: request.goal_id, agent_id: request.agent_id,
         turn_instance_id: selected.prior_turn_instance_id,
         todo_id: selected.binding_id,
-      }) : null;
+      }, request.owner) : null;
     return {
       schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_RESULT_SCHEMA,
       status: "candidate",
@@ -293,6 +321,16 @@ export async function preflightPriorHostTurnCloseout(
     prior_turn_instance_id: newestSettledTurn,
     accepted_closeout: newestAcceptedCloseout,
   };
+}
+
+export async function preflightPriorHostTurnCloseout(
+  value: unknown,
+): Promise<JsonObject> {
+  const request = decodePreflightRequest(value);
+  return await withQuotaAccountingOwner(
+    request.owner,
+    async () => preflightPriorHostTurnCloseoutForOwner(request),
+  );
 }
 
 function decodeCandidate(value: unknown): PriorHostTurnCloseoutCandidate {

@@ -621,6 +621,7 @@ def main() -> int:
             "loopx-doc-registry",
             "loopx-benchmark",
             "loopx-self-repair",
+            "loopx-performance-diagnosis",
         }, delivery
         assert delivery["delivery_options"] == [
             "host_skill_manifest",

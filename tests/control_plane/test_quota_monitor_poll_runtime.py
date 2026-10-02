@@ -135,6 +135,7 @@ def test_turn_monitor_effect_identity_replays_legacy_receipt_then_scopes_new_tod
         turn_instance_id=turn_id,
         todo_id="todo_monitor_legacy",
         target_key="legacy-target",
+        goal_ref=None,
     ) == legacy_effect_id
     assert monitor_poll._monitor_poll_effect_id(
         runtime_root=tmp_path,
@@ -143,6 +144,7 @@ def test_turn_monitor_effect_identity_replays_legacy_receipt_then_scopes_new_tod
         turn_instance_id=turn_id,
         todo_id="todo_monitor_new",
         target_key="new-target",
+        goal_ref=None,
     ) == (
         f"quota-monitor-poll:{goal_id}:{agent_id}:{turn_id}:"
         "todo:todo_monitor_new"

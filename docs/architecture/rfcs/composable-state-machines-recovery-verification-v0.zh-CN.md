@@ -2,7 +2,7 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** 提案；已有局部 conformance 不等于组合资格
+- **交付成熟度：** 部分实现；已有有界 Turn 恢复验证，完整 M2 仍开放
 - **作者 / 负责人：** 控制面领域维护者与测试维护者
 - **创建：** 2026-10-01
 - **最近规范修订：** 2026-10-01
@@ -169,6 +169,31 @@ provider 会使相应前提不成立；必须暴露这个事实，不能判定�
 
 [Monitor 静默到到期 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-monitor-quiet-due-recovery.zh-CN.md)
 记录有界 CLI 重放／successor 证据，并明确 M2／M3 尚未覆盖的部分。
+
+### Turn 结算资格范围
+
+Turn owner 现在先由 TypeScript 判断 provider 返回值和回读，再允许 Python
+checkpoint、撤销被拒绝的尝试或重试已确认 absent 的 effect。
+`settlement_provider.ts` 在既有 Turn 领域内持有纯规则；Python 保留 callback
+调用和 journal IO。原先的提交／回读分类分支和 completion 结果包装器随迁移删除，不新增 capability、
+provider 或通用 effect executor。
+
+有界探索覆盖三个顺序 effect（writeback、quota spend、terminal closeout），
+在 effect 提交或 checkpoint 前后中断一次，经历一次 unresolved 回读等待，
+再显式重试 failed turn、解析结果并精确重放。
+`tests/test_loopx_turn_settlement_recovery.py` 使用生产 Turn 入口、真实 File
+journal 和持久化的**合成** provider ledger。独立预期要求每个逻辑 effect
+只提交一次、阶段有序、未知期间保留 prepared、不重复运行 host，并在回读明确后
+有条件推进。四个非法 completion／identity 用例在改动前的固定版本上复现了
+先 checkpoint 后校验的问题。
+
+`tests/test_loopx_turn_driver.py` 还在隔离 File 状态中使用真实 CLI writeback
+和 quota provider，注入 journal checkpoint 丢失，并独立回读 run index。
+TypeScript 测试按步骤枚举合法／非法证据。异常模拟进程中断，不证明断电持久性。
+这些检查限定于 Turn／provider／journal；lease 转移、过期 owner 竞争、
+PostgreSQL authority、successor 调度和 App/Lark 送达尚未覆盖。因此 M2 仍开放；
+后续沿用现有 ownership-to-settlement 验收，在真实 lease／GoalRef fence 下
+补齐，再进入 M3 的实际送达 caller。
 
 ## 12. 未决事项
 

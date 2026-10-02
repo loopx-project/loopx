@@ -202,7 +202,11 @@ class ChatStatusRequestMixin:
                     "acceptance": goal.get("acceptance_observation"),
                 }
                 validate_public_safe_value(projection)
-            protected_paths = [self.server.registry_path, *self.server.scan_roots]
+            protected_paths = [
+                self.server.registry_path,
+                *self.server.scan_roots,
+                self.server.runtime_root,
+            ]
             projection = json.loads(
                 redact_local_paths(
                     json.dumps(projection, ensure_ascii=False),

@@ -21,11 +21,13 @@ export function GoalAutoNotifyToggle({
   goalId,
   notification,
   onChanged,
+  kind = "human_gate",
 }: {
   callbacks: PersonalWorkspaceCallbacks;
   goalId: string;
   notification?: WorkspaceGoalNotification;
   onChanged: () => void;
+  kind?: "human_gate" | "blocked_notice";
 }) {
   const { t } = useWorkspaceI18n();
   const [busy, setBusy] = useState(false);
@@ -36,7 +38,7 @@ export function GoalAutoNotifyToggle({
     setBusy(true);
     setError(null);
     try {
-      const result = await callbacks.onToggleGoalAutoNotify({ autoNotify, goalId });
+      const result = await callbacks.onToggleGoalAutoNotify({ autoNotify, goalId, kind });
       if (!result.ok) {
         setError(result.public_summary ?? result.blocker ?? t("notifications.setupFailed"));
         return;
@@ -53,12 +55,12 @@ export function GoalAutoNotifyToggle({
     <>
       <label className="personal-notification-toggle">
         <input
-          checked={notification?.humanGateAutoNotifyEnabled ?? false}
+          checked={kind === "blocked_notice" ? notification?.blockedNoticeAutoNotifyEnabled ?? false : notification?.humanGateAutoNotifyEnabled ?? false}
           disabled={busy || notification?.configured !== true || !callbacks.onToggleGoalAutoNotify}
           onChange={(event) => void toggle(event.target.checked)}
           type="checkbox"
         />
-        <span>{t("notifications.autoNotify")}</span>
+        <span>{t(kind === "blocked_notice" ? "notifications.blockedAutoNotify" : "notifications.autoNotify")}</span>
         {busy ? <Loader2 aria-hidden className="is-spinning" size={14} /> : null}
       </label>
       {error ? <p className="personal-notification-error" role="alert">{error}</p> : null}
@@ -130,6 +132,7 @@ function GoalNotificationRow({
             notification={notification}
             onChanged={onChanged}
           />
+
         </>
       ) : targets.length === 0 ? (
         <p className="personal-notification-hint">

@@ -21,6 +21,13 @@ import {
   requireNonEmptyString as requiredString,
   requireStringLiteral,
 } from "../runtime_decode.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaGoalRef,
+  requireQuotaOwnerProjection,
+  withQuotaAccountingOwner,
+  type QuotaAccountingOwner,
+} from "./source_admission.ts";
 
 export const QUOTA_VOID_COMMIT_REQUEST_SCHEMA =
   "loopx_quota_void_commit_request_v0";
@@ -63,6 +70,7 @@ interface QuotaVoidCommitRequest {
   execute: boolean;
   expected_index_digest: string | null;
   before: JsonObject;
+  owner: QuotaAccountingOwner;
 }
 
 interface QuotaVoidProjectionRequest {
@@ -173,12 +181,13 @@ function commitRequest(value: unknown): QuotaVoidCommitRequest {
       "quota void preview operation cannot execute durable effects",
     );
   }
+  const goalId = safeGoalId(request.goal_id);
   return {
     schema_version: QUOTA_VOID_COMMIT_REQUEST_SCHEMA,
     operation,
     effect_id: effectId,
     runtime_root: runtimeRoot,
-    goal_id: safeGoalId(request.goal_id),
+    goal_id: goalId,
     voided_run_generated_at:
       typeof request.voided_run_generated_at === "string"
         ? request.voided_run_generated_at.trim()
@@ -200,6 +209,12 @@ function commitRequest(value: unknown): QuotaVoidCommitRequest {
       "expected_index_digest",
     ),
     before,
+    owner: parseQuotaAccountingOwner({
+      goalRefValue: request.goal_ref,
+      sourceAdmissionValue: request.source_admission,
+      runtimeRoot,
+      goalId,
+    }),
   };
 }
 
@@ -227,6 +242,7 @@ function projectionRequest(value: unknown): QuotaVoidProjectionRequest {
 }
 
 function requestDigest(request: QuotaVoidCommitRequest): string {
+  const goalRef = quotaGoalRef(request.owner);
   return sha256(canonicalJson({
     schema_version: request.schema_version,
     effect_id: request.effect_id,
@@ -236,6 +252,7 @@ function requestDigest(request: QuotaVoidCommitRequest): string {
     source: request.source,
     reason_summary: request.reason_summary,
     before: request.before,
+    ...(goalRef === null ? {} : { goal_ref: goalRef }),
   }));
 }
 
@@ -406,6 +423,7 @@ async function findTargetSpend(
   records: readonly JsonObject[],
   goalId: string,
   generatedAt: string,
+  owner: QuotaAccountingOwner,
 ): Promise<TargetSpend | null> {
   for (const run of [...records].reverse()) {
     if (String(run.goal_id || goalId) !== goalId) continue;
@@ -413,6 +431,12 @@ async function findTargetSpend(
     if (run.classification !== QUOTA_SLOT_SPENT_CLASSIFICATION) continue;
     const event = await readTargetEvent(runsDir, run, goalId);
     if (event?.event_type !== QUOTA_SLOT_SPENT_CLASSIFICATION) continue;
+    requireQuotaOwnerProjection(owner, run.goal_ref, "quota void target");
+    requireQuotaOwnerProjection(
+      owner,
+      event.goal_ref,
+      "quota void target event",
+    );
     return { run, event };
   }
   return null;
@@ -459,7 +483,7 @@ function previewFor(
     legacyInteger(beforeQuota.spent_slots, 0) - slots,
   );
   after.quota = afterQuota;
-  return {
+  const preview: JsonObject = {
     ok: true,
     mode: "void-slot",
     dry_run: true,
@@ -479,6 +503,9 @@ function previewFor(
     rolling_window_note: ROLLING_WINDOW_NOTE,
     classification: QUOTA_SLOT_VOIDED_CLASSIFICATION,
   };
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) preview.goal_ref = goalRef;
+  return preview;
 }
 
 function recordFor(
@@ -488,6 +515,7 @@ function recordFor(
   generatedAt: string,
   effectId: string | null,
   fingerprint: string,
+  goalRef: JsonObject | null = null,
 ): JsonObject {
   if (preview.ok !== true) {
     throw new EffectRuntimeRequestError(
@@ -531,6 +559,10 @@ function recordFor(
       request_digest: fingerprint,
     };
   }
+  if (goalRef !== null) {
+    record.goal_ref = goalRef;
+    event.goal_ref = goalRef;
+  }
   return record;
 }
 
@@ -550,6 +582,7 @@ function artifactsFor(
     request.generated_at,
     request.effect_id,
     fingerprint,
+    quotaGoalRef(request.owner),
   );
   const event = requiredObject(record.quota_event, "record.quota_event");
   const payload: JsonObject = {
@@ -586,6 +619,11 @@ function artifactsFor(
     quota_void_commit: record.quota_void_commit,
   };
   if (record.agent_id) indexRecord.agent_id = record.agent_id;
+  const goalRef = quotaGoalRef(request.owner);
+  if (goalRef !== null) {
+    indexRecord.goal_ref = goalRef;
+    payload.goal_ref = goalRef;
+  }
   return {
     kind: "prepared",
     record,
@@ -609,6 +647,7 @@ async function prepareArtifacts(
     context.indexRecords,
     request.goal_id,
     request.voided_run_generated_at,
+    request.owner,
   );
   if (!target) {
     const payload = missingTargetPayload(
@@ -680,6 +719,7 @@ async function previewCommit(
       records,
       request.goal_id,
       request.voided_run_generated_at,
+      request.owner,
     );
     if (!target) {
       const payload = missingTargetPayload(
@@ -754,72 +794,77 @@ async function evaluateCommit(
     request.goal_id,
     "runs",
   );
-  if (!request.execute) {
-    return await previewCommit(request, fingerprint, runsDir);
-  }
-  const outcome = await commitQuotaAccountingArtifactTransaction({
-    kind: "void",
-    runsDir,
-    generatedAt: request.generated_at,
-    effectId: request.effect_id,
-    requestDigest: fingerprint,
-    expectedIndexDigest: request.expected_index_digest,
-    prepare: async (context) =>
-      await prepareArtifacts(request, fingerprint, runsDir, context),
+  return await withQuotaAccountingOwner(request.owner, async (indexLockHeld) => {
+    if (!request.execute) {
+      return await previewCommit(request, fingerprint, runsDir);
+    }
+    const goalRef = quotaGoalRef(request.owner);
+    const outcome = await commitQuotaAccountingArtifactTransaction({
+      kind: "void",
+      runsDir,
+      generatedAt: request.generated_at,
+      effectId: request.effect_id,
+      requestDigest: fingerprint,
+      expectedIndexDigest: request.expected_index_digest,
+      ...(goalRef === null ? {} : { goalRef }),
+      indexLockHeld,
+      prepare: async (context) =>
+        await prepareArtifacts(request, fingerprint, runsDir, context),
+    });
+    if (outcome.status === "conflict") {
+      return result(
+        request.effect_id,
+        fingerprint,
+        "conflict",
+        outcome.indexDigest,
+        outcome.reason,
+        null,
+        {
+          ok: false,
+          mode: "void-slot",
+          goal_id: request.goal_id,
+          effect_id: request.effect_id,
+          appended: false,
+          registry_mutated: false,
+        },
+        outcome.reasonCode,
+      );
+    }
+    if (outcome.status === "not_found") {
+      return result(
+        request.effect_id,
+        fingerprint,
+        "not_found",
+        outcome.indexDigest,
+        outcome.reason,
+        null,
+        outcome.payload,
+        "target_not_found",
+      );
+    }
+    const replayed = outcome.status === "replayed";
+    const repaired = outcome.status === "repaired";
+    const responsePayload: JsonObject = {
+      ...outcome.receipt.payload,
+      appended: outcome.status === "written" || repaired,
+      idempotent_replay: replayed,
+      transaction_repaired: repaired,
+      reason: replayed
+        ? "quota void commit replayed for the same effect identity"
+        : repaired
+        ? "quota void commit repaired its prepared durable transaction"
+        : outcome.receipt.payload.reason,
+    };
+    return result(
+      request.effect_id,
+      fingerprint,
+      outcome.status,
+      outcome.indexDigest,
+      String(responsePayload.reason ?? ""),
+      outcome.receipt.record,
+      responsePayload,
+    );
   });
-  if (outcome.status === "conflict") {
-    return result(
-      request.effect_id,
-      fingerprint,
-      "conflict",
-      outcome.indexDigest,
-      outcome.reason,
-      null,
-      {
-        ok: false,
-        mode: "void-slot",
-        goal_id: request.goal_id,
-        effect_id: request.effect_id,
-        appended: false,
-        registry_mutated: false,
-      },
-      outcome.reasonCode,
-    );
-  }
-  if (outcome.status === "not_found") {
-    return result(
-      request.effect_id,
-      fingerprint,
-      "not_found",
-      outcome.indexDigest,
-      outcome.reason,
-      null,
-      outcome.payload,
-      "target_not_found",
-    );
-  }
-  const replayed = outcome.status === "replayed";
-  const repaired = outcome.status === "repaired";
-  const responsePayload: JsonObject = {
-    ...outcome.receipt.payload,
-    appended: outcome.status === "written" || repaired,
-    idempotent_replay: replayed,
-    transaction_repaired: repaired,
-    reason: replayed
-      ? "quota void commit replayed for the same effect identity"
-      : repaired
-      ? "quota void commit repaired its prepared durable transaction"
-      : outcome.receipt.payload.reason,
-  };
-  return result(
-    request.effect_id,
-    fingerprint,
-    outcome.status,
-    outcome.indexDigest,
-    String(responsePayload.reason ?? ""),
-    outcome.receipt.record,
-    responsePayload,
-  );
 }
 
 function evaluateProjection(

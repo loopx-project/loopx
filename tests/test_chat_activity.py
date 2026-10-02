@@ -261,7 +261,7 @@ for raw in sys.stdin:
             if position % len(cases) == 3:
                 assert "notes.md docs/relative.md" in serialized and str(tmp_path) not in serialized
         # The file itself must already be clean, before a replay reader or UI can filter it.
-        logs = "\n".join(path.read_text() for path in root.rglob("*.events.jsonl"))
+        logs = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.events.jsonl"))
         assert "example value" not in logs and "/opt/example" not in logs and "/etc/example" not in logs
     finally:
         session.close()
