@@ -1081,6 +1081,66 @@ def test_a_mapped_specification_reference_must_be_published_text(field, value):
     assert not checked["ok"] and not checked["approval_consistent"]
 
 
+@pytest.mark.parametrize(("criterion_id", "spec_revision", "line", "unpublished"), [
+    # A criterion named only inside a longer criterion is not published.
+    ("EX-1", "b" * 40, "EX-10 implemented; EX-2 deferred.", "EX-1"),
+    # A short identity hidden inside the pinned commit id is not published.
+    ("bbb", "b" * 40, "EX-2 deferred.", "bbb"),
+])
+def test_a_specification_reference_must_appear_as_a_whole_token(
+    criterion_id, spec_revision, line, unpublished,
+):
+    """Another operator reads the body, so a substring of another word names nothing."""
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis["criteria"][0]["criterion_id"] = criterion_id
+    basis["spec_revision"] = spec_revision
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    result["review_body"] += (
+        "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance @ "
+        + spec_revision + " — " + line + "\n"
+    )
+    checked = check_review_result(packet, result)
+    assert f"review_body:spec_reference_not_published:{unpublished}" in checked["errors"]
+    assert not checked["ok"] and not checked["approval_consistent"]
+
+    result["review_body"] += f"{criterion_id} implemented.\n"
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_reviewer_line_must_name_each_declared_value_as_a_whole_token():
+    packet, result = _review()
+    result["reviewer"]["declared_provider"] = "AI"
+    result["review_body"] = result["review_body"].replace(
+        REVIEWER_LINE, "Reviewer: model_agent · Example Model 1 · OpenAI")
+    checked = check_review_result(packet, result)
+    assert "reviewer:body_line_disagrees_with_declaration" in checked["errors"]
+
+    result["review_body"] = result["review_body"].replace(
+        "· OpenAI", "· AI (self-reported family)")
+    assert check_review_result(packet, result)["ok"]
+
+
+@pytest.mark.parametrize("revision", ["main", "v1.2.0", "b" * 12, "B" * 39])
+def test_a_repository_specification_is_pinned_by_a_full_commit_id(revision):
+    """A branch, tag or abbreviated id cannot name the text the review judged."""
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis["spec_revision"] = revision
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    result["review_body"] += (
+        "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance @ "
+        + revision + " — EX-1 implemented; EX-2 deferred.\n"
+    )
+    checked = check_review_result(packet, result)
+    assert "problem_context:spec_basis:spec_revision_not_a_commit_id" in checked["approval_blockers"]
+    assert not checked["ok"]
+
+    # A linked task or review thread has no commit; its revision stays free text.
+    basis["spec_source"] = "linked_issue_or_task"
+    assert check_review_result(packet, result)["ok"]
+
+
 def test_a_published_mapping_must_carry_its_immutable_revision():
     """Another host can only open the same text if the body pins the revision.
 

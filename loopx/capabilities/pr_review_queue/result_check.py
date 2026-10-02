@@ -223,6 +223,17 @@ _DECLARED_NAME_FORBIDDEN = re.compile(r"[/:@]")
 _PUBLISHED_LINE_FORBIDDEN = re.compile(r"://|@")
 
 
+# Same full-length object ids the packet accepts for an exact head.
+_COMMIT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def _published_as_token(reference: str, text: str) -> bool:
+    # A whole-token match: EX-1 inside EX-10, or C1 inside a commit id, does not
+    # name the criterion to a reader.
+    pattern = rf"(?<![0-9a-z_-]){re.escape(reference)}(?![0-9a-z_-])"
+    return re.search(pattern, text) is not None
+
+
 def _reviewer_errors(value: object, body: str) -> list[str]:
     key = "reviewer"
     contract = REVIEWER_DECLARATION
@@ -249,7 +260,8 @@ def _reviewer_errors(value: object, body: str) -> list[str]:
         errors.append(f"{key}:body_line_missing_or_ambiguous")
     elif _PUBLISHED_LINE_FORBIDDEN.search(lines[0]):
         errors.append(f"{key}:body_line_carries_runtime_detail")
-    elif any(token.casefold() not in lines[0].casefold() for token in declared):
+    elif any(not _published_as_token(token.casefold(), lines[0].casefold())
+             for token in declared):
         errors.append(f"{key}:body_line_disagrees_with_declaration")
     return errors
 
@@ -283,6 +295,10 @@ def _check_spec_basis(blockers: list[str], value: object) -> None:
         text = value.get(field)
         if not _missing(text) and (not isinstance(text, str) or not text.strip()):
             blockers.append(f"{key}:invalid_{field}")
+    revision = value.get("spec_revision")
+    if (source in contract["commit_pinned_spec_sources"] and isinstance(revision, str)
+            and revision.strip() and not _COMMIT_ID.fullmatch(revision.strip().lower())):
+        blockers.append(f"{key}:spec_revision_not_a_commit_id")
     criteria = _require_items(
         blockers, evidence_id=key, row=value,
         requirement={"items_field": "criteria", "item_fields": contract["criterion_fields"],
@@ -328,7 +344,7 @@ def _unpublished_spec_references(value: object, body: str) -> list[str]:
         f"review_body:spec_reference_not_published:{reference}"
         for reference in references
         if isinstance(reference, str) and reference.strip()
-        and reference.strip().casefold() not in text
+        and not _published_as_token(reference.strip().casefold(), text)
     ]
 
 

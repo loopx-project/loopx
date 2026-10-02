@@ -179,6 +179,9 @@ SPEC_BASIS_ASSESSMENT = {
     ],
     "mapped_fields": ["spec_ref", "spec_revision", "criteria"],
     "published_text_fields": ["spec_ref", "spec_revision"],
+    # The repository's own documents are pinned by a full commit id; a branch or
+    # tag moves, so it cannot name the text the review judged against.
+    "commit_pinned_spec_sources": ["accepted_rfc", "accepted_contract_doc"],
     "criterion_fields": ["criterion_id", "requirement", "disposition"],
     "disposition_fields": {
         "implemented": ["symbol_or_path", "validation_ref"],
@@ -203,7 +206,10 @@ SPEC_BASIS_ASSESSMENT = {
         "review body: the body is the only part another operator reads, and a path alone "
         "moves with the branch while the revision pins the text the review judged against. "
         "Give spec_ref, spec_revision and criterion_id as non-empty strings: each is "
-        "published and matched against the body, so a non-string value could not be. "
+        "published and matched against the body as a whole token, so EX-1 inside EX-10 "
+        "or C1 inside a commit id is not publication. For accepted_rfc and "
+        "accepted_contract_doc, spec_revision is the full commit id; a branch or tag "
+        "name moves and cannot pin the text. "
         "Derive requirements from the "
         "specification, never from the patch. When the change edits the specification it "
         "cites, judge the criteria as accepted before this change and treat the edit as a "
