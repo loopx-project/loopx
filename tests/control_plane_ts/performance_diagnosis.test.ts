@@ -63,6 +63,20 @@ test("evented profiles integrate stack intervals rather than counting opens", ()
   assert.equal(main.inclusive_hotspots[0]!.inclusive_ms, 6);
 });
 
+test("event ordering, balanced exits and temporal units remain required", () => {
+  const profile = {$schema: sampled().$schema, shared: sampled().shared,
+    profiles: [{type: "evented", unit: "milliseconds", startValue: 0, endValue: 8,
+      events: [{type: "O", frame: 0, at: 1}, {type: "C", frame: 0, at: 7}]}]};
+  const wrongClose = structuredClone(profile); wrongClose.profiles[0]!.events[1]!.frame = 1;
+  assert.throws(() => inspect({profile: wrongClose}), /unbalanced/);
+  const unclosed = structuredClone(profile); unclosed.profiles[0]!.events.pop();
+  assert.throws(() => inspect({profile: unclosed}), /unclosed/);
+  const unordered = structuredClone(profile); unordered.profiles[0]!.events[1]!.at = 0;
+  assert.throws(() => inspect({profile: unordered}), /ordered/);
+  const allocations = sampled(); allocations.profiles[0]!.unit = "bytes";
+  assert.throws(() => inspect({profile: allocations}), /unsupported time unit/);
+});
+
 const v8 = () => ({startTime: 100, endTime: 5100,
   nodes: [{id: 10, callFrame: {functionName: "caller"}, children: [20]},
     {id: 20, callFrame: {functionName: "work", url: "worker.ts", lineNumber: 6}}],

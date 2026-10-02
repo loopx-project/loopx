@@ -300,6 +300,14 @@ on September 14 at `e98191faa`; its final result and applicability to the curren
 candidate still need evidence. Do not call it unstarted or restart its clock
 solely because an unrelated source revision changed.
 
+At source `613180ae`, the matched 64 KiB macOS run passes 13 rows, fails
+cold CLI status p95 (4.39 s against 2 s), and leaves 11 missing. The Linux
+storage-only run passes 12 rows with 13 missing; its smaller CLI rehearsal is
+not the formal CLI axis. Opt-in `performance-diagnosis` captures Python wall
+time, independent Node CPU, and Linux thread stacks on disposable targets.
+Startup, candidate scanning and waits are hypotheses to test with unchanged
+uninstrumented workloads; profile weights do not replace this admission failure.
+
 Last-caller Python decision retirement can proceed independently where the TS
 replacement and affected real callers are proven. Whole Markdown writer removal
 still requires C's new-Goal/upgrade/recovery exits. Complete consumer metadata,

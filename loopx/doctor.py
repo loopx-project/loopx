@@ -25,6 +25,7 @@ from .registry_writability import probe_registry_write_path
 from .release_manifest import load_release_manifest, release_version_tag
 from .skill_install_readback import (
     ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
+    PACKAGED_HOST_SKILL_IDS,
     configured_host_skills_dir,
     inspect_skill_install_readback,
     skill_install_doctor_checks,
@@ -557,7 +558,8 @@ def installed_skill_summary(skills_roots: tuple[Path, ...]) -> dict[str, dict[st
         raise ValueError("at least one Codex skill root is required")
     primary_root = skills_roots[0]
     summaries: dict[str, dict[str, Any]] = {}
-    for skill_name, phrases in REQUIRED_INSTALLED_SKILL_PHRASES.items():
+    for skill_name in PACKAGED_HOST_SKILL_IDS:
+        phrases = REQUIRED_INSTALLED_SKILL_PHRASES.get(skill_name, ())
         candidates = [
             (root, root / skill_name / "SKILL.md")
             for root in skills_roots
