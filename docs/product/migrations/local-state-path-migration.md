@@ -16,6 +16,22 @@ state. They do not select a second machine runtime. Extension activation,
 machine configuration and unclassified contents in that root still require the
 normal machine-state route decision.
 
+Host rollout observations under `runtime/goals/*/rollout-event-log.jsonl`,
+their locks, machine-scoped Lark consumer locks and a lone global-registry lock
+do not declare a second machine runtime. Discovery preserves these files;
+unknown contents or redirected entries still require an explicit route. Real
+configuration, extension activation, Goal state and registries retain the
+conflict protection above.
+
+`doctor` checks a supplied `--runtime-root` or the registry's declared
+`common_runtime_root`; `local_state_route.status=configured` names that scope
+and `default_status` retains the implicit discovery result. `update apply`
+keeps the selected registry and runtime through authority-format qualification,
+installation, doctor and extension readback. Status/Chat `--global-registry`
+uses the configured registry's runtime instead of rediscovering a default.
+None of these operations migrates directories or resolves a real implicit
+conflict by choosing one of two authorities.
+
 This migration is distinct from `migrate-state`, which imports the older Goal
 Harness product state. It moves only the LoopX runtime root and Goal directories
 declared by project registries. Other files under `.codex` remain in place.
