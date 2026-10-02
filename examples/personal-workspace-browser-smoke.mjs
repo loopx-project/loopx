@@ -48,6 +48,7 @@ import { newestDraftScenario } from "./personal-workspace-browser/newest-draft.m
 
 import { conversationInputScenario } from "./personal-workspace-browser/conversation-input.mjs";
 import { goalActivityScenario } from "./personal-workspace-browser/goal-activity.mjs";
+import { goalWorkMapScenario } from "./personal-workspace-browser/goal-work-map.mjs";
 
 import { stewardGroupTriggerScenario } from "./personal-workspace-browser/steward-group-trigger.mjs";
 
@@ -64,6 +65,7 @@ scenarioCatalog.push(conversationImageRequestScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
 scenarioCatalog.push(monitorReadbackScenario);
 scenarioCatalog.push(turnStepsScenario);
+scenarioCatalog.push(goalWorkMapScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
@@ -79,7 +81,7 @@ async function main() {
     );
   }
   await mkdir(outputDir, { recursive: true });
-  const server = startServer();
+  const server = await startServer();
   let browser;
   const results = {};
   const coverageEntries = [];

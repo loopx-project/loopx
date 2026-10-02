@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
+from ...control_plane.digest_envelope import sha256_envelope
 from ...extensions.hook_adapters import discover_extension_hook_adapters
 from ...extensions.runtime import default_extension_state_file
 from ...file_lock import exclusive_file_lock
@@ -87,7 +88,7 @@ def _digest(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _timestamp(value: object, label: str) -> str:

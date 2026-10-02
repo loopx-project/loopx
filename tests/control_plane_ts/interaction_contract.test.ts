@@ -120,3 +120,22 @@ test("rejects contradictory host-facing channel states", () => {
     /quiet no-op conflicts/,
   );
 });
+
+test("scoped override preserves admission context without selecting new work", async () => {
+  const {projectScopedOverride} = await import("../../loopx/control_plane/quota/scoped_override.ts");
+  const override = {kind: "agent_scoped_user_gate_override", from_state: "operator_gate",
+    to_state: "eligible", selected_action: "old candidate"};
+  const interaction = successorReplanContract();
+  const selected = {todo_id: "todo_bound", text: "Current work", selection_binding: "heartbeat_receipt"};
+  const before = structuredClone({override, selected});
+  assert.deepEqual(projectScopedOverride({override, selected_todo: selected,
+    interaction_contract: interaction}), {kind: override.kind, from_state: "operator_gate", to_state: "eligible"});
+  interaction.agent_channel = {must_attempt: true, delivery_allowed: true, quiet_noop_allowed: false};
+  assert.equal(projectScopedOverride({override, selected_todo: selected,
+    interaction_contract: interaction}).selected_action, "Current work");
+  assert.equal(projectScopedOverride({override, selected_todo: null,
+    interaction_contract: interaction}).selected_action, undefined);
+  assert.deepEqual({override, selected}, before);
+  assert.throws(() => projectScopedOverride({override, selected_todo: {text: "No identity"},
+    interaction_contract: interaction}), /selected_todo.todo_id/);
+});

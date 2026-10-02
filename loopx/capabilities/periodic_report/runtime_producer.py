@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
 from ...rollout_event_log import ROLLOUT_EVENT_SCHEMA_VERSION
+from ...control_plane.digest_envelope import sha256_envelope
 from .core import (
     _integer,
     _object,
@@ -46,7 +46,7 @@ def _event_digest(event_ids: Sequence[str]) -> str:
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _safe_durable_event(

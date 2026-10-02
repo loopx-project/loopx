@@ -478,7 +478,7 @@ def _entry_scenario_packets(root: Path) -> dict[str, dict[str, Any]]:
     )
 
     second_goal = "portfolio-second-goal"
-    second_state = project / ".codex" / "goals" / second_goal / "ACTIVE_GOAL_STATE.md"
+    second_state = project / ".loopx" / "goals" / second_goal / "ACTIVE_GOAL_STATE.md"
     second_state.parent.mkdir(parents=True)
     second_state.write_text("# Second Active Goal State\n", encoding="utf-8")
     registry["goals"].append(

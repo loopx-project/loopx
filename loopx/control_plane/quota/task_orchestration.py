@@ -359,7 +359,7 @@ def _task_orchestration_work_lane_contract(
     if not isinstance(peer_lanes, list):
         peer_lanes = contract.get("eligible_peer_lanes")
     return {
-        "schema_version": "work_lane_contract_v1",
+        "schema_version": WORK_LANE_CONTRACT_SCHEMA_VERSION,
         "lane": "task_orchestration",
         "next_lane": "peer_evidence_review",
         "obligation": "coordinate_task_bundle",

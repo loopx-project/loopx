@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fafafa">
+  <title>General long-horizon capability is a prerequisite for RSI · LoopX</title>
+  <meta name="description" content="From its first Meta Goal to Personal Workspace: four months of LoopX bootstrapping, 6,848 non-merge commits, and the long-horizon continuity that lets improvements compound.">
+  <link rel="canonical" href="https://loopx-project.github.io/loopx/blog/long-horizon-rsi/">
+  <link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/long-horizon-rsi/">
+  <link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/long-horizon-rsi/">
+  <link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/long-horizon-rsi/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="LoopX">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:title" content="General long-horizon capability is a prerequisite for RSI">
+  <meta property="og:description" content="From its first Meta Goal to Personal Workspace: four months of LoopX bootstrapping, 6,848 non-merge commits, and the long-horizon continuity that lets improvements compound.">
+  <meta property="og:url" content="https://loopx-project.github.io/loopx/blog/long-horizon-rsi/">
+  <meta property="article:published_time" content="2026-10-02">
+  <meta property="og:image" content="https://loopx-project.github.io/loopx/blog/assets/long-horizon-rsi-en.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="General long-horizon capability is a prerequisite for RSI · 6,848 non-merge commits">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="General long-horizon capability is a prerequisite for RSI">
+  <meta name="twitter:description" content="From its first Meta Goal to Personal Workspace: four months of LoopX bootstrapping, 6,848 non-merge commits, and the long-horizon continuity that lets improvements compound.">
+  <meta name="twitter:image" content="https://loopx-project.github.io/loopx/blog/assets/long-horizon-rsi-en.png">
+  <meta name="twitter:image:alt" content="General long-horizon capability is a prerequisite for RSI">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../blog/blog.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <a class="brand" href="../../" aria-label="LoopX home"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a>
+  <nav aria-label="Primary navigation"><a href="../../blog/" aria-current="true">Blog</a><a href="../../docs/book/en/">Docs</a></nav>
+  <div class="header-actions"><a class="language" href="../../blog/zh/long-horizon-rsi/" lang="zh-CN" hreflang="zh-CN" aria-label="阅读中文版">中文</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub <span aria-hidden="true">↗</span></a></div>
+</header>
+<main id="main">
+<div class="article-heading">
+  <a class="back" href="../../blog/">← All articles</a>
+  <p class="eyebrow">Design perspective · System-level self-improvement</p>
+  <h1>General long-horizon capability is a prerequisite for RSI</h1>
+  <p class="lead">Intelligence is not just being invoked. It begins to compound. Use the improved system to keep improving the system.</p>
+  <div class="byline"><a href="https://github.com/huangruiteng">Ruiteng Huang</a><span aria-hidden="true">·</span><time datetime="2026-10-02">October 2, 2026</time></div>
+</div>
+<div class="article-layout">
+  <aside class="toc"><details open><summary>In this article</summary><nav aria-label="Table of contents">
+<a href="#prerequisites">Why “general long-horizon” comes first</a>
+<a href="#recursive-work">From using AI on a project to improving the system with an improved system</a>
+<a href="#early-history">LoopX treated itself as a long-term task from the beginning</a>
+<a href="#development-rhythm">Four months of public development</a>
+<a href="#continuity">Long-horizon systems do more than “run a little longer”</a>
+<a href="#human-feedback">Humans in the loop do not negate recursion</a>
+<a href="#outlook">Where I want to take this</a>
+<a href="#sources">Data and further reading</a>
+  </nav></details></aside>
+  <article class="prose" aria-label="General long-horizon capability is a prerequisite for RSI">
+<section id="intro">
+<p>My view on Recursive Self-Improvement (RSI) is this: <strong>general long-horizon capability is a prerequisite for RSI.</strong></p>
+<p>AI modifying its own code is not the hardest part to imagine. What matters is that a round of work gives it better tools, more reliable execution, and more useful experience—and that these improvements participate in the next round of work, helping it improve itself again.</p>
+<p><strong>Intelligence is not just being invoked. It begins to compound.</strong></p>
+<p>Here I mean an agent system continually improving its own code, tools, and ways of working, not training model weights. This need not begin with a fully autonomous superintelligence. It can begin in a real project: people define direction, provide feedback, and accept results; agents continuously help improve their own operating environment.</p>
+<p>LoopX is my practice along that path. It is both the long-horizon agent meta-harness I use to advance projects and the system that LoopX agents continuously develop, validate, and maintain.</p>
+</section>
+<section id="prerequisites">
+<h2>Why “general long-horizon” comes first</h2>
+<p>“Recursive” means that the next improvement builds on the previous result.</p>
+<p>If every round requires explaining the goal again, rebuilding the environment, and finding the last conclusion, a system may repeatedly produce changes without accumulating capability. One excellent inference does not necessarily become a system that keeps getting better.</p>
+<p>Long-horizon capability carries goals, work state, validation results, and experience across contexts, sessions, executors, and system versions. A different agent can take over the same work. After an environment restart, the improvement can still become the next starting point.</p>
+<p>This does not require one model to think alone for months. Many short sessions, different models, and different executors can together form a long-horizon system. <strong>Continuity belongs to the system, not necessarily to any single inference.</strong></p>
+<p>“General” matters too. Real self-improvement does not stay inside one fixed task type. Today the system might discover a tool defect; tomorrow it might improve a research method; later it might change how agents collaborate, then evaluate what these changes do to overall output. It must connect research, implementation, evaluation, and adoption—not merely repeat a specialized scoring script.</p>
+<p>The prerequisite I mean is therefore not “being online long enough.” It is this: <strong>the system can keep advancing open-ended goals and carry its improvements into subsequent work.</strong></p>
+</section>
+<section id="recursive-work">
+<h2>From using AI on a project to improving the system with an improved system</h2>
+<p>Models provide intelligence, runtimes provide tools and execution environments, and a long-horizon system connects individual executions into ongoing work.</p>
+<p>In this structure, the object of self-improvement is broader than model weights. Tools, context organization, workflows, validation, memory, and human–agent collaboration can all be improved.</p>
+<p><a href="https://sakana.ai/dgm/">Sakana AI’s Darwin Gödel Machine</a> demonstrates a related research direction: agents modify their own code, retain candidates through task evaluation, and continue exploring from existing candidates. It strengthens my conviction that system-level evolution deserves serious attention.</p>
+<p><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">Anthropic’s work on harnesses for long-running agents</a> approaches a complementary problem: with finite context, incremental execution and resumable artifacts carry work across sessions.</p>
+<p>My interpretation is that these directions converge: <strong>self-improvement produces changes; general long-horizon capability lets them accumulate.</strong> One creates the next step. The other lets the system actually climb it.</p>
+</section>
+<section id="early-history">
+<h2>LoopX treated itself as a long-term task from the beginning</h2>
+<p>This history should not begin with the last few weeks.</p>
+<p><strong>Early: meta-bootstrapping in goal-harness.</strong> On May 31, 2026, the first public commit established a small control plane named goal-harness. On <strong>June 1</strong>, the repository already added a <a href="https://github.com/loopx-project/loopx/blob/9bc8c22ca31f22782f4d3f6a6187155156abafd2/goals/goal-harness-meta/ACTIVE_GOAL_STATE.md">Goal Harness Meta Goal</a>: treating its own development as a goal, checking runnability, continuation, and validation, then advancing the next improvement.</p>
+<p>Bootstrapping was not a feature added after the project matured. Very early, it was using itself to manage its own development. As new problems emerged, goal state, successor work, and validation mechanisms grew through that same process.</p>
+<p>By <strong>June 19</strong>, the public repository had a dedicated <a href="https://github.com/loopx-project/loopx/blob/b9b758ca4dfc30d0d610b45398fc31acd62781f6/docs/showcases/cases/0619-loopx-self-iteration.md">repository-level self-iteration case</a>. The case’s <strong>fixed June 20 snapshot</strong> recorded <strong>801 commits</strong> and described parallel development across the control plane, planning, validation, interfaces, and multiple workstreams—not one isolated feature. The project had not yet officially become LoopX.</p>
+<p><strong>Middle: from a bootstrapping tool to a general long-horizon system.</strong> On <strong>June 21</strong>, goal-harness <a href="https://github.com/loopx-project/loopx/commit/320fbedaa4d90bd02e5149a8fd9a46c9a498c650">was renamed LoopX</a>. Work expanded into multi-agent, cross-runtime, and community collaboration. July’s peer runtime and <a href="https://github.com/loopx-project/loopx/releases/tag/v0.2.0">v0.2 control plane</a> developed work ownership, execution boundaries, and handoff into product contracts.</p>
+<p>The important change was not adding more models. It was enabling different executors to advance work around the same durable state. Implementation, review, and validation could belong to different roles, while the work still needed to be adopted and accepted.</p>
+<p><strong>Later: from an engineering control plane to a personal workspace and community evolution.</strong> On <strong>September 6, <a href="https://github.com/loopx-project/loopx/releases/tag/v1.0.0">LoopX 1.0</a> introduced Personal Workspace.</strong> Beyond the state kernel, work gained a more complete everyday interface. People could participate in goals, decisions, and results through the workspace and IM; agents continued improving the underlying system, tools, and product surfaces. System bootstrapping and community contributions became intertwined. LoopX was no longer just one person’s development loop.</p>
+<p>Together, these stages tell the self-iteration story I want to share: <strong>first, make the system itself a long-term goal; then make long-horizon work a general capability; finally, let more people and agents keep evolving the same product.</strong></p>
+</section>
+<section id="development-rhythm">
+<h2>Four months of public development</h2>
+<p>I divided the same public Git history at those two milestones and consistently excluded merge commits:</p>
+<div class="table-scroll" role="region" aria-label="Fixed public history · Asia/Shanghai · non-merge commits" tabindex="0"><table class="benchmark-table" style="min-width: 720px"><caption>Fixed public history · Asia/Shanghai · non-merge commits</caption><thead><tr><th scope="col">Stage</th><th scope="col">Date range</th><th scope="col">Non-merge commits</th><th scope="col">Daily average</th><th scope="col">00:00–08:00 commits</th><th scope="col">Overnight share</th></tr></thead><tbody>
+<tr><th scope="row">Early · Meta bootstrapping</th><td>May 31–June 20</td><td><strong>739</strong></td><td><strong>35.2</strong></td><td><strong>298</strong></td><td><strong>40.3%</strong></td></tr>
+<tr><th scope="row">Middle · General long-horizon system</th><td>June 21–September 5</td><td><strong>3,870</strong></td><td><strong>50.3</strong></td><td><strong>1,399</strong></td><td><strong>36.1%</strong></td></tr>
+<tr><th scope="row">Later · Workspace and community</th><td>September 6–October 1</td><td><strong>2,239</strong></td><td><strong>86.1</strong></td><td><strong>556</strong></td><td><strong>24.8%</strong></td></tr>
+</tbody></table></div>
+<p>The fixed public-history snapshot contains <strong>8,613 commits, of which 6,848 are non-merge commits</strong>. The three stages above sum to those 6,848. All times use Beijing time.</p>
+<figure class="architecture-figure"><div class="architecture-viewport" role="region" aria-label="LoopX’s evolution from meta-bootstrapping to a long-horizon system and a community workspace" tabindex="0"><a href="../images/long-horizon-rsi/history-en.svg" target="_blank" rel="noopener"><img src="../images/long-horizon-rsi/history-en.svg" alt="LoopX’s evolution from meta-bootstrapping to a long-horizon system and a community workspace" width="1600" height="1220" loading="lazy" decoding="async"></a></div><figcaption>Three stages and one recursive feedback loop. Scroll horizontally on narrow screens; <a href="../images/long-horizon-rsi/history-en.svg" target="_blank" rel="noopener">open full-size figure ↗</a></figcaption></figure>
+<p>In the latest <strong>14 complete calendar days, September 18–October 1</strong>, the daily average reached <strong>96.9 non-merge commits</strong>: <strong>1,356</strong> in total, with a daily peak of <strong>144</strong>. <strong>384 commits, or 28.3%,</strong> fell between midnight and 08:00. All 14 days had overnight commits.</p>
+<p>The lesson is not that the overnight share must keep increasing. In fact, it declined across the stages while daily activity rose. More useful questions are whether work continues across day and night, whether improvements enter the next operating environment, and whether more people and agents sustain useful output.</p>
+<p>These counts describe development across the whole project, including community contributions. They are not a “fully automated RSI” percentage or a measure of capability improvement. They make the scale and timing of ongoing development auditable. <strong>The core self-iteration evidence remains the system being used in real work, receiving feedback, being improved, and then being used again.</strong></p>
+</section>
+<section id="continuity">
+<h2>Long-horizon systems do more than “run a little longer”</h2>
+<p>Starting from externalized goals and task state, LoopX has progressively organized continuation, authorization, resource budgets, validation, and accumulated experience into one control plane, with Personal Workspace and IM bringing people into the process. Models and runtimes can differ; the work’s goals, constraints, and acceptance evidence must continue. See the <a href="https://github.com/loopx-project/loopx/tree/b9b758ca4dfc30d0d610b45398fc31acd62781f6">public architecture and product entry points</a>.</p>
+<p>Three capabilities matter most to me:</p>
+<p><strong>Goal continuity.</strong> Completing a local task does not mean the overall goal has been achieved. The system must replan from acceptance results and keep moving toward the actual goal.</p>
+<p><strong>Accumulating feedback.</strong> User corrections, effective improvements, and failed attempts should not live only in a single conversation. They need to change the environment of subsequent execution.</p>
+<p><strong>Carrying improvements forward.</strong> Research cannot stop in a document, and code changes cannot stop on a branch. They must be validated, adopted, and tested again in real work.</p>
+<p>Connecting these creates a chance to turn more time, compute, and parallel agents into accumulated capability—not just more independent outputs.</p>
+<p>I regard LoopX’s human-in-the-loop bootstrapping in real engineering as an early form of system-level RSI. The point is not to rename ordinary development. It is to make the system doing the work an object of continuous improvement, then use that improved system in the next round.</p>
+</section>
+<section id="human-feedback">
+<h2>Humans in the loop do not negate recursion</h2>
+<p>I do not think early RSI must begin by excluding humans entirely.</p>
+<p>High-quality human reward helps a system identify what is worth doing and what actually works. People provide direction and key judgments; the system handles sustained execution and continuation. Feedback need not become another explanation from scratch. It can become part of the environment, work state, and validation requirements.</p>
+<p>Recursion depends on <strong>whether the improved system participates in subsequent improvement</strong>, not on whether a person speaks in every round.</p>
+<p>At the same time, candidate changes cannot earn “success” by relaxing their own evaluation standards. Real adoption, independent validation, and reversible work stages are foundations for a feedback loop that accumulates value.</p>
+</section>
+<section id="outlook">
+<h2>Where I want to take this</h2>
+<p>Models are becoming stronger, tokens cheaper, and the number of agents one person can organize is growing.</p>
+<p>The next frontier is not only completing more tasks. It is a digital team gradually developing better methods through long-term work: better tools, more effective collaboration, more rigorous validation, and experience that later work actually uses.</p>
+<p><strong>One-shot intelligence solves a problem. Long-horizon intelligence accumulates the ability to solve problems.</strong></p>
+<p>That is my ambition for LoopX: one person defines goals and provides key judgments, while a digital team keeps advancing. It not only completes work; it improves the system that completes the work.</p>
+<p>Maximize useful agent output. Minimize human attention. General long-horizon capability is the foundation of that path—and, in my view, a prerequisite RSI cannot bypass.</p>
+</section>
+<section id="sources">
+<h2>Data and further reading</h2>
+<p>The statistics are fixed at <a href="https://github.com/loopx-project/loopx/commit/b9b758ca4dfc30d0d610b45398fc31acd62781f6">b9b758c</a>, the last main-line commit before the end of October 1, 2026 in Beijing time. Calendar days use Git committer timestamps in Asia/Shanghai; overnight means 00:00 inclusive to 08:00 exclusive. We count all commits reachable from that snapshot, excluding multiple-parent commits (merges) from the headline measure. The stages follow the first public commit, the LoopX rename, and the 1.0 workspace release. Daily-average denominators are 21, 77, and 26 calendar days; the first day is the partial day on which the public history began. Another 1,765 merge commits are excluded from the 6,848 headline. Commit objects are not independent features or accepted outcomes, and timestamps do not identify whether authors used AI.</p>
+<p>For public adoption and subsequent corrections, see the <a href="https://github.com/loopx-project/loopx/blob/b9b758ca4dfc30d0d610b45398fc31acd62781f6/docs/research/agent-workflow-audits/rsi-harness-adoption-v0.zh-CN.md">RSI-Harness adoption audit</a>, <a href="https://github.com/loopx-project/loopx/pull/4984">PR #4984</a>, and <a href="https://github.com/loopx-project/loopx/pull/5119">follow-up correction #5119</a>. These show how improvements enter actual paths; their implementation details are not the main narrative here.</p>
+<p>Project: <a href="https://github.com/loopx-project/loopx">LoopX</a>. </p>
+<p><a href="../images/long-horizon-rsi/statistics.json">Download aggregate statistics and method (JSON)</a> · Stages use calendar dates, not the exact hour of each milestone.</p>
+<details><summary>Check the fixed history in a full Git clone</summary><pre><code>git rev-list --count b9b758ca4dfc30d0d610b45398fc31acd62781f6
+git rev-list --count --no-merges b9b758ca4dfc30d0d610b45398fc31acd62781f6
+TZ=Asia/Shanghai git log --no-merges b9b758ca4dfc30d0d610b45398fc31acd62781f6 \
+  --format='%cI'  # committer timestamps; group by the stated calendar intervals</code></pre></details>
+</section>
+
+  </article>
+</div>
+</main>
+<footer class="site-footer"><a class="brand" href="../../">LoopX</a><p>Keep the loop moving. Keep the judgment human.</p><a href="../../blog/">All posts ↑</a></footer>
+</body>
+</html>

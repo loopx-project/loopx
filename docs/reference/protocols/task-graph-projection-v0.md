@@ -150,8 +150,8 @@ These are intentional corrections to the old graph, which collapsed successor
 lineage into dependencies, reversed unblocks discovery, and omitted Monitor
 conditions. Parallel lineage and condition edges are retained. Opaque route,
 capability and unknown-condition suffixes must not be interpreted as Todo IDs
-by either graph or horizon. Existing read-only node kinds, status normalization,
-claim presentation and evidence/handoff renderers are unchanged.
+by either graph or horizon. Existing read-only node kinds, claim presentation
+and evidence/handoff renderers are unchanged.
 
 The predecessor lens expands the selected Todo and completed predecessors;
 open predecessors are visible boundaries, not recursive traversal roots.
@@ -176,6 +176,67 @@ These relations may help a dashboard or reviewer explain why a work item is
 still active, stale, repaired, or safe to hand off. They must not create a graph
 resume command, mutate todo status, or replace freshness checks against current
 quota, gates, claims, and run history.
+
+A `deferred` Todo renders as `waiting` in every lens. Deferral ends scheduling,
+not delivery, so it must never appear as `done`.
+
+### Goal work map (`goal_task_map_v0`)
+
+The predecessor lens answers "what led to this item". The Goal work map answers
+"what is the shape of this Goal's work": one read-only map of the Goal's
+non-archived Todos and every typed relation above. It ships beside `graph` in
+the cold `GET /api/chat/delivery-review?goal_id=...` response and is never
+added to status hot paths.
+
+```json
+{
+  "schema_version": "goal_task_map_v0",
+  "mode": "read_only",
+  "goal_id": "community-day",
+  "limits": {
+    "node_limit": 120, "emitted_node_count": 22, "omitted_node_count": 0,
+    "source_truncated": false, "missing_endpoint_count": 0,
+    "cycle_edge_count": 0, "topology_complete": true
+  },
+  "nodes": [{ "node_id": "node_todo_...", "kind": "deliverable", "title": "Reserve the hall",
+              "state": "blocked", "depth": 1, "refs": { "todo_ids": ["todo_..."] },
+              "owner_agent": "logistics", "task_domain": "booking" }],
+  "edges": [{ "edge_id": "edge_unblocks_...", "from_node_id": "node_todo_...",
+              "to_node_id": "node_gate_...", "relation": "depends_on",
+              "enforcement": "typed_lifecycle", "reason": "..." }]
+}
+```
+
+- Node `kind` is `deliverable`, `gate` (a user Todo) or `monitor` (a
+  `continuous_monitor` Todo). Gates carry no owner. Nodes carry no note,
+  evidence or raw Todo text beyond the compact public-safe title.
+- Edges use the relation mapping in the table above. `enforcement` reuses the
+  `planning_relations` catalog (`typed_lifecycle`, `typed_condition`,
+  `lineage_only`), so a reader can tell a lifecycle link from lineage.
+- The TS effect `work_item.task_graph.goal_topology` owns admission, edges and
+  `depth` (the longest recorded prerequisite path). Admission is deterministic:
+  unfinished work first, then direct completed prerequisites of unfinished
+  work, then remaining history, up to `node_limit` (at most 200).
+- `depends_on` edges order the map. Lineage (`continues`, `supersedes`)
+  carries no ordering obligation: it adds depth only where it agrees with the
+  dependency order. A follow-up recorded opposite to a dependency, such as a
+  gate spawned by the work it later unblocks, is drawn but is not a cycle.
+- `cycle_edge_count` counts dependency loops only; their back edges are
+  counted, not drawn as an order. `topology_complete` is true only when nothing
+  was omitted, the source list was not truncated, no relation names an absent
+  Todo, and no dependency loop exists. Missing endpoints never create phantom
+  nodes.
+- An unreadable Todo source returns `goal_map: null` and leaves the rest of the
+  delivery review available.
+
+Like the predecessor lens, the map has no write authority. A drawn line is a
+recorded relation, not a readiness verdict; the resume evaluator and lifecycle
+commands keep that authority.
+
+中文：工作地图只读展示一个 Goal 的全部未归档 Todo 和已记录的类型化关系；
+连线来自记录而非推断，不代表“可以执行”。顺序只由依赖决定，延续/替代仅在不与依赖
+冲突时加深层级，因此反向记录的后续不算成环；`cycle_edge_count` 只统计依赖环。截断、
+缺失端点和依赖环都必须显式计入 `limits`，不能把不完整的图画成完整顺序。
 
 ## Write Boundary
 

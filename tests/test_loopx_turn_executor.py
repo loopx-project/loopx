@@ -3205,7 +3205,7 @@ def test_real_host_duration_is_observed_but_settlement_replay_is_not(tmp_path, m
     from loopx import usage_ping
 
     machine = tmp_path / "machine"
-    monkeypatch.setattr(usage_ping, "DEFAULT_RUNTIME_ROOT", machine)
+    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: machine)
     for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")

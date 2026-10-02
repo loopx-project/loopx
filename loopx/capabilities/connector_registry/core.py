@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from ...paths import select_default_runtime_root
+
 
 CONNECTOR_REGISTRY_SCHEMA_VERSION = "connector_registry_v1"
 LAYER_LABELS = {
@@ -86,7 +88,7 @@ BUILTIN_CONNECTOR_CATALOG: list[dict[str, Any]] = [
 
 
 def default_registry_path() -> Path:
-    runtime_root = Path(os.environ.get("LOOPX_RUNTIME_ROOT") or (Path.home() / ".codex" / "loopx"))
+    runtime_root = Path(os.environ.get("LOOPX_RUNTIME_ROOT") or select_default_runtime_root())
     return runtime_root / "connector-registry.json"
 
 

@@ -25,7 +25,7 @@ Send this setup request:
 
 ```text
 Connect the current project to LoopX. Run loopx doctor first, reuse existing
-active state, and confirm that .loopx/, .codex/goals/, and .local/ are ignored.
+active state, and confirm that .loopx/, .loopx/goals/, and .local/ are ignored.
 Do not use hidden headless execution. After connection, generate a thin heartbeat
 task body and set the current Codex CLI task to a visible /goal <task_body>.
 Report the active state id, current user gate, top agent todo, and next safe action.

@@ -12,6 +12,7 @@ from loopx.control_plane.projects.registry_codec import (
     ProjectRegistryError,
     ProjectRegistryMutationError,
     ProjectRegistryProtocolError,
+    decode_project_registry,
     load_project_registry,
     mutate_project_registry,
     source_session_registry_transaction,
@@ -112,6 +113,21 @@ def test_strict_decode_validates_canonical_payload_digest(tmp_path: Path) -> Non
     _write(path, envelope)
     with pytest.raises(ValueError, match="digest"):
         load_project_registry(path)
+
+
+def test_dsh_strict_registry_fixture_uses_the_python_wire_contract() -> None:
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "packages/dsh-loopx-plugin/tests/fixtures/project-registry-strict-v1.json"
+    )
+
+    payload = decode_project_registry(fixture.read_bytes())
+
+    assert payload["goals"][0]["state_file"] == (
+        ".codex/goals/goal-fixture/ACTIVE_GOAL_STATE.md"
+    )
+    assert payload["meta"]["fraction"] == 1.0
+    assert payload["meta"]["label"] == "目标"
 
 
 def test_future_protocol_is_readable_but_not_mutable(tmp_path: Path) -> None:

@@ -21,12 +21,12 @@ def _pytest_facade_available() -> bool:
 
 
 def _pytest_command() -> list[str] | None:
-    uvx = shutil.which("uvx")
-    if uvx:
-        return [uvx, "--with", "pytest>=8,<9", "pytest"]
     try:
         import pytest  # noqa: F401
     except Exception:
+        uvx = shutil.which("uvx")
+        if uvx:
+            return [uvx, "--python", sys.executable, "--with", "pytest>=8,<9", "pytest"]
         return None
     return [sys.executable, "-m", "pytest"]
 

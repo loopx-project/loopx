@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -17,6 +16,7 @@ from .core import (
     _SINK_STATUSES,
 )
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+from ...control_plane.digest_envelope import sha256_envelope
 
 GENERATION_BUNDLE_SCHEMA = "periodic_report_generation_bundle_v0"
 GENERATION_RECEIPT_SCHEMA = "periodic_report_generation_receipt_v0"
@@ -175,7 +175,7 @@ def _sha256(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def _identity(value: object, *, prefix: str) -> str:

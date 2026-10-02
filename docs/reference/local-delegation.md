@@ -671,6 +671,31 @@ concurrent executions still use the same kernel lock and original Turn journal.
 | Ark requests a local tool while the host is absent | It waits for the local tool result. Recovery observes the original input/session and executes only previously unstarted tool calls. |
 | Tool execution or send acknowledgement is uncertain | Do not repeat the effect. Preserve the receipt/session for explicit reconciliation. |
 | Task completed but return was interrupted | Read/validate the original task and return; do not rerun the model. |
+| Journal history is unreadable, contradictory or ambiguous | The original operation remains recoverable with an error; no replacement Turn is launched. Reconcile the retained history before resuming the same operation. |
+
+Settlement-addressed recovery and completion capability evidence use the same
+TypeScript journal query and identity/inspection owners. Recovery accepts a
+consistent in-progress journal; capability evidence still requires terminal
+replay legality. The reader also enforces the writer's status/phase constraints:
+for example, `committed` requires the full phase prefix. These are enforced
+checks, not guidance. `turn inspect-journal` reports a contradictory snapshot
+as `replay_blocked` with `journal_status_phase_mismatch`.
+
+A digest-named journal that cannot be read cannot safely be skipped as evidence
+of absence or uniqueness. This also holds when another matching file is readable.
+Non-journal sidecars and identifiable other Turns are ignored; duplicate exact
+identities fail closed. Keep the original files for diagnosis; do not delete a
+receipt or change an operation id to force progress. After verified repair,
+resume the same operation through the existing tools. Capability lookup supplies
+no evidence on an unavailable/conflicting read, preserving ungated fallback.
+Historical capability names are strings; non-string declarations are ignored.
+
+The query reads atomic file versions without creating reader locks or an index.
+It does not take a directory-wide snapshot, establish provider-side absence,
+validate current lease authority, or replace execution single-flight and
+commit-time checks. The File Turn journal is separate from the selected
+coordination authority backend. No new configuration or frontend control is
+needed; existing delegation error/readback and CLI inspection expose the result.
 
 Ark recovery retains the original execution deadline; reconnecting does not
 reset the budget. Lost creation/input-send responses remain reconciliation

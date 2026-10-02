@@ -1,0 +1,6 @@
+/*
+ * Positive fixture for the shipped command: the reference below is satisfied by
+ * a real style sink in `clean.tsx`. The scope must exit 0; if the classifier
+ * stops recognising that sink, correct code starts failing the required check.
+ */
+.fixture-clean-surface { color: var(--fixture-clean); }

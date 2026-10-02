@@ -1,6 +1,6 @@
 /** Upgrade physical formats without changing provider selection or Goal authority.
  * Provider-to-provider movement uses authority_archive's portable logical log. */
-import {copyFile, mkdir, mkdtemp, open, readFile, readdir, rm, chmod} from "node:fs/promises";
+import {copyFile, mkdir, mkdtemp, readFile, readdir, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
@@ -10,7 +10,7 @@ import {canonicalAuthorityBytes} from "./authority_store_codec.ts";
 import {migrateFileAuthorityStore} from "./file_authority_migration.ts";
 import {FileAuthorityStore, replaceFileAuthorityDurably, syncAuthorityDirectory} from "./file_authority_store.ts";
 import {migrateSqliteAuthorityStoreV1ToV2} from "./sqlite_authority_migration.ts";
-import {sqliteAuthorityRuntime} from "./sqlite_runtime.ts";
+import {snapshotSqliteDatabase} from "./sqlite_backup.ts";
 import {sqliteAuthorityPath} from "./sqlite_authority_store.ts";
 import {requireLocalAuthorityRuntimeRoot} from "./local_authority_provider.ts";
 
@@ -29,12 +29,7 @@ async function upgradeSqlite(directory: string, goal: string, execute: boolean):
     await mkdir(backupRoot, {recursive: true, mode: 0o700});
     const backupDirectory = await mkdtemp(join(backupRoot, "sqlite-"));
     const snapshot = sqliteAuthorityPath(backupDirectory, goal);
-    const {driver} = sqliteAuthorityRuntime();
-    const db = new driver.DatabaseSync(path, {readOnly: true});
-    try { await driver.backup(db, snapshot); } finally { db.close(); }
-    await chmod(snapshot, 0o600);
-    const handle = await open(snapshot, "r");
-    try { await handle.sync(); } finally { await handle.close(); }
+    await snapshotSqliteDatabase(path, snapshot);
     // The source may continue committing during online backup. Verify a separate
     // copy through the real converter; compare its logical digest inside the
     // source's BEGIN IMMEDIATE before table adoption. A race fails, never drops writes.

@@ -494,6 +494,7 @@ type PersonalGoalItem = {
 
 type PersonalNeedsYouItem = {
   details?: AttentionDetails;
+  decisionSource?: "todo" | "run_operator_gate";
   actionKind?: string | null;
   blocking: boolean;
   goalId: string;
@@ -1034,6 +1035,7 @@ function buildPersonalHomeModel(
       details: attentionDetails({ task_class: "user_gate", status: "open", note: row.latestRun?.operator_gate?.reason_summary }),
       actionKind: "gate.resolve",
       blocking: true,
+      decisionSource: "run_operator_gate",
       goalId: row.goal.id,
       sourceOrder: payload.attention_queue.items.length + rowOrder,
       taskClass: "user_gate",
@@ -1342,12 +1344,12 @@ function PersonalGoalHome({
     {
       agentId: "status-only",
       available: true,
-      capability: "不调用模型",
+      capability: t("header.statusOnlyDescription"),
       adapterKind: "status_projection",
       interrupt: false,
-      label: "仅查状态",
+      label: t("header.statusOnlyAgent"),
       resume: true,
-      statusLabel: "只读",
+      statusLabel: t("common.readOnly"),
       streaming: false,
       toolCalls: false,
       trustScope: "read_only",
@@ -2209,9 +2211,9 @@ function PersonalGoalHome({
       const answer = personalManagerSnapshot(targetQuestionModel);
       const usesStatusOnlyRoute = selectedRoute.agentId === "status-only";
       const answerMessageId = appendManagerAssistantMessage(targetContextId, {
-        agentLabel: usesStatusOnlyRoute ? "仅查状态" : "LoopX 管家",
+        agentLabel: usesStatusOnlyRoute ? t("header.statusOnlyAgent") : t("header.manager"),
         lines: answer.lines.slice(0, 3),
-        sourceLabel: usesStatusOnlyRoute ? "LoopX 状态投影 · 仅查状态" : "LoopX 状态投影",
+        sourceLabel: usesStatusOnlyRoute ? `${t("header.statusProjection")} · ${t("header.statusOnlyAgent")}` : t("header.statusProjection"),
         text: answer.text,
       });
       void recordProjectionExchange({

@@ -226,6 +226,7 @@ def main() -> int:
             "LOOPX_INSTALL_SKILL": "1",
             "LOOPX_PROMOTE_DEFAULT": "1",
             "LOOPX_PYTHON": sys.executable,
+            "LOOPX_USAGE_PING": "0",
             "PATH": os.environ.get("PATH", ""),
             "SHELL": "/bin/zsh",
         }
@@ -449,7 +450,7 @@ def main() -> int:
             "Never infer `verified` from metadata or CI",
             "formal `REQUEST_CHANGES`",
             "Read the published review back",
-            "Merge still routes through `loopx-pr-merge`",
+            "Merge routes through `loopx-pr-merge`",
         ):
             assert phrase in pr_review_text, phrase
         assert "Do not use this skill to approve" not in pr_review_text, pr_review_text
@@ -575,7 +576,7 @@ def main() -> int:
                 )
 
         cli_env = {**env, "PATH": f"{bin_dir}:{env['PATH']}"}
-        runtime_run_dir = home / ".codex" / "loopx" / "goals" / "loopx-meta" / "runs"
+        runtime_run_dir = home / ".loopx" / "goals" / "loopx-meta" / "runs"
         generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         write_promotion_readiness(runtime_run_dir, generated_at=generated_at, label="fresh")
 
@@ -806,7 +807,7 @@ def main() -> int:
         assert payload["ok"] is True, payload
         assert payload["schema_version"] == "heartbeat_agent_input_v1", payload
         expected_quota_guard = (
-            'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+            'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
             'quota should-run --goal-id installer-smoke-goal '
             '--turn-instance-id "${LOOPX_TURN:?}"'
         )
