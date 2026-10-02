@@ -1,5 +1,7 @@
 """Steward expression replaces templates without replacing effect authority."""
 
+import pytest
+
 from loopx.extensions.lark.goal_channel_runtime import notify_lark_goal_channel_gate
 from loopx.extensions.lark.goal_channel_blocked_notice import deliver_blocked_notices
 from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding, write_goal_channel_binding
@@ -64,6 +66,31 @@ def test_generation_failure_has_no_send_and_recovers(tmp_path):
     projection = _goal_notification_row(binding_path=path,
         binding_payload=read_goal_channel_binding(path), goal_id=GOAL_ID)
     assert projection["steward_notice_delivery"] == {"pending_count": 0, "failed_count": 0}
+
+
+@pytest.mark.parametrize("complete_reference", [True, False])
+def test_standalone_owner_blocker_preserves_decision_without_gate_sender(tmp_path, complete_reference):
+    path = _gate_test_binding(tmp_path)
+    payload = read_goal_channel_binding(path)
+    payload["bindings"][GOAL_ID]["automation"] = {
+        "human_gate_auto_notify_enabled": False, "blocked_notice_auto_notify_enabled": True}
+    write_goal_channel_binding(path, payload)
+    calls, seen = [], []
+    def synthesize(facts):
+        seen.append(facts)
+        return "Review the publication evidence before deciding" + (
+            " (todo_release)." if complete_reference else ".")
+    result = deliver_blocked_notices(goal_id=GOAL_ID, binding_path=path,
+        status={"attention_queue": {"items": [{"goal_id": GOAL_ID,
+                "user_todos": {"items": [request()]}}]}}, quota_packet={},
+        external_sink_delivery_authorized=True, runner=_fake_runner(calls), synthesizer=synthesize)
+    decision = seen[0]["decision_notice"]["items"][0]
+    assert decision == {"request_id": "todo_release", "text": request()["text"],
+                        "reason": request()["reason"], "evidence": ""}
+    assert bool(result["readback_verified"]) is complete_reference
+    assert any("+messages-send" in args for args in calls) is complete_reference
+    if not complete_reference:
+        assert result["blocker"] == "steward_notice_unavailable"
 
 
 def test_prepared_body_survives_provider_retry(tmp_path):

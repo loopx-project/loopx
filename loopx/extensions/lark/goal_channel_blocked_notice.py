@@ -261,7 +261,7 @@ def deliver_blocked_notices(
         }
         raw = observed.get(str(notice["blocker_identity"])) or {}
         decision = _gate_notice_projection(goal_id=goal_id, quota_packet={
-            "user_todo_summary": {"first_executable_items": [raw] if notice.get("owner_must_act") else []}})
+            "user_todo_summary": {"gate_open_items": [raw] if notice.get("owner_must_act") else []}})
         facts = {"goal_id": goal_id, "blockers": [notice], "decision_notice": decision}
         try:
             message = render_channel_notice(
