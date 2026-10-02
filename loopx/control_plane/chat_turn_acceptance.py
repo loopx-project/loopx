@@ -173,6 +173,20 @@ def _required_bool(payload: dict[str, Any], field: str) -> bool:
     return value
 
 
+def managed_turn_execution_allowed(
+    session: dict[str, Any] | None, turn: dict[str, Any] | None,
+) -> bool:
+    """Ask the existing typed Turn owner about the current durable claim."""
+    result = effect_runtime_result("chat.turn.execution_allowed", {
+        "session": ({"status": session.get("status"),
+                     "active_turn_id": session.get("active_turn_id")}
+                    if session is not None else None),
+        "turn": ({"turn_id": turn.get("turn_id"), "status": turn.get("status")}
+                 if turn is not None else None),
+    })
+    return _required_bool(result, "allowed")
+
+
 def _raise_rejection(result: dict[str, Any]) -> None:
     code = result.get("code")
     if code in {"session_not_found", "session_closed"}:

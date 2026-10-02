@@ -686,6 +686,7 @@ def build_live_quota_should_run_decision(
             goal_id=goal_id, agent_id=agent_id, todo_id=receipt_bound_todo_id,
             turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
+            monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),
         )
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {

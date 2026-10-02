@@ -982,6 +982,12 @@ def test_runtime_drains_admitted_write_before_exit(
             assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
     finally:
         lock_path.unlink(missing_ok=True)
+        cleanup_deadline = time.monotonic() + 3
+        while time.monotonic() < cleanup_deadline:
+            effect_runtime._reap_exited_runtime_child(info)
+            if not effect_runtime._pid_is_alive(original["pid"]):
+                break
+            time.sleep(0.025)
         if effect_runtime._pid_is_alive(original["pid"]):
             os.kill(int(original["pid"]), signal.SIGTERM)
 

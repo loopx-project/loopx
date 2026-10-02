@@ -13,6 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -374,7 +375,13 @@ def assert_cadence_projection(
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="loopx-hot-path-budget-") as tmp:
+    # Prompt rendering inspects implicit routes even though status reads the
+    # declared fixture registry. Keep both default-route probes in this fixture.
+    with tempfile.TemporaryDirectory(prefix="loopx-hot-path-budget-") as tmp, patch.multiple(
+        "loopx.paths",
+        DEFAULT_RUNTIME_ROOT=Path(tmp) / "default-runtime",
+        LEGACY_RUNTIME_ROOT=Path(tmp) / "legacy-runtime",
+    ):
         root = Path(tmp)
         registry_path, project = write_registry(root)
         append_run(root)

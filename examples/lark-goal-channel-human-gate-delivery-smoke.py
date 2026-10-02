@@ -15,18 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from loopx.extensions.bundled import bundled_extension_manifest
 from loopx.extensions.lark.goal_channel_contracts import (
     GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
-    quota_human_gate_state_generation,
     read_goal_channel_binding,
-    semantic_key,
     write_goal_channel_binding,
 )
 from loopx.extensions.runtime import (
     default_extension_state_file,
     install_extension,
 )
-from loopx.paths import registry_project_root
-from loopx.quota import build_quota_should_run
-from loopx.status import collect_status
 
 
 GOAL_ID = "goal-channel-human-gate-smoke"
@@ -286,23 +281,6 @@ def main() -> None:
         )
         second = second_refresh["goal_channel_gate_sync"]
         second_fake_state = json.loads(fake_state_path.read_text(encoding="utf-8"))
-        status = collect_status(
-            registry_path=registry_path,
-            runtime_root_override=str(Path(raw) / "runtime"),
-            scan_roots=[registry_project_root(registry_path)],
-            limit=20,
-            goal_id=GOAL_ID,
-        )
-        quota = build_quota_should_run(status, goal_id=GOAL_ID)
-        expected_key = semantic_key(
-            GOAL_ID,
-            "lark",
-            "notify_gate",
-            GATE_TODO_ID,
-            quota_human_gate_state_generation(quota),
-            "material_state",
-            CHAT_ID,
-        )
         gate_update = update_gate(
             registry_path=registry_path,
             runtime_root=runtime_root,
@@ -322,14 +300,19 @@ def main() -> None:
         assert first["external_write_performed"] is True, first
         assert first["readback_verified"] is True, first
         notification = first["notification"]
-        assert notification["idempotency_key"] == expected_key, notification
+        # Assert causal delivery identities, not a second implementation of
+        # generation hashing built from an incomplete quota packet.
+        first_key = notification["idempotency_key"]
         assert second["status"] == "already_sent", second
+        assert second["notification"]["idempotency_key"] == first_key
         assert (
             sum(MESSAGE_SEND_COMMAND in args for args in second_fake_state["calls"])
             == send_count
         )
         assert gate_update["changed"] is True, gate_update
         assert third["status"] == "sent_verified", third
+        third_key = third["notification"]["idempotency_key"]
+        assert third_key != first_key
         assert (
             sum(MESSAGE_SEND_COMMAND in args for args in third_fake_state["calls"])
             == send_count + 1
@@ -337,8 +320,7 @@ def main() -> None:
         receipts = read_goal_channel_binding(binding_path)["bindings"][GOAL_ID][
             "receipts"
         ]
-        assert expected_key in receipts, receipts
-        assert len(receipts) == 2, receipts
+        assert set(receipts) == {first_key, third_key}, receipts
         assert "Approve the bounded external write" in third_fake_state["sent_text"]
         assert third_fake_state["sent_text"].startswith(
             "LoopX · Action required\n\nGoal:"

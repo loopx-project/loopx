@@ -72,8 +72,10 @@ test("fresh auxiliary admission requires exact advancement identity and ordinary
     ["other Turn", p => ({ ...p, turn_instance_id: "other-turn" }), "heartbeat_receipt_identity_conflict"],
     ["other binding", p => ({ ...p, observation: { ...p.observation as JsonObject, settlement_todo_id: "todo_other" } }), "heartbeat_receipt_identity_conflict"],
     ["missing lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject, auxiliary_settlement_todo: null } }), "heartbeat_receipt_identity_conflict"],
-    ["blocked lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject,
-      auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "blocked" } } }), "heartbeat_receipt_identity_conflict"],
+    ["invalid lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject,
+      auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "unknown" } } }), "heartbeat_receipt_identity_conflict"],
+    ["deferred lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject,
+      auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "deferred" } } }), "heartbeat_receipt_identity_conflict"],
     ["foreign primary", p => ({ ...p, decision: { ...p.decision as JsonObject,
       auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "done", claimed_by: "peer" } } }), "heartbeat_receipt_identity_conflict"],
     ["excluded actor", p => ({ ...p, decision: { ...p.decision as JsonObject,
@@ -86,9 +88,11 @@ test("fresh auxiliary admission requires exact advancement identity and ordinary
       work_lane_contract: { must_attempt_work: false }, should_run: false } }), "monitor_poll_admission_rejected"],
     ["user action", p => ({ ...p, decision: { ...p.decision as JsonObject, requires_user_action: true } }), "monitor_poll_admission_rejected"],
   ];
-  for (const settled of [false, true]) for (const [name, change, code] of cases) {
-    await t.test(`${settled ? "settled" : "pending"}: ${name}`, async st => {
+  for (const settled of [false, true]) for (const status of settled ? ["done", "blocked"] : ["done"]) for (const [name, change, code] of cases) {
+    await t.test(`${settled ? "settled" : "pending"} ${status}: ${name}`, async st => {
       const { runtime, params } = await fixture(st);
+      const decision = params.decision as JsonObject;
+      decision.auxiliary_settlement_todo = { ...decision.auxiliary_settlement_todo as JsonObject, status };
       if (settled) await settlePrimary(runtime);
       const initialIndex = await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8");
       const changed = change(params);
@@ -117,8 +121,11 @@ function providerReceipt(params: JsonObject): JsonObject {
     todo_update: { ok: true }, next_todos: [], successor_receipts: [] };
 }
 
-test("settled primary admits the first due auxiliary observation without another debit or delivery", async t => {
+for (const status of ["done", "blocked"]) {
+test(`settled ${status} primary admits the first due auxiliary observation without another debit or delivery`, async t => {
   const { runtime, params } = await fixture(t);
+  const decision = params.decision as JsonObject;
+  decision.auxiliary_settlement_todo = { ...decision.auxiliary_settlement_todo as JsonObject, status };
   await settlePrimary(runtime);
   const index = await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"));
   const request = { ...params, expected_index_digest: `sha256:${createHash("sha256").update(index).digest("hex")}` };
@@ -138,6 +145,21 @@ test("settled primary admits the first due auxiliary observation without another
   assert.equal(rows.filter(row => row.classification === "quota_slot_spent").length, 1);
   assert.equal(rows.length, 3);
 });
+}
+
+for (const status of ["blocked", "deferred"]) {
+test(`unsettled ${status} primary does not admit a new auxiliary effect`, async t => {
+  const { runtime, params } = await fixture(t);
+  const decision = params.decision as JsonObject;
+  decision.auxiliary_settlement_todo = { ...decision.auxiliary_settlement_todo as JsonObject, status };
+  await assert.rejects(evaluateQuotaMonitorPollCommit(params), error => {
+    assert.ok(error instanceof EffectRuntimeRequestError);
+    assert.equal(error.code, "heartbeat_receipt_identity_conflict");
+    return true;
+  });
+  assert.equal(await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8"), "");
+});
+}
 
 test("completed primary preserves an admitted pending effect across settlement and replay reads current closeout", async t => {
   const { runtime, params } = await fixture(t);

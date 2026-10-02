@@ -279,9 +279,12 @@ excluded = {"node_modules", ".next", "dist", "build", "coverage"}
 
 def ignore(directory, names):
     root = Path(directory)
+    # Cargo's default output directory belongs to its manifest, not every
+    # source/asset directory named target. It can also be a cache symlink.
+    ignored = excluded | ({"target"} if (root / "Cargo.toml").is_file() else set())
     return [
         name for name in names
-        if name in excluded and ((root / name).is_dir() or (root / name).is_symlink())
+        if name in ignored and ((root / name).is_dir() or (root / name).is_symlink())
     ]
 
 shutil.copytree(sys.argv[1], sys.argv[2], symlinks=True, ignore=ignore)
