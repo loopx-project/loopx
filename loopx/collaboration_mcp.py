@@ -1167,6 +1167,28 @@ class Delegations:
             # key/epoch; it cannot reacquire an expired execution. Renewal has
             # changed its version, so the historical acquisition is not CAS.
             if "completion_lease_version" not in row:
+                # The Host supervisor has stopped. Renew the original execution
+                # before validation captures its provider revision; renewing
+                # during validation would invalidate that source witness. The
+                # canonical TS lease owner decides admission and replay. This
+                # adapter journals one intent, not a new lease or a longer TTL.
+                if "completion_lease_renewal_version" not in row:
+                    proof = self._cli(binding, *self._delegation_claim_arguments(row, binding))
+                    if proof.get("ok") is not True:
+                        raise ValueError("delegation current execution proof lost before completion")
+                    row["completion_lease_renewal_version"] = proof["lease"]["version"]
+                    _write(self.path(row["identity"]["operation_id"]), row)
+                renewed = self._cli(
+                    binding, "task-lease", "renew", "--goal-id", self.goal_id,
+                    "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
+                    "--idempotency-key", lease["lease"]["idempotency_key"],
+                    "--expected-version", str(row["completion_lease_renewal_version"]),
+                    "--ttl-seconds", str(lease["lease"]["acquire_ttl_seconds"]),
+                )
+                if renewed.get("ok") is not True:
+                    raise ValueError("delegation original lease renewal rejected before completion")
+                # A renewal receipt can be historical after a lost reply. Read
+                # current authority before freezing the terminal intent below.
                 proof = self._cli(binding, *self._delegation_claim_arguments(row, binding))
                 current = proof.get("lease", {})
                 if (proof.get("ok") is not True or current.get("owner") != binding["agent_id"]
