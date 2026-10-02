@@ -30,8 +30,9 @@ flowchart LR
 
 ## 可执行边界
 
-`tests/control_plane/test_monitor_quiet_due_recovery.py` 确定性枚举六条旅程：
+`tests/control_plane/test_monitor_quiet_due_recovery.py` 确定性枚举十二条旅程：
 legacy Markdown、canonical File、canonical SQLite，分别观察无变化与有变化。
+每组分别覆盖有、无其他 peer 的 user gate 及普通用户提醒。
 各旅程使用真实 CLI 子进程、TS effects 和隔离 provider 状态，执行两次原请求重试
 和一次结果冲突重试。第一次命令成功后主动丢弃响应，模拟调用方确认丢失，
 不等于模拟提交过程中的进程崩溃。
@@ -52,6 +53,12 @@ fixture 中错误返回 `normal_run`；其他 frontier 状态还可能尝试冲�
 失败。未修改基线的六条旅程全部通过。这是刻意注入历史规则的 mutation，
 不声称当前基线仍有该缺陷。临时 mutant 不作为发布 fixture 保留。
 
+另一个反例给出不完整的 Todo frontier：聚合 work lane 缺失，且存在其他 peer 的
+user gate。精确的已结算 Monitor 仍必须返回 `heartbeat_settled_skip`。基线 adapter
+在聚合 lane 缺失时丢弃已验证 phase，错误恢复普通执行。修复后，绑定 Monitor 的
+投影不再依赖聚合覆盖完整性；poll 验证与 phase 判断仍归 TS。此反例在 adapter
+修复前失败、修复后通过。
+
 ## 归属与限制
 
 | 边界 | 保留的现有 owner |
@@ -61,6 +68,7 @@ fixture 中错误返回 `normal_run`；其他 frontier 状态还可能尝试冲�
 | canonical authority 中的观察与 successor | `coordination/todo_monitor_poll.ts` |
 | Turn 结算回读 | `quota/settlement_readback.ts`、`quota/settlement_phase.ts` |
 | 绑定 Monitor 的生命周期恢复 | `quota/blocked_wait.ts` |
+| 已绑定 phase 到可选聚合 lane 的投影 | `work_items/work_lane.py` |
 | legacy effect-id 兼容与 transport | `quota/monitor_poll.py` |
 
 伴随重构在 `blocked_wait.ts` 内共享 causal wait 与 blocked Monitor 的 current-Turn
@@ -69,7 +77,8 @@ fixture 中错误返回 `normal_run`；其他 frontier 状态还可能尝试冲�
 只有 active、owner 合法、状态 blocked 且 phase 为 `poll_due` 的 Monitor 进入此
 恢复路线；缺失、重复、其他 owner、已归档或已 poll 的输入均排除，测试覆盖这些边界。
 
-默认行为仅改变上述 blocked、尚未 poll 的重入。恢复命令以 blocker 已核实解除为
+默认行为改变上述 blocked、尚未 poll 的重入，以及不完整 frontier 缺少聚合 lane
+时已绑定 Monitor 的投影。恢复命令以 blocker 已核实解除为
 前提；投影不会自行重开 Todo，也不构成 poll／closeout receipt。原因未解除时
 继续保留 blocked。既有 Todo writer 仍执行变更权限检查。runtime 请求数不变，
 不计 Python 规则删除量或性能收益。保留的 Python effect-id 兼容 resolver 迁移
@@ -79,4 +88,4 @@ fixture 中错误返回 `normal_run`；其他 frontier 状态还可能尝试冲�
 lease transfer、提交中断、PostgreSQL、scheduler dispatch、App／Lark 原上下文投递
 均不在覆盖范围。现有 pending-wait 回归另行验证 File／SQLite 保留原绑定的恢复。
 不调用模型、外部 provider 或 benchmark Job，无前端变更。
-撤销修复可恢复旧投影且无需改写持久数据，但也会恢复 blocked Monitor 的恢复缺口。
+撤销修复可恢复旧投影且无需改写持久数据，但也会恢复 blocked Monitor 与聚合 lane 缺失的恢复缺口。

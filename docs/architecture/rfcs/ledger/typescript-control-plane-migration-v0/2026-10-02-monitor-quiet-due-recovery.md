@@ -33,9 +33,9 @@ flowchart LR
 
 ## Executable boundary
 
-`tests/control_plane/test_monitor_quiet_due_recovery.py` enumerates six journeys:
+`tests/control_plane/test_monitor_quiet_due_recovery.py` enumerates twelve journeys:
 legacy Markdown, canonical File and canonical SQLite, each with unchanged and
-material observations. Each journey uses real CLI subprocesses, real TS effects
+material observations, with and without a peer-scoped user gate and reminder. Each journey uses real CLI subprocesses, real TS effects
 and isolated provider state. It performs two exact retries and one conflicting
 result retry. The response is deliberately discarded after successful command
 completion; this models acknowledgement loss, not a process crash inside commit.
@@ -60,6 +60,14 @@ bound poll with `heartbeat_receipt_identity_conflict`. Unmodified base passes
 all six journeys. This is a deliberate historical-rule mutation, not a claim
 that the current base fails. The temporary mutant is not a shipped fixture.
 
+An additional counterexample supplies an incomplete Todo frontier with no aggregate
+work lane and an unrelated peer gate. The exact settled Monitor still has to
+return `heartbeat_settled_skip`. Base instead allows ordinary execution because
+the adapter drops its typed phase when the aggregate lane is absent. The adapter
+now preserves the bound Monitor projection independently of aggregate coverage;
+TS still owns poll verification and phase classification. This regression is red
+before the adapter change and green after it.
+
 ## Ownership and limits
 
 | Boundary | Existing owner retained |
@@ -69,6 +77,7 @@ that the current base fails. The temporary mutant is not a shipped fixture.
 | Observation and successors in canonical authority | `coordination/todo_monitor_poll.ts` |
 | Turn closeout readback | `quota/settlement_readback.ts`, `quota/settlement_phase.ts` |
 | Bound Monitor lifecycle recovery | `quota/blocked_wait.ts` |
+| Bound phase projection into an optional aggregate lane | `work_items/work_lane.py` |
 | Legacy effect-id compatibility and transport | `quota/monitor_poll.py` |
 
 The related refactor shares the current-Turn recovery envelope between causal
@@ -79,7 +88,8 @@ requests retain their causal-wait behavior. Only active, correctly owned blocked
 Monitors with `poll_due` qualify; missing, duplicate, foreign, archived and already
 polled inputs do not enter this restoration route. Tests assert these exclusions.
 
-The default behavior changes only for that blocked, unpolled replay. The emitted
+Default behavior changes for blocked, unpolled replay and for bound Monitor
+projection when an incomplete frontier has no aggregate lane. The emitted
 restore command is conditional on a verified resolved blocker; the projection
 neither reopens the Todo nor establishes a poll/closeout receipt. Retain the
 blocker when unresolved. The existing Todo writer still enforces mutation authority.
@@ -93,4 +103,4 @@ and original-context App/Lark delivery are outside this test. Existing pending-
 wait recovery tests separately cover original binding retention on File/SQLite.
 No model, external provider or benchmark job runs. There is no frontend change.
 Reverting restores the previous projection without rewriting persisted data,
-but also restores the blocked-Monitor recovery gap.
+but also restores the blocked-Monitor and missing-lane recovery gaps.
