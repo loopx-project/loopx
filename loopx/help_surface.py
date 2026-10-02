@@ -91,10 +91,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Build a compact evidence packet when behavior is surprising.",
             },
             {
-                "command": "loopx performance-diagnosis --help",
-                "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
-            },
-            {
                 "command": "loopx review-packet --goal-id <goal-id>",
                 "purpose": "Render a handoff or review packet with any required evidence-log reads.",
             },
@@ -334,6 +330,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx multi-agent", "purpose": "Launch visible role-scoped Codex TUI agents."},
             {"command": "loopx canary", "purpose": "Plan or run catalog-informed smoke profiles."},
+            {
+                "command": "loopx performance-diagnosis --help",
+                "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
+            },
             {
                 "command": "loopx promotion-readiness",
                 "purpose": "Record release-scoped canary readiness evidence in the shared runtime ledger.",
