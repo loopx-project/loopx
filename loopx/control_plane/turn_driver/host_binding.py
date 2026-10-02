@@ -284,7 +284,7 @@ def managed_executor_binding(
             sandbox=codex_sandbox, model=model, reasoning_effort=reasoning_effort,
         )
     individual_profile: str | None = None
-    if host == INDIVIDUAL_TURN_HOST and (model or reasoning_effort):
+    if host in INDIVIDUAL_CLI_HOSTS and (model or reasoning_effort):
         individual_profile = (
             f"{model or 'host-default'}@{reasoning_effort or 'host-default'}"
         )

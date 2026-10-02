@@ -58,6 +58,8 @@ from .turn_decision import (
     collect_turn_status_payload,
 )
 from .turn_dsh_host import build_dsh_host_runner
+from ..control_plane.turn_driver.claude_cli import run_claude_cli_host
+from ..control_plane.turn_driver.claude_cli_session import claude_cli_session_binding
 from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_inspection import handle_turn_journal_inspection
 from .turn_managed_step import handle_turn_managed_step
@@ -184,19 +186,20 @@ def handle_turn_command(
         )
         if (
             args.turn_command == "run-once"
-            and args.host == "codex-cli"
+            and args.host in {"codex-cli", "claude-code"}
             and not resume_requested
             and not args.resume_turn_key
             and turn_envelope.get("effective_action") != EffectiveAction.GOVERNED_CAPABILITY_INTENT.value
         ):
+            resolve_binding = codex_cli_session_binding if args.host == "codex-cli" else claude_cli_session_binding
             session_binding = (
-                codex_cli_session_binding(
+                resolve_binding(
                     runtime_root,
                     turn_envelope,
                     goal_admission=strict_goal_admission,
                 )
                 if strict_goal_admission is not None
-                else codex_cli_session_binding(runtime_root, turn_envelope)
+                else resolve_binding(runtime_root, turn_envelope)
             )
         payload = build_loopx_turn_plan(
             turn_envelope,
@@ -1037,6 +1040,22 @@ def handle_turn_command(
                     args,
                     workspace=project,
                     environ=operator_environ,
+                )
+            elif args.host == "claude-code":
+
+                def run_claude_host(request: Mapping[str, Any]) -> dict[str, Any]:
+                    return run_claude_cli_host(
+                        request, runtime_root=runtime_root, project=project,
+                        claude_bin=args.claude_bin, model=args.claude_model,
+                        reasoning_effort=args.claude_effort,
+                        writable=args.claude_workspace_write,
+                        timeout_seconds=max(1.0, args.timeout_seconds - 5.0),
+                        goal_admission=strict_goal_admission,
+                    )
+
+                host_runner = run_claude_host
+                session_binding_resolver = lambda envelope: claude_cli_session_binding(
+                    runtime_root, envelope, goal_admission=strict_goal_admission,
                 )
 
             def post_settlement_reward_memory(

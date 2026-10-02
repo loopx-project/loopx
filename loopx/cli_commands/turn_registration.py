@@ -15,9 +15,9 @@ from ..control_plane.turn_driver.execution_profile import REASONING_EFFORTS
 from ..paths import default_public_scan_root
 
 # Explicit host choices stay per-command: planning may name any host the Turn
-# driver routes, while run-once only ships built-in adapters for these three.
+# driver routes. run-once supports the same built-in and generic hosts.
 PLANNED_TURN_HOST_CHOICES = ["codex-cli", "claude-code", "dsh", "generic-cli"]
-RUN_ONCE_TURN_HOST_CHOICES = ["codex-cli", "dsh", "generic-cli"]
+RUN_ONCE_TURN_HOST_CHOICES = list(PLANNED_TURN_HOST_CHOICES)
 
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
@@ -219,6 +219,13 @@ def register_turn_commands(
         help="Codex CLI executable used by the built-in codex-cli host.",
     )
     run_once.add_argument("--codex-model")
+    run_once.add_argument("--claude-bin", default="claude", help="Claude CLI executable for the claude-code Turn host.")
+    run_once.add_argument("--claude-model", help="Explicit Claude CLI model; absent means the configured host default.")
+    run_once.add_argument("--claude-effort", help="Explicit Claude CLI reasoning effort.")
+    run_once.add_argument(
+        "--claude-workspace-write", action="store_true",
+        help="Allow Bash/Edit/Write for an admitted Claude Turn. Default tools are Read/Glob/Grep. The host permission mode is not an OS sandbox; provide workspace/process isolation as needed.",
+    )
     run_once.add_argument(
         "--codex-operation-tools",
         action="store_true",

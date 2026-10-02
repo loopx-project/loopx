@@ -111,6 +111,8 @@ def managed_executor_cli_binding(
             if args.host == "dsh"
             else getattr(args, "codex_model", None)
             if args.host == "codex-cli"
+            else getattr(args, "claude_model", None)
+            if args.host == "claude-code"
             else None
         ),
         reasoning_effort=(
@@ -118,6 +120,8 @@ def managed_executor_cli_binding(
             if args.host == "dsh"
             else getattr(args, "codex_reasoning_effort", None)
             if args.host == "codex-cli"
+            else getattr(args, "claude_effort", None)
+            if args.host == "claude-code"
             else None
         ),
         max_tokens=(
