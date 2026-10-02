@@ -134,9 +134,8 @@ class VisibleResponseStreamFilter:
 
     def __init__(self, *, protected_paths: Iterable[Path | str] = ()) -> None:
         self.protected_paths = tuple(protected_paths)
-        self._local_path_pattern = _local_path_pattern(
-            _protected_path_replacements(self.protected_paths)
-        )
+        self._protected = _protected_path_replacements(self.protected_paths)
+        self._local_path_pattern = _local_path_pattern(self._protected)
         self.marker_pending = ""
         self.visible_pending = ""
         self.envelope_started = False
@@ -154,10 +153,21 @@ class VisibleResponseStreamFilter:
                 boundary = index + 2
         if boundary < 0 and len(pending) >= self._MAX_PENDING_CHARS:
             prefix = pending[: self._MAX_PENDING_CHARS + 1]
-            whitespace = max(prefix.rfind(" "), prefix.rfind("\t"))
+            paths = list(self._local_path_pattern.finditer(pending))
+            whitespace = max(
+                (index for index, character in enumerate(prefix)
+                 if character in " \t"
+                 and not any(match.start() <= index < match.end() for match in paths)),
+                default=-1,
+            )
+            # A declared root itself can span several chunks or contain spaces.
+            # Hold its prefix until it becomes a complete path token.
+            partial_root = any(raw.startswith(pending) for raw, _ in self._protected)
             if whitespace >= 0:
                 boundary = whitespace + 1
-            elif self._local_path_pattern.search(prefix) is None:
+            elif partial_root:
+                return -1
+            elif not any(match.start() < self._MAX_PENDING_CHARS for match in paths):
                 boundary = self._MAX_PENDING_CHARS
             else:
                 for index, character in enumerate(

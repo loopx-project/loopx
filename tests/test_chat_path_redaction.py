@@ -35,8 +35,11 @@ def test_canonical_private_path_shapes_and_public_urls():
     assert redact_local_paths(public) == public
 
 
-def test_stream_does_not_split_a_long_custom_path_before_redacting():
-    root = "/custom-volume/private-state"
+@pytest.mark.parametrize("root", [
+    "/custom-volume/private-state", "/custom-volume/private state",
+    "/custom-volume/" + "r" * 190,
+])
+def test_stream_does_not_split_a_long_custom_path_before_redacting(root):
     stream = VisibleResponseStreamFilter(protected_paths=["/custom-project", root])
     path = root + "/" + "s" * 190 + "/gate.json"
     chunks = [stream.feed(path[:170]), stream.feed(path[170:] + "\n"), stream.finish()]
