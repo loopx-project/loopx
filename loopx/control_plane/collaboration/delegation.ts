@@ -393,6 +393,23 @@ function delegationWakeIntent(params: JsonObject): JsonObject {
   };
 }
 
+/** Reading another conversation's result cannot consume its continuation. */
+export function decideDelegationWakeObservation(params: JsonObject): JsonObject {
+  const intent = requireJsonObject(params.intent, "wake intent");
+  const requester = requireJsonObject(intent.requester, "wake requester");
+  const observer = requireJsonObject(params.observer, "wake observer");
+  requireThat([observer.session_id, observer.goal_id, observer.agent_id].every(text),
+    "wake observation requires its conversation and requester");
+  const conversation = intent.conversation == null ? null
+    : requireJsonObject(intent.conversation, "wake conversation");
+  return {
+    observed: conversation?.session_id === observer.session_id
+      && requester.goal_id === observer.goal_id && requester.agent_id === observer.agent_id
+      && canonicalAuthoritySha256(requester.goal_ref ?? null)
+        === canonicalAuthoritySha256(observer.goal_ref ?? null),
+  };
+}
+
 /** Repair only a false terminal observation after the exact Turn validated.
  *
  * This does not retry model work.  The host boundary must prove that the

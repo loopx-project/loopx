@@ -477,6 +477,12 @@ Goal 成果页可打开正文；原管家对话仅在已确认团队计划的回
 - **退出：** manager→worker 和 worker→worker 两个真实 caller，补充消息、来源会话消失、超长答案、重复回调、发送成功但 ACK 丢失及传输重启；同一结果在 CLI、packaged frontend、Lark 回读一致且受众隔离。普通已授权工作不增加第二次人工确认。
 - **迁移/回滚：** characterization 先行，记录旧 writer/reader 映射与删除收益；关新 producer 后可 drain 旧请求。不要同时保留两份可写生命周期。
 
+App 纠偏复用共享 TS 客户端缓存，在切换视图和刷新时保留追加指令与 ingress 身份；
+恢复不自动派发，终止回合不能继承新回合的目标。共享对话排序把原请求放在进行中的
+工作之前，即使持久受理时间稍晚；已接收的纠偏保留会话身份与创建时间。打包恢复、
+存储不可用、共存草稿及真实 Chat ingress/store 回归仅为有界证据；真实接收者采用、
+安装后读回与 Lark 纠偏仍须完成 R3 验收。
+
 R3 还需验证 handoff RFC 的分层 A6/A8/A13 扩展：普通 managed worker 请求、验证并
 综合另一 peer 的产物后再返回主 Agent；各层复用相同 request/work owner。入口
 fixture 在未决工具、取消、迟到结果下区分 inbox 收件、后续 queue 工作和已采用

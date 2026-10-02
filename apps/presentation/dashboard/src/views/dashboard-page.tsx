@@ -2929,7 +2929,11 @@ function PersonalGoalHome({
             setMessagesByContext(current => {
               const messages = current[targetContextId] ?? [];
               if (messages.some(item => item.sourceMessageId === `steer:${ingressId}`)) return current;
-              return { ...current, [targetContextId]: [...messages, { id, sourceMessageId: `steer:${ingressId}`, sourceTurnId: turnId, lines: [], role: "user", text: message }] };
+              return { ...current, [targetContextId]: [...messages, {
+                id, sourceMessageId: `steer:${ingressId}`, sourceTurnId: turnId,
+                sourceSessionId: binding.sessionId, sourceCreatedAt: new Date().toISOString(),
+                lines: [], role: "user", text: message,
+              }] };
             });
           },
           onOpenRunSession: async (run) => {

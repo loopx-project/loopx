@@ -629,7 +629,10 @@ Current status is design proposal; no G1 or default-screen promotion.
 The GQ08 App correction path now retains inline adjustments and ingress identity
 across view changes/reload through the same TS client cache as the composer.
 Restoration never dispatches work, and a terminal Turn cannot inherit a new
-Turn's target. Packaged recovery, blocked storage, coexisting drafts and real
+Turn's target. Shared conversation ordering keeps the original request before
+its pending work even when durable admission timestamps arrive later; accepted
+corrections retain their session identity and creation time. Packaged recovery,
+blocked storage, coexisting drafts and real
 Chat ingress/store regression are bounded evidence; live recipient adoption,
 installed readback and Lark correction still belong to R3 qualification.
 

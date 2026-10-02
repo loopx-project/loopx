@@ -1284,9 +1284,34 @@ For the 64 KiB live-state axis at 10,000 versus 100,000 commits:
   1 MiB axis and 300,000-commit headroom separately; failures narrow the supported
   profile rather than disappearing into averaged results.
 
-These thresholds are proposed engineering budgets, not current measurements.
-Review them against the first matched baseline before activation; do not relax
-correctness, silently change the workload, or advertise an unqualified horizon.
+These thresholds are proposed engineering budgets, not current measurements or
+a universal prerequisite for merging an improvement or trying an opt-in provider.
+Use the current supported implementation as the performance control, on the same
+host, runtime, complete data, history, durability and command mix. Retain the
+original pre-migration baseline as a product comparison; it cannot hide a
+regression against the current supported release. Report both absolute latency
+and relative change. A percentage increase on a short store operation is not,
+by itself, a user-visible regression; trace it through the affected command or
+consumer before deciding whether the tradeoff is acceptable. Conversely, parity
+with an already unusable baseline is not sufficient.
+
+Make three distinct decisions using the existing qualification evidence:
+
+| Decision | Required evidence and scope |
+| --- | --- |
+| Merge a bounded provider improvement | Exact-source correctness, metadata/history/receipt preservation, affected real backends and callers, and matched measurements of the changed paths. Disclose local regressions and their consumer impact; a missed proposed latency target alone is not a merge blocker. |
+| Invite a small opt-in developer cohort | A recoverable installed workflow: verified backup, migration, restart, ordinary commands, new writes and return to the previous provider without losing those writes. Relevant concurrency and interruption controls must pass. Bound the advertised workload to demonstrated evidence, expose actionable failures, and observe natural operation. A ten-day certificate is not required to begin this reversible trial. |
+| Select the release default | Installation and runtime support, new-Goal creation, upgrade, migration, recovery and rollback must work on the supported profiles. Representative sustained operation must show no material degradation of common user journeys against the current release, with acceptable growth, resource use and recovery space. Reconcile existing soak results with changed boundaries; do not restart elapsed-time evidence for unrelated changes. |
+
+Data loss, duplicate effects, altered original receipts, incorrect decisions,
+broken fencing or unrecoverable migration remain blockers at the affected
+boundary. Performance targets may be calibrated from matched evidence with an
+explicit tradeoff; correctness is not calibrated away. Preserve frozen workload
+and budget identities in existing reports, including failures and missing rows.
+If a budget is revised, record a new declared comparison rather than relabeling
+an old failed report as passing. The formal ten-day/100,000-commit qualification
+and its unmeasured axes remain explicit; neither a merged PR nor a successful
+cohort trial advertises that horizon or settles the release-default decision.
 
 #### Retention, recovery and delivery gates
 

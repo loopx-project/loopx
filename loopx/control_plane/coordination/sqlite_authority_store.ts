@@ -595,7 +595,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
       if (rows.length) this.verifiedRange(db, BigInt(String(rows[0]!.sequence)),
         BigInt(String(rows[rows.length - 1]!.sequence)), (row, replay, identity) => {
           verified.push({cursor: row.cursor.toString(), provider_revision: `${identity}:${row.cursor}`,
-            operation_id: row.operation_id, projection: JSON.parse(replay.canonicalJson()) as JsonObject, events: row.events, receipts: row.receipts});
+            operation_id: row.operation_id, projection: replay.snapshot(), events: row.events, receipts: row.receipts});
         });
       return scan.page(verified, head === null ? null : {cursor: head.state.cursor.toString(),
         provider_revision: head.provider_revision, head: head.state.projection});
