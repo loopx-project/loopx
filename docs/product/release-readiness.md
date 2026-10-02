@@ -983,8 +983,15 @@ available, with the following durable procedure:
    matching display name or a profile named "personal" is insufficient. Never
    fall back to a corporate account or bot; if personal access is unavailable,
    keep the draft and report the access gap.
-2. Derive claims from the previous-tag-to-release-tag range and the verified
-   release snapshot. Organize the guide around ordinary user tasks: who should
+2. Find the last substantive release guide in that personal account with a
+   bounded search. Read it and record its URL, date and covered version in the
+   private release checkpoint. Use that covered version as the guide's baseline;
+   do not substitute the previous GitHub tag. Read all intervening release notes
+   and derive cumulative claims from their merged PRs and the verified target
+   snapshot. If history cannot be verified, label an owner-supplied baseline
+   explicitly rather than claiming a complete audit. The GitHub release body
+   retains its own previous-tag-to-release-tag range.
+   Organize the guide around ordinary user tasks: who should
    upgrade, what they can now do, where to find it, and how to verify the result.
    Distinguish released behavior, experimental capabilities, simulated examples,
    and failed or unavailable validation. A candidate draft must remain labeled
@@ -998,7 +1005,11 @@ available, with the following durable procedure:
    behavior, and each highlighted optional capability's activation, validation,
    disable or rollback path, and authority/privacy boundary. Link canonical
    documentation at the release tag and the complete GitHub release body.
-   Preserve concrete community contribution credit from the same tag range.
+   Preserve concrete community contribution credit from the guide's cumulative
+   range, deduplicated across the intervening releases; verify contribution
+   descriptions and first-time labels against merged PR metadata. Screenshot
+   captions must distinguish intervening released features from candidate-only
+   changes and retain their actual capture version.
 5. Create one document under the verified personal user identity, then repair
    that document in place if content or media fails. Read back its ownership,
    title, text, image blocks, and rendered presentation before declaring success.
