@@ -519,7 +519,7 @@ def handle_support_control_command(
     if args.command == "serve-status":
         try:
             status_registry_path = (
-                explicit_global_registry(args.runtime_root)
+                explicit_global_registry(args.runtime_root, registry_path=registry_path)
                 if args.global_registry
                 else registry_path
             )
@@ -561,7 +561,7 @@ def handle_support_control_command(
     if args.command == "dashboard":
         try:
             dashboard_registry_path = (
-                explicit_global_registry(args.runtime_root)
+                explicit_global_registry(args.runtime_root, registry_path=registry_path)
                 if getattr(args, "global_registry", False)
                 else registry_path
             )
@@ -604,7 +604,7 @@ def handle_support_control_command(
     if args.command == "chat":
         try:
             chat_registry_path = (
-                explicit_global_registry(args.runtime_root)
+                explicit_global_registry(args.runtime_root, registry_path=registry_path)
                 if args.global_registry
                 else registry_path
             )

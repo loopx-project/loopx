@@ -46,6 +46,15 @@ export function canonicalAuthorityJson(
   value: unknown,
   stack = new Set<object>(),
 ): unknown {
+  return cloneAuthorityJson(value, stack, true);
+}
+
+/** Own JSON containers without copying immutable primitives or reordering keys. */
+export function copyAuthorityJson(value: unknown): unknown {
+  return cloneAuthorityJson(value, new Set<object>(), false);
+}
+
+function cloneAuthorityJson(value: unknown, stack: Set<object>, canonicalKeys: boolean): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
     return value;
   }
@@ -59,7 +68,13 @@ export function canonicalAuthorityJson(
     if (stack.has(value)) throw new AuthorityStoreProtocolError("JSON value must be acyclic");
     stack.add(value);
     try {
-      return value.map((item) => canonicalAuthorityJson(item, stack));
+      if (canonicalKeys) return value.map((item) => cloneAuthorityJson(item, stack, true));
+      const copy: unknown[] = Array(value.length);
+      for (const key of Object.keys(value)) Object.defineProperty(copy, key, {
+        value: cloneAuthorityJson(Reflect.get(value, key), stack, false),
+        writable: true, enumerable: true, configurable: true,
+      });
+      return copy;
     } finally {
       stack.delete(value);
     }
@@ -74,10 +89,19 @@ export function canonicalAuthorityJson(
   if (stack.has(value)) throw new AuthorityStoreProtocolError("JSON value must be acyclic");
   stack.add(value);
   try {
+    const keys = Object.keys(value);
+    if (!canonicalKeys) {
+      // Fill without inherited setters (including __proto__), then normalize
+      // to the same ordinary object as Object.fromEntries. No per-field tuples.
+      const copy: JsonObject = Object.create(null);
+      for (const key of keys) copy[key] = cloneAuthorityJson(value[key], stack, false);
+      return Object.setPrototypeOf(copy, Object.prototype);
+    }
+    keys.sort(authorityUnicodeCompare);
     return Object.fromEntries(
-      Object.keys(value).sort(authorityUnicodeCompare).map((key) => [
+      keys.map((key) => [
         key,
-        canonicalAuthorityJson(value[key], stack),
+        cloneAuthorityJson(value[key], stack, canonicalKeys),
       ]),
     );
   } finally {

@@ -238,6 +238,40 @@ test("private replay keeps exact proofs while copying only changed paths", async
   assert.equal(replay.canonicalJson(), stable);
 });
 
+test("replay snapshots isolate mutable JSON while retaining primitive edge cases", async () => {
+  const {AuthorityStateReplay} = await import("../../loopx/control_plane/coordination/authority_state_log.ts");
+  const initial = {
+    padding: "p".repeat(1024 * 1024),
+    negative: -0,
+    holes: Array(2),
+    unicode: "\ud800🎛",
+    ["__proto__"]: {marker: "data"},
+    nested: {rows: [{value: 1}, {value: 2}]},
+  };
+  const replay = new AuthorityStateReplay(initial);
+  const first = replay.snapshot(), second = replay.snapshot();
+  assert.deepEqual(first, initial);
+  assert.equal(Object.is(first.negative, -0), true);
+  assert.equal(0 in (first.holes as unknown[]), false);
+  assert.equal(Object.hasOwn(first, "__proto__"), true);
+  assert.equal(Object.getPrototypeOf(first), Object.prototype);
+  const rows = (value: Record<string, unknown>) =>
+    (value.nested as {rows: {value: number}[]}).rows;
+  rows(first)[0]!.value = 99;
+  rows(first).push({value: 3});
+  (first["__proto__"] as {marker: string}).marker = "edited";
+  assert.deepEqual(rows(second), [{value: 1}, {value: 2}]);
+  assert.deepEqual(second["__proto__"], {marker: "data"});
+  assert.deepEqual(replay.snapshot(), initial);
+  replay.apply({schema_version: AUTHORITY_STATE_DELTA_SCHEMA, operations: [
+    {op: "set", path: ["nested", "rows"], value: [{value: 4}]},
+  ]});
+  assert.deepEqual(rows(second), [{value: 1}, {value: 2}]);
+  assert.deepEqual(rows(replay.snapshot()), [{value: 4}]);
+  assert.equal(second.padding, initial.padding);
+  assert.equal(({} as Record<string, unknown>).marker, undefined);
+});
+
 test("replay encoding preserves canonical Unicode, sparse values, numeric keys and strict boundaries", async () => {
   const {AuthorityStateReplay} = await import("../../loopx/control_plane/coordination/authority_state_log.ts");
   const {createHash} = await import("node:crypto");

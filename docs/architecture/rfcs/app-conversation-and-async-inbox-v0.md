@@ -141,6 +141,15 @@ receipt → observed work or actionable failure → readable answer in the same 
   reusing an earlier snapshot or inserting another local copy of the instruction.
   History keeps the initial user request and later instructions as distinct messages
   even while the initial request is still being reconciled with its stored identity.
+  The Codex provider sends the correction itself through native `turn/steer`,
+  retaining multiline text and the exact active Turn identity. Replaying the
+  initial task/policy envelope incorrectly declares the correction to be a new
+  standalone task and can displace the original deliverable. Initial Turn
+  admission, policy and response framing stay in their existing owners; queued
+  messages and resume context keep their caller-supplied scope. This transport
+  repair serves steward and Goal Chat alike in the existing Python provider
+  adapter under the TS migration boundary. HTTP/store/protocol regressions
+  prove the payload and replay behavior, not model adoption or a first result.
   Unavailable browser storage keeps current-page retry behavior but cannot
   promise reload recovery. This tab-local cache is not delivery authority.
   Acceptance means the executor received the instructions, not that it adopted

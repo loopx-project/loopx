@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from typing import Any
+from pathlib import Path
 
 from ..doctor import collect_doctor, render_doctor_markdown
 from ..host_loop_activation import SUPPORTED_AGENT_TYPES
@@ -55,7 +56,9 @@ def register_doctor_command(
     return parser
 
 
-def handle_doctor_command(args: argparse.Namespace, print_payload: PrintPayload) -> int:
+def handle_doctor_command(
+    args: argparse.Namespace, print_payload: PrintPayload, *, registry_path: Path | None = None,
+) -> int:
     restart: dict[str, Any] | None = None
     if bool(getattr(args, "restart_runtime", False)):
         from ..control_plane.effect_runtime import restart_effect_runtime
@@ -65,6 +68,8 @@ def handle_doctor_command(args: argparse.Namespace, print_payload: PrintPayload)
         deep=bool(args.deep),
         agent_type=args.agent_type,
         installation_only=bool(getattr(args, "installation_only", False)),
+        registry_path=registry_path,
+        runtime_root_override=getattr(args, "runtime_root", None),
     )
     if restart is not None:
         payload["effect_runtime_restart"] = restart

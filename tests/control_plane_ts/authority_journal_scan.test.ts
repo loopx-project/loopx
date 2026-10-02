@@ -60,6 +60,35 @@ test("scan requests reject malformed types before a provider effect", () => {
   }
 });
 
+test("scan pages copy every mutable JSON container and retain row metadata", () => {
+  const rows = ["1", "2"].map(cursor => ({
+    ...row(cursor),
+    projection: {...row(cursor).projection, padding: "p".repeat(1024 * 1024),
+      ["__proto__"]: {marker: "data"}, negative: -0, holes: Array(2)},
+    events: [{sequence: cursor, detail: {marker: "event"}}],
+    receipts: [{accepted: true, detail: {marker: "receipt"}}],
+    provenance: {marker: "retained metadata"},
+  }));
+  const observed = {...head("2"), head: rows[1]!.projection};
+  const page = scan(null, 2).page(rows, observed);
+  assert.equal(page.status, "page");
+  if (page.status !== "page") return;
+  assert.deepEqual(page.transactions, rows);
+  assert.deepEqual(Object.keys(page.transactions[0]!), Object.keys(rows[0]!));
+  assert.deepEqual(Object.keys(page.transactions[0]!.projection), Object.keys(rows[0]!.projection));
+  const first = page.transactions[0]!;
+  assert.equal(Object.is(first.projection.negative, -0), true);
+  assert.equal(0 in (first.projection.holes as unknown[]), false);
+  (first.projection["__proto__"] as {marker: string}).marker = "edited";
+  (first.events[0]!.detail as {marker: string}).marker = "edited";
+  (first.receipts[0]!.detail as {marker: string}).marker = "edited";
+  assert.deepEqual(rows[0]!.projection["__proto__"], {marker: "data"});
+  assert.deepEqual(rows[0]!.events[0]!.detail, {marker: "event"});
+  assert.deepEqual(rows[0]!.receipts[0]!.detail, {marker: "receipt"});
+  assert.deepEqual(page.transactions[1], rows[1]);
+  assert.equal(({} as Record<string, unknown>).marker, undefined);
+});
+
 test("transaction decoder requires a canonical positive decimal cursor", () => {
   for (const cursor of ["0", "01", "-1", "1.0", "unknown", 1, null]) {
     assert.throws(() => decodeAuthorityTransaction({...row("1"), cursor}), /cursor/);

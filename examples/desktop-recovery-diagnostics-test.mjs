@@ -13,6 +13,7 @@ function page() {
     }},
     window: {}, navigator: {clipboard: {writeText: async () => {throw new Error('denied');}}},
     setInterval() {},
+    performance: {now: () => 0},
   };
   runInNewContext(script, context);
   return {context, elements};

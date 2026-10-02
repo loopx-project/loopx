@@ -5,8 +5,26 @@ import test from "node:test";
 import {
   CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA,
   CHAT_TURN_ACCEPTANCE_REQUEST_SCHEMA,
+  mayContinueChatTurn,
   planChatTurnAcceptance,
 } from "../../loopx/control_plane/turn_driver/chat_turn_acceptance.ts";
+
+test("only a still-active started Turn may continue after a delayed read", () => {
+  const session = {status: "busy", active_turn_id: "turn-one"};
+  for (const status of ["starting", "running"]) {
+    assert.equal(mayContinueChatTurn({session, turn: {turn_id: "turn-one", status}}).allowed, true);
+  }
+  for (const status of ["queued", "interrupting", "completing", "completed", "interrupted", "timed_out", "failed"]) {
+    assert.equal(mayContinueChatTurn({session, turn: {turn_id: "turn-one", status}}).allowed, false);
+  }
+  const turn = {turn_id: "turn-one", status: "running"};
+  for (const stoppedSession of [null, {status: "closed", active_turn_id: "turn-one"},
+    {status: "ready", active_turn_id: null}, {status: "busy", active_turn_id: "turn-two"}]) {
+    assert.equal(mayContinueChatTurn({session: stoppedSession, turn}).allowed, false);
+  }
+  assert.equal(mayContinueChatTurn({session, turn: null}).allowed, false);
+  assert.throws(() => mayContinueChatTurn({session, turn: {...turn, status: "invented"}}));
+});
 
 function sha256(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;

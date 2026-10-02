@@ -111,6 +111,46 @@ test("SQLite first empty projection still derives its root digest", async t => {
   assert.equal((await store.readReceipt("empty-root")).status, "found");
 });
 
+test("SQLite scan snapshots stay independent across checkpoint boundaries", async t => {
+  const {store} = await fixture(t);
+  let revision: string | null = null;
+  const projection = (ordinal: number) => ({
+    padding: "p".repeat(8192),
+    ["__proto__"]: {marker: "data"},
+    nested: {rows: [{ordinal}]},
+  });
+  for (let ordinal = 1; ordinal <= 70; ordinal++) {
+    const committed = await store.commitAuthority({expected_provider_revision: revision,
+      operation_id: "snapshot-" + ordinal, next_projection: projection(ordinal),
+      events: [{ordinal}], receipts: [{ordinal}]});
+    assert.equal(committed.status, "applied");
+    if (committed.status !== "applied") return;
+    revision = committed.provider_revision;
+  }
+  const page = await store.scanCommitted("62", 5);
+  assert.equal(page.status, "page");
+  if (page.status !== "page") return;
+  assert.deepEqual(page.transactions.map(row => row.cursor), ["63", "64", "65", "66", "67"]);
+  for (const [index, row] of page.transactions.entries()) {
+    assert.deepEqual(row.projection, projection(63 + index));
+    assert.deepEqual(row.receipts, [{ordinal: 63 + index}]);
+  }
+  const first = page.transactions[0]!.projection;
+  (first.nested as {rows: {ordinal: number}[]}).rows[0]!.ordinal = 900;
+  (first["__proto__"] as {marker: string}).marker = "edited";
+  assert.deepEqual(page.transactions[1]!.projection, projection(64));
+  const again = await store.scanCommitted("62", 5);
+  assert.equal(again.status, "page");
+  if (again.status === "page") {
+    assert.deepEqual(again.transactions[0]!.projection, projection(63));
+    assert.equal(Object.getPrototypeOf(again.transactions[0]!.projection), Object.prototype);
+  }
+  const head = await store.loadAuthority();
+  assert.equal(head.status, "loaded");
+  if (head.status === "loaded") assert.deepEqual(head.head, projection(70));
+  assert.equal(({} as Record<string, unknown>).marker, undefined);
+});
+
 test("SQLite head continuity is independent of retained history", {timeout: 30000}, async t => {
   const {store} = await fixture(t);
   assert.equal((await store.storeIdentity()).status, "available");

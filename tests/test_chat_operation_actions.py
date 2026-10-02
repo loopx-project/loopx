@@ -103,7 +103,9 @@ def test_browser_operation_fixture_needs_no_test_framework(tmp_path: Path) -> No
         check=True,
     )
     fixtures = json.loads(result.stdout)
-    assert list(fixtures) == ["confirmed", "waiting", "unknown", "reconciled"]
+    assert list(fixtures) == [
+        "prepared", "delivered", "confirmed", "waiting", "unknown", "reconciled"
+    ]
     for proposal in fixtures.values():
         assert proposal["normalized_parameters"]["goal_id"] == "product-release"
         assert proposal["normalized_parameters"]["executor"]["kind"] == "managed_turn"
