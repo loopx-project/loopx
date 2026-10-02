@@ -39,8 +39,8 @@ def read_manager_goal_details(
             row = {
                 k: _text(record[k], 160)
                 for k in ("todo_id", "role", "status", "priority", "task_class",
-                          "claimed_by", "bound_agent", "blocks_agent", "unblocks_todo_id",
-                          "action_kind", "next_due_at", "expires_at")
+                          "agent_id", "claimed_by", "bound_agent", "blocks_agent", "unblocks_todo_id",
+                          "action_kind", "cadence", "next_due_at", "expires_at")
                 if record.get(k) is not None
             }
             row["title"] = _text(record.get("title") or record.get("text"))
