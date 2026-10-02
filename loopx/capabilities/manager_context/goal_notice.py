@@ -71,6 +71,7 @@ def current_notice_revision(
                   if r.get("request_id") in records],
     })
     current_requests = {r["todo_id"]: r.get("request") for r in projected["items"]}
+    witness: dict[str, Any] = {"requests": current_requests, "blockers": [], "continuation": []}
     for request in (facts.get("decision_notice") or {}).get("items", []):
         current = current_requests.get(request.get("request_id"))
         if not current:
@@ -81,9 +82,33 @@ def current_notice_revision(
     for blocker in facts.get("blockers", []):
         record = records.get((blocker.get("task") or {}).get("todo_id"))
         current = build_blocked_transition_notice(record) if record else None
-        if not current or current["blocker_revision"] != blocker["blocker_revision"]:
+        if (not current or current["blocker_revision"] != blocker["blocker_revision"]
+                or current["task"] != blocker["task"]):
             raise ValueError("notification blocker is no longer current")
-    return hashlib.sha256(json.dumps(source.get("todos", []), sort_keys=True,
+        witness["blockers"].append({"task": current["task"], "blocker_revision": current["blocker_revision"]})
+    from ...control_plane.todos.summary_item import compact_todo_summary_item
+
+    continuation = facts.get("continuation") or {}
+    related = list(continuation.get("blocked_items") or [])
+    if continuation.get("selected_executable"):
+        related.append(continuation["selected_executable"])
+    for selected in related:
+        record = records.get(selected.get("todo_id"))
+        if not record:
+            raise ValueError("notification continuation is no longer current")
+        # Reuse the quota owner's compact facts and authority fields. Position
+        # and observation time do not change the selected work's meaning.
+        expected = compact_todo_summary_item(dict(selected))
+        current = compact_todo_summary_item(record)
+        for value in (expected, current):
+            value.pop("index", None)
+            value.pop("updated_at", None)
+        if expected != current:
+            raise ValueError("notification continuation changed")
+        witness["continuation"].append(current)
+    # Full canonical reads prove lifecycle/absence; only facts used by this
+    # notice govern freshness. Independent work must not starve delivery.
+    return hashlib.sha256(json.dumps(witness, sort_keys=True,
         ensure_ascii=False).encode()).hexdigest()
 
 

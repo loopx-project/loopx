@@ -262,7 +262,9 @@ def deliver_blocked_notices(
         raw = observed.get(str(notice["blocker_identity"])) or {}
         decision = _gate_notice_projection(goal_id=goal_id, quota_packet={
             "user_todo_summary": {"gate_open_items": [raw] if notice.get("owner_must_act") else []}})
-        facts = {"goal_id": goal_id, "blockers": [notice], "decision_notice": decision}
+        facts = {"goal_id": goal_id, "blockers": [notice], "decision_notice": decision,
+                 "continuation": {"selected_executable":
+                     (quota_packet.get("blocked_priority_fallback") or {}).get("selected_executable")}}
         try:
             message = render_channel_notice(
                 cached_text=existing.get("delivery_text"),
