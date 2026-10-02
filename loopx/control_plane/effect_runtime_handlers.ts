@@ -25,6 +25,7 @@ import {resolveConversationTrigger} from "./collaboration/conversation_trigger.t
 import {admitGoalDraft} from "./collaboration/goal_draft.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
+import {requirePeerContextAccess} from "./collaboration/peer_context.ts";
 import {projectConversationReplyContext} from "./collaboration/conversation_reply_context.ts";
 import {mayContinueChatTurn, planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -765,6 +766,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.goal_draft", (params) => ({draft: admitGoalDraft(params)})],
     ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
+    ["collaboration.peer.context_access", requirePeerContextAccess],
     ["collaboration.conversation.reply_context", projectConversationReplyContext],
     ["chat.turn.accept", planChatTurnAcceptance],
     ["chat.turn.execution_allowed", mayContinueChatTurn],
