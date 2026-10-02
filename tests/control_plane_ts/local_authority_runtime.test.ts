@@ -1335,8 +1335,15 @@ test("receipt-only claims require head CAS and recover a lost commit response", 
       claimed_by: "agent-a", actor_agent_id: "agent-a", registered_agents: ["agent-a"],
       operation_id: "no-change", observed_at: "2026-09-05T04:30:00Z", dry_run: false,
     }, {createStore: () => new FaultStore(directory, "goal-a")});
-    assert.equal(result.changed, false);
-    assert.equal(result.status, fault === "conflict" ? "conflict" : "recovered");
+    if (fault === "conflict") {
+      // The bounded CAS retry rereads the new owner and revalidates the claim.
+      assert.equal(result.status, "failed");
+      assert.equal(result.reason_code, "claim_owner_mismatch");
+      assert.equal(result.failure_kind, "decision_rejection");
+    } else {
+      assert.equal(result.changed, false);
+      assert.equal(result.status, "recovered");
+    }
     const receipt = await store.readReceipt("no-change");
     assert.equal(receipt.status, fault === "conflict" ? "missing" : "found");
     const after = await store.loadAuthority();
