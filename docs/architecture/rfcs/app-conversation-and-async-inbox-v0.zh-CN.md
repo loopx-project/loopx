@@ -265,6 +265,15 @@ typed 反例验收此恢复边界，不证明真实负责人选择、接收方�
 有歧义或回执冲突时不生成卡片。外部会话不展示私有 brief 或接收方理由。路由发现
 保留现有有界历史扫描；完整积压索引及安装/真实旅程验收仍单独保留。
 
+共享 TypeScript 读取模型在首次回复送达后、页面切换后继续观察已访问的会话。
+回传追加消息不会修改执行状态 `updated_at`，因此现有会话索引补充不暴露文件身份的
+`transcript_revision`。Python 只观察存储文件；TS 选择变化的读取，并把结果更新回原上下文。
+协作及送达元数据待核验时仍读回；安静的历史不反复下载全文。失败不推进已读修订，
+保留旧内容等待重试。不新增持久 schema、生命周期权限、模型重跑或 Inbox owner。
+打包验收使用生产 HTTP/store 与合成结果写入，覆盖首次结果、另一个上下文可见时的
+后续修订、一次读取失败、去重与当前会话保留。已安装原生执行、接收方采用及多次结果
+发布仍保留各自验收边界。
+
 Pending 回执检查点把“文件存在即结束”的分类迁入共享 `collaboration/inbox_receipts.ts` read model。
 Decision/result 缺失、不可读与身份冲突分别表达；损坏的结论不能静默清除接收方请求，
 也不能让原 App 对话的协作卡片消失。恢复原始记录后只回传一次，不重跑工作或更换受众。
@@ -290,7 +299,7 @@ Adapter 按数量和编码字节分批，不提高 bridge 上限；不新增 sto
 | Scope | 导航 A→B→A、迟到响应、旧 subscription 终态事件：只更新原 source/session/Turn。完整 snapshot 与 delta stream 采用不同合并规则 |
 | Stream | 重复或迟到事件与 hydrate 重叠保留一个逻辑答案。用户阅读历史时新事件不强制滚动 |
 | 纠偏/停止 | 工具执行中和完成时：实际接收者采纳最新 scope，或报告 queued/unsupported。停止针对原 Turn，不隐式停止其后继或所有 peer |
-| 结果 | 文件缺失仅重试读取；v1 review 不认证 v2；打开 report 不等于 adoption。Return ACK 丢失先 reconcile 再再次发送 |
+| 结果 | 切换当前会话或离开页面后仍能收到旧会话的后续结果、修订；一次回复送达不终止观察。安静的历史只读紧凑会话索引，有变化或待核验元数据时才更新原上下文，保留当前流式文本。文件缺失仅重试读取；v1 review 不认证 v2；打开 report 不等于 adoption。Return ACK 丢失先 reconcile 再再次发送 |
 | Attached | 原生 host 离线、stale binding、不支持 steering、只支持 next-Turn 的 adapter 与 restart：请求保持可见；不猜测成功或引入竞争 driver |
 | Managed | Runtime 启动失败、quota 拒绝、缺失登录、stop/restart：实际 profile 和条件可读；不静默替换 model/account |
 | 权限 | 撤销访问或 source 改变拒绝 stale effect；无关且被允许的分支继续。私有历史不进入共享 audience |
