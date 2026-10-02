@@ -68,6 +68,17 @@ now preserves the bound Monitor projection independently of aggregate coverage;
 TS still owns poll verification and phase classification. This regression is red
 before the adapter change and green after it.
 
+A further composition case settles an advancement Turn, then moves its primary
+Todo to `blocked` before an independent due Monitor is observed.
+The emitted poll previously failed because admission accepted only open/done
+primaries. The existing TS transaction owner now accepts this later hold only
+when exact settlement readback is `settled`. Unsettled holds still fail closed;
+the Monitor must independently pass its due, owner, gate and lease checks.
+No held Todo is reopened, no new advancement is admitted and no extra debit is
+created. Synthetic TS regressions cover the accepted hold and identity/gate
+rejections (including deferred primaries); one CLI journey exercise in-flight writeback, spend, hold, poll and
+exact replay. The accepted blocked-primary TS case fails before the change.
+
 ## Ownership and limits
 
 | Boundary | Existing owner retained |
@@ -88,8 +99,9 @@ requests retain their causal-wait behavior. Only active, correctly owned blocked
 Monitors with `poll_due` qualify; missing, duplicate, foreign, archived and already
 polled inputs do not enter this restoration route. Tests assert these exclusions.
 
-Default behavior changes for blocked, unpolled replay and for bound Monitor
-projection when an incomplete frontier has no aggregate lane. The emitted
+Default behavior changes for blocked, unpolled replay, for bound Monitor
+projection when an incomplete frontier has no aggregate lane, and for independent
+auxiliary observation after an exact settled advancement is held. The emitted
 restore command is conditional on a verified resolved blocker; the projection
 neither reopens the Todo nor establishes a poll/closeout receipt. Retain the
 blocker when unresolved. The existing Todo writer still enforces mutation authority.

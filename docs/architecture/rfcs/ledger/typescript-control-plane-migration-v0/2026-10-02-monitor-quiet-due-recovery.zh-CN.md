@@ -59,6 +59,14 @@ user gate。精确的已结算 Monitor 仍必须返回 `heartbeat_settled_skip`�
 投影不再依赖聚合覆盖完整性；poll 验证与 phase 判断仍归 TS。此反例在 adapter
 修复前失败、修复后通过。
 
+另一个组合场景先结算 advancement Turn，再将主 Todo 置为 `blocked`，
+随后观察独立到期的 Monitor。此前命令已经投影，但准入只接受 open/done 主 Todo，
+导致执行失败。现在由现有 TS 事务 owner 检查精确结算回读：仅 `settled` 才允许
+这些后续 hold。尚未结算的 hold 仍拒绝，Monitor 仍须独立通过到期、owner、gate 和
+lease 检查。不重开被 hold 的 Todo，不授予新交付，不增加扣费。合成 TS 回归覆盖
+该 hold 及身份／gate 拒绝（含 deferred 主 Todo）；一条 CLI 旅程覆盖 in-flight 写回、扣费、hold、poll
+和精确重放。blocked 主 Todo 的 TS 正例在修改前失败。
+
 ## 归属与限制
 
 | 边界 | 保留的现有 owner |
@@ -77,8 +85,9 @@ user gate。精确的已结算 Monitor 仍必须返回 `heartbeat_settled_skip`�
 只有 active、owner 合法、状态 blocked 且 phase 为 `poll_due` 的 Monitor 进入此
 恢复路线；缺失、重复、其他 owner、已归档或已 poll 的输入均排除，测试覆盖这些边界。
 
-默认行为改变上述 blocked、尚未 poll 的重入，以及不完整 frontier 缺少聚合 lane
-时已绑定 Monitor 的投影。恢复命令以 blocker 已核实解除为
+默认行为改变上述 blocked、尚未 poll 的重入，不完整 frontier 缺少聚合 lane
+时已绑定 Monitor 的投影，以及精确结算后的 advancement 被 hold 时的独立辅助观察。
+恢复命令以 blocker 已核实解除为
 前提；投影不会自行重开 Todo，也不构成 poll／closeout receipt。原因未解除时
 继续保留 blocked。既有 Todo writer 仍执行变更权限检查。runtime 请求数不变，
 不计 Python 规则删除量或性能收益。保留的 Python effect-id 兼容 resolver 迁移

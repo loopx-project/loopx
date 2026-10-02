@@ -19,6 +19,69 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
+def test_settled_advancement_hold_preserves_independent_monitor(
+    tmp_path: Path,
+) -> None:
+    """A post-settlement hold does not strand a due independent observation."""
+    status = "blocked"
+    project, runtime, registry = _write_fixture(tmp_path)
+    turn = "turn-settled-advancement-hold"
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--turn-instance-id", turn)
+    capabilities = ("--available-capability", "network",
+                    "--available-capability", "external_evidence_poll")
+    guard = ("quota", "should-run", "--codex-app", *binding,
+             *capabilities, "--scan-path", str(project))
+    rc, first = _run_cli(registry, runtime, *guard)
+    assert rc == 0, first
+    _append_newly_due_monitor(project, watch_only=True)
+    rc, admitted = _run_cli(registry, runtime, *guard)
+    assert rc == 0, admitted
+    poll_command = admitted["interaction_contract"]["cli_channel"][
+        "auxiliary_monitor_poll"]["command"]
+    rc, refresh = _run_cli(
+        registry, runtime, "refresh-state", *binding, "--todo-id", TODO_ID,
+        "--classification", "fixture_inflight_validated",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation",
+        "--delivery-workspace-path", str(project),
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert rc == 0, refresh
+    rc, spent = _run_cli(registry, runtime, *_projected_cli_args(
+        refresh["settlement_owed"]["command"], turn_instance_id=turn))
+    assert rc == 0, spent
+    rc, held = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--status", status,
+        "--reason", "Await independent evidence after validated progress",
+    )
+    assert rc == 0, held
+    rc, successor = _run_cli(
+        registry, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        "--role", "agent", "--task-class", "advancement_task",
+        "--claimed-by", AGENT_ID, "--text", "Validate an independent artifact",
+    )
+    assert rc == 0, successor
+    poll_args = tuple("observed-after-hold" if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
+                      else token for token in _projected_cli_args(
+                          poll_command, turn_instance_id=turn)) + ("--scan-path", str(project))
+    for expected_replay in (False, True):
+        rc, poll = _run_cli(registry, runtime, *poll_args)
+        assert rc == 0, (poll.get("error_code"), poll.get("reason"), poll.get("error"))
+        assert poll["replayed"] is expected_replay
+        assert poll["settlement_todo_id"] == TODO_ID
+        assert poll["turn_continuation"]["current_turn_settled"] is True
+        assert poll["turn_continuation"]["same_turn_independent_settlement_allowed"] is False
+        assert poll["settlement_resume"]["next_step"] is None
+    rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, listed
+    assert next(t for t in listed["todos"] if t["todo_id"] == TODO_ID)["status"] == status
+    assert _classification_count(runtime, "quota_monitor_poll") == 1
+    assert _spend_run_count(runtime) == 1
+
+
 def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     tmp_path: Path,
 ) -> None:
