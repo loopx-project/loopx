@@ -8,7 +8,7 @@ from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 13
+REVIEW_POLICY_REVISION = 14
 
 # A red check is an observation, not evidence that the reviewed PR caused it.
 # This contract belongs to review judgment; merge readiness still owns whether
@@ -198,8 +198,12 @@ SPEC_BASIS_ASSESSMENT = {
         "the validation that exercises it; deferred names the reason and the successor or "
         "remaining gap; out_of_scope cites the specification or accepted task boundary, "
         "not author preference; not_met names the observed gap and minimum repair and "
-        "blocks approval. Publish spec_ref and every criterion_id in the review body: "
-        "the body is the only part another operator reads. Derive requirements from the "
+        "blocks approval. Publish spec_ref, spec_revision and every criterion_id in the "
+        "review body: the body is the only part another operator reads, and a path alone "
+        "moves with the branch while the revision pins the text the review judged against. "
+        "Give criterion_id as a non-empty string: it is published, compared for duplicates "
+        "and matched against the body, so a non-string identity would not be a criterion. "
+        "Derive requirements from the "
         "specification, never from the patch. When the change edits the specification it "
         "cites, judge the criteria as accepted before this change and treat the edit as a "
         "finding to justify; a specification rewritten to match its implementation is not "

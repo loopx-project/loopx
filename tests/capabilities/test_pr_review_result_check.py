@@ -139,9 +139,11 @@ def _mapped_spec_basis():
 
 
 def _publish_spec_references(result):
+    # The published body carries the immutable revision a reader on another host
+    # needs to open the same specification text, not only its moving path.
     result["review_body"] += (
         "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance"
-        " — EX-1 implemented; EX-2 deferred.\n"
+        " @ revision " + "b" * 40 + " — EX-1 implemented; EX-2 deferred.\n"
     )
 
 
@@ -1039,3 +1041,46 @@ def test_projected_compatibility_rules_cannot_mutate_the_checker():
     packet["agent_response_contract"] = {"review_execution_contract": contract}
     result["evidence"]["code_volume"]["compatibility_assessment"] = _compatibility(decision="simplify_now")
     assert not check_review_result(packet, result)["approval_consistent"]
+
+
+@pytest.mark.parametrize("identity", [True, False, ["EX-1"], {"id": "EX-1"}, 1, ""])
+def test_a_criterion_identity_must_be_published_text(identity):
+    """A criterion that cannot be named in the body is not a criterion.
+
+    Bools hash and are non-empty, and non-strings silently fall out of the
+    published-body check, so the type is validated where membership, duplicate
+    detection and publication all assume it — not left to a later set or dict
+    operation that would either pass or fail with a command-level error.
+    """
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis["criteria"][0]["criterion_id"] = identity
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    _publish_spec_references(result)
+    checked = check_review_result(packet, result)
+    assert "problem_context:spec_basis:invalid_criterion_id" in checked["approval_blockers"]
+    assert not checked["ok"]
+
+
+def test_a_published_mapping_must_carry_its_immutable_revision():
+    """Another host can only open the same text if the body pins the revision.
+
+    The path moves with the branch, so publishing the path alone lets a reader
+    find a different document than the one the review judged against.
+    """
+    packet, result = _review()
+    result["evidence"]["problem_context"]["spec_basis"] = _mapped_spec_basis()
+    revision = "b" * 40
+    result["review_body"] += (
+        "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance"
+        " — EX-1 implemented; EX-2 deferred.\n"
+    )
+    assert revision not in result["review_body"]
+    checked = check_review_result(packet, result)
+    # A body-level gap blocks publication rather than scoring the evidence.
+    assert f"review_body:spec_reference_not_published:{revision}" in checked["errors"]
+    assert not checked["ok"] and not checked["approval_consistent"]
+
+    # Publishing the same mapping with its revision closes the gap.
+    result["review_body"] += "Spec revision: " + revision + "\n"
+    assert check_review_result(packet, result)["ok"]

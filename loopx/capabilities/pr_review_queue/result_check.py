@@ -281,14 +281,21 @@ def _check_spec_basis(blockers: list[str], value: object) -> None:
         requirement={"items_field": "criteria", "item_fields": contract["criterion_fields"],
                      "item_count": {"minimum": 1}},
     )
-    seen: set[object] = set()
+    seen: set[str] = set()
     for criterion in criteria:
+        # Membership, hashing and publication all assume a public identity.
+        # A bool hashes and is non-empty, and a non-string identity silently
+        # falls out of the published-body check, so validate the type here
+        # rather than letting a later set or dict operation decide.
         criterion_id = criterion.get("criterion_id")
+        if not isinstance(criterion_id, str) or not criterion_id.strip():
+            blockers.append(f"{key}:invalid_criterion_id")
+            continue
         if criterion_id in seen:
             blockers.append(f"{key}:duplicate_criterion:{criterion_id}")
         seen.add(criterion_id)
         disposition = criterion.get("disposition")
-        if disposition not in contract["disposition_fields"]:
+        if not isinstance(disposition, str) or disposition not in contract["disposition_fields"]:
             blockers.append(f"{key}:invalid_disposition:{criterion_id}")
             continue
         _require_fields(blockers, evidence_id=f"{key}:{criterion_id}", value=criterion,
@@ -299,10 +306,12 @@ def _check_spec_basis(blockers: list[str], value: object) -> None:
 
 def _unpublished_spec_references(value: object, body: str) -> list[str]:
     # The structured result stays local; another operator reads only the body.
+    # A path alone moves with the branch, so the immutable revision the review
+    # judged against has to travel with it for that reader to open the same text.
     if not isinstance(value, Mapping) or value.get("decision") != "mapped":
         return []
     text = visible_review_text(body).casefold()
-    references = [value.get("spec_ref")]
+    references = [value.get("spec_ref"), value.get("spec_revision")]
     criteria = value.get("criteria")
     if isinstance(criteria, list):
         references += [item.get("criterion_id") for item in criteria if isinstance(item, Mapping)]
