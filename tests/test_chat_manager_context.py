@@ -841,10 +841,10 @@ def test_trusted_manager_profile_rejects_endpoint_that_cannot_enforce_it(
 
     with pytest.raises(
         CodexChatAgentError,
-        match="requires the Codex endpoint",
+        match="requires a Codex or Claude Code endpoint",
     ) as caught:
         runtime._start_adapter(
-            agent_id="claude-code",
+            agent_id="dsh",
             work_dir=tmp_path,
             goal_id=MANAGER_AGENT_GOAL_ID,
             objective="manager",
@@ -852,7 +852,7 @@ def test_trusted_manager_profile_rejects_endpoint_that_cannot_enforce_it(
         )
 
     assert caught.value.error_code == "manager_runtime_endpoint_unsupported"
-    assert "Select the Codex Agent" in caught.value.gate["next_action"]
+    assert "Select a Codex or Claude Code Agent" in caught.value.gate["next_action"]
 
 
 def test_manager_profile_change_rotates_healthy_upstream_without_losing_session(

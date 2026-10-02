@@ -12,6 +12,7 @@ from loopx.chat_coordination import PROJECT_CONTEXT_VERSION
 from loopx.chat_agent import CodexChatAgentSession, CodexChatAgentError
 from loopx.chat_manager_context import collect_manager_turn_context
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
+from loopx.chat_providers import ClaudeCodeAdapter
 from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import pending
 from loopx.capabilities.manager_context.inspection import ManagerInspection, CONTEXT_TOOL_NAME
@@ -209,5 +210,46 @@ def test_external_input_cannot_reuse_the_project_turns_private_read_handler(proj
             result = controller.wait_for_turn(session_id=session["session_id"], turn_id=turn["turn_id"], timeout_sec=20)
             assert result["status"] == "completed", result
         assert len(sent) == 3
+    finally:
+        controller.close()
+
+
+def test_native_project_reader_rebinds_each_turn_and_cannot_read_other_goal(project, monkeypatch):
+    root, registry, repo = project
+    store = ChatSessionStore(root)
+    controller = ChatRuntimeController(store=store, codex_bin="codex", registry_path=registry)
+    reads = []
+    recorded = []
+
+    class NativeFixture(ClaudeCodeAdapter):
+        def start_turn(self, message, sink):
+            result = self.read_tool_handler(CONTEXT_TOOL_NAME, {"view": "todos", "goal_id": "research"})
+            reads.append(result)
+            if len(reads) == 2:
+                assert result == {"ok": False, "error": "conversation_scope_unavailable"}
+                assert "Fresh Core evidence" not in message
+            else:
+                assert result["ok"] is True
+                assert "Verify corrected source" in json.dumps(result)
+                outside = self.read_tool_handler(CONTEXT_TOOL_NAME, {"view": "todos", "goal_id": "other"})
+                assert outside["ok"] is False
+                assert "OTHER_PROJECT_PRIVATE" not in message
+            return {"schema_version": "loopx_chat_agent_response_v0", "message": "Scoped answer", "proposals": [], "gate": None}
+
+    adapter = NativeFixture("claude", repo, "fixture-native-reader")
+    monkeypatch.setattr(controller, "capabilities", lambda: [
+        {"agent_id": "claude-code", "available": True, "adapter_kind": "claude_code_cli"}])
+    monkeypatch.setattr(controller, "_start_adapter", lambda **_: adapter)
+    try:
+        session, _ = controller.open_session(goal_id="research", agent_id="claude-code", work_dir=repo,
+                                             objective="Research", mode="new", channel_id="goal.research")
+        for index, origin in enumerate(("web", "lark", "web")):
+            turn, _ = controller.enqueue_turn(session_id=session["session_id"], client_turn_id=f"native-{index}",
+                message="Inspect current work", work_dir=repo, objective="Research", origin=origin)
+            result = controller.wait_for_turn(session_id=session["session_id"], turn_id=turn["turn_id"], timeout_sec=20)
+            assert result["status"] == "completed", result
+            recorded.extend(store.events_after(session["session_id"], turn["turn_id"], None))
+        assert len(reads) == 3
+        assert len([e for e in recorded if e["kind"] == "manager.evidence_read"]) >= 2
     finally:
         controller.close()

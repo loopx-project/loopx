@@ -542,8 +542,11 @@ def test_preview_apply_inspect_and_rollback_are_revision_locked(tmp_path: Path) 
     assert final_handler.responses[0]["status"] == "absent"
 
 
+@pytest.mark.parametrize("endpoint,model", [("dsh", "deepseek-v4-flash"), ("claude-code", "fixture-native-model")])
 def test_the_steward_executor_namespace_is_editable_and_read_back(
     tmp_path: Path,
+    endpoint: str,
+    model: str,
 ) -> None:
     """The steward's machine default is a first-class product setting.
 
@@ -555,8 +558,8 @@ def test_the_steward_executor_namespace_is_editable_and_read_back(
 
     configuration = {
         "schema_version": "steward_executor_machine_defaults_v0",
-        "executor_endpoint": "dsh",
-        "executor_model": "deepseek-v4-flash",
+        "executor_endpoint": endpoint,
+        "executor_model": model,
         "executor_reasoning_effort": "high",
     }
     preview_handler = _Handler(
@@ -590,6 +593,7 @@ def test_the_steward_executor_namespace_is_editable_and_read_back(
         "executor_reasoning_effort",
     ]
     assert capability["configuration_editor"]["fields"][1]["options"] == [
+        "claude-code",
         "codex",
         "dsh",
     ]
