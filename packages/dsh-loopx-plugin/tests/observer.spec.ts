@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import {
+  ledgerPath,
   ENV_GOAL_ID,
   ENV_RUN_IDENTITY,
   ENV_SESSION_ID,
@@ -176,7 +177,7 @@ describe('shadow observer envelopes', () => {
     const envelopes = records.filter(
       (record): record is ObserverEnvelope => record.schema_version === OBSERVER_ENVELOPE_SCHEMA_VERSION,
     )
-    expect(new Set(paths)).toEqual(new Set(['/ledger/goal-observer-fixture.ndjson']))
+    expect(new Set(paths)).toEqual(new Set([ledgerPath(config)]))
     expect(envelopes.map(item => item.event_kind)).toEqual([
       'session_started', 'turn_started', 'tool_called', 'tool_completed', 'unsupported', 'turn_ended',
     ])

@@ -388,6 +388,23 @@ provider dispatch 或 receipt replay 前失败。Journal reader 删除独立的 
 CLI 测试，包含真实 File 回读。此处只验收 identity 边界；跨域 crash／lease 恢复及
 完整 provider conformance 仍需单独验收。
 
+2026-10-01 的 Turn 恢复迁移把 provider 返回值、completion 结果与回读分类收进 TypeScript
+Turn owner。每次 reduction 只授权 prepare/execute、resolve、
+execute-prepared、checkpoint 或 abort-prepared 中的一步；确认 checkpoint
+已持久化后才能进入下一个 provider。非法 completion 或显式不匹配的 payload
+effect ref 在推进 journal 前被拦截。Unknown 保留 prepared；确认 absent 后才
+允许沿用同一 ref 执行。既有 failed-turn 显式重试 gate 保持不变。
+
+临时 request/reduction 合同升至 v1，v0 caller 在 provider 授权前被拒绝。
+升级或回滚时须让 Python interpreter 和 TypeScript reducer 一起变化。
+持久化 journal／receipt schema、effect identity、公开 CLI 参数及省略显式 ref
+的旧 provider payload 保持兼容。既有 Turn 局部 provider step／resolution
+词表迁入对应模块，内部 action union 扩展，不新增共享状态词表。
+首次两 provider 结算由三次 RPC 变成五次（preflight，加每步返回值准入及
+持久化确认）；完整重放仍为一次。这是 Python 仍负责 IO 时明确接受的正确性成本，
+不是延迟优化；PR 证据需比较相同 base/head 工作负载。验证范围见
+[有界恢复 checkpoint](composable-state-machines-recovery-verification-v0.zh-CN.md#turn-结算资格范围)。
+
 M7.4：只有在移除重复知识并切换真实生产 caller 时，才一次扩展一个 bounded 状态族。Todo、monitor、capability、scheduler 和 gate 状态机保留自己的 domain transition invariants。它们迁移后可以通过同一个 managed runtime 执行，但不能仅仅因为 packet 字段相似就移到一个通用状态协议后面。CLI 原生迁到 TypeScript 后，CLI-only 在进程内 import kernel；daemon 只在 App/多 client 共享 authority 时可选保留，而不是每个状态族一个必选 server。
 
 #3208 的 replan semantic-exit 修复明确不是候选：`refresh-state` 已经会重新推导当前 obligation 并记录 typed semantic ACK，实际缺陷是 goal-frontier 中一个额外的 settlement 条件在 acceptance gaps 仍存在时忽略了合法的 non-successor ACK。这是 domain-local reducer/ACK invariant，不是第二个 multi-step executor，应继续由 replan/goal-frontier owner 持有。只有第二个真实 runtime 场景（例如具有相同 plan/receipt lifecycle 的 quota/status read ACK）出现，并且能在两个 adapter 间删除重复编排时，才重新评估 Effect Program 迁移。

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -60,14 +61,12 @@ from .session_recovery import (
 from .settlement import (
     TurnEffectResolver,
     TurnSettlementJournalAdapter,
-    completion_writeback_outcome,
     execute_turn_driver_settlement,
     invoke_result_effect,
     terminal_closeout_requirement,
     turn_settlement_failure_outcome,
     turn_settlement_outcome,
     turn_effect_resolvers,
-    verified_terminal_closeout_effect,
 )
 from .transaction import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
@@ -1061,30 +1060,7 @@ def _typed_settlement_stage(
                 raise ValueError(
                     "validated_completion requires a todo lifecycle adapter"
                 )
-            callback_payload = invoke_result_effect(
-                completion_writeback, result, effect_ref
-            )
-            completion_outcome = completion_writeback_outcome(
-                callback_payload,
-                plan=plan,
-            )
-            if completion_outcome is None:
-                return {
-                    "ok": False,
-                    "appended": False,
-                    "reason": str(
-                        callback_payload.get("reason")
-                        or callback_payload.get("error")
-                        or (
-                            "todo lifecycle adapter returned an invalid "
-                            "completion outcome"
-                        )
-                    ),
-                }
-            return {
-                **callback_payload,
-                "completion": completion_outcome,
-            }
+            return invoke_result_effect(completion_writeback, result, effect_ref)
         return invoke_result_effect(writeback, result, effect_ref)
 
     journal_adapter = TurnSettlementJournalAdapter(
@@ -1098,9 +1074,7 @@ def _typed_settlement_stage(
     terminal_checkpoint = None
     if terminal_closeout_required:
         assert terminal_closeout is not None
-        terminal_effect = verified_terminal_closeout_effect(
-            terminal_closeout, result=result, plan=plan
-        )
+        terminal_effect = partial(invoke_result_effect, terminal_closeout, result)
         terminal_checkpoint = journal_adapter.checkpoint_terminal
 
     settlement_result = execute_turn_driver_settlement(

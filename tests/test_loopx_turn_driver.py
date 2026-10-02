@@ -1825,18 +1825,50 @@ def test_turn_cli_requires_complete_resume_identity(tmp_path: Path) -> None:
     assert "requires --resume-goal-id" in payload["error"]
 
 
+@pytest.mark.parametrize("checkpoint_fault", [None, "writeback", "quota_spend"])
 def test_turn_run_once_cli_commits_validated_result_and_one_quota_slot(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    checkpoint_fault: str | None,
 ) -> None:
+    from loopx.control_plane.turn_driver import executor
+
+    persist = executor._write_journal
+    interrupted = False
+
+    def interrupt_checkpoint(path, journal):
+        nonlocal interrupted
+        if checkpoint_fault and not interrupted and checkpoint_fault in journal:
+            interrupted = True
+            raise RuntimeError("injected interruption before provider checkpoint")
+        persist(path, journal)
+
+    monkeypatch.setattr(executor, "_write_journal", interrupt_checkpoint)
     project, runtime, registry = _write_live_fixture(tmp_path)
     policy_output = io.StringIO()
     with contextlib.redirect_stdout(policy_output):
-        policy_code = cli_main([
-            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-            "automation-cadence", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-            "--min-interval-minutes", "1440", "--expected-revision", "0",
-            "--owner-reference", "fixture-owner", "--execute",
-        ])
+        policy_code = cli_main(
+            [
+                "--registry",
+                str(registry),
+                "--runtime-root",
+                str(runtime),
+                "--format",
+                "json",
+                "automation-cadence",
+                "--goal-id",
+                "loopx-turn-fixture",
+                "--agent-id",
+                "codex-fixture",
+                "--min-interval-minutes",
+                "1440",
+                "--expected-revision",
+                "0",
+                "--owner-reference",
+                "fixture-owner",
+                "--execute",
+            ]
+        )
     assert policy_code == 0, policy_output.getvalue()
     host_project = tmp_path / "isolated-host-workspace"
     host_project.mkdir()
@@ -1871,36 +1903,52 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
     output = io.StringIO()
 
     with contextlib.redirect_stdout(output):
-        exit_code = cli_main(
-            [
-                "--registry",
-                str(registry),
-                "--runtime-root",
-                str(runtime),
-                "--format",
-                "json",
-                "turn",
-                "run-once",
-                "--host",
-                "generic-cli",
-                "--goal-id",
-                "loopx-turn-fixture",
-                "--agent-id",
-                "codex-fixture",
-                "--project",
-                str(host_project),
-                "--host-adapter-command-json",
-                json.dumps([sys.executable, "-c", host_script]),
-                "--validation-command-json",
-                json.dumps([sys.executable, "-c", validation_script]),
-                "--scan-root",
-                str(project),
-                "--no-global-sync",
-                "--execute",
-            ]
-        )
+        args = [
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime),
+            "--format",
+            "json",
+            "turn",
+            "run-once",
+            "--host",
+            "generic-cli",
+            "--goal-id",
+            "loopx-turn-fixture",
+            "--agent-id",
+            "codex-fixture",
+            "--project",
+            str(host_project),
+            "--host-adapter-command-json",
+            json.dumps([sys.executable, "-c", host_script]),
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", validation_script]),
+            "--scan-root",
+            str(project),
+            "--no-global-sync",
+            "--execute",
+        ]
+        exit_code = cli_main(args)
 
     payload = json.loads(output.getvalue())
+    if checkpoint_fault:
+        assert exit_code == 1, payload
+        assert interrupted
+        journal_paths = [
+            path
+            for path in (runtime / "goals" / "loopx-turn-fixture" / "turns").glob(
+                "*.json"
+            )
+            if not path.name.endswith(".lock.holder.json")
+        ]
+        assert len(journal_paths) == 1
+        stored = json.loads(journal_paths[0].read_text(encoding="utf-8"))
+        assert checkpoint_fault not in stored
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exit_code = cli_main([*args, "--resume-turn-key", stored["turn_key"]])
+        payload = json.loads(output.getvalue())
     assert exit_code == 0, payload
     assert payload["status"] == "committed"
     assert payload["admission"]["reserved"] is True
@@ -1922,8 +1970,8 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
         "completion_reason": "selected scheduler owner requires no Codex App apply or ACK",
     }
     assert payload["effects"] == {
-        "host_invoked": True,
-        "state_written": True,
+        "host_invoked": checkpoint_fault is None,
+        "state_written": checkpoint_fault != "quota_spend",
         "quota_spent": True,
         "scheduler_acknowledged": False,
     }
