@@ -176,7 +176,12 @@ For every DSH plugin release:
 [Reliability Diagnostics](../../loopx/capabilities/reliability_diagnostics/README.md)
 capability: an L1 shadow observer that consumes read-only harness events and
 appends compact, public-safe envelopes plus an observer stats record to
-`<loopx-runtime-root>/reliability_diagnostics/<goal-id>.ndjson`. It is a
+`<loopx-runtime-root>/reliability_diagnostics/by-goal/<sha256>.ndjson`, where
+`sha256` is the lowercase digest of the exact UTF-8 Goal id. Upgrade the CLI and
+plugin together. An existing legacy filename blocks flushes with
+`LegacyDiagnosticLedgerError` until the
+[offline upgrade](../../loopx/capabilities/reliability_diagnostics/docs/local-retention-v0.md#upgrading-a-legacy-ledger-offline)
+preserves its history; readback never silently migrates it. It is a
 separate Cordis row and bundle from the Driver, with no Driver or Agent
 injection and no shared send path. It never calls `agent.send`, touches the
 inbox, invokes the LoopX CLI, schedules, retries, stops, or resumes anything.

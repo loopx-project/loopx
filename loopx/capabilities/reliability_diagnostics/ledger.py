@@ -8,6 +8,7 @@ public reference is the relative ``ledger_ref``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -21,17 +22,32 @@ LEDGER_DIRNAME = "reliability_diagnostics"
 def _goal_file_stem(goal_id: str) -> str:
     if not isinstance(goal_id, str) or not IDENTITY_TOKEN_PATTERN.match(goal_id):
         raise ValueError("goal_id must be an identity token")
-    return goal_id.replace(":", "_")
+    return hashlib.sha256(goal_id.encode("utf-8")).hexdigest()
 
 
 def ledger_ref(goal_id: str) -> str:
     """Public-safe, runtime-root-relative ledger reference."""
 
-    return f"{LEDGER_DIRNAME}/{_goal_file_stem(goal_id)}.ndjson"
+    return f"{LEDGER_DIRNAME}/by-goal/{_goal_file_stem(goal_id)}.ndjson"
 
 
 def ledger_path(runtime_root: Path, goal_id: str) -> Path:
     return Path(runtime_root).expanduser() / ledger_ref(goal_id)
+
+
+def resolve_ledger_path(runtime_root: Path, goal_id: str, *, for_write: bool = False) -> Path:
+    """Read legacy evidence without moving it; never split history on a write."""
+
+    canonical = ledger_path(runtime_root, goal_id)
+    legacy = canonical.parent.parent / (goal_id.replace(":", "_") + ".ndjson")
+    if legacy.exists() or legacy.is_symlink():
+        if for_write or canonical.exists() or canonical.is_symlink():
+            raise ValueError(
+                "legacy diagnostic ledger requires offline reconciliation; stop observers "
+                "and follow reliability_diagnostics/docs/local-retention-v0.md before writing"
+            )
+        return legacy
+    return canonical
 
 
 def append_ledger_records(path: Path, records: Iterable[Mapping[str, Any]]) -> int:

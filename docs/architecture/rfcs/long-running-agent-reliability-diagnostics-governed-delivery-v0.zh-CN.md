@@ -458,8 +458,10 @@ deletion profile 的接受决定。
 [本地 retention 参考方案（v0）](../../../loopx/capabilities/reliability_diagnostics/docs/local-retention-v0.md#中文)
 及其合成 CLI lifecycle smoke 提供 canonical 布局的离线导出／删除／恢复演练，包含实际 shell
 边界检查、安装包读回与负面证据保留；
-它们没有实现自动 retention，也未证明真实 observer 停写、文件名／租户隔离、C0/C1 或部署的
-删除 policy。实现 PR 和 milestone 证据继续归入
+它们没有实现自动 retention，也未证明真实 observer 停写、安全租户隔离、C0/C1 或部署的
+删除 policy。Python CLI 与 DSH producer 已按精确 Goal id 隔离账本文件；真实文件／CLI
+合成回归覆盖冒号／下划线、大小写不同 id 的独立读回、旧证据只读回查和升级未核对时
+拒绝拆散历史。retention 指南描述离线升级与回退。实现 PR 和 milestone 证据继续归入
 [task #5211](https://github.com/loopx-project/loopx/issues/5211)。
 
 ### P1 — Benchmark-qualified diagnostic pilot

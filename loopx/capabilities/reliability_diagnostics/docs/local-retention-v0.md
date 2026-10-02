@@ -68,7 +68,8 @@ in the frozen provider configuration; the current shell environment is not
 evidence of what an already running observer used.
 Use the same installed `loopx` revision throughout and record `loopx --version`.
 This v0 recipe supports the canonical layout only:
-`<runtime-root>/reliability_diagnostics/<goal-file>.ndjson`. The provider's
+`<runtime-root>/reliability_diagnostics/by-goal/<sha256>.ndjson` for new ledgers,
+or the original direct child for legacy readback. The provider's
 resolved directory must match `<runtime-root>/reliability_diagnostics`, including
 when `LOOPX_DSH_SHADOW_OBSERVER_LEDGER_DIR` was explicitly set. An arbitrary
 custom directory's parent does not supply this mapping: the CLI always inserts
@@ -77,11 +78,12 @@ CLI readback or export. Do not move, re-ingest or delete an unsupported ledger
 to make this recipe pass; retain it privately for an owner-approved recovery
 path. Do not infer a ledger from the current project or default runtime.
 
-Filename normalization currently replaces `:` with `_`, and some filesystems
-ignore case. Distinct goal ids can therefore share a filename. The ownership
-check below refuses mixed, foreign or unparseable records before deletion;
-it does not qualify multi-tenant isolation. Reserve a unique filename for the
-rehearsal and investigate ambiguous ownership separately.
+New filenames use the lowercase SHA-256 of the exact UTF-8 Goal id in a separate
+`by-goal` directory. Python and the DSH producer share this mapping, so colon/underscore
+and case variants no longer alias; the directory also separates new files from
+legacy ids that happen to look like a digest. This is file identity, not a tenant
+security boundary. Legacy files may still contain mixed ownership: the check
+below refuses mixed, foreign or unparseable records before deletion.
 
 ```sh
 set -eu
@@ -98,6 +100,8 @@ if provider.resolve() != expected.resolve():
     raise SystemExit("unsupported provider ledger directory: canonical runtime layout required")
 if provider.is_symlink():
     raise SystemExit("symlink ledger directory: hold offline operations")
+if (provider / "by-goal").is_symlink():
+    raise SystemExit("symlink ledger namespace: hold offline operations")
 PY
 umask 077
 diagnostic_archive=$(mktemp -d "${TMPDIR:-/tmp}/loopx-diagnostics.XXXXXX")
@@ -185,8 +189,8 @@ python examples/reliability_diagnostics/ledger-retention-smoke.py --installed
 The smoke executes this literal shell block with the selected interpreter's
 real CLI against disposable state. It restores degraded and refused-control
 input ledgers with identical bytes and receipt/projection, including invalid
-missing-ledger readback after deletion. Symlinks, foreign/mixed ownership,
-malformed input and normalized filename collisions stop before ledger export;
+missing-ledger readback after deletion. Provider, namespace and file symlinks, foreign/mixed ownership,
+malformed input and legacy filename collisions stop before ledger export;
 source/copy tampering and occupied restore destinations are rejected. Synthetic
 sibling state stays unchanged. The existing DSH producer's real resolver and
 file appender also write both canonical and arbitrary custom layouts: the
@@ -195,6 +199,43 @@ is held before this recipe's operations. This proves offline recovery mechanics;
 it measures neither observer CPU/RSS/bytes/latency nor actual harness lifecycle
 or live C0/C1 non-interference. Record the revision, commands, failures/skips,
 operator stop evidence and policy acceptance in the owning issue before a pilot.
+
+### Upgrading a legacy ledger offline
+
+Upgrade both the CLI and the DSH plugin, and freeze **all** old and new writers
+before changing files. Ordinary `receipt`/`status` reads keep using the original
+legacy file and return its actual `ledger_ref`; they never move or filter it.
+`ingest` exits with code 2 while that legacy filename exists. The DSH observer
+counts a flush failure and warns `LegacyDiagnosticLedgerError`, without changing
+worker execution. If both layouts exist, CLI readback also refuses to silently
+choose one history. Reconcile that condition offline; do not concatenate files
+or re-ingest them merely to clear the error.
+
+For a single-owner legacy ledger:
+
+1. Run the ownership and export verification above with frozen writers. Keep the
+   verified whole-byte archive outside the runtime ledger directory. If any row
+   is foreign, mixed, unparseable or lacks the exact `goal_id`, stop and retain
+   the original for an owner-approved recovery; do not drop negative evidence.
+2. Obtain the new relative destination from the same installed Python package:
+   `python3 -c 'import sys; from loopx.capabilities.reliability_diagnostics import ledger_ref; print(ledger_ref(sys.argv[1]))' "$diagnostic_goal"`.
+3. Require an absent destination and an unlinked `by-goal` directory. Create its
+   parent, copy the complete source bytes with exclusive creation (`xb`), and
+   verify the copy's hash against the retained archive and unchanged source.
+   Do not overwrite an existing destination. A failed copy leaves the original
+   authoritative; preserve incomplete artifacts for reconciliation.
+4. With the verified archive retained and writers still frozen, remove only the
+   original legacy file. Run `status --with-receipt` at the same `--as-of` as the
+   export: the receipt and projection must be identical; only `ledger_ref`
+   changes. Then allow the upgraded producer to resume.
+
+Rollback requires the same freeze and an absent legacy destination. Restore all
+current canonical bytes, including any newly appended evidence, to the original
+filename before removing the canonical file. If the old runtime would collide
+with another Goal, hold rollback instead of merging their records. Downgrading
+only the executable is not a data rollback. Keep archives under the original
+retention policy. No automatic migration, mixed-record repair, or concurrent
+old/new writer compatibility is provided.
 
 ## 中文
 
@@ -221,11 +262,12 @@ public-safe 聚合。保留全部失败标记，不筛选“成功”行。
    冻结 provider 配置中记录的真实目录填入 `diagnostic_provider_ledger_dir`，记录同一安装版本。
    本 v0 只支持 canonical 布局：该目录须与 `<runtime-root>/reliability_diagnostics` 对应。
    任意 custom directory 的 parent 无法建立映射，因为 CLI 会固定添加 `reliability_diagnostics`；
-   preflight 会在 CLI 读回和导出前拒绝不匹配或 symlink directory。保留原件供另行授权的恢复
+   preflight 会在 CLI 读回和导出前拒绝不匹配、provider 或 `by-goal` symlink directory。保留原件供另行授权的恢复
    路径使用，不要移动、重新 ingest 或删除文件来绕过此 hold，也不能依赖当前 shell 的 env、
    当前项目或默认路径猜测实际目录。
-3. 使用 recipe 的归属检查；目前 `:` 会被映射为 `_`，部分文件系统忽略大小写，不同 goal
-   可能共用文件名。混合、外来或不可解析行须暂停删除，另行调查；此方案没有证明租户隔离。
+3. 新文件使用精确 Goal id 的 UTF-8 SHA-256 小写摘要，放在独立的 `by-goal` 子目录；
+   冒号／下划线与大小写不同的 id 不再共用文件。旧文件仍可能混写，使用 recipe 的归属
+   检查，遇到混合、外来或不可解析行暂停删除。本变化不构成安全租户隔离。
 4. 完整导出、记录 SHA-256 和固定时间 receipt/projection，在隔离副本里读回并比较；删除前
    再比较源 hash。只有 owner 已授权、期限/hold 决策已核实才执行单文件删除。
 5. 删除后 receipt 必须为 `invalid`、包含 `no_observations` 且 persisted count 为 0。
@@ -247,3 +289,16 @@ symlink、foreign/mixed ownership、损坏行和文件名碰撞在导出 ledger 
 分别写入 canonical 和任意 custom 布局：前者经 CLI 完整读回，后者在 recipe 操作前 hold。它只证明
 离线恢复机制，没有测 observer CPU/RSS/bytes/latency，也未验真实 harness 停机或 live C0/C1。
 pilot 前须在所属 issue 记录 revision、命令、通过/失败/跳过、停写证据与 policy 接受决定。
+
+### 旧账本离线升级
+
+CLI 与 DSH 插件须一起升级，并冻结所有新旧 writer。只读 `receipt`／`status` 保留原文件与
+实际 `ledger_ref`，不搬迁或过滤；存在旧文件时 `ingest` 返回 2，DSH flush 计数失败并警告
+`LegacyDiagnosticLedgerError`，不改变 worker 行为。两种布局并存时 CLI 也拒绝静默选择历史。
+
+按上方离线升级步骤执行：先验证每行精确归属并在 runtime 外保留完整字节备份；用同版本
+`ledger_ref` 获取新相对路径，在无 symlink 的目录中以 `xb` 独占创建目的文件，比较备份、
+原件、副本 hash。验证成功且 writer 仍冻结后，仅移除旧文件，再用固定 `--as-of` 比较
+receipt／projection（只有 `ledger_ref` 改变），最后恢复新版 observer。混写、损坏或归属
+不明时保留原件，禁止筛选行来消除失败。回退也须停写，保留新增记录，拒绝覆盖与碰撞；
+仅降级可执行文件不等于数据回退。不提供自动迁移或新旧 writer 并发兼容。
