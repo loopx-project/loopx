@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from .chat_activity import CodexActivitySteps
+from .presentation.codex_activity import CodexActivitySteps
 from .chat import (
     CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
     CHAT_REVIEW_CLOSE_TAG,

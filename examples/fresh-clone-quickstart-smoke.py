@@ -148,7 +148,7 @@ def main() -> int:
         assert "loopx-project.github.io/loopx/install.sh" in bootstrap["archive_fallback_install_command"], bootstrap
         assert "loopx doctor" in bootstrap["install_repair_command"], bootstrap
         assert (project / ".loopx" / "registry.json").is_file(), bootstrap
-        assert (project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md").is_file(), bootstrap
+        assert (project / ".loopx" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md").is_file(), bootstrap
 
         registry = project / ".loopx" / "registry.json"
         status = run_loopx("--registry", str(registry), "status", cwd=project, env=cli_env)

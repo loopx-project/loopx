@@ -19,6 +19,11 @@ Python code that starts as a user-visible capability may keep a thin facade
 under `loopx.capabilities.*`, but the reusable display implementation should
 live here.
 
+`codex_activity.py` projects Codex host items into redacted, owner-visible Turn
+steps. It owns display normalization only; step completion does not establish
+Goal acceptance or execution authority. The Chat adapter consumes this projection
+without exposing a separate top-level module.
+
 ## Explore Result Layer
 
 Only the display side of software-exploration topology belongs here:
