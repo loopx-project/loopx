@@ -8,6 +8,24 @@ import {
   isStaleActionFailure,
 } from "../../loopx/control_plane/presentation/action_review_plan.ts";
 
+test("interrupted Goal bootstrap retries its original identity before downstream effects", () => {
+  const proposal = {proposal_id: "creation", expected_state_fingerprint: "original-registry",
+    action_kind: "goal.create", permission_classification: "durable_write", status: "failed",
+    normalized_parameters: {goal_id: "new-goal"},
+    checkpoint: {steps: {workspace_validated: {outcome: "workspace_validated"}}}};
+  const plan = compileActionReviewPlan(proposal);
+  assert.equal(plan.reason, "goal_creation_retry");
+  assert.equal(plan.retryOriginal, true);
+  assert.equal(plan.canApply, true);
+  assert.equal(plan.proposalId, "creation");
+  for (const change of [{checkpoint: null}, {status: "applying"}, {status: "gated"}, {status: "stale"},
+    {status: "applied", receipt: {projection_verified: true}}, {action_kind: "goal.update"},
+    {permission_classification: "protected"}, {proposal_id: ""}, {normalized_parameters: {}},
+    {checkpoint: {steps: {...proposal.checkpoint.steps, goal_bootstrapped: {goal_id: "new-goal"}}}}]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+});
+
 test("canonical update recovery includes User completion without changing generic action authority", () => {
   const proposal = {proposal_id: "reviewed", expected_state_fingerprint: "review-basis",
     action_kind: "todo.update", status: "failed", normalized_parameters: {operation: "edit"},

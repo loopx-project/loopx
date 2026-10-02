@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from .agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
 from .bootstrap import bootstrap_project
+from .capabilities.machine_configuration.goal_storage import initialize_goal_storage_target
 from .chat import apply_todo_review_preview, build_todo_review_preview
 from .chat_action_normalization import ChatActionNormalizationMixin
 from .chat_action_store import ActionConflictError, ChatActionStore
@@ -29,6 +30,7 @@ from .control_plane.todos.contract import TODO_DECISION_OUTCOME_VALUES
 from .history import load_registry
 from .host_loop_activation import build_host_loop_activation_packet
 from .kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID
+from .paths import resolve_runtime_root
 from .quota import build_quota_should_run
 from .registry import registry_goals
 from .todos import add_goal_todo, update_goal_todo
@@ -570,8 +572,7 @@ class ChatActionService(
                 "workspace_ref": str(parameters.get("workspace_ref") or "current"),
             },
         )
-        recovering = existing_goal is not None
-        if recovering:
+        if existing_goal is not None:
             existing_project = (
                 Path(str(existing_goal.get("repo") or "")).expanduser().resolve()
             )
@@ -592,17 +593,16 @@ class ChatActionService(
             )
             return {"proposal": stale, "turn": None}
         registry = self._registry()
-        runtime_root_value = registry.get("common_runtime_root")
-        runtime_root = (
-            Path(str(runtime_root_value)).expanduser().resolve()
-            if runtime_root_value
-            else None
-        )
+        runtime_root = resolve_runtime_root(registry, registry_path=self.registry_path).resolve()
         objective = str(parameters.get("objective") or parameters["title"])
-        result = (
-            {"ok": True}
-            if recovering
-            else bootstrap_project(
+        if existing_goal is not None:
+            # Registry publication precedes storage initialization. Resume the
+            # frozen target through its TS owner before any downstream effects;
+            # re-running Markdown bootstrap could overwrite a promoted Goal.
+            initialize_goal_storage_target(runtime_root, existing_goal)
+            result = {"ok": True}
+        else:
+            result = bootstrap_project(
                 project=project,
                 registry_path=self.registry_path,
                 runtime_root=runtime_root,
@@ -629,7 +629,6 @@ class ChatActionService(
                 dry_run=False,
                 sync_global=False,
             )
-        )
         if not result.get("ok"):
             raise ProtectedActionGate(
                 "goal.create",

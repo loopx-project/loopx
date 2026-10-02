@@ -1,8 +1,11 @@
 """New-Goal defaults are creation-time intent, never live provider inheritance."""
 import hashlib
+import http.client
 import json
 import subprocess
 import sys
+import threading
+from unittest.mock import patch
 
 import pytest
 
@@ -71,6 +74,107 @@ def test_pending_creation_uses_frozen_intent_after_machine_default_changes(envir
     configure("file")
     assert bootstrap()["storage_selection"]["provider"] == "sqlite"
     assert json.loads(marker().read_text())["provider"] == "sqlite"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("relative_runtime", [False, True])
+def test_app_creation_retries_storage_before_reporting_success(environment, monkeypatch, provider, relative_runtime):
+    from loopx.capabilities.machine_configuration import goal_storage
+    from loopx.chat_action_store import ChatActionStore
+    from loopx.chat_actions import ChatActionService
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.todos import add_goal_todo
+
+    configure, bootstrap, marker, project, runtime = environment
+    bootstrap("workspace")
+    configure(provider)
+    registry = project / ".loopx/registry.json"
+    # Registry-relative runtime routing must agree with CLI bootstrap, regardless
+    # of the HTTP server process's working directory.
+    if relative_runtime:
+        data = json.loads(registry.read_text())
+        data["common_runtime_root"] = "../runtime"
+        registry.write_text(json.dumps(data))
+    store = ChatActionStore(runtime / "actions")
+    service = ChatActionService(store=store, registry_path=registry)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.verbose = False
+    server.action_store = store
+    server.action_service = service
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=30)
+        try:
+            connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    unavailable = True
+    selections = []
+    effect = goal_storage.effect_runtime_result
+
+    def storage_effect(method, payload):
+        if payload.get("action") == "initialize":
+            if unavailable:
+                raise TimeoutError("storage initialization interrupted")
+            result = effect(method, payload)
+            selections.append(result)
+            return result
+        return effect(method, payload)
+
+    monkeypatch.setattr(goal_storage, "effect_runtime_result", storage_effect)
+    try:
+        code, preview = request("/api/actions/preview", {
+            "action_kind": "goal.create", "summary": "Create a Goal",
+            "normalized_parameters": {
+                "goal_id": "recovery", "title": "Creation recovery",
+                "objective": "Resume interrupted storage initialization",
+                "workspace_ref": "current", "agent_id": "codex",
+                "heartbeat": {"enabled": False}, "initial_todos": ["Verify recovery"],
+            },
+            "context": {"kind": "goal_channel", "goal_id": "workspace"},
+            "idempotency_key": "storage-recovery",
+        })
+        assert code == 201, preview
+        proposal_id = preview["proposal"]["proposal_id"]
+        apply_path = f"/api/actions/{proposal_id}/apply"
+        with patch("loopx.chat_actions.add_goal_todo", wraps=add_goal_todo) as add:
+            for _ in range(2):
+                code, failure = request(apply_path, {})
+                assert code == 424, failure
+                assert failure["error_code"] == "canonical_action_failed"
+                proposal = store.load(proposal_id)
+                assert proposal["status"] == "failed"
+                assert "goal_bootstrapped" not in proposal["checkpoint"]["steps"]
+                assert not marker("recovery").exists()
+                add.assert_not_called()
+
+            goal = next(g for g in json.loads(registry.read_text())["goals"] if g["id"] == "recovery")
+            assert goal["coordination"]["storage_target"]["provider"] == provider
+            configure("file" if provider == "sqlite" else "sqlite")
+            unavailable = False
+            code, recovered = request(apply_path, {})
+            assert code == 200, recovered
+            assert recovered["proposal"]["status"] == "applied"
+            assert recovered["proposal"]["receipt"]["outcome"] == "goal_created"
+            assert selections[-1]["provider"] == provider
+            assert selections[-1]["promotion_performed"] is False
+            if provider == "sqlite":
+                assert json.loads(marker("recovery").read_text())["provider"] == provider
+            else:
+                assert not marker("recovery").exists()
+            assert add.call_count == 1
+            assert request(apply_path, {})[1]["proposal"]["receipt"] == recovered["proposal"]["receipt"]
+            assert add.call_count == 1
+            assert len(selections) == 1
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_machine_editor_is_machine_only_and_configuration_rejects_activation():

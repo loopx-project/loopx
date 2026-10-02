@@ -85,6 +85,10 @@ The preview reports `storage_target`; creation reports `storage_selection` with
 `promotion_performed=false`. CLI and App creation share the same bootstrap
 owner. Creation stores its intent before provider initialization, so retry after
 interruption uses the same target even if the machine preference changed.
+If App creation fails during initialization, use **Retry original operation**
+on that creation card. It resumes the recorded target before adding initial
+Todos or starting a Turn. A persistent initialization failure remains an error;
+the presence of a registry entry alone is not successful creation.
 Reconnecting an existing Goal, including an implicit File Goal, does not adopt
 a newer machine default. Importing existing Markdown does not count as a new
 empty Goal. Explicit provider selection never falls back on failure.
