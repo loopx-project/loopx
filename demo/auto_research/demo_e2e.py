@@ -124,7 +124,7 @@ def _seed_visible_demo_control_plane(
     control_project = demo_root / "visible-control-plane"
     control_registry = demo_root / "visible-control-plane.registry.json"
     control_runtime = demo_root / "visible-control-plane.runtime"
-    bootstrap_project(
+    bootstrap = bootstrap_project(
         project=control_project,
         registry_path=control_registry,
         runtime_root=control_runtime,
@@ -146,7 +146,7 @@ def _seed_visible_demo_control_plane(
         dry_run=False,
         sync_global=False,
     )
-    state_file = control_project / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+    state_file = Path(str(bootstrap["state_file"]))
     if state_file.exists():
         updated_state, state_changed = replace_next_action_section(
             state_file.read_text(encoding="utf-8"),
