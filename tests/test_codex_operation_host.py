@@ -530,7 +530,10 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     def forbidden_plain_cli(*args, **kwargs):
         pytest.fail("Operation opt-in must not downgrade to plain Codex exec")
 
-    monkeypatch.setattr("loopx.cli_commands.turn.run_codex_cli_host", forbidden_plain_cli)
+    monkeypatch.setattr(
+        "loopx.cli_commands.turn_run_once.run_codex_cli_host",
+        forbidden_plain_cli,
+    )
     selected_route = {"host_surface": "codex-app", "thread_id": "source-thread"}
     observed_routes = []
 

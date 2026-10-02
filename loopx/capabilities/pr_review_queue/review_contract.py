@@ -8,7 +8,7 @@ from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 13
+REVIEW_POLICY_REVISION = 14
 
 # A red check is an observation, not evidence that the reviewed PR caused it.
 # This contract belongs to review judgment; merge readiness still owns whether
@@ -138,6 +138,90 @@ SCOPE_COVERAGE_ASSESSMENT = {
     ),
 }
 
+# A published review speaks for an agent or a person, and a reader from another
+# operator has no other way to weigh it. This is provenance carried by the
+# result itself, not review evidence: no reviewer can "verify" its own identity,
+# so a gap here makes the result unpublishable rather than blocking the author.
+REVIEWER_DECLARATION = {
+    "actor_kinds": ["model_agent", "human_operator"],
+    "declaration_sources": ["runtime_reported", "self_reported"],
+    "fields": ["actor_kind", "declaration_source"],
+    "model_agent_fields": ["declared_model", "declared_provider"],
+    "body_marker": "Reviewer:",
+    "rule": (
+        "Every result names who wrote it. actor_kind is model_agent or human_operator. "
+        "A model_agent gives declared_model and declared_provider in ordinary "
+        "product-family wording, and the published body repeats actor_kind, model and "
+        "provider on exactly one visible `Reviewer:` line, so a reader on another host "
+        "or organization can tell a model wrote the review and weigh it without private "
+        "context. declaration_source records whether the host runtime reported the "
+        "identity or the reviewer stated it; a reviewer that cannot observe its exact "
+        "build names the family it knows instead of inventing a version. The declaration "
+        "is provenance, not a credential: it authenticates nothing, authorizes no private "
+        "access and gives the verdict no extra weight. Never put an endpoint, gateway, "
+        "account, credential or router-qualified identifier in it."
+    ),
+}
+
+# Reviewers from different operators share no context or memory; the accepted
+# specification is the one reference both sides can open independently. Map the
+# head onto it criterion by criterion instead of onto the author's narrative.
+SPEC_BASIS_ASSESSMENT = {
+    "decision_values": ["mapped", "no_spec", "not_yet_proven"],
+    "blocking_decisions": ["not_yet_proven"],
+    "fields": ["decision", "spec_source", "reason"],
+    "spec_source_values": [
+        "accepted_rfc",
+        "accepted_contract_doc",
+        "linked_issue_or_task",
+        "review_thread",
+        "none",
+    ],
+    "mapped_fields": ["spec_ref", "spec_revision", "criteria"],
+    "published_text_fields": ["spec_ref", "spec_revision"],
+    # The repository's own documents are pinned by a full commit id; a branch or
+    # tag moves, so it cannot name the text the review judged against.
+    "commit_pinned_spec_sources": ["accepted_rfc", "accepted_contract_doc"],
+    "criterion_fields": ["criterion_id", "requirement", "disposition"],
+    "disposition_fields": {
+        "implemented": ["symbol_or_path", "validation_ref"],
+        "deferred": ["reason", "successor_or_gap"],
+        "out_of_scope": ["reason"],
+        "not_met": ["observed_gap", "minimum_repair"],
+    },
+    "blocking_dispositions": ["not_met"],
+    "rule": (
+        "Read the target repository's own accepted specification for the touched surface "
+        "before the implementation: an accepted RFC, an accepted contract or protocol "
+        "document, the linked issue or task, then a maintainer-agreed frame in the review "
+        "thread. For mapped, give spec_ref as a public path or link and spec_revision as "
+        "the immutable revision judged against, so a reviewer from another operator opens "
+        "the same text, and one criteria row per material acceptance criterion with the "
+        "specification's own identifier when it has one, the requirement as written and "
+        "its disposition at this exact head. implemented names a real symbol or path and "
+        "the validation that exercises it; deferred names the reason and the successor or "
+        "remaining gap; out_of_scope cites the specification or accepted task boundary, "
+        "not author preference; not_met names the observed gap and minimum repair and "
+        "blocks approval. Publish spec_ref, spec_revision and every criterion_id in the "
+        "review body: the body is the only part another operator reads, and a path alone "
+        "moves with the branch while the revision pins the text the review judged against. "
+        "Give spec_ref, spec_revision and criterion_id as non-empty strings: each is "
+        "published and matched against the body as a whole token, so EX-1 inside EX-10 "
+        "or C1 inside a commit id is not publication. For accepted_rfc and "
+        "accepted_contract_doc, spec_revision is the full commit id; a branch or tag "
+        "name moves and cannot pin the text. "
+        "Derive requirements from the "
+        "specification, never from the patch. When the change edits the specification it "
+        "cites, judge the criteria as accepted before this change and treat the edit as a "
+        "finding to justify; a specification rewritten to match its implementation is not "
+        "an independent reference. Do not invent criteria, promote a future or aspirational "
+        "property to a current obligation, or impose this repository's roadmap on another "
+        "repository. With no written specification use no_spec, spec_source none and a "
+        "reason; problem_context remains the delivery judgment. An unread or unavailable "
+        "specification is not_yet_proven."
+    ),
+}
+
 CODE_AREAS = {
     "product_runtime",
     "app_or_ui_surface",
@@ -211,7 +295,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             _section(
                 "动机",
                 floors["动机"],
-                "Use `problem_context`: verified goal basis, old behavior, before/after outcome and delivery verdict. Explain outcome_impact on sustained progress and the user journey, including accepted tradeoffs or scoped inapplicability. Distinguish completing the scoped goal from a justified increment; explain why this is a complete useful slice, not just why the code works.",
+                "Use `problem_context`: verified goal basis, old behavior, before/after outcome and delivery verdict. Cite `spec_basis.spec_ref` and map each criterion_id to implemented/deferred/out_of_scope/not_met at this head, or state that no written specification exists. Explain outcome_impact on sustained progress and the user journey, including accepted tradeoffs or scoped inapplicability. Distinguish completing the scoped goal from a justified increment; explain why this is a complete useful slice, not just why the code works.",
             ),
             _section(
                 "改动思路",
@@ -237,6 +321,8 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
         "review_order": _review_order(key_files),
         "output_hint": (
             "Render the verified structured result using the five sections. "
+            "Open the body with one `Reviewer:` line (reviewer_declaration.body_marker) "
+            "carrying result.reviewer's actor_kind, model and provider. "
             "The capability-owned review_execution_contract is the evidence and completeness authority. Save the exact final Markdown in result.review_body before check-result; publish that checked body and read it back. Section floors reject empty shells, not certify reasoning. Explain concrete paths and counterexamples; do not pad or duplicate evidence to meet a floor."
         ),
     }
@@ -252,6 +338,10 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             "host skills route this contract but must not reimplement it."
         ),
         "evidence_status_values": ["verified", "unverified", "not_applicable"],
+        # Provenance and spec binding travel with every result, so a host skill
+        # routes them from here instead of inventing its own wording.
+        "reviewer_declaration": deepcopy(REVIEWER_DECLARATION),
+        "spec_basis_assessment": deepcopy(SPEC_BASIS_ASSESSMENT),
         "decision_procedure": {
             "order": [
                 "establish_goal",
@@ -337,6 +427,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "smaller_fix_analysis",
                     "observable_outcome",
                     "outcome_impact",
+                    "spec_basis",
                     "non_goals",
                 ],
                 "fields_by_verdict": {
@@ -1278,6 +1369,9 @@ def build_review_plan(item: Mapping[str, Any]) -> dict[str, Any]:
             "findings": [],
             "residual_risk": "",
             "review_body": "",
+            "reviewer": {field: "" for field in (
+                *REVIEWER_DECLARATION["fields"], *REVIEWER_DECLARATION["model_agent_fields"],
+            )},
             "verdict": "unverified",
         },
     }

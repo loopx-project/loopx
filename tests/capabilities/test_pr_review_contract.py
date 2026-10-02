@@ -88,6 +88,20 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "minimum": 2,
         "maximum": 5,
     }
+    # Every review is bound to the specification it judged, inside the goal
+    # judgment that owns it, rather than to its own narrative.
+    assert "spec_basis" in requirements["problem_context"]["fields"]
+    assert "not_met" in contract["spec_basis_assessment"]["blocking_dispositions"]
+    # Provenance is carried by the result, never scored as review evidence.
+    assert "reviewer" not in requirements
+    assert contract["reviewer_declaration"]["actor_kinds"] == [
+        "model_agent",
+        "human_operator",
+    ]
+    assert contract["reviewer_declaration"]["model_agent_fields"] == [
+        "declared_model",
+        "declared_provider",
+    ]
     assert "caller_evidence" in requirements["symbol_map"]["item_fields"]
     assert "negative_fields" in requirements["walkthroughs"]
     assert "regression_test" in requirements["failure_analysis"]["fields"]

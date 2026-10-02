@@ -240,6 +240,7 @@ assert "loopx.cli" not in sys.modules
 assert {registration_module!r} in sys.modules
 assert "loopx.cli_commands.benchmark_dispatch" not in sys.modules
 assert "loopx.capabilities.content_ops.cli" not in sys.modules
+assert "loopx.cli_commands.turn_run_once" not in sys.modules
 if {registration_module!r} != {handler_module!r}:
     assert {handler_module!r} not in sys.modules
 """
