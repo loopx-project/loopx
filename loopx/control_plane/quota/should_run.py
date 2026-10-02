@@ -76,6 +76,16 @@ def _apply_selected_todo_guards(
         work_lane_contract=(None if route.replan_decision_allowed else route.payload_work_lane_contract),
         agent_scope_frontier=route.agent_scope_frontier,
     )
+    if (
+        selected_todo is None
+        and prepared.requested_action_todo_id is not None
+        and (prepared.action_selection_qualification or {}).get("state")
+        in {"deferred", "rejected"}
+    ):
+        # The typed selection owner refused this choice before workspace checks.
+        # A guard's legacy default fallback must not replace that refusal with
+        # a repair for a different, unselected Todo.
+        return route
     summary = prepared.agent_todo_summary or {}
     acceptance = summary.get("goal_acceptance_contract")
     if isinstance(acceptance, dict) and acceptance.get("enabled") is True:

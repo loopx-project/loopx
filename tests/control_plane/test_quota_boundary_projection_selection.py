@@ -6,6 +6,9 @@ import pytest
 
 from loopx.control_plane.quota.should_run import build_quota_should_run
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.scheduler.execution_context import (
+    SchedulerRuntimeProfile, scheduler_execution_context_for_runtime_profile,
+)
 from loopx.control_plane.testing.quota_fixtures import (
     quota_status_payload,
     quota_todo_item,
@@ -83,8 +86,10 @@ def test_workspace_and_boundary_guards_check_the_selected_todo_only(
     assert "boundary_projection_gap" not in packet
 
 
+@pytest.mark.parametrize("other_agent_gate", [False, True])
 def test_workspace_guard_keeps_alternative_todo_selection_available(
     monkeypatch: pytest.MonkeyPatch,
+    other_agent_gate: bool,
 ) -> None:
     foreign_primary = quota_todo_item(
         todo_id="todo_foreign_primary001",
@@ -105,6 +110,16 @@ def test_workspace_guard_keeps_alternative_todo_selection_available(
     status = quota_status_payload(
         goal_id=GOAL_ID,
         status="active",
+        quota_state="operator_gate" if other_agent_gate else "eligible",
+        user_todo_items=[
+            quota_todo_item(
+                todo_id="todo_peer_gate001",
+                role="user",
+                task_class="user_gate",
+                title="Approve the peer's independent action.",
+                blocks_agent="codex-peer",
+            )
+        ] if other_agent_gate else [],
         agent_todo_items=[foreign_primary, matching_alternative],
         recommended_action=foreign_primary["text"],
         coordination={
@@ -163,6 +178,78 @@ def test_workspace_guard_keeps_alternative_todo_selection_available(
         "pending_action_selection"
     )
     assert "workspace_guard" not in selected
+
+
+@pytest.mark.parametrize("other_agent_gate", [False, True])
+def test_deferred_selection_does_not_guard_an_unselected_default(
+    monkeypatch: pytest.MonkeyPatch,
+    other_agent_gate: bool,
+) -> None:
+    primary = quota_todo_item(
+        todo_id="todo_primary001", priority="P0",
+        title="Implement the primary repository change.", claimed_by=AGENT_ID,
+        required_write_scopes=["src/**"],
+    )
+    alternative = quota_todo_item(
+        todo_id="todo_alternative001", index=2, priority="P1",
+        title="Implement the current repository change.", claimed_by=AGENT_ID,
+        required_write_scopes=["src/**"],
+    )
+    prior = quota_todo_item(
+        todo_id="todo_prior001", index=3, status="done",
+        title="Complete the prior dependency.", claimed_by=AGENT_ID,
+    )
+    successor = quota_todo_item(
+        todo_id="todo_successor001", index=4, status="deferred", priority="P0",
+        title="Resume the ready successor.", claimed_by=AGENT_ID,
+        resume_when="todo_done:todo_prior001",
+    )
+    status = quota_status_payload(
+        goal_id=GOAL_ID, status="active",
+        quota_state="operator_gate" if other_agent_gate else "eligible",
+        agent_todo_items=[primary, alternative, prior, successor],
+        user_todo_items=[quota_todo_item(
+            todo_id="todo_peer_gate001", role="user", task_class="user_gate",
+            title="Approve the peer's independent action.", blocks_agent="codex-peer",
+        )] if other_agent_gate else [],
+        recommended_action=primary["text"],
+        coordination={
+            "agent_model": "peer_v1",
+            "registered_agents": [AGENT_ID, "codex-peer"],
+            "write_scope": ["src/**"],
+        },
+        claim_scope_agent_id=AGENT_ID,
+    )
+    guarded_ids: list[str | None] = []
+
+    def guard(*args: object, selected_todo: dict[str, Any] | None = None,
+              **kwargs: object) -> dict[str, Any] | None:
+        guarded_ids.append((selected_todo or {}).get("todo_id"))
+        if not selected_todo or selected_todo["todo_id"] == primary["todo_id"]:
+            return {
+                "schema_version": "agent_workspace_guard_v1",
+                "reason": "default Todo belongs to another repository",
+                "required_action": "move to its independent worktree",
+            }
+        return None
+
+    monkeypatch.setattr(
+        "loopx.control_plane.quota.should_run.build_agent_workspace_guard", guard,
+    )
+    packet = build_quota_should_run(
+        status, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        requested_action_todo_id=alternative["todo_id"],
+        turn_instance_id="turn-priority-selection",
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+            SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE
+        ),
+    )
+    assert packet["action_selection_qualification"]["reason"] == (
+        "ready_deferred_successor_priority_preemption"
+    )
+    assert packet["normal_delivery_allowed"] is False
+    assert "workspace_guard" not in packet
+    assert guarded_ids == []
 
 
 def test_boundary_projection_preserves_a_guarded_continuation_selection() -> None:
