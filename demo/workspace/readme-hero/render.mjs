@@ -2,7 +2,7 @@
 // All graph nodes, recorded relations and pending decisions use real demo state.
 // No Agent execution, conversation or team record is manufactured for the image.
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,7 +31,7 @@ async function decisionState() {
 // Never resolve the gate or manufacture an approval card with a route mock.
 async function prepareDecision() {
   assert.ok(args["demo-root"], "Pass --demo-root for a fresh Workspace stories directory");
-  const root = resolve(args["demo-root"]);
+  const root = realpathSync(args["demo-root"]);
   const manifest = JSON.parse(readFileSync(resolve(root, ".workspace-story-demo.json"), "utf8"));
   assert.equal(manifest.schema_version, "workspace_story_demo_v3");
   assert.equal(manifest.root, root);
