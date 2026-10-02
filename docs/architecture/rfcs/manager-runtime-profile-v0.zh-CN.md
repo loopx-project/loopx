@@ -22,13 +22,15 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
 `manager_runtime_profile_v0` 是机器级、显式且持久的授权选择：
 
 - `restricted` 是默认值。管家保留作用域化的 LoopX 读取，Codex sandbox 为
-  `read-only`。
-- `trusted_owner` 允许 Codex 管家使用宿主正常提供的文件、Shell、Git、Web 和已配置
-  连接器，Codex sandbox 为 `danger-full-access`。
+  `read-only`。Claude Code 禁用内置工具，只通过单次调用的 MCP bridge 提供同一套
+  作用域化 Core reader；这是工具边界，不是 OS sandbox。
+- `trusted_owner` 允许 Codex 或 Claude Code 管家使用宿主正常提供的文件、Shell、Git、
+  Web 和已配置连接器，Codex sandbox 为 `danger-full-access`；Claude Code 在同一份
+  既有 Owner grant 下使用原生 `bypassPermissions` 模式。
 - `trusted_owner` 不是通用提权。用户请求与既有 standing grant 仍限定工作范围；
   merge、release、deploy、delete、payment 等受保护操作继续走各自的 typed contract；
   外部 provider 权限、受众边界和 LoopX durable state owner 不被改写。
-- 当前只有 Codex endpoint 能执行 `trusted_owner`。选择其他 endpoint 时必须返回可恢复的
+- Codex 和 Claude Code endpoint 能执行 `trusted_owner`。选择其他 endpoint 时必须返回可恢复的
   typed error，不能把受限执行伪装成已开放。
 - `trusted_owner` 当前只对私有 Owner 管家会话生效。外部 audience（包括 Lark 群）是独立
   信任边界；在既有的 audience/resource grant 能被核验前，同一机器配置在那里仍解析为
@@ -56,7 +58,13 @@ outbox，也不把管家 session 字段当成工作、请求或送达权威。
 
 ### 实现与后继（2026-09-16）
 
-`43d362532` 已有 machine profile、controller 集成与聚焦测试；本次复跑通过不等于本机部署或完整 M1 资格。`restricted` 默认、仅 Codex 支持私人 `trusted_owner` 及外部受众降级保持。DSH 通道选择不继承该强能力 profile。按[统一路线](loopx-overall-roadmap-v0.zh-CN.md) R2 补真实工具/会话/连续执行与设置读回；不得新建第二份机器配置。
+`43d362532` 已有最初的 machine profile、controller 集成与聚焦测试，该检查点仅验证
+Codex。Claude Code 现在复用既有作用域化 Core reader、每轮受众检查、机器授权和 Session
+allocation。MCP 只读标记使 reader 可在原生计划模式下调用；token 和 bridge 地址仅在
+调用期间存在。原生模型默认使用 `sonnet` 别名，显式机器或环境模型仍优先。
+该 transport 不等于本机部署或完整 M1 资格。`restricted` 默认及外部受众降级保持。
+DSH 通道选择不继承该强能力 profile。按[统一路线](loopx-overall-roadmap-v0.zh-CN.md)
+R2 补真实工具/会话/连续执行与设置读回；不得新建第二份机器配置。
 
 ### 验收
 
@@ -66,7 +74,8 @@ outbox，也不把管家 session 字段当成工作、请求或送达权威。
    `AGENTS.md` 不再包含只读限制。
 4. profile 改变会旋转上游 thread，但保留 LoopX Session 和可见历史。
 5. 不相关机器配置变化不会旋转 thread。
-6. 非 Codex endpoint 对 `trusted_owner` fail closed，并给出切换 endpoint 或恢复
-   `restricted` 的动作提示。
+6. Codex 和 Claude Code 以外的 endpoint 对 `trusted_owner` fail closed，并给出切换
+   受支持 endpoint 或恢复 `restricted` 的动作提示。原生受限读取拒绝其他 Goal、
+   已撤销的受众权限和前一轮对话的私有 reader。
 7. 桌面和移动 Dashboard 显示有效 profile；配置损坏时显示回退状态。
 8. 外部 audience 在没有既有 scoped grant 时继续 `read-only`，并显示真实降级状态。

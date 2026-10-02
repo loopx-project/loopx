@@ -26,14 +26,16 @@ read-only.
 `manager_runtime_profile_v0` is an explicit, persistent machine-level grant:
 
 - `restricted` is the default. The manager keeps scoped LoopX reads and the Codex sandbox is
-  `read-only`.
-- `trusted_owner` lets the Codex manager use normal host filesystem, shell, Git, web, and
-  configured-connector tools. Its Codex sandbox is `danger-full-access`.
+  `read-only`. Claude Code disables built-in tools and offers only the same scoped Core
+  readers through an invocation-scoped MCP bridge. This is a tool boundary, not an OS sandbox.
+- `trusted_owner` lets the Codex or Claude Code manager use normal host filesystem, shell,
+  Git, web, and configured-connector tools. Its Codex sandbox is `danger-full-access`;
+  Claude Code uses its native `bypassPermissions` mode under the same existing owner grant.
 - `trusted_owner` is not ambient authority. The current request and existing standing grants
   still bound the work. Protected merge, release, deploy, delete, and payment operations retain
   their typed contracts. Provider permission, audience, and durable LoopX state ownership do
   not change.
-- Codex is currently the only endpoint that enforces `trusted_owner`. Other endpoints fail with
+- Codex and Claude Code enforce `trusted_owner`. Other endpoints fail with
   an actionable typed error instead of pretending to provide the selected profile.
 - `trusted_owner` currently applies only to the private owner-manager conversation. An external
   audience, including a Lark group, is a separate trust boundary and resolves the same machine
@@ -66,7 +68,15 @@ as work, request, or delivery authority.
 
 ### Implementation and successor (2026-09-16)
 
-`43d362532` contains the machine profile, controller integration and focused tests; passing them here is not deployment or full M1 qualification. The `restricted` default, Codex-only private `trusted_owner` and external-audience downgrade remain. Selecting DSH does not inherit that capable profile. Follow [roadmap](loopx-overall-roadmap-v0.md) R2 for actual tool/session/continued-execution and settings readback, without a second machine configuration.
+`43d362532` contains the original machine profile, controller integration and focused tests;
+that checkpoint qualified only Codex. Claude Code now reuses the existing scoped Core reader,
+per-Turn audience check, machine grant and Session allocation. MCP read-only annotations allow
+the reader in native plan mode; tokens and bridge addresses are transient. Its vendor model
+default is the native `sonnet` alias, while explicit machine or environment models retain
+priority. This transport does not establish deployment or full M1 qualification. The
+`restricted` default and external-audience downgrade remain. Selecting DSH does not inherit
+the capable profile. Follow [roadmap](loopx-overall-roadmap-v0.md) R2 for actual
+tool/session/continued-execution and settings readback, without a second machine configuration.
 
 ### Acceptance
 
@@ -77,8 +87,9 @@ as work, request, or delivery authority.
 4. A profile change rotates the upstream thread while preserving the LoopX Session and visible
    history.
 5. An unrelated machine-configuration change does not rotate the thread.
-6. A non-Codex endpoint fails closed for `trusted_owner` and recommends selecting Codex or
-   restoring `restricted`.
+6. An endpoint other than Codex or Claude Code fails closed for `trusted_owner` and recommends
+   selecting a supported endpoint or restoring `restricted`. Native restricted reads reject
+   another Goal, revoked audience access, and a preceding Turn's private reader.
 7. Desktop and mobile Dashboard show the effective profile; invalid configuration shows its
    fallback state.
 8. An external audience without an existing scoped grant remains `read-only` and exposes the
