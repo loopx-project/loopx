@@ -248,6 +248,7 @@ import {
   projectExternalEvidenceRetirement,
   recordExternalEvidenceReceiptObservation,
 } from "./capabilities/external_evidence.ts";
+import {planPerformanceDiagnosis, summarizePerformanceProfile} from "./capabilities/performance_diagnosis.ts";
 import {
   buildRewardMemorySurfaceReadCheckpoints,
   planRewardMemoryDecision,
@@ -783,6 +784,8 @@ export function createEffectRuntimeHandlers(
     ["external_evidence.receipt", recordExternalEvidenceReceiptObservation],
     ["external_evidence.admit", evaluateExternalEvidenceAdmission],
     ["external_evidence.retire", projectExternalEvidenceRetirement],
+    ["performance_diagnosis.plan", planPerformanceDiagnosis],
+    ["performance_diagnosis.inspect", summarizePerformanceProfile],
     ["reward_memory.decision.plan", planRewardMemoryDecision],
     ["reward_memory.decision.project", projectRewardMemoryDecision],
     ["reward_memory.read_authority.surface_checkpoints", buildRewardMemorySurfaceReadCheckpoints],

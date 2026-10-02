@@ -125,7 +125,8 @@ def test_executing_managed_turn_remembers_through_turn_start_hook(
         }
 
     monkeypatch.setattr(
-        "loopx.cli_commands.turn.run_loopx_turn_once", completed_turn
+        "loopx.cli_commands.turn_run_once.run_loopx_turn_once",
+        completed_turn,
     )
     code = main(
         [

@@ -78,25 +78,21 @@ def read_github_approval_closeout(*, repository: str, exact_head: str) -> dict[s
     reviews = [row for page in pages for row in page]
     if any(not isinstance(row, dict) for row in reviews):
         raise ValueError("review readback is malformed")
-    own_reviews = [{"state": row.get("state"), "body": row.get("body"),
-                    "author": row.get("user"), "submittedAt": row.get("submitted_at"),
-                    "commit": {"oid": row.get("commit_id")}}
-                   for row in reviews if isinstance(row.get("user"), dict)
-                   and str(row["user"].get("login", "")).casefold() == login.casefold()]
-    # Reuse the current standalone/exact-head body validator, not a new approval rule.
-    approval = _review_conclusion(pr | {"reviews": own_reviews}, reviewer_login=login,
-        behavior_bearing=bool({row["area"] for row in _files(pr)} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS)))
-    if approval["valid"]:
-        matching = [row for row in reviews if row.get("submitted_at") == approval["submitted_at"]
-                    and row.get("state") == approval["state"]
-                    and row.get("commit_id") == pr.get("headRefOid")
-                    and str(row.get("user", {}).get("login", "")).casefold() == login.casefold()]
-        if len(matching) != 1:
-            raise ValueError("approval readback identity is ambiguous")
-        approval["review_id"] = matching[0].get("id")
+    # Validate bodies here; the typed owner selects the effective opinion from
+    # the complete history. Authentication permits the read, not reviewer scope.
+    behavior_bearing = bool({row["area"] for row in _files(pr)} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS))
+    conclusions = []
+    for row in reviews:
+        review = {"state": row.get("state"), "body": row.get("body"),
+                  "author": row.get("user"), "submittedAt": row.get("submitted_at"),
+                  "commit": {"oid": row.get("commit_id")}}
+        reviewer = row.get("user", {}).get("login") if isinstance(row.get("user"), dict) else None
+        conclusion = _review_conclusion(pr | {"reviews": [review]},
+            reviewer_login=reviewer, behavior_bearing=behavior_bearing)
+        conclusions.append(conclusion | {"review_id": row.get("id")})
     after = run_gh_json(args)
     if not isinstance(after, dict) or after.get("number") != number or after.get("state") != pr.get("state"):
         raise ValueError("pull-request identity or lifecycle changed during readback")
     return plan_approval_closeout({"repository": repository, "expected_exact_head": exact_head,
         "pull_request": pr, "readback_head": after.get("headRefOid"), "reviews": reviews,
-        "reviews_complete": True, "approval_conclusion": approval})
+        "reviews_complete": True, "review_conclusions": conclusions})

@@ -72,7 +72,10 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
     def no_host(*args, **kwargs):
         pytest.fail("capability action must not invoke a normal host transaction")
 
-    monkeypatch.setattr("loopx.cli_commands.turn.run_loopx_turn_once", no_host)
+    monkeypatch.setattr(
+        "loopx.cli_commands.turn_run_once.execute_turn_run_once",
+        no_host,
+    )
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--scan-path", str(tmp_path)]
     with monkeypatch.context() as read_only:

@@ -442,6 +442,30 @@ them. Queue selection, scheduler and runtime permissions are unchanged. The
 five public sections retain the bounded prose floors documented above; reuse
 evidence and do not pad. Invoking review uses the installed capability policy.
 
+### Reviewer provenance and specification basis
+
+Policy revision 14 makes two publication requirements mandatory for every new
+result; neither changes queue selection, merge authority or how already
+published GitHub reviews are recognized (`check_review_body` is unchanged).
+
+- `result.reviewer` (`reviewer_declaration`) names `actor_kind`
+  (`model_agent` or `human_operator`) and `declaration_source`
+  (`runtime_reported` or `self_reported`); an agent adds `declared_model` and
+  `declared_provider` in product-family wording. The body repeats them on
+  exactly one visible `Reviewer:` line, each value as a whole token. This is
+  provenance, not a credential: it authenticates nothing and adds no weight.
+- `problem_context.spec_basis` (`spec_basis_assessment`) is `mapped`,
+  `no_spec` or `not_yet_proven`. `mapped` gives text `spec_ref`,
+  `spec_revision` (a full commit id for `accepted_rfc` and
+  `accepted_contract_doc`) and one criterion row per material acceptance
+  criterion; `not_met` and `not_yet_proven` block approval. The reference,
+  revision and every `criterion_id` must appear as whole tokens in the
+  visible body, because another operator reads only the published review.
+
+`--check-result` reports a missing or inconsistent declaration or unpublished
+reference as an error, and a spec-basis gap as an approval blocker. Regenerate
+results made under revision 13 rather than adding these fields to them.
+
 ### Semantic alignment and CI constraint recovery
 
 The semantic triage introduced in policy revision 5 replaces universal detailed

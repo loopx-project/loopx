@@ -1336,8 +1336,10 @@ test("receipt-only claims revalidate CAS contention and recover a lost commit re
       operation_id: "no-change", observed_at: "2026-09-05T04:30:00Z", dry_run: false,
     }, {createStore: () => new FaultStore(directory, "goal-a")});
     if (fault === "conflict") {
+      // The bounded CAS retry rereads the new owner and revalidates the claim.
       assert.equal(result.status, "failed");
       assert.equal(result.reason_code, "claim_owner_mismatch");
+      assert.equal(result.failure_kind, "decision_rejection");
     } else {
       assert.equal(result.changed, false);
       assert.equal(result.status, "recovered");
