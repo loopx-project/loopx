@@ -266,6 +266,7 @@ def apply_receipt_bound_wait_recovery(
     goal_id: str, agent_id: str, todo_id: str, turn_instance_id: str,
     available_capabilities: list[str] | None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+    monitor_phase: str | None = None,
 ) -> bool:
     """Read full provider facts only when a replay lost its executable binding."""
     from ...todos import list_goal_todos
@@ -283,6 +284,7 @@ def apply_receipt_bound_wait_recovery(
         "schema_version": "loopx_quota_receipt_bound_wait_request_v0",
         "todos": items, "todo_id": todo_id, "agent_id": agent_id,
         "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
+        "monitor_phase": monitor_phase,
     })
     if verdict.get("status") == "none":
         return False
