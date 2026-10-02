@@ -1,0 +1,4 @@
+interface:
+  display_name: "LoopX Performance Diagnosis"
+  short_description: "Profile slow commands with controlled local evidence"
+  default_prompt: "Use $loopx-performance-diagnosis to profile an owned slow command, compare an independent baseline, and keep raw profiles local."
