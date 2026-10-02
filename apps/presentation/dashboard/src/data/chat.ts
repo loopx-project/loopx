@@ -1,6 +1,7 @@
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps";
 import { z } from "zod";
+import { actionSourceBasisSchema } from "./action-source-basis.js";
 
 import {
   todoApplyResultMatchesRequest,
@@ -447,12 +448,7 @@ export const typedActionProposalSchema = z.object({
   error: z.record(z.string(), z.unknown()).nullable().optional(),
   checkpoint: z.record(z.string(), z.unknown()).nullable().optional(),
   failure: z.record(z.string(), z.unknown()).nullable().optional(),
-  canonical_update_basis: z.object({
-    schema_version: z.enum(["loopx_chat_canonical_update_basis_v0", "loopx_chat_canonical_terminal_basis_v0"]),
-    provider_revision: z.string().min(1),
-    source_authority: z.enum(["file_v0", "sqlite_v0"]),
-    registry_sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  }).optional(),
+  canonical_update_basis: actionSourceBasisSchema.optional(),
   regenerated_from: z.string().nullable().optional(),
   operation: typedOperationEnvelopeSchema.nullable().optional(),
   created_at: z.string(),
