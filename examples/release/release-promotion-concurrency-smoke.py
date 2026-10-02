@@ -70,6 +70,22 @@ def write_lock_test_python(path: Path) -> None:
     path.chmod(0o755)
 
 
+def stop_install_fixture(process: subprocess.Popen[str]) -> tuple[str, str]:
+    """Reap an installer that this fixture started in its own session."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        return process.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return process.communicate(timeout=10)
+
+
 def assert_install_waits_for_promotion_guard(root: Path) -> None:
     env = {**install_env(root), "LOOPX_RELEASE_ID": "guarded"}
     python_wrapper = root / "guard-python"
@@ -120,12 +136,7 @@ def assert_install_waits_for_promotion_guard(root: Path) -> None:
                 time.sleep(0.05)
             assert process.poll() is None, process.communicate()
         except Exception:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.communicate()
+            stop_install_fixture(process)
             raise
         finally:
             fcntl.flock(guard.fileno(), fcntl.LOCK_UN)
@@ -214,11 +225,7 @@ def assert_empty_legacy_lock_is_reaped(root: Path) -> None:
     finally:
         # The installer shells out while preparing its snapshot. Stop this
         # fixture's whole session before removing the directory it can write.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        stdout, stderr = process.communicate(timeout=10)
+        stdout, stderr = stop_install_fixture(process)
         if legacy_lock.exists():
             shutil.rmtree(legacy_lock)
     assert acquired, (stdout, stderr)
