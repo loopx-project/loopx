@@ -21,18 +21,18 @@
 - 语言说明：[英文版](./shared-goal-authority-state-provider-v0.md)与本中文版互为
   语义镜像；两者不一致属于缺陷
 
-## 当前交付边界（2026-09-28）
+## 当前交付边界（2026-10-02）
 
-按 `ce3862e33` 核对，#5054、#5140、#5144、#5156、#5173、#5175、#5169
-均已合并。事件退役、archive 恢复、managed 进程监督、reviewed 本地切换和 native
-drain 不再计作新待办 PR。此后 SQLite 读取证明优化
-[#4931](https://github.com/loopx-project/loopx/pull/4931) 已在 `9482a9496` 合并；D2 资格化仍未完成。
+按 main `9b0486dc1` 核对，#4931、#5251、#5395、#5417、#5436 已合并，
+不再把这些存储改进和 Python 退役重复记作待办。
+[当前验证、迁移与删除计划](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#当前收尾验证迁移与删除2026-10-02)
+优先收尾 #5413/#5466/#5283，再做安装态可回退验证、有界自愿采用、canonical
+创建／默认接入及最后调用方删除。存量 Goal 迁移、两策略退役和格式升级各有独立
+回执及出口；原回执恢复不能成为保留 legacy 活跃策略的理由，必要迁移 reader 保留。
 
-接下来并行验证整 Goal 执行／消费者集成和本地 profile，再统一新 Goal／安装／设置
-及受支持升级入口，切走最后调用方时同步删除对应旧 writer。保留必要 Host IO、
-原回执与迁移 reader。本轮未认证额外某个 Python 模块已死，也不承诺固定剩余 PR 数。
-[删除清单、工程窗口、本机证据及剩余工作](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md)
-替代旧记录的当前数量估算，旧执行证据仍按历史保留。
+有界 cohort 在安装恢复和相关执行控制通过后可开始，不代表发布默认值或正式十天
+D2 已通过；冻结的失败／缺项保持可见。T4 随实现删除已证明重复的 owner，不等 R6
+或所有 Python 消失。本节替代陈旧的当前数量估算，不覆盖历史执行证据。
 
 ## Todo 事件路径退役（2026-09-25）
 
@@ -1031,8 +1031,9 @@ crash、disk-full、backup/restore lineage，以及一次受支持 upgrade/rollb
 一次性 goal，不碰活跃用户状态。压缩时钟不证明自然时间耐久性；发布本 RFC 不启动 soak
 或 monitor。
 
-代码 PR 可在 soak 证据待补时合入，但 promotion 继续 hold。两个出口、显式 import/
-fencing/export 演练与 maintainer review 都通过才可晋升。发布紧凑可复现证据，不发布
+代码 PR 可在正式 soak 证据待补时合入。正式 profile 晋升仍须两个出口、显式
+import/fencing/export 演练及 maintainer review；另行授权、有界 opt-in cohort
+按上方安装态恢复决策执行，不宣称正式 profile 通过。发布紧凑可复现证据，不发布
 原始私有日志。
 
 #### SQLite 替换 file 的阶段节点（提案）
@@ -1046,8 +1047,9 @@ fencing/export 演练与 maintainer review 都通过才可晋升。发布紧凑�
 | --- | --- | --- |
 | 候选 conformance | 评审 #4121 的原子提交、原始 receipt、cursor/digest 完整性、typed provider-open 失败、真实 CLI 与 OS/runtime 测试。 | 仅候选。file 仍默认；不迁移活跃 Goal，不授予 promotion。 |
 | 有界本地 profile（L） | 满足本节不变的负载与预算矩阵：64 KiB 下匹配的 10k/100k、1 MiB 与 300k 余量、冷启动、锁等待、RSS、逻辑写入增长；资格化有界 checkpoint/delta 和 receipt 查询，同时保留精确历史 scan。 | 不切默认。保留完整性校验；成本超出 profile 时修正设计或明确缩小支持范围。 |
-| 带 fence 的迁移与恢复（I/F 前置） | 在一次性 Goal 上证明 file→SQLite 导入、原始 receipt/replay 等价、consumer cursor/outbox 保留、crash/disk-full 恢复和反向导出／回滚；共享路由或投影变化时纳入要求的独立 legacy/file/PostgreSQL 只读演练。 | 先评审工具与 migration manifest。当前空 Goal selector 不是已有 Goal 的迁移 API；不得用活跃用户 Goal 做测试。 |
-| 自然时间资格化与 opt-in canary | 完成真实 >=10 天合成 soak，覆盖本节规定的重启、休眠、第 1 天 retry、24 h consumer lag；随后单独申请小规模 opt-in operator canary，记录停止与回滚条件。 | C/I 与所选 provider 的全部 hold 仍有效。加速容量不替代自然时间；canary 不授权通用默认。 |
+| 带 fence 的迁移与恢复（I/F 前置） | 在一次性 Goal 上证明 file→SQLite 导入、原始 receipt/replay 等价、consumer cursor/outbox 保留、crash/disk-full 恢复和反向导出／回滚；共享路由或投影变化时纳入要求的独立 legacy/file/PostgreSQL 只读演练。 | 先评审工具与 migration manifest。采用已有 reviewed archive/cutover API，空 Goal selector 本身不足以完成存量迁移；不得用活跃用户 Goal 做测试。 |
+| 可恢复的 opt-in canary | 安装态备份／迁移／重启、普通命令、相关中断／并发控制及携带新写入反向迁移通过；独立授权，限于已证明负载。 | 可先于正式十天资格；记录停止／回退条件，不宣称通用默认或正式时长已通过。 |
+| 正式自然时间资格 | 完成实际 >=10 天合成 soak，含规定重启、休眠、第 1 天 retry 和 24 h consumer lag；按变化边界对账既有证据。 | 加速容量不替代自然时间；正式 profile 的 hold 和冻结报告仍显式保留。 |
 | 新 Goal 默认决策（F） | 维护者接受合格 profile、canary 结果、运维诊断、backup/restore 流程、发布操作说明和关闭默认的路径；在独立且明确披露的发布改动中切默认。 | 仅适用于新建且符合条件的本地 Goal；已有显式 file 选择保持固定。不受支持的 runtime/filesystem 需显式选择支持方案，打开失败不能静默切 backend。 |
 | 已有 Goal 迁移与 file 退役 | 按已评审的 fenced workflow 逐批 opt-in 迁移，每批核对 receipt、历史、投影和回滚；删除路径前列清最后的 file-primary caller 与兼容窗口。 | 每个 Goal 需要明确迁移权限；证据满足后才退役常规 primary 角色。参考／导入／导出支持保留到其 caller 与保留责任分别结束。 |
 

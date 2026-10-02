@@ -24,21 +24,22 @@
   [Chinese version](./shared-goal-authority-state-provider-v0.zh-CN.md) and this
   English version are semantic mirrors. A difference between them is a defect.
 
-## Current delivery frontier (2026-09-28)
+## Current delivery frontier (2026-10-02)
 
-Audit `ce3862e33`: #5054, #5140, #5144, #5156, #5173, #5175 and #5169
-are merged. Do not count event retirement, archive recovery, managed process
-supervision, reviewed local cutover or native drain as new pending PRs.
-The SQLite read-proof optimization [#4931](https://github.com/loopx-project/loopx/pull/4931)
-has since merged at `9482a9496`; D2 qualification remains incomplete.
+At main `9b0486dc1`, #4931, #5251, #5395, #5417 and #5436 are merged.
+Do not recount their storage improvements or Python retirement as pending work.
+The [current validation, migration and deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02)
+prioritizes #5413/#5466/#5283 closeout, installed reversible qualification,
+bounded opt-in adoption, canonical creation/defaults and last-caller deletion.
+Existing Goal migration, two-policy ownership retirement and storage-format
+upgrade have separate receipts and exits. Original-receipt recovery does not
+justify retaining `legacy` as a live policy. Required migration readers remain.
 
-Next: qualify whole-Goal execution/consumer integration and matched local
-profiles in parallel; then unify new-Goal/install/settings and supported upgrade
-entrypoints, deleting each replaced writer with its last caller. Retain necessary
-Host IO, original receipts and migration readers. No additional dead Python
-module is certified by this audit, and no fixed remaining-PR total is promised.
-[Deletion inventory, engineering windows, local evidence and remaining work](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md)
-supersedes older current-count estimates; their execution evidence stays historical.
+A bounded cohort can start after its installed recovery and relevant execution
+controls pass; it does not certify a released default or formal ten-day D2.
+Frozen failures/missing evidence remain visible. T4 deletes proven redundant
+owners alongside implementation, without waiting for R6 or all Python to vanish.
+This replaces stale current-count estimates, not historical execution evidence.
 
 File retained-state storage now reuses the existing TS checkpoint/delta codec,
 stacked on #5063's verified read cache and RPC budgets. Original revisions,
@@ -1347,9 +1348,11 @@ to an independent reference; no lost acknowledged commit or repeated effect is
 acceptable. Use disposable goals, never active user state. Compressed clocks do
 not qualify wall-clock endurance; publishing this RFC starts no soak or monitor.
 
-A code PR can land while soak evidence remains pending, with promotion held.
-Promotion requires both exits, explicit import/fencing/export rehearsal and
-maintainer review. Publish compact reproducible evidence, not raw private logs.
+A code PR can land while formal soak evidence remains pending. Formal profile
+promotion requires both exits, explicit import/fencing/export rehearsal and
+maintainer review. A separately authorized, bounded opt-in cohort uses the
+installed recovery decision above; it does not claim that formal profile.
+Publish compact reproducible evidence, not raw private logs.
 
 #### SQLite-for-file transition milestones (proposal)
 
@@ -1363,8 +1366,9 @@ is gated by evidence below, not by calendar dates or this PR's merge status.
 | --- | --- | --- |
 | Candidate conformance | Review #4121's atomic commits, original receipts, cursor/digest integrity, typed provider-open failures, real CLI and OS/runtime tests. | Candidate only. File remains default; no live migration or promotion. |
 | Bounded local profile (L) | Meet this section's unchanged workload/budget matrix, including 64 KiB matched 10k/100k runs, 1 MiB and 300k headroom, cold startup, lock wait, RSS and logical write growth. Qualify bounded checkpoints/deltas and receipt lookup while preserving exact historical scans. | No default flip. Keep integrity checks; if their cost grows beyond the profile, fix the design or narrow the explicitly supported profile. |
-| Fenced migration and recovery (I/F prerequisites) | On disposable Goals, prove file-to-SQLite import, exact receipt/replay equivalence, consumer cursor/outbox preservation, crash/disk-full recovery and reverse export/rollback. Include the required independent legacy/file/PostgreSQL read-only rehearsal where shared routing or projections change. | Tooling and migration manifest must be reviewed first. Today's empty-goal selector is not an existing-goal migration API. Never test on an active user's Goal. |
-| Elapsed qualification and opt-in canary | Complete an actual >=10-day synthetic soak, including the specified restart, sleep, day-1 retry and 24 h consumer-lag cases. Then request separate authorization for a small opt-in operator canary with recorded stop/rollback criteria. | All C/I and selected-provider holds still apply. Evidence from accelerated volume cannot replace elapsed time; a canary does not authorize a general default. |
+| Fenced migration and recovery (I/F prerequisites) | On disposable Goals, prove file-to-SQLite import, exact receipt/replay equivalence, consumer cursor/outbox preservation, crash/disk-full recovery and reverse export/rollback. Include the required independent legacy/file/PostgreSQL read-only rehearsal where shared routing or projections change. | Tooling and migration manifest must be reviewed first. Use the reviewed existing-Goal archive/cutover API; an empty-goal selector alone is insufficient. Never test on an active user's Goal. |
+| Recoverable opt-in canary | Verified installed backup/migration/restart, ordinary commands, relevant interruption/concurrency controls and reverse migration preserving new writes; separately authorized and limited to the demonstrated workload. | May precede formal ten-day qualification. Record stop/rollback criteria; no general default or formal-horizon claim. |
+| Formal elapsed qualification | Complete the actual >=10-day synthetic soak with specified restart, sleep, day-1 retry and 24 h consumer lag; reconcile existing evidence with changed boundaries. | Accelerated volume does not replace elapsed time; formal profile holds and frozen reports remain explicit. |
 | New-Goal default decision (F) | Maintainers accept the qualified profile and canary results, operational diagnostics, backup/restore procedure, release instructions and default-disable path. Ship the default change in a separate disclosed release change. | Apply only to newly created eligible local Goals. Existing explicit file selections remain pinned. Unsupported runtimes/filesystems require an explicit supported choice; no silent backend switch on open failure. |
 | Existing-Goal migration and file retirement | Migrate opt-in cohorts using the reviewed fenced workflow; reconcile receipts, history, projections and rollback after each cohort. Inventory the last file-primary callers and compatibility windows before removing any path. | Each Goal needs explicit migration authority. Retire file as the ordinary primary only after that evidence; retain reference/import/export support until its own callers and retention duties end. |
 

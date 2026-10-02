@@ -7,7 +7,7 @@
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
-**本地权威退役 checkpoint（2026-09-28）。** R5/T4 采用[重新核对的删除和验证节奏](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md)。Reviewed 本地切换和 native drain 已合入；整 Goal 执行／消费者闭环、profile 验证、默认入口接入仍分别验收。切走最后调用方时同步删旧 writer，保留必要迁移／回执 reader。已有 GoalRef／Turn PR 负责各自消费者；R6 PostgreSQL 服务验证另列，历史 PR 数量估算不再作为当前预测。
+**本地权威收尾检查点（2026-10-02）。** R5/T4 使用按 `9b0486dc1` 复核的[验证→迁移→删除计划](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.zh-CN.md#当前收尾验证迁移与删除2026-10-02)。先收尾现有 #5413/#5466/#5283，验证一个安装态可回退候选，再分别决定有界自愿试用和发布默认准入。Canonical 创建、legacy 策略迁移与最后 writer 删除各有明确出口；Python 替代 owner 随最后调用方删除。R6 独立，不用固定剩余 PR 数或历史测试数量证明完成。
 
 ## 1. 总目标与产品路线
 
@@ -512,7 +512,7 @@ L3 检查点：独立领取/接管、原子 claim 准入与维护共用 typed le
 - **Owner：** TS RFC T0–T4、shared-authority D1–D3；保留两套编号及原门禁。
 - **选择规则：** 优先迁移 R1–R4 热路径的一笔完整事务或恢复生命周期，附前后 caller/owner/crossing 表、实际删除和性能证据。不要继续按单字段增加 Python→TS RPC；不要重建已合入的 Todo update。
 - **交付：** 用已选本地 profile 验证完整来源读取、单向 Markdown 投影、event/receipt 保留、重启恢复、容量与长期成本；source 失败不能回退 legacy。R1 不能把大计划正文塞入 coordination head。
-- **退出：** 相关真实 CLI/backend、不可变 baseline 与候选对照、负例/mutation、三臂演练及适用 D2 至少十日 soak；D3 切换保留明确批准。此次审计没有执行新的 soak，也未晋升 provider。
+- **退出：** 按 shared-authority 7.2 分别决定有界改动、可回退自愿 cohort、发布默认值，各自在适用范围具备真实 CLI/backend、独立基线、负例和恢复证据。正式 D2 保留适用容量及至少十日证据，cohort 不必等该证书。D3 保留明确切换权限。本计划没有启动 soak 或晋升 provider。
 - **回滚：** 按已审阅的 fenced export/import 和 schema-aware downgrade，不能靠替换二进制恢复旧写权威。
 
 [Goal instance/recovery 提案](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md)

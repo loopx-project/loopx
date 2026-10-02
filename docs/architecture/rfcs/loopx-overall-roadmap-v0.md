@@ -8,7 +8,7 @@
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
-**Local authority retirement checkpoint (2026-09-28).** R5/T4 now use the [reconciled deletion and qualification cadence](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md). Reviewed local cutover and native drain are merged; whole-Goal execution/consumer closure, profile qualification and default-entry adoption still have separate exits. Delete a replaced writer with its last caller; retain necessary migration/receipt readers. Existing GoalRef/Turn PRs own their affected consumers. R6 PostgreSQL service qualification is separate, and the historical PR-count estimates are not current forecasts.
+**Local authority closeout checkpoint (2026-10-02).** R5/T4 use the [current validation → migration → deletion plan](ledger/shared-goal-authority-state-provider-v0/2026-09-28-retirement-cadence.md#current-closeout-validation-migration-and-deletion-2026-10-02), rechecked at `9b0486dc1`. Close existing #5413/#5466/#5283, qualify one installed reversible candidate, then decide a bounded opt-in cohort separately from release-default admission. Canonical creation, legacy-policy migration and last-writer deletion have named exits; delete replaced Python owners with their last callers. R6 remains separate. No fixed remaining-PR count or historical test count certifies completion.
 
 Conversational preparation from [PR #4376](https://github.com/loopx-project/loopx/pull/4376)
 is integrated under R1/GQ01 through the existing Chat draft and reviewed Goal
@@ -705,7 +705,7 @@ L3 checkpoint: standalone acquisition/takeover, atomic claim admission and maint
 - **Owner:** TS T0–T4 and shared-authority D1–D3; retain their numbering and gates.
 - **Selection:** prioritize an entire hot-path transaction or recovery lifecycle used by R1–R4. Record before/after callers, owners, crossings, actual deletions and performance. Stop adding per-field Python→TS RPCs; do not rebuild the merged Todo update.
 - **Delivery:** qualify full-source reads, one-way Markdown projection, event/receipt retention, restart recovery, capacity and long-term cost on the selected local profile. Source failure cannot fall back to legacy. R1 cannot put large plan bodies into the coordination head.
-- **Exit:** affected real CLI/backend, immutable baseline versus candidate comparison, negative/mutation coverage, three-arm rehearsal and applicable D2 soak of at least ten days. D3 retains explicit cutover approval. This audit runs no new soak and promotes no provider.
+- **Exit:** use shared-authority Section 7.2's separate decisions for a bounded change, reversible opt-in cohort and released default. Each requires affected real CLI/backend and independent baseline/negative/recovery evidence at its own scope. Formal D2 retains applicable volume and at least ten-day evidence; a cohort need not wait for that certificate. D3 retains explicit cutover authority. This plan runs no soak or provider promotion.
 - **Rollback:** reviewed fenced export/import and schema-aware downgrade; replacing a binary cannot restore old write authority.
 
 The [Goal instance/recovery proposal](goal-instance-identity-and-orphan-recovery-v0.md)
