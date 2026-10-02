@@ -299,6 +299,26 @@ conclude with the adopted/rejected planning decision; deferred or blocked work
 must explain the concrete condition and next action. Completion of this exchange
 is separate from completion of the receiving Goal.
 
+If a returned blocker or draft is followed by a materially changed fact, append
+a conclusion with a stable `--update-id`; do not replace the first conclusion or
+create another request merely to return its result:
+
+```sh
+loopx manager-inbox report --goal-id research --agent-id worker \
+  --request-id <id> --update-id review-complete \
+  --reply-text 'Review completed; the revised artifact is ready.'
+```
+
+Retry the same update with the same id and text. Each update has its own
+`result_key`, retains the original audience and authority checks, and arrives
+after verified delivery of the preceding result. Unknown delivery blocks later
+sends rather than allowing them to overtake it. Peer readers acknowledge the
+specific returned key with `acknowledge-return --result-key <key>` after reading
+it; consuming the first result does not consume later updates. MCP callers use
+the corresponding `return_result(update_id=...)` and
+`consume_peer_result(result_key=...)`. Full texts stay in immutable receipts;
+the typed publication planner receives identities and content digests.
+
 The Chat server hosts a cheap local receipt pump (no model calls and no Codex
 automation). It appends a deduplicated follow-up to the original transcript;
 the open frontend picks it up automatically. For Lark it reuses the current

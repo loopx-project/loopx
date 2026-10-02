@@ -230,6 +230,12 @@ Provider 认证、签名、外部事件解码、寻址、chat membership、rate 
 Notification/attention、Todo/lease、model admission 和 artifact acceptance 保留现有 owners。
 Dispatch 事件在准入范围内唤醒现有 driver，polling 修补缺口。Inbox 不授权启动另一个 automation。
 
+已返回阻塞或可审阅草稿，不能阻止后续完成结果回到同一对话。保留首条不可变结论，
+通过共享 TS 发布 owner 追加有明确身份的结果更新。同一更新重试保留结果身份，冲突替换拒绝。
+Chat/Lark 发送须等待前一结果核验送达；Peer 消费只确认已读的那条结果。
+在打包对话中验证重启、重复重试、前次发送不确定及精确 Goal 实例隔离。
+这是 R3/T1–T2 的结果连续性，不新增工作请求、权限、任务完成声明或管家专用队列。
+
 已提交委派的恢复复用现有 typed collaboration lifecycle。原请求 Turn 失败、超时或
 被打断，不会取消已经进入接收方 Inbox 的工作。该 Turn 结束后，即使调用方没能保存
 handoff 回答，接收方已保存的结果仍可沿同一可信路由返回。重新核验当前来源授权、
