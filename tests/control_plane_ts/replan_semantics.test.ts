@@ -223,6 +223,25 @@ test("external progress review: renamed identifiers discharge only behind new ev
   assert.equal(qualify({delta_kinds: ["new_hypothesis"], evidence_novel: false}, vision).accepted, true);
 });
 
+test("known blockers cannot discharge any replan source; independent vision evidence can", () => {
+  for (const kind of ["vision_acceptance_gap", "typed_progress_repeat", "external_progress_review_drift"]) {
+    const request = {operation: "qualify", obligation: {triggers: [{kind}]},
+      observation_delta: {delta_kinds: ["new_concrete_blocker"], blocker_repeated: true,
+        evidence_novel: true, observation_repeated: false}};
+    const rejected = projectReplanSemantics(request);
+    assert.equal(rejected.accepted, false, kind);
+    assert.equal(rejected.reason_code, "progress_observation_replayed", kind);
+    assert.deepEqual(rejected.outcomes, []);
+    assert.equal(projectReplanSemantics({...request,
+      observation_delta: {...request.observation_delta, blocker_repeated: false}}).accepted, true);
+    if (kind !== "typed_progress_repeat") {
+      const kept = projectReplanSemantics({...request, agent_vision: vision});
+      assert.equal(kept.accepted, true);
+      assert.deepEqual(kept.satisfying_outcomes, ["fresh_vision_path_outcome"]);
+    }
+  }
+});
+
 test("the identity rule is scoped to the external review source", () => {
   const fuse = {triggers: [{kind: "typed_progress_repeat"}]};
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: fuse,

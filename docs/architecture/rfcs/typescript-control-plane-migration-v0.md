@@ -430,6 +430,14 @@ authoring for all vision triggers, with real bound CLI closeout/readback and
 negative qualification-scope cases. Checkpoint recovery and in-flight rules
 remain in their existing owners; no new capability, provider or setting is added.
 
+Known blocker qualification also consumes the host-projected coverage ledger.
+Changing a Turn/work-item binding or refreshing evidence cannot make the same
+blocker a new replan outcome. Python normalizes the observations and reports
+identity reuse; the TypeScript outcome owner rejects that claim for every
+replan source while retaining independently evidenced vision paths. This
+corrects false advancement admission; it does not add a blocked-wait settlement
+route or certify Goal completion.
+
 The delivery-history boundary now treats `classification`, `health_check`, and
 `recommended_action` as narrative. They cannot create or discharge a
 follow-through obligation, prove an outcome, or classify delivery scale.

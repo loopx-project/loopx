@@ -306,12 +306,18 @@ def semantic_progress_delta(
         known_fingerprints.add(item["fingerprint"])
     evidence_novel = bool(set(current.get("evidence_ids") or []) - known_evidence)
     observation_repeated = current["fingerprint"] in known_fingerprints
+    blocker_repeated = bool(current.get("blocker_id")) and any(
+        item.get("result_class") == ProgressResultClass.BLOCKED.value
+        and item.get("blocker_id") == current.get("blocker_id")
+        for item in ([prior] if prior else []) + claimed
+    )
     return {
         "schema_version": "replan_semantic_delta_v0",
         "accepted": bool(delta_kinds),
         "delta_kinds": delta_kinds,
         "evidence_novel": evidence_novel,
         "observation_repeated": observation_repeated,
+        "blocker_repeated": blocker_repeated,
         "window_size": len(claimed),
         "observation_fingerprint": current["fingerprint"],
         "baseline_fingerprint": prior.get("fingerprint") if prior else None,
@@ -430,10 +436,15 @@ def semantic_delta_from_writeback(
             ),
             None,
         )
+    context = obligation.get("replan_context")
+    coverage = context.get("coverage_ledger") if isinstance(context, Mapping) else None
+    claimed = list(window) if isinstance(window, list) else []
+    if isinstance(coverage, list):
+        claimed.extend(coverage)
     observation_delta = semantic_progress_delta(
         progress_observation,
         baseline=baseline if isinstance(baseline, Mapping) else None,
-        window=window if isinstance(window, list) else None,
+        window=claimed,
     )
     vision = dict(agent_vision) if isinstance(agent_vision, Mapping) else {}
     if vision:
