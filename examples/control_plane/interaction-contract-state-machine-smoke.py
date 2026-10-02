@@ -602,7 +602,8 @@ def assert_required_reads_are_mirrored_into_execution_channels() -> None:
             "command": "  loopx evidence-log --goal-id interaction-state-machine-goal  ",
         }
     ]
-    # Reads are mirrored losslessly; the transport does not rewrite commands.
+    # Execution channels retain the admitted command verbatim. Trimming belongs
+    # to display compaction and can change quoted arguments.
     payload["required_reads"] = expected
     payload = finalize(payload)
     contract = payload["interaction_contract"]

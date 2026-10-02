@@ -11,8 +11,10 @@ const VISION_OUTCOMES = [
   "fresh_vision_path_outcome", "new_runnable_successor", "new_concrete_blocker",
   "coverage_backed_exploration_exhausted", "coverage_backed_no_followup",
 ] as const;
-type SemanticOutcome = typeof PROGRESS_OUTCOMES[number] | typeof VISION_OUTCOMES[number];
-const KNOWN_OUTCOMES: ReadonlySet<string> = new Set([...PROGRESS_OUTCOMES, ...VISION_OUTCOMES]);
+// Capability-owned evidence is never a default generic progress exit.
+const CAPABILITY_OUTCOMES = ["capability_evidence_observed", "capability_duty_retired"] as const;
+type SemanticOutcome = typeof PROGRESS_OUTCOMES[number] | typeof VISION_OUTCOMES[number] | typeof CAPABILITY_OUTCOMES[number];
+const KNOWN_OUTCOMES: ReadonlySet<string> = new Set([...PROGRESS_OUTCOMES, ...VISION_OUTCOMES, ...CAPABILITY_OUTCOMES]);
 // Outcomes that a renamed identifier alone can produce. An external progress
 // review found the evaluated identifiers not serving the goal, so for that
 // source they discharge only behind evidence ids absent from the whole
@@ -151,6 +153,10 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
     if (declared.some(value => !KNOWN_OUTCOMES.has(value))) {
       throw new EffectRuntimeRequestError("satisfying_semantic_outcomes contains an unknown typed outcome");
     }
+    if (declared.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value)) &&
+      object(obligation.capability_guard).schema_version !== "semantic_replan_capability_guard_v0") {
+      throw new EffectRuntimeRequestError("capability evidence requires a bound owning capability");
+    }
     if (acceptanceHold && declared.some(value => !["new_runnable_successor", "new_concrete_blocker"].includes(value))) {
       throw new EffectRuntimeRequestError("acceptance recovery cannot widen its typed outcomes");
     }
@@ -220,6 +226,9 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const patch = object(vision.vision_patch);
   const path = object(vision.path_delta);
   let outcomes = strings(observation.delta_kinds);
+  if (outcomes.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value))) {
+    throw new EffectRuntimeRequestError("capability evidence must be qualified by its owning capability, not generic progress");
+  }
   if (outcomes.some(outcome => !KNOWN_OUTCOMES.has(outcome))) {
     throw new EffectRuntimeRequestError("observation_delta contains an unknown typed outcome");
   }

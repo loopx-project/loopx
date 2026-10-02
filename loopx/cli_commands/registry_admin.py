@@ -484,6 +484,8 @@ def handle_registry_admin_command(
                 explore_harness_enabled=args.explore_harness_enabled,
                 explore_harness_profile=args.explore_harness_profile,
                 clear_explore_harness_profile=bool(args.clear_explore_harness_profile),
+                explore_composition_mode=args.explore_composition_mode,
+                explore_composition_scope_id=args.explore_composition_scope_id,
                 explore_graph_enabled=args.explore_graph_enabled,
                 lark_kanban_heartbeat_sync=args.lark_kanban_heartbeat_sync,
                 registered_agents=args.registered_agents,

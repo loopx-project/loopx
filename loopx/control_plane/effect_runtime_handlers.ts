@@ -2,6 +2,9 @@ import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
 import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgentOperationExecutor, planAgentOperationHandoff, projectAgentOperationInbox, projectManagedOperationTransport, resolveOperationSourceRoute} from "./work_items/operation_agent_handoff.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
+import {validateResearchExecution, normalizeResearchCompositionPolicy, researchCompositionFacts,
+  projectResearchComposition, qualifyResearchCompositionWriteback,
+  validateResearchCompositionSuccessor, qualifyResearchCompletion} from "./capabilities/explore_research_execution.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -888,6 +891,13 @@ export function createEffectRuntimeHandlers(
     ["work_item.replan_semantics.project", projectReplanSemantics],
     ["explore.research.normalize", normalizeResearchObservation],
     ["explore.research.validate_attribution", validateResearchAttribution],
+    ["explore.research.validate_execution", validateResearchExecution],
+    ["explore.research.composition_policy", normalizeResearchCompositionPolicy],
+    ["explore.research.composition_facts", researchCompositionFacts],
+    ["explore.research.composition", projectResearchComposition],
+    ["explore.research.composition_writeback", qualifyResearchCompositionWriteback],
+    ["explore.research.composition_successor", validateResearchCompositionSuccessor],
+    ["explore.research.completion", qualifyResearchCompletion],
     ["explore.research.frontier", projectResearchFrontier],
   ["work_item.replan_history.project", projectReplanHistory],
   ["work_item.replan_history.project_snapshot", projectReplanHistorySnapshot],

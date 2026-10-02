@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,10 @@ from loopx.control_plane import effect_runtime as runtime
 
 
 def serial_fingerprint(root: Path) -> str:
-    """Independent reference: names and raw bytes, not decoded source text."""
+    """Independent reference: selected Python adapter, names, and raw bytes."""
     digest = hashlib.sha256()
+    digest.update(sys.executable.encode("utf-8"))
+    digest.update(str(sys.version_info[:3]).encode("ascii"))
     for path in sorted(p for p in root.rglob("*") if p.suffix in {".ts", ".json"}):
         digest.update(path.relative_to(root).as_posix().encode("utf-8"))
         digest.update(path.read_bytes())

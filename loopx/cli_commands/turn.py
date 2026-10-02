@@ -1063,6 +1063,7 @@ def handle_turn_command(
                     settlement_identity,
                     semantic_replan_guard_scoped=replan_guard_scoped,
                     semantic_replan_obligation_id=replan_obligation_id,
+                    semantic_replan_capability_guard=(stable_envelope.get("replan_action_packet") or {}).get("capability_guard"),
                 )
 
             managed_cadence = managed_cadence_start(

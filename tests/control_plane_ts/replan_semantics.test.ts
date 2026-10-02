@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectReplanSemantics, requiredSemanticOutcomes } from "../../loopx/control_plane/work_items/replan_semantics.ts";
+
+test("capability evidence is not a default exit or a generic progress claim", () => {
+  for (const outcome of ["capability_evidence_observed", "capability_duty_retired"]) {
+  assert.equal(requiredSemanticOutcomes({triggers: [{kind: "no_progress_streak"}]}).includes("capability_evidence_observed"), false);
+  assert.throws(() => requiredSemanticOutcomes({satisfying_semantic_outcomes: ["capability_evidence_observed"]}), /bound owning capability/);
+  const obligation = {satisfying_semantic_outcomes: [outcome],
+    capability_guard: {schema_version: "semantic_replan_capability_guard_v0", capability_id: "explore"}};
+  assert.deepEqual(requiredSemanticOutcomes(obligation), [outcome]);
+  assert.throws(() => projectReplanSemantics({operation: "qualify", obligation,
+    observation_delta: {delta_kinds: [outcome]}}), /owning capability, not generic progress/);
+  }
+});
 import { visionAuthoringContract } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 

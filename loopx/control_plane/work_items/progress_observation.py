@@ -645,6 +645,9 @@ def build_replan_action_packet(
             ProgressResultClass.NO_FOLLOWUP.value,
         ],
     }
+    if isinstance(obligation.get("capability_guard"), Mapping):
+        packet["capability_guard"] = dict(obligation["capability_guard"])
+        packet["allowed_terminal"] = []
     if isinstance(selected_gap, Mapping):
         packet["bounded_frontier"] = {
             key: selected_gap[key]
@@ -654,6 +657,8 @@ def build_replan_action_packet(
                 "experiment_node_ref",
                 "input_node_refs",
                 "required_outcome",
+                "input_observations",
+                "frontier_revision",
             )
             if key in selected_gap
         }

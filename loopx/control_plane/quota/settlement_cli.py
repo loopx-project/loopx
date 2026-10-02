@@ -375,6 +375,15 @@ def quota_rollout_details(
         "quiet_noop_allowed": bool(agent_channel.get("quiet_noop_allowed")),
         "closeout_required": closeout_required,
     }
+    replan_packet = payload.get("replan_action_packet")
+    receipt = payload.get("heartbeat_receipt")
+    capability_guard = (replan_packet.get("capability_guard") if isinstance(replan_packet, Mapping) else None) or (
+        receipt.get("semantic_replan_capability_guard") if isinstance(receipt, Mapping) else None
+    )
+    if isinstance(capability_guard, Mapping):
+        details["semantic_replan_capability_id"] = capability_guard["capability_id"]
+        details["semantic_replan_gap_id"] = capability_guard["gap_id"]
+        details["semantic_replan_frontier_revision"] = capability_guard["frontier_revision"]
     cli_channel = interaction.get("cli_channel")
     if isinstance(cli_channel, Mapping) and cli_channel.get("quota_spend_source"):
         details["quota_spend_source"] = cli_channel["quota_spend_source"]

@@ -22,6 +22,16 @@ def _research_result(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _research_todo_facts(todo: Mapping[str, Any]) -> dict[str, Any]:
+    """Bound local authority facts; never transport private task text/notes."""
+    from ...control_plane.todos.todo_semantics import todo_item_is_actionable_open
+    fields = ("todo_id", "role", "status", "claimed_by", "replan_obligation_id", "task_class",
+              "action_kind", "archive_state", "excluded_agents", "explore_result_node_refs", "target_key", "capability_binding_ref",
+              "resume_when", "unblocks_todo_id")
+    return {**{field: todo[field] for field in fields if field in todo},
+            "actionable_open": todo_item_is_actionable_open(dict(todo))}
+
+
 def normalize_research_observation(value: Mapping[str, Any]) -> dict[str, Any]:
     validate_public_safe_value(value, path="research_observation")
     raw = dict(value)
@@ -58,6 +68,8 @@ def validate_research_append(
             if dict(event) != previous:
                 raise ValueError("research observation replay cannot rewrite its node revision; use explore observe")
             return
+    if observation.get("execution_lineage"):
+        raise ValueError("new research execution lineage requires explore observe and a current canonical Todo read")
     projection = proposal or build_explore_result_projection([*events, event], goal_id=str(event["goal_id"]))
     _research_result("explore.research.validate_attribution", {
         "observation": observation, "nodes": projection["nodes"], "edges": projection["edges"],
@@ -66,6 +78,7 @@ def validate_research_append(
 
 def append_research_observation(
     path: Path, *, goal_id: str, observation: Mapping[str, Any], agent_id: str | None = None,
+    registry_path: Path | None = None, runtime_root: Path | None = None,
 ) -> dict[str, Any]:
     # Use the existing append-only node revision transport. Lock attribution,
     # replay and append together so an input update cannot slip between them.
@@ -88,6 +101,39 @@ def append_research_observation(
         _research_result("explore.research.validate_attribution", {
             "observation": canonical, "nodes": projection["nodes"], "edges": projection["edges"],
         })
+        if canonical.get("execution_lineage"):
+            if registry_path is None or runtime_root is None:
+                raise ValueError("research execution lineage requires the selected registry and source runtime")
+            from ...todos import list_goal_todos
+            from ...history import load_registry
+            from ...materials import find_registry_goal
+            from .research_frontier import build_research_composition_frontier, read_research_todo_history
+
+            lineage = canonical["execution_lineage"]
+            goal = find_registry_goal(load_registry(registry_path), goal_id) or {}
+            harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+            policy = _research_result("explore.research.composition_policy", {"harness": harness})
+            candidate_sources = [{"node_id": event["result_id"], "research_observation": event["research_observation"]}
+                                 for event in events if event.get("research_observation")]
+            frontier = None
+            if policy["enabled"]:
+                history = read_research_todo_history(runtime_root=runtime_root, goal=goal)
+                frontier = build_research_composition_frontier(projection, candidate_sources=candidate_sources,
+                    harness=harness, todos=history, agent_id=agent_id)
+                todos = [todo for todo in history if todo["todo_id"] == lineage["successor_todo_id"]]
+            else:
+                context = list_goal_todos(
+                    registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
+                    role="agent", todo_id=lineage["successor_todo_id"],
+                )
+                todos = context.get("todos") or []
+            todo = todos[0] if len(todos) == 1 else {}
+            _research_result("explore.research.validate_execution", {
+                "goal_id": goal_id, "agent_id": agent_id, "observation": canonical,
+                "nodes": projection["nodes"], "edges": projection["edges"],
+                "candidate_sources": candidate_sources, "frontier": frontier,
+                "todo": _research_todo_facts(todo),
+            })
         event = build_explore_node_event(
             goal_id=goal_id, title=node["title"], node_id=node["node_id"], node_kind=node["node_kind"],
             status=node["status"], summary=node["summary"], blocked_reason=node["blocked_reason"],

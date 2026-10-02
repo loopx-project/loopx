@@ -18,6 +18,7 @@ from ..control_plane.status.agent_lane_projection import (
     compact_agent_lane_status_payload_for_display,
 )
 from ..control_plane.todos.contract import normalize_todo_claimed_by
+from ..control_plane.quota.goal_boundary import registry_goal_by_id
 from ..control_plane.todos.quota_summary import (
     compact_agent_lane_todos_for_status_display,
 )
@@ -564,7 +565,9 @@ def _sync_agent_replan_obligation_from_guard(
     """Keep agent-scoped status guidance identical to the quota decision."""
 
     targets = (item, project_asset)
-    if not any(
+    obligation = guard.get("autonomous_replan_obligation")
+    capability_obligation = isinstance(obligation, dict) and bool(obligation.get("capability_guard"))
+    if not capability_obligation and not any(
         isinstance(target, dict)
         and (
             "autonomous_replan_obligation" in target
@@ -576,7 +579,6 @@ def _sync_agent_replan_obligation_from_guard(
         for target in targets
     ):
         return
-    obligation = guard.get("autonomous_replan_obligation")
     for target in targets:
         if not isinstance(target, dict):
             continue
@@ -665,22 +667,38 @@ def attach_agent_lane_next_actions(
             "agent_member",
             "agent_interaction_summary",
             "agent_reward_memory",
+            "bounded_research_frontier",
         ),
         0,
     )
     current_agent_next_action: dict[str, Any] | None = None
+    goals = registry_goal_by_id(payload)
     for item in items:
         if not isinstance(item, dict):
             continue
         goal_id = str(item.get("goal_id") or "").strip()
         if not goal_id:
             continue
+        decision_payload = payload
+        frontier = None
+        goal = goals.get(goal_id) or {}
+        harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+        if harness.get("enabled") is True and harness.get("composition_mode") == "explicit_only":
+            from ..capabilities.explore.composition_frontier import project_live_explore_composition_frontier
+            frontier = project_live_explore_composition_frontier(
+                runtime_root=Path(str(payload["runtime_root"])), goal_id=goal_id,
+                agent_id=safe_agent_id, status_payload=payload)
+            decision_payload = {**payload, "bounded_research_frontier": frontier}
         try:
             guard = build_quota_should_run(
-                payload,
+                decision_payload,
                 goal_id=goal_id,
                 agent_id=safe_agent_id,
             )
+            selected = guard.get("replan_action_packet") or {}
+            obligation = (frontier or {}).get("obligation") or {}
+            if selected.get("capability_guard") and selected.get("obligation_id") == obligation.get("obligation_id"):
+                guard["autonomous_replan_obligation"] = obligation
         except Exception:
             continue
         next_action = guard.get("agent_lane_next_action")
@@ -715,6 +733,7 @@ def attach_agent_lane_next_actions(
                 "agent_member": agent_member,
                 "agent_interaction_summary": interaction_summary,
                 "agent_reward_memory": reward_memory_projection,
+                "bounded_research_frontier": guard.get("bounded_research_frontier"),
             },
         )
         for field in attached_fields:

@@ -28,8 +28,11 @@ class GoalFrontierReplanRule(str, Enum):
     DUE_MONITOR_EXECUTION = "due_monitor_execution"
     FUTURE_MONITOR_WAIT = "future_monitor_wait"
     MONITOR_FRONTIER_EXHAUSTED = "monitor_frontier_exhausted"
+    CAPABILITY_EVIDENCE_GAP = "capability_evidence_gap"
 
 
+# Stable presentation indices for the v0 wire contract. Optional rules append
+# here; their actual precedence is the explicit table in the interpreter.
 GOAL_FRONTIER_REPLAN_RULE_ORDER = tuple(GoalFrontierReplanRule)
 
 
@@ -51,6 +54,7 @@ class GoalFrontierReplanFacts:
     outcome_checkpoint_replan_required: bool = False
     long_todo_chain_triggered: bool = False
     current_agent_blocker_count: int = 0
+    capability_gap_pending: bool = False
     monitor_no_change_streak_triggered: bool = False
     monitor_only_lane: bool = False
     monitor_count: int = 0
@@ -142,6 +146,12 @@ def select_goal_frontier_replan_rule(
             facts.current_agent_blocker_count > 0,
             False,
             "an explicit current-agent blocker owns the empty frontier",
+        ),
+        (
+            GoalFrontierReplanRule.CAPABILITY_EVIDENCE_GAP,
+            facts.capability_gap_pending and facts.selectable_frontier_advancement == 0,
+            True,
+            "a caller-owned evidence gap remains without selectable advancement",
         ),
         (
             GoalFrontierReplanRule.MONITOR_NO_CHANGE_STREAK,

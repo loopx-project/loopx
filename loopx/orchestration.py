@@ -128,6 +128,12 @@ def compact_explore_harness_policy(policy: Any) -> dict[str, Any]:
     profile = str(harness.get("profile") or "").strip()
     if profile:
         compact["profile"] = profile
+    if "composition_mode" in harness or "composition_scope_id" in harness:
+        from .capabilities.explore.research_evidence import _research_result
+        policy = _research_result("explore.research.composition_policy", {"harness": harness})
+        compact["composition_mode"] = policy["mode"]
+        if policy["coverage_scope_id"] is not None:
+            compact["composition_scope_id"] = policy["coverage_scope_id"]
     return compact
 
 

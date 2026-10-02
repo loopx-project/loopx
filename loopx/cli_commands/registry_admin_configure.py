@@ -243,6 +243,14 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         help="Remove the goal-pinned explore profile while preserving the opt-in bit.",
     )
     configure_goal_parser.add_argument(
+        "--explore-composition-mode", choices=["disabled", "explicit_only"],
+        help="Opt in to typed composition obligations for this Goal; disabled preserves existing planning behavior.",
+    )
+    configure_goal_parser.add_argument(
+        "--explore-composition-scope-id",
+        help="Opaque research coverage scope required by explicit_only composition; grants no execution authority.",
+    )
+    configure_goal_parser.add_argument(
         "--registered-agent",
         dest="registered_agents",
         action="append",

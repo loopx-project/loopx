@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { AlertTriangle, Code2, LoaderCircle, RefreshCw } from "lucide-react";
 
 import {
@@ -54,7 +54,9 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     ? parseEditableCapabilityJson(selected.configuration_editor, jsonDraft) : null, [selected, jsonDraft]);
   const jsonValid = editorMode === "guided" || parsedJson !== null;
 
-  useEffect(() => {
+  // Initialize the new capability's draft before it can receive input. A
+  // post-paint reset can otherwise erase the first toggle after selection.
+  useLayoutEffect(() => {
     setEditorMode("guided");
     setJsonDraft("");
     setMutation({

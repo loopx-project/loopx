@@ -63,6 +63,7 @@ const MISSING_RECEIPT_NAMES = [WRITEBACK_RECEIPT, SPEND_RECEIPT] as const;
 export const ACCEPTED_CLOSEOUTS = [
   "validated_writeback_and_quota_spend",
   "typed_blocked_writeback_no_spend",
+  "capability_duty_retired_no_spend",
   "exact_committed_quota_monitor_poll",
   "typed_external_wait_with_runnable_successor",
   "typed_blocker_or_lifecycle_transition",
@@ -255,8 +256,8 @@ export async function preflightPriorHostTurnCloseout(
       newestSettledTurn ??= selected.prior_turn_instance_id;
       if (newestSettledTurn === selected.prior_turn_instance_id) {
         const progress = jsonObject(readback.progress);
-        if (progress?.closeout_kind === "typed_blocked_writeback_no_spend") {
-          newestAcceptedCloseout = "typed_blocked_writeback_no_spend";
+        if (progress?.closeout_kind === "typed_blocked_writeback_no_spend" || progress?.closeout_kind === "capability_duty_retired_no_spend") {
+          newestAcceptedCloseout = progress.closeout_kind;
         }
       }
       continue;

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from operator import itemgetter
 from pathlib import Path
 
@@ -84,6 +84,12 @@ PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
 ]
+
+
+def _completion_hook_state_version(payload: Mapping[str, object], committed_at: str) -> str:
+    """Keep ordinary and terminal Todo writes distinct within one clock second."""
+    continuation = payload.get("completion_continuation")
+    return f"{committed_at}|{continuation}" if isinstance(continuation, str) else committed_at
 
 
 def _read_todo_turn_settlement(
@@ -209,7 +215,11 @@ def _validated_replan_successor_obligation(
         ),
         None,
     )
+    from ..capabilities.explore.research_frontier import prepare_research_replan_evidence
+    capability_evidence = prepare_research_replan_evidence(runtime_root=runtime_root, goal_id=args.goal_id,
+        agent_id=args.claimed_by, registry_goal=registry_goal, state_text=state_text)
     obligation, _ = qualify_replan_writeback(
+        capability_evidence=capability_evidence,
         todo_fields=todo_fields,
         newest_first_runs=newest_first_runs,
         state_text=state_text,
@@ -228,6 +238,17 @@ def _validated_replan_successor_obligation(
             "--replan-obligation-id does not match the current open obligation: "
             f"expected {current}"
         )
+    if (obligation or {}).get("capability_guard"):
+        from ..capabilities.explore.research_evidence import _research_result
+        if capability_evidence is None:
+            raise ValueError("selected capability successor owner is not available")
+        _research_result("explore.research.composition_successor", {
+            "frontier": capability_evidence.frontier, "agent_id": args.claimed_by, "obligation_id": requested,
+            "todo": {"replan_obligation_id": requested, "claimed_by": args.claimed_by,
+                     "action_kind": args.action_kind, "task_class": args.task_class,
+                     "explore_result_node_refs": args.explore_result_node_refs,
+                     "target_key": args.monitor_target_key, "status": args.status or "open", "resume_when": args.resume_when},
+        })
     return current
 
 
@@ -751,7 +772,7 @@ def handle_todo_command(
                     goal_id=args.goal_id,
                     event_kind="todo_complete",
                     identity=identity,
-                    state_version=committed_at,
+                    state_version=_completion_hook_state_version(payload, committed_at),
                     committed_at=committed_at,
                     hooks=post_writeback_hooks,
                     projection_builder=post_writeback_projection_builder,

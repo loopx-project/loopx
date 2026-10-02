@@ -15,6 +15,8 @@
   "include": [
     "loopx/control_plane/capabilities/explore_research.ts",
     "tests/control_plane_ts/explore_research.test.ts",
+    "loopx/control_plane/capabilities/explore_research_execution.ts",
+    "tests/control_plane_ts/explore_research_execution.test.ts",
     "loopx/control_plane/runtime/usage_statistics*.ts",
     "tests/control_plane_ts/usage_statistics.test.ts",
     "tests/control_plane_ts/usage_statistics_delivery.test.ts",

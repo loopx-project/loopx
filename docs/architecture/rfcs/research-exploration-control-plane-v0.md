@@ -150,10 +150,8 @@ milestone status.
 
 | Gap | Consequence |
 |---|---|
-| No shared research write-time gate | The cold evidence codec cannot discharge or enforce a live composition obligation. |
-| No exact obligation/Todo/result lineage | A research receipt is not proof of an authorized Todo transition or accepted Goal closure. |
-| Cold shadow not adopted by hot status/frontier | The existing #3173 projection remains behavior-compatible; canonical research obligations still need M3 integration. |
-| No dismissal or deferral contract | Evidence invalidation is visible, but typed candidate retirement and resumption remain unimplemented. |
+| Integrated M3 qualification remains | Typed dismissal, blocker waits and exact invalidated-duty retirement are implemented locally; final premerge and maintainer-reviewed integration remain distinct from implementation and live research qualification. |
+| Execution attribution is not effect authority | The live replan gate joins exact Todo/experiment/input facts; its receipt is not task-lease/effect authorization or accepted Goal closure. |
 | Live qualification incomplete | Deterministic and real CLI/file-log tests establish state semantics, not model selection quality or scientific truth; no live Lark sync is qualified by projection tests. |
 | No promotion evidence for inferred combinations | Shared constraints are not known to be precise enough to trigger obligations. |
 
@@ -232,8 +230,9 @@ execution, and result into one ambiguous relation. This RFC rejects that shape.
 
 The research envelope and closure basis have an active CLI caller and the
 [versioned evidence protocol](../../reference/protocols/research-observation-v0.md).
-The action signature, shared write gate and model selection below remain design
-targets. The cold shadow does not promote them into current behavior.
+The opt-in M3 development path implements exact execution lineage and shared
+write gates and bounded retirement transitions. Model selection below
+remain design targets; the cold shadow does not activate enforcement.
 
 ### 7.1 Compose; do not mutate v0 silently
 
@@ -804,7 +803,7 @@ control-plane failures.
 | M0 | RFC, current-state inventory, and explicit ownership decision | Maintainer review; no runtime behavior | Accepted design |
 | M1 | Characterization fixtures plus typed research observation and closure contract in Explore | Deterministic normalization, privacy, compatibility, and negative tests | Implemented evidence/CLI slice; live research qualification remains separate |
 | M2 | Explicit-only composition candidate, canonical gap projection, and read-only status shadow | No pairwise inference; bounded packet; projection parity | Partial: #3173 legacy quota/successor; canonical binary cold shadow in CLI/Lark projection; hot status adoption and live Lark qualification remain |
-| M3 | Goal-frontier obligation, exact Todo/experiment lineage, and shared write-time gate | State/replay matrix and premerge canary pass | Not started |
+| M3 | Goal-frontier obligation, exact Todo/experiment lineage, and shared write-time gate | State/replay matrix and premerge canary pass | Local state/replay and standard premerge qualified; maintainer-reviewed integration pending. Scoped policy/editor, shared gates, archive lineage, consumers, dismissal, waits and exact no-spend duty retirement are implemented |
 | M4 | Bounded multi-candidate cards, `composition_selection_v0`, real model-tool behavior qualification, and repeated live shadow | Model autonomously selects a legal semantic action from the delivered candidate set; selection quality is no worse than the declared fallback; compact receipts only | Not started |
 | M5 | Shared-constraint candidate ranking in shadow mode | Precision and cost evidence; no automatic trigger | Not started |
 | M6 | Optional inferred trigger | Explicit maintainer decision and measured promotion thresholds | Deferred |
@@ -834,6 +833,33 @@ remote effects or model-selected research behavior. Delivery is tracked in
 M3 is the first behavior-changing slice. It should be a separate PR so the
 obligation and write gate can be reviewed and reverted independently from the
 evidence schema.
+
+The M3 development boundary joins current same-agent Todo, experiment and input
+facts in the typed Explore owner. Goal policy is explicitly scoped and disabled
+by default; the existing capability editor and CLI share its configuration
+owner. Quota and refresh reuse one live frontier, with the original duty pinned
+through scalar rollout fields and both receipt adapters. Real CLI tests reject
+unrelated/deferred successors and invalidated writeback, then settle the original
+Turn through its exact successor. File/SQLite tests distinguish canonical Todos
+from stale display rows; packaged UI checks exercise policy preview, activation,
+disable, readback and narrow screens. Native actor/lease and CAS admission remain in force; a fixed IO host
+locks the graph while the typed owner qualifies and persists completion evidence.
+Real File/SQLite and legacy tests cover missing evidence, direct IPC self-approval,
+terminal-verb bypass, retained archive lineage and immutable completion replay.
+Agent-scoped status, Explore and existing Lark Summary fields use the same live
+facts. Typed candidate dismissal permits scoped terminal retirement; a fresh
+canonical blocker and common Todo resume condition defer the gap without closing
+it. Real CLI validates exact observed/dismissed/blocked progress source through
+the original Turn, with independent File/SQLite lease-safe wait/resume evidence.
+Invalidated input/scope/activation produces source-qualified retirement for the
+original duty. Common readback retains its guard and historical debit, closes
+that Turn without spend, and keeps the current frontier and runnable/paused work
+visible. IO assembly stays in existing CLI/refresh composition roots; the shared
+gate consumes supplied capability facts and the typed owner remains singular.
+The local state/replay matrix and 19 standard risk-selected premerge checks pass.
+Two existing scheduler ACK tests fail identically on the unchanged base under the
+same local runtime; this is retained as a baseline limitation, not called green.
+Maintainer-reviewed integration and independent live qualification remain.
 
 ## 17. Rejected Alternatives
 

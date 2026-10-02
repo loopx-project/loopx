@@ -290,6 +290,10 @@ def capability_configuration_editor(
                     "select",
                     options=explore_harness_profiles,
                 ),
+                _field("composition_mode", "Composition policy", "select", options=["disabled", "explicit_only"],
+                       description="Replan requires an exact experiment successor or typed result; it grants no execution authority."),
+                _field("composition_scope_id", "Research coverage scope", "text", nullable=True,
+                       description="An opaque scope id required by the explicit-only composition policy."),
             ],
         },
         "change_quality_qualification": {

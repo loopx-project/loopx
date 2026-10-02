@@ -58,6 +58,78 @@ test("semantic replan guard distinguishes legacy, none, and exact selection", ()
   );
 });
 
+test("capability guard survives scalar receipt transport and rejects missing scope facts", () => {
+  const details = {semantic_replan_obligation_id: "replan-0000000000000001",
+    semantic_replan_capability_id: "explore", semantic_replan_gap_id: "research-composition-0123456789abcdef",
+    semantic_replan_frontier_revision: "research-composition-v0:0123456789abcdef"};
+  assert.deepEqual(projectSemanticReplanGuard(details).selected_capability_guard, {
+    schema_version: "semantic_replan_capability_guard_v0", capability_id: "explore",
+    gap_id: details.semantic_replan_gap_id, frontier_revision: details.semantic_replan_frontier_revision,
+  });
+  assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_obligation_id: ""}), /selected obligation/);
+  assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_gap_id: ""}), /capability guard is malformed/);
+  assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_frontier_revision: undefined}), /capability guard is malformed/);
+});
+
+test("capability retirement verifies its exact receipt and never erases a committed debit", async () => {
+  const obligation = "replan-0000000000000001";
+  const guard = {schema_version: "semantic_replan_capability_guard_v0", capability_id: "explore",
+    gap_id: "research-composition-0123456789abcdef", frontier_revision: "research-composition-v0:0123456789abcdef"};
+  const bound = settlementIdentity({goal_id: goalId, agent_id: agentId, todo_id: null,
+    replan_obligation_id: obligation, turn_instance_id: turnId});
+  const progress = {schema_version: "typed_progress_observation_v0", work_item_id: obligation,
+    result_class: "blocked", blocker_id: "capability-invalidated-fixture",
+    evidence_ids: ["capability-evidence-v0:fedcba9876543210"], fingerprint: "retirement-progress"};
+  const retirement = {schema_version: "capability_obligation_retirement_v0", disposition: "invalidated",
+    reason_code: "source_ineligible", capability_id: "explore", obligation_id: obligation,
+    original_guard: guard, current_revision: progress.evidence_ids[0], blocking_todo_count: 0,
+    blocking_todo_ids: [], progress_observation: progress, progress_fingerprint: progress.fingerprint};
+  const ack = {recorded: true, source: "refresh_state_semantic_delta", semantic_delta: {
+    schema_version: "replan_semantic_delta_v0", accepted: true, obligation_id: obligation,
+    outcomes: ["capability_duty_retired"], satisfying_outcomes: ["capability_duty_retired"], capability_guard: guard, retirement}};
+  const root = await fixture({writeback: true});
+  try {
+    const index = join(root, "goals", goalId, "runs", "index.jsonl");
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const events = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    for (const event of events) {
+      event.details = {...event.details, todo_id: "", replan_obligation_id: obligation, settlement_effect_id: bound.effect_id};
+      if (event.event_kind === "quota_should_run") Object.assign(event.details, {
+        semantic_replan_obligation_id: obligation, semantic_replan_capability_id: "explore",
+        semantic_replan_gap_id: guard.gap_id, semantic_replan_frontier_revision: guard.frontier_revision});
+    }
+    await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+    const base = {classification: "state_refreshed", goal_id: goalId, agent_id: agentId,
+      turn_instance_id: turnId, replan_obligation_id: obligation, settlement_identity: bound,
+      delivery_outcome: "outcome_gap", progress_observation: progress, autonomous_replan_ack: ack};
+    const read = () => readQuotaSettlement(request(root, {todo_id: null, replan_obligation_id: obligation}));
+    await writeFile(index, JSON.stringify(base) + "\n");
+    const accepted = await read();
+    assert.equal((accepted.progress as any).closeout_kind, "capability_duty_retired_no_spend");
+    assert.equal(accepted.replay_phase, "settled");
+    assert.equal((accepted.spend as any).payload.ok, false);
+    assert.equal((accepted.terminal_closeout as any).payload.ok, false);
+    for (const patch of [{obligation_id: "replan-0000000000000002"}, {blocking_todo_count: 1},
+      {original_guard: {...guard, frontier_revision: "research-composition-v0:fedcba9876543210"}},
+      {current_revision: "unrelated"}, {progress_fingerprint: "forged"}]) {
+      const changed = {...base, autonomous_replan_ack: {...ack, semantic_delta: {...ack.semantic_delta,
+        retirement: {...retirement, ...patch}}}};
+      await writeFile(index, JSON.stringify(changed) + "\n");
+      assert.equal((await read()).replay_phase, "settlement_pending");
+    }
+    await writeFile(index, JSON.stringify(base) + "\n" + JSON.stringify({classification: "quota_slot_spent",
+      goal_id: goalId, agent_id: agentId, turn_instance_id: turnId, replan_obligation_id: obligation,
+      settlement_identity: bound}) + "\n");
+    await appendFile(log, JSON.stringify({schema_version: "loopx_rollout_event_v0", event_id: "spent-before-retirement",
+      event_kind: "quota_spend", goal_id: goalId, agent_id: agentId, run_id: turnId,
+      details: {settlement_effect_id: bound.effect_id}}) + "\n");
+    const spent = await read();
+    assert.equal((spent.progress as any).state, "settled");
+    assert.equal((spent.progress as any).closeout_kind, undefined);
+    assert.equal((spent.spend as any).payload.ok, true);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 async function fixture(options: {
   guard?: boolean;
   /**

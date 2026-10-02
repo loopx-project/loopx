@@ -8,7 +8,7 @@ type LocalizedCopy = Readonly<{
   readOnlyReason?: string;
 }>;
 
-type FieldCopy = Record<string, Readonly<{ description?: string; label: string }>>;
+type FieldCopy = Record<string, Readonly<{ description?: string; label: string; optionLabels?: Record<string, string> }>>;
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
@@ -36,7 +36,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "Explore Harness",
-      description: "Selects a capability-owned planning and research harness profile for bounded multi-step exploration.",
+      description: "Plans bounded exploration. Explicit composition replans require a bound experiment or typed result; task completion and execution permissions remain separate.",
     },
     lark_event_inbox: {
       displayName: "Lark event inbox",
@@ -102,7 +102,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     explore_harness: {
       displayName: "探索 Harness",
-      description: "为有界的多步探索选择由能力负责的规划与研究 Harness profile。",
+      description: "规划有界探索。显式组合的重新规划需绑定实验或类型化结果；任务完成和执行权限单独判断。",
     },
     lark_event_inbox: {
       displayName: "飞书事件收件箱",
@@ -162,6 +162,8 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     reasoning_effort: { label: "Child reasoning effort", description: "For example max; the host must support this model and effort." },
     max_children: { label: "Maximum children", description: "Hard upper bound for concurrently delegated child work." },
     profile: { label: "Planner profile", description: "Select one registered Explore Harness profile." },
+    composition_mode: { label: "Composition policy", description: "Replan requires an exact experiment successor or typed result; it grants no execution authority.", optionLabels: {disabled: "Off", explicit_only: "Explicit candidates"} },
+    composition_scope_id: { label: "Research coverage scope", description: "An opaque scope id required by the explicit-only composition policy." },
     profile_preset: { label: "Report profile", description: "Capability-owned report profile, such as weekly-progress." },
     wait_for_ci: { label: "Wait for CI", description: "Disable to use local validation without querying or waiting for CI. Merge authority is unchanged." },
     review_priority: { label: "Review priority", description: "Choose whether other developers' PRs or the authenticated reviewer's own PRs are ranked first." },
@@ -189,6 +191,8 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     reasoning_effort: { label: "子 Agent 推理档位", description: "例如 max；宿主须支持所选模型与档位。" },
     max_children: { label: "最大子 Agent 数", description: "可同时委派的子任务硬上限。" },
     profile: { label: "规划 Profile", description: "选择一个已注册的 Explore Harness profile。" },
+    composition_mode: { label: "组合策略", description: "重新规划需要精确的实验后继或类型化结果；它不授予执行权限。", optionLabels: {disabled: "关闭", explicit_only: "仅显式候选"} },
+    composition_scope_id: { label: "研究覆盖范围", description: "显式组合策略要求填写不含私有内容的范围标识。" },
     profile_preset: { label: "报告 Profile", description: "由该能力管理的报告 profile，例如 weekly-progress。" },
     wait_for_ci: { label: "等待 CI", description: "关闭后使用本地验证，不查询或等待 CI；不改变合并权限。" },
     review_priority: { label: "审阅优先级", description: "选择先排其他开发者的 PR，还是先排当前已认证审阅者自己的 PR。" },

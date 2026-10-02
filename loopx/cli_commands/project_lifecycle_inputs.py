@@ -63,6 +63,7 @@ def inline_progress_observation(
     args: argparse.Namespace,
 ) -> dict[str, object] | None:
     fields = {
+        "work_item_id": getattr(args, "progress_work_item_id", None),
         "surface_id": getattr(args, "progress_surface_id", None),
         "hypothesis_id": getattr(args, "progress_hypothesis_id", None),
         "probe_kind": getattr(args, "progress_probe_kind", None),

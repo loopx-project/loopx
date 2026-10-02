@@ -514,13 +514,15 @@ def build_goal_configuration_catalog(
                 "current": {
                     "enabled": harness.get("enabled") is True,
                     "profile": harness.get("profile"),
+                    "composition_mode": harness.get("composition_mode", "disabled"),
+                    "composition_scope_id": harness.get("composition_scope_id"),
                 },
                 "profiles": list(explore_harness_profiles),
                 "consider_when": (
                     "The goal benefits from comparing alternative branches with explicit "
                     "evaluation criteria and guardrails."
                 ),
-                "effect": "Enables read-only Explore branch and worker-lane planning.",
+                "effect": "Enables read-only Explore planning. Explicit composition replans require an exact experiment successor or typed result; task completion remains separate.",
                 "does_not": [
                     "enable Explore Graph",
                     "launch workers, claim todos, acquire leases, mutate state, or spend quota",

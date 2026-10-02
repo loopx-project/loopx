@@ -112,12 +112,18 @@ def _peer_task_coordination_options(config: Mapping[str, Any]) -> dict[str, Any]
 
 def _explore_harness_options(config: Mapping[str, Any]) -> dict[str, Any]:
     profile = str(config.get("profile") or "").strip() or None
+    mode = config.get("composition_mode", "disabled")
+    scope = config.get("composition_scope_id")
+    if not isinstance(mode, str) or scope is not None and not isinstance(scope, str):
+        raise TypeError("Explore composition mode and scope must be strings")
     return {
         "explore_harness_enabled": _boolean_configuration(
             "explore_harness", config, "enabled"
         ),
         "explore_harness_profile": profile,
         "clear_explore_harness_profile": profile is None,
+        "explore_composition_mode": mode or "disabled",
+        "explore_composition_scope_id": scope or "",
     }
 
 
@@ -212,7 +218,7 @@ def _goal_capability_options(
         },
         "peer_task_coordination": {"coordinator_agent_id"},
         "explore_graph": {"enabled"},
-        "explore_harness": {"enabled", "profile"},
+        "explore_harness": {"enabled", "profile", "composition_mode", "composition_scope_id"},
         "pull_request_review": {"wait_for_ci", "review_priority"},
         "change_quality_qualification": {"enabled", "safe_fix", "strict_receipt"},
         "progress_review": {"mode", "signal", "drift_threshold", "contract_revision"},

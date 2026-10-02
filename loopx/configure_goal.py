@@ -467,6 +467,8 @@ def configure_goal(
     explore_harness_enabled: bool | None = None,
     explore_harness_profile: str | None = None,
     clear_explore_harness_profile: bool = False,
+    explore_composition_mode: str | None = None,
+    explore_composition_scope_id: str | None = None,
     explore_graph_enabled: bool | None = None,
     registered_agents: list[str] | None = None,
     clear_registered_agents: bool = False,
@@ -978,6 +980,8 @@ def configure_goal(
         or explore_harness_enabled is not None
         or explore_harness_profile is not None
         or clear_explore_harness_profile
+        or explore_composition_mode is not None
+        or explore_composition_scope_id is not None
     ):
         spawn_policy = (
             goal.get("spawn_policy")
@@ -1003,6 +1007,8 @@ def configure_goal(
             explore_harness_enabled is not None
             or explore_harness_profile is not None
             or clear_explore_harness_profile
+            or explore_composition_mode is not None
+            or explore_composition_scope_id is not None
         ):
             explore_harness = (
                 spawn_policy.get("explore_harness")
@@ -1015,6 +1021,15 @@ def configure_goal(
                 explore_harness.pop("profile", None)
             elif explore_harness_profile is not None:
                 explore_harness["profile"] = explore_harness_profile
+            if explore_composition_mode is not None:
+                explore_harness["composition_mode"] = explore_composition_mode
+            if explore_composition_scope_id is not None:
+                if explore_composition_scope_id:
+                    explore_harness["composition_scope_id"] = explore_composition_scope_id
+                else:
+                    explore_harness.pop("composition_scope_id", None)
+            from .orchestration import compact_explore_harness_policy
+            compact_explore_harness_policy(explore_harness)
             if explore_harness:
                 spawn_policy["explore_harness"] = explore_harness
             else:

@@ -12,9 +12,24 @@ import pytest
 import test_quota_settlement_cli as cli
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
+from loopx.cli_commands.todo import _completion_hook_state_version
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.control_plane.todos.markdown import render_todo_markdown
+
+
+def test_same_second_todo_closeout_has_distinct_replay_stable_hook_version():
+    committed_at = "2026-09-30T13:33:32-07:00"
+    ordinary = _completion_hook_state_version(
+        {"completion_continuation": "active_goal"}, committed_at,
+    )
+    terminal = _completion_hook_state_version(
+        {"completion_continuation": "no_followup"}, committed_at,
+    )
+    assert ordinary != terminal
+    assert terminal == _completion_hook_state_version(
+        {"completion_continuation": "no_followup"}, committed_at,
+    )
 
 
 def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):

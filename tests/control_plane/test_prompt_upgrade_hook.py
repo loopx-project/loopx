@@ -158,6 +158,13 @@ def test_upgrade_read_projection_preserves_work_authority(tmp_path, monkeypatch,
     receipt.write_bytes(contents)
     pending = build_live_quota_should_run_decision(status, **kwargs)
     assert pending["required_reads"][-1]["kind"] == "automation_prompt_upgrade"
+    assert "turn_start_capability_hook_dispatch" not in baseline
+    dispatch = pending["turn_start_capability_hook_dispatch"]
+    assert set(dispatch) == {"required_reads"}
+    assert len(dispatch["required_reads"]) == 1
+    assert dispatch["required_reads"][0]["kind"] == pending["required_reads"][-1]["kind"]
+    assert dispatch["required_reads"][0]["command"] == pending["required_reads"][-1]["command"]
+    assert pending["required_reads"][-1]["source"] == "turn_start_capability_hook"
     assert pending["interaction_contract"]["agent_channel"]["required_reads"] == pending["required_reads"]
     hint = pending["required_reads"][-1]
     assert len(hint["command"]) > 360

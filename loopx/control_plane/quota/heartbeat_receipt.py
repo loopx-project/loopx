@@ -172,6 +172,7 @@ def ensure_turn_heartbeat_settlement_receipt(
     *,
     semantic_replan_guard_scoped: bool,
     semantic_replan_obligation_id: str | None,
+    semantic_replan_capability_guard: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Idempotently bind a Turn-created quota guard to its settlement identity.
 
@@ -239,6 +240,14 @@ def ensure_turn_heartbeat_settlement_receipt(
                         raise HeartbeatReceiptIdentityConflictError(
                             "Turn heartbeat receipt belongs to another semantic replan guard"
                         )
+                    if semantic_replan_capability_guard is not None and any(effective_details.get(
+                        source
+                    ) != semantic_replan_capability_guard[field] for source, field in (
+                        ("semantic_replan_capability_id", "capability_id"),
+                        ("semantic_replan_gap_id", "gap_id"),
+                        ("semantic_replan_frontier_revision", "frontier_revision"),
+                    )):
+                        raise HeartbeatReceiptIdentityConflictError("Turn heartbeat receipt belongs to another capability guard")
                     return effective
 
         details = {
@@ -253,6 +262,10 @@ def ensure_turn_heartbeat_settlement_receipt(
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
             )
+            if semantic_replan_capability_guard is not None:
+                details["semantic_replan_capability_id"] = semantic_replan_capability_guard["capability_id"]
+                details["semantic_replan_gap_id"] = semantic_replan_capability_guard["gap_id"]
+                details["semantic_replan_frontier_revision"] = semantic_replan_capability_guard["frontier_revision"]
         source_event_id = (
             str(effective.get("event_id") or "").strip()
             if effective is not None
@@ -534,6 +547,13 @@ def heartbeat_receipt_view(
         receipt["semantic_replan_obligation_id"] = (
             semantic_replan_obligation_id
         )
+        if details.get("semantic_replan_capability_id"):
+            receipt["semantic_replan_capability_guard"] = {
+                "schema_version": "semantic_replan_capability_guard_v0",
+                "capability_id": details["semantic_replan_capability_id"],
+                "gap_id": details.get("semantic_replan_gap_id"),
+                "frontier_revision": details.get("semantic_replan_frontier_revision"),
+            }
     pending_action_todo_id = heartbeat_receipt_pending_action_todo_id(event)
     if pending_action_todo_id:
         receipt["pending_action_selection"] = {

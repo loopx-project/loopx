@@ -195,6 +195,7 @@ def register_refresh_state_command(
         ),
     )
     refresh_state_parser.add_argument("--progress-surface-id")
+    refresh_state_parser.add_argument("--progress-work-item-id", help="Explicit typed observation source; settlement keeps its own Todo or obligation binding.")
     refresh_state_parser.add_argument("--progress-hypothesis-id")
     refresh_state_parser.add_argument("--progress-probe-kind")
     refresh_state_parser.add_argument("--progress-blocker-id")
