@@ -51,6 +51,11 @@ Memray/V8 heap 用工具自己的 allocation reporter。其余工具是后续诊
 输入限 16 MiB，超出时缩短采集；重复展示的 profile 名称与热点标签共用 1 Mi 字符
 上限，超出时明确拒绝，不静默截断。较大的录制复用 Effect 的私有本地快照传输，
 不会提高普通命令的 2 MiB 传输上限，也不会把原始 profile 返回到展示结果。
+导出器用 `file: null` 或 `line: null` 表示未知位置时，读取器按缺省处理；非空
+错误类型仍拒绝。V8 重复 leaf 先聚合再遍历祖先，保留原样本数及 self/inclusive
+权重。整份请求的 frame 分配、sample/event 访问与栈展开共用 2,000,000 工作单位
+上限，多份 profile 复用的 frame 也计入；超出时明确要求缩短采样或减少 profile。
+这约束了共享运行时中的同步解析，不提高请求超时；浏览器仍使用可取消 Worker。
 
 ## 验证结论
 

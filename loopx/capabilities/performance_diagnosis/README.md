@@ -83,6 +83,14 @@ profile names and hotspot labels share a 1 Mi-character display-text budget;
 oversized summaries are rejected explicitly, never silently truncated. Larger
 recordings reuse Effect's private local snapshot transport without raising the
 ordinary 2 MiB message limit or returning the raw profile in the summary.
+Unknown source locations exported as `file: null` or `line: null` are omitted;
+incorrect non-null types remain errors. Repeated V8 leaves are aggregated before
+ancestor traversal, preserving sample counts and self/inclusive weights. One
+request has a 2,000,000-work-unit limit across frame allocation, sample/event
+visits and stack expansion, including shared frames reused by multiple profiles.
+Exceeding it returns an actionable input error: select a shorter capture or fewer
+profiles. This bounds synchronous inspection on the shared runtime without
+raising its request timeout; the browser still uses a cancellable worker.
 
 ## Complete the diagnosis
 
