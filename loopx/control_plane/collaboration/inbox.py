@@ -118,6 +118,18 @@ def normalize_request(value: Any) -> dict | None:
         raise ValueError(str(exc)) from exc
 
 
+def normalize_source_context(value: str) -> str:
+    """The shared typed owner qualifies source text before persistence."""
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return str(effect_runtime_result(
+            "collaboration.source_context.normalize", {"source_message": value},
+        )["source_message"])
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def pending(
     runtime_root: Path,
     goal_id: str,

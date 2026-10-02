@@ -92,6 +92,24 @@ must not grant approval or restart work. Require one original request after
 replay. Transport/store fixtures qualify context availability only; a live
 receiver interpretation and checked answer are still required for the case.
 
+Also test an ordinary thread follow-up without a direct quote: “用新版。” /
+“Use the new version,” “继续。” / “Continue,” and “批准。” / “Approved.”
+Prepare an earlier draft, a correction and a newer returned revision in the same
+thread, plus unrelated group material and a message sent after the current
+request. The receiver gets the ordered preceding excerpt with authors, times,
+message identities and omissions, retains the established owner and determines
+the relevant scope from context. It must not approve the old draft, inherit a
+quoted instruction or expand permission to separate publication. Ambiguous work
+remains explicit; thread proximity alone is not an exact parent. Compare source
+availability, actual model interpretation, owner adoption and checked return
+separately. Model evaluation stays in release qualification, not routine tests.
+Include a normal long request plus preceding context exceeding the former 20,000
+character handoff cap: the receiver must read the final user constraint intact.
+Check the shared 32,000-character/98,304-encoded-byte boundary with Chinese,
+emoji and JSON escapes; rejection must be explicit, without publishing a partial
+request or silently truncating it. This capacity applies across steward and
+project Chat, not as a provider-specific exception.
+
 #### Repair and merge / 修复并合并
 
 GQ03/GQ07 include “修复并合并这个 PR。” / “Fix and merge this PR,” with

@@ -233,6 +233,39 @@ def test_reply_context_keeps_the_exact_parent_as_context_only() -> None:
     }
 
 
+def test_formatted_lookup_preserves_event_ancestry_and_thread_context() -> None:
+    root = {"message_id": "om_root", "chat_id": "oc_fixture", "thread_id": "omt_fixture",
+            "thread_message_position": "-1", "content": "Review the draft.",
+            "sender": {"sender_type": "user", "id": "ou_fixture"}}
+    current = {**root, "message_id": "om_current", "thread_message_position": "2",
+               "content": "Use the new version."}
+    revised = {**root, "message_id": "om_revised", "thread_message_position": "1",
+               "content": "Version 3 is ready.", "create_time": "2026-01-01 12:02",
+               "sender": {"sender_type": "app", "id": "cli_fixture_bot"}}
+    messages = {"om_current": current, "om_root": {**root, "thread_replies": [revised, current]}}
+    calls = []
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        mid = argv[argv.index("--message-ids") + 1]
+        calls.append(mid)
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "data": {"messages": [messages[mid]]}}), "")
+
+    options = dict(runner=runner, command_prefix=["lark-cli"], profile="fixture-bot",
+                   profile_app_id="cli_fixture_bot", configured_chat_id="oc_fixture", sleeper=lambda _: None)
+    enriched = enrich_lark_event_reply_context({"message_id": "om_current", "root_id": "om_root"}, **options)
+    assert calls == ["om_current", "om_root"]
+    assert "parent_id" not in enriched and "reply_context" not in enriched
+    assert enriched["reply_to_bot"] is False  # A thread is not a verified direct bot reply.
+    assert enriched["thread_context"]["messages"][1] == {
+        "message_id": "om_revised", "conversation_id": "oc_fixture", "thread_id": "omt_fixture",
+        "position": 1, "content": "Version 3 is ready.", "content_truncated": False,
+        "sender": {"id": "cli_fixture_bot", "kind": "app"}, "created_at": "2026-01-01 12:02",
+    }
+    direct = enrich_lark_event_reply_context({"message_id": "om_current", "parent_id": "om_root"}, **options)
+    assert direct["reply_context"]["content"] == "Review the draft."
+    assert direct["parent_id"] == "om_root"
+
+
 def _operation_callback_project(tmp_path: Path) -> tuple[Path, Path]:
     project = tmp_path / "project"
     project.mkdir()

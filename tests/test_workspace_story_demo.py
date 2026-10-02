@@ -53,6 +53,11 @@ def test_real_state_replay_is_local_and_repeatable(tmp_path, monkeypatch):
         assert sum(t["status"] == "deferred" for t in agents) == 2
         assert sum(t["status"] == "blocked" for t in agents) == 4
         assert len([t for t in rows if t["role"] == "user" and not t["done"]]) == 2
+        by_id = {t["todo_id"]: t for t in rows}
+        for gate in (t for t in rows if t["role"] == "user"):
+            target = by_id[gate["unblocks_todo_id"]]
+            assert target["status"] == "blocked"
+            assert target["required_decision_scopes"] == [gate["decision_scope"]]
     artifact = json.loads(
         (root / "projects/community-day/calculations.json").read_text()
     )

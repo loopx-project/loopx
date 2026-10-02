@@ -53,10 +53,11 @@ assert.match(drawer, /actionKind: "todo\.create"/, "Todo successor uses the cano
 for (const field of ["evidence", "explanation"]) {
   assert.match(model, new RegExp(`${field}\\??:`), `Decision exposes ${field}`);
 }
-for (const decision of ["reject", "defer"]) {
-  assert.match(drawer, new RegExp(`resolution:\\s*"${decision}"`), `Decision previews ${decision}`);
+for (const decision of ["approve", "reject", "cancel"]) {
+  assert.match(drawer, new RegExp(`previewDecision\\(selection\\.item, "${decision}"`), `Decision ${decision} uses a typed preview`);
 }
-assert.match(drawer, /previewDecision\(selection\.item, "approve"/, "Decision approval uses a typed preview");
+assert.doesNotMatch(drawer, /previewDecision\([^)]*"defer"/, "Deferring records no decision, so the drawer does not offer it as one");
+assert.match(drawer, /canDecideAttention\(attention\)/, "Only a typed User gate can be decided from the drawer");
 
 for (const callback of ["onRetryResumeRun", "onStartNewRunSession", "onCloseRunSession"]) {
   assert.match(model, new RegExp(`${callback}\\??:`), `Run exposes ${callback}`);
@@ -191,7 +192,7 @@ assert.match(tasks, /disabled=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)\}/
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.next\)/, "Goal lifecycle apply projects the requested state before the server responds");
 assert.match(page, /model\.goals\.find\(\(goal\) => goal\.goalId === proposal\.goalId\)\?\.activationState/, "Goal lifecycle rollback captures the rendered state instead of assuming the operation inverse");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.previous\)/, "Rejected Goal lifecycle apply rolls back the optimistic projection");
-assert.match(page, /if \(applied\.actionKind === "goal\.lifecycle"\) \{\s*void reconcileStatus\(applied\.goalId \? \[applied\.goalId\] : undefined\)/, "Successful Goal lifecycle apply reconciles the affected Goal without blocking the sidebar");
+assert.match(page, /if \(applied\.actionKind === "goal\.lifecycle" \|\| applied\.actionKind === "gate\.resolve"\) \{\s*void reconcileStatus\(applied\.goalId \? \[applied\.goalId\] : undefined\)/, "Successful Goal lifecycle or decision apply reconciles the affected Goal without blocking the sidebar");
 assert.match(dashboard, /onReconcileStatus=\{\(options\) => loadFromUrl\([\s\S]*\{ background: true, invalidateGoalIds: options\?\.invalidateGoalIds, readScope: "missing" \}/, "Lifecycle reconciliation uses the non-fatal background status path");
 assert.match(dashboard, /statusRequestCanCommit\(statusRequestFenceRef\.current, request\)/, "A stale background response cannot overwrite a newer optimistic transition");
 assert.match(sidebar, /Trash2/, "Stopped Goals expose a delete icon");
@@ -293,7 +294,7 @@ assert.doesNotMatch(header, /切换到野兽主题|切换到默认主题/, "Work
 assert.match(workspaceTheme, /workspaceThemeStorageKey = "loopx-pw-theme"/, "Theme preference persists across reloads");
 assert.doesNotMatch(dashboard, /isManagerProjectionQuestion/, "Ordinary manager questions do not silently bypass the selected model by matching phrases");
 assert.match(dashboard, /if \(selectedRoute\.agentId === "status-only" \|\| \(!targetGoal && targetContextId !== "manager"\)\)/, "Projection answers require the explicit status-only route or a missing Goal fallback");
-assert.match(drawer, /t\("drawer\.decisionReview"\)/, "Blocked items preview their decision boundary before any write");
+assert.match(drawer, /role="group" aria-label=\{t\("drawer\.decisionGroup"\)\}/, "Blocked items expose their decisions as one labelled group that previews before any write");
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
 assert.match(drawer, /t\("drawer\.runRecordEmpty"\)/, "A truly empty Session still explains why there is no timeline yet");

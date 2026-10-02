@@ -48,6 +48,8 @@ scanning a chronological list.
 - [`reward_memory_architecture_v0`](../../../loopx/capabilities/reward_memory/README.md): Reward memory architecture v0
 - [`reward_memory_architecture_v0`](../../../loopx/capabilities/reward_memory/README.zh-CN.md): Reward memory architecture v0 (中文)
 - [`reward_memory_corpus_registry_v0`](reward-memory-corpus-registry-v0.md): Reward memory corpus registry v0
+- [`memory_utility_projection_v0`](reward-memory-utility-projection-v0.md): Reward memory utility projection v0
+- [`memory_utility_projection_v0`](reward-memory-utility-projection-v0.zh-CN.md): Reward memory utility projection v0 (中文)
 - [`trajectory_hygiene_v0`](trajectory-hygiene-v0.md): Trajectory hygiene v0
 
 ## Runtime And Host Integration

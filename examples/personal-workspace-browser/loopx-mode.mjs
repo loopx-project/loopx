@@ -66,8 +66,14 @@ export const loopxModeScenario = {
       if (api.loopxModeRequests.some(row => row.operation === "inspect")) throw new Error("Reading results ran member preflight");
       await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
       const team = page.getByRole("region", {name: "团队执行详情"});
-      await team.getByText("local-analyst · 已通过当前验收", {exact: true}).waitFor();
+      const memberCard = name => team.locator(".goal-team-bindings > li").filter({hasText: name});
+      const pulseCount = bucket => team.locator(`.goal-team-pulse li[data-bucket="${bucket}"] strong`).innerText();
+      await memberCard("local-analyst").getByText("已通过当前验收", {exact: true}).waitFor();
       await team.getByText("本页有无法核验的工作，请检查原请求；不要直接重新派工。", {exact: true}).waitFor();
+      await team.locator(".goal-team-operations").getByText("记录不可读 · 无法核验", {exact: true}).waitFor();
+      if (await pulseCount("accepted") !== "1" || await pulseCount("attention") !== "1" || await pulseCount("executing") !== "0") {
+        throw new Error("Team pulse did not count the page's typed delegation states");
+      }
       await team.getByRole("button", {name: "检查整个团队", exact: true}).click();
       await team.getByText(/运行时可用性尚未验证/).waitFor();
       await team.getByText("上次检查 3/3 名：1 名满足本机启动条件，1 名运行时待核验，1 名受阻或无法读取。检查不代表已经执行。", {exact: true}).waitFor();
@@ -78,8 +84,10 @@ export const loopxModeScenario = {
       }
       await page.screenshot({path: resolve(outputDir, "goal-team-execution-desktop.png"), fullPage: false, animations: "disabled"});
       await team.getByRole("button", {name: "下一页", exact: true}).click();
-      await team.getByText("cloud-reviewer · 需要恢复原执行", {exact: true}).waitFor();
-      if (await team.getByText("cloud-reviewer · 执行中", {exact: true}).count()) throw new Error("Stopped worker was labeled executing");
+      await memberCard("cloud-reviewer").getByText("需要恢复原执行", {exact: true}).waitFor();
+      if (await memberCard("cloud-reviewer").getByText("执行中", {exact: true}).count() || await pulseCount("executing") !== "0") {
+        throw new Error("Stopped worker was labeled executing");
+      }
       await page.setViewportSize({width: 390, height: 844});
       await page.screenshot({path: resolve(outputDir, "goal-team-execution-mobile.png"), fullPage: false, animations: "disabled"});
       if (api.turnRequests.length) throw new Error("Inspecting the team started a model turn");
@@ -95,6 +103,61 @@ export const loopxModeScenario = {
       await page.screenshot({path: resolve(outputDir, "goal-conversation-mobile.png"), fullPage: false, animations: "disabled"});
 
       const mode = page.__loopxRuntime.loopxModes.get(request.sessionId);
+      const originalMembers = mode.members;
+      const repeatedMembers = [
+        {id: "analysis", agent_id: "local-analyst", todo_id: "todo_analysis"},
+        {id: "followup", agent_id: "local-analyst", todo_id: "todo_followup"},
+        {id: "review-a", agent_id: "cloud-reviewer", todo_id: "todo_review"},
+        {id: "review-b", agent_id: "cloud-reviewer", todo_id: "todo_review"},
+      ];
+      const repeatedRecords = [
+        {record_id: "a".repeat(64), operation_id: "accepted-analysis", agent_id: "local-analyst", todo_id: "todo_analysis", status: "accepted", recovery_required: false},
+        {record_id: "d".repeat(64), operation_id: "followup-work", agent_id: "local-analyst", todo_id: "todo_followup", status: "running", worker_active: false, recovery_required: false},
+        {record_id: "e".repeat(64), operation_id: "historical-work", agent_id: "local-analyst", todo_id: "todo_retired", status: "accepted", recovery_required: false},
+        {record_id: "f".repeat(64), operation_id: "missing-task", agent_id: "local-analyst", status: "future_state", recovery_required: null},
+        {record_id: "c".repeat(64), operation_id: "needs-recovery", agent_id: "cloud-reviewer", todo_id: "todo_review", status: "running", worker_active: false, recovery_required: true},
+        {record_id: "b".repeat(64), operation_id: null, status: "unavailable", recovery_required: null},
+      ];
+      let repeatedBindings = true;
+      await page.route("**/api/chat/sessions/*/loopx", async route => {
+        if (repeatedBindings && route.request().method() === "POST" && route.request().postDataJSON().operation === "operations") {
+          return route.fulfill({json: {items: repeatedRecords, has_more: false, next_cursor: null, page_readback_complete: false}});
+        }
+        return route.fallback();
+      });
+      mode.members = repeatedMembers;
+      await page.waitForResponse(response => response.url().endsWith("/loopx") && response.request().method() === "GET");
+      await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
+      await team.getByRole("heading", {name: "已绑定成员 · 4", exact: true}).waitFor();
+      await team.getByText(/本页 6 条委派记录/).waitFor();
+      const taskCard = todoId => team.locator(".goal-team-bindings > li").filter({has: page.getByText(todoId, {exact: true})});
+      for (const [todoId, operationId] of [["todo_analysis", "accepted-analysis"], ["todo_followup", "followup-work"]]) {
+        const card = taskCard(todoId);
+        const identifiers = await card.locator("details code").allTextContents();
+        if (await card.getByRole("button", {name: "查看证据与反馈", exact: true}).count() !== 1
+          || identifiers.length !== 2 || !identifiers.includes(todoId) || !identifiers.includes(operationId)) {
+          throw new Error(`Repeated Agent bindings mixed or duplicated records for ${todoId}`);
+        }
+      }
+      if (await taskCard("todo_review").getByRole("button", {name: "查看证据与反馈", exact: true}).count()
+        || await team.locator(".goal-team-operations > li").count() !== 4
+        || await team.locator(".goal-team-record").count() !== repeatedRecords.length
+        || await team.getByRole("button", {name: "查看证据与反馈", exact: true}).count() !== 5
+        || await pulseCount("unknown") !== "1" || await pulseCount("executing") !== "0") {
+        throw new Error("Ambiguous, historical or missing-task records were lost, duplicated or shown as active");
+      }
+      const otherIdentifiers = await team.locator(".goal-team-operations details code").allTextContents();
+      if (!["historical-work", "todo_retired", "missing-task", "needs-recovery", "todo_review", "b".repeat(64)]
+        .every(id => otherIdentifiers.includes(id))) throw new Error("Other records lost their reconciliation identifiers");
+      await taskCard("todo_analysis").getByRole("button", {name: "查看证据与反馈", exact: true}).click();
+      await page.getByRole("button", {name: "返回执行列表", exact: true}).click();
+      if (!await taskCard("todo_analysis").getByRole("button", {name: "查看证据与反馈", exact: true}).evaluate(el => el === document.activeElement)) {
+        throw new Error("Evidence return lost the originating binding's focus");
+      }
+      await page.screenshot({path: resolve(outputDir, "goal-team-repeated-bindings-mobile.png"), fullPage: false, animations: "disabled"});
+      await page.keyboard.press("Escape");
+      repeatedBindings = false;
+      mode.members = originalMembers;
       Object.assign(mode, {enabled: true, active_turn_id: "fixture-loopx-turn", native: {status: "active", tokensUsed: 120, tokenBudget: 100000}});
       await page.getByText("LoopX · 正在推进", {exact: true}).waitFor();
       await page.getByLabel("消息处理方式").selectOption("steer");
@@ -120,7 +183,7 @@ export const loopxModeScenario = {
 
       return {
         coverageEntries: await context.close(),
-        note: "Conversation-first desktop/mobile layout; one-step team inspection preserves unknowns, recovery, focus and scroll; active pause/steer, blocked/rejected and unavailable observations remain visible without model launch.",
+        note: "Conversation-first desktop/mobile layout; repeated Agent bindings partition records by task and preserve ambiguous/history/missing-task work; team inspection preserves unknowns, recovery, focus and scroll without model launch.",
       };
     } catch (error) {
       releaseSnapshot();

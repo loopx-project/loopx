@@ -24,6 +24,13 @@ LoopX should feel:
 The interface should read like excellent technical documentation that also
 communicates a confident product.
 
+LoopX's value to an owner is delegating long-running work to Agents without
+losing sight or control of it. Every surface should answer, at a glance, what
+is moving, what is waiting on the owner, and what can be trusted, and let the
+owner act on the answer in place. The same honesty is what makes LoopX credible
+to people outside the project: a screenshot of LoopX should never overstate
+progress.
+
 ### Earn The User's Attention
 
 Every visible element must provide at least one of these:
@@ -44,6 +51,26 @@ offer one-step access to relevant controls and details without a chain of pages.
 Do not collapse failures, missing authority, uncertain observations, or actions
 requiring judgment into a reassuring success summary. Read models select facts;
 they must not invent execution, acceptance, or completion from prose or counts.
+
+Owner-facing state follows four rules:
+
+- **Decide in place.** When LoopX already owns the authority for an owner
+  decision, the surface performs it: choose, confirm once with the stated
+  effect, then read back the recorded outcome and its effect on dependent work.
+  Do not hand the owner a CLI command to copy, a generic "apply" step, or a
+  control whose effect differs from its label. When an action is truly
+  unavailable here, say why in plain language and name where it can be done.
+- **Liveness comes from observation.** Live treatment (a pulsing dot,
+  "executing", "running") requires an observed active worker, session or turn.
+  A stored status, a registration or a count is not activity; unknown stays
+  visibly unknown.
+- **Group by responsibility.** Collaboration surfaces place work under the
+  member, Agent or owner responsible for it, so one glance shows who is doing
+  what and who is blocked. Work with no resolvable owner goes into an explicit
+  "other" group; it is never dropped.
+- **Owner language first.** Primary copy uses the owner's words. Protocol ids,
+  gate kinds, preview mechanics and executor profiles belong in a collapsed
+  diagnostics disclosure.
 
 Review realistic populated, quiet, blocked, and unavailable states on desktop
 and mobile. Show before/after views, name what earns attention and what was
@@ -228,6 +255,14 @@ Do not mix marketing pills and application squares in the same control group.
 - Prefer compact badges and hairline panels.
 - Keep goal, gate, owner, evidence, risk, budget, and next action visually
   distinguishable.
+- Summarize many records with one hairline count strip of typed states: zero
+  counts recede, states that need the owner take the danger color and an icon,
+  and the scope of the counts (for example "this page only") sits next to it.
+  Counts come from the same typed classification as the labels, never from
+  prose.
+- Detail many owners with a grid of owner cards: identity, one status pill, the
+  owner's own records, and identifiers behind a disclosure. A blocked owner's
+  card may carry a tinted hairline; avoid filling the card with color.
 - Never render raw private state, credentials, provider IDs, or machine paths.
 
 ## Motion
@@ -306,6 +341,8 @@ parity is required. Framework migration alone must not alter the UI.
 - [ ] Marketing and application controls use the correct shape language.
 - [ ] Desktop and mobile layouts are validated.
 - [ ] Keyboard, focus, contrast, and reduced-motion behavior are preserved.
+- [ ] Owner decisions complete in place with a readback; live treatment is
+      backed by an observed active fact; protocol identifiers are not primary copy.
 - [ ] English and Chinese content remain usable.
 - [ ] Screenshots are provided for first-screen or fidelity-sensitive changes.
 - [ ] No private data or local paths enter the UI or screenshots.

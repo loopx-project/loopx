@@ -71,6 +71,11 @@ REWARD_MEMORY_CATALOG_ENTRY: dict[str, Any] = {
             "write_boundary": "utility attribution is default-off, proposal-only, and fail-open; this command reads compact receipts only and performs no ranking, authority, memory, operator, provider, or external write",
         },
         {
+            "command": "loopx reward-memory utility-project --input <observations.json> --format json",
+            "purpose": "Reduce schema-valid Stage-1 utility observations into a deterministic, bounded, read-only utility projection.",
+            "write_boundary": "projection and reducer are local pure computation only; no provider, memory, ranking, authority, scheduler, or external write",
+        },
+        {
             "command": "loopx reward-memory operator-control --input <reviewed-record.json> --action edit --control-ref <ref> --reasoning-summary <summary> --edited-content-summary <summary> --format json",
             "purpose": "Prepare an authority-matched edit or retirement decision for a reviewed active record.",
             "write_boundary": "returns a control decision and next-step receipt only; the declared corpus owner must perform and exactly read back any provider write",
@@ -170,6 +175,11 @@ REWARD_MEMORY_CATALOG_ENTRY: dict[str, Any] = {
             "doc": "loopx/capabilities/reward_memory/README.md",
         },
         {
+            "schema_version": "memory_utility_projection_v0",
+            "module": "loopx.capabilities.reward_memory.utility_reducer",
+            "doc": "docs/reference/protocols/reward-memory-utility-projection-v0.md",
+        },
+        {
             "schema_version": "reward_memory_dogfood_receipt_v1",
             "module": "loopx.capabilities.reward_memory.dogfood",
             "doc": "loopx/capabilities/reward_memory/README.md",
@@ -192,10 +202,12 @@ REWARD_MEMORY_CATALOG_ENTRY: dict[str, Any] = {
         "python3 examples/reward-memory-recall-application-smoke.py",
         "python3 examples/reward-memory-evaluation-smoke.py",
         "python3 examples/reward-memory-dogfood-smoke.py",
+        "python3 examples/reward-memory-utility-reducer-smoke.py",
     ],
     "docs": [
         "loopx/capabilities/reward_memory/README.md",
         "docs/reference/protocols/reward-memory-corpus-registry-v0.md",
+        "docs/reference/protocols/reward-memory-utility-projection-v0.md",
     ],
     "boundaries": [
         "Run-bound reward is outcome evidence; future influence requires compact candidate derivation and an activation policy.",
@@ -218,7 +230,7 @@ REWARD_MEMORY_CATALOG_ENTRY: dict[str, Any] = {
         "Applied plus a successful outcome remains unknown without independent attribution evidence; evaluator scope, outcome, retrieval snapshot, and policy snapshot must match trusted execution context, with receipt-carried snapshots cross-checked when present.",
         "Utility attribution is default-off, proposal-only, and fail-open; absent or malformed evaluator output leaves the main result, application settlement, and trial readiness unchanged.",
         "Stage 5 trial readiness requires Issue Fix, two distinct LoopX domains, applied/not_applied/refuted coverage, and authority-matched edit/retire controls; utility does not affect readiness or authorize ranking, lifecycle, provider, or external writes.",
-        "Utility-attribution Stage 1 provides stable observation identity only; idempotent reduction, utility projection, ranking influence, and OpenViking writeback remain later-stage work.",
+        "Utility-attribution Stage 1 provides stable observation identity; Stage 2 adds only the bounded idempotent reducer and read-only projection, with no ranking influence or OpenViking writeback.",
     ],
     "next_real_step": (
         "Feed one corpus-owner-approved, exactly read-back record through the "

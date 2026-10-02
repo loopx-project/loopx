@@ -164,7 +164,15 @@ def require_registry_source_write_allowed(
         goal = next((g for g in registry.get("goals", []) if g.get("id") == goal_id), {"id": goal_id})
         require_no_legacy_todo_events(goal, state_path=state_file)
 
-    registered_root = resolve_runtime_root(registry, None, registry_path=registry_path)
+    # A new registry has not been committed by project_registry_transaction yet.
+    # With no declared root or registered source, the caller's effective root
+    # is the only route to check; resolving an implicit default here would
+    # reject an explicitly isolated registration when both defaults have state.
+    registered_root = (
+        resolve_runtime_root(registry, None, registry_path=registry_path)
+        if registry.get("common_runtime_root") or registry.get("goals")
+        else runtime_root
+    )
     _require_other_goal_source_write_allowed(
         registry=registry,
         runtime_roots={runtime_root.expanduser().resolve(strict=False), registered_root.expanduser().resolve(strict=False)},

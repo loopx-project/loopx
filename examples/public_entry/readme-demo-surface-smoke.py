@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -35,8 +36,8 @@ def main() -> int:
         "docs/assets/personal-workspace/workspace-1.0.webp",
         "docs/architecture/rfcs/capable-manager-semantic-handoff-v0.md",
         "## Why LoopX",
-        "objective / issue / project",
-        "LoopX state: objective + gates + todos + scope + evidence + quota",
+        "docs/assets/harness-neutral.en.svg",
+        "docs/assets/control-plane-board.en.svg",
         "## Try LoopX",
         "### Start From Your Agent",
         "Codex App",
@@ -71,6 +72,8 @@ def main() -> int:
     for required in [
         '<a id="快速开始"></a>',
         '<a id="看几个例子"></a>',
+        "docs/assets/harness-neutral.zh.svg",
+        "docs/assets/control-plane-board.zh.svg",
         "200+ 小时自然时长",
         "超过 200 小时的公开贡献轨迹",
         "经过脱敏的 owner-run showcase",
@@ -82,6 +85,24 @@ def main() -> int:
         "loopx preset show daily-triage",
     ]:
         assert required in readme_zh, required
+
+    # Preserve bilingual, responsive diagrams without requiring an old ASCII
+    # rendering of the same architecture. Each picture needs a working fallback.
+    svg_ns = "{http://www.w3.org/2000/svg}"
+    for language, markdown in (("en", readme), ("zh", readme_zh)):
+        for diagram in ("harness-neutral", "control-plane-board"):
+            for variant in ("", ".mobile"):
+                asset = f"docs/assets/{diagram}.{language}{variant}.svg"
+                attribute = "srcset" if variant else "src"
+                assert f'{attribute}="{asset}"' in markdown, asset
+                root = ET.parse(REPO_ROOT / asset).getroot()
+                assert root.tag == f"{svg_ns}svg", asset
+                assert len(root.attrib["viewBox"].split()) == 4, asset
+                assert root.attrib.get("role") == "img", asset
+                for tag in ("title", "desc"):
+                    assert root.findtext(f"{svg_ns}{tag}"), (asset, tag)
+                assert root.find(f".//{svg_ns}script") is None, asset
+            assert '<source media="(max-width: 640px)"' in markdown
 
     for required in [
         "independent reproduction",

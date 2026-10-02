@@ -1233,6 +1233,12 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-danger-action:hover { background: var(--pw-red-bg); }
 .personal-primary-action:disabled, .personal-secondary-action:disabled, .personal-danger-action:disabled { opacity: .46; cursor: default; box-shadow: none; }
 .personal-drawer-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.personal-decision-bar { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 8px; }
+.personal-decision-bar > button { margin: 0; }
+.personal-decision-chip { display: inline-flex; align-items: center; margin-top: 8px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--pw-line-strong); font-size: 11.5px; font-weight: 650; }
+.personal-decision-chip.is-approve { border-color: transparent; background: var(--pw-green-bg); color: var(--pw-green); }
+.personal-decision-chip.is-reject { border-color: transparent; background: var(--pw-red-bg); color: var(--pw-red); }
+.personal-proposal-state.is-applied > span { display: grid; gap: 2px; }
 .personal-correction-panel { margin-top: 12px; }
 .personal-correction-panel header { display: flex; justify-content: space-between; align-items: center; }
 .personal-correction-panel header span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
@@ -1813,9 +1819,6 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-proposal-state.is-error:has(small) { display: grid; gap: 4px; align-items: start; }
 .personal-proposal-state.is-error small { line-height: 1.5; word-break: break-all; }
 
-.personal-gate-cli-hint { display: grid; gap: 6px; margin-top: 10px; }
-.personal-gate-cli-hint code { display: block; padding: 8px 10px; border: 1px solid var(--pw-line); border-radius: 7px; background: var(--pw-bg, #f7f6f2); font-size: 11.5px; line-height: 1.5; user-select: all; word-break: break-all; }
-.personal-gate-cli-hint small { color: var(--pw-muted); line-height: 1.5; }
 
 .personal-notification-list { display: grid; gap: 0; margin: 12px 0 0; padding: 0; list-style: none; }
 .personal-notification-row { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--pw-line); }

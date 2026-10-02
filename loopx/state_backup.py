@@ -11,7 +11,7 @@ import tarfile
 from typing import Any
 
 from . import __version__
-from .paths import DEFAULT_RUNTIME_ROOT
+from .paths import select_default_runtime_root
 
 
 STATE_BACKUP_SCHEMA_VERSION = "loopx_state_backup_v0"
@@ -369,7 +369,7 @@ def build_state_backup_plan(
     include_registry_projects: bool = True,
 ) -> dict[str, Any]:
     resolved_project = _resolved(Path(project))
-    resolved_runtime_root = _resolved(Path(runtime_root).expanduser() if runtime_root else DEFAULT_RUNTIME_ROOT)
+    resolved_runtime_root = _resolved(Path(runtime_root).expanduser() if runtime_root else select_default_runtime_root())
     resolved_output_dir = _resolved(Path(output_dir).expanduser() if output_dir else resolved_runtime_root / "backups")
     resolved_backup_id = backup_id or _utc_timestamp()
     archive_path = resolved_output_dir / f"loopx-state-{resolved_backup_id}.tar.gz"

@@ -36,7 +36,7 @@ python -m demo.workspace advance --root /tmp/workspace-stories \
   --story research-brief --decision assumptions
 ```
 
-Refresh the UI afterward. Only that decision and its direct blocked successors are advanced. Other owner decisions and downstream blockers remain intact. The command does not purchase, publish, deploy or start an Agent.
+Refresh the UI afterward. Only that decision and its direct blocked successor are advanced through the canonical User completion owner. The App's Approve, Reject and Withdraw controls use the same decision relationship; reject and withdraw leave the dependent blocked. Other owner decisions and downstream blockers remain intact. The command does not purchase, publish, deploy or start an Agent. Use a fresh directory after updating from demo manifest v2; existing replays are preserved rather than migrated.
 
 ## Data and isolation
 

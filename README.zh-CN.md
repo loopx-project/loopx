@@ -87,28 +87,19 @@ App 为 ad-hoc 签名，尚未 notarize。Windows 预览版目前手动更新，
 
 LoopX 把长期控制状态留在同一层紧凑状态里：
 
-```text
-目标 / issue / project
-   │
-   ▼
-LoopX state：objective + gate + todo + scope + evidence + quota
-   │
-   ├─ 需要人类判断？ ── 是 ─▶ 提出具体问题并等待
-   │
-   ├─ 有安全侧路？ ─────────▶ 执行一个有界 agent slice
-   │
-   ▼
-Codex / Claude Code / Cursor / shell agent 执行一轮
-   │
-   ▼
-写回证据 + handoff + next todo ─▶ quota 决定下一次 tick
-```
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/harness-neutral.zh.mobile.svg">
+  <img src="docs/assets/harness-neutral.zh.svg" alt="Harness 执行每一轮，LoopX 延续整份工作。" width="1200">
+</picture>
 
 Agent runtime 负责执行，LoopX 负责治理跨运行延续的控制状态，让工程、
 研究、discovery 和运营 Loop 能持续推进。它不是又一个 agent framework，也不是
 绑定某一 Provider 的编排 runtime。
 
-![LoopX control-plane board](docs/assets/control-plane-board.svg)
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/control-plane-board.zh.mobile.svg">
+  <img src="docs/assets/control-plane-board.zh.svg" alt="一轮工作是受约束的状态迁移，不是定时器。" width="1200">
+</picture>
 
 一个形象化理解是：LoopX 是
 **[面向长程 Agent 的可执行看板](docs/development/control-plane-course/00-concept-primer.md)**。

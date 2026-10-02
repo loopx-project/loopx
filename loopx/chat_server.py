@@ -20,7 +20,12 @@ from .chat import (
     redact_local_paths,
 )
 from .chat_agent import CodexChatAgentError
-from .chat_attachments import normalize_chat_image_attachments
+from .chat_attachments import (
+    CHAT_JSON_MAX_BYTES,
+    CHAT_TURN_MAX_BODY_BYTES,
+    normalize_chat_image_attachments,
+    validate_chat_turn_envelope,
+)
 from .chat_actions import ChatActionService, ProtectedActionGate
 from .chat_action_store import ACTION_KINDS, ActionConflictError, ChatActionStore
 from .chat_goal_subagent_api import (
@@ -482,11 +487,11 @@ class ChatRequestHandler(
             payload["delivery_state"] = delivery_state
         self._send_json(payload, status=status)
 
-    def _read_json(self) -> dict[str, Any]:
+    def _read_json(self, *, max_bytes: int = CHAT_JSON_MAX_BYTES) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or "0")
         if length <= 0:
             raise ValueError("request body is empty")
-        if length > 64_000:
+        if length > max_bytes:
             raise ValueError("request body is too large")
         return parse_strict_json_object(self.rfile.read(length))
 
@@ -676,14 +681,19 @@ class ChatRequestHandler(
             )
             return
         try:
-            body = self._read_json()
+            body = self._read_json(max_bytes=CHAT_TURN_MAX_BODY_BYTES)
             if set(body) - {"message", "client_turn_id", "attachments"}:
                 raise ValueError("unknown turn field")
+            validate_chat_turn_envelope(body)
             message = str(body.get("message") or "").strip()
             if not message:
                 raise ValueError("message is required")
             attachments = normalize_chat_image_attachments(body.get("attachments"))
             client_turn_id = _compact_text(body.get("client_turn_id"), limit=160) or uuid.uuid4().hex
+        except (ValueError, TypeError, OverflowError) as exc:
+            self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
+            return
+        try:
             context = self._session_context(session)
             runtime_objective = str(context["objective"] or context["title"])
             turn, created = self.server.runtime_controller.submit_turn(

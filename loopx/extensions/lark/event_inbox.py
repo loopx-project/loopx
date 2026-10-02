@@ -306,6 +306,36 @@ def _event_from_payload(
         event["parent_id"] = parent_id
     if MESSAGE_ID_PATTERN.fullmatch(root_id):
         event["root_id"] = root_id
+    if isinstance(payload.get("thread_id"), str):
+        event["thread_id"] = payload["thread_id"][:200]
+    thread_context = payload.get("thread_context")
+    if isinstance(thread_context, Mapping):
+        # Provider adapter bounds the observation; shared TS validates lineage
+        # and selects the visible excerpt. Keep it immutable on ingress replay.
+        messages = thread_context.get("messages")
+        if isinstance(messages, list) and len(messages) <= 64:
+            rows = []
+            for raw in messages:
+                if not isinstance(raw, Mapping):
+                    continue
+                text = raw.get("content")
+                text = text if isinstance(text, str) else ""
+                sender = raw.get("sender")
+                sender = sender if isinstance(sender, Mapping) else {}
+                rows.append({
+                    **{key: raw.get(key, "")[:200] if isinstance(raw.get(key), str) else ""
+                       for key in ("message_id", "conversation_id", "thread_id")},
+                    "position": raw.get("position"), "content": text[:16000],
+                    "content_truncated": len(text) > 16000 or raw.get("content_truncated") is True,
+                    "sender": {key: sender.get(key, "")[:200] if isinstance(sender.get(key), str) else ""
+                               for key in ("id", "kind")},
+                    "created_at": raw.get("created_at", "")[:80] if isinstance(raw.get("created_at"), str) else "",
+                })
+            event["thread_context"] = {
+                **{key: thread_context.get(key, "")[:200] if isinstance(thread_context.get(key), str) else ""
+                   for key in ("root_message_id", "conversation_id", "thread_id")},
+                "messages": rows, "truncated": thread_context.get("truncated") is True,
+            }
     reply_context_verified = payload.get("reply_context_verified") is True
     event["reply_context_verified"] = reply_context_verified
     event["reply_to_bot"] = bool(

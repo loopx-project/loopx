@@ -125,6 +125,43 @@ authorization" stays public-safe. Both runtimes are pinned to the shared corpus
 in `tests/fixtures/public_safe_text_corpus.json`; extend that corpus rather
 than adding a per-file exception.
 
+Detection and permission are separate. The owner names a category for every
+recognized shape, and a surface picks the policy (the category set) its
+destination needs:
+
+- Repository publication -- a PR-time scan of development code -- uses the full
+  set (`ALL_CATEGORIES`). A bare credential word is rejected there.
+- LoopX's own operational state -- `feedback`, `authority`,
+  `boundary_authority`, and the Vision checkpoint -- uses
+  `TEXT_OWNER_CATEGORIES`, which recognizes a bare credential word without
+  rejecting it. "the Bearer token expired" describes a credential; it does not
+  carry one.
+
+The value arms stay in every policy, so the narrower tier releases prose only. A
+label carries a value when one of four independent signals is present: an
+assignment operator (`:` or `=`), including after a quoted object key, which
+carries whatever follows with no length condition; a connector (whitespace,
+comma, semicolon, dash, or a copula such as "is" or "set to") followed by a token
+containing a digit or one of `+ / =`; the same connector followed by a quoted
+run; or the same connector followed by an unbroken letter-only run of
+`OPAQUE_VALUE_MIN_LENGTH` (16) characters or more. A raw credential token with no
+label at all -- a GitHub token, a private key block -- is rejected by both tiers
+too, which the word-only rule never caught.
+
+No signal reads the length of a word to decide whether a credential *word* is
+present, so a scheme name beside an ordinary English word stays prose while the
+same word with one digit appended is a value. One residual is stated rather than
+argued: a letter-only run of fifteen characters or fewer, written beside the label
+with no quotes and no assignment operator, is prose to this owner. The publication
+tier still rejects the mention, and the internal-state tier is not a
+credential-storage exemption; the corpus carries that row as
+`disclosed_residual_short_letter_value` so the limit stays a decision with a test.
+
+A URL is in neither tier's internal-state policy yet. The rule these four owners
+enforced before never rejected an ordinary link, so this split does not start to;
+whether an internal-state field may carry one is decided per face, together with
+the remaining caller migration in #5136.
+
 ### Compact Artifacts
 
 Safe compact artifact:
@@ -181,7 +218,8 @@ The project repo should answer: "What is this specific goal currently doing?"
 The runtime root should answer: "What happened in recent goal ticks?"
 
 Real controller state belongs in ignored local files such as
-`.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`,
+`.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`,
+legacy `.codex/goals/<goal-id>/ACTIVE_GOAL_STATE.md`,
 `.local/goals/<goal-id>/ACTIVE_GOAL_STATE.md`, or the shared runtime root. A
 public repository may track sanitized templates, fixtures, and compact
 projections, but not the live file that a controller updates on every turn.

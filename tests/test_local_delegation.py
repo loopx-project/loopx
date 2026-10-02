@@ -409,3 +409,48 @@ def test_an_ordinary_delegation_gains_no_wake_state(service):
     assert "wake" not in recorded, "an ordinary delegation must not carry wake state"
     # Nor does it gain a wake target it could be routed to later.
     assert "conversation" not in recorded
+
+
+@pytest.mark.parametrize("damage", ["unreadable", "owner"])
+def test_lost_turn_reply_with_damaged_history_never_restarts_host(service, monkeypatch, damage):
+    """Real Turn commit, lost reply, damaged readback, repair, same-operation return."""
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _operation_id: None)
+    runner.start("analysis", "analysis-recovery", brief())
+    record = runner._record_turn_result
+
+    def lose_reply(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("turn reply after commit", 1)
+
+    monkeypatch.setattr(runner, "_record_turn_result", lose_reply)
+    runner.execute("analysis-recovery")
+    count = root / "analyst" / "initial" / "host-invocations"
+    assert count.read_text() == "1"
+    assert _read(runner.path("analysis-recovery"))["status"] == "running"
+    journals = list((runner.root / "goals" / runner.goal_id / "turns").glob("*.json"))
+    assert len(journals) == 1
+    path = journals[0]
+    original = path.read_bytes()
+    if damage == "unreadable":
+        path.write_text("{damaged", encoding="utf-8")
+    else:
+        damaged = json.loads(original)
+        damaged["plan"]["turn_envelope"]["agent_id"] = "foreign-agent"
+        path.write_text(json.dumps(damaged), encoding="utf-8")
+    monkeypatch.setattr(runner, "_record_turn_result", record)
+    runner.execute("analysis-recovery")
+    held = _read(runner.path("analysis-recovery"))
+    assert held["status"] == "running"
+    assert "journal" in held["error"].lower()
+    # Recovery visibility retains the existing 15-second startup grace.
+    with monkeypatch.context() as observation:
+        observation.setattr("loopx.collaboration_mcp.time.time", lambda: held["created_at"] + 16)
+        visible = runner.read("analysis-recovery")
+    assert visible["recovery_required"] is True
+    assert visible["error"] == held["error"]
+    assert count.read_text() == "1"
+    # Restore only this disposable fixture's bytes, simulating verified repair.
+    path.write_bytes(original)
+    runner.execute("analysis-recovery")
+    assert runner.read("analysis-recovery")["status"] == "accepted"
+    assert count.read_text() == "1"

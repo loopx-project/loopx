@@ -189,7 +189,7 @@ and exposes `loopx read-only-map --goal-id <goal> --dry-run` as
 appends nothing; a real map run still waits for the target controller to move
 the adapter to `read-only-map-ready` or `connected-read-only`.
 Agent executors should use
-`loopx --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <goal>`
+`loopx --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <goal>`
 as the hard compute gate. While the item is still planned, that guard stays
 `should_run=false` and omits `agent_command`, even though status displays the
 preview command for the human operator.

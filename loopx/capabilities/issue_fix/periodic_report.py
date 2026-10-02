@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
 from ..periodic_report.adapters import (
     PeriodicReportSourceAdapter,
     build_periodic_report_source_result,
@@ -17,7 +17,6 @@ from .outcome_projection import (
 
 
 _PRIORITY_RANK = {"P0": 0, "P1": 100, "P2": 200, "P3": 300}
-_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 
 
 def _mapping(value: object) -> dict[str, Any]:
@@ -57,7 +56,7 @@ def _tags(outcome: Mapping[str, Any]) -> list[str]:
     tags: list[str] = []
     for value in values:
         candidate = str(value or "").strip().lower().replace("_", "-")
-        if _TOKEN_RE.fullmatch(candidate):
+        if PUBLIC_SAFE_SLUG_PATTERN.fullmatch(candidate):
             tags.append(candidate)
     return sorted(set(tags))
 

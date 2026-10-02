@@ -101,28 +101,19 @@ Chat memory and a timer are not enough to govern that.
 
 LoopX keeps the durable control state in one compact layer:
 
-```text
-objective / issue / project
-   │
-   ▼
-LoopX state: objective + gates + todos + scope + evidence + quota
-   │
-   ├─ human judgment needed? ── yes ─▶ ask a concrete question and wait
-   │
-   ├─ safe fallback available? ──────▶ run one bounded agent slice
-   │
-   ▼
-Codex / Claude Code / Cursor / shell agent executes one turn
-   │
-   ▼
-write evidence + handoff + next todo ─▶ quota decides the next tick
-```
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/harness-neutral.en.mobile.svg">
+  <img src="docs/assets/harness-neutral.en.svg" alt="Your harness runs the turn. LoopX carries the work." width="1200">
+</picture>
 
 Agent runtimes execute the work. LoopX governs the state that lets engineering,
 research, discovery, and operations loops continue across runs. It is not
 another agent framework or a provider-specific orchestration runtime.
 
-![LoopX control-plane board](docs/assets/control-plane-board.svg)
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/control-plane-board.en.mobile.svg">
+  <img src="docs/assets/control-plane-board.en.svg" alt="One turn is a governed state transition—not just a timer." width="1200">
+</picture>
 
 A useful mental model is an
 **[agent-native Kanban for long-running work](docs/development/control-plane-course/00-concept-primer.md)**.
@@ -352,8 +343,8 @@ missing, use the guided path:
 loopx start-goal --guided --project . --goal-text "Your long-running objective"
 ```
 
-LoopX should reuse existing state rather than overwrite it. Keep `.loopx/`,
-`.codex/goals/`, and `.local/` ignored.
+LoopX should reuse existing state rather than overwrite it. Keep `.loopx/`
+and `.local/` ignored; keep legacy `.codex/goals/` ignored until migration.
 
 ### Start From Your Agent
 
@@ -796,7 +787,7 @@ Project roles and public history are recorded in
 [Project History](docs/project/history.md).
 
 LoopX keeps local active state separate from the public repository. Do not
-commit `.loopx/`, `.codex/goals/`, live `ACTIVE_GOAL_STATE.md`, raw benchmark
+commit `.loopx/`, legacy `.codex/goals/`, live `ACTIVE_GOAL_STATE.md`, raw benchmark
 traces, credentials, private logs, or operator artifacts.
 
 ## Current Status

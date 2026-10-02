@@ -31,5 +31,8 @@ def conversation_reply_context(route: dict[str, Any]) -> dict[str, Any]:
             "parent_id": route.get("parent_id"),
             "conversation_id": route.get("source_conversation_id"),
             "reply_context": route.get("reply_context"),
+            "root_id": route.get("root_id"),
+            "thread_id": route.get("thread_id"),
+            "thread_context": route.get("thread_context"),
         },
     )

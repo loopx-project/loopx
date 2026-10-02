@@ -133,7 +133,7 @@ evidence only; the temporary task coordinator writes accepted state and spends.
 ```yaml
 subagent_control_plane_handoff_v0:
   parent_goal_id: example-peer-task-goal
-  authority_artifact: .codex/goals/example-peer-task-goal/ACTIVE_GOAL_STATE.md
+  authority_artifact: .loopx/goals/example-peer-task-goal/ACTIVE_GOAL_STATE.md
   latest_state_ref: state_hash_or_run_id
   quota_gate_snapshot: eligible
   evidence_boundary: public-safe read-only repository map
