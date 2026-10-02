@@ -205,6 +205,25 @@ source-registry files that are also covered by a parent project directory.
 After `--execute`, use `archive_size_bytes` and the archive/logical ratio to
 judge the actual storage cost.
 
+SQLite files are recognized by content and captured through the same qualified
+TypeScript online-backup implementation used by authority format upgrades.
+The archive contains a verified standalone database at its original relative
+path; live `-wal`, `-shm`, and rollback-journal sidecars are omitted. Duplicate
+targets reuse that database snapshot. The manifest's
+`execution.sqlite_snapshots` records its archive paths, SHA-256, size, and actual
+Node/SQLite runtime identity. A snapshot failure fails the command and leaves
+the previously published archive intact. No raw-file fallback is used.
+
+Each database snapshot is transactionally consistent, including committed WAL
+data. The complete archive is **not one simultaneous snapshot across databases,
+registries, File journals, and project files**. Quiesce writers through the
+existing migration workflow before a coordinated cutover; a successful local
+backup does not grant restoration or promotion authority. Restore into an
+isolated directory first, verify the archived SQLite hashes and complete Goal
+history/receipts through `authority-archive`, and use the supported migration
+route to preserve writes made after the backup. Do not unpack old bytes over an
+active Goal.
+
 ## Codex CLI TUI Setup
 
 For Codex CLI users, the product target is: start in the Codex TUI, send one

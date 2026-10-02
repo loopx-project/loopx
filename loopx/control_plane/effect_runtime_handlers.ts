@@ -8,6 +8,7 @@ import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
 import {drainShadowOutbox} from "./coordination/shadow_drain.ts";
 import {readCanonicalSnapshotPage} from "./coordination/canonical_snapshot_page.ts";
 import {manageLocalAuthorityArchive} from "./coordination/local_authority_archive.ts";
+import {snapshotSqliteBackup} from "./coordination/sqlite_backup.ts";
 import {selectPeriodicReportProgress, selectPeriodicReportApprovalRetry} from "./capabilities/periodic_report_progress.ts";
 import {planIssueFixMonitorReconciliation} from "./capabilities/issue_fix_monitor_reconciliation.ts";
 import {planPrReviewApprovalCloseout} from "./capabilities/pr_review_approval_closeout.ts";
@@ -599,6 +600,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow)],
     ["coordination.local_authority.promote", promoteLocalCoordinationAuthority],
     ["coordination.authority_archive.manage", manageLocalAuthorityArchive],
+    ["coordination.sqlite_backup.snapshot", snapshotSqliteBackup],
     ["coordination.local_authority.new_goal_storage", manageNewGoalStorage],
     ["coordination.local_authority.promotion_review", withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion)],
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],

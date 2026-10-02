@@ -1991,7 +1991,7 @@
     },
     {
       "site": "loopx/state_backup.py::<module>._registry_goals::direct_json_read:json.loads#1",
-      "line": 52,
+      "line": 54,
       "column": 15,
       "kind": "direct_json_read",
       "api": "json.loads",

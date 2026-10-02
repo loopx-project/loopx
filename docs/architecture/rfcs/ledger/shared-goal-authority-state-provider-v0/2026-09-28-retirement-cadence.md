@@ -100,6 +100,17 @@ universal gate. CAS success does not prove current Goal identity or task quality
 
 ## Aggressive local qualification before deleting writers
 
+Physical backup consistency is part of the recovery row. Copying a live SQLite
+database and WAL as separate tar members can lose already acknowledged rows
+when a checkpoint lands between the copies, even if the restored database
+passes `integrity_check`. The general state-backup entry therefore reuses the
+qualified TS online snapshot owner from format upgrade, omits its live sidecars,
+and publishes only after snapshot verification. Python retains directory
+discovery and archive IO, not a second SQLite engine or migration decision.
+This closes a per-database backup defect; whole-Goal multi-file quiescence,
+subsequent-write rollback, installed consumer recovery and D2 observation remain
+separate evidence requirements.
+
 These are proposed engineering windows from a frozen candidate, not promised
 release dates. Run faults on disposable runtimes and detached verified copies;
 never kill/rewrite live Goals to make a test pass.

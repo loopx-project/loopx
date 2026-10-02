@@ -223,7 +223,7 @@ def resolve_runtime_root(
     *,
     registry_path: Path | None = None,
 ) -> Path:
-    value = override
+    value: object = override
     if not value:
         value = registry.get("common_runtime_root") if isinstance(registry, dict) else None
     if not value:
