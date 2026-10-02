@@ -233,11 +233,15 @@ def test_quiet_turn_binds_due_monitor_and_recovers_lost_response(
         assert next_turn["execution_obligation"]["must_attempt_work"] is True
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize(("provider", "handoff_mode"), [
+    ("legacy", "soft_claim"), ("file", "soft_claim"), ("sqlite", "soft_claim"),
+    ("file", "hard_lease"), ("sqlite", "hard_lease"),
+])
 def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
     tmp_path,
     monkeypatch,
     provider,
+    handoff_mode,
 ):
     """A blocker changes execution eligibility, never the committed binding."""
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -255,7 +259,7 @@ def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
             build_todo_runtime_shadow_projection(
                 goal_id=GOAL_ID,
                 todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"],
-                handoff_mode="soft_claim",
+                handoff_mode=handoff_mode,
             ),
             state_path=state,
             provider=provider,
@@ -288,7 +292,7 @@ def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
         "--todo-id",
         monitor["todo_id"],
         "--status",
-        "blocked",
+        "blocked", "--reason", "Temporary dependency unavailable", "--clear-resume-when",
     )
     before = state.read_bytes()
     for _ in range(2):
@@ -310,7 +314,10 @@ def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
     actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
     restore = next(action for action in actions if " todo update " in action)
     assert "--status open" in restore
-    command = shlex.split(restore)
+    command = [
+        "Temporary dependency verified available" if token == "<verified-resolved-blocker-reason>" else token
+        for token in shlex.split(restore)
+    ]
     result = run_json_cli(*command[1:], registry_path=registry, runtime_root=runtime)
     assert result["ok"] is True
     resumed = call(*guard)
@@ -318,6 +325,19 @@ def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
     assert (
         resumed["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "poll_due"
     )
+    lease_args = ()
+    if handoff_mode == "hard_lease":
+        before_poll = state.read_bytes()
+        rc, denied = run_json_cli_result(
+            "quota", "monitor-poll", *scope, "--todo-id", monitor["todo_id"],
+            "--target-key", "public-target", "--result-hash", "verified-head", "--execute",
+            registry_path=registry, runtime_root=runtime,
+        )
+        assert rc != 0 and denied["error_code"] == "monitor_poll_rejected", denied
+        assert state.read_bytes() == before_poll
+        call("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", monitor["todo_id"],
+             "--owner", AGENT_ID, "--idempotency-key", "restored-monitor", "--ttl-seconds", "900")
+        lease_args = ("--use-current-task-lease",)
     poll = call(
         "quota",
         "monitor-poll",
@@ -329,6 +349,7 @@ def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
         "--result-hash",
         "verified-head",
         "--execute",
+        *lease_args,
     )
     assert poll["turn_continuation"]["current_turn_settled"] is True
     assert call(*guard)["should_run"] is False
@@ -342,3 +363,41 @@ def test_blocked_bound_monitor_requires_verified_lifecycle_repair(
     assert not any(
         row["classification"] in {"quota_slot_spent", "state_refreshed"} for row in rows
     )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_restore_rejects_an_active_execution_lease(tmp_path, monkeypatch, provider):
+    """Lifecycle intent cannot bypass a live holder, even on a blocked record."""
+    from loopx.control_plane.work_items.unsettled_host_turn_contract import recovery_cli_actions
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state = _write_fixture(tmp_path)
+    monitor = _add_monitor(registry, text="Observe a public target", target_key="public-target")
+    run_json_cli("todo", "update", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                 "--todo-id", monitor["todo_id"], "--status", "blocked", registry_path=registry,
+                 runtime_root=runtime)
+    lease = {"schema_version": "task_lease_v0", "goal_id": GOAL_ID,
+             "todo_id": monitor["todo_id"], "owner": AGENT_ID, "idempotency_key": "active-monitor",
+             "status": "active", "expires_at": "2099-01-01T00:00:00Z", "version": 1,
+             "lease_epoch": 1, "write_scopes": [], "acquire_ttl_seconds": 900}
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL_ID, todos=list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"],
+        handoff_mode="hard_lease", leases=[lease],
+    )
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    actions = recovery_cli_actions(
+        {"unsettled_host_turn_recovery": {"repair": "lifecycle", "scope": "current_turn",
+          "binding_id": monitor["todo_id"], "turn_instance_id": "held-monitor-turn"}},
+        command_prefix="loopx", goal_id=GOAL_ID, lifecycle_actor_args=f" --agent-id {AGENT_ID}",
+        typed_quota_guard="loopx quota should-run", turn_instance_id="held-monitor-turn",
+    )
+    restore = next(action for action in actions if " todo update " in action)
+    command = ["Dependency verified available" if token == "<verified-resolved-blocker-reason>" else token
+               for token in shlex.split(restore)]
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID, include_leases=True)
+    state_before = state.read_bytes()
+    rc, denied = run_json_cli_result(*command[1:], registry_path=registry, runtime_root=runtime)
+    assert rc != 0 and denied["error_code"] == "blocked_lifecycle_active_lease", denied
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID, include_leases=True) == before
+    assert state.read_bytes() == state_before

@@ -42,11 +42,16 @@ spend 记录；重放和冲突不改状态；仅有变化时生成一次 materia
 successor；已结算回读不允许原 Turn 再执行工作。Monitor 仍为 open；有变化时，
 后继选择通过新的 Turn 完成。
 
-另三条旅程在绑定之后、poll 之前将 Monitor 标为 blocked。未修改基线在这个
+另五条旅程在绑定之后、poll 之前将 Monitor 标为 blocked：legacy、File、SQLite
+的 soft claim，以及 File、SQLite 的 hard lease。未修改基线在这个
 fixture 中错误返回 `normal_run`；其他 frontier 状态还可能尝试冲突的 replan
 绑定。修复后使用既有 `unsettled_host_turn_recovery`，保留原身份且不给交付权限。
 两次回读都保留 blocked 状态；仅在 fixture 的 blocker 已解除后，测试才执行
-投影的恢复命令、重入原 guard、poll 并无配额扣减地结束 Turn。
+投影的恢复命令、重入原 guard、poll 并无配额扣减地结束 Turn。恢复命令向现有
+生命周期 owner 提交独立核实的原因与 `--clear-resume-when`。hard lease 下恢复
+不授予执行权限：无 lease 的 poll 仍拒绝，取得新 lease 后才执行精确 poll。
+另外两条 File／SQLite 用例将相同投影命令用于存在活跃 holder 的状态，验证拒绝
+且 Todo、lease 与 Goal 状态均不变。
 
 敏感性验证使用同一基线的临时 checkout：恢复仅按 Turn 分配 effect 的历史规则后，
 无变化／legacy 旅程在首次绑定后的 poll 以 `heartbeat_receipt_identity_conflict`

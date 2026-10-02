@@ -46,13 +46,20 @@ or conflict, one material generation and successor only in the material case,
 and settled readback that cannot execute further work in the original Turn.
 The Monitor remains open; material successor selection uses a fresh Turn.
 
-Three additional journeys block an already-bound Monitor before its poll. The
+Five additional journeys block an already-bound Monitor before its poll: legacy,
+File and SQLite soft claims, plus File and SQLite hard leases. The
 unmodified base incorrectly returns `normal_run` in this fixture; other frontier
 states can attempt a conflicting replan binding. Head returns the existing
 `unsettled_host_turn_recovery` mode with the original identity and no delivery
 authority. Two readbacks preserve blocked state. Only after the fixture's blocker
 is resolved does the test execute the projected restore command, re-enter the
-original guard, poll and settle without spending quota.
+original guard, poll and settle without spending quota. The projected restore
+carries the independently verified reason and `--clear-resume-when`, as required
+by the existing lifecycle owner. Hard-lease restoration grants no execution
+authority: polling without a lease remains rejected, and a fresh lease is acquired
+before the exact poll. Two additional File/SQLite cases execute the same projected
+restore against an active holder and verify rejection with Todo, lease and Goal
+state unchanged.
 
 Sensitivity was checked in a disposable checkout of the same base: restoring
 Turn-only effect allocation makes the unchanged/legacy journey fail at its first

@@ -31,9 +31,10 @@ def recovery_cli_actions(
         return [
             (f"{command_prefix} todo list --goal-id {goal_id}{lifecycle_actor_args}"
              f" --todo-id {shlex.quote(prior_todo_id)}"),
-            "Inspect the blocker and existing effects. Only if the blocker is verified resolved, execute the restore below. Otherwise retain the blocked Todo and report the unresolved cause; do not reset receipts or choose another Turn to bypass it.",
+            "Inspect the blocker and existing effects. Only if the blocker is verified resolved, replace <verified-resolved-blocker-reason> with that verified reason and execute the restore below. Otherwise retain the blocked Todo and report the unresolved cause; do not reset receipts or choose another Turn to bypass it.",
             (f"{command_prefix} todo update --goal-id {goal_id}{lifecycle_actor_args}"
-             f" --todo-id {shlex.quote(prior_todo_id)} --status open"),
+             f" --todo-id {shlex.quote(prior_todo_id)} --status open"
+             " --reason '<verified-resolved-blocker-reason>' --clear-resume-when"),
             f"{typed_quota_guard} --turn-instance-id {bound_turn}",
         ]
     if recovery.get("repair") == "blocked_writeback":
