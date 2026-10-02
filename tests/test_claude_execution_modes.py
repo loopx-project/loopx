@@ -42,4 +42,3 @@ def test_error_result_is_not_a_successful_turn(monkeypatch, tmp_path):
         adapter.start_turn('fixture request', lambda kind, _: events.append(kind))
     assert 'answer.final' not in events
     assert not adapter.resumed
-
