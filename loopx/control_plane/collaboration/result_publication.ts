@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
@@ -24,7 +25,7 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
     if (typeof record.key !== "string" || !sameRequest(value, request, true)
         || value.decision !== decision || typeof record.text_chars !== "number"
         || !Number.isSafeInteger(record.text_chars) || record.text_chars < 1 || record.text_chars > 20000
-        || typeof record.text_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(record.text_sha256)) {
+        || typeof record.text_sha256 !== "string" || !BARE_SHA256_PATTERN.test(record.text_sha256)) {
       throw new EffectRuntimeRequestError("result receipt identity or content conflict");
     }
     return { key: record.key, value, textSha256: record.text_sha256 };
