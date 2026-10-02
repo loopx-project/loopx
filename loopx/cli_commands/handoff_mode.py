@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..control_plane.todos.handoff_mode import (
+    HANDOFF_MODE_VALUES,
     HandoffModeError,
     set_goal_handoff_mode,
     show_goal_handoff_mode,
@@ -90,9 +91,10 @@ def register_handoff_mode_command(
     parser.add_argument("--goal-id", required=True, help="Goal id whose active state carries the mode.")
     parser.add_argument(
         "--mode",
-        choices=["soft_claim", "hard_lease"],
+        choices=HANDOFF_MODE_VALUES,
         help=(
-            "Target ownership policy. legacy is read only for upgrade/history. "
+            "Target ownership policy: soft_claim or hard_lease. legacy is accepted "
+            "only to recover an existing canonical set receipt with its original --operation-id. "
             "soft_claim rejects lease acquire/renew/"
             "transfer, hard_lease requires the actor to hold the todo's lease "
             "for ownership changes and makes the completion fence mandatory."

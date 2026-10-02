@@ -132,6 +132,15 @@ def test_handoff_mode_show_defaults_to_legacy(
     assert payload["source"] == "default"
 
 
+def test_unpromoted_legacy_set_is_retired_without_mutation(tmp_path, capsys):
+    registry, state = _write_workspace(tmp_path)
+    before = state.read_bytes()
+    code, payload = _run_cli(capsys, registry, "handoff-mode", "set", "--goal-id", GOAL_ID,
+                             "--mode", "legacy")
+    assert code == 1 and payload["error_code"] == "handoff_mode_retired", payload
+    assert state.read_bytes() == before
+
+
 def test_handoff_mode_show_rejects_invalid_frontmatter_without_mutation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

@@ -48,8 +48,10 @@ Canonical `--operation-id` binds Goal and target. Even an accepted no-op seals a
 receipt. Retry with the same ID/target recovers the original decision and never
 restores an old mode over later work; changed intent needs a fresh ID.
 `ambiguous`/`coordination_receipt_recovery_required` means retry that same request.
-Malformed receipts reject. Original legacy receipts remain readable, but new
-legacy writes return `handoff_mode_retired`. The unpromoted writer does not
+Malformed receipts reject. An original `set --mode legacy --operation-id <original-id>`
+request still reaches receipt recovery after upgrade, including after a later
+policy change. New legacy writes and dry-runs return `handoff_mode_retired`;
+`plan-migration` also refuses legacy as a target. The unpromoted writer does not
 promise durable operation replay.
 
 ## Migrate an assigned canonical Goal with a verified backup
@@ -113,7 +115,9 @@ migration/recovery boundary.
 上面的 show/set 命令读取、预览或切换空闲 Goal。晋升后以 canonical provider 为准，
 不回退旧 Markdown／lease 文件。改变策略要求完整快照没有未完成的已认领活动 Todo、
 没有有效 lease；相同 soft/hard 是 no-op。CAS 防止并发覆盖，canonical 请求用固定
-operation ID 恢复原回执，不把后来状态改回去。新增 legacy 目标明确拒绝。
+operation ID 恢复原回执，不把后来状态改回去。升级后仍可用原来的
+`set --mode legacy --operation-id <原ID>` 确认历史操作；新 legacy 写入、预览和
+迁移目标明确拒绝。
 
 有 claim 的 canonical Goal 使用 `plan-migration → migrate 预览 → --execute`。
 执行先生成并核验 `<plan>.backup.jsonl`，保存全部事务、原回执、完整历史投影与
