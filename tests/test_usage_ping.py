@@ -175,7 +175,7 @@ def test_absent_stderr_keeps_real_cli_json_pure_until_a_stream_discloses(isolate
     assert main(['version', '--format', 'json']) == 0
     assert 'random installation ID' in stderr.getvalue()
     assert json.loads(capsys.readouterr().out)['ok'] is True
-    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 5
+    assert json.loads(usage_ping.state_path().read_text())['notice']['version'] == 6
 
 
 @pytest.mark.parametrize('setting,value', [
@@ -380,7 +380,7 @@ def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated, u
             assert usage_ping.state_path().read_bytes() == before
         else:
             assert not usage_ping.state_path().exists()
-        assert initial['notice']['version'] == 5
+        assert initial['notice']['version'] == 6
         connection.request('POST', path, json.dumps({'notice': initial['notice']}), {'Content-Type': 'application/json'})
         response = connection.getresponse()
         acknowledged = json.loads(response.read())
@@ -415,6 +415,61 @@ def test_real_chat_settings_share_cli_choice_and_reject_cross_origin(isolated, u
         connection.close()
         server.shutdown()
         server.server_close()
+
+
+def test_context_setting_real_cli_and_http_share_state_without_enabling(isolated, capsys):
+    import http.client
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    assert main(['usage-ping', 'context', '--context', 'maintainer', '--format', 'json']) == 0
+    initial = json.loads(capsys.readouterr().out)
+    assert initial['stored_context'] == 'maintainer' and not initial['sending']
+    server = ChatHTTPServer(('127.0.0.1', 0), ChatRequestHandler)
+    server.verbose = False
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=8)
+    path = '/api/chat/usage-statistics'
+    try:
+        connection.request('GET', path)
+        response = connection.getresponse()
+        assert json.loads(response.read())['effective_context'] == 'maintainer'
+        connection.request('POST', path, json.dumps({'context': 'personal'}), {'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        updated = json.loads(response.read())
+        assert response.status == 200 and updated['effective_context'] == 'personal' and not updated['sending']
+        assert usage_ping.control('status')['stored_context'] == 'personal'
+        connection.request('POST', path, json.dumps({'context': 'my-company'}), {'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        assert response.status == 400
+        response.read()
+        connection.request('POST', path, json.dumps({'context': 'maintainer'}), {'Content-Type': 'application/json', 'Origin': 'https://evil.example'})
+        response = connection.getresponse()
+        assert response.status == 403
+        response.read()
+        assert usage_ping.control('status')['stored_context'] == 'personal'
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+
+
+def test_real_cli_installation_profile_tags_context_and_contains_no_work_identity(isolated, collector, monkeypatch, capsys):
+    endpoint, received, accepted, release = collector
+    release.set()
+    monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
+    assert main(['usage-ping', 'context', '--context', 'maintainer', '--format', 'json']) == 0
+    capsys.readouterr()
+    usage_ping.control('enable')
+    assert main(['version', '--format', 'json']) == 0
+    assert json.loads(capsys.readouterr().out)['ok']
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline and not any(row['schema'] == 'loopx_installation_usage_v1' for row in received):
+        time.sleep(0.05)
+    payload = next(row for row in received if row['schema'] == 'loopx_installation_usage_v1')
+    assert payload['profiles'][0]['context'] == 'maintainer'
+    assert payload['profiles'][0]['cli'] == [{'feature': 'version', 'count': 1}]
+    assert payload['profiles'][0]['runtime'] == []
+    assert set(payload) == {'schema', 'install_id', 'profiles'}
+    assert not any(word in json.dumps(payload) for word in ('goal_id', 'agent_id', 'prompt', str(isolated)))
 
 
 def test_goal_observer_does_not_wait_for_unresponsive_collector(isolated, collector, monkeypatch):
@@ -453,10 +508,10 @@ def test_v3_cli_upgrade_requires_visible_renewal_before_real_http(isolated, coll
     assert not accepted.wait(0.3) and received == []
     visible = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert visible.returncode == 0 and json.loads(visible.stdout)['ok']
-    assert 'first measured CLI result' in visible.stderr and '15 minutes' in visible.stderr
-    assert 'network timing' in visible.stderr
+    assert 'daily installation profiles' in visible.stderr and '15 minutes' in visible.stderr
+    assert 'connection metadata' in visible.stderr
     current = json.loads(path.read_text())
-    assert current['notice']['version'] == 5
+    assert current['notice']['version'] == 6
     assert current['generation'] != old['generation']
     assert current['counters'] == []
     assert not accepted.wait(0.3) and received == []
