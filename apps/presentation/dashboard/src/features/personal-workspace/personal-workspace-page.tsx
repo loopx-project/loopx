@@ -1,3 +1,4 @@
+import { clientRequestId } from "../../data/client-request-id.js";
 import { goalCreateRequest } from "./goal-create-request";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
@@ -765,7 +766,7 @@ function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<Workspa
     reader.onerror = () => reject(new Error(t("composer.imageReadError", { name: file.name })));
     reader.onload = () => resolve({
       dataUrl: String(reader.result ?? ""),
-      id: crypto.randomUUID(),
+      id: clientRequestId(),
       mimeType: file.type,
       name: file.name,
       size: file.size,
@@ -1736,7 +1737,7 @@ export function PersonalWorkspacePage({
         setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
         return;
       }
-      const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
+      const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: clientRequestId() };
       retainSteeringRequest(composerDraftKey, request);
       setSteering(true);
       setActionFeedback(null);

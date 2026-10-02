@@ -874,6 +874,7 @@ class CodexChatAgentSession:
                         if method in {
                             "thread/start",
                             "thread/resume",
+                            "model/list",
                         } and _is_legacy_model_catalog_error(message.get("error")):
                             raise _LegacyModelCatalogSchemaError
                         raise self._runtime_error(

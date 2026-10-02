@@ -2,6 +2,7 @@ import { useId, type ReactNode } from "react";
 
 import type { CapabilityConfigurationEditor } from "../../data/chat";
 import { PeriodicReportScheduleField } from "./periodic-report-schedule-field";
+import { ModelConfigurationField } from "./model-configuration-field";
 
 type FieldCopy = Record<string, { description?: string; label?: string }>;
 type ConfigurationField = CapabilityConfigurationEditor["fields"][number];
@@ -15,11 +16,16 @@ type ConfigurationFieldProps = Readonly<{
   onChange?: FieldChange;
   value: unknown;
   timezone: string;
+  endpointId: string;
 }>;
 
-function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone }: ConfigurationFieldProps) {
+function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone, endpointId }: ConfigurationFieldProps) {
   const label = copy[field.key]?.label ?? field.label;
   const readOnly = !onChange;
+  if (field.key === "executor_model") {
+    return <ModelConfigurationField endpointId={endpointId} id={id} label={label} value={value}
+      onChange={onChange ? (model) => onChange(field.key, model) : undefined} />;
+  }
 
   if (field.input_kind === "periodic_report_schedule") {
     return <PeriodicReportScheduleField id={id} value={value} timezone={timezone}
@@ -54,14 +60,11 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
     );
   }
   const numeric = field.input_kind === "number";
-  const modelSuggestions = field.key === "executor_model"
-    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra"] : [];
   return (
     <label htmlFor={id}>
       <span>{label}</span>
       <input
         id={id}
-        list={modelSuggestions.length ? `${id}-suggestions` : undefined}
         max={field.maximum}
         min={field.minimum}
         onChange={onChange ? (event) => onChange(field.key, numeric ? Number(event.target.value) : event.target.value) : undefined}
@@ -70,7 +73,6 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
         type={numeric ? "number" : "text"}
         value={typeof value === "number" || typeof value === "string" ? value : ""}
       />
-      {modelSuggestions.length ? <datalist id={`${id}-suggestions`}>{modelSuggestions.map((model) => <option key={model} value={model} />)}</datalist> : null}
     </label>
   );
 }
@@ -108,6 +110,7 @@ export function CapabilityConfigurationFields({
           onChange={onChange}
           value={value[field.key]}
           timezone={String(value.timezone ?? "UTC")}
+          endpointId={String(value.executor_endpoint ?? "")}
         />;
         return field.key === "enabled" && field.input_kind === "boolean"
           ? <div className="personal-capability-enabled-row" key={field.key}>{control}{enabledAction}</div>

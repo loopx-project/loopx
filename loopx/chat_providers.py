@@ -15,6 +15,7 @@ import uuid
 
 from .chat import VisibleResponseStreamFilter, parse_agent_response
 from .chat_agent import CodexChatAgentError, _host_tool_gate, _turn_prompt
+from .extensions.process_runtime import terminate_process_tree
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
@@ -249,6 +250,7 @@ class ClaudeCodeAdapter:
                 stderr=subprocess.DEVNULL,
                 text=True, encoding="utf-8", errors="replace",
                 bufsize=1,
+                start_new_session=os.name == "posix",
             )
         except OSError as exc:
             if bridge is not None:
@@ -339,7 +341,7 @@ class ClaudeCodeAdapter:
         with self.lock:
             process = self.current_process
         if process is not None and process.poll() is None:
-            process.terminate()
+            terminate_process_tree(process, grace_seconds=0.1)
 
     def close_session(self) -> None:
         self.interrupt_turn()

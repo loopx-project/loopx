@@ -1,3 +1,4 @@
+import { clientRequestId } from "../../data/client-request-id.js";
 import { goalCreateContent, goalCreateRequest } from "./goal-create-request";
 import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
@@ -79,7 +80,7 @@ export function WorkspaceActionForm({ draft, onClose, onPreview }: {
         ...(draft.kind === "monitor" ? { target: target.trim(), target_key: `goal-${goalId}` } : {}),
       };
       await onPreview({ actionKind, context: { kind: "goal", goal_id: draft.goalId },
-        idempotencyKey: `workspace-${actionKind}-${crypto.randomUUID()}`, normalizedParameters: parameters,
+        idempotencyKey: `workspace-${actionKind}-${clientRequestId()}`, normalizedParameters: parameters,
         summary: title });
       onClose();
     } catch (failure) {

@@ -1,3 +1,4 @@
+import { clientRequestId } from "./client-request-id.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps";
 import { z } from "zod";
@@ -621,6 +622,20 @@ export async function fetchChatCapabilities() {
   return chatCapabilitiesSchema.parse(await requestJson<unknown>("/api/chat/capabilities"));
 }
 
+const chatModelCatalogSchema = z.object({
+  ok: z.literal(true), endpoint_id: z.string(), available: z.boolean(),
+  source: z.string(), observed_at: z.string(), compatibility_applied: z.boolean(),
+  unavailable_reason: z.string().nullable(),
+  models: z.array(z.object({ id: z.string(), label: z.string(), description: z.string() })),
+});
+export type ChatModelCatalog = z.infer<typeof chatModelCatalogSchema>;
+
+export async function fetchChatModelCatalog(endpointId: string, signal?: AbortSignal) {
+  return chatModelCatalogSchema.parse(await requestJson<unknown>(
+    `/api/chat/models?endpoint_id=${encodeURIComponent(endpointId)}`, { signal },
+  ));
+}
+
 export async function recordProjectionExchange(options: {
   answer: string;
   contextKind: "goal" | "manager";
@@ -1148,12 +1163,12 @@ export function inspectLoopXMember(sessionId: string, bindingId: string) {
     method: "POST", body: JSON.stringify({operation: "inspect", binding_id: bindingId}),
   });
 }
-export function updateLoopXMode(sessionId: string, operation: string, settings?: LoopXModeSettings, operationId = crypto.randomUUID()) {
+export function updateLoopXMode(sessionId: string, operation: string, settings?: LoopXModeSettings, operationId = clientRequestId()) {
   return requestJson<LoopXModeSnapshot>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation, operation_id: operationId, ...(settings ? {settings} : {})}),
   });
 }
-export function sendLoopXMessage(sessionId: string, message: string, deliveryMode: "queue" | "inbox" | "steer", operationId: string = crypto.randomUUID()) {
+export function sendLoopXMessage(sessionId: string, message: string, deliveryMode: "queue" | "inbox" | "steer", operationId: string = clientRequestId()) {
   return requestJson<{ok: true; status: string; delivery_mode: string}>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "message", operation_id: operationId, message, delivery_mode: deliveryMode}),
   });
@@ -1171,7 +1186,7 @@ export async function sendChatTurnStreaming(
     signal?: AbortSignal;
   } = {},
 ) {
-  const clientTurnId = options.clientTurnId ?? crypto.randomUUID();
+  const clientTurnId = options.clientTurnId ?? clientRequestId();
   const accepted = await acceptChatTurn(
     sessionId,
     message,

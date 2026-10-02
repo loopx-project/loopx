@@ -1,3 +1,4 @@
+import { clientRequestId } from "../../data/client-request-id.js";
 import {GoalTeamLineage} from "./goal-team-lineage";
 import {GoalTeamEpisode} from "./goal-team-episode";
 import {GoalTeamComparison} from "./goal-team-comparison";
@@ -39,7 +40,7 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
   async function send() {
     if ((!result || !message.trim()) && !submission.current) return;
     // A retry after transport failure must carry the original identity and exact evidence.
-    const attempt = submission.current ?? {id: crypto.randomUUID(), text: [
+    const attempt = submission.current ?? {id: clientRequestId(), text: [
       `${zh ? "针对团队执行" : "Regarding team execution"}: ${operationId}`,
       ...(result?.artifacts ?? []).map(artifact => `${artifact.ref} · sha256:${artifact.sha256}`),
       message.trim(),

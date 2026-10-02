@@ -922,6 +922,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-report-schedule p { grid-column: 1 / -1; margin: 0; color: var(--pw-muted); font-size: 12px; overflow-wrap: anywhere; }
 .personal-capability-fields label { display: grid; align-content: start; gap: 6px; min-width: 0; }
 .personal-capability-fields label > span { font-size: 12px; font-weight: 650; }
+.personal-capability-fields label > .personal-model-catalog-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--pw-muted); font-size: 11px; font-weight: 400; }
+.personal-model-catalog-note button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 .personal-capability-fields input:not([type="checkbox"]), .personal-capability-fields select, .personal-capability-fields textarea { width: 100%; min-width: 0; min-height: 42px; padding: 8px 11px; border: 1px solid var(--pw-line-strong); border-radius: 9px; background: #fff; color: var(--pw-text); font: inherit; font-size: 13px; }
 .personal-capability-fields .is-boolean { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-height: 48px; padding-bottom: 12px; border-bottom: 1px solid var(--pw-line); }
 .personal-capability-enabled-row { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; min-width: 0; min-height: 60px; padding-bottom: 12px; border-bottom: 1px solid var(--pw-line); }

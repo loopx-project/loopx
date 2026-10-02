@@ -1,3 +1,4 @@
+import { clientRequestId } from "../../data/client-request-id.js";
 import type { WorkspaceTranslate } from "./i18n";
 import type { WorkspaceActionPreviewRequest } from "./personal-workspace-model";
 
@@ -23,10 +24,10 @@ export function goalCreateRequest(input: GoalContent & {
   const content = goalCreateContent(input, t);
   return {
     actionKind: "goal.create", context: { kind: "manager", goal_id: input.contextGoalId },
-    idempotencyKey: `workspace-goal.create-${input.operationId ?? crypto.randomUUID()}`,
+    idempotencyKey: `workspace-goal.create-${input.operationId ?? clientRequestId()}`,
     summary: t("proposal.summary.goalCreate", { title: content.title }),
     normalizedParameters: {
-      ...content, goal_id: `goal-${input.operationId ?? crypto.randomUUID()}`,
+      ...content, goal_id: `goal-${input.operationId ?? clientRequestId()}`,
       agent_id: input.agentId, permission: input.permission,
       workspace_ref: "current", heartbeat: { enabled: false, cadence: "1d", timezone: "Asia/Shanghai" },
       stop_condition: "goal_complete",

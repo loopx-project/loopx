@@ -1,3 +1,4 @@
+import { clientRequestId } from "../../data/client-request-id.js";
 import { useEffect, useRef, useState } from "react";
 import { Square } from "lucide-react";
 import { ChatApiError } from "../../data/chat.js";
@@ -58,7 +59,7 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
       return;
     }
     const next = { sessionId: message.sourceSessionId ?? "", turnId: message.sourceTurnId ?? "", text,
-      id: previous?.text.trim() === text.trim() ? previous.id : crypto.randomUUID() };
+      id: previous?.text.trim() === text.trim() ? previous.id : clientRequestId() };
     request.current = next;
     if (cacheKey) retainSteeringRequest(cacheKey, next);
   }
@@ -82,7 +83,7 @@ export function MessageActivity({ message, onInterruptTurn, onSteerTurn, onCance
       const definitelyNotDelivered = cause instanceof ChatApiError && cause.payload.delivery_state === "not_delivered";
       if (definitelyNotDelivered && request.current?.id === sent.id) {
         // Preserve the draft; only confirmed non-delivery can renew retry identity.
-        const next = { ...sent, id: crypto.randomUUID() };
+        const next = { ...sent, id: clientRequestId() };
         request.current = next;
         if (cacheKey && readSteeringRequest(cacheKey)?.id === sent.id) retainSteeringRequest(cacheKey, next);
       }
