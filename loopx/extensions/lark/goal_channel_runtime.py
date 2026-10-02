@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +26,12 @@ from .goal_channel_contracts import (
     semantic_key,
     write_human_gate_auto_notify_marker,
 )
+from .identity_shapes import (
+    LARK_CHAT_ID_SEARCH as CHAT_ID_PATTERN,
+    LARK_MESSAGE_ID_SEARCH as MESSAGE_ID_PATTERN,
+)
 from .goal_channel_transport import (
     APP_ID_PATTERN,
-    CHAT_ID_PATTERN,
-    MESSAGE_ID_PATTERN,
     auth_verified,
     call,
     chat_verified,
@@ -166,6 +168,7 @@ def auto_notify_lark_goal_channel_gate(
     provider_target: Mapping[str, Any] | None = None,
     external_sink_delivery_authorized: bool,
     runner: CommandRunner = default_subprocess_runner,
+    admit_delivery: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     goal_from_registry(registry, goal_id)
     payload = read_goal_channel_binding(binding_path)
@@ -201,6 +204,7 @@ def auto_notify_lark_goal_channel_gate(
         provider_target=provider_target,
         execute=True,
         runner=runner,
+        admit_delivery=admit_delivery,
     )
     result["notification"] = notification
     blocker = str(notification.get("blocker") or "")
@@ -496,6 +500,7 @@ def notify_lark_goal_channel_gate(
     provider_target: Mapping[str, Any] | None = None,
     execute: bool = False,
     runner: CommandRunner = default_subprocess_runner,
+    admit_delivery: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     goal = goal_from_registry(registry, goal_id)
     payload = read_goal_channel_binding(binding_path)
@@ -660,6 +665,8 @@ def notify_lark_goal_channel_gate(
             idempotency_key=key,
             receipt_id=f"receipt_{key.removeprefix('sha256:')[:16]}",
         )
+    if admit_delivery is not None:
+        admit_delivery()
     configured_app_id = str(identity_config.get("bot_app_id") or "")
     if not (
         identity == "bot"

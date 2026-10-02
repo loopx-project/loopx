@@ -3,12 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 import subprocess
-from collections.abc import Mapping
 
 from ...control_plane.runtime.runtime_projection_route import (
     resolve_goal_source_runtime_route,
 )
-from ...history import load_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...paths import registry_project_root
 from ...quota import build_quota_should_run
 from ...status import collect_status
@@ -25,8 +24,8 @@ from .goal_channel_contracts import (
 )
 from .goal_channel_runtime import auto_notify_lark_goal_channel_gate
 from .goal_channel_message_delivery import delivery_send_failure
+from .identity_shapes import LARK_MESSAGE_ID_SEARCH as MESSAGE_ID_PATTERN
 from .goal_channel_transport import (
-    MESSAGE_ID_PATTERN,
     call,
     find_first_string,
     json_payload,
@@ -110,7 +109,7 @@ class _DeliveryObservation:
         args: list[str],
         cwd: Path | None,
         timeout: float | None,
-    ) -> Mapping[str, Any]:
+    ) -> dict[str, Any]:
         # Match command position, never a token inside the private message.
         offset = 3 if args[1:2] == ["--profile"] else 1
         command = args[offset : offset + 2]
@@ -156,7 +155,7 @@ class _DeliveryObservation:
         elif reading:
             # A subsequent exception is local receipt persistence, not send.
             self.stage = "receipt_write"
-        return result
+        return dict(result)
 
 
 def _inactive_result(status: str) -> dict[str, Any]:
@@ -276,21 +275,6 @@ def sync_human_gate_after_refresh(
         else Path(str(source_route["source_runtime_root"]))
     )
     binding_path = default_goal_channel_binding_path(source_registry_path)
-    marker_path = human_gate_auto_notify_marker_path(binding_path, goal_id)
-    try:
-        activation = resolve_extension_activation(
-            LARK_EXTENSION_ID,
-            state_file=default_extension_state_file(runtime_root),
-            required_permissions=(LARK_GOAL_CHANNEL_PERMISSION,),
-        )
-    except (OSError, ValueError) as error:
-        return _with_failure(
-            _extension_unavailable_result(
-                configured=human_gate_auto_notify_marker_enabled(marker_path)
-            ),
-            stage="extension_activation",
-            reason=_exception_reason(error),
-        )
     try:
         binding_payload = read_goal_channel_binding(binding_path)
         raw_binding = binding_for_goal(binding_payload, goal_id)
@@ -368,6 +352,19 @@ def sync_human_gate_after_refresh(
             )
 
     observation = _DeliveryObservation(runner)
+    activation: dict[str, Any] | None = None
+
+    def admit_delivery() -> None:
+        # The existing notification owner first selects, suppresses and deduplicates.
+        # Require the extension only when it is about to use provider transport.
+        nonlocal activation
+        observation.stage = "extension_activation"
+        activation = resolve_extension_activation(
+            LARK_EXTENSION_ID,
+            state_file=default_extension_state_file(runtime_root),
+            required_permissions=(LARK_GOAL_CHANNEL_PERMISSION,),
+        )
+
     try:
         result = auto_notify_lark_goal_channel_gate(
             registry=source_registry,
@@ -377,12 +374,17 @@ def sync_human_gate_after_refresh(
             provider_target=provider_target,
             external_sink_delivery_authorized=external_sink_delivery_authorized,
             runner=observation,
+            admit_delivery=admit_delivery,
         )
     except Exception as error:
-        result = goal_channel_gate_sync_failure(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            configured=human_gate_auto_notify_enabled(binding),
+        result = (
+            _extension_unavailable_result(configured=True)
+            if observation.stage == "extension_activation"
+            else goal_channel_gate_sync_failure(
+                registry_path=registry_path,
+                goal_id=goal_id,
+                configured=human_gate_auto_notify_enabled(binding),
+            )
         )
         result["external_write_performed"] = observation.write_status == "performed"
         _with_failure(
@@ -393,8 +395,8 @@ def sync_human_gate_after_refresh(
         )
     else:
         notification = result.get("notification") or {}
-        blocker = notification.get("blocker")
-        stage, reason = {
+        blocker = str(notification.get("blocker") or "")
+        failure_causes: dict[str, tuple[FailureStage, str]] = {
             "provider_identity_unverified": (
                 "provider_preflight",
                 "provider_identity_unverified",
@@ -417,13 +419,14 @@ def sync_human_gate_after_refresh(
                 "binding_resolution",
                 "provider_target_missing",
             ),
-        }.get(blocker, ("lifecycle", "unexpected_failure"))
+        }
+        stage, reason = failure_causes.get(blocker, ("lifecycle", "unexpected_failure"))
         _with_failure(
             result,
             stage=stage,
             reason=observation.reason or reason,
             write_status=observation.write_status,
         )
-    if quota_packet:
+    if activation is not None:
         result["extension_activation"] = activation
     return result

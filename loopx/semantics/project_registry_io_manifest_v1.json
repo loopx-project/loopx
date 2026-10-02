@@ -1735,7 +1735,7 @@
     },
     {
       "site": "loopx/extensions/lark/goal_channel_lifecycle.py::<module>.goal_channel_gate_sync_failure::codec_read:load_registry#1",
-      "line": 210,
+      "line": 209,
       "column": 32,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1743,7 +1743,7 @@
     },
     {
       "site": "loopx/extensions/lark/goal_channel_lifecycle.py::<module>.sync_human_gate_after_refresh::codec_read:load_registry#1",
-      "line": 258,
+      "line": 257,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1751,7 +1751,7 @@
     },
     {
       "site": "loopx/extensions/lark/goal_channel_lifecycle.py::<module>.sync_human_gate_after_refresh::codec_read:load_registry#2",
-      "line": 269,
+      "line": 268,
       "column": 14,
       "kind": "codec_read",
       "api": "load_registry",
