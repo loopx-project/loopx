@@ -27,6 +27,7 @@ const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
+  "todo.context.page",
   "goal.checkpoint_read_context.source",
   "goal.checkpoint_read_context.evaluate",
   "goal.checkpoint_read_context.commit",

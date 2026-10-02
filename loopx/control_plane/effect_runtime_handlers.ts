@@ -3,6 +3,7 @@ import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgen
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
+import {projectTodoContextPage} from "./todos/context_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
 import {drainShadowOutbox} from "./coordination/shadow_drain.ts";
@@ -543,6 +544,7 @@ export function createEffectRuntimeHandlers(
       reconcileRetainedActionSelection,
     ],
     ["work_item.planning_horizon.project", projectQuotaPlanningHorizon],
+    ["todo.context.page", projectTodoContextPage],
     ["work_item.task_graph.topology", projectTaskGraphTopology],
     ["work_item.task_graph.goal_topology", projectGoalTaskGraphTopology],
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],

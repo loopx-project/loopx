@@ -37,6 +37,8 @@ READ_TOOL = {
             "source_id": {"type": "string", "description": "Default local. For SSH use an exact source_id from view=sources; local Goal IDs do not discover remote Goals."},
             "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Deliveries lookback; expand for latest known progress older than yesterday."},
             "goal_id": {"type": "string"},
+            "todo_id": {"type": "string", "minLength": 1,
+                        "description": "Todos only, with goal_id: read one exact record including its complete permitted text. Recover content_truncated excerpts; a completed record does not authorize new work."},
             "query": {"type": "string", "maxLength": 200, "description": "Agents only: case-insensitive text match on identity and declared responsibility. Omit to browse all permitted registrations."},
             "request_id": {
                 "type": "string",
@@ -98,6 +100,13 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
         rejected.append("view:must_be_one_of_" + ",".join(READ_VIEWS))
     if "request_id" in arguments and view != "handoffs":
         rejected.append("request_id:only_for_view_handoffs")
+    if "todo_id" in arguments:
+        if view != "todos":
+            rejected.append("todo_id:only_for_view_todos")
+        elif not isinstance(arguments["todo_id"], str) or not arguments["todo_id"]:
+            rejected.append("todo_id:must_be_a_nonempty_string")
+        elif not arguments.get("goal_id"):
+            rejected.append("todo_id:requires_goal_id")
     if "include_stopped" in arguments:
         if view not in {"portfolio", "agents"}:
             rejected.append("include_stopped:only_for_view_portfolio_or_agents")
@@ -325,6 +334,7 @@ class ManagerInspection:
                 owner_scope=self.owner_scope,
                 limit=limit,
                 offset=offset,
+                todo_id=arguments.get("todo_id"),
             )
             page = source.pop("todos", [])
             # Completed title joins remain available through the delivery view.
