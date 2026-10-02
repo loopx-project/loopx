@@ -28,8 +28,14 @@ new capability registration or speculative workflow engine is introduced.
 Parent lineage retains root semantic context without recursively copying the
 entire ancestor transcript. Immediate request ids keep each return unambiguous;
 brief authors must preserve decision-relevant intermediate constraints. A parent
-reference proves which request was received, not authority inheritance. Local
-peer forwarding of external-audience parent requests is rejected.
+reference proves which request was received, not authority inheritance.
+External-source context may be forwarded only to recipients already allowed by
+that source's current sender-bound grant. Each hop follows immutable parent
+references back to the original provider ingress and Chat route, then the shared
+TypeScript admission rule checks source identity and every recipient in that
+lineage. Missing provenance or revoked grants reject the send before a peer
+operation is stored. Private owner conversations retain their existing scope;
+independent local peer requests do not gain an external audience or work rights.
 
 `inbox.py` adapts the existing private file stores; typed request validation stays
 in TypeScript. This does not promote a canonical shared-authority backend. General

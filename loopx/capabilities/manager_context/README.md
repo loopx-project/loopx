@@ -431,6 +431,15 @@ the registered Goal; otherwise it uses the Goal workspace. A digest/readiness
 check is not proof that the Agent understood the material. Files above 4 MiB
 remain explicitly unchecked.
 
+For a request received from an external conversation, peer consultation uses
+the original source's current sender and recipient grants. Both the current
+requester and the peer, including intermediate recipients, must still be
+authorized for that source. Each further hop rechecks the original ingress and
+return route; a parent peer request is not an authorization bypass. A missing
+grant names the blocked recipient without recording a request. This replaces
+the previous blanket refusal of external-source peer forwarding, without
+granting execution, changing priorities or broadening the return audience.
+
 The peer independently `acknowledge`s and `report`s a conclusion through the
 same commands as a manager request. The original requester receives it in
 `manager-inbox read` under `peer_returns`; its Turn-start hook keeps requiring
