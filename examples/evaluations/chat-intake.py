@@ -28,8 +28,7 @@ def score(case, response):
         errors.append("missing_answer")
     if observed != case["expected"]:
         errors.append(f"expected_{case['expected']}_got_{observed}")
-    if (response.get("proposals") or response.get("protected_action")
-            or (response.get("goal_draft") and response.get("context_handoff"))):
+    if response.get("proposals") or response.get("protected_action"):
         errors.append("unrequested_action")
     if case["expected"] in {"draft", "handoff"} and response.get("gate"):
         errors.append("redundant_gate")

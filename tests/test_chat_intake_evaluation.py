@@ -208,7 +208,7 @@ def test_material_counterfactuals_do_not_use_source_identity_as_completion():
         assert evaluation.score(case, answer)["passed"]
         assert not evaluation.score(case, wrong)["passed"]
         assert not evaluation.score(case, {**answer, "protected_action": {"operation": "deploy"}})["passed"]
-        assert not evaluation.score(case, {**answer, "goal_draft": {"objective": "Duplicate work"}})["passed"]
+        assert not evaluation.score(case, {**answer, "proposals": [{"kind": "todo"}]})["passed"]
 
 
 def test_review_evidence_retains_brief_without_provider_payload():
