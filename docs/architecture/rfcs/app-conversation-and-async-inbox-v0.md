@@ -262,6 +262,17 @@ substitutes another instance; unavailable readback preserves the saved message.
 Production HTTP tests cover steward and Goal Chat with real disposable stores.
 This is readback qualification, not native executor or model-routing acceptance.
 
+Saved-answer readback retains the same distinction outside the timeline: the
+existing return phase labels a progress update or conclusion, and delivery
+verification remains visible beside it. Delivery alone never means completion.
+Navigation reuses the typed conversation-scope owner rather than a storage Goal:
+Goal answers return to that Goal, portfolio answers to Steward, and external
+answers offer **Open Steward**, without claiming to open the external audience.
+Packaged read-only validation uses the production HTTP/store and return
+projection with synthetic receiver results. This closes a saved-answer
+presentation gap; external-conversation selection, native adoption/correction
+and the two real collaboration cycles remain separate acceptance work.
+
 Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
 recovery, GoalRef and late-return changes. Shared TS refactors accompany the
 affected transaction; full migration, Lark visual parity, scale and promotional

@@ -34,7 +34,7 @@ them directly.
 | --- | --- | --- |
 | `goal_identity` | registry, active state, agent profile docs | Stable `goal_id`, repo, registered peers, advisory profiles, and write boundary. |
 | `connection_state` | `loopx connect`, `bootstrap`, `doctor`, `sync-global` | Whether the repo is connected, read-only, bootstrapped, stale, or missing local state. |
-| `local_state_boundary` | `.gitignore`, `loopx check`, getting-started docs | Keep `.loopx/`, `.codex/goals/`, `.local/`, raw logs, credentials, and private paths out of public commits. |
+| `local_state_boundary` | `.gitignore`, `loopx check`, getting-started docs | Keep `.loopx/`, `.loopx/goals/`, `.local/`, raw logs, credentials, and private paths out of public commits. |
 | `todo_item_v0` | `loopx todo`, active-state todo sections, `loopx/status.py` | Formal work unit with role, status, task class, action kind, claim, dependency, resume, and evidence metadata. |
 | `interaction_contract_v0` | `loopx quota should-run`, `docs/quota-allocation.md` | Splits user, agent, and CLI obligations before an automated turn spends compute. |
 | `agent_lane_next_action_v0` | `loopx quota should-run --agent-id ...`, `docs/project-agent-todo-contract.md` | Per-agent selected runnable todo without replacing the goal-level next action. |

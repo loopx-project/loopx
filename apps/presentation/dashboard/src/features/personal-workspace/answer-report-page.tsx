@@ -3,6 +3,8 @@ import {useEffect, useState} from "react";
 import {fetchChatSession, type ChatSessionSnapshot, type ChatVisibleMessage} from "../../data/chat";
 import {visibleAgentMessage} from "./answer-text";
 import {readWorkspaceLocale} from "./i18n";
+import {resolveConversationScope} from "../../../../../../loopx/control_plane/collaboration/conversation_scope";
+import {ReturnDeliveryStatus} from "./return-delivery-status";
 import {MarkdownText} from "./markdown";
 import "./personal-workspace.css";
 import "./goal-loopx-mode.css";
@@ -38,16 +40,12 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
     return () => { live = false; document.title = previousTitle; };
   }, [sessionId, messageId, zh]);
 
-  const currentUrl = new URL(window.location.href);
-  currentUrl.searchParams.delete("reportSessionId");
-  currentUrl.searchParams.delete("reportMessageId");
-  currentUrl.searchParams.set("goalId", state.kind === "ready" && state.snapshot.session.goal_id !== "loopx-manager"
-    ? state.snapshot.session.goal_id : "");
-  if (statusUrl) currentUrl.searchParams.set("statusUrl", statusUrl);
-  const workspaceUrl = currentUrl.toString();
+  const navigation = answerReportNavigation(
+    state.kind === "ready" ? state.snapshot.session : null, window.location.href, statusUrl, zh,
+  );
   const closeOrReturn = () => {
     if (window.opener) window.close();
-    else window.location.assign(workspaceUrl);
+    else window.location.assign(navigation.url);
   };
 
   const answer = state.kind === "ready" ? state.message : null;
@@ -64,14 +62,13 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
     <div className="answer-report-shell">
       <header className="answer-report-header">
         <div><span className="answer-report-brand">LoopX</span><span className="answer-report-context">
-          {state.kind === "ready" && state.snapshot.session.goal_id !== "loopx-manager"
-            ? state.snapshot.session.goal_id : zh ? "管家" : "Steward"}
+          {navigation.context}
         </span></div>
-        <button type="button" onClick={closeOrReturn}>{zh ? "返回对话" : "Back to conversation"}</button>
+        <button type="button" onClick={closeOrReturn}>{window.opener ? (zh ? "关闭答复" : "Close answer") : navigation.label}</button>
       </header>
       <article className="answer-report-body">
         <div className="answer-report-heading"><div><small>{zh ? "已保存的答复" : "Saved answer"}</small>
-          <h1>{zh ? "完整答复" : "Full answer"}</h1>
+          <AnswerReportSummary message={answer ?? undefined} zh={zh}/>
           {dateLabel ? <p><time dateTime={answer?.created_at}>{dateLabel}</time></p> : null}
         </div>{answer ? <button type="button" onClick={() => {
           setCopyFailed(false);
@@ -97,4 +94,41 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
       </article>
     </div>
   </main>;
+}
+
+/** Present the trusted conversation scope, rather than its storage Goal. */
+export function answerReportNavigation(
+  session: Pick<ChatSessionSnapshot["session"], "goal_id" | "channel_id"> | null,
+  currentUrl: string, statusUrl: string, zh: boolean,
+) {
+  const scope = resolveConversationScope({goal_id: session?.goal_id, channel_id: session?.channel_id});
+  const goal = scope.kind === "owner_goal" ? scope.goal_ids[0] : "";
+  const url = new URL(currentUrl);
+  url.searchParams.delete("reportSessionId");
+  url.searchParams.delete("reportMessageId");
+  url.searchParams.set("goalId", goal);
+  url.searchParams.set("view", "conversation");
+  if (statusUrl) url.searchParams.set("statusUrl", statusUrl);
+  return {
+    url: url.toString(),
+    context: scope.kind === "owner_goal" ? goal
+      : scope.kind === "owner_portfolio" ? (zh ? "管家" : "Steward")
+      : scope.kind === "external_audience" ? (zh ? "管家 · 外部对话" : "Steward · External conversation")
+      : (zh ? "已保存的对话" : "Saved conversation"),
+    label: scope.kind === "owner_goal" ? (zh ? "返回对话" : "Back to conversation")
+      : scope.kind === "owner_portfolio" ? (zh ? "返回管家" : "Back to Steward")
+      : scope.kind === "external_audience" ? (zh ? "打开管家" : "Open Steward")
+      : (zh ? "打开工作区" : "Open workspace"),
+  };
+}
+
+/** Delivery confirms receipt; the existing phase alone distinguishes a progress update. */
+export function AnswerReportSummary({message, zh}: {message?: ChatVisibleMessage; zh: boolean}) {
+  const delivery = message?.return_delivery;
+  return <>
+    <h1>{delivery?.phase === "decision" ? (zh ? "进度更新" : "Progress update")
+      : delivery?.phase === "conclusion" ? (zh ? "处理结论" : "Conclusion")
+      : (zh ? "完整答复" : "Full answer")}</h1>
+    <ReturnDeliveryStatus delivery={delivery}/>
+  </>;
 }

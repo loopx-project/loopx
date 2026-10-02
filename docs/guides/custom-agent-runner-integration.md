@@ -109,7 +109,7 @@ Use JSON for the machine path:
 
 ```bash
 loopx --format json \
-  --registry "$HOME/.codex/loopx/registry.global.json" \
+  --registry "$HOME/.loopx/registry.global.json" \
   quota should-run \
   --goal-id <goal-id> \
   --agent-id <agent-id> \

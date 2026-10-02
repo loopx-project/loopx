@@ -422,7 +422,7 @@ if ! command -v loopx >/dev/null 2>&1; then
   fi
 fi
 loopx doctor >/dev/null
-loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <GOAL_ID> --runtime-profile codex_app_heartbeat --turn-instance-id "${LOOPX_TURN:?}"
+loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID> --runtime-profile codex_app_heartbeat --turn-instance-id "${LOOPX_TURN:?}"
 
 If that preflight still fails, do not do implementation work, adapter work,
 file edits, research, project exploration, or quota spend in this turn. Return
@@ -611,7 +611,7 @@ If the result says should_run=true:
    A plain state-only refresh is quota-neutral and cannot replace it. Then, for
    a minute-based heartbeat, spend one slot:
 
-   loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute
+   loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute
 
    Run it exactly once as rendered; no pipe/filter/retry. If spend output is
    ambiguous, verify with read-only quota status; never rerun.
@@ -702,7 +702,7 @@ Advance <GOAL_ID> using <ACTIVE_GOAL_STATE_PATH>. Before any delivery work,
 export `$HOME/.local/bin` onto PATH and run `loopx doctor`; if the CLI is
 still unavailable, quietly report that preflight failure and do no work. Then
 copy this trigger's `<current_time_iso>` into `LOOPX_TURN` and run
-`loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <GOAL_ID> --runtime-profile codex_app_heartbeat --turn-instance-id "${LOOPX_TURN:?}"`. If it
+`loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID> --runtime-profile codex_app_heartbeat --turn-instance-id "${LOOPX_TURN:?}"`. If it
 returns `should_run=false`, ask about operator gates with NOTIFY using
 `gate_prompt` unless the same unresolved gate was already surfaced recently. If
 the payload says `notify_user_on_open_todo=true`, ask up to three open
@@ -748,7 +748,7 @@ boundary is already clear. Validate it, write back changed files / validation /
 critic / next action; for non-trivial feature slices, create a successor todo
 or write a compact no-follow-up rationale; append one accountable
 `refresh-state --delivery-outcome outcome_progress`, then exactly one
-`loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute`
+`loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute`
 event for the completed turn; run it as rendered, without pipes or filters,
 and never rerun it. Only an optional state-only refresh belongs after spend.
 Use `--slots 1` for minute-based heartbeats; for coarser intervals, spend the

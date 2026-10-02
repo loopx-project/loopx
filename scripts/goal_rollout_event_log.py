@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.paths import DEFAULT_RUNTIME_ROOT  # noqa: E402
+from loopx.paths import select_default_runtime_root  # noqa: E402
 from loopx.rollout_event_log import (  # noqa: E402
     build_rollout_event,
     append_rollout_event,
@@ -41,7 +41,15 @@ def _details(values: list[str] | None) -> dict[str, str]:
 def _log_path(args: argparse.Namespace) -> Path:
     if args.log_path:
         return Path(args.log_path).expanduser()
-    return rollout_event_log_path(Path(args.runtime_root).expanduser(), args.goal_id)
+    try:
+        root = (
+            Path(args.runtime_root).expanduser()
+            if args.runtime_root is not None
+            else select_default_runtime_root()
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    return rollout_event_log_path(root, args.goal_id)
 
 
 def handle_append(args: argparse.Namespace) -> int:
@@ -111,7 +119,7 @@ def handle_observe_codex_sessions(args: argparse.Namespace) -> int:
 
 def _add_common_path_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--goal-id", required=True)
-    parser.add_argument("--runtime-root", default=str(DEFAULT_RUNTIME_ROOT))
+    parser.add_argument("--runtime-root", help="Defaults to the selected current or legacy runtime.")
     parser.add_argument("--log-path")
     parser.add_argument("--pretty", action="store_true")
 

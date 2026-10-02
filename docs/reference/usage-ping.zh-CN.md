@@ -143,9 +143,13 @@ canary smoke 执行器也在本地验证时关闭采集。Native Codex 评测 pr
 
 ## 发送与关闭边界
 
-整机状态在 `~/.codex/loopx/usage-ping.json`，权限 `0600`。它不进入 Goal 状态或
+新安装的整机状态在 `~/.loopx/usage-ping.json`，权限 `0600`。已有默认全局 registry
+位于 `.codex/loopx` 时，统计状态继续沿旧路由，直到显式迁移；两份默认 registry
+并存时拒绝隐式设置写入。整机路径独立于 Goal runtime root。它不进入 Goal 状态或
 authority provider 备份、公共投影。普通命令只读取很小的本地提示；独立 Node 后台
 进程负责计数、锁和网络。首次告知和设置操作可能等待本机 Node，不等待收集服务。
+离线 `migrate-local-state` 命令不调度这些观察，避免后台写入改变预览和回滚收据
+所绑定的整机状态字节。
 
 每天最多尝试一次心跳。首次可采集的 CLI 命令结束后立即尝试发送汇总，包括失败结果；
 后续有合格活动时，每隔至少 15 分钟发送一批新增计数，UTC 换日不重置间隔。

@@ -16,7 +16,7 @@ from .execution_profile import execution_profile_turn_granularity
 from .heartbeat_prompt import build_heartbeat_prompt
 from .control_plane.reward_memory import reward_memory_goal_policy
 from .history import load_registry
-from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from .registry import registry_goals, resolve_state_file
 from .control_plane.agents.legacy_migration import (
     completed_peer_agent_runtime_migration,
@@ -741,7 +741,7 @@ def build_upgrade_plan(
     registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_override)
     if not registry_path.exists():
-        fallback = global_registry_path(runtime_root or DEFAULT_RUNTIME_ROOT)
+        fallback = global_registry_path(runtime_root or select_default_runtime_root())
         if fallback.exists():
             registry_path = fallback
             registry = load_registry(registry_path)

@@ -260,7 +260,7 @@ def main() -> int:
     )
     assert_contains(
         status_contract,
-        'loopx --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <goal-id>',
+        'loopx --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <goal-id>',
         label="status contract",
     )
     assert_contains(

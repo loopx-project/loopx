@@ -8,7 +8,7 @@ from .control_plane.projects.registry_codec import project_registry_transaction
 from .control_plane.runtime.time import now_local_iso, utc_timestamp
 from .global_registry import GlobalRegistryReduction, mutate_global_registry
 from .history import load_registry
-from .paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from .registry import read_json, registry_goals
 from .runtime import validate_goal_id_path_segment
 
@@ -345,7 +345,7 @@ def uninstall_project(
         "dry_run": dry_run,
         "execute": execute,
         "registry": str(registry_path),
-        "runtime_root": str(runtime_root or DEFAULT_RUNTIME_ROOT),
+        "runtime_root": str(runtime_root or select_default_runtime_root()),
         "global_registry": str(global_path),
         "goal_ids": sorted(target_goal_ids),
         "local_registry_goal_count_before": local_before,

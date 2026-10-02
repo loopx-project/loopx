@@ -270,24 +270,49 @@ function teamPlanApplyReceipt(proposal) {
   return receipt;
 }
 
-export function startServer() {
+export async function startServer() {
   if (packaged) {
     // An explicit installed interpreter must resolve its own package, not the checkout.
     const isolation = process.env.LOOPX_PYTHON_BIN ? ["-I"] : [];
-    return spawn(resolveTestPython(), [...isolation, "-c", `
+    const server = spawn(resolveTestPython(), [...isolation, "-c", `
+from pathlib import Path
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
 from loopx.presentation.chat_bundle import validate_bundle
 assets = default_chat_assets_dir()
-validate_bundle(assets)
+validate_bundle(assets, source_root=${process.env.LOOPX_PYTHON_BIN ? "None" : `Path(${JSON.stringify(repoRoot)})`})
 server = ChatHTTPServer(("127.0.0.1", ${port}), ChatRequestHandler)
 server.assets_dir = assets
 server.verbose = False
+print("loopx-packaged-smoke-ready", flush=True)
 server.serve_forever()
 `], {
       cwd: repoRoot,
       env: { ...process.env },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    // An unrelated process on the same port is not this bundle's readiness.
+    await new Promise((resolveReady, rejectReady) => {
+      let output = "";
+      let diagnostic = "";
+      const timer = setTimeout(() => {
+        server.kill("SIGTERM");
+        rejectReady(new Error("Packaged workspace server did not start within 20 seconds"));
+      }, 20_000);
+      server.stderr.on("data", (chunk) => { diagnostic = (diagnostic + chunk).slice(-8000); });
+      server.stdout.on("data", (chunk) => {
+        output += chunk;
+        if (output.includes("loopx-packaged-smoke-ready\n")) {
+          clearTimeout(timer);
+          resolveReady();
+        }
+      });
+      server.once("error", (error) => { clearTimeout(timer); rejectReady(error); });
+      server.once("exit", (code) => {
+        clearTimeout(timer);
+        rejectReady(new Error(`Packaged workspace server exited (${code}): ${diagnostic}`));
+      });
+    });
+    return server;
   }
   return startViteDashboardServer({ dashboardDir, port });
 }

@@ -6,6 +6,7 @@ from typing import Any
 
 from .agent_registry import registered_agent_ids_for_goal
 from .bootstrap import default_goal_id
+from .paths import registered_goal_state_file
 from .capabilities.issue_fix.candidate_preflight import (
     candidate_preflight_input_contract,
 )
@@ -568,7 +569,7 @@ def inspect_bootstrap_connection(
     registry_exists = registry_path.exists()
     registry, registry_error = _read_registry(registry_path) if registry_exists else (None, None)
     inferred_goal_id = goal_id or default_goal_id(resolved_project)
-    state_file = resolved_project / ".codex" / "goals" / inferred_goal_id / "ACTIVE_GOAL_STATE.md"
+    state_file = registered_goal_state_file(resolved_project, inferred_goal_id, registry)
     base_connection = {
         "input_project": str(input_project),
         "project": str(resolved_project),
@@ -599,7 +600,7 @@ def inspect_bootstrap_connection(
     goals = registry_goals(registry)
     selected_goal_id, selected_goal = _select_goal(goals, goal_id)
     resolved_goal_id = selected_goal_id or inferred_goal_id
-    fallback_state_file = resolved_project / ".codex" / "goals" / resolved_goal_id / "ACTIVE_GOAL_STATE.md"
+    fallback_state_file = registered_goal_state_file(resolved_project, resolved_goal_id, registry)
     goal_state_file = (
         resolve_state_file(resolved_project, str(selected_goal.get("state_file")))
         if selected_goal and selected_goal.get("state_file")
@@ -2108,7 +2109,7 @@ Detected state: `{state}` ({reason})
 
 Rules:
 - This command pack preview is read-only. Do not run bootstrap/connect, create heartbeat automation, or spend quota while only previewing it.
-- Bare `/loopx` is read/status-first: if the project is not fully connected, ask for explicit user confirmation before any command that writes `.loopx/` or `.codex/goals/`.
+- Bare `/loopx` is read/status-first: if the project is not fully connected, ask for explicit user confirmation before any command that writes `.loopx/` (or legacy `.codex/goals/`).
 - `/loopx <goal text>` is explicit goal-start intent: it may create project-local LoopX state, but it must run the profile-appropriate planning checkpoint before writing todos, then activate the correct host loop if missing/stale.
 - Same-priority todos are ranked by planner order, then by `todo add` write order; preserve the order exactly.
 - If the project is connected, reuse the existing state and show the status/gate/todo snapshot.

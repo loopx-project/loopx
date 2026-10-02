@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx import usage_ping
+from loopx import paths, usage_ping
 from loopx.cli_runtime import main
 
 
@@ -65,11 +65,43 @@ def collector():
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setattr(usage_ping, 'DEFAULT_RUNTIME_ROOT', tmp_path)
+    monkeypatch.setattr(usage_ping, 'select_default_runtime_root', lambda: tmp_path)
     for key in ('CI', 'DO_NOT_TRACK', 'LOOPX_USAGE_PING', 'LOOPX_USAGE_POLICY'):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', 'http://127.0.0.1:1/v1/ping')
     return tmp_path
+
+
+def test_machine_usage_state_keeps_legacy_choice_and_rejects_ambiguous_route(
+    tmp_path, monkeypatch, capsys,
+):
+    current = tmp_path / ".loopx"
+    legacy = tmp_path / ".codex" / "loopx"
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy)
+    for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    assert usage_ping.state_path() == current / "usage-ping.json"
+
+    legacy.mkdir(parents=True)
+    (legacy / "registry.global.json").write_text('{"goals": []}', encoding="utf-8")
+    assert usage_ping.state_path() == legacy / "usage-ping.json"
+    usage_ping.control("disable")
+    before = usage_ping.state_path().read_bytes()
+    assert usage_ping.begin("version") is None
+    assert not current.exists()
+
+    current.mkdir()
+    (current / "registry.global.json").write_text('{"goals": []}', encoding="utf-8")
+    with pytest.raises(ValueError, match="Both default LoopX registries exist"):
+        usage_ping.state_path()
+    monkeypatch.setattr(usage_ping, "_detach", lambda *_: pytest.fail("ambiguous route must not send"))
+    assert main(["version", "--format", "json"]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert (legacy / "usage-ping.json").read_bytes() == before
+    assert not (current / "usage-ping.json").exists()
+    assert usage_ping.state_path(tmp_path / "explicit") == tmp_path / "explicit" / "usage-ping.json"
 
 
 def test_settings_commands_and_corrupt_state_repair(isolated, capsys):
@@ -160,7 +192,7 @@ def test_first_disclosure_respects_policy_overrides(isolated, monkeypatch, capsy
 def test_real_agent_cli_keeps_json_clean_and_sends_only_after_disclosure(isolated, collector, monkeypatch):
     endpoint, received, accepted, release = collector
     monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
-    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); from loopx.cli_runtime import main; '
     command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
     first = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert first.returncode == 0 and isinstance(json.loads(first.stdout), dict)
@@ -200,7 +232,7 @@ def test_claude_smoke_environment_disables_real_cli_and_sender(
     env['LOOPX_USAGE_PING_ENDPOINT'] = endpoint
     setup = (
         'import json,sys; from pathlib import Path; from loopx import usage_ping; '
-        'usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); '
+        'usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); '
     )
     cli = subprocess.run(
         [sys.executable, '-c', setup + 'from loopx.cli_runtime import main; '
@@ -225,7 +257,7 @@ def test_real_cli_returns_while_http_response_is_held_and_disable_survives(isola
     endpoint, received, accepted, release = collector
     monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
     usage_ping.control('enable')
-    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); from loopx.cli_runtime import main; '
     command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
     started = time.monotonic()
     baseline = subprocess.run(command, capture_output=True, text=True, timeout=30,
@@ -253,7 +285,7 @@ def test_real_cli_first_result_reaches_http_without_next_day_return(isolated, co
     endpoint, received, accepted, release = collector
     monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', endpoint)
     release.set()
-    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); from loopx.cli_runtime import main; '
     command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
     first = subprocess.run(command, capture_output=True, text=True, timeout=30)
     assert first.returncode == 0 and 'random installation ID' in first.stderr
@@ -291,7 +323,7 @@ def test_disabled_synthetic_real_cli_never_contacts_collector(isolated, collecto
     release.set()
     env = {**os.environ, 'LOOPX_USAGE_PING_ENDPOINT': endpoint, switch: value}
     setup = ('import sys; from pathlib import Path; from loopx import usage_ping; '
-             'usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; ')
+             'usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); from loopx.cli_runtime import main; ')
     command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
     # A matching acknowledged state cannot override an environment suppressor.
     usage_ping.control('enable')
@@ -413,7 +445,7 @@ def test_v3_cli_upgrade_requires_visible_renewal_before_real_http(isolated, coll
     old['notice']['version'] = 3
     path.write_text(json.dumps(old))
     before = path.read_bytes()
-    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.DEFAULT_RUNTIME_ROOT=Path(sys.argv[1]); from loopx.cli_runtime import main; '
+    setup = 'import sys; from pathlib import Path; from loopx import usage_ping; usage_ping.select_default_runtime_root=lambda: Path(sys.argv[1]); from loopx.cli_runtime import main; '
     command = [sys.executable, '-c', setup + 'raise SystemExit(main(["version", "--format", "json"]))', str(isolated)]
     hidden = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30)
     assert hidden.returncode == 0 and json.loads(hidden.stdout)['ok']

@@ -2495,7 +2495,7 @@ const zhCN: Record<WorkspaceMessageKey, string> = {
   "timeline.emptyWorkspaceDescription": "向 LoopX 管家描述一个 Goal，或询问今天最值得关注的事情。",
   "timeline.gateHistory": "{count} 项历史 Gate",
   "timeline.pending": "正在整理…",
-  "returnDelivery.queued": "结论等待回传",
+  "returnDelivery.queued": "等待回传",
   "returnDelivery.verifying": "正在核验送达，不会重复发送",
   "returnDelivery.delivered": "已送达原受众",
   "returnDelivery.reconciled": "恢复后已核验送达",
