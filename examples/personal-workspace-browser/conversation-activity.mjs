@@ -113,6 +113,14 @@ export const conversationActivityScenario = {
       assert.equal(api.turnRequests.length, 1, "steering never starts another turn");
       assert.equal(streams.size, 1, "steering keeps the original output stream");
       assert.equal(await page.locator(".personal-message.is-user").filter({ hasText: "先核对依赖" }).count(), 1);
+      const conversation = await page.locator(".personal-channel-timeline > .personal-message").evaluateAll(rows => rows.map(row => ({
+        user: row.classList.contains("is-user"), text: row.textContent,
+      })));
+      const originalIndex = conversation.findIndex(row => row.user && row.text.includes(turn.message));
+      const workIndex = conversation.findIndex(row => !row.user && row.text.includes("中断本轮"));
+      const correctionIndex = conversation.findIndex(row => row.user && row.text.includes("先核对依赖"));
+      assert.ok(originalIndex >= 0 && originalIndex < workIndex && workIndex < correctionIndex,
+        "The request, ongoing work and accepted correction remain together in conversation order");
       await pending.locator("summary").filter({ hasText: "最近活动" }).click();
       assert.deepEqual((await pending.locator(".personal-message-activity li").allTextContents()).slice(-3), ["Agent 正在执行命令", "Agent 正在检索", "Agent 正在执行命令"]);
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-desktop.png"), animations: "disabled" });

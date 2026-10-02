@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -344,6 +345,12 @@ def probe_cli(repository: Path) -> Path:
 
 
 def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
+    # The copied CLI runs in a disposable repository. Do not merge its coverage
+    # into the source checkout: pytest removes that repository before CI reports.
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("COV_CORE_", "COVERAGE_"))
+    }
     return subprocess.run(
         [
             sys.executable,
@@ -352,6 +359,7 @@ def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
             "HEAD",
         ],
         cwd=repository,
+        env=env,
         capture_output=True,
         text=True,
         check=False,

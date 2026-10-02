@@ -891,7 +891,7 @@ class CodexChatAgentSession:
     def steer(self, user_message: str, *, expected_turn_id: str) -> str:
         """Inject one user message into the exact active Codex Turn."""
 
-        text = " ".join(str(user_message or "").split())
+        text = str(user_message or "").strip()
         selected_turn_id = str(expected_turn_id or "").strip()
         if not text or not selected_turn_id:
             raise ValueError("steering requires a message and expected active turn id")
@@ -900,17 +900,9 @@ class CodexChatAgentSession:
             {
                 "threadId": self.thread_id,
                 "expectedTurnId": selected_turn_id,
-                "input": [
-                    {
-                        "type": "text",
-                        "text": _turn_prompt(
-                            text,
-                            context_summary=self.context_summary,
-                            execution_mode=self.execution_mode,
-                            runtime_profile=self.runtime_profile,
-                        ),
-                    }
-                ],
+                # The native Turn already has its task and policy. Replaying
+                # the start prompt would reframe this update as a new task.
+                "input": [{"type": "text", "text": text}],
             },
         )
         turn_id = _extract_id(result, "turn", "turnId")
