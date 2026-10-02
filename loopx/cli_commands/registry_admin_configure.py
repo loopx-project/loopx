@@ -148,6 +148,13 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         ),
     )
     configure_goal_parser.add_argument(
+        "--capability-improvement-mode", choices=["off", "bounded"],
+        help="Goal-scoped improvement intent; does not enable or install capabilities.",
+    )
+    configure_goal_parser.add_argument("--capability-discovery-budget-minutes", type=int)
+    configure_goal_parser.add_argument("--capability-max-trials", type=int)
+    configure_goal_parser.add_argument("--clear-capability-improvement-configuration", action="store_true")
+    configure_goal_parser.add_argument(
         "--orchestration-mode",
         choices=["default", "multi_subagent"],
         help="Per-goal orchestration mode.",

@@ -36,7 +36,9 @@ import {setLocalHandoffMode, migrateLocalHandoffMode} from "./coordination/hando
 import {projectOwnershipObservation} from "./coordination/ownership_observation.ts";
 import {observeLocalCoordinationOwnership} from "./coordination/local_authority_runtime.ts";
 import {evaluateTaskLeaseOwnerEligibility} from "./work_items/task_lease_eligibility.ts";
-import { evaluateSubagentContext, describeSubagentContext } from "./subagent_context.ts";
+import { describeSubagentContext } from "./subagent_context.ts";
+import { evaluateGoalAgentContext } from "./goal_agent_context.ts";
+import { inspectImprovementPolicy, planImprovementConfiguration } from "./capabilities/goal_capability_organization.ts";
 import {
   effectIdsMatch,
   effectProgramFromOrderedSteps,
@@ -724,7 +726,15 @@ export function createEffectRuntimeHandlers(
     ],
     [
       "capability_hook.agent_context.project",
-      (params) => evaluateSubagentContext(params),
+      (params) => evaluateGoalAgentContext(params),
+    ],
+    [
+      "capability.improvement.inspect",
+      (params) => inspectImprovementPolicy(params.policy),
+    ],
+    [
+      "capability.improvement.configuration",
+      (params) => planImprovementConfiguration(params),
     ],
     [
       "capability_hook.interaction_projection.validate_registration",
