@@ -1,5 +1,11 @@
 # Core state machines and transitions
 
+The previous chapters took the mechanisms apart: chapter 02b set out the four requirements of
+long-horizon work, the state substrate covered durable facts and read-only projections, the work graph
+covered Todos, claims, and authority, and chapter 03 covered the transaction order inside one turn.
+This chapter is where they converge. Read in isolation, each mechanism holds up. The question here is
+the one only this chapter can answer: **how do they connect back into a single loop?**
+
 The short answer is: **LoopX is driven by cooperating state-machine families, but its highest-level model
 is not “nine machines messaging one another.” It is one
 effectful Agent Loop.** The Harness interprets effect requests from an Agent or Host; bounded state
@@ -10,8 +16,39 @@ instead of overwriting each other's state.
 LoopX does not advance a Goal through one giant state machine. It assigns durable work, turn decisions,
 evidence settlement, scheduling, and UI projection to state machines with explicit owners. This chapter
 establishes vocabulary and abstraction levels first, explains why the design is split this way, shows the
-cooperation loop, and only then expands each state-machine family. You can understand the main path before
-drilling into one rule family.
+cooperation loop, expands each state-machine family, and closes with the cost of the design. You can
+understand the main path before drilling into one rule family.
+
+## Start from a bad ending
+
+The scene in this chapter needs several rounds to appear, so start with the timeline:
+
+```text
+Mon 14:00  The Goal is active. The Todo graph is complete: implementation, tests, and docs
+           all have owners.
+Mon 17:30  One round completes. The Agent edits Vision to accept a new acceptance route.
+Tue 09:00  The process is killed (deploy, OOM, or the user hits stop).
+Tue 09:10  A new instance takes over. It reads an active Goal, a complete Todo graph, and
+           an ACKed scheduling record.
+Tue 09:10  Every field is legal. Todo status is one of the four durable statuses; the Vision
+           checkpoint is well-formed; last_checked_at is current.
+Tue 09:10  It cannot determine one thing: the Goal acceptance changed at Mon 17:30. On the
+           File/SQLite authority path the checkpoint's read context covers the digest of the
+           Goal and acceptance basis, so a later change reads as stale and forces a reread;
+           in a mode that does not carry acceptance, no owner binds the checkpoint to an
+           acceptance revision.
+Wed 10:00  Nobody can say whether the replan is complete.
+Wed 10:00  The control plane keeps advancing the old route. No rule forbids it.
+```
+
+No state machine is broken in that ending. Todo lifecycle judged the status correctly, quota recompiled
+its contract from current source facts, the settlement receipts are complete, and the scheduler ACK was
+genuinely written back. Each machine answers correctly on its own, and together they cannot say how far
+the work has come.
+
+That is the seam the earlier chapters cannot show when read separately: **each machine owns a share of
+the facts, and the loop is built from the handoff between those facts.** One machine writes a conclusion
+back as durable fact and the next reads it, never calling into the other's internal state.
 
 ## Choose the level first: one Loop, three abstraction levels, nine state-machine families
 
@@ -149,7 +186,7 @@ For orientation, first imagine the desired Goal control plane as this **conceptu
 describes the questions one read should answer, not a unified schema already implemented in LoopX 1.0:
 
 ```yaml
-GoalControlSnapshot:                 # desired read model, not the one writable schema
+GoalControlSnapshot:                 # conceptual view; these fields are questions, not implemented field names
   identity:
     goal_id: ...
     activation_state: active | stopped
@@ -179,7 +216,7 @@ LoopX 1.0 does **not** expose one `GoalState` object that may be replaced wholes
 `objective`, non-goals, acceptance, permissions, and terminal conditions do not yet have unified typed
 canonical storage. The `intent` block above is a target model; it must not be presented as an implemented
 authoritative envelope. Today's shared Goal alignment is a read-only aggregate: it obtains a source basis
-from the event log, Markdown active state, or canonical Todo snapshot; identifies the Todo/lease snapshot
+from the selected Markdown active state or canonical Todo snapshot, with history supplied by its own owner; the former Todo event API is retired. It identifies the Todo/lease snapshot
 through a separate `todo_basis`; and then projects drift and conflict:
 
 | Common abstract field | Actual LoopX expression |
@@ -187,7 +224,7 @@ through a separate `todo_basis`; and then projects drift and conflict:
 | `goal_id` | Stable identity in the registry and every goal-scoped event |
 | `phase` | Goal activation is only `active | stopped`; stage routing belongs to Agent Vision / Todo, not a universal Goal phase |
 | `objective` / `acceptance` / `permissions` / terminal conditions | Currently distributed across project material, Vision, Todos, and runtime constraints; there is no unified typed canonical intent revision |
-| `completed_requirements` / `pending_requirements` | Aggregated from available Todo, Vision-checkpoint, acceptance-gap, and frontier facts; not independently writable lists |
+| Completed / pending requirements | A conceptual placeholder, not a current field name; the corresponding item in the alignment output is `frontier_basis`, with the rest aggregated from Todo, Vision-checkpoint, acceptance-gap, and frontier facts, and not independently writable lists |
 | `artifacts` / `evidence` / `blockers` | References and typed facts held by Todos, runs, events, and receipts |
 | `version` | Owner-specific event `append_sequence`, source checksum, or opaque provider revision; no global Goal version exists |
 
@@ -213,13 +250,13 @@ flowchart TD
 Here, “CAS” is a concurrency-control principle, not a claim that the entire repository has one integer
 `version`:
 
-- event-sourced Todo writes compare the validation checksum, last event, and append sequence before appending;
+- Todo completion compares a snapshot of the admission-owned fields (`status`, `completion_continuation`, `successor_todo_ids`, `validation_command_argv`, and others) after taking the mutation lock; a mismatch is rejected, so a validation planned against one declaration cannot authorize a different persisted Todo;
 - the shared authority store performs its real compare-and-swap with the opaque `expected_provider_revision` (a generation in the file provider); neither `authority_revision` nor `lease_epoch` may substitute for it;
 - the local-state correctness module builds an `expected_revision`, per-Goal lock, lease, and idempotency envelope in dry-run/shadow mode; it explicitly does not mean that the current apply path enforces those guarantees, because the caller still owns the actual lock, write, and event;
 - settlement binds writeback, spend, and scheduler receipts to `goal_id + agent_id + turn_instance_id`.
 
 The matching source anchors are
-[`event_writeback.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/event_writeback.py),
+[`completion_transaction.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py),
 [`local_state_write_correctness.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py),
 [`authority_store.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts),
 [`coordination/authority_core.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_core.py),
@@ -251,8 +288,8 @@ returns an unknown state.
 
 ## How nine state-machine families compose one Loop
 
-Now the state map is useful. The maintainer-level map separates the control plane into nine cooperating
-state-machine families. “Nine” is the current teaching map for core rules, not a protocol constant that
+Now the state map is useful, and it connects back to the timeline above. The maintainer-level map
+separates the control plane into nine cooperating state-machine families. “Nine” is the current teaching map for core rules, not a protocol constant that
 requires every extension to register nine runtime services. This book groups them into four reader-oriented
 layers:
 
@@ -723,3 +760,85 @@ See the complete maintainer-level nine-machine table in
 [State Machines](/loopx/docs/product/core-control-plane/state-machine/). When changing a rule, do not copy
 an implementation backward from this teaching diagram. Confirm the current typed owner, protocol schema,
 characterization fixture, and migration boundary first.
+
+## Cost and boundary: what nine state-machine families buy
+
+The opening timeline shows what separating fact ownership buys: each machine evolves and is repaired on
+its own. The price is that the handoff becomes something to maintain, and no single machine can notice
+when it breaks.
+
+**Cost one: every handoff point must be explicit.** For a conclusion to travel from "this machine's
+judgment" to "a fact the next machine can read," it needs a writeback and a receipt. Without that step
+both machines are right and the loop is still broken. That is the shape of the opening timeline.
+
+**Cost two: what you read may already be stale.** Each machine judges from current source facts, and a
+window exists between reading and committing. Revision basis, checksums, and CAS constrain that window
+by rejecting stale writes. The price is that callers must handle `needs_rebase` and read again.
+
+**Cost three: one question gets asked several times.** Nine families each keep their own interpretation
+table, so the same phenomenon — "should this turn move?" — is judged once in quota, once in scheduler,
+and once in frontier. What repeats is the entry point rather than the knowledge. The gain is that each rule has
+exactly one owner; the cost is that debugging walks owner by owner.
+
+**Cost four: no single family can guarantee a cross-family property.** Closure is a four-level nested
+conjunction, and the terminal judgment requires an entirely resolved frontier. "Looks nearly done" is
+therefore not a state you can decide on; it has to be proven item by item.
+
+**Boundary one: nine is a teaching map rather than a protocol constant.** No runtime requires nine registered
+services, and extensions do not align to that number. What actually binds is the typed owner, the protocol
+schema, and the transition rules.
+
+**Boundary two: this map does not replace the migration boundary.** The owner in the diagram and the
+implementation language are separate dimensions. When a semantic is already carried by a TypeScript
+owner, rebuilding it in Python from this teaching map creates a second source of truth.
+
+**Boundary three: idempotent recovery covers only journal-governed steps.** Only settlement steps with a
+durable journal, an `effect_ref`, and a provider readback resolver carry that guarantee. An arbitrary
+external call is not automatically deduplicated because this chapter mentions reconciliation; settlement
+fails closed when the resolver is missing or returns an unknown state.
+
+**Boundary four: the diagram does not go to the front line.** The diagrams here explain; they are not an
+implementation spec. Before changing a rule, confirm the current typed owner, protocol schema,
+characterization fixture, and migration boundary.
+
+## Named failures: where the handoff breaks
+
+Each of the four costs above has a matching failure you can observe, and all of them are readable from
+state rather than from a transcript.
+
+**Failure one: a conclusion never became fact.** A machine computes this turn's decision and ends without
+a writeback. The next turn re-reads source facts and reaches the same old conclusion. The symptom is the
+same action being selected repeatedly while the Todo graph never changes.
+
+**Failure two: a stale write overwrites newer fact.** Source changed after the basis was read and the
+commit bypassed CAS. The symptom is two Agents erasing each other's progress, or a lease that has already
+been replaced continuing to write. `needs_rebase` exists as the rejection path for this.
+
+**Failure three: a projection treated as a source.** Editing a dashboard row makes the display correct
+while the source stays unchanged. The symptom is a persistent UI/CLI disagreement that returns to the old
+value on every refresh. Repair the source or builder, then read back.
+
+**Failure four: the reason to stop is not the same as closure.** A stopped Goal, paused quota, or blocked peer
+coordination can each stop polling; each is a legal stop, and none proves Goal closure. Only
+`terminal_no_followup` means "stopped because validated Goal closure was derived." Collapsing them lets a
+paused Goal look finished.
+
+## Invariants
+
+1. **The loop is built from fact handoffs, not call relationships.** One machine changes another's
+   behavior by writing a durable fact rather than reaching into its state.
+2. **Each machine owns only its decision table and legal transitions.** A correct answer from one machine
+   does not make the loop hold.
+3. **Derived results are not writable.** What a view exposes is a derivation; to change it, change source
+   and recompute.
+4. **Stale writes must be rejected.** Revision basis and CAS constrain the read-to-commit window, and the
+   caller handles the rejection.
+5. **Terminal is a conjunction.** Complete and closed Todo sources, no unresolved frontier, and a
+   structured `no_followup` intent must all hold.
+6. **A teaching map is not an implementation spec.** Change a rule only after confirming the typed owner,
+   protocol schema, characterization fixture, and migration boundary.
+
+These six answer one question: **when the mechanisms are split across nine families that can only speak
+through durable facts, what makes them still drive a single loop?** The answer here is that they do, on
+the condition that handoffs are explicit, derivations are not writable, stale writes are rejected, and
+terminal state is proven item by item.

@@ -11,7 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dashboard = resolve(root, "apps/presentation/dashboard");
 const require = createRequire(resolve(dashboard, "package.json"));
 const { chromium } = require("playwright");
-const site = resolve(root, "output/frontstage-pages/site");
+const site = resolve(process.env.LOOPX_PUBLIC_SITE_DIR ?? resolve(root, "output/frontstage-pages/site"));
 
 const server = createServer(async (request, response) => {
   const pathname = new URL(request.url, "http://localhost").pathname;
@@ -49,6 +49,12 @@ try {
     ["docs/guides/personal-workspace-user-guide/", 1],
     ["docs/book/chapters/core-state-machines/", 10],
     ["docs/book/en/chapters/core-state-machines/", 10],
+    ["docs/book/chapters/03-one-turn/", 1],
+    ["docs/book/en/chapters/03-one-turn/", 1],
+    ["docs/book/chapters/work-graph-and-authority/", 1],
+    ["docs/book/en/chapters/work-graph-and-authority/", 1],
+    ["docs/book/chapters/04-runtime-boundaries/", 1],
+    ["docs/book/en/chapters/04-runtime-boundaries/", 1],
   ]) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const failedScripts = [];

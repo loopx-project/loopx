@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "extension_id",
+        "ok",
+        "request_schema_version",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "loopx_text_stats_response_v0"
+        },
+        "extension_id": {
+          "const": "loopx-text-stats"
+        },
+        "ok": {
+          "const": true
+        },
+        "request_schema_version": {
+          "const": "loopx_text_stats_request_v0"
+        },
+        "result": {
+          "type": "object",
+          "required": [
+            "characters",
+            "non_whitespace_characters",
+            "words",
+            "lines"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "characters": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "non_whitespace_characters": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "words": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lines": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "extension_id",
+        "ok",
+        "error"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "loopx_text_stats_response_v0"
+        },
+        "extension_id": {
+          "const": "loopx-text-stats"
+        },
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "enum": [
+            "duplicate_field",
+            "input_too_large",
+            "invalid_json",
+            "object_required",
+            "invalid_fields",
+            "schema_mismatch",
+            "nonempty_text_required",
+            "text_too_long",
+            "input_unavailable"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -21,6 +21,80 @@ Lark has no separate switch and cannot override the machine owner's choice.
 
 ## Product questions and exact scope
 
+### Device context and installation runtime (notice revision 6)
+
+Configure once for the machine, not once per Goal or terminal:
+
+```bash
+loopx usage-ping context --context maintainer
+loopx usage-ping status --format json
+loopx usage-ping context --context unknown    # remove the voluntary label
+```
+
+The Workspace device settings use the same TypeScript owner. Precedence is an
+explicit `LOOPX_USAGE_CONTEXT` environment value, then the stored device label,
+then `unknown`. Invalid environment values remain unknown; invalid settings are
+rejected. Context configuration never enables collection, changes the random
+installation ID, or grants work authority. Disable retains only that optional
+label, clearing identity and measurement history. No generic repository `.env`
+is auto-loaded. Existing ID-free diagnostic rows remain ID-free.
+
+The **new** `POST /v1/installation` contract,
+`loopx_installation_usage_v1`, links the existing random installation ID to up
+to eight UTC daily snapshots. Each has activity date, numeric version,
+voluntary context, revision, fixed CLI family counts, independent observed
+runtime minutes, and a truncation flag. The context and version freeze on that
+day's first observation; later settings do not relabel that day or history.
+Counts are capped at 10,000 per family. New diagnostics and profiles distinguish
+`heartbeat`, `state`, `agent`, `memory`, `capability` and `maintenance`
+families using fixed parsed command names; custom names remain `other`.
+The legacy feature contract is unchanged.
+
+For each of `host_call`, `codex_turn` and `quota_cycle`, union actual
+observation intervals **across all Goals and Hosts in the same installation**.
+Split at UTC midnight and round each daily union down to whole minutes.
+Parallel/nested overlap counts once; replay adds nothing; inter-interval idle
+time adds nothing. Runtime rows are absent when no interval was observed; a
+present row with zero minutes means less than one observed minute, not no work.
+Do not add the three clocks: quota/Turn intervals can include pauses, approval
+and tool waits, while direct Host calls use the existing short-checkpoint gap
+rules. This measures partial instrumented elapsed time, **not process uptime**,
+CPU time, completion, billable time or model thinking time. A process that only
+heartbeats has unknown runtime, not 24 hours/day.
+
+Intervals remain local and bounded to 1,024 disjoint intervals per clock/day
+and eight UTC days. Overflow is marked `truncated` rather than extrapolated.
+Only whole-minute daily totals leave; no interval timestamps, Goal/Agent/Host
+identity or transcripts. Full snapshots attempt at most every 15 minutes on
+supported activity, not an autonomous timer. A quiet final partial day may
+remain unsent; late observations can update the previous seven days. The
+collector replaces only newer revisions for the exact installation/date and
+same frozen context/version; duplicate or out-of-order transport never adds
+counts. Client state loss without changing the ID can cause undercounting;
+copied IDs can conflate machines. These are diagnostics, not a ledger.
+
+Installation profiles are a **new association**, not anonymous aggregate
+data. Renewed disclosure fences old workers before it begins; old scope
+buffers are discarded, not backfilled. `CI`, `DO_NOT_TRACK`, explicit disable
+and consent-required policy keep their precedence. Disable removes local
+`.installation` interval buffers; a request already started cannot be recalled.
+Collector profile retention is 30 activity days, independent of 400-day
+heartbeat retention. No public endpoint exposes per-ID profiles.
+
+Operators may sum daily observed minutes within a specified retained window
+for each installation/clock, and report active days, calendar span and runtime
+**separately**. This is observed time in that window, not lifetime uptime.
+See [fixed read queries](../../apps/usage-collector/queries/installation-usage.sql).
+Do not divide old anonymous CLI counts by ID totals or fill missing days with
+zero. Excluding `maintainer` applies only to explicit future profile labels;
+`unknown` does not prove external or personal use.
+
+Deploy additive migration `0005-installation-usage.sql` and the Worker before
+releasing notice-v6 clients. Validate against a disposable database/collector,
+never by writing synthetic events to production. Worker rollback keeps the
+additive table; older clients/endpoints remain supported. Merging does not
+deploy the Worker or change installed clients.
+
 | Question | Evidence | Limit |
 |---|---|---|
 | Which versions/platforms need support? | Daily version, OS, CPU architecture, Python minor and install channel | Only reporting installations |
@@ -51,7 +125,7 @@ OS is `darwin|linux|windows|other`, CPU is `x64|arm64|x86|other`, and channel is
 `pip|local_release|source|unknown`. Version accepts only numeric major.minor.patch;
 a custom version containing a private suffix is not sent.
 
-**Current CLI diagnostics** (`POST /v1/aggregate`, notice revision 5):
+**ID-free CLI diagnostics** (`POST /v1/aggregate`, introduced in notice revision 5):
 
 ```json
 {"schema":"loopx_usage_diagnostics_v1","counters":[{"feature":"pr-review","operation":"merge-readiness","outcome":"blocked","error":"not_ready","duration":"lt_1s","count":4,"version":"1.2.3","activity_day":"2026-09-30","context":"unknown","signal":"none"}]}
@@ -59,12 +133,14 @@ a custom version containing a private suffix is not sent.
 
 The new default adds numeric release version, UTC activity **date** (not event
 time), fixed sub-operation, result/reason and receipt-backed lifecycle signal.
-Deployment context is optional self-report via `LOOPX_USAGE_CONTEXT`:
+Deployment context is optional self-report via the shared device setting or
+`LOOPX_USAGE_CONTEXT` (environment takes precedence):
 `unknown` (default), `personal`, `shared_service`, `ephemeral`,
 `organization_managed`, `maintainer`. Invalid values become `unknown`; no
 company name, person or hardware topology is inferred or sent. Set `maintainer`
-on maintainer processes to distinguish their **future diagnostics** in operator
-analysis. This does not label heartbeats or identify historical ID-free counts.
+on maintainer devices/processes to distinguish their **future diagnostics and
+daily installation profiles** in operator analysis. It does not label the
+heartbeat table or identify historical ID-free counts.
 Use the shared disable switch to exclude a machine from all channels.
 
 The collector adds a separate receipt date. It accepts activity dates from the
@@ -200,7 +276,7 @@ Legacy counts are capped at 128 distinct rows; new diagnostics at 32, with
 10,000 per row. Diagnostics expire by activity date after seven UTC days;
 legacy expiry uses the oldest buffered day. Overflow records a bounded local
 `diagnostic_dropped` count, not an unbounded queue. Existing buffers remain
-readable. Notice revision 5 renews disclosure before the expanded default takes
+readable. The current notice revision 6 renews disclosure before the expanded default takes
 effect: old notice state cannot send or consume buffers.
 Acknowledging the renewed notice discards old-scope counters and fences queued
 observations with a new generation; only subsequent measurements can send.
@@ -291,6 +367,21 @@ up on a later observation; this is not a global session watcher. Missing or
 ambiguous bindings and unavailable files leave the common quota cycle working.
 No historical backfill or extrapolation of crashed sessions occurs.
 
+Codex provider `started_at`/`completed_at` values accept Unix seconds or legacy
+ISO dates. Explicit provider times take precedence over the recorder timestamp;
+without an explicit start, a terminal must match the observed open Turn. Only
+completed or aborted Turns produce intervals. `token_count` record timestamps
+may be delayed beyond the provider's completion, so they no longer extend an
+unfinished Turn. An ongoing native session can report its completed Turns, but
+its current unfinished Turn remains unknown until a terminal is read. This
+corrects prior prefix timing; it does not rewrite previously sent aggregates.
+
+These populations have no enforced size ordering. A quota cycle commonly
+encloses several Turns and waits; a managed Host call can enclose a Turn plus
+startup/cleanup. Native sessions, incomplete cycles and coverage gaps can reverse
+their observed totals. Compare each clock over the same window and inspect
+coverage rather than assuming `host_call <= codex_turn <= quota_cycle`.
+
 Within each Goal/measurement/Host series, **span** is first to most recent
 observed activity, including pauses; **duration** is the union of observed
 intervals. Parallel or nested overlap counts once within that series. Both stop
@@ -333,7 +424,7 @@ measurement histograms over 30 receipt days, omitting cells below five.
 The existing settings switch, environment opt-outs and consent policy control
 all channels and local timing reads. Settings and `loopx usage-ping status`
 show `goal_preview`, a local snapshot rather than a delivery receipt. Expanded
-scope requires the current notice version 5; an existing explicit disable persists.
+scope requires the current notice version 6; an existing explicit disable persists.
 
 Before shipping the client, back up D1, apply `0002-goal-usage.sql` and
 `0003-goal-duration-sources.sql`, then deploy the Worker. The latter migrates

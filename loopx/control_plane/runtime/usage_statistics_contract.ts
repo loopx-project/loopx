@@ -1,6 +1,7 @@
 /** Public allowlist shared by the client and Cloudflare collector. No text slots. */
 export const PING_SCHEMA = "loopx_usage_ping_v1";
 export const AGGREGATE_SCHEMA = "loopx_usage_aggregate_v1";
+export const CONTEXTS = ["unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"] as const;
 export const FEATURES = ["status", "quota", "todo", "turn", "project", "connect", "pr-review", "version", "chat", "other"] as const;
 export const OUTCOMES = ["ok", "failed", "cancelled"] as const;
 export const DURATIONS = ["lt_100ms", "lt_1s", "lt_10s", "lt_60s", "gte_60s"] as const;

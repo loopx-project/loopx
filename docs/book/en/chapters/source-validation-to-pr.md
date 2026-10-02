@@ -237,16 +237,21 @@ If the fake violates the real contract, repair test infrastructure before diagno
 
 ## Choose local validation commands by risk
 
-The official fast baseline includes:
+The official contribution baseline (see the [testing and quality guide](/loopx/docs/development/testing-and-quality/))
+starts with `uv sync --extra test` and runs inside the checkout with the selected interpreter:
 
 ```bash
-python -m pip install -e ".[test]"
-python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
-python -m mypy
-python examples/control_plane/cli-output-budget-regression-smoke.py
-python -m pytest -q
+uv sync --extra test
+uv run --extra test python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
+uv run --extra test python -m mypy
+uv run --extra test python examples/control_plane/cli-output-budget-regression-smoke.py
+uv run --extra test python -m pytest -q
 git diff --check
 ```
+
+An explicit environment that already has this checkout installed may run the same `python -m ...`
+commands directly; a bare `python` may point at another installation, so confirm `sys.executable` and
+`loopx --version` first.
 
 During development, start closer to the change:
 
