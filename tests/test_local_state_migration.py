@@ -134,6 +134,14 @@ def test_project_register_explicit_route_survives_two_default_runtimes(tmp_path:
     assert load_project_registry(registry)["common_runtime_root"] == str(runtime)
     assert all(path.read_bytes() == before for path, before in defaults_before.items())
 
+    status = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+         "--runtime-root", str(runtime), "status", "--goal-id", "independent-goal"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert status.returncode == 0, status.stdout + status.stderr
+    assert all(path.read_bytes() == before for path, before in defaults_before.items())
+
     repeat = register()
     assert repeat.returncode == 0, repeat.stdout + repeat.stderr
     assert json.loads(repeat.stdout)["changed"] is False
@@ -145,6 +153,36 @@ def test_project_register_explicit_route_survives_two_default_runtimes(tmp_path:
     assert ambiguous.returncode != 0
     assert "Both default LoopX registries exist" in ambiguous.stdout + ambiguous.stderr
     assert all(path.read_bytes() == before for path, before in defaults_before.items())
+
+
+def test_projection_discovery_keeps_both_declarations_without_selecting_authority(tmp_path, monkeypatch):
+    from loopx.control_plane.runtime.runtime_projection_route import resolve_runtime_projection_route
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    registry = projects[0] / ".loopx" / "registry.json"
+    source_runtime = tmp_path / "source-runtime"
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    _write_json(target / "registry.global.json", {"goals": []})
+    with pytest.raises(ValueError, match="Both default LoopX"):
+        paths.select_default_runtime_root()
+    route = resolve_runtime_projection_route(
+        registry_path=registry, goal_id="goal-0", source_runtime_root=source_runtime,
+    )
+    assert route["status"] == "resolved"
+    assert Path(route["target_runtime_root"]) == source
+
+    _write_json(target / "registry.global.json", _read(source / "registry.global.json"))
+    before = {path: path.read_bytes() for path in (
+        target / "registry.global.json", source / "registry.global.json",
+    )}
+    ambiguous = resolve_runtime_projection_route(
+        registry_path=registry, goal_id="goal-0", source_runtime_root=source_runtime,
+    )
+    assert ambiguous["status"] == "ambiguous"
+    assert ambiguous["target_runtime_root"] is None
+    assert all(path.read_bytes() == data for path, data in before.items())
 
 
 def test_host_global_registry_selector_uses_one_host_route(
@@ -164,6 +202,49 @@ def test_host_global_registry_selector_uses_one_host_route(
         resolve_cli_registry(args, argv)
     args.runtime_root = str(source)
     assert resolve_cli_registry(args, argv) == (source / "registry.global.json", True)
+
+
+def test_repository_canary_does_not_select_goal_authority(tmp_path, monkeypatch):
+    source, target, _ = _fixture(tmp_path, projects=1)
+    _write_json(target / "registry.global.json", {"goals": []})
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    monkeypatch.delenv("LOOPX_REGISTRY", raising=False)
+    registry = tmp_path / "missing-registry.json"
+    args = argparse.Namespace(command="canary", registry=str(registry), runtime_root=None)
+    assert resolve_cli_registry(args, ["canary", "quality-audit"]) == (registry, False)
+    args.goal_id = "goal-0"
+    with pytest.raises(SystemExit, match="Both default LoopX registries exist"):
+        resolve_cli_registry(args, ["canary", "premerge", "--goal-id", "goal-0"])
+    args.goal_id = None
+    args.registry = "@host-global"
+    with pytest.raises(SystemExit, match="Both default LoopX registries exist"):
+        resolve_cli_registry(args, ["--registry", "@host-global", "canary", "quality-audit"])
+
+
+def test_explicit_first_bootstrap_does_not_resolve_nonexistent_previous_authority(
+    tmp_path, monkeypatch, capsys,
+):
+    from loopx.cli import main
+
+    source, target, _ = _fixture(tmp_path, projects=1)
+    _write_json(target / "registry.global.json", {"goals": []})
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    before = {p: p.read_bytes() for p in (
+        source / "registry.global.json", target / "registry.global.json",
+    )}
+    project = tmp_path / "fresh-project"
+    registry, runtime = project / ".loopx" / "registry.json", tmp_path / "explicit-runtime"
+    assert main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "bootstrap", "--project", str(project), "--goal-id", "fresh-goal",
+        "--objective", "Create on the explicit isolated route",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["ok"] is True
+    assert load_project_registry(registry)["common_runtime_root"] == str(runtime)
+    assert all(p.read_bytes() == content for p, content in before.items())
 
 
 def test_doctor_reads_legacy_capture_hosts_from_selected_runtime(
