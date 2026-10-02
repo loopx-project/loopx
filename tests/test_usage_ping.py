@@ -446,6 +446,16 @@ def test_context_setting_real_cli_and_http_share_state_without_enabling(isolated
         assert response.status == 403
         response.read()
         assert usage_ping.control('status')['stored_context'] == 'personal'
+        before = usage_ping.state_path().read_bytes()
+        assert main(['usage-ping', 'context', '--context', 'my-company', '--format', 'json']) == 2
+        assert 'Invalid device deployment context' in capsys.readouterr().err
+        assert usage_ping.state_path().read_bytes() == before
+        usage_ping.state_path().write_text('invalid')
+        connection.request('POST', path, json.dumps({'context': 'personal'}), {'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        assert response.status == 503, 'a damaged store is not a caller input rejection'
+        response.read()
+        assert usage_ping.state_path().read_text() == 'invalid'
     finally:
         connection.close()
         server.shutdown()

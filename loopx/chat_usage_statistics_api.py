@@ -4,7 +4,7 @@ from __future__ import annotations
 import subprocess
 from typing import Any
 
-from .usage_ping import control
+from .usage_ping import UsageSettingsInputError, control
 
 CHAT_USAGE_STATISTICS_PATH = "/api/chat/usage-statistics"
 
@@ -24,8 +24,6 @@ class UsageStatisticsRequestMixin:
         try:
             body = self._read_json()
             if set(body) == {"context"} and isinstance(body["context"], str):
-                if body["context"] not in {"unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"}:
-                    raise ValueError("invalid deployment context")
                 self._usage_statistics_request("context", context=body["context"])
                 return
             if set(body) == {"notice"} and isinstance(body["notice"], dict):
@@ -41,6 +39,9 @@ class UsageStatisticsRequestMixin:
     def _usage_statistics_request(self, action: str, **fields: Any) -> None:
         try:
             projection = control(action, **fields)
+        except UsageSettingsInputError as exc:
+            self._send_error(str(exc), status=400, error_code="invalid_usage_settings")
+            return
         except (OSError, ValueError, RuntimeError, TimeoutError, subprocess.TimeoutExpired):
             self._send_error("Usage settings unavailable; use loopx usage-ping status in the terminal.",
                              status=503, error_code="usage_settings_unavailable")

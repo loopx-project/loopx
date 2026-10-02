@@ -139,9 +139,13 @@ export async function inspect(path: string, ctx: Context) {
 export function effectiveContext(state: Pick<State, "context">, ctx: Context): Diagnostic["context"] {
   return usageContext(ctx.env.LOOPX_USAGE_CONTEXT !== undefined ? ctx.env.LOOPX_USAGE_CONTEXT : state.context);
 }
+/** Only this input rejection may cross the adapter as a caller error. */
+export class UsageContextInputError extends Error {
+  constructor() { super("usage_context_invalid"); }
+}
 /** A device label is observation metadata, never consent, identity or work authority. */
 export async function configureContext(path: string, ctx: Context, value: unknown) {
-  if (!(CONTEXTS as readonly unknown[]).includes(value)) throw new Error("usage_context_invalid");
+  if (!(CONTEXTS as readonly unknown[]).includes(value)) throw new UsageContextInputError();
   await withFileMutationLock(path, async () => {
     const state = await load(path);
     state.generation ||= randomUUID();

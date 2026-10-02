@@ -2251,6 +2251,7 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
   );
 }
 
+export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract";
 const usageStatisticsSchema = z.object({
   consent: z.enum(["default", "enabled", "disabled"]),
   sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),

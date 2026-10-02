@@ -1,4 +1,4 @@
-import { configure, configureContext, inspect, observe } from "./usage_statistics.ts";
+import { configure, configureContext, inspect, observe, UsageContextInputError } from "./usage_statistics.ts";
 import { profileFeature } from "./usage_statistics_installation_contract.ts";
 import { durationBucket, FEATURES, object } from "./usage_statistics_contract.ts";
 import type { Context } from "./usage_statistics.ts";
@@ -47,8 +47,9 @@ try {
     }
   } else throw new Error("usage_request_invalid");
   process.stdout.write(JSON.stringify(result) + "\n");
-} catch {
+} catch (error) {
   // No environment, source paths or exception text in the diagnostic contract.
-  process.stdout.write(JSON.stringify({ error: "usage_statistics_unavailable" }) + "\n");
+  process.stdout.write(JSON.stringify({ error: error instanceof UsageContextInputError
+    ? "usage_context_invalid" : "usage_statistics_unavailable" }) + "\n");
   process.exitCode = 1;
 }

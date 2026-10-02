@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Callable
 
 from .. import usage_ping
@@ -49,7 +50,7 @@ def register_usage_ping_command(
         default="status",
         help="status previews payloads; enable accepts collection; disable clears the ID and pending counts.",
     )
-    parser.add_argument("--context", choices=("unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"),
+    parser.add_argument("--context", metavar="CONTEXT",
                         help="Persistent device label; only with context. Does not enable collection; environment takes precedence.")
     add_subcommand_format(parser)
     return parser
@@ -58,6 +59,10 @@ def register_usage_ping_command(
 def handle_usage_ping_command(args: argparse.Namespace, print_payload: PrintPayload) -> int:
     if (args.action == "context") != (args.context is not None):
         raise ValueError("use usage-ping context --context <value>; other actions take no context")
-    payload = usage_ping.control(args.action, **({"context": args.context} if args.context is not None else {}))
+    try:
+        payload = usage_ping.control(args.action, **({"context": args.context} if args.context is not None else {}))
+    except usage_ping.UsageSettingsInputError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print_payload(payload, output_format(args), render_usage_ping_markdown)
     return 0

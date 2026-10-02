@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { setUsageContext, usageStatistics, type UsageStatistics } from "../../data/chat";
+import { setUsageContext, usageContexts, usageStatistics, type UsageStatistics } from "../../data/chat";
 import { useWorkspaceI18n } from "./i18n";
 
 export function UsageStatisticsSettings() {
@@ -36,7 +36,7 @@ export function UsageStatisticsSettings() {
     {state ? <>
       <label>{zh ? "这台设备的用途（自愿声明）" : "Device deployment context (voluntary)"}
         <select value={state.stored_context ?? "unknown"} disabled={busy} onChange={event => void updateContext(event.target.value)}>
-          {(["unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"] as const).map(value =>
+          {usageContexts.map(value =>
             <option key={value} value={value}>{zh ? ({ unknown: "未知", personal: "个人使用", shared_service: "共享服务",
               ephemeral: "临时环境", organization_managed: "组织管理", maintainer: "项目维护者" })[value] : value}</option>)}
         </select>

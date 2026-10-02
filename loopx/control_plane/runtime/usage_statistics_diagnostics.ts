@@ -1,9 +1,9 @@
 /** Versioned, content-free diagnostics. This is observation, never work authority. */
-import { counterKey, DURATIONS, FEATURES, MAX_COUNT, MAX_ROWS, object } from "./usage_statistics_contract.ts";
+import { counterKey, CONTEXTS, DURATIONS, FEATURES, MAX_COUNT, MAX_ROWS, object } from "./usage_statistics_contract.ts";
 import type { Counter } from "./usage_statistics_contract.ts";
 
 export const DIAGNOSTIC_SCHEMA = "loopx_usage_diagnostics_v1";
-export const CONTEXTS = ["unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"] as const;
+export { CONTEXTS } from "./usage_statistics_contract.ts";
 export const DIAGNOSTIC_FEATURES = [...FEATURES, "heartbeat", "state", "agent", "memory", "capability", "maintenance"] as const;
 export type DiagnosticFeature = typeof DIAGNOSTIC_FEATURES[number];
 /** Fixed parser command names, not argv values or user-supplied extension names. */
