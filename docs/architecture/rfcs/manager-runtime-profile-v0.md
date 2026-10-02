@@ -94,3 +94,15 @@ tool/session/continued-execution and settings readback, without a second machine
    fallback state.
 8. An external audience without an existing scoped grant remains `read-only` and exposes the
    effective downgrade accurately.
+
+### Model discovery and native cancellation
+
+The Chat model picker reads the selected host through `GET /api/chat/models`.
+Codex discovery uses its configured CLI and captured home for paginated
+`model/list`, without creating a model Turn. Native Claude discovery projects
+only the host's declared model picker metadata. Catalog availability is not
+proof of inference or model access; empty and unavailable catalogs retain an
+explicit model input, rather than falling back to another host's suggestions.
+Legacy Codex catalog compatibility remains visible in the response and UI.
+Native Chat interruption terminates the invocation's owned process group,
+including wrapper children. It does not target unrelated host sessions.
