@@ -589,7 +589,7 @@ def test_explicit_cli_checkpoint_transport_failure_returns_safe_packet(
     turn = "turn-cli-failure"
     decision = quota_decision() | {"goal_id": "goal", "agent_identity": {"agent_id": "pilot"},
         "heartbeat_receipt": {"turn_instance_id": turn, "status": "committed"}}
-    monkeypatch.setattr(recall_cli, "_quota_decision", lambda *_args: decision)
+    monkeypatch.setattr(recall_cli, "load_turn_quota_decision", lambda *_args: decision)
 
     def unavailable(operation: str, _params: Any) -> Any:
         assert operation == "reward_memory.read_authority.surface_checkpoints"

@@ -97,6 +97,7 @@ def claim_canonical_todo_if_promoted(
     actor_agent_id: str | None,
     dry_run: bool,
     operation_id: str | None = None,
+    expected_provider_revision: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     project: Path | None = None,
@@ -125,6 +126,8 @@ def claim_canonical_todo_if_promoted(
                 if operation_id is not None
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
+            **({"expected_provider_revision": expected_provider_revision}
+               if expected_provider_revision is not None else {}),
             "lease_request": (
                 {
                     "idempotency_key": task_lease_idempotency_key,

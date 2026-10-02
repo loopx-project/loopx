@@ -142,6 +142,12 @@ function decisionFailure(
   };
 }
 
+/** The legacy claim contract must never imply unimplemented lifetime binding. */
+export function unqualifiedGoalRefClaimFailure(value: object): CoordinationTodoClaimResult | null {
+  return Object.hasOwn(value, "goal_ref") ? failure("goal_ref_claim_contract_unqualified",
+    "This claim contract does not bind the head and operation receipt to GoalRef; a qualified lifetime-bound claim owner is required.") : null;
+}
+
 function rejectInvalidClaimActor(
   input: CoordinationTodoClaimInput,
 ): ClaimRejection {
@@ -188,6 +194,10 @@ function rejectIneligibleTodo(
       "Todo does not have the requested role",
       { requested_role: input.expected_role, todo_role: todo.role },
     );
+  }
+  if (todo.bound_agent != null && todo.bound_agent !== "" &&
+      normalizeTodoAgent(todo.bound_agent, "todo.bound_agent") !== input.claimed_by) {
+    return decisionFailure("bound_agent_mismatch", "Todo is bound to another agent");
   }
   if (todo.status !== "open") {
     return decisionFailure(
@@ -350,6 +360,8 @@ async function executeClaimAttempt(
 ): Promise<CoordinationTodoClaimResult> {
   let input: CoordinationTodoClaimInput;
   try {
+    const scopeFailure = unqualifiedGoalRefClaimFailure(rawInput);
+    if (scopeFailure !== null) return scopeFailure;
     input = {
       ...rawInput,
       goal_id: requireAuthorityStoreId(rawInput.goal_id, "goal id"),

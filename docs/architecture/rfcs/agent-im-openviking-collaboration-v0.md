@@ -284,6 +284,43 @@ Measure outcome quality rather than message volume:
 - false acceptance or rejection of controlled transitions;
 - verified goal outcomes produced after handoff.
 
+## Current Delivery Checkpoint
+
+Task [#5198](https://github.com/loopx-project/loopx/issues/5198) tracks composition.
+The first proposed implementation stage is the
+[canonical room-work Agent CLI](../../reference/goal-channel-room-work.md): compact
+actor-scoped orientation, revision-guarded claim, historical acceptance plus
+current ownership, scoped IM claim-button offers/callbacks and existing verified
+Goal Channel delivery/readback. It
+reuses promoted File/SQLite authority and the typed Todo owner; it does not
+replace the shared-service or provisioning owners.
+
+The private `work resume` path composes existing scoped Turn Recall with fresh
+channel identity, canonical projection and quota observations. It skips memory
+ingest, rechecks scope and state after retrieval, discards context on changes,
+and carries only explicitly requested scoped record-artifact references covered
+by current verified recall receipts. It does not send private context to a room
+or accept/renew work. Source-session exact-instance profiles and arbitrary
+external artifact targets remain outside this local qualification stage.
+
+Validation uses synthetic Lark transport with disposable real local stores.
+Independent source CLI processes with separate TS runtimes compete for one
+File/SQLite claim; a fresh process replays its exact receipt, and direct CLI
+readback verifies current ownership. These local clients use trusted registered
+Agent identities; independently authenticated remote hosts remain unqualified.
+Real non-production room qualification, independent hosts,
+daemon reconnect, native callback qualification, external artifact-target access and scoped live
+OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
+synthetic checks do not close those requirements or authorize promotion.
+
+The legacy-profile local stage can be qualified without enabling source-session
+business effects. Exact GoalRef support must first qualify the existing shared
+authority head/receipt owner, retirement and caller/writer fences under the
+[Goal-instance contract](goal-instance-identity-and-orphan-recovery-v0.md).
+That later profile boundary does not expand this composition stage into a
+parallel authority migration. Existing claim wires reject explicit unqualified
+GoalRef intent before provider or historical-receipt access.
+
 ## Open Questions
 
 1. Which LoopX projection fields are stable enough for the first public
