@@ -666,8 +666,9 @@ every request, not another planner or a cached verdict. A fixed workspace,
 registry/runtime/Goal/agent/Todo partition, source/environment invalidation,
 bounded startup and request deadlines, output caps and descendant cleanup are
 part of this slice; execute/resume/mutations retain their original transport.
-This targets warm inspection in a continuous MCP/HTTP service; a fresh CLI still
-pays cold startup, and the bridge adds a cold cost. The PR records exact-head
+Only the long-lived MCP service opts into warm inspection reuse. Goal Chat HTTP
+and standalone CLI inspections retain the original fresh subprocess; MCP pays
+the additional bridge cost on its first request. The PR records exact-head
 parity, real MCP, cancellation and paired timing evidence separately. Discovering
 projection candidates does not select a machine default: two existing stores
 are checked against their declared source registry, and multiple matching mirrors
@@ -682,9 +683,9 @@ G1/G3 promotion or end-to-end financial-loop completion is claimed.
 只读预检进程复用。固定 Python worker 只是 IO 适配器，每次重新进入原 CLI/Turn
 决策 owner，不是另一个规划器或判决缓存。固定工作区与 registry/runtime/Goal/
 Agent/Todo 分区、源码和环境失效、启动及请求期限、输出上限与子孙进程清理均属于
-本切片；执行、恢复和写入保留原传输。目标是持续 MCP/HTTP 服务的热预检，独立 CLI
-仍支付冷启动，桥接还会增加冷成本。确切头上的结果等价、真实 MCP、取消与配对
-计时分别记录在 PR。投影候选发现不选择机器默认源：两个现有目录按声明的源注册表
+本切片；执行、恢复和写入保留原传输。仅长驻 MCP 服务启用热预检复用；Goal Chat
+HTTP 与独立 CLI 保留原有的一次性子进程，MCP 首次请求仍支付额外桥接冷成本。
+确切头上的结果等价、真实 MCP、取消与配对计时分别记录在 PR。投影候选发现不选择机器默认源：两个现有目录按声明的源注册表
 核对，多重匹配仍判歧义，不迁移机器状态。旧全套预算失败保留；当前有界切片按
 上述调用路径标准，分开功能 runner 超时、热调用／含冷启动序列的净节省及有界
 冷启动成本。新标准须重新验证，不改判旧结果；真实调用方采用和 R2 持续运行

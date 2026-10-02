@@ -496,8 +496,9 @@ budget and R2 acceptance remain open.
 进程复用。固定 Python worker 仅为 IO 适配器，每次重新进入原 CLI/Turn 决策 owner，
 不另建规划器、不缓存判决。固定工作区及 registry/runtime/Goal/Agent/Todo 分区、
 源码和环境失效、启动与请求期限、输出上限及子孙进程清理均在本切片；执行、恢复和
-写入保留原传输。收益针对持续 MCP/HTTP 服务的热预检；独立 CLI 仍支付冷启动，
-桥接也会增加冷成本。PR 分别记录确切头上的结果等价、真实 MCP、取消与配对计时。
+写入保留原传输。仅长驻 MCP 服务启用热预检复用；Goal Chat HTTP 与独立 CLI
+保留原有的一次性子进程，MCP 首次请求仍支付额外桥接冷成本。PR 分别记录确切头上
+的结果等价、真实 MCP、取消与配对计时。
 投影候选发现不选择机器默认源：两个现有目录按声明的源注册表核对，多重匹配仍判
 歧义，不迁移机器状态。原全套预算、真实调用方采用与 R2 持续运行验收仍开放；
 不声称安装、G1/G3 晋级或金融最小闭环完成。
@@ -506,9 +507,10 @@ reuse under the existing TS Host supervisor. Its pinned Python worker is only an
 IO adapter, re-entering original CLI/Turn owners each time, with fixed workspace
 and authority partitions, source/environment invalidation, bounded startup and
 request deadlines, output caps and descendant cleanup. Execute/resume/mutations
-retain original transport. This targets warm MCP/HTTP service inspection; fresh
-CLI startup and an added cold bridge cost remain. The PR separates exact-head
-parity, real MCP, cancellation and paired timing evidence. Projection discovery
+retain original transport. Only the long-lived MCP service opts into warm
+inspection reuse; Goal Chat HTTP and standalone CLI retain the original fresh
+subprocess. MCP pays the additional bridge cost on its first request. The PR
+separates exact-head parity, real MCP, cancellation and paired timing evidence. Projection discovery
 checks both existing stores against declared source registries without selecting
 a default; multiple matching mirrors stay ambiguous and nothing is migrated.
 Original suite budget, real caller adoption and sustained R2 acceptance remain
