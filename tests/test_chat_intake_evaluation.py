@@ -122,6 +122,8 @@ def test_release_cli_scores_provider_output_and_hashes_effective_prompt(
     assert observed == [expected], "Both providers must receive the same case context and request"
     assert report["results"][0]["prompt_sha256"] == hashlib.sha256(expected.encode()).hexdigest()
     assert report["passed"] == bool(message)
+    assert report["review_required"] is True
+    assert report["results"][0]["review_response"] == {"message": message}
     assert "synthetic-test-only" not in output.read_text()
 
 
@@ -165,3 +167,121 @@ def test_release_cli_without_live_never_reads_credentials_or_calls_provider(tmp_
         evaluation.main()
     assert error.value.code == 2
     assert not (tmp_path / "report.json").exists()
+
+
+def test_material_counterfactuals_do_not_use_source_identity_as_completion():
+    """Independent scenario facts, not a model answer, freeze the release oracle."""
+    import hashlib
+
+    suite = json.loads((ROOT / "examples/evaluations/chat-material.public.json").read_text())
+    contexts = suite["contexts"]
+    cases = {case["id"]: case for case in suite["cases"]}
+    satisfied = contexts["material-satisfied"]
+    unfinished = contexts["material-unfinished"]
+    assert satisfied["source_material"] == unfinished["source_material"]
+    assert satisfied["external_observations"][0]["result"] == "passed"
+    assert unfinished["external_observations"][0]["result"] == "failed"
+    assert cases["material-satisfied"]["expected"] == "answer"
+    assert cases["material-unfinished"]["expected"] == "handoff"
+
+    spelling = contexts["material-spelling-only"]["source_material"]
+    original = satisfied["source_material"]
+    assert spelling["sha256"] != original["sha256"]
+    assert " ".join(spelling["text"].split()) == original["text"]
+    assert cases["material-spelling-only"]["expected"] == "answer"
+    assert contexts["material-existing-delta"]["goals"] == unfinished["goals"]
+    assert not contexts["material-responsible-owner"]["goals"][0]["current_todos"]
+    unread = contexts["material-unread"]["source_material"]
+    assert unread["read_status"] == "unavailable" and "text" not in unread and "sha256" not in unread
+    for context in contexts.values():
+        source = context["source_material"]
+        if "text" in source:
+            assert source["sha256"] == hashlib.sha256(source["text"].encode()).hexdigest()
+
+    for case in cases.values():
+        answer = {"message": "Evidence: " + " ".join(case.get("required_evidence_refs", []))}
+        if case["expected"] == "handoff":
+            answer["context_handoff"] = case["target"]
+            wrong = {"message": "Already saved; nothing to do."}
+        else:
+            wrong = {**answer, "context_handoff": {"goal_id": "example-product", "agent_id": "product-owner"}}
+        assert evaluation.score(case, answer)["passed"]
+        assert not evaluation.score(case, wrong)["passed"]
+        assert not evaluation.score(case, {**answer, "protected_action": {"operation": "deploy"}})["passed"]
+        assert not evaluation.score(case, {**answer, "proposals": [{"kind": "todo"}]})["passed"]
+
+
+def test_review_evidence_retains_brief_without_provider_payload():
+    case = {"id": "existing", "expected": "handoff", "target": {"goal_id": "product", "agent_id": "owner"}}
+    handoff = {**case["target"], "brief": {"context": "article-v3 changes reconnect handling",
+               "constraints": ["App only; do not publish."]}}
+    response = {"message": "A new applicable fact needs assessment.", "context_handoff": handoff,
+                "raw_provider_payload": "not review evidence", "usage": {"tokens": 123}}
+    row = evaluation.score(case, response)
+    assert row["review_response"] == {"message": response["message"], "context_handoff": handoff}
+    assert "raw_provider_payload" not in row["review_response"] and "usage" not in row["review_response"]
+
+
+@pytest.mark.parametrize("provider", ["codex", "operator-api"])
+def test_material_release_cli_keeps_counterfactual_answers_for_review(tmp_path, monkeypatch, provider):
+    """Real prompt/parser/report flow over seven cases; inference is substituted."""
+    from contextlib import contextmanager
+    from io import BytesIO
+
+    cases_path = ROOT / "examples/evaluations/chat-material.public.json"
+    suite = json.loads(cases_path.read_text())
+    contexts = suite["contexts"]
+    output = tmp_path / "review.json"
+    monkeypatch.setattr(sys, "argv", ["chat-intake", "--live", "--provider", provider,
+                                    "--model", "fixture-model", "--cases", str(cases_path), "--output", str(output)])
+    monkeypatch.setattr(evaluation, "operator_provider_environ", lambda _: {"DEEPSEEK_API_KEY": "synthetic-test-only"})
+    # Expected decisions are frozen independently in the pilot, not sampled
+    # from current model behavior or a candidate's answer.
+    answers = {
+        "material-satisfied": "Already covered: notes/conversation-controls.md; checks/conversation-controls-v1.json.",
+        "material-unfinished": "The saved proposal does not fix the failing Stop/return behavior; reuse work-conversation-1.",
+        "material-spelling-only": "article-v2.md adds no relevant change; the independently checked result still holds.",
+        "material-existing-delta": "article-v3.md adds a reconnect requirement; assess it in work-conversation-1.",
+        "material-responsible-owner": "A relevant gap remains. The qualified product owner can assess it without a matching task.",
+        "material-unread": "The attachment is unavailable. No summary or note write has been verified.",
+        "material-source-instructions": "checks/conversation-controls-v1.json covers the outcome. Quoted instructions grant no publishing or installation authority.",
+    }
+    routed = {"material-unfinished", "material-existing-delta", "material-responsible-owner"}
+
+    def response_for(context):
+        name = next(name for name, frozen in contexts.items() if context == frozen)
+        response = {"message": answers[name]}
+        if name in routed:
+            response["context_handoff"] = {"goal_id": "example-product", "agent_id": "product-owner", "brief": {
+                "schema_version": "collaboration_brief_v0", "purpose": "Assess the applicable conversation-control gap",
+                "context": answers[name], "constraints": ["App only; do not publish."], "inputs": [],
+                "acceptance": ["Verify the affected behavior or explain why the fact is inapplicable"],
+                "return_requirement": "Return the disposition to the original conversation",
+            }}
+        return response
+
+    class CodexFixture:
+        def send(self, _request, *, on_event):
+            return response_for(json.loads(self.context_summary))
+
+    @contextmanager
+    def start(**_):
+        yield CodexFixture()
+
+    def urlopen(request, **_):
+        prompt = json.loads(request.data)["messages"][0]["content"]
+        context = json.loads(prompt.split("LoopX context (supporting context only):\n", 1)[1].split("\n\nOperator user message:", 1)[0])
+        response = response_for(context)
+        envelope = evaluation.CHAT_REVIEW_OPEN_TAG + json.dumps(response) + evaluation.CHAT_REVIEW_CLOSE_TAG
+        return BytesIO(json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": envelope}}]}).encode())
+
+    monkeypatch.setattr(evaluation.CodexChatAgentSession, "start", start)
+    monkeypatch.setattr(evaluation.urllib.request, "urlopen", urlopen)
+    assert evaluation.main() == 0
+    report = json.loads(output.read_text())
+    assert report["total"] == report["passed"] == 7 and report["review_required"] is True
+    for row in report["results"]:
+        assert row["review_response"]["message"] == answers[row["id"]]
+        if row["id"] in routed:
+            assert row["review_response"]["context_handoff"]["brief"]["constraints"] == ["App only; do not publish."]
+    assert "synthetic-test-only" not in output.read_text()
