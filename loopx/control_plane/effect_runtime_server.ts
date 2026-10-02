@@ -104,6 +104,8 @@ const fingerprint = parseArg("--fingerprint");
 const token = requiredString(process.env.LOOPX_EFFECT_RUNTIME_TOKEN, "runtime token");
 const idleMs = parseIdleMs(process.env.LOOPX_EFFECT_RUNTIME_IDLE_MS);
 let idleTimer: NodeJS.Timeout;
+let pendingRequests = 0;
+let resolveDrain: (() => void) | undefined;
 const handlers = createEffectRuntimeHandlers({
   fingerprint,
   requestShutdown: () => {
@@ -113,6 +115,8 @@ const handlers = createEffectRuntimeHandlers({
 
 function resetIdleTimer(server: ReturnType<typeof createServer>): void {
   clearTimeout(idleTimer);
+  // Idleness starts after effects finish, not when their sockets connect.
+  if (pendingRequests > 0 || shutdownRequested || !server.listening) return;
   idleTimer = setTimeout(() => server.close(), idleMs);
   idleTimer.unref();
 }
@@ -164,6 +168,8 @@ const server = createServer((socket) => {
     raw += chunk;
     if (!raw.includes("\n")) return;
     socket.pause();
+    pendingRequests += 1;
+    clearTimeout(idleTimer);
     void (async () => {
       let requestId = "unknown";
       let sink: FileHandle | null = null;
@@ -218,7 +224,6 @@ const server = createServer((socket) => {
           ok: true,
           result,
         }, sink);
-        if (shutdownRequested) setImmediate(() => server.close());
       } catch (error) {
         if (dispatched) socket.destroy();
         else {
@@ -232,27 +237,42 @@ const server = createServer((socket) => {
           } catch { socket.destroy(); }
         }
       } finally {
-        await sink?.close();
+        try {
+          await sink?.close();
+        } finally {
+          pendingRequests -= 1;
+          if (pendingRequests === 0) resolveDrain?.();
+          // Stop accepting new work immediately on shutdown, but drain every
+          // already accepted handler, including those whose caller disconnected.
+          if (shutdownRequested && server.listening) server.close();
+          resetIdleTimer(server);
+        }
       }
     })();
   });
 });
 
 server.on("close", () => {
-  void withFileMutationLock(infoPath, async () => {
-    let published: Record<string, unknown>;
-    try {
-      published = JSON.parse(await readFile(infoPath, "utf8"));
-    } catch {
-      return;
+  void (async () => {
+    // TCP close does not wait for a handler after its client times out.
+    if (pendingRequests > 0) {
+      await new Promise<void>((resolve) => { resolveDrain = resolve; });
     }
-    // A timed-out client may have published a replacement server. The old
-    // server must never erase that server's locator when it finally exits.
-    if (published.token === token && published.pid === process.pid &&
-        published.fingerprint === fingerprint) {
-      await rm(infoPath, { force: true });
-    }
-  }).finally(() => process.exit(0));
+    await withFileMutationLock(infoPath, async () => {
+      let published: Record<string, unknown>;
+      try {
+        published = JSON.parse(await readFile(infoPath, "utf8"));
+      } catch {
+        return;
+      }
+      // A timed-out client may have published a replacement server. The old
+      // server must never erase that server's locator when it finally exits.
+      if (published.token === token && published.pid === process.pid &&
+          published.fingerprint === fingerprint) {
+        await rm(infoPath, { force: true });
+      }
+    });
+  })().finally(() => process.exit(0));
 });
 
 server.listen(0, "127.0.0.1", async () => {

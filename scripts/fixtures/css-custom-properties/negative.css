@@ -1,0 +1,8 @@
+/*
+ * Negative fixture stylesheet. `--fixture-ghost` is defined nowhere except as an
+ * ordinary data key in `dataKeys.ts`, so this bare reference is genuinely
+ * undefined and the scope must exit non-zero.
+ */
+.fixture-ghost-surface {
+  color: var(--fixture-ghost);
+}

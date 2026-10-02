@@ -28,6 +28,7 @@ from ...control_plane.collaboration.inbox import (
     _write as _write,
     acknowledge as acknowledge,
     normalize_request as normalize_request,
+    normalize_source_context,
     pending as pending,
 )
 
@@ -63,7 +64,7 @@ def register_ingress(
         sender_id=sender_id,
         message_digest=_hash(message),
         source_id=source_id,
-        source_message=message if source_message is None else source_message,
+        source_message=normalize_source_context(message if source_message is None else source_message),
     )
     path = (
         _root(runtime_root)
@@ -166,8 +167,7 @@ def deliver(
                 / (_hash([session["session_id"], turn["client_turn_id"]]) + ".json")
             )
             content = str(ingress["source_message"])
-        if not content.strip() or len(content) > 20_000:
-            raise ValueError("invalid context content")
+        content = normalize_source_context(content)
         exact_target = _target(
             request["goal_id"],
             request["agent_id"],

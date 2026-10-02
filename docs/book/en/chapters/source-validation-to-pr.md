@@ -343,7 +343,7 @@ Git hygiene is part of the public/private contract.
 | Product code | Protocol policy, writer, projection | Commit when required by this PR |
 | Public docs | Protocol, contributor guide | Commit when it explains current behavior |
 | Durable validation | Contract test, public-safe smoke | Commit when it protects the rule |
-| Local/private state | `.loopx/`, `.codex/goals/`, live state | Never commit |
+| Local/private state | `.loopx/`, `.loopx/goals/`, live state | Never commit |
 | Generated/raw evidence | Logs, transcripts, verifier tails | Never commit |
 | Unrelated artifact | Another experiment or formatter churn | Keep outside the PR |
 
@@ -580,7 +580,7 @@ Before opening the PR, confirm:
 - [ ] Fakes, fixtures, and snapshots do not invent product semantics.
 - [ ] Validation failures are classified accurately.
 - [ ] Every changed path is classified and staged explicitly.
-- [ ] `.loopx/`, `.codex/goals/`, live state, credentials, private links, raw logs, and machine paths are absent.
+- [ ] `.loopx/`, `.loopx/goals/`, live state, credentials, private links, raw logs, and machine paths are absent.
 - [ ] Commits and PR text are organized around protocol results, not function lists.
 - [ ] Compatibility, recovery, unverified items, and owner Gates are explicit.
 - [ ] The PR links public work and does not duplicate maintainer-owned execution.

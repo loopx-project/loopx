@@ -181,6 +181,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.collaboration.peers",
     "loopx.control_plane.coordination.local_authority_shadow_outbox",
     "loopx.control_plane.coordination.shadow_management",
+    "loopx.control_plane.digest_envelope",
     "loopx.control_plane.effect_runtime",
     "loopx.control_plane.goals.activation_service",
     "loopx.control_plane.goals.deletion_service",

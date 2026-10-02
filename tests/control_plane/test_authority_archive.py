@@ -133,11 +133,16 @@ def test_upgrade_cli_requires_migration_and_keeps_verified_backup(tmp_path, monk
     subprocess.run([*command, "--require-current"], capture_output=True, text=True, check=True, timeout=60)
 
 
-def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp_path, monkeypatch):
+@pytest.mark.parametrize("legacy_runtime", [False, True])
+def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp_path, monkeypatch, legacy_runtime):
+    from loopx import paths
     from loopx.cli_commands import authority_archive
 
-    common, project = tmp_path / "common", tmp_path / "project"
-    common.mkdir()
+    current = tmp_path / "home" / ".loopx"
+    legacy = tmp_path / "home" / ".codex" / "loopx"
+    common = legacy if legacy_runtime else current
+    project = tmp_path / "project"
+    common.mkdir(parents=True)
     (project / ".loopx").mkdir(parents=True)
     project_registry = project / ".loopx" / "registry.json"
     project_registry.write_text(json.dumps({"common_runtime_root": ".loopx/runtime", "goals": [
@@ -149,7 +154,8 @@ def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp
         {"id": "disconnected", "source_registry": str(tmp_path / "removed" / "registry.json")},
     ]}))
     monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
-    monkeypatch.setattr(authority_archive, "DEFAULT_RUNTIME_ROOT", common)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy)
     before = {p: p.read_bytes() for p in (global_registry, project_registry)}
     roots = authority_archive.authority_upgrade_roots(project_registry, None, all_known=True)
     assert roots == sorted(map(str, [common, project / ".loopx/runtime"]))
@@ -157,6 +163,12 @@ def test_all_known_upgrade_roots_are_registry_owned_and_do_not_create_stores(tmp
     assert all(p.read_bytes() == data for p, data in before.items())
     assert not (project / ".loopx/runtime").exists()
     assert not (common / "authority").exists()
+    other = current if legacy_runtime else legacy
+    other.mkdir(parents=True)
+    (other / "registry.global.json").write_text('{"goals": []}', encoding="utf-8")
+    with pytest.raises(ValueError, match="Both default LoopX registries exist"):
+        authority_archive.authority_upgrade_roots(project_registry, None, all_known=True)
+    assert authority_archive.authority_upgrade_roots(project_registry, str(common), all_known=True) == roots
 
 
 @pytest.mark.parametrize("initial,target", [("file", "sqlite"), ("sqlite", "file")])

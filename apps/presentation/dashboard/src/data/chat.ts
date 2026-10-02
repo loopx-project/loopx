@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
+  type AgentResponse,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -427,6 +428,7 @@ const typedOperationEnvelopeSchema = z.object({
 
 export const typedActionProposalSchema = z.object({
   schema_version: z.literal("loopx_chat_action_proposal_v1"),
+  idempotency_key: z.string().optional(),
   proposal_id: z.string().min(1),
   action_kind: typedActionKindSchema,
   summary: z.string().min(1),
@@ -1106,16 +1108,34 @@ export function readManagedGoalResult(goalId: string, todoId: string) {
     `/api/chat/goal-results/${encodeURIComponent(todoId)}?goal_id=${encodeURIComponent(goalId)}`,
   );
 }
+export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
+  | "executing" | "validating" | "dispatched" | "unknown";
+type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null};
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
-export function delegationStateLabel(row: {status: string; worker_active?: boolean; recovery_required: boolean | null}, zh: boolean) {
-  if (row.status === "unavailable") return zh ? "无法核验" : "Unavailable";
-  if (row.status === "accepted") return zh ? "已通过当前验收" : "Currently accepted";
-  if (row.status === "rejected") return zh ? "未通过验收" : "Rejected";
-  if (row.recovery_required) return zh ? "需要恢复原执行" : "Original execution needs recovery";
-  if (row.status === "running" && row.worker_active) return zh ? "执行中" : "Executing";
-  if (row.status === "turn_returned" && row.worker_active) return zh ? "正在验收" : "Validating";
-  if (["prepared", "running", "turn_returned"].includes(row.status)) return zh ? "已派发，等待执行回读" : "Dispatched; awaiting execution readback";
-  return zh ? "状态未知" : "Unknown state";
+// "executing" and "validating" require an active worker observation, never the stored status alone.
+export function delegationState(row: DelegationStateFacts): DelegationState {
+  if (row.status === "unavailable") return "unavailable";
+  if (row.status === "accepted") return "accepted";
+  if (row.status === "rejected") return "rejected";
+  if (row.recovery_required) return "recovery_required";
+  if (row.status === "running" && row.worker_active) return "executing";
+  if (row.status === "turn_returned" && row.worker_active) return "validating";
+  if (["prepared", "running", "turn_returned"].includes(row.status)) return "dispatched";
+  return "unknown";
+}
+const DELEGATION_STATE_LABELS: Record<DelegationState, {zh: string; en: string}> = {
+  unavailable: {zh: "无法核验", en: "Unavailable"},
+  accepted: {zh: "已通过当前验收", en: "Currently accepted"},
+  rejected: {zh: "未通过验收", en: "Rejected"},
+  recovery_required: {zh: "需要恢复原执行", en: "Original execution needs recovery"},
+  executing: {zh: "执行中", en: "Executing"},
+  validating: {zh: "正在验收", en: "Validating"},
+  dispatched: {zh: "已派发，等待执行回读", en: "Dispatched; awaiting execution readback"},
+  unknown: {zh: "状态未知", en: "Unknown state"},
+};
+export function delegationStateLabel(row: DelegationStateFacts, zh: boolean) {
+  const label = DELEGATION_STATE_LABELS[delegationState(row)];
+  return zh ? label.zh : label.en;
 }
 export function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
   return requestJson<DelegationInventory>(`/api/chat/sessions/${sessionId}/loopx`, {
@@ -1238,6 +1258,18 @@ async function receiveChatTurnStreaming(
     sessionId,
     turnId,
   };
+}
+
+/** Read a stored Turn's terminal outcome without submitting or resuming work.
+ * Failed/interrupted Turns have no completed proposals; transport failures throw
+ * so callers can retry instead of treating an unavailable response as empty.
+ */
+export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
+  let completed: AgentResponse | null = null;
+  await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
+    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+  }, signal);
+  return completed;
 }
 
 export async function resumeChatTurnStreaming(

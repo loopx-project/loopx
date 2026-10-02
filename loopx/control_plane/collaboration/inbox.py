@@ -118,6 +118,18 @@ def normalize_request(value: Any) -> dict | None:
         raise ValueError(str(exc)) from exc
 
 
+def normalize_source_context(value: str) -> str:
+    """The shared typed owner qualifies source text before persistence."""
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return str(effect_runtime_result(
+            "collaboration.source_context.normalize", {"source_message": value},
+        )["source_message"])
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def pending(
     runtime_root: Path,
     goal_id: str,
@@ -192,9 +204,9 @@ def pending(
         batch.clear()
 
     for path in paths:
-        if path.suffix != ".json":
-            continue
-        if BARE_SHA256_PATTERN.fullmatch(path.stem) and path.stem <= after:
+        if path.suffix != ".json" or not BARE_SHA256_PATTERN.fullmatch(path.stem):
+            continue  # Ignore lock holder sidecars and other non-entry files.
+        if path.stem <= after:
             continue
         try:
             batch.append(_pending_entry(path, goal_id, agent_id, scope))

@@ -913,6 +913,79 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
     )
 
 
+@pytest.mark.parametrize("shutdown", [False, True], ids=["idle", "shutdown"])
+@pytest.mark.parametrize("disconnect", [False, True], ids=["connected", "timed-out"])
+def test_runtime_drains_admitted_write_before_exit(
+    tmp_path: Path, monkeypatch, shutdown: bool, disconnect: bool,
+) -> None:
+    """Socket lifetime must not define the lifetime of an accepted effect."""
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "250")
+    original = effect_runtime.effect_runtime_result("runtime.ping", {})
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    journal_path = tmp_path / "admitted-turn.json"
+    lock_path = Path(f"{journal_path}.ts-effect.lock")
+    lock_path.write_text(json.dumps({"pid": os.getpid(), "token": "fixture-holder"}))
+    effect_id = _effect_id("drain-before-exit")
+    journal = _journal(effect_id)
+
+    def write() -> dict[str, object]:
+        return effect_runtime.effect_runtime_result(
+            "turn_journal.write",
+            {"path": str(journal_path), "journal": journal, "expected_effect_id": effect_id},
+            timeout=0.1 if disconnect else 3,
+            retry_safe=False,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(write)
+            if disconnect:
+                with pytest.raises(effect_runtime.EffectRuntimeResponseAmbiguous):
+                    pending.result(timeout=2)
+            else:
+                time.sleep(0.1)
+            rejected = _raw_runtime_response(info, (json.dumps({
+                "schema_version": effect_runtime.EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
+                "token": "wrong-token", "request_id": "rejected", "method": "runtime.ping", "params": {},
+            }) + "\n").encode())
+            assert rejected["ok"] is False
+            assert rejected["error"]["code"] == "authentication_failed"
+            # A second, completed request must not mark the outstanding write idle.
+            observed = effect_runtime._request_with_info(
+                info, request_id="still-serving", method="runtime.ping", params={}, timeout=2,
+            )
+            assert observed["result"]["pid"] == original["pid"]
+            if shutdown:
+                effect_runtime._request_with_info(
+                    info, request_id="drain-shutdown", method="runtime.shutdown", params={}, timeout=2,
+                )
+            time.sleep(0.6)  # More than two idle windows while the real lock is held.
+            try:
+                assert effect_runtime._pid_is_alive(original["pid"]), "accepted work was abandoned"
+                assert info_path.exists(), "locator retired before the accepted effect settled"
+                assert not journal_path.exists()
+                if shutdown:
+                    with pytest.raises(OSError):
+                        socket.create_connection((str(info["host"]), int(info["port"])), timeout=0.2)
+            finally:
+                lock_path.unlink(missing_ok=True)
+            if not disconnect:
+                result = pending.result(timeout=3)
+                assert result["appended"] is True and result["replayed"] is False
+            deadline = time.monotonic() + 3
+            while info_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.025)
+            assert not info_path.exists(), "settled runtime must still retire when idle or stopped"
+            assert json.loads(journal_path.read_text(encoding="utf-8")) == journal
+    finally:
+        lock_path.unlink(missing_ok=True)
+        if effect_runtime._pid_is_alive(original["pid"]):
+            os.kill(int(original["pid"]), signal.SIGTERM)
+
+
 def _envelope(code: str, received: str) -> bytes:
     """Frame one startup rejection the way the managed server publishes it.
 

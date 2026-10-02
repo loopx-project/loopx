@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping
 from typing import Any
 
+from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
 
 REQUEST_SCHEMA = "review_batch_request_v0"
 BATCH_SCHEMA = "review_batch_v0"
 DECISIONS_SCHEMA = "review_batch_decisions_v0"
 DECISION_RECEIPT_SCHEMA = "review_batch_decision_receipt_v0"
 
-_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _FORBIDDEN_RAW_KEYS = {
     "credential",
     "credentials",
@@ -58,7 +57,7 @@ def _optional_text(value: object, label: str, *, maximum: int = 1000) -> str | N
 
 def _token(value: object, label: str) -> str:
     token = _text(value, label, maximum=128).lower()
-    if not _TOKEN_RE.fullmatch(token):
+    if not PUBLIC_SAFE_SLUG_PATTERN.fullmatch(token):
         raise ValueError(f"{label} must be a lower-snake-like public token")
     return token
 

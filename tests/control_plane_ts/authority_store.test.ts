@@ -8,6 +8,7 @@ import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_
 import {
   AUTHORITY_STORE_PROVIDER_PROFILES,
   AUTHORITY_STORE_REQUIRED_GUARANTEES,
+  readAuthorityReceipts,
 } from "../../loopx/control_plane/coordination/authority_store.ts";
 import {
   authorityStoreCommitFixture as commit,
@@ -29,6 +30,104 @@ registerAuthorityStoreConformance("file provider", async (t) => {
 registerAuthorityOperationReplayConformance("file provider", async (t) => {
   const { root, store } = await fixture(t);
   return { store, contender: new FileAuthorityStore(root, "goal-a") };
+});
+
+test("file receipt batches retain caller order, original receipts and detached results", async t => {
+  const {store} = await fixture(t);
+  assert.equal(typeof store.readReceipts, "function");
+  let revision: string | null = null;
+  const expected = [];
+  for (let i = 1; i <= 3; i++) {
+    const request = commit(revision, `operation-${i}`, i, i);
+    request.receipts = [{original: i, metadata: {absent: null, enabled: false}}];
+    const result = await store.commitAuthority(request);
+    assert.equal(result.status, "applied");
+    if (result.status !== "applied") throw new Error("seed failed");
+    revision = result.provider_revision;
+    expected.push({status: "found", cursor: String(i), provider_revision: revision, receipts: request.receipts});
+  }
+  const before = await readFile(store.path);
+  const ids = ["operation-3", "absent", "operation-1", "operation-3"];
+  const result = await readAuthorityReceipts(store, ids);
+  assert.deepEqual(result, {status: "receipts", results: [expected[2], {status: "missing"}, expected[0], expected[2]]});
+  if (result.status !== "receipts" || result.results[0].status !== "found") throw new Error("batch failed");
+  result.results[0].receipts[0].original = "caller edit";
+  assert.deepEqual(result.results[3], expected[2], "duplicate results must not share mutable receipt bodies");
+  assert.deepEqual(await store.readReceipt("operation-3"), expected[2]);
+  assert.deepEqual(await readFile(store.path), before);
+
+  // Readonly types do not freeze a caller's array while filesystem IO yields.
+  // Force a fresh proof and mutate that array inside the existing decode seam.
+  await writeFile(store.path, Buffer.concat([before, Buffer.from("\n")]));
+  class MutatingCallerStore extends FileAuthorityStore {
+    protected override decodeStoredDocument(value: unknown, identity: string) {
+      ids.splice(0, ids.length, "");
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  assert.deepEqual(await readAuthorityReceipts(new MutatingCallerStore(store.directory, "goal-a"), ids),
+    {status: "receipts", results: [expected[2], {status: "missing"}, expected[0], expected[2]]});
+});
+
+test("file receipt batches reject invalid input and corrupt historical proof as a whole", async t => {
+  const {store} = await fixture(t);
+  const first = await store.commitAuthority(commit(null, "old", 1, 1));
+  assert.equal(first.status, "applied");
+  if (first.status !== "applied") throw new Error("seed failed");
+  assert.equal((await store.commitAuthority(commit(first.provider_revision, "current", 2, 2))).status, "applied");
+  const original = await readFile(store.path, "utf8");
+  for (const ids of [[], Array(65).fill("old"), ["old", ""], ["old", null]]) {
+    // Exercise direct provider input too, rather than only the common length guard.
+    const batch = await store.readReceipts(ids as string[]);
+    assert.equal(batch.status, "failed");
+    assert.deepEqual(await readFile(store.path, "utf8"), original);
+  }
+  const invalidSingle = await store.readReceipt("");
+  assert.equal(invalidSingle.status, "failed");
+  if (invalidSingle.status === "failed") assert.equal(invalidSingle.reason_code, "invalid_operation_id");
+  const forged = JSON.parse(original);
+  forged.committed[0].receipts = [{forged: true}];
+  await writeFile(store.path, JSON.stringify(forged));
+  assert.equal((await readAuthorityReceipts(store, ["current", "absent"])).status, "failed",
+    "unchanged current receipts and missing IDs cannot bypass corrupt older history");
+  await writeFile(store.path, original);
+  assert.equal((await readAuthorityReceipts(store, ["old", "current"])).status, "receipts");
+  await writeFile(store.identityPath, `file:${"f".repeat(32)}`);
+  assert.equal((await readAuthorityReceipts(store, ["current"])).status, "failed");
+});
+
+test("missing File receipt batches stay read-only", async t => {
+  const {store} = await fixture(t);
+  assert.deepEqual(await readAuthorityReceipts(store, Array(64).fill("absent")),
+    {status: "receipts", results: Array(64).fill({status: "missing"})});
+  await assert.rejects(readFile(store.identityPath), {code: "ENOENT"});
+});
+
+test("file receipt batches reject array holes before reading storage", async t => {
+  const {root, store} = await fixture(t);
+  const first = await store.commitAuthority(commit(null, "present", 1, 1));
+  assert.equal(first.status, "applied");
+  const original = await readFile(store.path);
+  // Sparse arrays are valid string[] values in TypeScript. Every request slot
+  // must be validated, even when an array method would skip an absent property.
+  const empty = new Array<string>(1);
+  const mixed = ["present", "hole", "absent", "present"];
+  delete mixed[1];
+  const masked = new Array<string>(1);
+  masked[Symbol.iterator] = () => ["present"].values();
+  const unreadable = new FileAuthorityStore(root, "unreadable");
+  await mkdir(unreadable.path);
+  assert.equal((await unreadable.readReceipts(["present"])).status, "unavailable");
+  for (const ids of [empty, mixed, masked]) {
+    for (const provider of [store, unreadable]) {
+      for (const result of [await provider.readReceipts(ids),
+        await readAuthorityReceipts(provider, ids)]) {
+        assert.equal(result.status, "failed", "holes cannot produce successful undefined receipt items");
+        if (result.status === "failed") assert.equal(result.reason_code, "provider_protocol_violation");
+      }
+    }
+  }
+  assert.deepEqual(await readFile(store.path), original);
 });
 
 test("file provider persists object keys in deterministic Unicode order", async (t) => {

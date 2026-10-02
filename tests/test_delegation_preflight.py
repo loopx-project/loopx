@@ -628,12 +628,13 @@ def test_hard_lease_delegation_claims_before_host_launch(service, monkeypatch):
     row = json.loads(runner.path("leased-dispatch").read_text())
 
     assert [call[:2] for call in calls] == [("todo", "claim"), ("turn", "run-once")]
-    assert row["task_lease"] == {
-        "required": True,
-        "handoff_mode": "hard_lease",
-        "idempotency_key": row["turn_instance_id"],
-        "version": 7,
-    }
+    assert row["task_lease"]["required"] is True
+    assert row["task_lease"]["lease"]["idempotency_key"] == row["turn_instance_id"]
+    assert row["task_lease"]["lease"]["version"] == 7
+    # The canonical contract permits an older lease without an acquisition
+    # TTL. Let the shared TS lease owner resolve its default rather than
+    # inventing a Python default or rejecting this still-current execution.
+    assert runner._delegated_lease_context(row, runner.binding("analysis"))["ttl_seconds"] is None
     assert result["status"] == "rejected"
     assert result["error"] == "stop after lease evidence"
 

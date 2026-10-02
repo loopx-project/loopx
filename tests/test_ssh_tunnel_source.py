@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
 from unittest import mock
 from types import SimpleNamespace
 
@@ -10,6 +16,8 @@ from loopx.control_plane.goals.ssh_lifecycle_transport import (
     apply_ssh_goal_lifecycle,
 )
 from loopx.control_plane.status.ssh_tunnel import ensure_ssh_source
+from loopx.global_registry import sync_project_registry_to_global
+from loopx.history import load_registry
 
 
 def test_ensure_ssh_source_opens_tunnel_and_returns_status_url() -> None:
@@ -179,7 +187,7 @@ def test_apply_ssh_goal_lifecycle_uses_remote_typed_contract_without_local_fallb
     assert argv[:4] == ["ssh", "-o", "ConnectTimeout=5", "ark-devbox"]
     assert "goal-lifecycle" in argv[4]
     assert "--actor-kind owner" in argv[4]
-    assert '"$HOME/.codex/loopx/registry.global.json"' in argv[4]
+    assert "--registry @host-global" in argv[4]
     assert result == {
         "ok": True,
         "schema_version": "loopx_remote_goal_lifecycle_v1",
@@ -190,6 +198,84 @@ def test_apply_ssh_goal_lifecycle_uses_remote_typed_contract_without_local_fallb
         "changed": True,
         "projection_verified": True,
     }
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_ssh_lifecycle_uses_remote_global_registry_with_project_cwd(
+    tmp_path: Path, legacy: bool,
+) -> None:
+    home = tmp_path / "home"
+    runtime_root = home / (".codex/loopx" if legacy else ".loopx")
+    project = tmp_path / "target-project"
+    source_registry = project / ".loopx" / "registry.json"
+    source_registry.parent.mkdir(parents=True)
+    source_registry.write_text(
+        json.dumps({
+            "schema_version": "0.1",
+            "common_runtime_root": str(runtime_root),
+            "goals": [{
+                "id": "shared",
+                "display_name": "Target Goal",
+                "repo": str(project),
+                "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+            }],
+        }),
+        encoding="utf-8",
+    )
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="shared",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    global_registry = runtime_root / "registry.global.json"
+
+    # A project-local registry in the remote HOME used to win implicit CLI
+    # selection. The host-global selector must ignore this unrelated Goal.
+    local_registry = home / ".loopx" / "registry.json"
+    local_registry.parent.mkdir(parents=True, exist_ok=True)
+    local_registry.write_text(
+        json.dumps({
+            "schema_version": "0.1",
+            "common_runtime_root": str(home / "unrelated-runtime"),
+            "goals": [{"id": "shared", "repo": str(home)}],
+        }),
+        encoding="utf-8",
+    )
+    local_before = local_registry.read_bytes()
+    bin_path = home / ".local" / "bin" / "loopx"
+    bin_path.parent.mkdir(parents=True)
+    bin_path.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -m loopx.cli \"$@\"\n",
+        encoding="utf-8",
+    )
+    bin_path.chmod(0o755)
+    env = dict(os.environ, HOME=str(home), LOOPX_USAGE_PING="0")
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    env.pop("LOOPX_REGISTRY", None)
+    env.pop("LOOPX_RUNTIME_ROOT", None)
+    real_run = subprocess.run
+
+    def execute_remote(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert "--registry @host-global" in argv[-1]
+        return real_run(["/bin/sh", "-c", argv[-1]], cwd=home, env=env, **kwargs)
+
+    with mock.patch(
+        "loopx.control_plane.goals.ssh_lifecycle_transport.configured_ssh_host_aliases",
+        return_value=["fixture-host"],
+    ), mock.patch(
+        "loopx.control_plane.goals.ssh_lifecycle_transport.subprocess.run",
+        side_effect=execute_remote,
+    ):
+        result = apply_ssh_goal_lifecycle(
+            host_alias="fixture-host", goal_id="shared", operation="stop",
+        )
+
+    assert result["activation_state"] == "stopped"
+    assert local_registry.read_bytes() == local_before
+    goal = load_registry(global_registry)["goals"][0]
+    assert goal["activation"]["state"] == "stopped"
 
 
 def test_apply_ssh_goal_lifecycle_fails_closed_for_unconfigured_host() -> None:

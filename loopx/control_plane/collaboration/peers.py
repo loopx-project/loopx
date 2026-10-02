@@ -249,6 +249,8 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
         / _hash(_target(goal_id, agent_id, scope))
     )
     for operation_path in sorted(folder.glob("*.json")):
+        if not BARE_SHA256_PATTERN.fullmatch(operation_path.stem):
+            continue  # Lock holder sidecars are not peer operation records.
         operation = _read(operation_path)
         if (
             operation.get("goal_id") != goal_id

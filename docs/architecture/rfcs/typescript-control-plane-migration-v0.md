@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-09-26
+- Last revised: 2026-10-01
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -1151,6 +1151,27 @@ debit. This closes the demonstrated T3 consumer gap, not D1–D3, provider
 promotion, or the remaining Python transaction adapters. See the
 [operating contract](../../quota-allocation.md#receipt-backed-settlement-progress).
 
+**Canonical claim contention.** The TS claim command now retries a conclusive
+provider revision CAS rejection at most twice, using the same operation and
+lease keys. Every attempt rereads the receipt and complete authority and
+revalidates source registration, Todo eligibility, acceptance and lease scopes.
+An explicit provider revision or transfer grant stays pinned; ambiguous writes
+retain existing receipt recovery. Independent claims can both finish while
+same-Todo or overlapping-scope claims still admit one owner. This adopts the
+shared-authority conflict contract at the canonical writer; it does not reserve
+recommendations, change local writer serialization, or qualify sustained
+multi-host throughput. CLI claim callers inherit the behavior; no frontend or
+Lark action contract changes.
+
+**Scoped gate action readback.** The final quota packet now projects the scoped
+User gate/action override through a typed quota rule after selection, capability,
+workspace, receipt and notification decisions. Its optional `selected_action`
+comes only from the final selected Todo when the interaction allows delivery;
+selection-required, repair and settled packets omit it. Admission diagnostics
+and receipt identity remain intact. This corrects misleading CLI JSON readback
+for peer-scoped gates; it does not migrate the remaining route or primary-action
+builders, reserve recommendations, or complete T3/D1–D3.
+
 **Long-history transport boundary.** Replan history still has one TS decision
 owner. Small requests retain the inline codec; larger complete fact snapshots
 travel through a private, digest-bound local file reference. The same reducer
@@ -1420,6 +1441,52 @@ Consumers treat a missing envelope as unknown freshness, and disclose an
 alerting one before stating any conclusion that depends on it. Field
 semantics and the consumer rule are in the
 [projection envelope contract](../../reference/contracts/projection-envelope-contract.md).
+
+### 2.7 Legal domain values and deterministic decisions
+
+Keep external/historical wire values separate from validated internal domain
+values. Decode `unknown`, preserve supported omitted/null/clear semantics, then
+construct a constrained domain value. Use products for independent dimensions
+and discriminated unions for alternatives whose fields depend on one another.
+For example, a settlement binding selects either a Todo or a replan obligation;
+a required user decision cannot simultaneously be a non-blocking notice. Do
+not remove persisted compatibility fields merely because they are redundant in
+the internal model. Keep their codec and migration owner explicit.
+
+The pure decision core receives an immutable snapshot, command and explicit
+facts supplied by the trusted authority, including time or allocated identity
+when required. It must not read a clock, environment, filesystem, network or
+mutable global. Local mutation is acceptable when it cannot change observable
+inputs or escape through shared aliases. The effect shell retains IO, current
+source/permission revalidation, CAS and durable receipts. Decoding once does
+not mean authorizing once: temporal validity is checked at the owning commit
+or effect-acceptance boundary.
+
+Use the existing runtime decoder/schema owner and exhaustive TypeScript
+branches. Brands distinguish identifiers or revision domains only where real
+callers confuse them; a brand never proves current authorization. Domain-local
+expected rejection should remain a typed result, distinct from malformed input
+and unexpected defects. No new FP dependency or universal `Result`/effect layer
+is required. Existing `AgentInteractionChannel` and `SettlementResult` provide
+bounded patterns to reuse; an open JSON carrier is appropriate at a transport
+boundary, not a substitute for known internal state relationships.
+
+A selected replacement must prove compile-time illegal-state rejection, runtime
+boundary rejection, supported wire compatibility and production caller readback.
+Use the [composition verification contract](composable-state-machines-recovery-verification-v0.md)
+for cross-domain recovery. These are acceptance requirements for future slices,
+not a claim that all existing TypeScript domains already satisfy them.
+
+### 2.8 Change locality as migration payoff
+
+Extend the existing payoff table for a representative changed rule: identify
+semantic owners and callers changed, cross-runtime requests per complete
+transaction, remaining compatibility branches and the path from a failure to
+its deciding owner. Compare the same base/head workload and record deleted
+rules as well as added bridge code. Do not impose arbitrary whole-tree counts
+or count more registered types as progress. A cohesive replacement should make
+the next rule change easier to localize, test and revert; directory moves alone
+do not establish that payoff.
 
 ## 3. Current baseline and phase transition
 
@@ -1974,3 +2041,8 @@ This advances T3/L5; it does not replace D2/D3 or flip a provider default.
 2026-09-24: [Leased continuation and remaining local-default packages](ledger/shared-goal-authority-state-provider-v0/2026-09-24-leased-continuation.md).
 
 Event replay and the reconciled cutover inventory: [2026-09-25](ledger/shared-goal-authority-state-provider-v0/2026-09-25-event-replay.md).
+
+### Settlement-addressed Turn journal readback
+
+The native query now owns recovery lookup and completion capability evidence,
+with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.

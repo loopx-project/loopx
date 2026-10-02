@@ -36,14 +36,32 @@ python -m demo.workspace advance --root /tmp/workspace-stories \
   --story research-brief --decision assumptions
 ```
 
-Refresh the UI afterward. Only that decision and its direct blocked successors are advanced. Other owner decisions and downstream blockers remain intact. The command does not purchase, publish, deploy or start an Agent.
+Refresh the UI afterward. Only that decision and its direct blocked successor are advanced through the canonical User completion owner. The App's Approve, Reject and Withdraw controls use the same decision relationship; reject and withdraw leave the dependent blocked. Other owner decisions and downstream blockers remain intact. The command does not purchase, publish, deploy or start an Agent. Use a fresh directory after updating from demo manifest v2; existing replays are preserved rather than migrated.
 
 ## Data and isolation
 
 These are authored scenario replays using real LoopX APIs and state transitions, not customer case studies or receipts of live Agent execution. Natural project titles keep the interface readable; the manifest and completion evidence retain provenance. Source-card inventories and website checklists are planning inputs, not claims of external research or executed website tests. Event money is a project budget, not model spending.
 
-The demo does not import personal registries, session history or credentials, and does not sync into the global registry. The loopback server uses a separate HOME/CODEX_HOME, minimal environment and unavailable Agent/Lark binaries. Chat and Lark connection errors are intentional isolation and do not qualify live IM behavior. Stop with Ctrl-C.
+The demo does not import personal registries, session history or credentials, and does not sync into the global registry. Prepare, advance and serve run in a separate HOME/CODEX_HOME with a minimal environment; even preparation never discovers personal default registries. The loopback server uses unavailable Agent/Lark binaries. Chat and Lark connection errors are intentional isolation and do not qualify live IM behavior. Stop with Ctrl-C.
 
 This remains a source-checkout demo under `demo/`, outside the installed wheel and capability catalog. Screenshots and recordings belong in ignored `output/playwright/`. Keep real operating statistics separately timestamped with their counting scope.
+
+## README hero
+
+The repository README hero is rendered from the packaged App on this demo. With the dashboard dependencies installed, build the App and start a fresh isolated demo:
+
+```bash
+uv run --extra test python scripts/chat_bundle.py build --install
+uv run --extra test python -m demo.workspace serve --root /tmp/workspace-hero --port 8791
+```
+
+In another terminal:
+
+```bash
+node demo/workspace/readme-hero/render.mjs --url http://127.0.0.1:8791 \
+  --demo-root /tmp/workspace-hero --out docs/assets/personal-workspace
+```
+
+The hero shows the real packaged Work map: recorded task relations, responsible agents, progress and pending owner decisions. These come from the authored scenario replay; the capture runs no live Agent task and adds no mocked conversation or team record. The renderer requires a complete map and a fresh v3 demo, prepares a pending venue approval through the existing typed action preview API, and verifies its confirmation button in both languages without applying it. All projected Todo states must remain unchanged after capture. It fails on older Apps, incomplete maps or advanced decisions. Intermediate frames stay in ignored `output/playwright/readme-hero/frames/`.
 
 Validation: `python -m pytest tests/test_workspace_story_demo.py -q` exercises real state, directory isolation, repeatable prepare, computed artifacts and decision-scoped transitions. The normal Workspace browser smoke covers the shared Board/List and completed-history behavior, including #3961.

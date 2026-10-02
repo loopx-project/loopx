@@ -35,6 +35,7 @@ from ..control_plane.work_items.governed_transition_proposal import (
 )
 from ..control_plane.work_items.team_plan_adapter import team_plan_state_fingerprint
 from ..file_lock import exclusive_file_lock
+from ..paths import select_default_runtime_root
 from .capability_admission import prepare_external_capability_invocation
 from .runtime import execute_extension_runtime_binding
 
@@ -57,7 +58,7 @@ def default_governed_capability_run_dir(
     root = (
         Path(runtime_root).expanduser()
         if runtime_root is not None
-        else Path.home() / ".codex" / "loopx"
+        else select_default_runtime_root()
     )
     return root / "extensions" / "governed-capability-runs"
 

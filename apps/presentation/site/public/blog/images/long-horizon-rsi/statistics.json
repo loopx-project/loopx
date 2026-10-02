@@ -1,0 +1,61 @@
+{
+  "repository": "https://github.com/loopx-project/loopx",
+  "anchor": "b9b758ca4dfc30d0d610b45398fc31acd62781f6",
+  "anchor_committer_time": "2026-10-01T23:58:12+08:00",
+  "timezone": "Asia/Shanghai",
+  "timestamp": "committer",
+  "night_interval": "[00:00,08:00)",
+  "history_scope": "all commits reachable from the last main first-parent commit before the calendar cutoff; merge commits excluded from headline",
+  "total_reachable": 8613,
+  "total_non_merge": 6848,
+  "total_merge": 1765,
+  "stages": [
+    {
+      "stage": "meta-bootstrapping",
+      "start_inclusive": "2026-05-31",
+      "end_exclusive": "2026-06-21",
+      "calendar_days": 21,
+      "non_merge_commits": 739,
+      "night_commits": 298,
+      "night_percent": 40.32476319350474,
+      "daily_average": 35.19047619047619
+    },
+    {
+      "stage": "general-long-horizon",
+      "start_inclusive": "2026-06-21",
+      "end_exclusive": "2026-09-06",
+      "calendar_days": 77,
+      "non_merge_commits": 3870,
+      "night_commits": 1399,
+      "night_percent": 36.14987080103359,
+      "daily_average": 50.25974025974026
+    },
+    {
+      "stage": "workspace-and-community",
+      "start_inclusive": "2026-09-06",
+      "end_exclusive": "2026-10-02",
+      "calendar_days": 26,
+      "non_merge_commits": 2239,
+      "night_commits": 556,
+      "night_percent": 24.832514515408665,
+      "daily_average": 86.11538461538461
+    }
+  ],
+  "last14": {
+    "start_inclusive": "2026-09-18",
+    "end_exclusive": "2026-10-02",
+    "calendar_days": 14,
+    "non_merge_commits": 1356,
+    "night_commits": 384,
+    "night_percent": 28.31858407079646,
+    "daily_average": 96.85714285714286,
+    "night_active_days": 14,
+    "peak_non_merge_commits": 144
+  },
+  "method": "git log ANCHOR --format=%H%x09%ct%x09%P; select commits with at most one parent; convert committer epoch seconds to Asia/Shanghai; group by half-open date intervals; overnight hour < 8; daily average = non-merge commits / calendar days.",
+  "limitations": [
+    "Git commit objects are not unique accepted outcomes.",
+    "Counts include community contributions; timestamps do not identify AI authorship or unattended activity.",
+    "No causal RSI performance or automation percentage is estimated."
+  ]
+}

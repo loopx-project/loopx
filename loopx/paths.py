@@ -4,9 +4,60 @@ import os
 from pathlib import Path
 
 
-DEFAULT_RUNTIME_ROOT = Path.home() / ".codex" / "loopx"
+DEFAULT_RUNTIME_ROOT = Path.home() / ".loopx"
+LEGACY_RUNTIME_ROOT = Path.home() / ".codex" / "loopx"
 DEFAULT_PROJECT_REGISTRY = Path(".loopx") / "registry.json"
+DEFAULT_PROJECT_GOALS = Path(".loopx") / "goals"
+LEGACY_PROJECT_GOALS = Path(".codex") / "goals"
 GLOBAL_REGISTRY_FILENAME = "registry.global.json"
+SHELL_DEFAULT_GLOBAL_REGISTRY = '"$HOME/.loopx/registry.global.json"'
+SHELL_LEGACY_GLOBAL_REGISTRY = '"$HOME/.codex/loopx/registry.global.json"'
+
+
+def default_goal_state_file(project: Path, goal_id: str) -> Path:
+    return project / DEFAULT_PROJECT_GOALS / goal_id / "ACTIVE_GOAL_STATE.md"
+
+
+def legacy_goal_state_file(project: Path, goal_id: str) -> Path:
+    return project / LEGACY_PROJECT_GOALS / goal_id / "ACTIVE_GOAL_STATE.md"
+
+
+def registered_goal_state_file(
+    project: Path, goal_id: str, registry: dict[str, object] | None = None
+) -> Path:
+    """Keep an existing registration on its declared path until migration."""
+
+    if isinstance(registry, dict):
+        goals = registry.get("goals")
+        if isinstance(goals, list):
+            for goal in goals:
+                if not isinstance(goal, dict) or goal.get("id") != goal_id:
+                    continue
+                value = goal.get("state_file")
+                if isinstance(value, str) and value:
+                    path = Path(value).expanduser()
+                    return path if path.is_absolute() else project / path
+        declared_root = registry.get("common_runtime_root")
+        if declared_root and Path(str(declared_root)).expanduser() == LEGACY_RUNTIME_ROOT:
+            return legacy_goal_state_file(project, goal_id)
+    return default_goal_state_file(project, goal_id)
+
+
+def require_single_goal_state_route(project: Path, goal_id: str, selected: Path) -> None:
+    """Avoid bootstrapping a second default state file for the same Goal."""
+
+    current = default_goal_state_file(project, goal_id)
+    legacy = legacy_goal_state_file(project, goal_id)
+    if selected == current and legacy.exists():
+        raise ValueError(
+            f"legacy Goal state exists at {legacy}; restore its registration or "
+            "migrate it explicitly before bootstrapping this Goal"
+        )
+    if selected == legacy and current.exists():
+        raise ValueError(
+            f"new Goal state already exists at {current}; resolve the route "
+            "conflict before bootstrapping this Goal"
+        )
 
 
 def default_public_scan_root() -> str:
@@ -22,8 +73,134 @@ def default_registry_path() -> Path:
     return DEFAULT_PROJECT_REGISTRY
 
 
-def global_registry_path(runtime_root: Path = DEFAULT_RUNTIME_ROOT) -> Path:
-    return runtime_root / GLOBAL_REGISTRY_FILENAME
+def _runtime_root_has_machine_state(root: Path) -> bool:
+    """Separate a HOME project's declared files from machine-owned state."""
+
+    if not root.is_dir():
+        return False
+    project_registry = root / DEFAULT_PROJECT_REGISTRY.name
+    project_owned: set[str] = set()
+    if root == DEFAULT_RUNTIME_ROOT and project_registry.is_file() and not project_registry.is_symlink():
+        from .control_plane.projects.registry_codec import load_registry
+        from .file_lock import _lock_path, lock_holder_path, lock_incident_path
+
+        try:
+            registry = load_registry(project_registry)
+        except (OSError, ValueError):
+            return True  # Unclassified existing state requires an explicit route.
+        project_owned = {
+            project_registry.name, _lock_path(project_registry).name,
+            lock_holder_path(project_registry).name, lock_incident_path(project_registry).name,
+        }
+        goal_root = root / DEFAULT_PROJECT_GOALS.name
+        declared_dirs = set()
+        for goal in registry.get("goals", []):
+            if not isinstance(goal, dict) or not isinstance(goal.get("state_file"), str):
+                continue
+            state = Path(goal["state_file"]).expanduser()
+            state = state if state.is_absolute() else root.parent / state
+            if state.name == "ACTIVE_GOAL_STATE.md" and state.parent.parent == goal_root:
+                declared_dirs.add(state.parent)
+        if goal_root.is_dir() and not goal_root.is_symlink() and all(
+            child in declared_dirs and child.is_dir() and not child.is_symlink()
+            for child in goal_root.iterdir()
+        ):
+            project_owned.add(goal_root.name)
+    return any(child.name not in project_owned for child in root.iterdir())
+
+
+def default_runtime_route() -> dict[str, object]:
+    """Inspect the two default routes without creating either one."""
+
+    current = global_registry_path(DEFAULT_RUNTIME_ROOT)
+    legacy = global_registry_path(LEGACY_RUNTIME_ROOT)
+    current_exists = current.exists() or current.is_symlink()
+    legacy_exists = legacy.exists() or legacy.is_symlink()
+    invalid = any(
+        path.is_symlink() or not path.is_file()
+        for path, present in ((current, current_exists), (legacy, legacy_exists))
+        if present
+    )
+    roots = (DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT)
+    invalid = invalid or any(
+        root.is_symlink() or (root.exists() and not root.is_dir()) for root in roots
+    )
+    # Machine configuration and extension activation can predate the first
+    # Goal registry. Preserve any existing state in an owned default root;
+    # an empty directory alone does not establish a second authority.
+    current_state, legacy_state = (
+        _runtime_root_has_machine_state(root) for root in roots
+    ) if not invalid else (False, False)
+    if invalid:
+        status = "invalid"
+    elif current_state and legacy_state:
+        status = "conflict"
+    elif legacy_state:
+        status = "legacy"
+    elif current_state:
+        status = "current"
+    else:
+        status = "fresh"
+    selected = LEGACY_RUNTIME_ROOT if status == "legacy" else DEFAULT_RUNTIME_ROOT
+    recommended_action = None
+    if status == "conflict":
+        recommended_action = (
+            "Select one registry with --registry/--runtime-root; "
+            "inspect both roots before migration."
+        )
+    elif status == "invalid":
+        recommended_action = (
+            "A default runtime root is linked or not a directory, or a default "
+            "registry path is not a regular file; inspect it before continuing."
+        )
+    elif status == "legacy":
+        recommended_action = (
+            "Preview `loopx migrate-local-state`; existing state remains on its legacy route."
+            if legacy_exists else
+            "Existing machine state remains on its legacy route without a Goal registry. "
+            "Ordinary registration will use that route; directory migration requires "
+            "a registered global registry."
+        )
+    return {
+        "status": status,
+        "selected_runtime_root": str(selected),
+        "target_runtime_root": str(DEFAULT_RUNTIME_ROOT),
+        "legacy_runtime_root": str(LEGACY_RUNTIME_ROOT),
+        "target_registry_exists": current_exists,
+        "legacy_registry_exists": legacy_exists,
+        "recommended_action": recommended_action,
+    }
+
+
+def select_default_runtime_root() -> Path:
+    route = default_runtime_route()
+    if route["status"] == "conflict":
+        conflict = (
+            "Both default LoopX registries exist."
+            if route["target_registry_exists"] and route["legacy_registry_exists"]
+            else "Both default LoopX runtime roots contain state."
+        )
+        raise ValueError(
+            f"{conflict} Select an explicit --registry and "
+            "--runtime-root; resolve the route conflict before using implicit defaults."
+        )
+    if route["status"] == "invalid":
+        raise ValueError(str(route["recommended_action"]))
+    return Path(str(route["selected_runtime_root"]))
+
+
+def shell_selected_global_registry() -> str:
+    selected = select_default_runtime_root()
+    return (
+        SHELL_LEGACY_GLOBAL_REGISTRY
+        if selected == LEGACY_RUNTIME_ROOT
+        else SHELL_DEFAULT_GLOBAL_REGISTRY
+    )
+
+
+def global_registry_path(runtime_root: Path | None = None) -> Path:
+    selected = runtime_root if runtime_root is not None else select_default_runtime_root()
+    return selected / GLOBAL_REGISTRY_FILENAME
 
 
 def registry_project_root(registry_path: Path) -> Path:
@@ -46,11 +223,11 @@ def resolve_runtime_root(
     *,
     registry_path: Path | None = None,
 ) -> Path:
-    value = override
+    value: object = override
     if not value:
         value = registry.get("common_runtime_root") if isinstance(registry, dict) else None
     if not value:
-        return DEFAULT_RUNTIME_ROOT
+        return select_default_runtime_root()
 
     runtime_root = Path(str(value)).expanduser()
     if runtime_root.is_absolute() or registry_path is None:

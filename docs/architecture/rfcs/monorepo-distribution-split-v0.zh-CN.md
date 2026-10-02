@@ -4,7 +4,7 @@
 - **交付成熟度：** Proposal
 - **作者 / 负责人：** LoopX maintainers
 - **创建：** 2026-09-26
-- **最近规范性修订：** 2026-09-27
+- **最近规范性修订：** 2026-10-01
 - **实现基线：** `2f3d13ae9`
 - **相关契约：** [TypeScript 控制面迁移 v0](typescript-control-plane-migration-v0.zh-CN.md)、[Extensions 参考](../../reference/extensions.md)、[Capability 目录](../../../loopx/capabilities/README.md)、[总体路线图 v0](loopx-overall-roadmap-v0.zh-CN.md)（S2、S8、S12）、[import 边界测试](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **跟踪 issue：** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -21,7 +21,7 @@
 
 1. **仓库保持单一 monorepo。** 一条 PR 流程、一套 CI、一个发布列车。拆成多个 Git 仓库是本 RFC 的非目标。
 2. **安装物拆成多个发行物。** 单一 `loopx` wheel 逐步替换为 `loopx-core`、`loopx-workspace` 以及 `packages/` 下的按 capability 打包；`loopx` 保留为依赖全部子包的 meta-package。
-3. **先做顶层目录重组，再做打包变更。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，旧路径保留至少一个 minor 版本的兼容 re-export。
+3. **先做顶层目录重组，再做打包变更。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，已建立的公开 import 保留至少一个 minor 版本的兼容 re-export；内部调用方一起迁移并删除旧内部入口。
 4. **新增一条架构测试钉住顶层增长。** `loopx/*.py` 的文件数只能减少，与现有零例外 import 边界测试并列。
 5. **仅内核安装不得在 import 阶段要求 Node.js。** TS effect runtime 对有副作用的命令仍是必需的；缺失时必须以现有的类型化 `node_unavailable` 诊断呈现，而不是安装或 import 失败。
 6. **不变：** 内核权威、CLI 兼容基线、extension 生命周期规则、公开/私有边界、全部稳定协议。
@@ -56,7 +56,7 @@
 
 - I1. 任何跨包变更都是一个仓库、一个 PR、一次 CI。
 - I2. 内核真相（Goal/Todo/claim/lease/quota/effect/receipt）每个事务只有一个负责人、一条实现路径；打包不得引入第二份拷贝。
-- I3. 迁移后 `import loopx.<旧模块>` 至少在一个 minor 版本内继续可用，并有文档化的弃用说明。
+- I3. 已建立的公开 `import loopx.<旧模块>` 合同在迁移后至少一个 minor 版本内继续可用，并有弃用说明。纯内部移动同步更新全部活跃 caller 并删除旧入口；只有具名未迁 caller 与明确退出条件才保留内部 bridge。
 - I4. 缺失的可选发行物退化为与 extension "off state" 相同的行为：核心命令可用，缺失的 capability 报告为不可用，绝不静默替换。
 - I5. 安装仅内核发行物不需要 Node.js；在没有 Node.js 时运行有副作用的命令得到类型化 `node_unavailable` 诊断。
 - I6. 任何移动都不附带改变公开/私有边界规则、schema 字段或许可证。
@@ -101,6 +101,17 @@
 
 权威不移动：内核仍是 Goal/Todo/claim/lease/quota/effect 状态的唯一写者。capability 包只能通过 `CapabilityRegistry` 注册 provider、capability 契约和 CLI 子命令，绝不 import 内核私有模块。
 
+### 职责与安装验收
+
+目录重组与发行物拆分分别验收。每次移动说明规则的唯一 owner、变更 caller、
+import 方向、剩余兼容接缝和从失败定位 owner 的路径。每个发行物通过支持的命令
+验证干净最小安装、缺少可选包、升级与回滚。跨运行时成本复用 TS 迁移兑现表，
+不增加平行评分表。
+
+文件数棘轮仍是架构守卫，不是优化目标。移动文件后仍保留 shim 不会降低文件数；
+把无关职责塞进一个文件来满足预算不构成成功重构。代表性修改局部性与安装成本
+分别测量。
+
 ### 状态模型与 schema
 
 不改任何规范记录。唯一新增的持久产物是架构 fixture：
@@ -120,8 +131,8 @@ tests/architecture/top_level_module_budget.json
 每组迁移按固定顺序执行：
 
 1. `git mv` 该组到目标包（`loopx/chat/`、`loopx/hosts/` 或 `packages/loopx-capability-<name>/src/`）。
-2. 在旧路径留下 shim，re-export 公开名字并每进程发出一次 `DeprecationWarning`。
-3. 按迁移文件数调低 `max_top_level_modules`。
+2. 盘点公开 import 与活跃内部 caller。已建立的公开名字在旧路径 re-export，每进程发出一次 `DeprecationWarning`；纯内部 caller 同步迁移并删除旧入口，必要迁移 bridge 写明移除条件。
+3. 重新测量包含保留 shim 的顶层文件数，只按实际净减少调低 `max_top_level_modules`。
 4. 运行 import 边界测试、预算测试、对触及文档的 `loopx check`，以及 package smoke lane。
 
 任一项失败的迁移 PR 不可合并；改变行为的迁移 PR 视为超出范围而拒绝。
@@ -136,14 +147,14 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 | --- | --- |
 | **拆成多个 Git 仓库** | 在 TS 事务 cutover 期间违反 I1：内核语义每天变化，下游仓库会随每次变更断裂。评审产能是稀缺资源时，它成倍放大 CI、发布与评审成本。仅在内核迁移完成且某个包有独立 maintainers 后重开（附录 D）。 |
 | **保持单 wheel，只加 extras** | 能减轻安装重量，但平铺命名空间与两套打包惯例照旧；贡献者仍找不到边界。 |
-| **一次性全部搬到 `packages/`** | 同时对大量调用方破坏 I3，并把行为风险混入结构性变更。按组迁移 + shim 更易评审、更易回滚。 |
+| **一次性全部搬到 `packages/`** | 同时对大量调用方破坏 I3，并把行为风险混入结构性变更。按组迁移并遵守 I3 兼容更易评审、更易回滚。 |
 | **无条件把 Node 捆进 `loopx-core`** | 解决 I5，但让内核 wheel 变成平台相关且体积大。作为 D1 选项与 optional-extra 方案并列保留。 |
 
 ## 7. 安全、隐私与兼容
 
 - **默认关闭 / 功能关闭一致性：** 缺失 `loopx-workspace` 或 capability 包时，行为等同现有 extension off state（I4）。没有命令会静默回退到另一实现。
 - **公开/私有边界：** 不变。`loopx check` 继续扫描每个包；移动文件不改变其扫描类别。
-- **旧读者/写者：** import shim（I3）覆盖 Python 调用方。console script 保持名字；`loopx` meta-package 让 `pip install loopx` 在一个 minor 版本内行为完全一致。
+- **旧读者/写者：** import shim（I3）覆盖已建立的公开 Python import。console script 保持名字；`loopx` meta-package 让 `pip install loopx` 在一个 minor 版本内行为完全一致。
 - **混合版本：** meta-package 把所有层钉到同一发布列车。混合版本安装不受支持，由 `loopx doctor` 报告。
 - **fail-closed：** 没有 runtime extra 时，有副作用的命令以 `node_unavailable` 失败，绝不在没有 TS 内核的情况下继续。
 
@@ -152,8 +163,8 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 | 步骤 | 门禁 | 回滚 |
 | --- | --- | --- |
 | 以当前数量加入预算测试 | 无；纯新增 | 删除 fixture |
-| `chat_*` → `loopx/chat/` 带 shim | import 边界 + 预算 + smoke 全绿 | revert PR；shim 使 revert 对调用方无感 |
-| `*_goal_mode` → `loopx/hosts/` 带 shim | 同上 | 同上 |
+| `chat_*` → `loopx/chat/` 遵守 I3 兼容 | import 边界 + 预算 + smoke 全绿 | revert PR 及 caller 更新；保留必要公开 shim |
+| `*_goal_mode` → `loopx/hosts/` 遵守 I3 兼容 | 同上 | 同上 |
 | 发布 `loopx-core` / `loopx-workspace` / meta `loopx` | package-smoke lane 在干净 runner 上分别安装 | 撤下预发布；`loopx` meta 保留旧布局一个版本 |
 | capability 包迁移 | 逐个 capability，内核调用方清单已解决 | revert 单个包 |
 | 移除 shim | 迁移后一个 minor 版本；弃用记入 update notes | 不适用；需调用方迁移 |
@@ -178,7 +189,7 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 
 - `loopx doctor` 报告已安装的发行物集合与版本，并标记混合发布列车。
 - `loopx capability list` 区分"未安装"与"已安装但未就绪"。
-- 发布说明列出每个迁移模块及其 shim 到期版本。
+- 发布说明列出公开 import 的移动及保留 shim 的到期版本。
 - 不引入新的守护进程、存储或网络面。
 
 ## 11. 规范性交付计划
@@ -186,11 +197,11 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 | 里程碑 | 交付行为 | 进入门禁 | 退出证据 | 回滚 |
 | --- | --- | --- | --- | --- |
 | M0 | 以当前数量加入预算 fixture 与测试；RFC 索引条目 | 本 RFC 被接受 | 预算测试绿；数量钉住 | 删除测试 |
-| M1 | `loopx/chat_*` → `loopx/chat/` 带 shim；预算调低 | M0 | 第 9 节第 1–2 行 | revert |
-| M2 | `loopx/*_goal_mode` → `loopx/hosts/` 带 shim | M0 | 第 1–2 行 | revert |
+| M1 | `loopx/chat_*` → `loopx/chat/` 遵守 I3 兼容；预算按净减少调低 | M0 | 第 9 节第 1–2 行 | revert |
+| M2 | `loopx/*_goal_mode` → `loopx/hosts/` 遵守 I3 兼容 | M0 | 第 1–2 行 | revert |
 | M3 | `loopx-core` + `loopx-workspace` + meta `loopx` 以预发布发布；Node 按 D1 以 extra 或捆绑交付 | M1、M2；D1 已决 | 第 3–4、7 行 | 撤下预发布 |
 | M4 | 第一个无内核调用方的 capability 迁入 `packages/` | M3；D2 清单 | 第 5–6 行 | revert 单包 |
-| M5 | 其余符合条件的 capability 迁移；M1/M2 的 shim 在一个 minor 版本后移除 | M4 | 完整 smoke 一致 | 不适用 |
+| M5 | 其余符合条件的 capability 迁移；M1/M2 的公开 shim 在文档化兼容窗口结束后移除 | M4 | 完整 smoke 一致 | 不适用 |
 
 ## 12. 未决决策
 

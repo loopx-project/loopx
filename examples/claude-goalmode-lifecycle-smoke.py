@@ -29,7 +29,7 @@ from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane  # no
 
 
 def loopx(args, home=None, **kw):
-    # Isolate HOME so the global runtime root (~/.codex/loopx) is a temp dir — the
+    # Isolate HOME so the global runtime root (~/.loopx) is a temp dir — the
     # test never reads or pollutes the real global registry, and re-runs don't
     # collide on goal ids.
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT)}

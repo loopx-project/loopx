@@ -78,3 +78,9 @@ export function canReviewAttention(item: WorkspaceAttention): boolean {
   // not an authorization grant; only known inactive or missing rows are fenced.
   return !["closed", "deferred", "superseded", "unavailable"].includes(item.details?.lifecycle ?? "unknown");
 }
+
+/** Approve/reject/withdraw exist only for a User gate Todo; the owner still validates each preview. */
+export function canDecideAttention(item: WorkspaceAttention): boolean {
+  return canReviewAttention(item) && item.details?.interaction === "decision"
+    && item.decisionSource !== "run_operator_gate";
+}

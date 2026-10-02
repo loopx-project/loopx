@@ -272,7 +272,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(
         prefix="loopx-turn-managed-executor-"
     ) as directory, mock.patch.object(
-        operator_provider, "DEFAULT_RUNTIME_ROOT", Path(directory) / "machine"
+        operator_provider, "select_default_runtime_root", return_value=Path(directory) / "machine"
     ):
         root = Path(directory)
         project, runtime, workspace, registry = _write_fixture(root)

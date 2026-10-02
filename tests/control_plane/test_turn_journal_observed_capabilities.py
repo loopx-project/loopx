@@ -350,9 +350,9 @@ def test_typescript_replay_block_provides_no_evidence(
     )
 
     def blocked(*_args: object, **_kwargs: object) -> dict[str, object]:
-        return {"decision": "replay_blocked", "violations": ["owner_mismatch"]}
+        return {"observed_capabilities": None}
 
-    monkeypatch.setattr(journal_store, "interpret_turn_journal_projection", blocked)
+    monkeypatch.setattr(journal_store, "effect_runtime_result", blocked)
 
     assert _observed(tmp_path) is None
 
@@ -369,7 +369,7 @@ def test_typescript_runtime_failure_fails_closed(
         raise RuntimeError("TypeScript Effect runtime request failed")
 
     monkeypatch.setattr(
-        journal_store, "interpret_turn_journal_projection", unavailable
+        journal_store, "effect_runtime_result", unavailable
     )
 
     assert _observed(tmp_path) is None
@@ -388,4 +388,74 @@ def test_ambiguous_duplicate_bound_journals_fail_closed(tmp_path: Path) -> None:
     duplicate["plan"]["transaction"]["turn_key"] = duplicate["turn_key"]
     _write_journal(tmp_path, duplicate, digest="e" * 64)
 
+    assert _observed(tmp_path) is None
+
+
+@pytest.mark.parametrize("damage", ["unreadable", "owner", "phase", "binding"])
+def test_recovery_lookup_never_turns_uncertain_history_into_a_new_turn(
+    tmp_path: Path, damage: str,
+) -> None:
+    journal = _journal()
+    if damage == "owner":
+        journal["plan"]["turn_envelope"]["agent_id"] = OTHER_AGENT_ID
+    elif damage == "phase":
+        journal["completed_phases"] = ["quota_spend"]
+    elif damage == "binding":
+        journal["plan"]["transaction"]["settlement_plan"]["identity"]["binding_id"] = OTHER_TODO_ID
+    path = _write_journal(tmp_path, journal)
+    if damage == "unreadable":
+        path.write_text("{interrupted", encoding="utf-8")
+    with pytest.raises((ValueError, RuntimeError), match="journal|Journal"):
+        journal_store.find_loopx_turn_key_by_settlement_identity(
+            tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID,
+            todo_id=TODO_ID, turn_instance_id=TURN_ID,
+        )
+
+
+@pytest.mark.parametrize("status,phase_count", _COMMIT_LADDER)
+def test_recovery_lookup_characterizes_every_durable_prefix(
+    tmp_path: Path, status: str, phase_count: int,
+) -> None:
+    journal = _journal(boundary={"available_capabilities": ["network"]})
+    journal.update(status=status, completed_phases=TRANSACTION_PHASES[:phase_count])
+    _write_journal(tmp_path, journal)
+    assert journal_store.find_loopx_turn_key_by_settlement_identity(
+        tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        todo_id=TODO_ID, turn_instance_id=TURN_ID,
+    ) == TURN_KEY
+    # Recoverability of an in-flight journal does not grant completed evidence.
+    assert _observed(tmp_path) == (["network"] if status == "committed" else None)
+
+
+def test_both_readers_use_one_native_query_even_with_same_turn_foreign_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for index in range(32):
+        other = _journal(selected_todo_id=f"todo_other_{index}")
+        digest = f"{index:064x}"
+        other["turn_key"] = other["plan"]["transaction"]["turn_key"] = f"sha256:{digest}"
+        _write_journal(tmp_path, other, digest=digest)
+    _write_journal(tmp_path, _journal(boundary={"available_capabilities": ["network"]}))
+    actual = journal_store.effect_runtime_result
+    calls: list[str] = []
+
+    def counted(method: str, *args: Any, **kwargs: Any) -> Any:
+        calls.append(method)
+        return actual(method, *args, **kwargs)
+
+    monkeypatch.setattr(journal_store, "effect_runtime_result", counted)
+    assert _observed(tmp_path) == ["network"]
+    assert calls == ["turn_journal.observed_capabilities"]
+    calls.clear()
+    assert journal_store.find_loopx_turn_key_by_settlement_identity(
+        tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        todo_id=TODO_ID, turn_instance_id=TURN_ID,
+    ) == TURN_KEY
+    assert calls == ["turn_journal.find_settlement"]
+
+
+def test_unreadable_neighbor_cannot_lend_capabilities(tmp_path: Path) -> None:
+    _write_journal(tmp_path, _journal(boundary={"available_capabilities": ["network"]}))
+    bad = _write_journal(tmp_path, _journal(), digest="f" * 64)
+    bad.write_text("{lost", encoding="utf-8")
     assert _observed(tmp_path) is None

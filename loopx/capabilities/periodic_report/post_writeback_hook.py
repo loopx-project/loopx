@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import warnings
 from collections.abc import Mapping
@@ -11,6 +10,7 @@ from ...control_plane.capability_hooks import (
     POST_WRITEBACK_HOOK_RESULT_SCHEMA_VERSION,
     PostWritebackHookRegistration,
 )
+from ...control_plane.digest_envelope import enveloped_sha256, sha256_envelope
 from ...control_plane.goals.goal_frontier import (
     build_goal_frontier_projection_from_summaries,
 )
@@ -434,7 +434,9 @@ def evaluate_periodic_report_trigger_evaluation_intent(
             "candidates": [{
                 "trigger_kind": "cadence_due", "observed_at": window["due_at"],
                 "source_ref": "cadence:" + window["window_id"],
-                "evidence_digest": "sha256:" + window["window_id"].removeprefix("cadence_"),
+                "evidence_digest": enveloped_sha256(
+                    window["window_id"].removeprefix("cadence_")
+                ),
                 "facts": {"due": True},
             }],
         })
@@ -470,7 +472,7 @@ def evaluate_periodic_report_trigger_evaluation_intent(
             raise ValueError("periodic-report typed request is invalid")
         requested_at = str(report_request["requested_at"])
         request_id = str(report_request["request_id"])
-        evidence_digest = "sha256:" + hashlib.sha256(
+        evidence_digest = sha256_envelope(
             json.dumps(
                 {
                     "request_id": request_id,
@@ -481,7 +483,7 @@ def evaluate_periodic_report_trigger_evaluation_intent(
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode()
-        ).hexdigest()
+        )
         return build_periodic_report_trigger_decision(
             {
                 "schema_version": "periodic_report_trigger_request_v0",
@@ -524,11 +526,8 @@ def evaluate_periodic_report_trigger_evaluation_intent(
         raise ValueError("periodic-report stage completion receipt is invalid")
     completed_at = str(stage["completed_at"])
     stage_identity = str(stage["stage_identity"])
-    evidence_digest = (
-        "sha256:"
-        + hashlib.sha256(
-            json.dumps([stage_identity], separators=(",", ":")).encode()
-        ).hexdigest()
+    evidence_digest = sha256_envelope(
+        json.dumps([stage_identity], separators=(",", ":")).encode()
     )
     request = {
         "schema_version": "periodic_report_trigger_request_v0",

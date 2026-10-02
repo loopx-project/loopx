@@ -40,7 +40,12 @@ from .orchestration import (
     DEFAULT_ORCHESTRATION_MODE,
     MULTI_SUBAGENT_ORCHESTRATION_MODE,
 )
-from .paths import rel_or_abs, resolve_runtime_root
+from .paths import (
+    registered_goal_state_file,
+    rel_or_abs,
+    require_single_goal_state_route,
+    resolve_runtime_root,
+)
 from .control_plane.goals.active_state_metadata import markdown_blockquote, markdown_frontmatter_string
 from .registry_writability import probe_registry_write_path
 
@@ -329,7 +334,12 @@ def bootstrap_project(
     if not registry_path.is_absolute():
         registry_path = project / registry_path
     goal_id = goal_id or default_goal_id(project)
-    state_file = state_file or (project / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md")
+    explicit_state_file = state_file is not None
+    state_file = state_file or registered_goal_state_file(
+        project, goal_id, read_json_if_exists(registry_path)
+    )
+    if not explicit_state_file:
+        require_single_goal_state_route(project, goal_id, state_file)
     state_file = state_file.expanduser()
     if not state_file.is_absolute():
         state_file = project / state_file
@@ -500,7 +510,7 @@ def bootstrap_project(
                     "If this local LoopX install is missing or stale, repair the PyPI distribution "
                     "and packaged workflow skills, then confirm with loopx doctor before continuing."
                 ),
-                "private_boundary_note": "Add .loopx/ and .codex/goals/ to the project .gitignore if the goal state contains private evidence.",
+                "private_boundary_note": "Add .loopx/ to the project .gitignore if the goal state contains private evidence; keep .codex/goals/ ignored while legacy state remains.",
                 "error": str(global_writability.get("error") or "global registry is not writable"),
             }
     storage_selection = None
@@ -524,12 +534,15 @@ def bootstrap_project(
                 if frozen is not None:
                     goal_entry["coordination"]["storage_target"] = frozen
 
-            previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
-            if previous_root != runtime_root:
-                for previous_goal in current_registry.get("goals", []):
-                    if isinstance(previous_goal, dict) and previous_goal.get("id"):
-                        require_legacy_state_replacement_allowed(runtime_root=previous_root,
-                            goal_id=str(previous_goal["id"]), goal=previous_goal)
+            # A first explicit bootstrap has no previous Goal authority to fence.
+            # Existing Goals still resolve and authorize their original route.
+            if current_registry.get("goals"):
+                previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
+                if previous_root != runtime_root:
+                    for previous_goal in current_registry["goals"]:
+                        if isinstance(previous_goal, dict) and previous_goal.get("id"):
+                            require_legacy_state_replacement_allowed(runtime_root=previous_root,
+                                goal_id=str(previous_goal["id"]), goal=previous_goal)
             original = state_file.read_text(encoding="utf-8") if state_file.exists() else ""
             if force or not state_file.exists():
                 require_legacy_state_replacement_allowed(runtime_root=runtime_root,
@@ -624,7 +637,7 @@ def bootstrap_project(
             "If this local LoopX install is missing or stale, repair the PyPI distribution "
             "and packaged workflow skills, then confirm with loopx doctor before continuing."
         ),
-        "private_boundary_note": "Add .loopx/ and .codex/goals/ to the project .gitignore if the goal state contains private evidence.",
+        "private_boundary_note": "Add .loopx/ to the project .gitignore if the goal state contains private evidence; keep .codex/goals/ ignored while legacy state remains.",
     }
 
 

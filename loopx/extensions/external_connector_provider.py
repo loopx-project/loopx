@@ -17,6 +17,7 @@ from ..authority import normalize_project_materials
 from .external_connector_runtime import (
     CONNECTOR_SCHEMA_VERSION,
     EVENT_SCHEMA_VERSION,
+    SAFE_TOKEN_PATTERN,
     ExternalConnectorCapability,
     ExternalResponsePolicy,
     ExternalSourceKind,
@@ -38,7 +39,6 @@ DOCUMENT_COMMENT_REGISTRATION_SCHEMA_VERSION = (
 )
 PROVIDER_PAGE_SCHEMA_VERSION = "agent_external_connector_provider_page_v0"
 
-SAFE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}")
 SAFE_SCOPE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}")
 
 ProviderPageReader = Callable[[Mapping[str, Any], str | None, int], Mapping[str, Any]]

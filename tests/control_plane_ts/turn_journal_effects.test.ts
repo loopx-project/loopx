@@ -172,6 +172,27 @@ test("journal checkpoint retry is idempotent and operation-scoped", async () => 
   });
 });
 
+test("contradictory settlement binding cannot create or replace a durable journal", async () => {
+  await withJournalPath(async (path) => {
+    const valid = journal();
+    const invalid = structuredClone(valid);
+    const plan = invalid.plan as Record<string, unknown>;
+    const transaction = plan.transaction as Record<string, unknown>;
+    const settlement = transaction.settlement_plan as Record<string, unknown>;
+    Object.assign(settlement.identity as object, {
+      binding_kind: "autonomous_replan", binding_id: "other-work",
+    });
+
+    await assert.rejects(commit(path, invalid), /settlement|identity/i);
+    await assert.rejects(readFile(path), { code: "ENOENT" });
+    await commit(path, valid);
+    const before = await readFile(path, "utf8");
+    await assert.rejects(commit(path, invalid), /settlement|identity/i);
+    assert.equal(await readFile(path, "utf8"), before);
+    assert.equal((await commit(path, valid)).replayed, true);
+  });
+});
+
 test("exact GoalRef journals require source admission", async () => {
   await withJournalPath(async (path) => {
     const snapshot = sourceJournal(instanceA, turnKey);

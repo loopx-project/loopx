@@ -8,8 +8,10 @@ import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
 import {drainShadowOutbox} from "./coordination/shadow_drain.ts";
 import {readCanonicalSnapshotPage} from "./coordination/canonical_snapshot_page.ts";
 import {manageLocalAuthorityArchive} from "./coordination/local_authority_archive.ts";
+import {snapshotSqliteBackup} from "./coordination/sqlite_backup.ts";
 import {selectPeriodicReportProgress, selectPeriodicReportApprovalRetry} from "./capabilities/periodic_report_progress.ts";
 import {planIssueFixMonitorReconciliation} from "./capabilities/issue_fix_monitor_reconciliation.ts";
+import {planPrReviewApprovalCloseout} from "./capabilities/pr_review_approval_closeout.ts";
 import {projectPeerOrchestration} from "./quota/peer_orchestration.ts";
 import {inspectTaskLease} from "./work_items/task_lease_inspection.ts";
 import {evaluateTodoPriority} from "./todos/priority.ts";
@@ -88,6 +90,7 @@ import {
   preflightPriorHostTurnCloseout,
   reduceUnsettledHostTurnRecovery,
 } from "./quota/unsettled_host_turn_recovery.ts";
+import { projectScopedOverride } from "./quota/scoped_override.ts";
 import { evaluateTurnEnvelope } from "./quota/turn_envelope.ts";
 import { evaluateQuotaMonitorPollCommit } from "./quota/monitor_poll_commit.ts";
 import { planMonitorSuccessor, selectMonitorTodoRequest } from "./scheduler/monitor_successor.ts";
@@ -97,6 +100,7 @@ import {
   type TurnJournalInspectionRequest,
 } from "./turn_driver/turn_journal.ts";
 import { commitTurnJournal } from "./turn_driver/turn_journal_effects.ts";
+import { findTurnJournalBySettlement, readTurnJournalCapabilities } from "./turn_driver/turn_journal_query.ts";
 import { projectTurnSelectionRejection } from "./turn_driver/selection_rejection.ts";
 import {
   evaluateTodoCompletionFence,
@@ -158,7 +162,7 @@ import {
   reconcileRetainedActionSelection,
 } from "./work_items/action_portfolio.ts";
 import { projectQuotaPlanningHorizon } from "./work_items/planning_horizon.ts";
-import { projectTaskGraphTopology } from "./work_items/task_graph.ts";
+import { projectGoalTaskGraphTopology, projectTaskGraphTopology } from "./work_items/task_graph.ts";
 import { projectDeliveryHistory, projectDeliveryResponse } from "./work_items/delivery_history.ts";
 import { validateDeliveryClaim } from "./work_items/delivery_outcome.ts";
 import {
@@ -236,7 +240,7 @@ import { decideCollaborationLifecycle } from "./collaboration/goal_instance_life
 import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
 import { selectObservedPeerHostRoute } from "./collaboration/peer_route_selection.ts";
 
-import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
+import { normalizeCollaborationRequest, normalizeCollaborationSourceContext } from "./collaboration/semantic_request.ts";
 import {
   evaluateExternalEvidenceAdmission,
   planExternalEvidenceRequest,
@@ -462,6 +466,8 @@ export function createEffectRuntimeHandlers(
       (params) => interpretTurnJournal(turnJournalInspectionRequest(params)),
     ],
     ["turn_journal.write", commitTurnJournal],
+    ["turn_journal.find_settlement", findTurnJournalBySettlement],
+    ["turn_journal.observed_capabilities", readTurnJournalCapabilities],
     ["todo.completion_fence.evaluate", evaluateTodoCompletionFence],
     ["todo.completion_state.normalize", normalizeTodoCompletionValue],
     ["todo.completion_state.require_metadata", requireTodoCompletionMetadataValue],
@@ -537,6 +543,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["work_item.planning_horizon.project", projectQuotaPlanningHorizon],
     ["work_item.task_graph.topology", projectTaskGraphTopology],
+    ["work_item.task_graph.goal_topology", projectGoalTaskGraphTopology],
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],
     ["work_item.planning_inventory.detail", projectTodoPlanningInventoryDetail],
     ["work_item.refresh_recommendation.resolve", resolveRefreshRecommendation],
@@ -577,6 +584,7 @@ export function createEffectRuntimeHandlers(
       reduceUnsettledHostTurnRecovery,
     ],
     ["quota.turn_envelope.evaluate", evaluateTurnEnvelope],
+    ["quota.scoped_override.project", projectScopedOverride],
     ["task_lease.owner_eligibility", evaluateTaskLeaseOwnerEligibility],
     ["task_lease.acquire.native", executeTaskLeaseAcquire],
     ["task_lease.inspect.native", inspectTaskLease],
@@ -592,6 +600,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow)],
     ["coordination.local_authority.promote", promoteLocalCoordinationAuthority],
     ["coordination.authority_archive.manage", manageLocalAuthorityArchive],
+    ["coordination.sqlite_backup.snapshot", snapshotSqliteBackup],
     ["coordination.local_authority.new_goal_storage", manageNewGoalStorage],
     ["coordination.local_authority.promotion_review", withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion)],
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],
@@ -639,6 +648,7 @@ export function createEffectRuntimeHandlers(
     ["scheduler.monitor_successor.plan", planMonitorSuccessor],
     ["scheduler.monitor_target.select", selectMonitorTodoRequest],
     ["capabilities.issue_fix.monitor_reconciliation.plan", planIssueFixMonitorReconciliation],
+    ["capabilities.pr_review.approval_closeout.plan", planPrReviewApprovalCloseout],
     ["coordination.local_authority_shadow.record", recordLocalAuthorityShadow],
     ["coordination.runtime_shadow.commit_entry", deliverShadowEntry],
     ["coordination.runtime_shadow.outbox_read", readLocalAuthorityShadow],
@@ -759,6 +769,7 @@ export function createEffectRuntimeHandlers(
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
     ],
+    ["collaboration.source_context.normalize", normalizeCollaborationSourceContext],
     ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
     ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],
     [
