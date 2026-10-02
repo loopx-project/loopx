@@ -20,7 +20,7 @@ export const performanceDiagnosisScenario = {
       const input = panel.locator('input[type="file"]');
       const capture = {
         $schema: "https://www.speedscope.app/file-format-schema.json",
-        shared: { frames: [{ name: marker }, { name: "readSnapshot", file: "fixture.ts", line: 7 }] },
+        shared: { frames: [{ name: marker, file: null, line: null }, { name: "readSnapshot", file: "fixture.ts", line: 7 }] },
         profiles: [
           { type: "sampled", name: "main thread", unit: "milliseconds", startValue: 0, endValue: 100, samples: [[0, 1]], weights: [100] },
           { type: "evented", name: "worker thread", unit: "milliseconds", startValue: 0, endValue: 150,
@@ -43,6 +43,14 @@ export const performanceDiagnosisScenario = {
       await input.setInputFiles({ name: "broken.json", mimeType: "application/json", buffer: Buffer.from('{"profiles":[]}') });
       await panel.getByRole("alert").waitFor();
       if (await panel.getByRole("table").count()) throw new Error("Failed capture retained the previous success");
+      const events = [];
+      for (let i = 0; i < 1000; i++) events.push({type: "O", frame: 0, at: i});
+      for (let i = 0; i < 2000; i++) events.push({type: i % 2 ? "C" : "O", frame: 0, at: 1000 + i});
+      for (let i = 0; i < 1000; i++) events.push({type: "C", frame: 0, at: 3000 + i});
+      const costly = {...capture, profiles: [{type: "evented", unit: "milliseconds", startValue: 0, endValue: 4000, events}]};
+      await input.setInputFiles({name: "deep.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(costly))});
+      await panel.getByRole("alert").filter({hasText: "analysis work limit"}).waitFor();
+      if (await panel.getByRole("table").count()) throw new Error("Expensive capture retained partial success");
       const amplified = { ...capture, shared: { frames: [{ name: "x".repeat(8192) }] },
         profiles: Array.from({ length: 65 }, () => ({ type: "sampled", name: "thread", unit: "milliseconds", startValue: 0, endValue: 1, samples: [[0]], weights: [1] })) };
       await input.setInputFiles({ name: "many-threads.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(amplified)) });

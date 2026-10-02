@@ -74,3 +74,57 @@ def test_real_cli_reads_profile_larger_than_inline_transport(tmp_path: Path) -> 
     assert len(result.stdout) < 4096
     assert not [path for path in tmp_path.glob("loopx-effect-*")
                 if not path.name.startswith("loopx-effect-runtime-")]  # Only the shared runtime persists.
+
+
+def test_deep_capture_and_parallel_plan_fit_original_shared_service_budget(tmp_path: Path, monkeypatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.control_plane import effect_runtime
+
+    # Real shared service, isolated locator. Only its directory is redirected;
+    # transport, handler, timeout, snapshot and parser remain production code.
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    plan = {"tool": "node-cpu", "command": ["node", "work.js"],
+            "output_directory": str(tmp_path), "platform": sys.platform}
+    effect_runtime.effect_runtime_result("performance_diagnosis.plan", plan)
+    profile = {"startTime": 0, "endTime": 1_000_000,
+               "nodes": [{"id": i + 1, "callFrame": {"functionName": f"frame-{i}"},
+                          "children": [i + 2] if i < 999 else []} for i in range(1000)],
+               "samples": [1000] * 1_000_000, "timeDeltas": [1] * 1_000_000}
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            heavy = pool.submit(effect_runtime.effect_runtime_result,
+                                "performance_diagnosis.inspect", {"profile": profile},
+                                large_local_snapshot=True)
+            light = pool.submit(effect_runtime.effect_runtime_result, "performance_diagnosis.plan", plan)
+            assert light.result(timeout=15)["execution_performed"] is False
+            result = heavy.result(timeout=15)["profiles"][0]
+        assert result["observations"] == 1_000_000
+        assert result["observed_weight_ms"] == 1000
+        assert result["self_hotspots"][0]["name"] == "frame-999"
+        with pytest.raises(effect_runtime.EffectRuntimeRemoteError, match="shorter capture") as error:
+            effect_runtime.effect_runtime_result("performance_diagnosis.inspect", {
+                "profile": {**profile, "samples": [1000] * 2_000_001, "timeDeltas": [1] * 2_000_001,
+                            "endTime": 2_000_001}}, large_local_snapshot=True)
+        assert error.value.error_kind == "request_rejected"
+        assert effect_runtime.effect_runtime_result("performance_diagnosis.plan", plan)["status"] == "planned"
+    finally:
+        assert effect_runtime.restart_effect_runtime()["stopped"] is True
+
+
+def test_real_cli_preserves_null_locations_and_actionable_input_errors(tmp_path: Path) -> None:
+    capture = {"$schema": "https://www.speedscope.app/file-format-schema.json",
+               "shared": {"frames": [{"name": "[self]", "file": None, "line": None}]},
+               "profiles": [{"type": "sampled", "unit": "seconds", "startValue": 0,
+                             "endValue": 1, "samples": [[0]], "weights": [1]}]}
+    path = tmp_path / "capture.json"
+    path.write_text(json.dumps(capture), encoding="utf-8")
+    result = command(tmp_path, "performance-diagnosis", "inspect", "--profile-json", str(path))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["profiles"][0]["self_hotspots"][0] == {
+        "name": "[self]", "self_ms": 1000, "inclusive_ms": 1000}
+    capture["shared"]["frames"][0]["file"] = 42
+    path.write_text(json.dumps(capture), encoding="utf-8")
+    result = command(tmp_path, "performance-diagnosis", "inspect", "--profile-json", str(path))
+    assert result.returncode == 1
+    assert "frame.file" in json.loads(result.stdout)["error"]
+    assert "unexpectedly" not in result.stdout

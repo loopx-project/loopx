@@ -78,6 +78,13 @@ an empty successful diagnosis. Speedscope sampled/evented and V8 CPU time units
 are normalized to milliseconds. Threads/profiles stay separate, recursion is
 counted once per stack observation, and self and inclusive hotspots are distinct.
 Do not sum inclusive rows or thread weights to infer elapsed time.
+Unknown Speedscope source locations (including Pyinstrument's `null` file/line)
+remain unknown; they do not invalidate recorded weights. V8 samples sharing a
+leaf are aggregated before expanding its call chain, preserving observation
+counts. A request-wide analysis budget bounds stack traversal, samples/events
+and shared-frame expansion across all profiles. Inputs exceeding that budget
+fail with a request error suggesting a shorter or shallower capture; they do not
+return partial results or require a larger runtime timeout.
 Input files are limited to 16 MiB; shorten captures beyond that limit. Repeated
 profile names and hotspot labels share a 1 Mi-character display-text budget;
 oversized summaries are rejected explicitly, never silently truncated. Larger

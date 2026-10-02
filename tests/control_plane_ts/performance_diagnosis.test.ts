@@ -119,3 +119,57 @@ test("malformed, empty, unknown and cyclic observations never become clean evide
   const unknown = v8(); unknown.samples[0] = 999;
   assert.throws(() => inspect({profile: unknown}), /unknown V8/);
 });
+
+test("Pyinstrument null source locations mean unknown, not malformed evidence", () => {
+  const profile = {...sampled(), shared: {frames: [{name: "[self]", file: null, line: null}]},
+    profiles: [{type: "sampled", name: "main", unit: "seconds", startValue: 0, endValue: 1,
+      samples: [[0]], weights: [1]}]};
+  const row = inspect({profile}).profiles[0]!.self_hotspots[0]!;
+  assert.equal(row.self_ms, 1000);
+  assert.equal(row.file, undefined);
+  assert.equal(row.line, undefined);
+  for (const bad of [{name: "[self]", file: 1}, {name: "[self]", line: "1"}]) {
+    assert.throws(() => inspect({profile: {...profile, shared: {frames: [bad]}}}), /frame\.(file|line)/);
+  }
+});
+
+test("repeated deep V8 leaves retain counts, self and ancestor time", () => {
+  const nodes = Array.from({length: 1000}, (_, i) => ({id: i + 1,
+    callFrame: {functionName: `frame-${i}`}, children: i < 999 ? [i + 2] : []}));
+  const profile = {nodes, startTime: 0, endTime: 1_000_000,
+    samples: Array(1_000_000).fill(1000), timeDeltas: Array(1_000_000).fill(1)};
+  const main = inspect({profile}).profiles[0]!;
+  assert.equal(main.observations, 1_000_000);
+  assert.equal(main.observed_weight_ms, 1000);
+  assert.equal(main.self_hotspots[0]!.name, "frame-999");
+  assert.equal(main.self_hotspots[0]!.self_ms, 1000);
+  assert.equal(main.inclusive_hotspots[0]!.inclusive_ms, 1000);
+  const mixed = inspect({profile: {...v8(), samples: [20, 10, 20], timeDeltas: [1000, 2000, 2000]}}).profiles[0]!;
+  assert.equal(mixed.observations, 3);
+  assert.equal(mixed.self_hotspots[0]!.self_ms, 3);
+  assert.equal(mixed.inclusive_hotspots[0]!.inclusive_ms, 5);
+});
+
+test("work limits apply across evented stacks and independent profiles without partial success", () => {
+  const events: {type: string; frame: number; at: number}[] = [];
+  for (let i = 0; i < 1000; i++) events.push({type: "O", frame: 0, at: i});
+  for (let i = 0; i < 2000; i++) events.push({type: i % 2 ? "C" : "O", frame: 0, at: 1000 + i});
+  for (let i = 0; i < 1000; i++) events.push({type: "C", frame: 0, at: 3000 + i});
+  const evented = {$schema: sampled().$schema, shared: {frames: [{name: "recursive"}]},
+    profiles: [{type: "evented", unit: "milliseconds", startValue: 0, endValue: 4000, events}]};
+  assert.ok(JSON.stringify(evented).length < 200_000, "small bytes can amplify analysis work");
+  assert.throws(() => inspect({profile: evented}), /analysis work limit/);
+  const shared = {$schema: sampled().$schema,
+    shared: {frames: Array.from({length: 100_000}, () => ({name: "unused"}))},
+    profiles: Array.from({length: 21}, () => ({type: "sampled", unit: "milliseconds",
+      startValue: 0, endValue: 1, samples: [[0]], weights: [1]}))};
+  assert.throws(() => inspect({profile: shared}), /analysis work limit/);
+});
+
+test("overdeep zero-duration event stacks cannot evade interval validation", () => {
+  const profile = {$schema: sampled().$schema, shared: {frames: [{name: "recursive"}]},
+    profiles: [{type: "evented", unit: "milliseconds", startValue: 0, endValue: 1,
+      events: [...Array.from({length: 1025}, () => ({type: "O", frame: 0, at: 0})),
+        ...Array.from({length: 1025}, () => ({type: "C", frame: 0, at: 0}))]}]};
+  assert.throws(() => inspect({profile}), /stack exceeds/);
+});
