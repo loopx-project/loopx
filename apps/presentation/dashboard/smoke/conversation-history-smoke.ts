@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 import { fetchChatHistory } from "../src/data/chat";
+import { readConversationReturns } from "../src/data/conversation-return-observation";
+import { conversationReturnSessions, reconcileConversationReturns } from "../src/data/conversation-returns";
 
 const repoRoot = resolve(process.cwd(), "../../..");
 const child = spawn(resolveTestPython({ repoRoot }), ["-u", "apps/presentation/dashboard/smoke/conversation-history-http-fixture.py"],
@@ -46,11 +48,53 @@ try {
   requests.length = 0;
   await fetchChatHistory(options, restored);
   assert.deepEqual(requests, [], "A complete cached history does not poll");
+  const revisions = new Map<string, string>();
+  let transcript = restored.messages.map(row => ({ sourceSessionId: row.session_id!, sourceMessageId: row.message_id, sourceCreatedAt: row.created_at, text: row.text }));
+  const originalCurrent = transcript.find(row => row.sourceSessionId === "current");
+  const observe = () => readConversationReturns({
+    sessionIds: conversationReturnSessions("current", transcript), pendingSessionIds: new Set(), revisions,
+    signal: AbortSignal.timeout(5000), receive(snapshot) {
+      const id = snapshot.session.session_id;
+      transcript = reconcileConversationReturns(transcript, id, snapshot.messages, row => ({
+        sourceSessionId: id, sourceMessageId: row.message_id, sourceCreatedAt: row.created_at, text: row.text,
+      }));
+    },
+  });
+  await observe();
+  requests.length = 0;
+  await observe();
+  assert.equal(requests.length, 1, "Quiet observation reads only the compact index");
+  child.stdin.write("result\n");
+  assert.equal((await next()).published, "result");
+  await observe();
+  assert.equal(transcript.at(-1)?.text, "First checked result");
+  requests.length = 0;
+  await observe();
+  assert.equal(requests.length, 1, "Delivery does not trigger continuous full history reads");
+  requests.length = 0;
+  await readConversationReturns({ sessionIds: ["old", "current"], pendingSessionIds: new Set(["old"]), revisions,
+    signal: AbortSignal.timeout(5000), receive() {} });
+  assert.deepEqual(requests, ["/api/chat/sessions?", "/api/chat/sessions/old"], "Outstanding metadata refreshes without a transcript change");
+  child.stdin.write("revision\nfault\n");
+  assert.equal((await next()).published, "revision");
+  assert.equal((await next()).unavailable, "old");
+  assert.deepEqual(await observe(), ["old"]);
+  assert.equal(transcript.at(-1)?.text, "First checked result", "Failed reads preserve the first result");
+  child.stdin.write("recover\n");
+  assert.equal((await next()).recovered, true);
+  requests.length = 0;
+  await observe();
+  assert.deepEqual(requests, ["/api/chat/sessions?", "/api/chat/sessions/old"], "Retry reads only the changed old session");
+  assert.equal(transcript.at(-1)?.text, "Revised checked result");
+  assert.equal(transcript.filter(row => row.text === "Revised checked result").length, 1);
+  assert.equal(transcript.find(row => row.sourceSessionId === "current"), originalCurrent, "Old updates preserve current text and object identity");
+  await observe();
+  assert.equal(transcript.filter(row => row.text === "Revised checked result").length, 1);
   child.stdin.end("inspect\n");
   assert.deepEqual(await next(), { store_unchanged: true, turn_count: 0 });
   const [exitCode] = await exited;
   assert.equal(exitCode, 0, stderr);
-  console.log("conversation-history: passed (real HTTP/store, partial read, channel isolation, missing-only recovery, scoped identity, zero writes or Turns)");
+  console.log("conversation-history: passed (real HTTP/store, partial read, channel isolation, missing-only recovery, scoped identity, quiet index reads, late revisions, recovery, zero read-side writes or Turns)");
 } finally {
   globalThis.fetch = originalFetch;
   output.close();

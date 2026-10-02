@@ -686,6 +686,8 @@ export type ChatSessionSummary = {
   last_error_code: string | null;
   created_at: string;
   updated_at: string;
+  /** Opaque transcript read hint, independent of execution updated_at. */
+  transcript_revision?: string | null;
   last_activity_at: string;
   resumable: boolean;
   session_mode?: ChatSessionMode;
