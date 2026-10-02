@@ -7,6 +7,7 @@ does not authorize borrowing another session's identity or changing providers.
 | Missing fact | First useful surface |
 | --- | --- |
 | Why the current operation was rejected | Its existing JSON error, typed recovery and operation receipt; look up the error before opening other projections |
+| Whether a receipt defect still needs a source fix | Resolve the failing executable and source revision, then run the same synthetic sequence on the intended current base. An installed release can predate an already merged repair; source tests do not prove installed behavior. |
 | Whether an ambiguous Todo create committed | `loopx --format json todo receipt --goal-id <goal> --operation-id <original-id>`; inspect the receipt before any retry with the same identity |
 | Current lease ownership/version | `loopx --format json task-lease inspect --goal-id <goal> --todo-id <todo>` |
 | One Todo's current state | `loopx --format json todo list --goal-id <goal> --todo-id <todo>`; use `--agent-id` when needed by the existing lane |
@@ -19,6 +20,13 @@ These are alternatives, not a sequence. Use the resolved registry/runtime
 options for all calls. `quota should-run` may establish host-Turn state; it is
 not a harmless latency probe. Never remove a Turn id, capability declaration,
 lease proof, revision or receipt check to make a command faster.
+
+For an already repaired defect, keep the original receipt and binding intact.
+Qualify the installed runtime after an authorized upgrade and add missing
+composition coverage instead of duplicating the fix or marking the Todo blocked
+merely to escape a receipt conflict. Upgrading and resetting task state are
+different actions; neither a successful installation nor a fresh Turn proves
+recovery of the original operation.
 
 ## Read one response more than once, not one command
 

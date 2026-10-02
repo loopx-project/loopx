@@ -1,0 +1,96 @@
+# Quiet-to-due Monitor recovery qualification
+
+[中文镜像](2026-10-02-monitor-quiet-due-recovery.zh-CN.md)
+
+This checkpoint adds composition evidence for T2 and the
+[recovery verification RFC](../../composable-state-machines-recovery-verification-v0.md).
+Base `e38b057b3` already
+contains the effect-identity repair from [#4335](https://github.com/loopx-project/loopx/pull/4335).
+An older installed runtime can still exhibit that repaired defect.
+The remaining repair handles an unpolled, bound Monitor that becomes blocked:
+its original Turn now exposes conditional lifecycle recovery instead of ordinary
+execution or conflicting replan selection. No new RPC or persisted schema is added.
+
+## Missing counterexample
+
+A quiet heartbeat automatically commits an observation without a Todo. If a
+Monitor becomes due during that same Turn, its explicit binding and actual
+observation must remain possible. The first observation cannot settle the later
+Todo or occupy its effect identity. Testing a newly due Monitor after an ordinary
+unbound guard misses this prerequisite: the quiet poll has already committed.
+
+```mermaid
+flowchart LR
+    Q[Quiet guard: no Todo] --> O[Commit quiet observation]
+    O --> D[Monitor becomes due]
+    D --> B[Bind original Turn to Monitor]
+    B --> P[Commit exact poll once]
+    P --> L[Discard caller response]
+    L --> R[Read back and retry original poll]
+    R --> S[Turn settled; no quota debit]
+    S --> N[Material successor uses a new Turn]
+```
+
+## Executable boundary
+
+`tests/control_plane/test_monitor_quiet_due_recovery.py` enumerates six journeys:
+legacy Markdown, canonical File and canonical SQLite, each with unchanged and
+material observations. Each journey uses real CLI subprocesses, real TS effects
+and isolated provider state. It performs two exact retries and one conflicting
+result retry. The response is deliberately discarded after successful command
+completion; this models acknowledgement loss, not a process crash inside commit.
+
+Independent assertions require two distinct polls (quiet and Todo-bound),
+unchanged original observation, no refresh/spend records, no mutation on replay
+or conflict, one material generation and successor only in the material case,
+and settled readback that cannot execute further work in the original Turn.
+The Monitor remains open; material successor selection uses a fresh Turn.
+
+Three additional journeys block an already-bound Monitor before its poll. The
+unmodified base incorrectly returns `normal_run` in this fixture; other frontier
+states can attempt a conflicting replan binding. Head returns the existing
+`unsettled_host_turn_recovery` mode with the original identity and no delivery
+authority. Two readbacks preserve blocked state. Only after the fixture's blocker
+is resolved does the test execute the projected restore command, re-enter the
+original guard, poll and settle without spending quota.
+
+Sensitivity was checked in a disposable checkout of the same base: restoring
+Turn-only effect allocation makes the unchanged/legacy journey fail at its first
+bound poll with `heartbeat_receipt_identity_conflict`. Unmodified base passes
+all six journeys. This is a deliberate historical-rule mutation, not a claim
+that the current base fails. The temporary mutant is not a shipped fixture.
+
+## Ownership and limits
+
+| Boundary | Existing owner retained |
+| --- | --- |
+| Selection arbitration | `work_items/action_portfolio.ts` |
+| Monitor transaction and immutable replay | `quota/monitor_poll_commit.ts` |
+| Observation and successors in canonical authority | `coordination/todo_monitor_poll.ts` |
+| Turn closeout readback | `quota/settlement_readback.ts`, `quota/settlement_phase.ts` |
+| Bound Monitor lifecycle recovery | `quota/blocked_wait.ts` |
+| Legacy effect-id compatibility and transport | `quota/monitor_poll.py` |
+
+The related refactor shares the current-Turn recovery envelope between causal
+waits and blocked Monitor recovery in `blocked_wait.ts`. Python passes the already
+verified Monitor phase through the existing request and renders the typed repair;
+it owns no second lifecycle rule. The added phase field is optional: earlier
+requests retain their causal-wait behavior. Only active, correctly owned blocked
+Monitors with `poll_due` qualify; missing, duplicate, foreign, archived and already
+polled inputs do not enter this restoration route. Tests assert these exclusions.
+
+The default behavior changes only for that blocked, unpolled replay. The emitted
+restore command is conditional on a verified resolved blocker; the projection
+neither reopens the Todo nor establishes a poll/closeout receipt. Retain the
+blocker when unresolved. The existing Todo writer still enforces mutation authority.
+Runtime request count is unchanged; no Python rule deletion or performance gain
+is claimed. Moving the retained Python effect-id compatibility resolver needs
+separate pending-receipt/caller characterization and is deferred.
+
+This qualifies a bounded Monitor closeout and CLI successor-selection sequence,
+not full M2/M3: lease transfer, mid-commit crashes, PostgreSQL, scheduler dispatch
+and original-context App/Lark delivery are outside this test. Existing pending-
+wait recovery tests separately cover original binding retention on File/SQLite.
+No model, external provider or benchmark job runs. There is no frontend change.
+Reverting restores the previous projection without rewriting persisted data,
+but also restores the blocked-Monitor recovery gap.
