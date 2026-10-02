@@ -1062,6 +1062,25 @@ def test_a_criterion_identity_must_be_published_text(identity):
     assert not checked["ok"]
 
 
+@pytest.mark.parametrize("field", ["spec_ref", "spec_revision"])
+@pytest.mark.parametrize("value", [True, {"path": "x"}, ["b" * 40], 1, "   "])
+def test_a_mapped_specification_reference_must_be_published_text(field, value):
+    """A reference the body cannot carry cannot pin the reviewed specification.
+
+    Non-string values pass the non-empty field check and then fall out of the
+    published-body comparison, so an approval would cite nothing a reader on
+    another host could open.
+    """
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis[field] = value
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    _publish_spec_references(result)
+    checked = check_review_result(packet, result)
+    assert f"problem_context:spec_basis:invalid_{field}" in checked["approval_blockers"]
+    assert not checked["ok"] and not checked["approval_consistent"]
+
+
 def test_a_published_mapping_must_carry_its_immutable_revision():
     """Another host can only open the same text if the body pins the revision.
 

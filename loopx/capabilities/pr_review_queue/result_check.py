@@ -276,6 +276,13 @@ def _check_spec_basis(blockers: list[str], value: object) -> None:
     if source == "none":
         blockers.append(f"{key}:mapped_without_spec_source")
     _require_fields(blockers, evidence_id=key, value=value, fields=contract["mapped_fields"])
+    # The reference and revision are published and matched against the body, so
+    # a non-string value would pass the non-empty check and then never be
+    # compared; require text here, as for criterion_id below.
+    for field in contract["published_text_fields"]:
+        text = value.get(field)
+        if not _missing(text) and (not isinstance(text, str) or not text.strip()):
+            blockers.append(f"{key}:invalid_{field}")
     criteria = _require_items(
         blockers, evidence_id=key, row=value,
         requirement={"items_field": "criteria", "item_fields": contract["criterion_fields"],
@@ -315,6 +322,8 @@ def _unpublished_spec_references(value: object, body: str) -> list[str]:
     criteria = value.get("criteria")
     if isinstance(criteria, list):
         references += [item.get("criterion_id") for item in criteria if isinstance(item, Mapping)]
+    # Non-text identities are rejected by _check_spec_basis; they are skipped
+    # here only because they have no text to look for in the body.
     return [
         f"review_body:spec_reference_not_published:{reference}"
         for reference in references

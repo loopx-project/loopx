@@ -178,6 +178,7 @@ SPEC_BASIS_ASSESSMENT = {
         "none",
     ],
     "mapped_fields": ["spec_ref", "spec_revision", "criteria"],
+    "published_text_fields": ["spec_ref", "spec_revision"],
     "criterion_fields": ["criterion_id", "requirement", "disposition"],
     "disposition_fields": {
         "implemented": ["symbol_or_path", "validation_ref"],
@@ -201,8 +202,8 @@ SPEC_BASIS_ASSESSMENT = {
         "blocks approval. Publish spec_ref, spec_revision and every criterion_id in the "
         "review body: the body is the only part another operator reads, and a path alone "
         "moves with the branch while the revision pins the text the review judged against. "
-        "Give criterion_id as a non-empty string: it is published, compared for duplicates "
-        "and matched against the body, so a non-string identity would not be a criterion. "
+        "Give spec_ref, spec_revision and criterion_id as non-empty strings: each is "
+        "published and matched against the body, so a non-string value could not be. "
         "Derive requirements from the "
         "specification, never from the patch. When the change edits the specification it "
         "cites, judge the criteria as accepted before this change and treat the edit as a "
