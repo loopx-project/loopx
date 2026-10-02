@@ -1,10 +1,89 @@
-"""The smoke runner suppresses telemetry in actual child processes."""
+"""The smoke runner owns its isolated environment and child lifecycle."""
 import json
 import runpy
 import subprocess
+import os
+import signal
+import sys
+import threading
+import time
 from pathlib import Path
 
+import pytest
+
 from loopx.canary import runner
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX owned process-group regression")
+@pytest.mark.parametrize("outcome", ["timeout", "exited_leader", "cancelled"])
+def test_smoke_failure_reaps_children_before_cleaning_fixture(tmp_path, monkeypatch, outcome):
+    ready, release, effect = (tmp_path / name for name in ("ready", "release", "effect"))
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    child = (
+        "import os,time; from pathlib import Path\n"
+        f"Path({str(ready)!r}).write_text(str(os.getpid()))\n"
+        f"while not Path({str(release)!r}).exists(): time.sleep(.01)\n"
+        f"Path({str(effect)!r}).write_text('late effect')\n"
+    )
+    script = examples / "owned.py"
+    script.write_text(
+        "import subprocess,sys,time\n"
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]"
+        + (",stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL" if outcome != "exited_leader" else "")
+        + ")\n"
+        + ("time.sleep(60)\n" if outcome != "exited_leader" else ""),
+        encoding="utf-8",
+    )
+    real_popen = subprocess.Popen
+    timers = []
+
+    def spawn(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        if str(script) not in args[0]:
+            return process
+        # Synchronize real child startup before exercising the communicate
+        # deadline; this tests cleanup rather than machine scheduling speed.
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists(), "fixture child did not reach its startup barrier"
+        if outcome == "exited_leader":
+            timer = threading.Timer(.7, lambda: release.write_text("release"))
+            timer.start()
+            timers.append(timer)
+        if outcome == "cancelled":
+            def cancelled(*_, **__):
+                raise KeyboardInterrupt
+            process.communicate = cancelled
+        return process
+
+    monkeypatch.setattr(runner, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    with real_popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True) as unrelated:
+        try:
+            if outcome == "cancelled":
+                with pytest.raises(KeyboardInterrupt):
+                    runner._run_check({"command": "python examples/owned.py"}, timeout_seconds=.1)
+            else:
+                result = runner._run_check({"command": "python examples/owned.py"}, timeout_seconds=.1)
+                assert result['status'] == 'timed_out' and not result['ok']
+            assert unrelated.poll() is None
+            child_pid = int(ready.read_text())
+            status = subprocess.run(["ps", "-p", str(child_pid), "-o", "stat="], capture_output=True, text=True).stdout.strip()
+            assert not status or status.startswith("Z"), "owned child survived cleanup"
+            assert not effect.exists(), "child performed a late effect before cleanup returned"
+        finally:
+            for timer in timers:
+                timer.cancel()
+                timer.join()
+            if ready.exists():
+                try:
+                    os.kill(int(ready.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            unrelated.kill()
+            unrelated.wait()
 
 
 def test_smoke_subprocess_overrides_parent_telemetry_enable(tmp_path, monkeypatch):
