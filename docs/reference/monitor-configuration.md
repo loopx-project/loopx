@@ -60,6 +60,17 @@ TS derives its due date only for a new commit. Retry does not reschedule it.
 Chat supplies no implicit lease proof, so leased edits keep their existing
 rejections. Stop/completion and run-now remain separate lifecycle/runtime paths.
 
+Chat **Run now** keeps the registered responsible Agent separate from its
+executable Runtime. An explicit registered actor survives a Runtime switch.
+If no actor is selected, choose an existing Goal Agent before confirming the
+check. A Goal without an applicable identity can open an Agent binding preview;
+after verified binding, the original check receives a fresh, separate preview.
+Ordinary Claude Chat retains read-only tools. Confirmed Task channels enable
+native execution tools and forward an explicitly selected model/effort. A
+run-now receipt proves Turn creation, not monitor completion or periodic
+scheduling. See the synthetic [actor preview](images/monitor-runtime-binding/registered-actor.png)
+and [binding recovery](images/monitor-runtime-binding/confirmed-binding.png).
+
 Synthetic recovery-card examples: [desktop](../assets/personal-workspace/reviewed-edit-recovery-desktop.png)
 and [mobile](../assets/personal-workspace/reviewed-edit-recovery-mobile.png).
 
@@ -93,5 +104,11 @@ revision/注册事实。丢响应或展示 pending 时，在保留的卡片点�
 重载后恢复入口仍可见。频率是意图，TS 仅在新提交时派生 due time，重试不会重新调度。
 Chat 不补造 lease proof，带 lease 的编辑保留既有限制；停止／完成及立即运行仍由
 各自 lifecycle/runtime 路径负责。
+
+Chat“立即运行”分别保留已注册的责任 Agent 和执行 Runtime。切换 Runtime 不会替换
+明确指定的责任身份；未选择身份时，可先选 Goal 的现有 Agent 再确认检查。需要新身份
+时先预览并确认绑定，读回验证后重新预览原检查，两个操作分别确认。普通 Claude 对话
+继续只读，已确认 Task 才启用原生执行工具并传入选定模型／effort。立即运行回执证明
+Turn 已创建，不证明巡检完成或周期调度已启动。
 提交成功但展示 pending 时，用原操作重试回执／投影；不能改旧 Markdown 当作回滚。
 本切片不改变 provider 默认，不晋升已有 Goal。
