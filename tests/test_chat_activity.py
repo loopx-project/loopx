@@ -154,9 +154,9 @@ def test_dashboard_reader_mirrors_the_step_vocabulary():
 
 
 @pytest.mark.parametrize("value", [
-    "--token 'fixture value'", '--password="fixture value"',
-    'API_KEY="fixture value"', "--secret 'fixture'\\ value", "--token 'fixture 'value",
-    "--token 'fixture value", '--token "fixture value',
+    "--token 'example value'", '--password="example value"',
+    'API_KEY="example value"', "--secret 'example'\\ value", "--token 'example 'value",
+    "--token 'example value", '--token "example value',
 ])
 def test_quoted_credentials_are_masked_in_every_visible_text(value):
     steps = CodexActivitySteps()
@@ -164,7 +164,7 @@ def test_quoted_credentials_are_masked_in_every_visible_text(value):
     command = steps.started(_command(text, [{"type": "search", "query": text}]))
     thought = steps.completed({"type": "reasoning", "id": "r", "content": [text]})
     for step in (command, thought):
-        assert all(part not in step[field] for part in ("fixture", "value") for field in ("title", "detail"))
+        assert all(part not in step[field] for part in ("example", "value") for field in ("title", "detail"))
         assert "***" in step["title"] and "***" in step["detail"]
 
 
@@ -201,11 +201,11 @@ def test_private_step_text_is_clean_before_real_transport_store_and_reopened_rep
     from loopx.chat_store import ChatSessionStore
 
     cases = [
-        _command("curl --token 'fixture value' https://example.test/notes"),
-        _command('API_KEY="fixture value" curl https://example.test/notes'),
+        _command("curl --token 'example value' https://example.test/notes"),
+        _command('API_KEY="example value" curl https://example.test/notes'),
         _command("cat /opt/example/notes.md /etc/example/config"),
         _command(f"cat {tmp_path}/notes.md docs/relative.md https://example.test/notes"),
-        {"type": "reasoning", "id": "r", "summary": ['Inspect /etc/example/config with --password "fixture value"']},
+        {"type": "reasoning", "id": "r", "summary": ['Inspect /etc/example/config with --password "example value"']},
         {"type": "fileChange", "id": "f", "changes": [{"path": "/opt/example/notes.md"}]},
     ]
     peer = tmp_path / "peer.py"
@@ -255,13 +255,13 @@ for raw in sys.stdin:
             steps = [row["payload"]["step"] for row in replay if row["kind"] == "agent.phase" and "step" in row["payload"]]
             assert len(steps) == 2 and steps[0]["id"] == steps[1]["id"]
             serialized = json.dumps(steps)
-            assert "fixture value" not in serialized and "/opt/example" not in serialized and "/etc/example" not in serialized
+            assert "example value" not in serialized and "/opt/example" not in serialized and "/etc/example" not in serialized
             if position % len(cases) in (0, 1, 3):
                 assert "https://example.test/notes" in serialized
             if position % len(cases) == 3:
                 assert "notes.md docs/relative.md" in serialized and str(tmp_path) not in serialized
         # The file itself must already be clean, before a replay reader or UI can filter it.
         logs = "\n".join(path.read_text() for path in root.rglob("*.events.jsonl"))
-        assert "fixture value" not in logs and "/opt/example" not in logs and "/etc/example" not in logs
+        assert "example value" not in logs and "/opt/example" not in logs and "/etc/example" not in logs
     finally:
         session.close()
