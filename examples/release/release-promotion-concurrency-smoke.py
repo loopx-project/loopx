@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -109,6 +110,7 @@ def assert_install_waits_for_promotion_guard(root: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
         )
         try:
             deadline = time.monotonic() + 2
@@ -118,11 +120,11 @@ def assert_install_waits_for_promotion_guard(root: Path) -> None:
                 time.sleep(0.05)
             assert process.poll() is None, process.communicate()
         except Exception:
-            process.terminate()
+            os.killpg(process.pid, signal.SIGTERM)
             try:
                 process.communicate(timeout=10)
             except subprocess.TimeoutExpired:
-                process.kill()
+                os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
             raise
         finally:
@@ -196,6 +198,7 @@ def assert_empty_legacy_lock_is_reaped(root: Path) -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     acquired = False
     try:
@@ -209,8 +212,12 @@ def assert_empty_legacy_lock_is_reaped(root: Path) -> None:
                 break
             time.sleep(0.05)
     finally:
-        if process.poll() is None:
-            process.terminate()
+        # The installer shells out while preparing its snapshot. Stop this
+        # fixture's whole session before removing the directory it can write.
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
         stdout, stderr = process.communicate(timeout=10)
         if legacy_lock.exists():
             shutil.rmtree(legacy_lock)
