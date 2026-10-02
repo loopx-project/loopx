@@ -73,7 +73,7 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
    infer `verified` from metadata or CI. Execute its repository-reuse, default-off, authority
    and real-path counterfactuals rather than repeating them as prose. Fill `result.reviewer`
    per `review_execution_contract.reviewer_declaration`, open the body with its `body_marker`
-   line, and read `problem_context.spec_basis`'s specification before implementing it.
+   line, and read `problem_context.spec_basis`'s specification before the diff.
 3. Apply `completion_gate` literally: save final Markdown in `review_body`, then check
    evidence and that exact body. Follow capability-owned floors and scope counterfactuals;
    prose cannot replace missing execution:
