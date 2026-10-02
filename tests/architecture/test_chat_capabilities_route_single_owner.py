@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import http.client
+import os
 from pathlib import Path
 
 import pytest
@@ -42,11 +43,48 @@ def _web_sources(root: Path) -> list[Path]:
     web = root / "apps"
     if not web.is_dir():
         return []
-    return sorted(
-        path
-        for path in web.rglob("*.ts")
-        if "node_modules" not in path.relative_to(root).parts
-    )
+
+    def fail_on_source_error(error: OSError) -> None:
+        raise error
+
+    sources = []
+    for directory, directories, files in os.walk(web, onerror=fail_on_source_error):
+        # Dependency installation can replace these directories during the
+        # census. Prune before traversing; first-party I/O errors still fail.
+        directories[:] = [name for name in directories if name != "node_modules"]
+        sources.extend(Path(directory) / name for name in files if name.endswith(".ts"))
+    return sorted(sources)
+
+
+def test_web_census_never_enters_dependencies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "apps" / "client" / "route.ts"
+    source.parent.mkdir(parents=True)
+    source.write_text("export const route = '/api/chat/capabilities';", encoding="utf-8")
+    dependencies = source.parent / "node_modules"
+    dependencies.mkdir()
+    scan = os.scandir
+
+    def guarded_scan(path):
+        if Path(path) == dependencies:
+            raise FileNotFoundError("dependency tree was concurrently replaced")
+        return scan(path)
+
+    monkeypatch.setattr(os, "scandir", guarded_scan)
+    assert _web_sources(tmp_path) == [source]
+
+
+def test_web_census_does_not_hide_first_party_io_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "apps"
+    source_root.mkdir()
+
+    def inaccessible_source(path):
+        raise PermissionError("first-party source is unreadable")
+
+    monkeypatch.setattr(os, "scandir", inaccessible_source)
+    with pytest.raises(PermissionError, match="first-party source"):
+        _web_sources(tmp_path)
 
 
 def _module_bindings(root: Path) -> dict[str, int]:
