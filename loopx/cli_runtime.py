@@ -44,6 +44,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"doctor",
 		"first-run-report",
 		"usage-ping",
+		"performance-diagnosis",
 		"new-project-prompt",
 		"resolve-agent-thread",
 		"resolve-peer-route",

@@ -23,6 +23,12 @@ mandatory acceptance source. If none applies, the task, failure and owning
 contract still define acceptance. Inspect current main and related work first.
 A passing implementation-shaped test is not an independent experience oracle.
 
+Caller-facing capabilities require an appropriate shipped frontend journey,
+including discoverability, authorized operation, feedback and result readback.
+CLI-only prerequisites are partial delivery; catalog text or a command-copy
+button is not the journey. Reuse the typed capability owner rather than adding
+frontend-only decisions or a setting for a capability with no persistent policy.
+
 Carry the same task through these steps:
 
 1. **Compare the journey.** Write the current and proposed user steps in the

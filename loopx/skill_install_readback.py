@@ -44,6 +44,7 @@ PACKAGED_HOST_SKILL_IDS = [
     "loopx-doc-registry",
     "loopx-benchmark",
     "loopx-self-repair",
+    "loopx-performance-diagnosis",
 ]
 ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS = [
     "loopx",
