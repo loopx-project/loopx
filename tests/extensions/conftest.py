@@ -1,4 +1,4 @@
-"""Existing notification transport tests inject synthesis, never call a live model."""
+"""Transport modules explicitly import this shared fixture for mixed-root collection."""
 import json
 import pytest
 

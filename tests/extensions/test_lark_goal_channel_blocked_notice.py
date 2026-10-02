@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.extensions.conftest import notification_transport_synthesis  # noqa: F401
+
 from loopx.extensions.lark.goal_channel_blocked_notice import deliver_blocked_notices
 from loopx.extensions.lark import goal_channel_lifecycle, goal_channel_notification
 from loopx.extensions.lark.goal_channel_runtime import (

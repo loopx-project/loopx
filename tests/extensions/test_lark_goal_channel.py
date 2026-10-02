@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 
+from tests.extensions.conftest import notification_transport_synthesis  # noqa: F401
+
 from loopx.cli_commands import goal_channel as goal_channel_cli
 from loopx.cli_commands import goal_channel_operation as goal_channel_operation_cli
 from loopx.extensions.lark import goal_channel_contracts
