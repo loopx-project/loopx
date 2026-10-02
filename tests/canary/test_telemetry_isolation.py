@@ -5,7 +5,6 @@ import subprocess
 import os
 import signal
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -36,7 +35,6 @@ def test_smoke_failure_reaps_children_before_cleaning_fixture(tmp_path, monkeypa
         encoding="utf-8",
     )
     real_popen = subprocess.Popen
-    timers = []
 
     def spawn(*args, **kwargs):
         process = real_popen(*args, **kwargs)
@@ -49,9 +47,13 @@ def test_smoke_failure_reaps_children_before_cleaning_fixture(tmp_path, monkeypa
             time.sleep(.01)
         assert ready.exists(), "fixture child did not reach its startup barrier"
         if outcome == "exited_leader":
-            timer = threading.Timer(.7, lambda: release.write_text("release"))
-            timer.start()
-            timers.append(timer)
+            original_kill = process.kill
+            def kill_leader():
+                original_kill()
+                # The old leader-only fallback releases the still-live child,
+                # preventing a hanging baseline without a sleep-based oracle.
+                release.write_text("release")
+            process.kill = kill_leader
         if outcome == "cancelled":
             def cancelled(*_, **__):
                 raise KeyboardInterrupt
@@ -74,9 +76,6 @@ def test_smoke_failure_reaps_children_before_cleaning_fixture(tmp_path, monkeypa
             assert not status or status.startswith("Z"), "owned child survived cleanup"
             assert not effect.exists(), "child performed a late effect before cleanup returned"
         finally:
-            for timer in timers:
-                timer.cancel()
-                timer.join()
             if ready.exists():
                 try:
                     os.kill(int(ready.read_text()), signal.SIGKILL)
