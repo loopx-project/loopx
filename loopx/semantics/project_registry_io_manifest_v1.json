@@ -375,7 +375,7 @@
     },
     {
       "site": "loopx/chat_actions.py::<module>.ChatActionService._registry::codec_read:load_registry#1",
-      "line": 247,
+      "line": 249,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
