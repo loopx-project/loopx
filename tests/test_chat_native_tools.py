@@ -3,6 +3,8 @@ import asyncio
 import io
 import json
 import sys
+import threading
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -134,3 +136,32 @@ def test_native_manager_uses_existing_runtime_grant_and_configured_model(monkeyp
 def test_native_manager_vendor_default_never_inherits_codex_model():
     assert manager_model_config({}, endpoint="claude-code")["model"] == "sonnet"
     assert manager_model_config({}, endpoint="codex")["model"] == "gpt-6-astra"
+
+
+def test_interrupt_native_wrapper_stops_child_before_it_can_write(tmp_path):
+    marker = tmp_path / "child-side-effect.txt"
+    executable = tmp_path / "native-wrapper"
+    child = f"import time; from pathlib import Path; time.sleep(1); Path({str(marker)!r}).write_text('late effect')"
+    executable.write_text(f"#!{sys.executable}\nimport json,subprocess,sys\n"
+        + f"p=subprocess.Popen([sys.executable,'-c',{child!r}])\n"
+        + "print(json.dumps({'type':'stream_event','event':{'type':'content_block_start','content_block':{'type':'tool_use','name':'synthetic-child'}}}),flush=True)\np.wait()\n")
+    executable.chmod(0o700)
+    adapter = ClaudeCodeAdapter(str(executable), tmp_path, "synthetic-interrupt")
+    ready = threading.Event()
+    errors = []
+    def run():
+        try:
+            adapter.start_turn("Wait for owner", lambda kind, _: ready.set()
+                               if kind == "agent.phase" and adapter.current_process is not None else None)
+        except CodexChatAgentError as error:
+            errors.append(error)
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert ready.wait(timeout=5)
+    process = adapter.current_process
+    adapter.interrupt_turn()
+    worker.join(timeout=3)
+    assert not worker.is_alive() and errors
+    assert process.poll() is not None and adapter.current_process is None
+    time.sleep(1.1)
+    assert not marker.exists(), "Native child survived owner interruption"
