@@ -293,8 +293,11 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         )
 
     @server.tool()
-    def return_result(request_id: str, text: str) -> dict:
-        """Save an evidence-backed conclusion or explicit blocker for the original requester."""
+    def return_result(request_id: str, text: str, update_id: str | None = None) -> dict:
+        """Return a conclusion to the original requester. For a later changed fact,
+        append an update with a stable update_id; retry with the same id and text.
+        Neither a blocker nor a returned result certifies completion of the work.
+        """
         check_scope()
         # The host adapter selects Chat/Lark transport; the shared collaboration
         # owner never depends on presentation or manager capabilities.
@@ -307,19 +310,23 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             request_id,
             "conclusion",
             text,
+            update_id=update_id,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
 
     @server.tool()
-    def consume_peer_result(request_id: str) -> dict:
-        """Acknowledge a peer result after reading and using/rejecting it; no work-state mutation."""
+    def consume_peer_result(request_id: str, result_key: str = "conclusion") -> dict:
+        """Acknowledge a read peer result, using its result_key for a later update.
+        This consumes only that result and never changes work state.
+        """
         check_scope()
         return consume_return(
             root,
             goal_id,
             agent_id,
             request_id,
+            result_key=result_key,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
