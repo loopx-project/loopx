@@ -275,13 +275,13 @@ def test_owner_blocker_requests_action_and_agent_blocker_does_not(
     messages = [
         args[args.index("--text") + 1] for args in calls if "+messages-send" in args
     ]
-    assert len(messages) == 1 and "Owner action required." in messages[0]
+    assert len(messages) == 1 and json.loads(messages[0])["blockers"][0]["owner_must_act"] is True
     calls.clear()
     _send(path, _status(), calls)
     agent_message = next(
         args[args.index("--text") + 1] for args in calls if "+messages-send" in args
     )
-    assert "No owner action required." in agent_message
+    assert json.loads(agent_message)["blockers"][0]["owner_must_act"] is False
 
 
 def test_failed_provider_send_stays_pending_for_retry(tmp_path: Path) -> None:

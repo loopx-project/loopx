@@ -63,6 +63,10 @@ export function GoalAutoNotifyToggle({
         <span>{t(kind === "blocked_notice" ? "notifications.blockedAutoNotify" : "notifications.autoNotify")}</span>
         {busy ? <Loader2 aria-hidden className="is-spinning" size={14} /> : null}
       </label>
+      {kind === "human_gate" ? <p className="personal-notification-hint">{t("notifications.stewardHint")}</p> : null}
+      {kind === "human_gate" && (notification?.stewardNoticeDelivery?.pending_count ?? 0) > 0 ? (
+        <p className="personal-notification-error" role="status">{t("notifications.stewardPending", { count: notification!.stewardNoticeDelivery!.pending_count })}</p>
+      ) : null}
       {error ? <p className="personal-notification-error" role="alert">{error}</p> : null}
     </>
   );

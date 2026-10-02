@@ -117,11 +117,11 @@ def _goal_notification_row(
     receipts = receipts if isinstance(receipts, Mapping) else {}
     row["receipt_count"] = len(receipts)
     resolved_binding = binding
-    has_blocked_receipts = any(
-        isinstance(receipt, Mapping) and receipt.get("kind") == "blocked_notice"
+    has_notification_receipts = any(
+        isinstance(receipt, Mapping) and receipt.get("kind") in {"blocked_notice", "gate_notification"}
         for receipt in receipts.values()
     )
-    if binding.get("target_ref") and has_blocked_receipts:
+    if binding.get("target_ref") and has_notification_receipts:
         target = None
         try:
             if runtime_root is not None:
@@ -151,6 +151,15 @@ def _goal_notification_row(
             for r in blocked_receipts
         ),
         "resolved_count": sum(r.get("state") in BLOCKED_NOTICE_RETIRED_STATES for r in blocked_receipts),
+    }
+    from .goal_channel_contracts import semantic_key
+    current_notifications = [r for r in receipts.values() if isinstance(r, Mapping)
+        and ((r.get("kind") == "gate_notification"
+              and r.get("target_generation") == semantic_key("lark_goal_channel_target_v0", chat_id))
+             or (r in blocked_receipts and r.get("state") not in BLOCKED_NOTICE_RETIRED_STATES))]
+    row["steward_notice_delivery"] = {
+        "pending_count": sum(r.get("readback_verified") is not True for r in current_notifications),
+        "failed_count": sum(bool(r.get("failure_code")) for r in current_notifications),
     }
     verified: list[tuple[Any, str]] = []
     for key, receipt in receipts.items():
