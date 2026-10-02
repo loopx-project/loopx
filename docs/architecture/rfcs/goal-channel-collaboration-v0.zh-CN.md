@@ -239,19 +239,16 @@ interaction-contract surface：
 - `user_todo_summary`；
 - `user_gate_notification_cooldown`。
 
-消息包含：
-
-- goal label 和短 objective；
-- 具体 gate question；
-- 最多三条 user-gate 或 user-action todo；
-- 期望回复格式；
-- Kanban 链接或 channel control 链接；
-- 等待期间的 next safe action（如果存在）。
+管家说明所选决策、对 Goal 的影响与有用的下一步。最多三条完整请求保留精确引用、
+范围与证据；不完整请求明确保留缺口。相关阻塞与决策可以合并表达，不扩大批准范围；
+必要时保留 Kanban 链接。这替换固定的 `Action required / Decision requests` 模板，
+选择、冷却与 provider 权限仍由各自 owner 持有。
 
 消息不包含本地路径、raw active state、私有日志、凭据、message id 或 raw provider
 payload。
 
-自动投递默认关闭。完成 Goal Channel setup 后，先预览，再显式启用：
+新建 Goal Channel 默认开启 human gate 投递，已有 binding 保留原设置；blocked notice
+默认关闭。可以预览或显式启用：
 
 ```bash
 loopx goal-channel configure --goal-id <goal-id> --auto-notify-human-gates
@@ -312,6 +309,46 @@ binding。启用自动投递时必须使用项目本地 canonical binding 路径
 和“已配置但 extension 后续不可用”。后者会通过可重试的
 `extension_unavailable` postcondition fail closed；marker 不包含 provider id、
 凭据、channel metadata 或 raw payload。
+
+### 本地管家接收与可选 Channel 投递
+
+私有本地管家是其获准读取 Goal 的默认注意力消费者。未连接 Lark、关闭群通知或
+外部投递失败，都不能隐藏 canonical 阻塞与用户请求；Goal 对话在所选 Goal 内
+复用同一事实。外部受众保留精确授权，接收不授予发布或执行权限。
+
+同一 Todo 的阻塞与用户请求合成一个对象，保留具体决策条款，分别表达“用户需要
+知道”和“用户需要行动”。复用 blocked-transition builder 与共用 TS 决策/注意力
+投影；provider 地址、发送/回读和私有回执留在 Lark。切群改变投递回执，不改变源
+可见性；模型改写不是新修订，读取也不证明已通知用户。
+
+管家结合目标、已有决定与独立工作，解释实质变化的影响，合并相关原因，建议下一步。
+Agent 自行恢复的工作留在后台；用户决定保留对象、条款、依据与不行动后果；未知或
+脱敏事实明确为缺口。不要机械转发每条变化或把阻塞变成新审批。语义汇总复用已配置
+的对话 runtime，模型不拥有通知资格、授权或回执状态迁移。
+
+**实现检查点。** 已有管家 / Goal Turn 在没有 Channel 或 run history 时仍读取
+当前 canonical 注意事实。TS owner 按 Todo 合并阻塞与决策，优先呈现 owner action，
+披露遗漏。整个 Turn 最多纳入十二个对象，各 Goal 保留遗漏数量，完整剩余事实通过
+已有带作用域的 Todo read 获取。Python 仅适配 canonical I/O 与公开安全字段，不建立
+第二套选择规则。
+
+已有 human gate 与 blocked notice sender 共用管家生成适配器，替换两套固定消息模板。
+已准入的外部通知使用配置的管家执行器 / 模型，在独立、restricted Chat Turn 中生成
+（启动最多 30 秒，推理最多 90 秒）。读取限定本 Goal 与 audience，不增加宿主、
+委托或发布授权。生成前后核验 canonical 请求内容与 blocker revision；正文保留精确
+请求引用以保护回复路由。执行 / fallback 未评估时保持未知，建议不证明 worker 正在运行。
+
+生成正文在发送前保存到已有私有 effect receipt；重试沿用相同正文与 provider key。
+已核验 gate 消息记录覆盖的阻塞版本，blocker adapter 不再重复发送同一事实。
+生成失败保留待处理，不回退机械模板；已有前端设置说明模型使用并呈现未核验投递。
+历史 verified receipt 继续静默；历史不确定 blocker receipt 若未保存正文，须先核对，
+不能在已尝试的 provider key 下重新生成另一段正文。
+
+不新增 inbox、scheduler 或通知 store。默认本地接收表示下一次已有 Turn 中可读，
+不等于自动呈现或已读。material-delta 唤醒、预算内主动生成、已读 / 恢复确认、跨 Goal
+语义批处理及持续质量仍归 presentation Stage 2 / R3。一次真实 Codex 合成测试证明
+模型路径可用，不证明长期通知质量或真实 Lark 部署。独立外部 transcript 不借用
+正在运行的 owner session，也不宣称完整会话连续性。
 
 ## 命令契约
 
@@ -404,7 +441,7 @@ goal_id + provider + operation + todo_id/gate_id + gate_text_hash + channel_id
 - Goal Control message 可以发送、pin，并通过 readback 验证；
 - human-gate notification 遵守 cooldown 和 idempotency；
 - 重试通知不会产生重复可见消息；
-- 自动投递默认关闭，并且可按单次 refresh 临时抑制；
+- 新建 Channel 的 human gate 投递默认开启，blocked notice 默认关闭；均可关闭或按单次 refresh 抑制；
 - 自动投递读取 canonical quota，非 gate 状态不发送；
 - doctor 能用类型化 blocker 报告缺 bot auth、缺 channel、缺 Kanban 或 stale
   extension activation；
