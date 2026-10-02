@@ -688,6 +688,7 @@ def _planning_projections(
     route: _QuotaDecisionRoute,
     *,
     include_detail: bool,
+    turn_instance_id: str | None,
 ) -> dict[str, Any]:
     selection_available = route.normal_delivery_allowed or bool(
         route.workspace_repair_allowed
@@ -718,6 +719,18 @@ def _planning_projections(
         capability_gate=prepared.capability_gate,
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
+        replan_selection_context=(
+            {
+                "has_turn_identity": bool(turn_instance_id),
+                "should_run": route.should_run,
+                "receipt_bound": bool(
+                    prepared.receipt_bound_todo_id or route.receipt_bound_replan_decision
+                ),
+                "selection_requested": prepared.requested_action_todo_id is not None,
+                "monitor_only": prepared.agent_monitor_only,
+            }
+            if route.replan_decision_allowed else None
+        ),
     )
 
 
@@ -1199,6 +1212,7 @@ def _build_active_quota_payload(
     route: _QuotaDecisionRoute,
     *,
     include_agent_todo_detail: bool = False,
+    turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     agent_scope_action = _agent_scope_frontier_action(route.effective_action)
     execution_obligation = _execution_obligation(
@@ -1321,6 +1335,7 @@ def _build_active_quota_payload(
             prepared,
             route,
             include_detail=include_agent_todo_detail,
+            turn_instance_id=turn_instance_id,
         )
     )
     _attach_truthy_fields(
@@ -1483,6 +1498,7 @@ def _build_quota_should_run_payload(
     else:
         payload = _build_active_quota_payload(
             prepared, route, include_agent_todo_detail=include_agent_todo_detail,
+            turn_instance_id=turn_instance_id,
         )
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)

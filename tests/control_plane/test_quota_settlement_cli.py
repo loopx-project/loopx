@@ -597,6 +597,28 @@ def _projected_cli_args(command: str, *, turn_instance_id: str) -> tuple[str, ..
     )
 
 
+def _bind_selected_replan_guard(
+    registry: Path, runtime: Path, project: Path, turn_instance_id: str,
+) -> dict[str, Any]:
+    """Choose the fixture Todo explicitly, then consume the generated recovery.
+
+    An initial hard-replan recommendation is planning context, not a binding.
+    Keep the existing semantic-delta regressions testing an admitted identity.
+    """
+    rc, deferred = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn_instance_id, "--scan-path", str(project),
+        "--todo-id", SELECTED_REPLAN_TODO_ID,
+    )
+    assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
+    [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    rc, bound = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    return bound
+
+
 def _initialize_git_checkout(project: Path) -> None:
     subprocess.run(
         ["git", "init", "--quiet"],
@@ -3287,6 +3309,8 @@ def test_legacy_todo_guard_keeps_current_replan_gate_strict(
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
 
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
+
     log_path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     events = [
         json.loads(line)
@@ -5417,6 +5441,7 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
     obligation_id = guard["replan_action_packet"]["obligation_id"]
 
     refresh_args = (
@@ -5540,6 +5565,8 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+
+    guard = _bind_selected_replan_guard(registry_path, runtime, project, turn_instance_id)
 
     refresh_rc, refresh = _run_cli(
         registry_path,

@@ -166,7 +166,10 @@ function unavailableProjection(candidate: ActionCandidate): JsonObject {
  * portfolio semantics: validation, identity de-duplication, ordering, and the
  * fallback trigger exposed to hosts and models.
  */
-function projectQuotaActionPortfolioV1(request: JsonObject): JsonObject | null {
+function projectQuotaActionPortfolioV1(
+  request: JsonObject,
+  requirePlanningChoice = false,
+): JsonObject | null {
   if (request.schema_version !== ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION) {
     throw new EffectRuntimeRequestError(
       `action_portfolio_request.schema_version must be ${ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION}`,
@@ -238,10 +241,10 @@ function projectQuotaActionPortfolioV1(request: JsonObject): JsonObject | null {
     if (unavailableHigherPriority.length >= MAX_ALTERNATIVE_ACTIONS) break;
   }
 
-  if (alternativeActions.length === 0 && unavailableHigherPriority.length === 0) {
+  if (!requirePlanningChoice && alternativeActions.length === 0 && unavailableHigherPriority.length === 0) {
     return null;
   }
-  const requiresExplicitTurnBinding = alternativeActions.length > 0;
+  const requiresExplicitTurnBinding = requirePlanningChoice || alternativeActions.length > 0;
   return {
     schema_version: ACTION_PORTFOLIO_SCHEMA_VERSION,
     primary: primaryProjection(primary),
@@ -291,15 +294,28 @@ function projectQuotaPlanningPacket(request: JsonObject): JsonObject {
       "planning_packet_request.planning_inventory_request",
     ),
   );
+  // A required replan still preempts delivery. Before any explicit choice,
+  // however, its recommended Todo is not a causal settlement identity.
+  // Unscoped diagnostic reads have no Turn receipt to bind or recover.
+  let requirePlanningChoice = false;
+  if (request.replan_selection_context !== undefined) {
+    const context = requireJsonObject(request.replan_selection_context, "replan_selection_context");
+    const hasTurnIdentity = requireBoolean(context.has_turn_identity, "replan_selection_context.has_turn_identity");
+    const shouldRun = requireBoolean(context.should_run, "replan_selection_context.should_run");
+    const receiptBound = requireBoolean(context.receipt_bound, "replan_selection_context.receipt_bound");
+    const selectionRequested = requireBoolean(context.selection_requested, "replan_selection_context.selection_requested");
+    const monitorOnly = requireBoolean(context.monitor_only, "replan_selection_context.monitor_only");
+    requirePlanningChoice = hasTurnIdentity && shouldRun && !receiptBound && !selectionRequested && !monitorOnly;
+  }
   const projected: JsonObject = {
     schema_version: QUOTA_PLANNING_PACKET_SCHEMA_VERSION,
   };
-  if (projectionEnabled) {
+  if (projectionEnabled || requirePlanningChoice) {
     const portfolio = projectQuotaActionPortfolioV1({
       schema_version: ACTION_PORTFOLIO_REQUEST_SCHEMA_VERSION,
       planning_inventory: inventory,
       max_alternative_actions: DEFAULT_MAX_ALTERNATIVE_ACTIONS,
-    });
+    }, requirePlanningChoice);
     if (portfolio !== null) projected.action_portfolio = portfolio;
     const horizon = projectQuotaPlanningHorizon({
       schema_version: PLANNING_HORIZON_REQUEST_SCHEMA_VERSION,
@@ -462,6 +478,7 @@ export function reconcileRetainedActionSelection(value: unknown): JsonObject {
       disposition: "preserve_retained_todo",
       retained_todo_id: retainedTodoId,
       projected_todo_id: projectedTodoId,
+      clear_fields: ["action_portfolio"],
     };
   }
   if (
@@ -475,6 +492,7 @@ export function reconcileRetainedActionSelection(value: unknown): JsonObject {
       projected_todo_id: projectedTodoId,
       replan_obligation_id: replanObligationId,
       continuation: "fresh_turn_after_replan_closeout",
+      clear_fields: ["action_portfolio"],
     };
   }
   return {
