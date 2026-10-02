@@ -61,8 +61,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_env() -> dict[str, str]:
-    path_parts = [path for path in COMMON_NODE_PATHS if Path(path).exists()]
-    path_parts.append(os.environ.get("PATH", ""))
+    path_parts = [os.environ.get("PATH", "")]
+    path_parts.extend(path for path in COMMON_NODE_PATHS if Path(path).exists())
     return {
         **os.environ,
         "PATH": ":".join(part for part in path_parts if part),
