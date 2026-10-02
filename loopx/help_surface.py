@@ -91,6 +91,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Build a compact evidence packet when behavior is surprising.",
             },
             {
+                "command": "loopx performance-diagnosis --help",
+                "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
+            },
+            {
                 "command": "loopx review-packet --goal-id <goal-id>",
                 "purpose": "Render a handoff or review packet with any required evidence-log reads.",
             },
