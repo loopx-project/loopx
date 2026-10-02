@@ -63,6 +63,17 @@ test("evented profiles integrate stack intervals rather than counting opens", ()
   assert.equal(main.inclusive_hotspots[0]!.inclusive_ms, 6);
 });
 
+test("shared long names cannot multiply a small capture into an unbounded summary", () => {
+  const name = "x".repeat(8192);
+  const profile = {$schema: sampled().$schema, shared: {frames: [{name}]},
+    profiles: Array.from({length: 65}, () => ({type: "sampled", name: "thread",
+      unit: "milliseconds", startValue: 0, endValue: 1, samples: [[0]], weights: [1]}))};
+  assert.ok(JSON.stringify(profile).length < 20_000);
+  assert.throws(() => inspect({profile}), /summary text exceeds/);
+  profile.profiles.length = 1;
+  assert.equal(inspect({profile}).profiles[0]!.self_hotspots[0]!.name, name);
+});
+
 test("event ordering, balanced exits and temporal units remain required", () => {
   const profile = {$schema: sampled().$schema, shared: sampled().shared,
     profiles: [{type: "evented", unit: "milliseconds", startValue: 0, endValue: 8,

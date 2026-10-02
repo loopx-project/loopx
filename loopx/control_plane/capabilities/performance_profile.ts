@@ -33,7 +33,15 @@ export function summarizePerformanceProfile(input: unknown) {
   const raw = object(request.profile, "profile");
   const top = number(request.top ?? 15, "top");
   if (!Number.isInteger(top) || top < 1 || top > 50) throw new Error("top must be an integer from 1 to 50");
+  // Shared frames may appear in many profiles and both rankings. Bound their
+  // repeated display text before serializing or posting the complete summary.
+  let displayedCharacters = 0;
+  const reserveText = (value: string) => {
+    displayedCharacters += value.length;
+    if (displayedCharacters > 1_048_576) throw new Error("profile summary text exceeds 1 Mi characters; select fewer profiles or a smaller top count");
+  };
   const summarize = (name: string, frames: Frame[], unit: string, build: (add: (stack: number[], weight: number) => void) => void) => {
+    reserveText(name);
     const scale = ({nanoseconds: 1e-6, microseconds: 1e-3, milliseconds: 1, seconds: 1000} as Record<string, number>)[unit];
     if (scale === undefined) throw new Error(`unsupported time unit: ${unit}`);
     if (!frames.length || frames.length > 100_000) throw new Error("profile requires 1..100000 frames");
@@ -53,8 +61,10 @@ export function summarizePerformanceProfile(input: unknown) {
     if (!observationsCount || !weightTotal) throw new Error("profile contains no positive-duration observations");
     if (!Number.isFinite(weightTotal)) throw new Error("profile time overflows finite milliseconds");
     const rows = (kind: "self" | "inclusive") => observations.filter(row => row[kind] > 0)
-      .sort((a, b) => b[kind] - a[kind]).slice(0, top).map(row => ({...row.frame,
-        self_ms: row.self, inclusive_ms: row.inclusive}));
+      .sort((a, b) => b[kind] - a[kind]).slice(0, top).map(row => {
+        reserveText(row.frame.name); reserveText(row.frame.file ?? "");
+        return {...row.frame, self_ms: row.self, inclusive_ms: row.inclusive};
+      });
     return {name, observations: observationsCount, observed_weight_ms: weightTotal,
       stack_weight_ms: stackWeight, self_hotspots: rows("self"), inclusive_hotspots: rows("inclusive")};
   };

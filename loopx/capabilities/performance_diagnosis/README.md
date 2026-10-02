@@ -78,7 +78,9 @@ an empty successful diagnosis. Speedscope sampled/evented and V8 CPU time units
 are normalized to milliseconds. Threads/profiles stay separate, recursion is
 counted once per stack observation, and self and inclusive hotspots are distinct.
 Do not sum inclusive rows or thread weights to infer elapsed time.
-Input files are limited to 16 MiB; shorten captures beyond that limit. Larger
+Input files are limited to 16 MiB; shorten captures beyond that limit. Repeated
+profile names and hotspot labels share a 1 Mi-character display-text budget;
+oversized summaries are rejected explicitly, never silently truncated. Larger
 recordings reuse Effect's private local snapshot transport without raising the
 ordinary 2 MiB message limit or returning the raw profile in the summary.
 

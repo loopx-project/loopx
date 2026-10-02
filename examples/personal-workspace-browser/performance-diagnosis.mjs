@@ -43,6 +43,11 @@ export const performanceDiagnosisScenario = {
       await input.setInputFiles({ name: "broken.json", mimeType: "application/json", buffer: Buffer.from('{"profiles":[]}') });
       await panel.getByRole("alert").waitFor();
       if (await panel.getByRole("table").count()) throw new Error("Failed capture retained the previous success");
+      const amplified = { ...capture, shared: { frames: [{ name: "x".repeat(8192) }] },
+        profiles: Array.from({ length: 65 }, () => ({ type: "sampled", name: "thread", unit: "milliseconds", startValue: 0, endValue: 1, samples: [[0]], weights: [1] })) };
+      await input.setInputFiles({ name: "many-threads.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(amplified)) });
+      await panel.getByRole("alert").filter({ hasText: "summary text exceeds" }).waitFor();
+      if (await panel.getByRole("table").count()) throw new Error("Rejected summary was silently truncated");
       await input.setInputFiles({ name: "too-large.json", mimeType: "application/json", buffer: Buffer.alloc(16 * 1024 * 1024 + 1, 32) });
       await panel.getByRole("alert").filter({ hasText: "文件超过 16 MiB" }).waitFor();
       const clear = panel.getByRole("button", { name: "清除 / 取消", exact: true });
