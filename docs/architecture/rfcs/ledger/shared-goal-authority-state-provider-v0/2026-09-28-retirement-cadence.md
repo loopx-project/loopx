@@ -308,6 +308,15 @@ time, independent Node CPU, and Linux thread stacks on disposable targets.
 Startup, candidate scanning and waits are hypotheses to test with unchanged
 uninstrumented workloads; profile weights do not replace this admission failure.
 
+[#5283](https://github.com/loopx-project/loopx/pull/5283) is the adjacent
+read-only delegation preflight optimization, not a provider implementation.
+Its current process-reuse candidate reports paired File/SQLite warm gains with
+an explicit cold-start cost; retain it for exact-head review, installed readback
+and real requester adoption. Qualify that repeated consumer independently from
+the cold-only status workload above. Keep decisions fresh at the existing TS/CLI
+owners; the pinned Python worker remains transport, not a new decision cache.
+Retire Python rules only when their TS replacement and last callers are proven.
+
 Last-caller Python decision retirement can proceed independently where the TS
 replacement and affected real callers are proven. Whole Markdown writer removal
 still requires C's new-Goal/upgrade/recovery exits. Complete consumer metadata,

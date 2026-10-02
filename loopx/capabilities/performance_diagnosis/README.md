@@ -102,3 +102,16 @@ Disable by not invoking the command/workflow; there is no background collection.
 Remove optional tools from their isolated environment and local captures after
 retaining the required private evidence. This grants no production attach,
 elevation, Goal mutation, upload or merge permission.
+
+## Frontend inspection
+
+Open **Settings → Capabilities → Device defaults → Performance diagnosis**.
+Choose a local Speedscope or V8 CPU JSON capture (up to 16 MiB). The packaged
+frontend parses it in a cancellable worker using the same TypeScript rules as
+the CLI, displays each profile separately, and lets you rank self or inclusive
+hotspots. Invalid captures replace the earlier result with an error.
+
+Files and results remain in browser memory: no upload, saved preference, process
+attachment or automatic collection. **Clear / cancel** drops the result and
+terminates its worker; leaving settings does the same. Capture still requires
+an explicitly owned Host target; the browser does not gain process privileges.

@@ -227,6 +227,13 @@ D2 通过或默认切换。#4224 已报告在 `e98191faa` 上于 9 月 14 日开
 线程栈。启动、候选扫描和等待仍是待验证假设，需复跑未插桩的原负载；不能用
 profile 权重替换这项准入失败。
 
+[#5283](https://github.com/loopx-project/loopx/pull/5283) 是相邻的只读 delegation
+预检优化，不是 provider 实现。当前进程复用候选报告了 File/SQLite 配对暖调用收益，
+同时披露冷启动成本；保留并推进精确 head 评审、安装读回和真实请求方采用。
+重复调用消费者与上述单次冷 status 分别验收。沿原 TS／CLI owner 读取当前决策，
+固定 Python worker 只作传输，不缓存权限或验收结果；TS 替代与最后调用方验证完成
+后再退役 Python 规则，不能凭进程复用就宣称退役或 SQLite 准入。
+
 已有 TS 替代且真实受影响调用方验证完成的 Python 重复决策，可以按最后调用方独立
 退役；整条 Markdown writer 删除仍需 C 的新 Goal／升级／恢复出口。消费者完整
 metadata、freshness 和决策输入继续验收。合同检查与 attention 现在按 runtime／Goal 共享请求内已校验的完整
