@@ -7,14 +7,14 @@
 The open, local-first control plane for long-horizon agents and personal agent teams.<br>
 <sub>Keep goals, decisions and evidence across sessions. Work with Codex, Claude Code, DeepSeek Harness and other supported runtimes.</sub>
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
 
 <a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx on Trendshift" width="220" height="48"></a>
 
 [Get started](#try-loopx) · [Workspace](#meet-the-personal-agent-workspace) · [LHTB results](#lhtb-results) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
-<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4"><img src="docs/assets/personal-workspace/workspace-hero.webp" alt="LoopX Personal Agent Workspace: an Agent team with executing and validating members, an owner decision that unblocks dependent work, and an accepted result with its evidence" width="960"></a><br>
-<sub>Packaged App on the reproducible <a href="demo/workspace/README.md">Workspace stories</a>; Agent turns and team records are simulated · <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">watch the 32-second walkthrough</a></sub>
+<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4"><img src="docs/assets/personal-workspace/workspace-hero.webp" alt="LoopX Personal Agent Workspace: a Work map showing task dependencies, responsible agents, progress and decisions waiting for the owner" width="960"></a><br>
+<sub>Source-built App on an authored <a href="demo/workspace/README.md">Workspace stories replay</a>; no live Agent execution · <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">watch the 32-second walkthrough</a></sub>
 
 **Start in Codex App in two steps.** Install once:
 

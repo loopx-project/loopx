@@ -6,87 +6,33 @@
   @font-face { font-family: "Geist"; src: url("../../../apps/presentation/dashboard/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; }
   @font-face { font-family: "Geist Mono"; src: url("../../../apps/presentation/dashboard/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; }
   * { box-sizing: border-box; margin: 0; }
-  html, body { width: 1280px; height: 860px; overflow: hidden; background: transparent; }
+  html, body { width: 1280px; height: 940px; overflow: hidden; background: transparent; }
   body { font-family: "Geist", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", Arial, sans-serif; color: #171717; -webkit-font-smoothing: antialiased; }
-  .stage { position: relative; width: 1280px; height: 860px; overflow: hidden; border-radius: 24px; background: #fafafa; box-shadow: inset 0 0 0 1px rgba(23,23,23,.06); }
-  .grid {
-    position: absolute; inset: 0;
-    background-image: linear-gradient(to right, rgba(23,23,23,.055) 1px, transparent 1px), linear-gradient(to bottom, rgba(23,23,23,.055) 1px, transparent 1px);
-    background-size: 56px 56px; background-position: -1px -1px;
-    -webkit-mask-image: radial-gradient(70% 60% at 50% 18%, #000 30%, transparent 85%);
-  }
-  .mesh {
-    position: absolute; inset: -80px; filter: blur(40px); opacity: .95;
-    background:
-      radial-gradient(28% 38% at 14% 22%, rgba(0,124,240,.30), transparent 70%),
-      radial-gradient(24% 30% at 30% 6%, rgba(0,223,216,.26), transparent 70%),
-      radial-gradient(28% 40% at 86% 20%, rgba(121,40,202,.24), transparent 70%),
-      radial-gradient(22% 30% at 68% 4%, rgba(255,0,128,.15), transparent 70%);
-  }
-  header { position: absolute; top: 40px; left: 0; right: 0; text-align: center; }
-  .eyebrow {
-    display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px; border-radius: 9999px;
-    background: rgba(255,255,255,.75); box-shadow: 0 0 0 1px #ebebeb;
-    font: 500 13px/16px "Geist Mono", monospace; letter-spacing: .06em; text-transform: uppercase; color: #4d4d4d;
-  }
+  .stage { position: relative; width: 1280px; height: 940px; overflow: hidden; border-radius: 24px; background: #fafafa; box-shadow: inset 0 0 0 1px rgba(23,23,23,.06); }
+  .mesh { position: absolute; inset: -80px; filter: blur(48px); opacity: .65;
+    background: radial-gradient(38% 44% at 12% 15%, rgba(0,124,240,.24), transparent 70%), radial-gradient(32% 34% at 88% 10%, rgba(121,40,202,.22), transparent 70%); }
+  header { position: absolute; top: 28px; left: 24px; right: 24px; text-align: center; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px; border-radius: 9999px; background: rgba(255,255,255,.8); box-shadow: 0 0 0 1px #ebebeb;
+    font: 500 12px/16px "Geist Mono", monospace; letter-spacing: .06em; text-transform: uppercase; color: #4d4d4d; }
   .eyebrow b { width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #007cf0, #7928ca); }
-  h1 { margin-top: 18px; font-size: 48px; line-height: 54px; font-weight: 600; letter-spacing: -0.05em; }
-  html[lang="zh-CN"] h1 { letter-spacing: -0.01em; }
-  h1 em { display: block; font-style: normal; background: linear-gradient(90deg, #007cf0, #7928ca 70%); -webkit-background-clip: text; color: transparent; }
-  .window {
-    position: absolute; left: 196px; top: 210px; width: 888px; border-radius: 14px; overflow: hidden; background: #fff;
-    box-shadow: 0 0 0 1px rgba(23,23,23,.08), 0 2px 4px rgba(23,23,23,.04), 0 24px 48px -12px rgba(23,23,23,.16), 0 60px 120px -40px rgba(60,40,140,.22);
-  }
-  .chrome { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 16px; background: #fafafa; border-bottom: 1px solid #ebebeb; position: relative; }
-  .chrome i { width: 12px; height: 12px; border-radius: 50%; background: #e3e3e3; }
-  .chrome span {
-    position: absolute; left: 50%; transform: translateX(-50%); padding: 4px 14px; border-radius: 6px; background: #f2f2f2;
-    font: 500 12px/16px "Geist Mono", monospace; color: #8f8f8f; letter-spacing: .02em;
-  }
-  .window img { display: block; width: 888px; }
-  .float, .pin { position: absolute; }
-  .float img {
-    display: block; border-radius: 12px; background: #fff;
-    box-shadow: 0 0 0 1px rgba(23,23,23,.08), 0 2px 4px rgba(23,23,23,.05), 0 28px 56px -16px rgba(23,23,23,.24);
-  }
-  .tag {
-    display: inline-flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 9px 16px; border-radius: 9999px;
-    background: #171717; color: #fff; font: 500 18px/22px "Geist", "PingFang SC", sans-serif; letter-spacing: -0.01em;
-    box-shadow: 0 10px 24px -10px rgba(23,23,23,.45); white-space: nowrap;
-  }
-  .tag i { width: 8px; height: 8px; border-radius: 50%; }
-  .team { left: 32px; top: 470px; }
-  .team img { width: 330px; padding: 12px; background: #fafafa; }
-  .team .tag i { background: #0070f3; }
-  .results { right: 28px; top: 248px; text-align: right; }
-  .results img { width: 360px; padding: 8px 4px; }
-  .results .tag i { background: #45d483; }
-  .decide { left: 905px; top: 700px; }
-  .decide .tag { margin: 0; }
-  .decide .tag i { background: #f5a623; }
+  h1 { margin-top: 16px; font-size: 40px; line-height: 48px; font-weight: 600; letter-spacing: -.045em; }
+  html[lang="zh-CN"] h1 { letter-spacing: -.01em; }
+  h1 em { display: block; margin-top: 4px; font-size: 34px; line-height: 42px; font-style: normal; background: linear-gradient(90deg, #007cf0, #7928ca 70%); -webkit-background-clip: text; color: transparent; }
+  .window { position: absolute; left: 48px; top: 184px; width: 1184px; border-radius: 14px; overflow: hidden; background: #fff;
+    box-shadow: 0 0 0 1px rgba(23,23,23,.08), 0 20px 60px -20px rgba(23,23,23,.18); }
+  .chrome { height: 36px; display: flex; align-items: center; gap: 7px; padding: 0 14px; background: #fafafa; border-bottom: 1px solid #ebebeb; position: relative; }
+  .chrome i { width: 10px; height: 10px; border-radius: 50%; background: #e3e3e3; }
+  .chrome span { position: absolute; left: 50%; transform: translateX(-50%); padding: 4px 14px; border-radius: 6px; background: #f2f2f2;
+    font: 500 11px/16px "Geist Mono", monospace; color: #8f8f8f; }
+  .window img { display: block; width: 1184px; }
 </style>
 </head>
 <body>
 <div class="stage">
   <div class="mesh"></div>
-  <div class="grid"></div>
-  <header>
-    <span class="eyebrow"><b></b><span data-copy="eyebrow"></span></span>
-    <h1><span data-copy="headline"></span><em data-copy="subline"></em></h1>
-  </header>
-  <figure class="window">
-    <div class="chrome"><i></i><i></i><i></i><span data-copy="chrome"></span></div>
-    <img data-shot="conversation" alt="">
-  </figure>
-  <figure class="float results">
-    <span class="tag"><i></i><span data-copy="results"></span></span>
-    <img data-shot="results" alt="">
-  </figure>
-  <figure class="float team">
-    <span class="tag"><i></i><span data-copy="team"></span></span>
-    <img data-shot="team" alt="">
-  </figure>
-  <div class="pin decide"><span class="tag"><i></i><span data-copy="decision"></span></span></div>
+  <header><span class="eyebrow"><b></b><span data-copy="eyebrow"></span></span>
+    <h1><span data-copy="headline"></span><em data-copy="subline"></em></h1></header>
+  <figure class="window"><div class="chrome"><i></i><i></i><i></i><span data-copy="chrome"></span></div><img data-shot="workspace" alt=""></figure>
 </div>
 </body>
 </html>
