@@ -141,6 +141,8 @@ export type WorkspaceGoal = {
 
 export type WorkspaceAttention = {
   details?: AttentionDetails;
+  /** A run-level operator gate has no User Todo to record a decision on. */
+  decisionSource?: "todo" | "run_operator_gate";
   sourceId?: string;
   blocking: boolean;
   evidence?: string | null;
@@ -294,6 +296,7 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
   collaboration?: CollaborationReadback;

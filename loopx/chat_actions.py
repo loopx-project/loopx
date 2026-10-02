@@ -24,6 +24,8 @@ from .control_plane.goals.configure_goal_service import (
 )
 from .control_plane.runtime.time import now_utc, parse_timestamp
 from .control_plane.scheduler.monitor_todo import monitor_next_due_at
+from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+from .control_plane.todos.contract import TODO_DECISION_OUTCOME_VALUES
 from .history import load_registry
 from .host_loop_activation import build_host_loop_activation_packet
 from .kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID
@@ -1176,6 +1178,22 @@ class ChatActionService(
                 else "The monitor execution request is bound to the current Goal state."
             ]
             permission = "durable_write"
+        elif action_kind == "gate.resolve" and normalized["decision"] in TODO_DECISION_OUTCOME_VALUES:
+            canonical_update_basis = self._canonical_update_basis(
+                normalized["goal_id"], completion_todo_id=normalized["todo_id"], decision=True)
+            try:
+                canonical_preview = self._run_gate_resolve(
+                    normalized, dry_run=True, basis=canonical_update_basis)
+            except LocalCoordinationAuthorityUnavailable as error:
+                raise ValueError(str(error)) from error
+            if canonical_preview.get("ok") is not True:
+                raise ValueError(str(canonical_preview.get("error")
+                                     or "Decision failed canonical dry-run validation"))
+            fingerprint = (_digest({"goal_id": normalized["goal_id"],
+                "canonical_update_basis": canonical_update_basis}) if canonical_update_basis is not None
+                else self._goal_state_fingerprint(normalized["goal_id"]))
+            evidence = ["Canonical LoopX User completion dry-run validated this decision."]
+            permission = "durable_write"
         elif action_kind == "agent.bind":
             binding = read_goal_agent_binding_with_source_route(
                 registry_path=self.registry_path,
@@ -1320,11 +1338,21 @@ class ChatActionService(
             return self._apply_monitor_create(proposal_id, proposal, parameters)
         if action_kind == "team.plan":
             return self._apply_team_plan(proposal_id, proposal, parameters)
-        if action_kind == "todo.update":
+        if action_kind == "todo.update" or (
+                action_kind == "gate.resolve" and parameters.get("decision") in TODO_DECISION_OUTCOME_VALUES):
             return self._apply_todo_update(proposal_id, proposal, parameters)
         if action_kind == "monitor.update":
             return self._apply_monitor_update(proposal_id, proposal, parameters)
-        if action_kind in {"goal.update", "gate.resolve"}:
+        if action_kind == "gate.resolve":
+            raise ProtectedActionGate(
+                action_kind,
+                gate={
+                    "kind": "decision_outcome_required",
+                    "summary": "Deferring records no decision; the request stays open.",
+                    "next_action": "Approve, reject or cancel the request when ready.",
+                },
+            )
+        if action_kind == "goal.update":
             raise ProtectedActionGate(
                 action_kind,
                 gate={

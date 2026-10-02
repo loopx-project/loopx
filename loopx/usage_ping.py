@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .paths import DEFAULT_RUNTIME_ROOT
+from .paths import select_default_runtime_root
 
 STATE_FILENAME = "usage-ping.json"
 # Scheduling hint only; keep aligned with the TypeScript notice revision.
@@ -71,7 +71,8 @@ def capture_failure(error: BaseException) -> None:
 
 def state_path(runtime_root: Path | None = None) -> Path:
     """Machine-local choice is deliberately independent of a Goal runtime root."""
-    return Path(runtime_root or DEFAULT_RUNTIME_ROOT) / STATE_FILENAME
+    root = Path(runtime_root) if runtime_root is not None else select_default_runtime_root()
+    return root / STATE_FILENAME
 
 
 def install_channel() -> str:
@@ -116,7 +117,9 @@ def begin(command: str) -> tuple[str, float] | None:
     # cannot authorize collection; TS still checks every supported switch value.
     if os.environ.get("LOOPX_USAGE_PING") == "0" or os.environ.get("DO_NOT_TRACK") == "1" or os.environ.get("CI") == "true":
         return None
-    if command == "usage-ping":
+    # Whole-runtime migration includes this machine state. Detached observation
+    # would invalidate its preview or rollback receipt even with other hosts stopped.
+    if command in {"usage-ping", "migrate-local-state"}:
         return None
     try:
         path = state_path()

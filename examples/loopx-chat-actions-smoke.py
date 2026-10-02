@@ -960,16 +960,30 @@ def assert_http_action_api(root: Path) -> None:
             )
             assert code == 201, transition_preview
 
-        for index, (action_kind, params) in enumerate(
+        # A decision outcome is only valid on a User gate; the canonical owner
+        # rejects it before any proposal is stored.
+        code, misdirected_decision = request_json(
+            f"{base_url}/api/actions/preview",
+            method="POST",
+            body={
+                "action_kind": "gate.resolve",
+                "summary": "Approve an Agent Todo",
+                "normalized_parameters": {"goal_id": "goal-one", "todo_id": current_todo_id, "decision": "approve"},
+                "context": {"kind": "goal", "goal_id": "goal-one"},
+                "idempotency_key": "http-misdirected-decision",
+            },
+        )
+        assert code == 400, misdirected_decision
+        assert "decision_outcome is only valid" in misdirected_decision["error"], misdirected_decision
+
+        for index, (action_kind, params, gate_kind) in enumerate(
             [
-                ("goal.update", {"goal_id": "goal-one", "objective": "A revised objective"}),
-                (
-                    "gate.resolve",
-                    {"goal_id": "goal-one", "todo_id": current_todo_id, "decision": "approve"},
-                ),
+                ("goal.update", {"goal_id": "goal-one", "objective": "A revised objective"},
+                 "canonical_authority_required"),
                 (
                     "gate.resolve",
                     {"goal_id": "goal-one", "todo_id": current_todo_id, "decision": "defer"},
+                    "decision_outcome_required",
                 ),
             ]
         ):
@@ -991,7 +1005,7 @@ def assert_http_action_api(root: Path) -> None:
                 body={},
             )
             assert code == 409, protected_gate
-            assert protected_gate["gate"]["kind"] == "canonical_authority_required", protected_gate
+            assert protected_gate["gate"]["kind"] == gate_kind, protected_gate
 
         persisted_payload = action_store.path.read_text(encoding="utf-8")
         assert str(root) not in persisted_payload, persisted_payload

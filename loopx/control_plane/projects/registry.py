@@ -6,7 +6,12 @@ from typing import Any
 
 from ...bootstrap import build_goal_entry
 from ...control_plane.runtime.time import now_local_iso
-from ...paths import resolve_runtime_root
+from ...paths import (
+    registered_goal_state_file,
+    require_single_goal_state_route,
+    resolve_runtime_root,
+    select_default_runtime_root,
+)
 from ..todos.active_state_editing import atomic_write_state_text as _atomic_write_text
 from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from ..goals.source_session_services import (
@@ -19,7 +24,6 @@ from ..goals.source_session_services import (
     register_fresh_source_session_project,
     resolve_source_session_project,
 )
-from ...paths import DEFAULT_RUNTIME_ROOT
 from ...repository_identity import normalize_repository_identity
 from .contract import validate_project_record_bindings
 from .registration_state import (
@@ -171,7 +175,9 @@ def register_project_goal(
 
     knowledge_root = knowledge_root.expanduser().resolve()
     registry_path = registry_path.expanduser()
-    state_file = knowledge_root / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+    existing_registry = load_project_registry(registry_path) if registry_path.exists() else None
+    state_file = registered_goal_state_file(knowledge_root, goal_id, existing_registry)
+    require_single_goal_state_route(knowledge_root, goal_id, state_file)
     updated_at = now_local_iso()
     project_record = {
         "project_id": project_id,
@@ -226,7 +232,7 @@ def register_project_goal(
         return register_fresh_source_session_project(
             FreshSourceSessionRegistration(
                 registry_path=registry_path,
-                runtime_root=(runtime_root or DEFAULT_RUNTIME_ROOT)
+                runtime_root=(runtime_root or select_default_runtime_root())
                 .expanduser()
                 .resolve(),
                 operation_id=operation_id,
@@ -252,7 +258,7 @@ def register_project_goal(
         create=lambda: {
                 "schema_version": "0.1",
                 "registry_role": "project-local",
-                "common_runtime_root": str(runtime_root or DEFAULT_RUNTIME_ROOT),
+                "common_runtime_root": str(runtime_root or select_default_runtime_root()),
         },
     ) as transaction:
         registry = transaction.payload_copy()

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..control_plane.effect_runtime import effect_runtime_result
-from ..paths import DEFAULT_RUNTIME_ROOT, global_registry_path, resolve_runtime_root
+from ..paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from ..control_plane.projects.registry_codec import load_registry
 
 
@@ -125,7 +125,7 @@ def authority_upgrade_roots(registry_path: Path, runtime_root_arg: str | None,
     selected = resolve_runtime_root(registry, override, registry_path=registry_path).resolve()
     roots = {selected}
     if all_known:
-        common = Path(override).expanduser().resolve() if override else DEFAULT_RUNTIME_ROOT.resolve()
+        common = Path(override).expanduser().resolve() if override else select_default_runtime_root().resolve()
         roots.add(common)
         global_path = global_registry_path(common)
         global_registry = load_registry(global_path) if global_path.exists() else {}

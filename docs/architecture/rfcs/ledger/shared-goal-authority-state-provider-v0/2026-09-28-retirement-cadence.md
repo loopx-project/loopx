@@ -408,3 +408,62 @@ on each restored commit; a prior full-history restore exceeded its caller's
 300-second timeout and later published an exact matching acknowledgement.
 That remaining recovery cost is not closed by this receipt-read optimization.
 The #4224 soak was started; its final evidence and applicability remain pending.
+
+### Runtime retirement drains admitted effects
+
+The shared TS Effect server now counts pending handlers independently of TCP
+connections. The idle window starts after the last handler and private response
+sink finish. Explicit shutdown stops accepting connections, waits for admitted
+effects (including disconnected clients), and then removes only its own locator.
+Authentication, request budgets, original receipts and caller recovery remain
+unchanged. No additional provider or Python decision owner is introduced.
+
+The previous close handler could exit while a disconnected caller's write still
+waited for a live mutation lock. A real-server regression reproduces this under
+both idle retirement and explicit shutdown; connected callers are controls.
+It also verifies concurrent ping, rejected authentication, listener closure,
+durable write readback and eventual retirement. Existing replacement-locator,
+restart and File/SQLite archive crash/recovery tests remain required.
+
+This repairs one S4/runtime-lifetime dependency of R5/D2 recovery. It does not
+qualify sustained operation, choose the release default, increase a frozen
+capacity budget or authorize deleting a legacy writer.
+
+### Delegated execution keeps its original lease
+
+The delegated CLI now reuses the TS managed-process owner to renew the original
+canonical execution while the Host and independent Turn validation run. Its
+private control pipe carries the initial lease and unchanged claim/renew
+commands; the model request does not carry those commands or acquire authority.
+Claim replay must prove the same owner, key and epoch. A lease read cannot
+replace mutation-time CAS, and an expired execution is never reacquired to
+accept its old result.
+
+Renewal uses the latest proved version, one unchanged-intent retry for a lost
+transport reply, and the last proved expiry even when renewal hangs. A rejected
+proof cancels the CLI; its TERM adapter unwinds nested managed Hosts before
+returning. Ordinary non-hard delegation keeps the existing subprocess route.
+Completion reads the current claim, persists its terminal CAS intent before the
+effect, and replays that exact completion after an ambiguous reply. Canonical
+completion releases the execution lease; subsequent original-Turn accounting
+uses its terminal receipt rather than reacquiring an open-work lease.
+
+Explicit registry/runtime commands also survive coexistence of both machine
+roots: projection discovery inspects both declarations without selecting an
+implicit authority, and still reports competing routes as ambiguous. Implicit
+Goal CLI defaults retain their existing conflict rejection. Repository canaries
+without a Goal receipt do not select machine authority; a first explicit
+bootstrap has no previous Goal authority to fence. Existing Goals still require
+their original-route replacement authorization. Local smoke fixtures declare
+their own runtime instead of inheriting operator state.
+
+The acceptance slice uses disposable File/SQLite providers, real CLI/Turn
+execution and a synthetic model process: crossing the initial expiry, canonical
+release, a new execution epoch, lost completion/renewal replies and rejected or
+hung renewal, including control-pipe loss with a TERM-resistant process. It
+does not qualify a paid model, remote job cancellation or
+Windows process-tree cleanup. Stop acknowledgements and interrupted-Turn
+no-progress settlement remain with the existing delegation-stop work (#5308);
+this slice leaves an interrupted operation explicitly recoverable, never
+accepted from incomplete output. Sustained D2 operation, default onboarding and
+last-writer retirement still require their owning evidence.

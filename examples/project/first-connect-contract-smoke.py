@@ -64,7 +64,7 @@ def initialize_project(root: Path, name: str) -> tuple[Path, Path]:
 
 
 def state_path(project: Path, goal_id: str) -> Path:
-    return project / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+    return project / ".loopx" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
 
 
 def assert_no_first_connect_projection(state_text: str, *, label: str) -> None:

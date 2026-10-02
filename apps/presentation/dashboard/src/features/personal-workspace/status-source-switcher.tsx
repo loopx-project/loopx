@@ -49,7 +49,7 @@ export function StatusSourceSwitcher({
   const [statusUrl, setStatusUrl] = useState("");
   const quickAddPrefix = "configured:";
   const sourceOptions = [
-    ...sources.map((source) => ({ label: source.label, value: source.id })),
+    ...sources.map((source) => ({ label: source.kind === "local" ? t("source.local") : source.label, value: source.id })),
     ...configuredHosts
       .filter((host) => !sources.some((source) => source.label === host.alias))
       .map((host) => ({

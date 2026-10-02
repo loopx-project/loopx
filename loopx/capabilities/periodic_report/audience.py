@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .core import _reject_raw_keys
+from ...control_plane.digest_envelope import sha256_envelope
 
 AUDIENCE_POLICY_SCHEMA = "periodic_report_audience_policy_v0"
 AUDIENCE_RECIPIENT_SCHEMA = "periodic_report_audience_recipient_v0"
@@ -244,7 +244,7 @@ def _digest(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return sha256_envelope(encoded)
 
 
 def build_periodic_report_announcement_plan(

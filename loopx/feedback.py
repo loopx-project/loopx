@@ -17,7 +17,8 @@ from .history import load_index, load_registry
 from .paths import resolve_runtime_root
 from .public_safe_text import (
     PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
-    find_private_text_match,
+    TEXT_OWNER_CATEGORIES,
+    classify_private_text,
 )
 from .registry import registry_goals, resolve_state_file
 from .control_plane.actor_identity import normalize_owner_controller_actor
@@ -123,7 +124,10 @@ def now_local() -> str:
 
 
 def validate_public_safe_text(label: str, value: str | None) -> None:
-    if find_private_text_match(value) is not None:
+    # The named policy, not a bare pattern sweep: this is LoopX's own state, so a
+    # mention of "Bearer"/"password"/"secret" is a fact about a credential, not
+    # one. Value and assignment shapes stay rejected (Refs #5136, direction 2).
+    if classify_private_text(value, categories=TEXT_OWNER_CATEGORIES) is not None:
         raise ValueError(
             f"{label} contains a private-looking value; "
             + public_safe_text_guidance(label)

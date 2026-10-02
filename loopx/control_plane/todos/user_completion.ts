@@ -7,11 +7,8 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {decisionScopeCovers} from "./decision_scope.ts";
 import {normalizeTodoDecisionScope, normalizeTodoRequiredDecisionScopes} from "./decision_metadata.ts";
+import type {DecisionOutcome, ResumeState} from "./user_completion_types.ts";
 
-type DecisionOutcome = "approve" | "reject" | "cancel";
-type ResumeState = "target_not_found" | "target_or_decision_scope_not_found" | "target_not_active" |
-  "target_not_blocked" | "explicit_blocker_repair_required" | "other_user_blockers_active" |
-  "decision_requirements_remaining" | "resumed" | "decision_rejected" | "decision_cancelled";
 interface ResumeReceipt extends JsonObject { readonly state: ResumeState; }
 
 export interface UserCompletionPlan extends JsonObject {

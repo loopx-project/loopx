@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from loopx.turn_identity import normalize_turn_instance_id
+from loopx.paths import global_registry_path, select_default_runtime_root
 
 
 _FAILURE_OUTPUT_LIMIT = 2_000
@@ -462,7 +463,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--registry",
         type=Path,
-        default=Path.home() / ".codex/loopx/registry.global.json",
+        help="Global registry; defaults to the selected LoopX local state route.",
     )
     parser.add_argument("--automation-id", default="loopx")
     parser.add_argument(
@@ -490,7 +491,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.registry is None:
+        args.registry = global_registry_path(select_default_runtime_root())
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -90,6 +90,7 @@ import {
   preflightPriorHostTurnCloseout,
   reduceUnsettledHostTurnRecovery,
 } from "./quota/unsettled_host_turn_recovery.ts";
+import { projectScopedOverride } from "./quota/scoped_override.ts";
 import { evaluateTurnEnvelope } from "./quota/turn_envelope.ts";
 import { evaluateQuotaMonitorPollCommit } from "./quota/monitor_poll_commit.ts";
 import { planMonitorSuccessor, selectMonitorTodoRequest } from "./scheduler/monitor_successor.ts";
@@ -99,6 +100,7 @@ import {
   type TurnJournalInspectionRequest,
 } from "./turn_driver/turn_journal.ts";
 import { commitTurnJournal } from "./turn_driver/turn_journal_effects.ts";
+import { findTurnJournalBySettlement, readTurnJournalCapabilities } from "./turn_driver/turn_journal_query.ts";
 import { projectTurnSelectionRejection } from "./turn_driver/selection_rejection.ts";
 import {
   evaluateTodoCompletionFence,
@@ -160,7 +162,7 @@ import {
   reconcileRetainedActionSelection,
 } from "./work_items/action_portfolio.ts";
 import { projectQuotaPlanningHorizon } from "./work_items/planning_horizon.ts";
-import { projectTaskGraphTopology } from "./work_items/task_graph.ts";
+import { projectGoalTaskGraphTopology, projectTaskGraphTopology } from "./work_items/task_graph.ts";
 import { projectDeliveryHistory, projectDeliveryResponse } from "./work_items/delivery_history.ts";
 import { validateDeliveryClaim } from "./work_items/delivery_outcome.ts";
 import {
@@ -464,6 +466,8 @@ export function createEffectRuntimeHandlers(
       (params) => interpretTurnJournal(turnJournalInspectionRequest(params)),
     ],
     ["turn_journal.write", commitTurnJournal],
+    ["turn_journal.find_settlement", findTurnJournalBySettlement],
+    ["turn_journal.observed_capabilities", readTurnJournalCapabilities],
     ["todo.completion_fence.evaluate", evaluateTodoCompletionFence],
     ["todo.completion_state.normalize", normalizeTodoCompletionValue],
     ["todo.completion_state.require_metadata", requireTodoCompletionMetadataValue],
@@ -539,6 +543,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["work_item.planning_horizon.project", projectQuotaPlanningHorizon],
     ["work_item.task_graph.topology", projectTaskGraphTopology],
+    ["work_item.task_graph.goal_topology", projectGoalTaskGraphTopology],
     ["work_item.planning_inventory.project", projectTodoPlanningInventory],
     ["work_item.planning_inventory.detail", projectTodoPlanningInventoryDetail],
     ["work_item.refresh_recommendation.resolve", resolveRefreshRecommendation],
@@ -579,6 +584,7 @@ export function createEffectRuntimeHandlers(
       reduceUnsettledHostTurnRecovery,
     ],
     ["quota.turn_envelope.evaluate", evaluateTurnEnvelope],
+    ["quota.scoped_override.project", projectScopedOverride],
     ["task_lease.owner_eligibility", evaluateTaskLeaseOwnerEligibility],
     ["task_lease.acquire.native", executeTaskLeaseAcquire],
     ["task_lease.inspect.native", inspectTaskLease],

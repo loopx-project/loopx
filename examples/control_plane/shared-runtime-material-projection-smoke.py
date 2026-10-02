@@ -344,8 +344,8 @@ def exercise_route_edges(root: Path) -> None:
     write_target(target_a, source_registry=ambiguous_registry, goal=ambiguous_goal)
     write_target(target_b, source_registry=ambiguous_registry, goal=ambiguous_goal)
     os.environ["LOOPX_RUNTIME_ROOT"] = str(target_a)
-    original_default = route_module.DEFAULT_RUNTIME_ROOT
-    route_module.DEFAULT_RUNTIME_ROOT = target_b
+    original_default = route_module.select_default_runtime_root
+    route_module.select_default_runtime_root = lambda: target_b
     try:
         ambiguous = record_operator_gate(
             ambiguous_registry,
@@ -353,7 +353,7 @@ def exercise_route_edges(root: Path) -> None:
             sync_global=True,
         )
     finally:
-        route_module.DEFAULT_RUNTIME_ROOT = original_default
+        route_module.select_default_runtime_root = original_default
         if original_runtime is None:
             os.environ.pop("LOOPX_RUNTIME_ROOT", None)
         else:
