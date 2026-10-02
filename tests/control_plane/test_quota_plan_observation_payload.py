@@ -99,6 +99,7 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
                     if record["role"] == role:
                         assert actual[record["todo_id"]]["note"] == record["note"]
                         assert actual[record["todo_id"]]["status"] == record["status"]
+                        assert actual[record["todo_id"]]["task_class"] == record["task_class"]
             assert len(json.dumps(compact)) < len(json.dumps(full)) / 2
         assert not list((runtime / "goals" / "example" / "runs").glob("*.json*"))
     finally:

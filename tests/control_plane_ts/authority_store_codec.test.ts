@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import test from "node:test";
-import {authorityUnicodeCompare, canonicalAuthorityBytes, canonicalAuthoritySha256}
+import {authorityUnicodeCompare, canonicalAuthorityBytes, canonicalAuthoritySha256, copyAuthorityJson}
   from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 
 // Frozen pre-optimization comparator: persisted revisions depend on code points,
@@ -22,6 +22,28 @@ test("canonical key ordering preserves the persisted Unicode comparator", () => 
     assert.equal(Math.sign(authorityUnicodeCompare(a, b)), Math.sign(referenceCompare(a, b)));
   }
   assert.deepEqual([...keys].sort(authorityUnicodeCompare), [...keys].sort(referenceCompare));
+});
+
+test("copying JSON defines own data even when a key names an inherited setter", () => {
+  const key = "authorityCopySentinel";
+  const previous = Object.getOwnPropertyDescriptor(Object.prototype, key);
+  let setterCalls = 0;
+  Object.defineProperty(Object.prototype, key, {
+    configurable: true, set: () => { setterCalls++; },
+  });
+  try {
+    const input = JSON.parse('{"authorityCopySentinel":{"nested":1},"constructor":{"marker":2}}');
+    const copy = copyAuthorityJson(input) as Record<string, unknown>;
+    assert.equal(setterCalls, 0);
+    assert.deepEqual(copy, input);
+    assert.equal(Object.getPrototypeOf(copy), Object.prototype);
+    assert.equal(Object.hasOwn(copy, key), true);
+    (copy[key] as {nested: number}).nested = 99;
+    assert.deepEqual(input[key], {nested: 1});
+  } finally {
+    if (previous) Object.defineProperty(Object.prototype, key, previous);
+    else Reflect.deleteProperty(Object.prototype, key);
+  }
 });
 
 test("canonical bytes and digest retain JSON enumeration, scalar and special-key semantics", () => {

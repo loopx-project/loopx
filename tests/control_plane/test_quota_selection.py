@@ -59,10 +59,12 @@ def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, di
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
     history = "\n".join(f"- [x] [P2] Completed synthetic work {i}.\n"
         f"  <!-- loopx:todo todo_id=todo_history_{i} status=done task_class=advancement_task -->" for i in range(12))
+    # A goal-wide gate cannot also bind continuation through a legacy agent claim.
+    claim = " claimed_by=agent-a" if scope == "blocks_agent=agent-b" else ""
     state.write_text("---\nstatus: active\n---\n# Goal\n## Objective\nDeliver a checked change.\n\n"
         "## Agent Todo\n" + history + "\n\n## User Todo\n"
         "- [ ] [P0] Owner approval is required.\n"
-        f"  <!-- loopx:todo todo_id=todo_gate task_class=user_gate status=open claimed_by=agent-a {scope} -->\n")
+        f"  <!-- loopx:todo todo_id=todo_gate task_class=user_gate status=open{claim} {scope} -->\n")
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
         goal_id="goal-scope", domain="quota-scope", adapter_kind="generic_project_goal_v0",
         state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)

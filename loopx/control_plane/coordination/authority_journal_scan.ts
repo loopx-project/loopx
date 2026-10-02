@@ -2,7 +2,7 @@
  * Storage effects and snapshot acquisition remain with each provider. */
 import type {AuthorityStoreCommittedTransaction, AuthorityStoreHead,
   AuthorityStoreReadFailure, AuthorityStoreScanResult} from "./authority_store.ts";
-import {AuthorityStoreProtocolError, canonicalAuthorityBytes, parseAuthorityCursor} from "./authority_store_codec.ts";
+import {AuthorityStoreProtocolError, canonicalAuthorityBytes, copyAuthorityJson, parseAuthorityCursor} from "./authority_store_codec.ts";
 
 export class AuthorityJournalScan {
   readonly after: string | null;
@@ -57,7 +57,9 @@ export class AuthorityJournalScan {
         throw new AuthorityStoreProtocolError("committed scan head lineage is invalid");
       }
     }
-    const transactions = structuredClone(rows.slice(0, this.limit));
+    // Each caller owns the mutable JSON containers; immutable primitive values
+    // need no additional byte copy for every retained projection in the page.
+    const transactions = copyAuthorityJson(rows.slice(0, this.limit)) as AuthorityStoreCommittedTransaction[];
     return {status: "page", transactions,
       next_cursor: transactions.at(-1)?.cursor ?? this.after, has_more: rows.length > this.limit};
   }
