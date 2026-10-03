@@ -29,12 +29,21 @@ def read_linked_work(root, registry_path, item, todos_cache):
     links, error = _receipt(root, "links", item)
     tids = links.get("todo_ids", [])
     gid, aid = item["goal_id"], item["agent_id"]
-    if tids and gid not in todos_cache:
+    goal_ref = item.get("goal_ref")
+    cache_key = (gid, (goal_ref or {}).get("goal_instance_id"))
+    if tids and cache_key not in todos_cache:
         try:
-            todos_cache[gid] = _core_todos(registry_path, root, gid)
+            with collaboration_goal_scope(
+                registry_path, goal_id=gid, agents=(), caller_goal_ref=goal_ref
+            ) as scope:
+                admission = decide_collaboration_lifecycle(scope, operation="inbox_observe", record=item)
+                todos_cache[cache_key] = (
+                    None if admission.get("kind") == "omit"
+                    else _core_todos(registry_path, root, gid)
+                )
         except (OSError, ValueError, RuntimeError):
-            todos_cache[gid] = None
-    core = todos_cache.get(gid)
+            todos_cache[cache_key] = None
+    core = todos_cache.get(cache_key)
     linked = []
     for tid in tids:
         todo = core.get(tid) if core is not None else None

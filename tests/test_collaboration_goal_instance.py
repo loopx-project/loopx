@@ -293,6 +293,30 @@ def test_recreated_goal_cannot_observe_or_mutate_prior_instance_requests(
         )
 
 
+def test_historical_request_does_not_borrow_work_from_recreated_goal(tmp_path, monkeypatch):
+    from loopx.control_plane.collaboration import links
+
+    registry = _create_source_registry(tmp_path)
+    _, _, receipt = _manager_request(tmp_path, registry)
+    reads = []
+
+    def current_work(**kwargs):
+        reads.append(kwargs["goal_id"])
+        return {"ok": True, "todos": [{"todo_id": "todo_reused_work",
+            "claimed_by": "builder", "status": "done", "text": "Work from the new Goal"}]}
+
+    monkeypatch.setattr(links, "list_goal_todos", current_work)
+    links.link(tmp_path, registry, "delivery", "builder", receipt["request_id"],
+               ["todo_reused_work"], [])
+    _recreate(registry)
+    reads.clear()
+    row = query(tmp_path, registry, goal_ids=["delivery"], owner_scope=True,
+                request_id=receipt["request_id"])["rows"][0]
+    assert row["linked_todos"] == [{"todo_id": "todo_reused_work", "status": "unknown",
+        "title": None, "source": "core_todo_unavailable_or_owner_changed"}]
+    assert reads == []
+
+
 def test_late_prior_instance_result_returns_only_to_its_saved_conversation(
     tmp_path: Path,
 ) -> None:
