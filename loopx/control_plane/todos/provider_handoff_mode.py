@@ -67,3 +67,30 @@ def migrate_canonical_handoff_mode(*, runtime_root: Path, goal_id: str, action: 
         raise ValueError("invalid handoff migration response")
     return {**result, "ok": result.get("status") in {"planned", "applied", "no_change", "replayed", "recovered"},
             "action": action, "goal_id": goal_id}
+
+
+def migrate_registered_handoff_mode(*, registry_path: Path, runtime_root: Path | str | None,
+                                    goal_id: str, action: str, plan: Path,
+                                    mode: str | None = None, plan_sha256: str | None = None,
+                                    execute: bool = False) -> dict[str, Any]:
+    """CLI and App share the registry witness used by the typed migration owner."""
+    from ...agent_registry import registered_agent_ids_for_goal
+    from ...paths import resolve_runtime_root
+    from ...registry import find_registry_goal
+    from ..projects.registry_codec import load_registry
+    from ..coordination.authority_source_capture import authority_registry_source
+
+    with authority_registry_source(registry_path) as witness:
+        registry = load_registry(registry_path)
+        resolved_root = resolve_runtime_root(registry, str(runtime_root) if runtime_root is not None else None,
+                                             registry_path=registry_path)
+        goal = find_registry_goal(registry, goal_id)
+        if goal is None:
+            raise ValueError("Goal is not registered")
+        agents = registered_agent_ids_for_goal(goal)
+        source = {**witness, "registered_agents": agents}
+    return migrate_canonical_handoff_mode(
+        runtime_root=resolved_root, goal_id=goal_id, action=action, plan=plan,
+        registered_agents=agents, registry_source=source, mode=mode,
+        plan_sha256=plan_sha256, execute=execute,
+    )

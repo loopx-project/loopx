@@ -901,7 +901,13 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       const offset = Number(url.searchParams.get("cursor") || 0);
       const items = Array.from({ length: Math.min(40, total - offset) }, (_, position) => {
         const index = offset + position;
-        return { todo_id: `todo_history_${index}`, text: index < 3 ? `Completed ${String.fromCharCode(65 + index)}` : `Completed historical Task ${index + 1}`, claimed_by: "example-agent", evidence: null, priority: null, task_class: "advancement_task" };
+        return { todo_id: `todo_history_${index}`, text: index < 3 ? `Completed ${String.fromCharCode(65 + index)}` : `Completed historical Task ${index + 1}`, claimed_by: "example-agent", evidence: index === 0 ? "Verified retained **completion evidence**." : null, priority: null, task_class: "advancement_task", done: true, status: "done",
+          completed_at: "2026-08-01T00:00:00Z", resume_when: index === 0 ? "todo_done:todo_history_1" : null, resume_ready: index === 0 ? true : null,
+          resume_condition: index === 0 ? { resume_receipt: { receipt_id: "receipt-completed-history" } } : null,
+          completion_validation_sha256: index === 0 ? "a".repeat(64) : null,
+          completion_validation_revision: index === 0 ? 3 : null,
+          completion_validation_revision_history: index === 0 ? [{ revision: 3, previous_declaration_sha256: "b".repeat(64), declaration_sha256: "a".repeat(64), actor_agent_id: "example-reviewer", revised_at: "2026-08-01T00:00:00Z" }] : [],
+        };
       });
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;

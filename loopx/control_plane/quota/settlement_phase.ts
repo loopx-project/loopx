@@ -43,6 +43,29 @@ export function isAcceptedInFlightWriteback(
   });
 }
 
+/** A path replan may be qualified during work, without a preselected obligation.
+ * As with spend validation, only its exact, verified durable writeback is proof.
+ * This closes the Turn binding, never the Todo or its completion validation. */
+export function isAcceptedReplanWriteback(
+  value: unknown,
+  identity: SettlementIdentity,
+): boolean {
+  const run = jsonObject(value);
+  if (identity.binding_kind !== "todo" || identity.todo_id === null ||
+      !run || run.goal_id !== identity.goal_id ||
+      run.agent_id !== identity.agent_id || run.todo_id !== identity.todo_id ||
+      run.turn_instance_id !== identity.turn_instance_id) return false;
+  const ack = jsonObject(run.autonomous_replan_ack);
+  if (!ack || ack.schema_version !== "autonomous_replan_ack_v0" ||
+      ack.recorded !== true) return false;
+  const semantic = jsonObject(ack.semantic_delta);
+  const repair = jsonObject(ack.delta_contract);
+  return (semantic?.schema_version === "replan_semantic_delta_v0" &&
+      semantic.accepted === true) ||
+    (repair?.schema_version === "repair_delta_contract_v0" &&
+      repair.delta_present === true);
+}
+
 /** Both same-Turn readback and prior-Turn recovery accept the shipped effect identities. */
 export function isCommittedMonitorPollEffect(
   effectId: unknown,

@@ -14,7 +14,7 @@ from typing import Any
 
 from ..goals.legacy_event_source import require_no_legacy_todo_events
 from .active_state_editing import TODO_SECTION_HEADINGS
-from .active_state_todo_parser import parse_active_state_todos
+from .active_state_todo_parser import parse_active_state_todos, parse_todo_source
 from .list_projection import compact_explicit_limit_todo_summary
 from .succession_warning import public_todo_summary
 from .contract import (
@@ -106,6 +106,7 @@ def goal_todo_summaries(
     todo_id: str | None,
     agent_id: str | None,
     limit: int | None,
+    include_retained: bool = False,
 ) -> GoalTodoSummaries:
     """Project todo summaries from active-state text plus its event projection.
 
@@ -115,13 +116,19 @@ def goal_todo_summaries(
     """
 
     require_no_legacy_todo_events(goal or {}, state_path=state_path)
-    markdown_fields = parse_active_state_todos(
-        state_text,
-        goal=goal,
-        state_path=state_path,
-        item_limit=None,
-        rollout_events=rollout_events,
-    )
+    if include_retained:
+        active, archived, _sections = parse_todo_source(state_text, goal=goal, state_path=state_path)
+        markdown_fields = retained_todo_summary_fields(
+            [*active["user"], *active["agent"], *archived], rollout_events=rollout_events,
+        )
+    else:
+        markdown_fields = parse_active_state_todos(
+            state_text,
+            goal=goal,
+            state_path=state_path,
+            item_limit=None,
+            rollout_events=rollout_events,
+        )
     return todo_summaries_from_fields(
         fields=markdown_fields,
         source="markdown_active_state",
@@ -180,6 +187,31 @@ def todo_summaries_from_fields(
         unfiltered_count=unfiltered_count,
         uncapped_todo_count=uncapped_todo_count,
     )
+
+
+def retained_todo_summary_fields(
+    items: list[dict[str, Any]],
+    *,
+    rollout_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Feed retained source rows through the existing typed summary owner.
+
+    History is an explicit cold read; active scheduler/attention summaries
+    continue to exclude archives. Preserve full text, evidence and source ids.
+    """
+    return {
+        f"{role}_todos": compact_todo_group(
+            [item for item in items if item.get("role") == role],
+            source_section=TODO_SECTION_HEADINGS[role],
+            role=role,
+            include_empty_source=True,
+            resume_source_items=items,
+            rollout_events=rollout_events,
+            item_limit=None,
+            text_limit=None,
+        )
+        for role in ("user", "agent")
+    }
 
 
 def exact_archived_todo_summaries(

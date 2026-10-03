@@ -655,6 +655,66 @@ def test_human_operator_needs_no_model_or_provider():
     assert check_review_result(packet, result)["ok"]
 
 
+def _recorded_reviewer():
+    packet, result = _review()
+    execution = {"status": "runtime_reported", "model": "example-model-2", "provider": "OpenAI",
+                 "reasoning_effort": "xhigh", "observation_id": "b" * 64}
+    packet["reviewer_execution"] = execution
+    result["reviewer"] = {"actor_kind": "model_agent", "declaration_source": "runtime_reported",
+                          "declared_model": execution["model"], "declared_provider": execution["provider"],
+                          "declared_reasoning_effort": execution["reasoning_effort"],
+                          "execution_observation_id": execution["observation_id"]}
+    result["review_body"] = result["review_body"].replace(
+        REVIEWER_LINE, "Reviewer: model_agent · example-model-2 · OpenAI · runtime_reported · xhigh")
+    return packet, result
+
+
+@pytest.mark.parametrize("field,value", [
+    ("declared_model", "Old Model"), ("declared_provider", "Other Provider"),
+    ("declared_reasoning_effort", "low"), ("execution_observation_id", "c" * 64),
+])
+def test_runtime_attribution_rejects_stale_template_even_when_body_agrees(field, value):
+    packet, result = _recorded_reviewer()
+    assert check_review_result(packet, result)["ok"]
+    previous = result["reviewer"][field]
+    result["reviewer"][field] = value
+    result["review_body"] = result["review_body"].replace(previous, value)
+    assert f"reviewer:runtime_mismatch:{field}" in check_review_result(packet, result)["errors"]
+
+
+def test_runtime_switch_and_packet_tampering_require_fresh_attribution():
+    packet, result = _recorded_reviewer()
+    original = copy.deepcopy(packet["reviewer_execution"])
+    assert check_review_result(packet, result, current_execution=original)["ok"]
+    switched = dict(original, model="example-model-3", observation_id="c" * 64)
+    assert "reviewer:runtime_observation_changed" in check_review_result(
+        packet, result, current_execution=switched)["errors"]
+    packet["reviewer_execution"]["model"] = "Old Model"
+    result["reviewer"]["declared_model"] = "Old Model"
+    result["review_body"] = result["review_body"].replace("example-model-2", "Old Model")
+    assert "reviewer:runtime_mismatch:declared_model" in check_review_result(
+        packet, result, current_execution=original)["errors"]
+    del packet["reviewer_execution"]
+    assert "reviewer:runtime_mismatch:declared_model" in check_review_result(
+        packet, result, current_execution=original)["errors"]
+
+
+def test_missing_runtime_is_self_reported_not_fabricated_or_a_pr_blocker():
+    packet, result = _review()
+    packet["reviewer_execution"] = {"status": "unavailable", "reason": "session_not_bound"}
+    result["review_body"] = result["review_body"].replace(REVIEWER_LINE, REVIEWER_LINE + " · self_reported")
+    assert check_review_result(packet, result)["ok"]
+    result["reviewer"]["declaration_source"] = "runtime_reported"
+    assert "reviewer:runtime_observation_missing" in check_review_result(packet, result)["errors"]
+    assert not check_review_result(packet, result)["approval_blockers"]
+
+
+def test_runtime_effort_and_basis_must_be_visible_in_the_published_line():
+    packet, result = _recorded_reviewer()
+    result["review_body"] = result["review_body"].replace(" · xhigh", "")
+    assert "reviewer:runtime_basis_not_published" in check_review_result(packet, result)["errors"]
+
+
 def test_mapped_spec_basis_binds_criteria_to_the_head_and_the_published_body():
     packet, result = _review()
     result["evidence"]["problem_context"]["spec_basis"] = _mapped_spec_basis()
@@ -851,6 +911,8 @@ def test_inventory_only_head_cannot_certify_a_new_review() -> None:
 def test_public_cli_checks_semantic_boundaries_without_github_or_checkpoint_effects(
     tmp_path, monkeypatch, capsys, semantic_verdict: str, expected_exit: int
 ):
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
     packet, result = _review()
     semantic = result["evidence"]["semantic_alignment"]
     semantic["verdict"] = semantic_verdict

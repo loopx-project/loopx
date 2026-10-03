@@ -91,7 +91,7 @@ retirement of the `legacy` handoff policy.
 | Merged: [#5413](https://github.com/loopx-project/loopx/pull/5413), head `2c99505c7` | Separate provider promotion from backed-up policy migration; reject fresh legacy configuration but recover historical operations. Retain the original CLI recovery evidence. Existing legacy Goals are not automatically migrated; a successful plan does not qualify their execution consumers. |
 | Merged: [#5466](https://github.com/loopx-project/loopx/pull/5466), merge `066b5bf26` | Preserve the original lease through final acceptance. Installed consumer qualification remains distinct from merge. |
 | Review: [#5283](https://github.com/loopx-project/loopx/pull/5283), `1012d37f3` | Preflight optimization remains under review. Retain failed cold-CLI qualification rows; functional projection parity alone does not establish a performance pass. Do not declare the historical transient open failure explained by a synthetic failure. |
-| Review: [#5500](https://github.com/loopx-project/loopx/pull/5500), `b367a37f2` | Recover the original canonical Goal creation operation through App retries. This creation/default-adoption prerequisite does not retire existing ownership policies. |
+| Approved, awaiting maintainer merge: [#5500](https://github.com/loopx-project/loopx/pull/5500), `a9e3d722c` | Recover the original canonical Goal creation operation through App retries. This creation/default-adoption prerequisite does not retire existing ownership policies. |
 | Affected-lane dependencies | [#5308](https://github.com/loopx-project/loopx/pull/5308) must prove child stop before settled acknowledgement; [#5398](https://github.com/loopx-project/loopx/pull/5398) preserves complete UI history/inspector facts. Scope these to consumers actually included in the trial. They are not SQLite-engine prerequisites or permission to ship a known broken journey. |
 
 The remaining open heads above concern preflight and creation recovery, not a
@@ -100,6 +100,18 @@ policy migration plus legacy-policy retirement, and old-writer/capture retiremen
 They may combine only when caller ownership and rollback are coherent. Validation
 can expose concrete repairs; do not manufacture a fixed remaining-PR total or
 restart completed work to maintain one.
+
+The Goal-settings policy-migration slice now uses the same backed-up TS owner
+as the CLI: read current policy, preview claims/leases, apply, and recover the
+original operation after a lost response or same-tab reload. Synthetic real
+File/SQLite HTTP journeys cover metadata preservation, stale source, cross-Goal
+and digest rejection, expired unreleased leases and corrupt backups. The packaged
+App journey uses a real SQLite authority behind a synthetic workspace directory,
+including dropped apply response, reload/retry and narrow-screen readback. This is
+source validation, not installed adoption or legacy execution retirement. Lark
+policy editing remains outside this slice; existing Lark actions read canonical
+state. Next: qualified creation/upgrade callers and authorized Goal adoption,
+then delete live legacy branches at their last callers.
 
 ### Ordered delivery packages and exits
 
@@ -502,8 +514,29 @@ The representative request falls from over 2 MiB to about 0.96 MB without raisin
 budgets. Real File/SQLite CLI tests cover exact counts, distant inferred edges,
 metadata preservation and unchanged provider state. This is a bounded capacity
 repair, not unlimited graph capacity, stable latency evidence, D2 qualification
-or permission to change the default provider. Full-Goal summary/list/detail
-adoption and sustained observation remain separate work.
+or permission to change the default provider.
+
+### Retained completion consumption
+
+The completed-history consumer
+now explicitly reads retained active and archived records through the existing
+typed summary/filter owner. Previously, archiving 84 of 85 completions made
+the workspace history return only one row. Its bounded HTTP pages now include
+all 85, preserve full task text/evidence and Agent filtering, and expose only
+display fields. Explicit history reads opt out of the existing 500-character
+summary limit; the default active Todo list and scheduling input still exclude
+archives and retain their display limit. Real File/SQLite and legacy Markdown
+reads preserve provider state. The packaged workspace keeps its existing
+pagination and opens retained evidence in the read-only Todo inspector using
+the shared Markdown renderer, without another navigation step or edit action.
+History also preserves completion time, resume facts and validation-declaration
+revision/actor facts. Active and history consumers reuse the same TS inspector
+mapping and the existing Todo schema; the active queue's preview budgets remain
+unchanged. Unprovided dependencies are not presented as an empty dependency
+list, and absent resume readiness or validation revisions are not invented.
+This closes that history-enumeration/detail gap, not whole-Goal summary/list/detail
+adoption, sustained observation, D2 or default-provider admission. No persisted
+format, writer or PostgreSQL consumer is changed.
 
 ### Packaged-source fingerprint cost
 
@@ -558,6 +591,19 @@ receipts do not imply a running or failed worker. Current integrity still needs
 the existing audit; no provider activation or D2/default gate changes. The next
 recovery-cost work remains the measured full-envelope rewrite and decode path,
 not another timeout increase or a second receipt/state format.
+
+The next measured File increment reuses `AuthorityStateReplay` while decoding
+one checkpoint window, instead of rebuilding a replay owner and canonicalizing
+the unchanged projection for every historical row. Untrusted metadata still
+uses the shared transaction decoder; every original revision, receipt and final
+head is verified. This changes no format, cache budget, writer or public API.
+On one detached 2,107-commit File history, three fresh Node 24.21.0 processes per
+arm on macOS arm64 reduce cold-load medians from 35.6 to 25.9 seconds (27%).
+Complete heads, revisions and cursors match. These consecutive sample groups
+do not flush OS caches or control other host activity; they are not p95, a
+provider comparison or a whole-restore result. File's full-envelope rewrite
+and remaining revision hashing cost still need their existing recovery work;
+no D2/default or legacy-writer retirement exit is closed by this measurement.
 The #4224 soak was started; its final evidence and applicability remain pending.
 
 ### Runtime retirement drains admitted effects

@@ -104,6 +104,42 @@ def _thread_rows(db: Path, thread_ids: list[str]) -> dict[str, tuple[Any, Any]]:
         return _query_threads(f"{db.as_uri()}?immutable=1", thread_ids)
 
 
+def current_codex_execution_identity(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Read metadata for the exact invoking session in its selected home only.
+
+    Store discovery remains provider I/O; the shared TypeScript runtime owns
+    Turn matching, public projection and declaration consistency. Never use the
+    store's mutable model preferences as execution evidence.
+    """
+    from .control_plane.effect_runtime import effect_runtime_result
+
+    env = os.environ if env is None else env
+    thread = env.get("CODEX_THREAD_ID") or env.get("CODEX_SESSION_ID")
+    if not thread:
+        return {"status": "unavailable", "reason": "session_not_bound"}
+    home = Path(env.get("CODEX_HOME") or str(Path.home() / ".codex")).expanduser().resolve()
+    try:
+        db = _state_db(home)
+        rows = _thread_rows(db, [thread]) if db else {}
+    except (OSError, sqlite3.Error, _UnrecognizedStore):
+        return {"status": "unavailable", "reason": "host_store_unavailable"}
+    row = rows.get(thread)
+    if row is None:
+        return {"status": "unavailable", "reason": "session_not_found"}
+    path, archived = row
+    if archived != 0 or not isinstance(path, str) or not path:
+        return {"status": "unavailable", "reason": "session_record_unavailable"}
+    try:
+        result: dict[str, Any] = effect_runtime_result("runtime.execution_identity.codex", {
+            "home": str(home), "path": path, "thread_id": thread,
+        })
+        return result
+    except RuntimeError:
+        return {"status": "unavailable", "reason": "host_runtime_unavailable"}
+
+
 def _record(line: bytes) -> dict[str, Any] | None:
     try:
         record = json.loads(line)

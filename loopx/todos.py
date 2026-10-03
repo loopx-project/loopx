@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from json import dumps as json_dumps
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .agent_registry import registered_agent_ids_from_registry, require_registered_agent_id
 from .history import load_registry
@@ -84,6 +84,7 @@ from .control_plane.todos.list_projection import (
 )
 from .control_plane.todos.goal_todo_projection import (
     exact_archived_todo_summaries,
+    retained_todo_summary_fields,
     goal_todo_summaries,
     todo_summaries_from_fields,
 )
@@ -180,7 +181,12 @@ def list_goal_todos(
     runtime_root_arg: str | None = None,
     limit: int | None = None,
     thin: bool = False,
+    read_scope: Literal["active", "completed_history"] = "active",
 ) -> dict[str, Any]:
+    if read_scope not in {"active", "completed_history"}:
+        raise ValueError("Todo read_scope must be active or completed_history")
+    if read_scope == "completed_history" and (role != "agent" or status != "done"):
+        raise ValueError("Completed history requires role=agent and status=done")
     normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
     if todo_id and not normalized_todo_id:
         raise ValueError("todo_id must use the public token shape todo_<letters-digits-underscore-hyphen>")
@@ -216,12 +222,14 @@ def list_goal_todos(
     )
     if canonical_read is not None:
         projected = todo_summaries_from_fields(
-            fields=canonical_todo_summary_fields(
+            fields=(retained_todo_summary_fields(
+                canonical_todo_items(canonical_read["todos"]), rollout_events=rollout_events,
+            ) if read_scope == "completed_history" else canonical_todo_summary_fields(
                 canonical_read["todos"],
                 rollout_events=rollout_events,
                 goal_acceptance_contract=canonical_read.get("goal_acceptance_contract"),
                 goal_acceptance_work_guards=canonical_read.get("goal_acceptance_work_guards"),
-            ),
+            )),
             source="file_authority",
             rollout_events=rollout_events,
             roles=roles,
@@ -244,8 +252,9 @@ def list_goal_todos(
             todo_id=normalized_todo_id,
             agent_id=normalized_agent_id,
             limit=limit,
+            include_retained=read_scope == "completed_history",
         )
-    if normalized_todo_id and not projected.todos:
+    if read_scope == "active" and normalized_todo_id and not projected.todos:
         if canonical_read is not None:
             archived_items = [
                 item
@@ -278,7 +287,7 @@ def list_goal_todos(
 
     matched_todo_count = len(todos)
     agent_lane_hot_path = bool(
-        normalized_agent_id and limit is None
+        read_scope == "active" and normalized_agent_id and limit is None
         and role is None
         and status is None
         and normalized_todo_id is None

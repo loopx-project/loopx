@@ -9,6 +9,7 @@ import {authorityStateDelta} from "./authority_state_log.ts";
 import {AUTHORITY_ARCHIVE_SCHEMA, archiveCursor as positive, verifyAuthorityArchive,
   withVerifiedAuthorityArchive, type ArchiveHeader, type AuthorityArchiveSummary} from "./authority_archive_read.ts";
 import {checkArchivePage, checkArchivePrefix} from "./authority_archive_audit.ts";
+import {syncAuthorityDirectory} from "./file_authority_store.ts";
 export {verifyAuthorityArchive} from "./authority_archive_read.ts";
 export type {AuthorityArchiveSummary} from "./authority_archive_read.ts";
 
@@ -73,8 +74,7 @@ export async function exportAuthorityArchive(store: AuthorityStore, goalId: stri
     await handle.sync(); await handle.close(); closed = true;
     const verified = await verifyAuthorityArchive(temporary);
     await link(temporary, output);
-    const directory = await open(dirname(output), "r");
-    try { await directory.sync(); } finally { await directory.close(); }
+    await syncAuthorityDirectory(dirname(output));
     return verified;
   } finally {
     if (!closed) await handle.close();

@@ -55,6 +55,10 @@ DEFAULT_DOMAIN = "project-goal-control-plane"
 DEFAULT_NEXT_ACTION = "Initial routing is owned by the connected domain adapter."
 
 
+class GoalCreationConflictError(ValueError):
+    """A create-only bootstrap cannot adopt another registry operation."""
+
+
 def slugify_goal_id(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
     return slug or "project-goal"
@@ -328,6 +332,7 @@ def bootstrap_project(
     dry_run: bool,
     sync_global: bool,
     allow_global_route_replacement: bool = False,
+    creation_operation_id: str | None = None,
 ) -> dict[str, Any]:
     project = project.expanduser().resolve()
     registry_path = registry_path.expanduser()
@@ -382,6 +387,8 @@ def bootstrap_project(
         execution_profile=execution_profile,
         display_name=display_name,
     )
+    if creation_operation_id is not None:
+        goal_entry["creation_operation_id"] = creation_operation_id
     previous_goal = find_registry_goal(registry, goal_id)
     storage_target = ((previous_goal or {}).get("coordination") or {}).get("storage_target")
     if previous_goal is None and not state_file.exists():
@@ -527,6 +534,10 @@ def bootstrap_project(
         ):
             current_registry = registry_transaction.payload_copy()
             current_goal = find_registry_goal(current_registry, goal_id)
+            if creation_operation_id is not None and current_goal is not None:
+                # The App is creating a new Goal, not reconnecting one. Recheck
+                # under the publication lock before state/provider side effects.
+                raise GoalCreationConflictError("Goal id was registered by another operation")
             # A concurrent creator or reconnect owns its frozen target, including absence.
             if current_goal is not None or state_file.exists():
                 frozen = ((current_goal or {}).get("coordination") or {}).get("storage_target")
