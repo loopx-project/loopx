@@ -2,6 +2,7 @@
 import {createHash} from "node:crypto";
 import {open, realpath} from "node:fs/promises";
 import {isAbsolute, relative} from "node:path";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 type UnknownIdentity = {status: "unavailable"; reason: string};
 type RecordedIdentity = {status: "runtime_reported"; model: string; provider: string;
@@ -100,7 +101,7 @@ export function matchExecutionDeclaration(params: Record<string, unknown>): {err
     return {errors};
   }
   if (!publicModel(effective.model) || ![...providers.values()].includes(String(effective.provider))
-    || typeof effective.observation_id !== "string" || !/^[a-f0-9]{64}$/.test(effective.observation_id)
+    || typeof effective.observation_id !== "string" || !BARE_SHA256_PATTERN.test(effective.observation_id)
     || !(effective.reasoning_effort === null || typeof effective.reasoning_effort === "string"
       && /^[a-z]{1,16}$/.test(effective.reasoning_effort))) return {errors: ["runtime_observation_invalid"]};
   if (declaration.declaration_source !== "runtime_reported") errors.push("runtime_observation_requires_runtime_declaration");
