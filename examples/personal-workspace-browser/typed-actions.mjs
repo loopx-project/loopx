@@ -946,6 +946,17 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, 'completed-history-4087.png'), fullPage: false, animations: 'disabled' });
       await historyScroll.evaluate(element => { element.scrollTop = 0; });
       await completedColumn.getByText('Completed A', { exact: true }).waitFor();
+      await completedColumn.getByText('Completed A', { exact: true }).click();
+      const completedDetail = page.getByRole('dialog', { name: 'Todo 详情' });
+      await completedDetail.getByRole('region', { name: '证据', exact: true }).getByText('Verified retained completion evidence.', { exact: true }).waitFor();
+      await completedDetail.getByText('todo_done:todo_history_1', { exact: true }).waitFor();
+      await completedDetail.getByText('receipt-completed-history', { exact: true }).waitFor();
+      await completedDetail.getByText('example-reviewer', { exact: true }).waitFor();
+      await completedDetail.getByText('a'.repeat(64), { exact: true }).waitFor();
+      await completedDetail.getByText('2026-08-01T00:00:00Z', { exact: true }).waitFor();
+      if (await completedDetail.getByText('依赖', { exact: true }).count()) throw new Error('An absent dependency projection was reported as no dependencies');
+      if (await completedDetail.getByRole('button', { name: '完成任务', exact: true }).count()) throw new Error('Completed history exposed a write action');
+      await page.keyboard.press('Escape');
       // Both presentations retain one snapshot, including archived history and evidence.
       let historyRequests = 0;
       page.on('request', request => { if (request.url().includes('/api/chat/completed-todos?')) historyRequests += 1; });

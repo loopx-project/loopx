@@ -2175,7 +2175,7 @@
     },
     {
       "site": "loopx/todos.py::<module>.list_goal_todos::codec_read:load_registry#1",
-      "line": 192,
+      "line": 198,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
