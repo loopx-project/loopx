@@ -509,11 +509,7 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
                 if (surface_id, scenario.name, output_format) == (
                     "loopx_turn_plan", "crowded", "json"
                 ):
-                    # Budget compaction must not discard the writeback target.
-                    action = measurement["payload"]["turn_envelope"]["writeback"]["next_cli_actions"][0]
-                    argv = shlex.split(action)
-                    assert argv[argv.index("--registry") + 1] == str(registry_path)
-                    assert argv[argv.index("--runtime-root") + 1] == str(runtime)
+                    _assert_turn_plan_writeback_routes(measurement, registry_path, runtime)
                 spec = CLI_OUTPUT_BUDGET_BY_ID[surface_id]
                 assert_cli_output_baseline(
                     spec,
@@ -524,6 +520,16 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
                 )
                 results.setdefault(surface_id, {})[output_format] = measurement
     return results
+
+
+def _assert_turn_plan_writeback_routes(
+    measurement: dict, registry_path: Path, runtime: Path
+) -> None:
+    # Budget compaction must not discard or redirect the writeback target.
+    action = measurement["payload"]["turn_envelope"]["writeback"]["next_cli_actions"][0]
+    argv = shlex.split(action)
+    assert argv[argv.index("--registry") + 1] == str(registry_path)
+    assert argv[argv.index("--runtime-root") + 1] == str(runtime)
 
 
 def _mode_variant_commands(
@@ -817,15 +823,30 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
             assert classification.surface_id is None
 
 
-def test_real_cli_output_stays_inside_the_characterized_baseline(
+def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
     tmp_path: Path,
 ) -> None:
+    scenarios = {
+        scenario.name: _measure_scenario(tmp_path / scenario.name, scenario)
+        for scenario in SCENARIOS
+    }
+    _assert_scenario_matrix(scenarios)
+
+
+def _assert_scenario_matrix(scenarios: dict[str, dict[str, dict[str, dict]]]) -> None:
+    """Keep the pytest and base/head probe on the same matrix assertions."""
+
     for scenario in SCENARIOS:
-        results = _measure_scenario(tmp_path / scenario.name, scenario)
+        results = scenarios[scenario.name]
         for formats in results.values():
             assert formats["json"]["json_parseable"] is True
             assert formats["json"]["pretty_print_overhead_chars"] > 0
             assert formats["markdown"]["json_parseable"] is False
+    # Growth and duplication describe this same output matrix. Reuse its
+    # observations instead of executing small/crowded CLI fixtures a second time.
+    _assert_collection_growth_and_bootstrap_duplication(
+        scenarios["small"], scenarios["crowded"]
+    )
 
 
 def test_quota_should_run_no_format_uses_machine_contract_json(
@@ -1405,9 +1426,9 @@ def test_status_and_quota_json_ignore_compatibility_reexport_bindings(
         assert semantic_receipts() == baseline
 
 
-def test_collection_growth_and_bootstrap_duplication_are_explicit(tmp_path: Path) -> None:
-    small = _measure_scenario(tmp_path / "small", SCENARIOS[0])
-    crowded = _measure_scenario(tmp_path / "crowded", SCENARIOS[1])
+def _assert_collection_growth_and_bootstrap_duplication(
+    small: dict[str, dict[str, dict]], crowded: dict[str, dict[str, dict]]
+) -> None:
     added_todos = SCENARIOS[1].todo_count - SCENARIOS[0].todo_count
     added_runs = SCENARIOS[1].run_count - SCENARIOS[0].run_count
     for spec in CLI_OUTPUT_BUDGET_SPECS:

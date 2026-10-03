@@ -14,6 +14,7 @@ def project_agent_context(
     scope: Mapping[str, Any],
     orchestration: Mapping[str, Any],
     observations: Mapping[str, Any] | None = None,
+    capability_improvement: object = None,
 ):
     return effect_runtime_result(
         "capability_hook.agent_context.project",
@@ -22,6 +23,7 @@ def project_agent_context(
             "scope": dict(scope),
             "orchestration": dict(orchestration),
             "observations": dict(observations or {}),
+            **({"capability_improvement": capability_improvement} if capability_improvement is not None else {}),
         },
     )
 
@@ -64,11 +66,13 @@ def project_goal_agent_context(
                 include_operation_receipts=phase == "after_delegate_result",
             ),
         )
+    control_plane = goal.get("control_plane")
     return project_agent_context(
         phase=phase,
         scope=scope,
         orchestration=orchestration,
         observations=projected_observations,
+        capability_improvement=(control_plane.get("capability_improvement") if isinstance(control_plane, Mapping) else None),
     )
 
 

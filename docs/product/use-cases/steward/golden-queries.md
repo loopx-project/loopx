@@ -352,6 +352,15 @@ existing worker qualifies, use an already-authorized creation/binding path or
 return the precise missing decision. Do not silently substitute a stronger,
 costlier or differently authorized model. Qualify other runtimes separately.
 
+For the review variant of GQ03/GQ12, the published reviewer attribution must
+preserve the host-recorded model and effort. A stale template naming another
+model must fail result checking even when its body and declaration agree.
+Switch the recorded Turn/model before publication, then regenerate attribution;
+also test missing metadata without inventing an exact runtime identity. The
+shared typed metadata reader and CLI checker qualify this bounded attribution
+path. They do not prove worker eligibility, independent review, installed App
+adoption or complete small-team delivery; those remain separate observations.
+
 For GQ10, use three synthetic public projects with fixed facts: a release-blocking
 regression, a dated public-research deliverable, and optional visual polish.
 Freeze effort/dependency estimates and one missing evidence source. Review the

@@ -30,3 +30,14 @@ def test_packaged_scope_markers_ship_with_workflow_sources():
         assert f"skills/{skill_id}/.loopx-skill-scope" in data_files[
             f"share/loopx/skills/{skill_id}"
         ]
+
+
+def test_packaged_skill_display_metadata_is_in_distribution():
+    import tomllib
+    from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
+
+    package = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    data_files = package["tool"]["setuptools"]["data-files"]
+    for skill_id in PACKAGED_HOST_SKILL_IDS:
+        assert f"skills/{skill_id}/agents/openai.yaml" in data_files[
+            f"share/loopx/skills/{skill_id}/agents"]

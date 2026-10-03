@@ -140,6 +140,25 @@ def build_goal_configuration_catalog(
         },
         "features": [
             {
+                "feature_id": "goal_capability_organization",
+                "display_name": "Bounded capability improvement",
+                "availability": "supported_explicit_opt_in",
+                "default": {"mode": "off", "discovery_budget_minutes": 5, "max_trials": 1},
+                **({"current": settings["goal_capability_organization"]}
+                   if settings.get("goal_capability_organization") is not None else {}),
+                "consider_when": "A material Goal gap needs bounded discovery or a reversible trial.",
+                "effect": "Advisory before-plan/replan guidance through the existing Goal configuration owner.",
+                "does_not": ["enable, install or admit capabilities", "scan all capabilities on routine wakes", "create adoption, memory or execution authority"],
+                "commands": {
+                    "preview_enable": _configure_command(goal_id, "--capability-improvement-mode", "bounded"),
+                    "apply_enable": _configure_command(goal_id, "--capability-improvement-mode", "bounded", execute=True),
+                    "preview_disable": _configure_command(goal_id, "--clear-capability-improvement-configuration"),
+                    "apply_disable": _configure_command(goal_id, "--clear-capability-improvement-configuration", execute=True),
+                    "verify": [inspect_command],
+                },
+                "documentation": {"path": "loopx/capabilities/goal_capability_organization/README.md"},
+            },
+            {
                 "feature_id": "todo_replan_cadence",
                 "display_name": "Goal review cadence",
                 "availability": "supported_opt_in",

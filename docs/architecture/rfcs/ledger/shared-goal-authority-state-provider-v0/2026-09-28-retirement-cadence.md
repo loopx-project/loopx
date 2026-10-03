@@ -91,7 +91,7 @@ retirement of the `legacy` handoff policy.
 | Merged: [#5413](https://github.com/loopx-project/loopx/pull/5413), head `2c99505c7` | Separate provider promotion from backed-up policy migration; reject fresh legacy configuration but recover historical operations. Retain the original CLI recovery evidence. Existing legacy Goals are not automatically migrated; a successful plan does not qualify their execution consumers. |
 | Merged: [#5466](https://github.com/loopx-project/loopx/pull/5466), merge `066b5bf26` | Preserve the original lease through final acceptance. Installed consumer qualification remains distinct from merge. |
 | Review: [#5283](https://github.com/loopx-project/loopx/pull/5283), `1012d37f3` | Preflight optimization remains under review. Retain failed cold-CLI qualification rows; functional projection parity alone does not establish a performance pass. Do not declare the historical transient open failure explained by a synthetic failure. |
-| Review: [#5500](https://github.com/loopx-project/loopx/pull/5500), `b367a37f2` | Recover the original canonical Goal creation operation through App retries. This creation/default-adoption prerequisite does not retire existing ownership policies. |
+| Approved, awaiting maintainer merge: [#5500](https://github.com/loopx-project/loopx/pull/5500), `a9e3d722c` | Recover the original canonical Goal creation operation through App retries. This creation/default-adoption prerequisite does not retire existing ownership policies. |
 | Affected-lane dependencies | [#5308](https://github.com/loopx-project/loopx/pull/5308) must prove child stop before settled acknowledgement; [#5398](https://github.com/loopx-project/loopx/pull/5398) preserves complete UI history/inspector facts. Scope these to consumers actually included in the trial. They are not SQLite-engine prerequisites or permission to ship a known broken journey. |
 
 The remaining open heads above concern preflight and creation recovery, not a
@@ -100,6 +100,49 @@ policy migration plus legacy-policy retirement, and old-writer/capture retiremen
 They may combine only when caller ownership and rollback are coherent. Validation
 can expose concrete repairs; do not manufacture a fixed remaining-PR total or
 restart completed work to maintain one.
+
+The Goal-settings policy-migration slice now uses the same backed-up TS owner
+as the CLI: read current policy, preview claims/leases, apply, and recover the
+original operation after a lost response or same-tab reload. Synthetic real
+File/SQLite HTTP journeys cover metadata preservation, stale source, cross-Goal
+and digest rejection, expired unreleased leases and corrupt backups. The packaged
+App journey uses a real SQLite authority behind a synthetic workspace directory,
+including dropped apply response, reload/retry and narrow-screen readback. This is
+source validation, not installed adoption or legacy execution retirement. Lark
+policy editing remains outside this slice; existing Lark actions read canonical
+state. Next: qualified creation/upgrade callers and authorized Goal adoption,
+then delete live legacy branches at their last callers.
+
+### Installed delegation boundary at `9ac4efa90`
+
+A macOS arm64 installation from that merged source aligns the CLI, rebuilt App
+bundle and restarted Chat/Status services. The served HTML matches the installed
+bundle; both current entry assets and all 14 assets from the preceding delivery
+remain readable. This is process/HTTP readback, not a full GUI interaction test.
+
+An independently staged installation exercises real File/SQLite stores, actual
+CLI subprocesses and a deterministic generic Host process: six final-acceptance
+renewal/lost-reply cases, four expired/replaced-execution rejection cases, and
+four last-Todo completion→controller-replan cases pass. Loaded LoopX modules are
+checked against the installed snapshot. The first run had 9 passes and 5 failures:
+a short setup lease preempted one intended negative case; an extension of the
+Markdown fixture incorrectly expected a changed canonical completion intent to
+replay. The corrected fixture loses authority at the tested boundary, requires
+changed-intent rejection, and verifies original Turn resume without new effects.
+All affected cases were rerun; the failures are not counted as product successes.
+
+The adjacent source regression now starts its 20-second Host lease at managed
+execution dispatch. A matched 22-second delay after fixture preparation rejected
+the old execution before Host start; the corrected fixture reaches real renewal,
+completion and lost-reply replay. Lease identity, expiry rejection and the
+existing runtime and validation budgets remain unchanged.
+
+This closes this bounded installed #5466 path. It does not qualify live model
+providers, interrupted-Host stop acknowledgement, Windows, full Goal recovery,
+formal D2, release defaults or last-writer retirement. No active Goal provider or
+ownership mode changes are part of this installation. Keep those existing exits;
+recovery observation and File decode measurements retain their separate evidence
+below.
 
 ### Ordered delivery packages and exits
 
@@ -256,6 +299,16 @@ At `ce3862e33`, local real-backend migration/crash suites passed 15 cases;
 The existing SQLite rehearsal completed 100 and 1,000 commits with cold CLI
 sampling and cleanup. Its report remains **incomplete**, with formal workload,
 capacity, platform and elapsed-soak rows missing; this run starts no soak.
+
+The retained-consumer regression in `authority_archive_audit.test.ts` now fixes
+a consumer checkpoint at cursor 63, then resumes in fresh Node processes over
+131 commits across checkpoint boundaries. Both File→SQLite→File and
+SQLite→File→SQLite retain the complete submitted transactions, nested Todo
+metadata and original receipts; commit 132 made after the first restore survives
+the return export. The fixture explicitly rebinds its checkpoint only after a
+verified archive restore. It does not deliver automatic migration of registered
+consumer cursors. A logical one-day timestamp gap is accelerated backlog
+coverage, **not** 24 hours of observed lag, elapsed soak or formal D2 admission.
 
 A detached previously captured real source with 1,101 complete Todo records was
 reconstructed into three synthetic source transactions. The current production
@@ -492,8 +545,29 @@ The representative request falls from over 2 MiB to about 0.96 MB without raisin
 budgets. Real File/SQLite CLI tests cover exact counts, distant inferred edges,
 metadata preservation and unchanged provider state. This is a bounded capacity
 repair, not unlimited graph capacity, stable latency evidence, D2 qualification
-or permission to change the default provider. Full-Goal summary/list/detail
-adoption and sustained observation remain separate work.
+or permission to change the default provider.
+
+### Retained completion consumption
+
+The completed-history consumer
+now explicitly reads retained active and archived records through the existing
+typed summary/filter owner. Previously, archiving 84 of 85 completions made
+the workspace history return only one row. Its bounded HTTP pages now include
+all 85, preserve full task text/evidence and Agent filtering, and expose only
+display fields. Explicit history reads opt out of the existing 500-character
+summary limit; the default active Todo list and scheduling input still exclude
+archives and retain their display limit. Real File/SQLite and legacy Markdown
+reads preserve provider state. The packaged workspace keeps its existing
+pagination and opens retained evidence in the read-only Todo inspector using
+the shared Markdown renderer, without another navigation step or edit action.
+History also preserves completion time, resume facts and validation-declaration
+revision/actor facts. Active and history consumers reuse the same TS inspector
+mapping and the existing Todo schema; the active queue's preview budgets remain
+unchanged. Unprovided dependencies are not presented as an empty dependency
+list, and absent resume readiness or validation revisions are not invented.
+This closes that history-enumeration/detail gap, not whole-Goal summary/list/detail
+adoption, sustained observation, D2 or default-provider admission. No persisted
+format, writer or PostgreSQL consumer is changed.
 
 ### Packaged-source fingerprint cost
 
@@ -548,6 +622,19 @@ receipts do not imply a running or failed worker. Current integrity still needs
 the existing audit; no provider activation or D2/default gate changes. The next
 recovery-cost work remains the measured full-envelope rewrite and decode path,
 not another timeout increase or a second receipt/state format.
+
+The next measured File increment reuses `AuthorityStateReplay` while decoding
+one checkpoint window, instead of rebuilding a replay owner and canonicalizing
+the unchanged projection for every historical row. Untrusted metadata still
+uses the shared transaction decoder; every original revision, receipt and final
+head is verified. This changes no format, cache budget, writer or public API.
+On one detached 2,107-commit File history, three fresh Node 24.21.0 processes per
+arm on macOS arm64 reduce cold-load medians from 35.6 to 25.9 seconds (27%).
+Complete heads, revisions and cursors match. These consecutive sample groups
+do not flush OS caches or control other host activity; they are not p95, a
+provider comparison or a whole-restore result. File's full-envelope rewrite
+and remaining revision hashing cost still need their existing recovery work;
+no D2/default or legacy-writer retirement exit is closed by this measurement.
 The #4224 soak was started; its final evidence and applicability remain pending.
 
 ### Runtime retirement drains admitted effects

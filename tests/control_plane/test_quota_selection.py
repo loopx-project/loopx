@@ -9,6 +9,7 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
 from loopx.control_plane.todos.quota_summary import summarize_user_todos_for_quota
+from loopx.control_plane.todos.todo_summary import compact_todo_group
 
 
 def summary(items):
@@ -51,6 +52,21 @@ def test_agent_execution_still_respects_claim_and_exclusion():
     assert [row["todo_id"] for row in result["first_executable_items"]] == ["todo_owned", "todo_free"]
     assert result["claim_scope"]["executor_excluded_self_count"] == 1
     assert result["claim_scope"]["other_agent_claimed_open_count"] == 1
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_quota_uses_complete_owned_commitment_count_before_display_cap(reverse):
+    own = [item(f"todo_own_{i}", task_class="advancement_task", claimed_by="agent-b", done=False)
+           for i in range(15)]
+    peers = [item(f"todo_peer_{i}", task_class="advancement_task", claimed_by="agent-a", done=False)
+             for i in range(20)]
+    rows = own + peers
+    source = compact_todo_group(list(reversed(rows)) if reverse else rows,
+        role="agent", source_section="Agent Todo", item_limit=10)
+    result = summarize_user_todos_for_quota(source, agent_identity={"agent_id": "agent-b"})
+    assert result["current_agent_claimed_advancement_count"] == 15
+    assert len(result["current_agent_claimed_advancement_items"]) < 15
+    assert all(row["claimed_by"] == "agent-b" for row in result["first_executable_items"])
 
 
 @pytest.mark.parametrize("display", ["legacy", "missing", "stale"])

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from ...file_lock import exclusive_file_lock
+from ..runtime.file_paths import windows_extended_path
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
 from ..todos.contract import TODO_ID_PATTERN
 
@@ -40,7 +41,9 @@ def _hash(value: Any) -> str:
 
 def _root(runtime_root: Path) -> Path:
     """Retain the shipped storage address; Agent topology is not encoded in it."""
-    return runtime_root / ".local" / "manager-context"
+    # Full request hashes plus lock sidecars can exceed MAX_PATH even in an
+    # ordinary workspace. Keep extended syntax inside the private store.
+    return windows_extended_path(runtime_root / ".local" / "manager-context")
 
 
 def _write(path: Path, value: dict) -> None:

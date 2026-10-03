@@ -3,6 +3,7 @@ import test from "node:test";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { projectQuotaSelection } from "../../loopx/control_plane/todos/quota_selection.ts";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
+import {projectAdvancementFrontier} from "../../loopx/control_plane/todos/frontier_revision.ts";
 
 function row(id: string, fields: JsonObject = {}): JsonObject {
   return {payload: {todo_id: id}, claim: null, bound: null, blocks: null, excluded: [],
@@ -94,6 +95,35 @@ test("stable ties and zero display never change selection or counts", () => {
   assert.deepEqual(ids((result.lanes as JsonObject).open_items), ["zed", "alpha"]);
   assert.equal((result.lanes as JsonObject).open_count, 2);
   assert.deepEqual((result.claim_visibility as JsonObject).unclaimed_priority_open_items, []);
+});
+
+test("complete frontier counts survive hidden peer pressure without granting hidden work", () => {
+  const mine = Array.from({length: 15}, (_, i) => ({id: `own-${i}`, claim: "agent-a",
+    excluded: [], advancement: true, actionable: true, updated: "2026-09-01T00:00:00Z", serialized: "{}"}));
+  const peers = Array.from({length: 20}, (_, i) => ({...mine[0], id: `peer-${i}`, claim: "agent-b"}));
+  for (const full of [mine, [...mine, ...peers], [...mine, ...peers].reverse()]) {
+    const index = projectAdvancementFrontier({schema_version: "todo_frontier_revision_request_v0",
+      operation: "index", rows: full}).index;
+    const observed = [row("visible-owned", {claim: "agent-a"}), row("visible-peer", {claim: "agent-b"})];
+    const result = projectQuotaSelection(request(observed, {frontier_revision_index: index, source_open_count: full.length}));
+    assert.equal((result.claim_visibility as JsonObject).current_agent_claimed_advancement_count, 15);
+    // Counting hidden commitments does not synthesize a claim, lease or an
+    // executable row. Selection still uses only the independently admitted rows.
+    assert.deepEqual(ids((result.lanes as JsonObject).executable_items), ["visible-owned"]);
+    assert.equal((result.work_counts as JsonObject).complete, false);
+  }
+});
+
+test("missing historical census retains observed counts; malformed new totals reject", () => {
+  const observed = [row("mine", {claim: "agent-a"})];
+  const index = {schema_version: "todo_frontier_revision_index_v0"};
+  assert.equal((projectQuotaSelection(request(observed, {frontier_revision_index: index}))
+    .claim_visibility as JsonObject).current_agent_claimed_advancement_count, 1);
+  for (const counts of [{"agent-a": -1}, {"agent-a": "15"}, {"agent-a": Number.MAX_SAFE_INTEGER + 1}, {" AGENT-A ": 15}]) {
+    assert.throws(() => projectQuotaSelection(request(observed, {
+      frontier_revision_index: {...index, claimed_advancement_counts: counts},
+    })));
+  }
 });
 
 test("malformed facts are rejected, not coerced into scope or execution authority", () => {

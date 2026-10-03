@@ -87,7 +87,7 @@ def test_invalid_or_out_of_scope_reads_do_not_touch_core(monkeypatch, tmp_path, 
         ({"view": "portfolio", "path": "/unknown"}, ["unknown_argument:path"]),
         (
             {"view": "shell"},
-            ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents"],
+            ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents,agent_route"],
         ),
         ({"view": "portfolio", "offset": True}, ["offset:must_be_an_integer_at_least_0"]),
         (
@@ -115,7 +115,7 @@ def test_invalid_or_out_of_scope_reads_do_not_touch_core(monkeypatch, tmp_path, 
             {"view": "todos", "goal_id": "alpha", "source_id": 3},
             ["source_id:must_be_a_string"],
         ),
-        ({"goal_id": "alpha"}, ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents"]),
+        ({"goal_id": "alpha"}, ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents,agent_route"]),
     ],
 )
 def test_a_refused_read_names_the_argument_that_must_change(tmp_path, args, expected):
@@ -146,7 +146,7 @@ def test_a_refused_read_names_every_bad_argument_and_the_called_tool(tmp_path):
     )
     assert result["rejected_arguments"] == [
         "unknown_argument:path",
-        "view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents",
+        "view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents,agent_route",
         "limit:must_be_an_integer_between_1_and_12",
         "days:only_for_view_deliveries",
     ]
@@ -327,7 +327,7 @@ def test_dynamic_requests_are_not_mistaken_for_client_responses(tmp_path):
         )
 
 
-@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "agents"])
+@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "agents", "agent_route"])
 def test_manager_runtime_installs_tool_and_records_real_subprocess_read(
     monkeypatch, tmp_path, read_view
 ):
@@ -374,6 +374,15 @@ for line in sys.stdin:
             "'view':'todos','goal_id':'alpha'", "'view':'agents','query':'review'").replace(
             "evidence['rows'][0]['title'] == 'Check the sample result'",
             "evidence['rows'][0]['agent_id'] == 'review-worker' and evidence['rows'][0]['execution_readiness'] == 'not_checked'"))
+        (tmp_path / "registry.json").write_text(json.dumps({"goals": [
+            {"id": "alpha", "registered_agents": ["review-worker"]}
+        ]}))
+    if read_view == "agent_route":
+        fake.write_text(fake.read_text().replace(
+            "'view':'todos','goal_id':'alpha'",
+            "'view':'agent_route','goal_id':'alpha','agent_id':'review-worker'").replace(
+            "evidence['rows'][0]['title'] == 'Check the sample result'",
+            "evidence['status'] == 'unavailable' and evidence['reason'] == 'no_binding' and evidence['host_delivery'] == 'not_attempted'"))
         (tmp_path / "registry.json").write_text(json.dumps({"goals": [
             {"id": "alpha", "registered_agents": ["review-worker"]}
         ]}))
@@ -447,10 +456,12 @@ for line in sys.stdin:
         assert collected == [{"include_details": False, "remote_evidence": False}]
         events = store.events_after(session["session_id"], turn["turn_id"], None)
         reads = [e for e in events if e["kind"] == "manager.evidence_read"]
-        assert (
-            len(reads) == 1
-            and reads[0]["payload"]["rows"][0]["agent_id" if read_view == "agents" else "todo_id"] == ("review-worker" if read_view == "agents" else "todo_sample")
-        )
+        assert len(reads) == 1
+        if read_view == "agent_route":
+            assert reads[0]["payload"]["reason"] == "no_binding"
+            assert reads[0]["payload"]["authority"] == "locator_only"
+        else:
+            assert reads[0]["payload"]["rows"][0]["agent_id" if read_view == "agents" else "todo_id"] == ("review-worker" if read_view == "agents" else "todo_sample")
     finally:
         runtime.close()
 

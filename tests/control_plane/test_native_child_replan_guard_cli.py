@@ -34,7 +34,9 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, tod
     state.write_text("---\nstatus: active\n---\n\n# Synthetic Goal\n\n## Agent Todo\n" + (
         "\n- [ ] [P1] Validate the original source.\n"
         f"  <!-- loopx:todo todo_id={TODO} status=open task_class=advancement_task "
-        f"claimed_by={AGENT} action_kind=validate validation_command=pytest -->\n"
+        f"claimed_by={AGENT} action_kind=validate validation_command=pytest "
+        "continuation_policy=same_agent_non_delivery "
+        "required_capabilities=shell%2Cfilesystem_read -->\n"
         if todo_bound else ""
     ))
     index = runtime / "goals" / GOAL / "runs" / "index.jsonl"

@@ -252,6 +252,45 @@ host after a lost submission response before repeating the host message. The
 receiver's `manager-inbox read`, decision and `report` receipts remain distinct
 from host submission and from each other.
 
+### Real-host qualification
+
+`examples/peer-handoff-live-smoke.py` is an explicit opt-in qualification of the
+existing Codex app-server adapter and the same request/return CLI. It creates
+two synthetic host threads in the selected authenticated home, a disposable
+Goal/registry/runtime, and a bounded artifact pinned to the checkout head and
+SHA-256. It does not resume a user thread or create replacement child workers.
+
+From the source checkout:
+
+```bash
+uv run --extra test python examples/peer-handoff-live-smoke.py --execute-real-host
+```
+
+On Windows select `--codex-bin codex.cmd` if the installed launcher needs it.
+The command consumes model quota and leaves the host's own test-thread records
+in that home; no authentication or session records are copied between homes.
+The caller authorizes these test submissions separately from route resolution.
+An unreachable historical binding keeps automatic selection ambiguous; an
+explicit exact link pins the existing reviewer. The real receiver reads and
+adopts the request, independently checks the artifact, and returns its exact
+head/digest. A fresh requester process restores its own thread, reads the
+result and acknowledges consumption. Retry recovers one request. Output contains
+compact assertions, without thread links, local paths or raw conversations.
+
+The qualification exposed two Windows blockers in this journey: private request
+hashes and lock/claim suffixes exceed `MAX_PATH`, and POSIX-only input flags
+prevent artifact readback. Private store/lock I/O now addresses the same physical
+files using Win32 extended paths; identities, lock exclusion and storage layout
+remain unchanged. Regular input files use the platform's binary/nonblocking
+flags. Focused regression checks cover mutual exclusion, release, artifact
+readback and one request across repeated delivery/consumption.
+
+This qualifies this local owned-host request/adopt/return slice. It does not
+qualify remote hosts, grant message permission to an arbitrary App task, transfer
+a lease, or close the overall R2/R3 collaboration acceptance. Route previews
+continue to report `host_delivery: not_attempted`; the smoke's explicit host
+submission and receiver receipts are separate evidence.
+
 ## Target Identity Pinning
 
 A bounded wait, or the readback that a delivery produced a turn, must be pinned

@@ -570,6 +570,9 @@ def test_readiness_observation_suppresses_only_an_exact_material_match() -> None
     changed_merge_state = deepcopy(item)
     changed_merge_state["merge_state"] = "BEHIND"
     mutations.append((changed_merge_state, threads))
+    changed_mergeability = deepcopy(item)
+    changed_mergeability["mergeability"] = "CONFLICTING"
+    mutations.append((changed_mergeability, threads))
 
     for changed_item, changed_thread_state in mutations:
         execution = materialize_review_execution(

@@ -72,9 +72,16 @@ def _apply_retained_action_selection_reentry(
     )
     payload["retained_action_selection"] = verdict
     disposition = verdict.get("disposition")
+    consumed_fields = verdict.get("clear_fields", [])
+    if not isinstance(consumed_fields, list) or not all(
+        isinstance(field, str) for field in consumed_fields
+    ):
+        raise RuntimeError("TypeScript retained action-selection fields are malformed")
+    for field in consumed_fields:
+        payload.pop(field, None)
     if disposition == "preserve_retained_todo":
-        return
-    if disposition == "bind_autonomous_replan":
+        pass
+    elif disposition == "bind_autonomous_replan":
         payload.pop("selected_todo", None)
         payload.pop("todo_id", None)
         payload.pop("agent_lane_next_action", None)
@@ -713,6 +720,9 @@ def build_live_quota_should_run_decision(
                 goal=goal,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
+                observations={"capability_improvement": {
+                    "trigger": "replan" if payload.get("replan_action_packet") else "before_plan",
+                }},
             )
         else:
             context = project_agent_context(

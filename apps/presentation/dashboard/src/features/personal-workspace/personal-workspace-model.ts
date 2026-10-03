@@ -6,6 +6,7 @@ import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/pre
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
+import type { TodoItem } from "../../data/status";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
 export type WorkspaceGoalState =
   | "需修复"
@@ -51,6 +52,36 @@ export type WorkspaceAgentTodo = {
   validationRevision?: number | null;
   validationRevisionActor?: string | null;
 };
+
+/** Both active status and retained history carry the same inspector facts. */
+export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
+  "todo_id" | "text" | "done" | "status" | "claimed_by" | "evidence" | "note"
+  | "priority" | "task_class" | "task_domain" | "completed_at" | "resume_when"
+  | "resume_ready" | "resume_condition" | "completion_validation_sha256"
+  | "completion_validation_revision" | "completion_validation_revision_history"
+>, fallbackId: string): WorkspaceAgentTodo {
+  const receipt = todo.resume_condition?.resume_receipt;
+  const receiptId = receipt && typeof receipt === "object" && !Array.isArray(receipt)
+    ? (receipt as Record<string, unknown>).receipt_id : null;
+  return {
+    todoId: todo.todo_id?.trim() || fallbackId,
+    text: todo.text,
+    done: todo.status === "deferred" ? false : todo.done,
+    status: todo.status ?? null,
+    claimedBy: todo.claimed_by ?? null,
+    evidence: todo.evidence || todo.note || null,
+    priority: todo.priority ?? null,
+    taskClass: todo.task_class ?? null,
+    taskDomain: todo.task_domain ?? null,
+    completedAt: todo.completed_at ?? null,
+    resumeWhen: todo.resume_when ?? null,
+    resumeReady: todo.resume_ready ?? null,
+    resumeReceiptId: typeof receiptId === "string" && receiptId.trim() ? receiptId.trim() : null,
+    validationDigest: todo.completion_validation_sha256 ?? null,
+    validationRevision: todo.completion_validation_revision ?? null,
+    validationRevisionActor: todo.completion_validation_revision_history.at(-1)?.actor_agent_id ?? null,
+  };
+}
 
 export type WorkspaceTodo = WorkspaceAgentTodo & {
   goalId: string;

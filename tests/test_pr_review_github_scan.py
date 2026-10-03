@@ -121,6 +121,7 @@ def _fake_run_gh_json(args: list[str], *, cwd: Path | None = None):
             ],
             "reviewDecision": "REVIEW_REQUIRED",
             "mergeStateStatus": "CLEAN",
+            "mergeable": "MERGEABLE",
             "createdAt": "2026-08-11T00:00:00Z",
             "commits": [
                 {
@@ -171,7 +172,7 @@ def test_pr_list_keeps_nested_details_in_bounded_per_pr_reads(monkeypatch) -> No
     assert sorted(args[2] for args in detail_calls) == ["1", "2"]
     assert all(
         args[args.index("--json") + 1]
-        == "body,files,reviewDecision,mergeStateStatus,createdAt,commits,reviews,statusCheckRollup"
+        == "body,files,reviewDecision,mergeStateStatus,mergeable,createdAt,commits,reviews,statusCheckRollup"
         for args in detail_calls
     )
     assert rows[0]["body"] == "Body for PR 1"
@@ -180,6 +181,7 @@ def test_pr_list_keeps_nested_details_in_bounded_per_pr_reads(monkeypatch) -> No
     ]
     assert rows[0]["reviewDecision"] == "REVIEW_REQUIRED"
     assert rows[0]["mergeStateStatus"] == "CLEAN"
+    assert rows[0]["mergeable"] == "MERGEABLE"
     assert rows[0]["commits"][0]["committedDate"] == "2026-08-12T00:00:00Z"
     assert rows[0]["reviews"] == []
 
@@ -1910,7 +1912,9 @@ def test_live_review_adapters_never_request_ci(monkeypatch) -> None:
     monkeypatch.setattr(merge_readiness_module, "_run_gh_json", fake)
     merge_readiness_module.fetch_github_pull_request(repo="owner/repo", number=4110, wait_for_ci=False)
     assert "statusCheckRollup" not in calls[0][calls[0].index("--json") + 1]
+    assert "mergeable" in calls[0][calls[0].index("--json") + 1].split(",")
     assert "statusCheckRollup" not in github_source_module.DETAIL_FIELDS
+    assert "mergeable" in github_source_module.DETAIL_FIELDS
 
 
 def test_review_risk_and_instructions_are_independent_of_legacy_ci() -> None:
@@ -1943,3 +1947,47 @@ def test_ci_independence_preserves_merge_conflict_and_unknown_gates() -> None:
         )
         assert result["ready"] is False, result
         assert all(not reason.startswith("status_checks") for reason in result["blocking_reasons"])
+
+
+@pytest.mark.parametrize("wait_for_ci", [False, True])
+@pytest.mark.parametrize("mergeable", ["MERGEABLE", "CONFLICTING", "UNKNOWN", None])
+def test_behind_readiness_depends_on_observed_conflicts_not_base_sync(
+    tmp_path: Path, wait_for_ci: bool, mergeable: str | None,
+) -> None:
+    pr = _merge_ready_pr()
+    pr["mergeStateStatus"] = "BEHIND"
+    pr["mergeable"] = mergeable
+    pr["review_thread_summary"] = _complete_review_threads()
+    fixture = tmp_path / "behind.json"
+    fixture.write_text(json.dumps({"repository": "owner/repo", "pull_requests": [pr]}))
+    args = _merge_readiness_args(fixture=str(fixture), repo=None)
+    registry = _goal_registry(tmp_path)
+    goals = json.loads(registry.read_text())
+    goals["goals"][0]["control_plane"] = {"pull_request_review": {
+        "schema_version": "pull_request_review_goal_configuration_v0",
+        "wait_for_ci": wait_for_ci,
+    }}
+    registry.write_text(json.dumps(goals))
+    out: list[dict[str, object]] = []
+    exit_code = pr_review_cli_module.handle_pr_review_command(
+        args, runtime_root=tmp_path, registry_path=registry,
+        output_format=lambda _args: "json", print_payload=_capture_payload(out),
+    )
+    assert out[0]["wait_for_ci"] is wait_for_ci
+    assert out[0]["ready"] is (mergeable == "MERGEABLE"), out
+    assert exit_code == (0 if mergeable == "MERGEABLE" else 1)
+    assert out[0]["authority"]["grants_merge_authority"] is False
+    if mergeable == "MERGEABLE":
+        assert out[0]["admin_bypass_required"] is True
+
+
+def test_conflicting_mergeability_rejects_a_clean_status() -> None:
+    pr = _merge_ready_pr()
+    pr["mergeable"] = "CONFLICTING"
+    result = merge_readiness_module.build_pr_merge_readiness_packet(
+        pull_request=pr, repository="owner/repo",
+        expected_exact_head=f"4110@{HEAD_1}", reviewer_login="maintainer",
+        review_threads=_complete_review_threads(), source="fixture", wait_for_ci=False,
+    )
+    assert result["ready"] is False
+    assert "merge_state_requires_update" in result["blocking_reasons"]

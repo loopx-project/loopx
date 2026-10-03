@@ -1,12 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
-import { listTypedActions } from "./chat";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { listTypedActions, type TypedActionProposal } from "./chat";
 
 /** Visible workspace readback only: no confirmation, dispatch or effect owner.
  * Query keys fence scope changes; React Query serializes same-key requests,
  * cancels superseded reads and suspends background interval polling. */
 export function useTypedActionReadback(readOnly: boolean, goalId: string | null | undefined) {
-  return useQuery({
-    queryKey: ["typed-action-readback", goalId ?? "manager"],
+  const client = useQueryClient();
+  const queryKey = ["typed-action-readback", goalId ?? "manager"];
+  const query = useQuery({
+    queryKey,
     queryFn: ({ signal }) => listTypedActions(goalId ? { goalId } : {},
       AbortSignal.any([signal, AbortSignal.timeout(10_000)])),
     enabled: !readOnly,
@@ -15,4 +17,18 @@ export function useTypedActionReadback(readOnly: boolean, goalId: string | null 
     refetchOnWindowFocus: "always",
     retry: false,
   });
+  return {
+    ...query,
+    async acceptProposal(proposal: TypedActionProposal, replacedId?: string) {
+      if (readOnly) return;
+      // The validated mutation response is already canonical readback. Fence
+      // older reads before publishing it, so a cached preview or delayed poll
+      // cannot replace an acknowledged receipt during a Goal status refresh.
+      await client.cancelQueries({ queryKey, exact: true });
+      client.setQueryData<TypedActionProposal[]>(queryKey, current => current
+        ? [proposal, ...current.filter(row => row.proposal_id !== proposal.proposal_id
+          && row.proposal_id !== replacedId)]
+        : current);
+    },
+  };
 }

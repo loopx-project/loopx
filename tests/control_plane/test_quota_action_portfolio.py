@@ -13,12 +13,52 @@ from loopx.control_plane.testing.quota_fixtures import (
     quota_status_payload,
     quota_todo_item,
 )
+from loopx.control_plane.work_items.autonomous_replan_obligation import (
+    build_autonomous_replan_obligation_payload,
+)
 
 
 GOAL_ID = "action-portfolio-fixture"
 AGENT_ID = "codex-main"
 PRIMARY_ID = "todo_primary001"
 FALLBACK_ID = "todo_fallback001"
+
+
+def test_periodic_replan_keeps_recommendations_unbound_before_selection() -> None:
+    status = _legacy_future_primary_status()
+    obligation = build_autonomous_replan_obligation_payload(
+        schema_version="autonomous_replan_obligation_v0",
+        stall_threshold=2,
+        trigger_count=1,
+        triggers=[{"kind": "periodic_review_due", "source": "fixture"}],
+        guidance_actions=["create_successor"],
+        todo_actions=[],
+        stop_condition="stop on owner-only authority",
+        recommended_action="Review the current route before delivery.",
+        agent_id=AGENT_ID,
+        include_agent_id=True,
+    )
+    item = status["attention_queue"]["items"][0]
+    item["autonomous_replan_obligation"] = obligation
+    item["project_asset"]["autonomous_replan_obligation"] = obligation
+    packet = build_quota_should_run(
+        status, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        turn_instance_id="turn-periodic-selection",
+        available_capabilities=["fallback_runner"],
+    )
+    assert packet["effective_action"] == "autonomous_replan_required"
+    assert packet["autonomous_replan_obligation"]["required"] is True
+    assert packet["normal_delivery_allowed"] is False
+    assert packet["action_portfolio"]["selection_policy"][
+        "requires_explicit_turn_binding"
+    ] is True
+    cli = packet["interaction_contract"]["cli_channel"]
+    assert cli["selection_required"] is True
+    assert "settlement_plan" not in cli
+    assert cli["next_cli_actions"] == []
+    assert "--turn-instance-id turn-periodic-selection" in cli[
+        "selection_command"
+    ]["command_args_template"]
 
 
 def _legacy_future_primary_status() -> dict:

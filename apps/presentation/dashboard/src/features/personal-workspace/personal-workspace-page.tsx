@@ -1481,6 +1481,7 @@ export function PersonalWorkspacePage({
         ))) {
         throw new ChatApiError(t("actionReview.targetChanged"), { error_code: "action_response_mismatch" });
       }
+      await actionReadback.acceptProposal(result.proposal);
       const applied = workspaceProposal(result.proposal, t);
       setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
       if (showDrawer) setSelection({ item: applied, kind: "proposal" });
@@ -1596,14 +1597,18 @@ export function PersonalWorkspacePage({
       });
       try {
         callbacks.onCancelProposal?.(proposal);
-        if (!callbacks.onCancelProposal) await cancelTypedAction(proposal.previewId);
+        if (!callbacks.onCancelProposal) {
+          await actionReadback.acceptProposal(await cancelTypedAction(proposal.previewId));
+        }
       } catch (error) {
         setProposals((current) => ({ ...current, [proposal.previewId]: proposal }));
         setActionFeedback(t("feedback.cancelFailed", { error: error instanceof Error ? error.message : String(error) }));
       }
     },
     onTransitionProposal: async (proposal, transition) => {
-      const transitioned = workspaceProposal(await transitionTypedAction(proposal.previewId, transition), t);
+      const result = await transitionTypedAction(proposal.previewId, transition);
+      await actionReadback.acceptProposal(result, transition === "regenerate" ? proposal.previewId : undefined);
+      const transitioned = workspaceProposal(result, t);
       const managerOwned = managerSessionProposalIds.includes(proposal.previewId)
         || managerChannelProposalIds.includes(proposal.previewId);
       rememberSessionProposal(transitioned.previewId, managerOwned ? null : proposal.goalId ?? selectedGoalId);

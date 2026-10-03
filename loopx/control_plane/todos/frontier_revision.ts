@@ -20,7 +20,7 @@ type Checkpoint = { complete: false } | {
 };
 type Row = {
   id: string; claim: string | null; excluded: string[];
-  updated: string; serialized: string; advancement: boolean;
+  updated: string; serialized: string; advancement: boolean; actionable: boolean | null;
 };
 type LongChainObservation = {
   trigger_count: number;
@@ -93,10 +93,40 @@ function decodeRows(value: unknown): Row[] | null {
     if (typeof row.serialized !== "string" || typeof row.advancement !== "boolean") {
       throw new EffectRuntimeRequestError("frontier row codec facts are missing");
     }
+    if (row.actionable !== undefined && typeof row.actionable !== "boolean") {
+      throw new EffectRuntimeRequestError("frontier actionable fact must be boolean");
+    }
     return {id: text(row.id), claim: text(row.claim) || null,
       excluded: strings(row.excluded), updated: text(row.updated),
-      serialized: row.serialized, advancement: row.advancement};
+      serialized: row.serialized, advancement: row.advancement,
+      actionable: typeof row.actionable === "boolean" ? row.actionable : null};
   });
+}
+
+/** Full-source commitment counts, not a claim/exclusion or execution grant.
+ * Historical indexes/row codecs without evaluated actionability keep their
+ * observed lower bounds. Never turn an incomplete codec into an exact total.
+ */
+function claimedAdvancementCounts(rows: Row[] | null): JsonObject | null {
+  if (rows === null || rows.some(row => row.actionable === null || !row.id) ||
+      new Set(rows.map(row => row.id)).size !== rows.length) return null;
+  const counts = new Map<string, number>();
+  for (const row of rows) if (row.claim) {
+    counts.set(row.claim, (counts.get(row.claim) ?? 0) + Number(row.advancement && row.actionable));
+  }
+  return Object.fromEntries([...counts].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+}
+
+export function claimedAdvancementCountFromIndex(value: unknown, agent: string): number | null {
+  const index = object(value);
+  if (index.schema_version !== INDEX || index.claimed_advancement_counts === undefined) return null;
+  const counts = requireJsonObject(index.claimed_advancement_counts, "claimed advancement counts");
+  for (const [claim, total] of Object.entries(counts)) {
+    if (agentId(claim) !== claim || typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) {
+      throw new EffectRuntimeRequestError("invalid claimed advancement count");
+    }
+  }
+  return Object.hasOwn(counts, agent) ? counts[agent] as number : 0;
 }
 
 function checkpoint(rows: Row[] | null, agent: string | null, unclaimedOnly = false): Checkpoint {
@@ -206,7 +236,9 @@ export function projectAdvancementFrontier(value: unknown): JsonObject {
   // falling back to the global unclaimed checkpoint would include excluded work.
   const agents = [...new Set((rows ?? []).filter(row => row.advancement)
     .flatMap(row => [...(row.claim ? [row.claim] : []), ...row.excluded]))].sort();
-  return {index: {schema_version: INDEX, all: checkpoint(rows, null),
+  const counts = claimedAdvancementCounts(rows);
+  return {index: {schema_version: INDEX, ...(counts === null ? {} : {claimed_advancement_counts: counts}),
+    all: checkpoint(rows, null),
     unclaimed: checkpoint(rows, null, true),
     by_agent: agents.map(agent_id => ({agent_id, ...checkpoint(rows, agent_id)}))}};
 }
