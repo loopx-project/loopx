@@ -11,6 +11,7 @@ from ...control_plane.collaboration.source_grant_observation import (
     POLICY_SCHEMA as POLICY_SCHEMA,
     registered_context_recipients,
     source_context_authority,
+    source_context_target_authority,
 )
 from ...control_plane.collaboration.goal_instance_scope import (
     collaboration_goal_scope,
@@ -86,6 +87,15 @@ def authority(
     grant = source_context_authority(runtime_root, registry_path, session, turn)
     return {**grant, "instruction": INSTRUCTION} if grant["mode"] == "context_only" else grant
 
+
+def target_authority(
+    runtime_root: Path, *, session: dict, turn: dict, target: dict
+) -> dict:
+    """Authorize one target already validated by an exact Goal scope."""
+    grant = source_context_target_authority(runtime_root, session, turn, target)
+    return {**grant, "instruction": INSTRUCTION} if grant["mode"] == "context_only" else grant
+
+
 def deliver(
     runtime_root: Path, registry_path: Path, *, session: dict, turn: dict, request: dict
 ) -> dict:
@@ -101,7 +111,16 @@ def deliver(
             goal_scope,
             operation="request_create",
         )
-        grant = authority(runtime_root, registry_path, session, turn)
+        grant = (
+            target_authority(
+                runtime_root,
+                session=session,
+                turn=turn,
+                target=target,
+            )
+            if goal_scope.exact
+            else authority(runtime_root, registry_path, session, turn)
+        )
         if target not in grant["targets"]:
             raise ValueError("context recipient is not authorized or registered")
         content = str(turn.get("message") or "")

@@ -634,7 +634,8 @@ def test_same_turn_material_monitor_poll_is_no_spend_closeout_before_successor(
         runtime_root=runtime,
     )
     assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == admitted["todo_id"]
-    assert replay.get("selected_todo") is None
+    assert replay["selected_todo"]["todo_id"] == admitted["todo_id"]
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
     assert replay["should_run"] is False
     assert replay["effective_action"] == "heartbeat_settled_skip"
     assert replay["execution_obligation"]["must_attempt_work"] is False
@@ -800,7 +801,8 @@ def test_same_turn_unchanged_monitor_poll_is_already_settled(tmp_path: Path) -> 
         runtime_root=runtime,
     )
     assert replay["heartbeat_receipt"]["settlement_identity"]["todo_id"] == monitor["todo_id"]
-    assert replay.get("selected_todo") is None
+    assert replay["selected_todo"]["todo_id"] == monitor["todo_id"]
+    assert replay["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "settled"
     assert replay["effective_action"] == "heartbeat_settled_skip"
     assert replay["execution_obligation"]["must_attempt_work"] is False
     assert replay["heartbeat_recommendation"]["agent_must_attempt"] is False

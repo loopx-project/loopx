@@ -48,6 +48,7 @@ MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+RUNTIME_RETRY_SETTLE_SECONDS = 0.25
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 # Canonical writers may wait 30 seconds for the per-Goal maintenance lock and
 # another 5 seconds for the provider lock. Keep the client connected through
@@ -459,6 +460,26 @@ def _read_info(path: Path, *, fingerprint: str) -> dict[str, Any] | None:
     ):
         return None
     return payload
+
+
+def _wait_for_runtime_locator_turnover(
+    path: Path,
+    *,
+    fingerprint: str,
+    observed: Mapping[str, Any] | None,
+    timeout: float,
+) -> None:
+    """Give a retiring runtime time to remove or replace its locator."""
+
+    if not isinstance(observed, Mapping):
+        return
+    token = observed.get("token")
+    deadline = time.monotonic() + min(timeout, RUNTIME_RETRY_SETTLE_SECONDS)
+    while time.monotonic() < deadline:
+        current = _read_info(path, fingerprint=fingerprint)
+        if current is None or current.get("token") != token:
+            return
+        time.sleep(STARTUP_POLL_SECONDS)
 
 
 _RUNTIME_IDENTITY_TEXT_FIELDS = (
@@ -972,6 +993,12 @@ def effect_runtime_request(
                 # Even a token check followed by unlink would race with a
                 # replacement server publishing its own locator.
                 _reap_exited_runtime_child(info)
+                _wait_for_runtime_locator_turnover(
+                    info_path,
+                    fingerprint=fingerprint,
+                    observed=info,
+                    timeout=timeout,
+                )
                 continue
             break
     if isinstance(last_error, TimeoutError):

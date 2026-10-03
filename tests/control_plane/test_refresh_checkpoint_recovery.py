@@ -18,6 +18,7 @@ from tests.control_plane.test_quota_settlement_cli import (
     SELECTED_REPLAN_TODO_ID,
     TODO_ID,
     TURN_ID,
+    _bind_selected_replan_guard,
     _configure_selected_todo_replan_fixture,
     _initialize_git_checkout,
     _run_cli,
@@ -350,6 +351,13 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     assert rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required"
     assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    assert guard["heartbeat_receipt"]["settlement_binding_owed"] is True
+    _bind_selected_replan_guard(
+        registry,
+        runtime,
+        project,
+        turn_id,
+    )
 
     delivery = (
         "refresh-state",

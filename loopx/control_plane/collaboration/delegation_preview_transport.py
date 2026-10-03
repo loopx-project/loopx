@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import time
 import weakref
@@ -47,8 +48,21 @@ def _source_snapshot(release: Path) -> tuple:
     return tuple(files)
 
 
-def _close_bridge(process: subprocess.Popen) -> None:
+def _terminate_bridge(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name != "nt":
+        try:
+            process.send_signal(signal.SIGCONT)
+        except ProcessLookupError:
+            return
+    process.terminate()
+
+
+def _close_bridge(process: subprocess.Popen, *, force: bool = False) -> None:
     # Parent EOF cancels the TS-owned group; give its cleanup fence time to run.
+    if force:
+        _terminate_bridge(process)
     if process.stdin is not None and not process.stdin.closed:
         try:
             process.stdin.close()
@@ -58,7 +72,7 @@ def _close_bridge(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         # SIGTERM asks the supervisor to clean, not to abandon its worker.
-        process.terminate()
+        _terminate_bridge(process)
         process.wait(timeout=5)
     finally:
         if process.stdout is not None:
@@ -75,9 +89,9 @@ class DelegationPreviewTransport:
         self._finalizer: weakref.finalize | None = None
         self._sequence = 0
 
-    def _close(self) -> None:
+    def _close(self, *, force: bool = False) -> None:
         if self._process is not None:
-            _close_bridge(self._process)
+            _close_bridge(self._process, force=force)
         if self._finalizer is not None:
             self._finalizer.detach()
         self._process = None
@@ -155,7 +169,7 @@ class DelegationPreviewTransport:
                 return response["value"]
             raise ValueError("delegation preview retirement did not complete")
         except BaseException:
-            self._close()
+            self._close(force=True)
             raise
         finally:
             self._lock.release()

@@ -599,6 +599,10 @@ def _projected_cli_args(command: str, *, turn_instance_id: str) -> tuple[str, ..
 
 def _bind_selected_replan_guard(
     registry: Path, runtime: Path, project: Path, turn_instance_id: str,
+    *,
+    goal_id: str = GOAL_ID,
+    agent_id: str = AGENT_ID,
+    todo_id: str = SELECTED_REPLAN_TODO_ID,
 ) -> dict[str, Any]:
     """Choose the fixture Todo explicitly, then consume the generated recovery.
 
@@ -607,15 +611,15 @@ def _bind_selected_replan_guard(
     """
     rc, deferred = _run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--goal-id", goal_id, "--agent-id", agent_id,
         "--turn-instance-id", turn_instance_id, "--scan-path", str(project),
-        "--todo-id", SELECTED_REPLAN_TODO_ID,
+        "--todo-id", todo_id,
     )
     assert rc == 1 and deferred["action_selection_qualification"]["state"] == "deferred", deferred
     [command] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
     rc, bound = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, bound
-    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
     return bound
 
 
