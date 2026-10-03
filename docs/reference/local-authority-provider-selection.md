@@ -88,7 +88,14 @@ interruption uses the same target even if the machine preference changed.
 If App creation fails during initialization, use **Retry original operation**
 on that creation card. It resumes the recorded target before adding initial
 Todos or starting a Turn. A persistent initialization failure remains an error;
-the presence of a registry entry alone is not successful creation.
+the presence of a registry entry alone is not successful creation. Recovery must
+match the original App operation and its validated workspace. Registration
+records `creation_operation_id` atomically with the Goal; a competing creation
+of the same id, even in the same workspace, is rejected before initialization
+or initial Todos. The create-only check is repeated under the registry lock.
+Older incomplete cards without this binding require inspection of the existing
+Goal and its canonical bootstrap/recovery path; they cannot adopt it by id.
+Already-applied cards continue to return their original receipt.
 Reconnecting an existing Goal, including an implicit File Goal, does not adopt
 a newer machine default. Importing existing Markdown does not count as a new
 empty Goal. Explicit provider selection never falls back on failure.

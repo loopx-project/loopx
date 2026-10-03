@@ -76,25 +76,15 @@ def test_pending_creation_uses_frozen_intent_after_machine_default_changes(envir
     assert json.loads(marker().read_text())["provider"] == "sqlite"
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("relative_runtime", [False, True])
-def test_app_creation_retries_storage_before_reporting_success(environment, monkeypatch, provider, relative_runtime):
-    from loopx.capabilities.machine_configuration import goal_storage
+@pytest.fixture
+def app(environment):
     from loopx.chat_action_store import ChatActionStore
     from loopx.chat_actions import ChatActionService
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-    from loopx.todos import add_goal_todo
 
-    configure, bootstrap, marker, project, runtime = environment
+    _, bootstrap, _, project, runtime = environment
     bootstrap("workspace")
-    configure(provider)
     registry = project / ".loopx/registry.json"
-    # Registry-relative runtime routing must agree with CLI bootstrap, regardless
-    # of the HTTP server process's working directory.
-    if relative_runtime:
-        data = json.loads(registry.read_text())
-        data["common_runtime_root"] = "../runtime"
-        registry.write_text(json.dumps(data))
     store = ChatActionStore(runtime / "actions")
     service = ChatActionService(store=store, registry_path=registry)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
@@ -113,6 +103,30 @@ def test_app_creation_retries_storage_before_reporting_success(environment, monk
         finally:
             connection.close()
 
+    try:
+        yield store, request
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("relative_runtime", [False, True])
+def test_app_creation_retries_storage_before_reporting_success(environment, app, monkeypatch, provider, relative_runtime):
+    from loopx.capabilities.machine_configuration import goal_storage
+    from loopx.todos import add_goal_todo
+
+    configure, _, marker, project, _ = environment
+    store, request = app
+    configure(provider)
+    registry = project / ".loopx/registry.json"
+    # Registry-relative runtime routing must agree with CLI bootstrap, regardless
+    # of the HTTP server process's working directory.
+    if relative_runtime:
+        data = json.loads(registry.read_text())
+        data["common_runtime_root"] = "../runtime"
+        registry.write_text(json.dumps(data))
     unavailable = True
     selections = []
     effect = goal_storage.effect_runtime_result
@@ -127,54 +141,111 @@ def test_app_creation_retries_storage_before_reporting_success(environment, monk
         return effect(method, payload)
 
     monkeypatch.setattr(goal_storage, "effect_runtime_result", storage_effect)
-    try:
-        code, preview = request("/api/actions/preview", {
-            "action_kind": "goal.create", "summary": "Create a Goal",
-            "normalized_parameters": {
-                "goal_id": "recovery", "title": "Creation recovery",
-                "objective": "Resume interrupted storage initialization",
-                "workspace_ref": "current", "agent_id": "codex",
-                "heartbeat": {"enabled": False}, "initial_todos": ["Verify recovery"],
-            },
-            "context": {"kind": "goal_channel", "goal_id": "workspace"},
-            "idempotency_key": "storage-recovery",
-        })
-        assert code == 201, preview
-        proposal_id = preview["proposal"]["proposal_id"]
-        apply_path = f"/api/actions/{proposal_id}/apply"
-        with patch("loopx.chat_actions.add_goal_todo", wraps=add_goal_todo) as add:
-            for _ in range(2):
-                code, failure = request(apply_path, {})
-                assert code == 424, failure
-                assert failure["error_code"] == "canonical_action_failed"
-                proposal = store.load(proposal_id)
-                assert proposal["status"] == "failed"
-                assert "goal_bootstrapped" not in proposal["checkpoint"]["steps"]
-                assert not marker("recovery").exists()
-                add.assert_not_called()
+    code, preview = request("/api/actions/preview", {
+        "action_kind": "goal.create", "summary": "Create a Goal",
+        "normalized_parameters": {
+            "goal_id": "recovery", "title": "Creation recovery",
+            "objective": "Resume interrupted storage initialization",
+            "workspace_ref": "current", "agent_id": "codex",
+            "heartbeat": {"enabled": False}, "initial_todos": ["Verify recovery"],
+        },
+        "context": {"kind": "goal_channel", "goal_id": "workspace"},
+        "idempotency_key": "storage-recovery",
+    })
+    assert code == 201, preview
+    proposal_id = preview["proposal"]["proposal_id"]
+    apply_path = f"/api/actions/{proposal_id}/apply"
+    with patch("loopx.chat_actions.add_goal_todo", wraps=add_goal_todo) as add:
+        for _ in range(2):
+            code, failure = request(apply_path, {})
+            assert code == 424, failure
+            assert failure["error_code"] == "canonical_action_failed"
+            proposal = store.load(proposal_id)
+            assert proposal["status"] == "failed"
+            assert "goal_bootstrapped" not in proposal["checkpoint"]["steps"]
+            assert not marker("recovery").exists()
+            add.assert_not_called()
 
-            goal = next(g for g in json.loads(registry.read_text())["goals"] if g["id"] == "recovery")
-            assert goal["coordination"]["storage_target"]["provider"] == provider
-            configure("file" if provider == "sqlite" else "sqlite")
-            unavailable = False
-            code, recovered = request(apply_path, {})
-            assert code == 200, recovered
-            assert recovered["proposal"]["status"] == "applied"
-            assert recovered["proposal"]["receipt"]["outcome"] == "goal_created"
-            assert selections[-1]["provider"] == provider
-            assert selections[-1]["promotion_performed"] is False
-            if provider == "sqlite":
-                assert json.loads(marker("recovery").read_text())["provider"] == provider
-            else:
-                assert not marker("recovery").exists()
-            assert add.call_count == 1
-            assert request(apply_path, {})[1]["proposal"]["receipt"] == recovered["proposal"]["receipt"]
-            assert add.call_count == 1
-            assert len(selections) == 1
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
+        goal = next(g for g in json.loads(registry.read_text())["goals"] if g["id"] == "recovery")
+        assert goal["coordination"]["storage_target"]["provider"] == provider
+        assert goal["creation_operation_id"] == proposal_id
+        configure("file" if provider == "sqlite" else "sqlite")
+        unavailable = False
+        code, recovered = request(apply_path, {})
+        assert code == 200, recovered
+        assert recovered["proposal"]["status"] == "applied"
+        assert recovered["proposal"]["receipt"]["outcome"] == "goal_created"
+        assert selections[-1]["provider"] == provider
+        assert selections[-1]["promotion_performed"] is False
+        if provider == "sqlite":
+            assert json.loads(marker("recovery").read_text())["provider"] == provider
+        else:
+            assert not marker("recovery").exists()
+        assert add.call_count == 1
+        assert request(apply_path, {})[1]["proposal"]["receipt"] == recovered["proposal"]["receipt"]
+        assert add.call_count == 1
+        assert len(selections) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("collision", ["other_workspace", "same_workspace", "during_bootstrap"])
+def test_app_creation_cannot_adopt_a_competing_goal(environment, app, monkeypatch, provider, collision):
+    from loopx import chat_actions
+
+    _, bootstrap, marker, project, _ = environment
+    store, request = app
+    registry = project / ".loopx/registry.json"
+    other_project = project if collision == "same_workspace" else project.parent / "other"
+    other_project.mkdir(exist_ok=True)
+    code, preview = request("/api/actions/preview", {
+        "action_kind": "goal.create", "summary": "Create a Goal",
+        "normalized_parameters": {
+            "goal_id": "competing", "title": "Requested Goal",
+            "workspace_ref": "current", "agent_id": "codex",
+            "initial_todos": ["Only the original creation may add this Todo"],
+        },
+        "context": {"kind": "goal_channel", "goal_id": "workspace"},
+        "idempotency_key": "competing-creation",
+    })
+    assert code == 201, preview
+    proposal_id = preview["proposal"]["proposal_id"]
+    before = {}
+
+    def create_competitor():
+        # Real CLI registration, then model its durable pre-initialization
+        # boundary independently. No fake success receipt or provider is used.
+        bootstrap("competing", "--project", str(other_project))
+        data = json.loads(registry.read_text())
+        goal = next(g for g in data["goals"] if g["id"] == "competing")
+        goal.setdefault("coordination", {})["storage_target"] = {
+            "schema_version": "loopx_new_goal_storage_target_v0", "provider": provider}
+        registry.write_text(json.dumps(data))
+        before["registry"] = registry.read_bytes()
+        before["files"] = {str(p): p.read_bytes() for p in other_project.rglob("*.md")}
+
+    if collision == "during_bootstrap":
+        real_bootstrap = chat_actions.bootstrap_project
+        def race(**kwargs):
+            create_competitor()
+            return real_bootstrap(**kwargs)
+        monkeypatch.setattr(chat_actions, "bootstrap_project", race)
+    else:
+        create_competitor()
+
+    with patch("loopx.chat_actions.initialize_goal_storage_target", wraps=chat_actions.initialize_goal_storage_target) as initialize, patch("loopx.chat_actions.add_goal_todo", wraps=chat_actions.add_goal_todo) as add:
+        code, rejected = request(f"/api/actions/{proposal_id}/apply", {})
+        assert code == 409, rejected
+        assert rejected["proposal"]["gate"]["kind"] == "goal_id_conflict"
+        initialize.assert_not_called()
+        add.assert_not_called()
+    assert registry.read_bytes() == before["registry"]
+    assert {str(p): p.read_bytes() for p in other_project.rglob("*.md")} == before["files"]
+    assert not marker("competing").exists()
+    assert not (project / ".codex/goals/competing").exists() or collision == "same_workspace"
+    checkpoint = store.load(proposal_id).get("checkpoint") or {}
+    assert "goal_bootstrapped" not in checkpoint.get("steps", {})
+    if collision != "during_bootstrap":
+        assert not checkpoint  # Reject before even a workspace success checkpoint.
 
 
 def test_machine_editor_is_machine_only_and_configuration_rejects_activation():
