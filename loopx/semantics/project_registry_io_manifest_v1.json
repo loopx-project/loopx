@@ -998,19 +998,11 @@
       "classification": "codec_api"
     },
     {
-      "site": "loopx/control_plane/collaboration/peer_host_route.py::<module>.resolve_peer_host_route::codec_read:load_registry#1",
-      "line": 123,
+      "site": "loopx/control_plane/collaboration/peer_host_route.py::<module>._read_route_registry::codec_read:decode_registry_snapshot#1",
+      "line": 41,
       "column": 16,
       "kind": "codec_read",
-      "api": "load_registry",
-      "classification": "codec_api"
-    },
-    {
-      "site": "loopx/control_plane/collaboration/peer_host_route.py::<module>.resolve_peer_host_route::codec_read:load_registry#2",
-      "line": 176,
-      "column": 38,
-      "kind": "codec_read",
-      "api": "load_registry",
+      "api": "decode_registry_snapshot",
       "classification": "codec_api"
     },
     {
@@ -2135,7 +2127,7 @@
     },
     {
       "site": "loopx/thread_agent_binding.py::<module>.bind_thread_agent_in_registry::codec_write:mutate_project_registry#1",
-      "line": 649,
+      "line": 650,
       "column": 16,
       "kind": "codec_write",
       "api": "mutate_project_registry",
@@ -2143,7 +2135,7 @@
     },
     {
       "site": "loopx/thread_agent_binding.py::<module>.bind_thread_agent_in_registry::codec_read:load_registry#1",
-      "line": 656,
+      "line": 657,
       "column": 15,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2151,7 +2143,7 @@
     },
     {
       "site": "loopx/thread_agent_binding.py::<module>.resolve_registry_thread_agent_binding::codec_read:load_registry#1",
-      "line": 412,
+      "line": 413,
       "column": 15,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2159,7 +2151,7 @@
     },
     {
       "site": "loopx/thread_agent_binding.py::<module>.unbind_thread_agent_in_registry::codec_write:mutate_project_registry#1",
-      "line": 708,
+      "line": 709,
       "column": 16,
       "kind": "codec_write",
       "api": "mutate_project_registry",
@@ -2167,7 +2159,7 @@
     },
     {
       "site": "loopx/thread_agent_binding.py::<module>.unbind_thread_agent_in_registry::codec_read:load_registry#1",
-      "line": 715,
+      "line": 716,
       "column": 15,
       "kind": "codec_read",
       "api": "load_registry",
