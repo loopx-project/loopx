@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,22 @@ def write_lock_test_python(path: Path) -> None:
     path.chmod(0o755)
 
 
+def stop_install_fixture(process: subprocess.Popen[str]) -> tuple[str, str]:
+    """Reap an installer that this fixture started in its own session."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        return process.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return process.communicate(timeout=10)
+
+
 def assert_install_waits_for_promotion_guard(root: Path) -> None:
     env = {**install_env(root), "LOOPX_RELEASE_ID": "guarded"}
     python_wrapper = root / "guard-python"
@@ -109,6 +126,7 @@ def assert_install_waits_for_promotion_guard(root: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
         )
         try:
             deadline = time.monotonic() + 2
@@ -118,12 +136,7 @@ def assert_install_waits_for_promotion_guard(root: Path) -> None:
                 time.sleep(0.05)
             assert process.poll() is None, process.communicate()
         except Exception:
-            process.terminate()
-            try:
-                process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.communicate()
+            stop_install_fixture(process)
             raise
         finally:
             fcntl.flock(guard.fileno(), fcntl.LOCK_UN)
@@ -196,6 +209,7 @@ def assert_empty_legacy_lock_is_reaped(root: Path) -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     acquired = False
     try:
@@ -209,9 +223,9 @@ def assert_empty_legacy_lock_is_reaped(root: Path) -> None:
                 break
             time.sleep(0.05)
     finally:
-        if process.poll() is None:
-            process.terminate()
-        stdout, stderr = process.communicate(timeout=10)
+        # The installer shells out while preparing its snapshot. Stop this
+        # fixture's whole session before removing the directory it can write.
+        stdout, stderr = stop_install_fixture(process)
         if legacy_lock.exists():
             shutil.rmtree(legacy_lock)
     assert acquired, (stdout, stderr)

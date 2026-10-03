@@ -368,9 +368,9 @@ def _check_scope_coverage(blockers: list[str], value: object) -> None:
     cases = _require_items(blockers, evidence_id=key, row=value,
                            requirement={"items_field": "cases", "item_fields": contract["case_fields"]})
     ids = [case.get("case_id") for case in cases]
-    for case_id in contract["case_ids"]:
-        if ids.count(case_id) != 1:
-            blockers.append(f"{key}:missing_or_duplicate_case:{case_id}")
+    for expected_case_id in contract["case_ids"]:
+        if ids.count(expected_case_id) != 1:
+            blockers.append(f"{key}:missing_or_duplicate_case:{expected_case_id}")
     for case in cases:
         case_id = case.get("case_id")
         status = case.get("status")
@@ -406,6 +406,7 @@ def _unpublished_problem_explanation(context: object, body: str) -> list[str]:
 def check_review_result(
     packet: Mapping[str, Any],
     result: Mapping[str, Any],
+    *, current_execution: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     target = result.get("target_exact_head")
     items = packet.get("pull_requests")
@@ -569,6 +570,32 @@ def check_review_result(
     errors.extend(f"review_body:{reason}" for reason in body["invalid_reasons"])
     body_text = str(result.get("review_body") or "")
     errors.extend(_reviewer_errors(result.get("reviewer"), body_text))
+    from ...control_plane.effect_runtime import effect_runtime_result
+
+    execution = packet.get("reviewer_execution")
+    declaration = result.get("reviewer")
+    if execution is not None or current_execution is not None or (
+        isinstance(declaration, Mapping) and declaration.get("declaration_source") == "runtime_reported"
+    ):
+        params = {"observation": execution, "declaration": result.get("reviewer")}
+        if current_execution is not None:
+            params["current"] = current_execution
+        matched = effect_runtime_result("runtime.execution_identity.match", params)
+        errors.extend(f"reviewer:{reason}" for reason in matched["errors"])
+        if isinstance(declaration, Mapping) and declaration.get("actor_kind") == "model_agent" and (
+            execution is not None or declaration.get("declaration_source") == "runtime_reported"
+            or current_execution is not None and current_execution.get("status") == "runtime_reported"
+        ):
+            lines = reviewer_declaration_lines(body_text)
+            public_fields = [declaration.get("declaration_source")]
+            observed = current_execution or execution
+            if isinstance(observed, Mapping) and observed.get("status") == "runtime_reported":
+                public_fields.append(declaration.get("declared_reasoning_effort") or "effort_unavailable")
+            if len(lines) == 1 and any(
+                isinstance(value, str) and not _published_as_token(value.casefold(), lines[0].casefold())
+                for value in public_fields
+            ):
+                errors.append("reviewer:runtime_basis_not_published")
     problem_context = evidence.get("problem_context")
     errors.extend(_unpublished_problem_explanation(problem_context, body_text))
     errors.extend(_unpublished_spec_references(
@@ -594,5 +621,7 @@ def check_review_result(
         "review_body_check": body,
         "evidence_truth_verified": False,
         "remote_head_verified": False,
+        "reviewer_execution_current_checked": current_execution is not None
+        and current_execution.get("status") == "runtime_reported",
         "external_writes_performed": False,
     }

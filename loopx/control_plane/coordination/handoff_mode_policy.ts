@@ -2,10 +2,8 @@
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 
-export const HANDOFF_MODES = ["legacy", "soft_claim", "hard_lease"] as const;
-/** New configuration targets. legacy remains readable for upgrade and receipts. */
-export const EXECUTION_HANDOFF_MODES = ["soft_claim", "hard_lease"] as const;
-export type HandoffMode = typeof HANDOFF_MODES[number];
+import {HANDOFF_MODES, type HandoffMode} from "./handoff_mode_vocabulary.ts";
+export {HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type HandoffMode} from "./handoff_mode_vocabulary.ts";
 export const HANDOFF_MODE_PLAN_SCHEMA = "loopx_handoff_mode_plan_request_v0";
 
 import type {PersistedHandoffMode} from "./handoff_mode_facts.ts";

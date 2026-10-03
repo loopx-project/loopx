@@ -26,7 +26,8 @@ def _row(todo_id: str, *, status: str = "open", extra: str = "") -> str:
     )
 
 
-def _source(root: Path, *, provider: str, status: str = "open", extra: str = "", empty: bool = False):
+def _source(root: Path, *, provider: str, status: str = "open", extra: str = "", empty: bool = False,
+            handoff_mode: str = "soft_claim"):
     project, runtime, registry = cli._write_fixture(root)
     goal = json.loads(registry.read_text())["goals"][0]
     path = project / goal["state_file"]
@@ -38,7 +39,7 @@ def _source(root: Path, *, provider: str, status: str = "open", extra: str = "",
         initialize_canonical_authority(
             runtime, cli.GOAL_ID,
             build_todo_runtime_shadow_projection(
-                goal_id=cli.GOAL_ID, todos=fields["agent_todos"]["items"], handoff_mode="soft_claim",
+                goal_id=cli.GOAL_ID, todos=fields["agent_todos"]["items"], handoff_mode=handoff_mode,
             ),
             state_path=path, provider=provider,
         )
@@ -131,6 +132,74 @@ def _execute(command: str, project: Path, runtime: Path, registry: Path):
     # Execute the returned argv unchanged. The fixture supplies only CLI output
     # format and the same registry/runtime, never missing actor/binding arguments.
     return cli._run_cli(registry, runtime, *shlex.split(command)[1:], cwd=project)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provider):
+    project, runtime, registry, path, _ = _source(
+        tmp_path, provider=provider, handoff_mode="legacy",
+        extra=f"claimed_by={cli.AGENT_ID}",
+    )
+
+    def run(*args):
+        return cli._run_cli(registry, runtime, *args, "--goal-id", cli.GOAL_ID, cwd=project)
+
+    plan = tmp_path / "handoff-plan.json"
+    code, planned = run("handoff-mode", "plan-migration", "--mode", "hard_lease", "--plan", str(plan))
+    assert code == 0 and planned["status"] == "planned", planned
+    assert planned["preserved_claim_count"] == 1
+    migration = ("handoff-mode", "migrate", "--plan", str(plan),
+                 "--plan-sha256", planned["plan_sha256"], "--execute")
+    code, migrated = run(*migration)
+    assert code == 0 and migrated["status"] == "applied", migrated
+    assert Path(migrated["backup_path"]).is_file()
+    assert migrated["execution_authority_granted"] is False
+    path.unlink()  # The migrated journey cannot use the old Markdown writer.
+
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0 and guard["decision"] == "run", guard
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
+    update = ("todo", "update", "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
+              "--text", "Continue after policy migration")
+    code, rejected = run(*update)
+    assert code == 1 and rejected["error_code"] == "handoff_mode_requires_lease", rejected
+
+    lease_key = "migrated-delivery"
+    code, acquired = run("task-lease", "acquire", "--todo-id", cli.TODO_ID, "--owner", cli.AGENT_ID,
+                         "--idempotency-key", lease_key, "--expected-version", "0", "--ttl-seconds", "3600",
+                         "--write-scope", "tests/**")
+    assert code == 0 and acquired["acquired"] is True, acquired
+    version = str(acquired["lease"]["version"])
+    code, updated = run(*update, "--task-lease-idempotency-key", lease_key,
+                        "--task-lease-expected-version", version)
+    assert code == 0 and updated["ok"] is True, updated
+
+    code, refreshed = _refresh(project, runtime, registry)
+    assert code == 0, refreshed
+    command = refreshed["settlement_owed"]["command"]
+    code, spent = _execute(command, project, runtime, registry)
+    assert code == 0 and spent["appended"] is True, spent
+    assert spent["settlement_progress"]["state"] == "settled"
+    code, retried = _execute(command, project, runtime, registry)
+    assert code == 0 and retried["appended"] is False, retried
+    assert cli._spend_run_count(runtime) == 1
+
+    # A migration retry after actual work cannot reset the current projection.
+    before = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                            runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)["todo"]
+    assert before["text"] == "[P1] Continue after policy migration"
+    code, replayed = run(*migration)
+    assert code == 0 and replayed["status"] == "replayed", replayed
+    assert list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                          runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)["todo"] == before
+    code, released = run("task-lease", "release", "--todo-id", cli.TODO_ID, "--owner", cli.AGENT_ID,
+                         "--idempotency-key", lease_key, "--expected-version", version)
+    assert code == 0 and released["released"] is True, released
+    code, next_wake = _guard(project, runtime, registry, turn_id="turn-after-policy-migration")
+    assert code == 0 and next_wake["decision"] == "run", next_wake
+    assert next_wake["selected_todo"]["todo_id"] == cli.TODO_ID
+    assert next_wake["effective_action"] != "unsettled_host_turn_recovery"
+    assert cli._spend_run_count(runtime) == 1
 
 
 def test_returned_command_settles_and_repairs_receipts_without_another_debit(tmp_path):

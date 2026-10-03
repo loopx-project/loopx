@@ -38,6 +38,14 @@ test("ordinary publication retains immutable phases and rejects invalid update a
   }
 });
 
+test("stored result digests retain the bare lowercase SHA-256 boundary", () => {
+  for (const digest of [null, 42, "", "a".repeat(63), "a".repeat(65), "A".repeat(64), "g".repeat(64), `sha256:${"a".repeat(64)}`]) {
+    assert.throws(() => planCollaborationResult({ ...input,
+      results: [{ ...input.results[0], text_sha256: digest }] }), /identity or content conflict/);
+  }
+  assert.equal(planCollaborationResult(input).result_key, "conclusion-00000001");
+});
+
 test("later delivery waits for verified predecessors, including exact update identity", () => {
   const initialUpdate = { previous_result_key: "conclusion" };
   for (const status of ["queued", "retry_pending", "verification_required", "explicit_unverified", "superseded"]) {

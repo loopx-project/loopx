@@ -24,9 +24,11 @@ from loopx.control_plane.turn_driver.delivery_continuity import (
 )
 from test_quota_settlement_cli import (
     AGENT_ID,
+    ALTERNATIVE_TODO_ID,
     GOAL_ID,
     TODO_ID,
     _configure_completion_validation_todo,
+    _configure_selectable_alternative,
     _run_cli,
     _spend_run_count,
     _write_fixture,
@@ -68,11 +70,14 @@ def _vision_path(path: Path) -> Path:
     return path
 
 
+@pytest.mark.parametrize("waiting", [False, True])
 def test_qualified_path_replan_settles_without_completing_validation_todo(
     tmp_path: Path,
+    waiting: bool,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     state_path = _configure_completion_validation_todo(project)
+    _configure_selectable_alternative(project)
     initial_state = state_path.read_text(encoding="utf-8")
     turn_id = "turn-validation-bearing-replan"
 
@@ -162,6 +167,45 @@ def test_qualified_path_replan_settles_without_completing_validation_todo(
     replay_rc, replay = _run_cli(registry, runtime, *spend_args)
     assert replay_rc == 0, replay
     assert replay["idempotent_replay"] is True
+    assert _spend_run_count(runtime) == 1
+
+    if waiting:
+        rc, updated = _run_cli(
+            registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--status", "open",
+            "--resume-when", "resume_at:2099-01-01T00:00:00Z",
+            "--successor-todo-id", ALTERNATIVE_TODO_ID,
+            "--reason", "Wait for independent evidence on the revised path.",
+        )
+        assert rc == 0, updated
+
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--scan-path", str(project),
+    )
+    for selection in ((), ("--todo-id", TODO_ID)):
+        rc, replay = _run_cli(
+            registry, runtime, *guard_args,
+            "--turn-instance-id", turn_id, *selection,
+        )
+        assert rc == 0, replay
+        assert replay["effective_action"] == "heartbeat_settled_skip", replay
+        assert replay["should_run"] is False
+        assert replay["execution_obligation"]["must_attempt_work"] is False
+        assert replay["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
+
+    rc, fresh = _run_cli(
+        registry, runtime, *guard_args, "--turn-instance-id", f"{turn_id}-next",
+    )
+    assert rc == 0, fresh
+    assert fresh["should_run"] is True
+    assert fresh["effective_action"] != "unsettled_host_turn_recovery", fresh
+    assert fresh["selected_todo"]["todo_id"] == (ALTERNATIVE_TODO_ID if waiting else TODO_ID)
+    rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert rc == 0, listed
+    todo = next(item for item in listed["todos"] if item["todo_id"] == TODO_ID)
+    assert todo["status"] == "open"
+    assert todo["completion_validation_required"] is True
     assert _spend_run_count(runtime) == 1
 
 

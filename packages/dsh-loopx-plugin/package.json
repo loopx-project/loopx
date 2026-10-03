@@ -1,6 +1,6 @@
 {
   "name": "dsh-loopx-plugin",
-  "version": "0.1.1-beta.5",
+  "version": "0.1.1-beta.6",
   "description": "One-step LoopX bootstrap, same-session driver, and local GoalBar for DeepSeek Harness",
   "type": "module",
   "main": "./lib/index.js",
@@ -47,6 +47,7 @@
     "prepack": "pnpm build",
     "smoke:artifact": "node smoke/dsh-client-artifact-smoke.mjs",
     "smoke:peer-range": "node smoke/dsh-peer-range-smoke.mjs",
+    "smoke:install": "node smoke/dsh-installer-smoke.mjs",
     "smoke:profile": "node smoke/dsh-profile-smoke.mjs",
     "smoke:runtime": "node smoke/dsh-goalbar-runtime-smoke.mjs",
     "smoke:docker": "bash smoke/dsh-clean-docker-smoke.sh"
@@ -67,13 +68,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.2.0-0",
-    "@deepseek-ai/dsh-client-connection": ">=0.1.5-rc.1 <0.2.0-0",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.5-rc.1 <0.2.0-0",
-    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.5-rc.1 <0.2.0-0",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.5-rc.1 <0.2.0-0",
-    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.1 <0.2.0-0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
+    "@deepseek-ai/dsh-client-connection": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -107,6 +108,7 @@
     "lightningcss": "1.33.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "semver": "7.8.5",
     "tsdown": "0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"

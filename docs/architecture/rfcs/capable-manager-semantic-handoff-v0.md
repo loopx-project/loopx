@@ -92,6 +92,17 @@ execution, live Lark, frontend journey completion or the remaining M1–M4 work.
 
 ## 4. Current-system contract: audited facts
 
+The review command now projects the exact invoking Codex session's recorded
+model/provider/effort into its existing result template and rereads the metadata
+before publication checking. `control_plane/runtime/execution_identity.ts` owns
+bounded metadata projection and declaration matching; the Python Codex adapter
+only locates the exact thread in the selected home through a read-only store.
+Unknown metadata stays explicit, configuration is not execution evidence, and
+public review text contains no host locator or transcript. This is a GQ03/GQ12
+attribution prerequisite, not evidence of independent review, App adoption,
+receiver execution or R2/G1 completion. Other host adapters and the installed
+conversation journey remain with those existing acceptance owners.
+
 The baseline already has substantial reusable machinery:
 
 | Existing owner | Source / fact | Consequence |
@@ -191,6 +202,18 @@ owners. Do not build a second scheduler in the manager or provider adapter.
 Resolve a request from authenticated principal, origin/audience, resource scope and requested effect, then match the existing persistent grant. A grant is reused across turns and restarts until revoked, expired or outside scope. Authorized delegation may carry an attenuated reference to a real standing grant; handoff is not inherently powerless. The receiver verifies the grant chain, target/action scope and its own host authority. It neither trusts a model-written permission string nor requires the user to approve the same in-scope work again. Read-only discovery, direct reversible effects and protected operations keep their actual permission semantics; none is forced through a second confirmation merely because the entrypoint is chat.
 
 For a trusted owner-private manager, grant the normal host-agent tool profile that the owner configured. For a shared/untrusted audience, run a restricted context with enforceable resource/tool limits. A broad private process followed only by output filtering is **not** sufficient isolation. A verified owner message in a group may trigger private work with a separately scoped return, when a standing policy permits it; other participants do not inherit that policy.
+
+Use managed Goal scope for an authenticated owner's context-delegation grant:
+all current and future registered Agents within those Goals inherit it. Avoid
+requiring separate enrollment every time a worker joins. Retain exact-recipient
+grants for restricted sources, and explicit recipient revocations that override
+the Goal grant. New Goals, evidence-read scope and execution permissions are
+separate authority; registration or a quoted request cannot expand them.
+The shared `collaboration/source_grants.ts` owner resolves the same current
+policy for the catalog, direct handoff and peer forwarding. The existing local
+operator command can configure a Goal target by omitting `--agent-id`, with
+preview, locked apply and readback. This bounded configuration slice does not
+qualify settings-UI editing, native receiver adoption or the full M1–M3 journey.
 
 LoopX state mutations always use the existing typed command boundary, even if initiated through shell. The manager does not edit registry/authority files behind the control plane. Repository modifications use the project's normal worktree/review practice. Scoped merge/deploy authorization may be reused; unrelated payment or trading authority cannot be inferred from it.
 

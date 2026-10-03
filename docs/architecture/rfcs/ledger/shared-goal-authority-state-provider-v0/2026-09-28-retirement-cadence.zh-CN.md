@@ -65,7 +65,7 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 
 ## 当前收尾：验证、迁移与删除（2026-10-02）
 
-按 main `9b0486dc1` 和所列 PR head 重新核对。本节是 **R5 / D1–D3 / T0–T4**
+按 main `8b5335a72` 和所列 PR head 重新核对。本节是 **R5 / D1–D3 / T0–T4**
 的当前执行计划，替代旧 A–D 排期；历史测量仍只适用于原源码和负载。R6 单独推进。
 存储格式、权威选择、所有权策略是三种不同迁移：有 SQLite 数据库，不代表新 Goal
 已经默认使用 canonical authority，也不代表 `legacy` handoff 策略已经退役。
@@ -77,21 +77,30 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 | 已合并：#4931、#5251 | SQLite 重放／证明和分配优化；复用实现及匹配证据，合并不等于 D2 已验收。 |
 | 已合并：#5395、#5417 | 无调用方的 Python lease／handoff 跨界、重复结算准入／恢复决策已退役。继续按最后调用方删除，不重复计账。 |
 | 已合并：#5436 | 委派 Host 原租约续期；最终 Todo 验收和停止确认仍是不同边界。 |
-| 复审中：[#5413](https://github.com/loopx-project/loopx/pull/5413)，`2c99505c7` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。CLI 恢复修复的 99 项相关测试、File/SQLite 真实旧 CLI→新 CLI 演练通过，最终 head 独立复审待完成。没有自动迁移存量 legacy Goal。 |
-| 待审：[#5466](https://github.com/loopx-project/loopx/pull/5466)，`60a052383` | 原租约保持到最终验收；独立评审、维护者合并后验证安装态执行路径。 |
-| 待审：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`73d1fe663` | 不缩减决策输入地降低 preflight 投影成本，末次 capture 显式报告 provider 不可用。作者报告固定源码下 96 次 File/SQLite 检查及完整投影等价；仍需独立复审和安装后读回。合成故障不证明历史瞬态打开失败的根因。 |
+| 已合并：[#5413](https://github.com/loopx-project/loopx/pull/5413)，head `2c99505c7` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。保留原 CLI 恢复证据。没有自动迁移存量 legacy Goal，成功生成计划也不代表执行消费者已验收。 |
+| 已合并：[#5466](https://github.com/loopx-project/loopx/pull/5466)，merge `066b5bf26` | 原租约保持到最终验收；安装态消费者验收与合并分开记录。 |
+| 待审：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`1012d37f3` | preflight 优化仍在评审；冷 CLI 资格失败行保留，功能投影等价不等于性能通过。合成故障不证明历史瞬态打开失败的根因。 |
+| 已批准，待维护者合并：[#5500](https://github.com/loopx-project/loopx/pull/5500)，`a9e3d722c` | App 重试恢复原 canonical Goal 创建操作；这是创建／默认接入的前置修复，不退役存量所有权策略。 |
 | 按实际路径建立依赖 | [#5308](https://github.com/loopx-project/loopx/pull/5308) 要证明子进程停止后才报告已结算；[#5398](https://github.com/loopx-project/loopx/pull/5398) 保留 UI 历史和 inspector 完整事实。只对纳入试用的相关消费者建依赖，不将其说成 SQLite 引擎前置，也不能发布已知损坏的用户路径。 |
 
-当前优先收尾的是 **3 个已存在的开放 PR**，不等于再合 3 个就全部结束。
-剩余实现包是 canonical 创建／默认接入、策略迁移与 legacy 策略删除、旧 writer／
+上述开放 head 分别解决 preflight 与创建恢复，不代表固定“剩余 PR 数”。
+剩余实现包仍是 canonical 创建／默认接入、策略迁移与 legacy 策略删除、旧 writer／
 捕获退役。仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
 不再制造固定“剩余 PR 数”，也不为维持这个数字重做已完成的工作。
+
+Goal 设置的策略迁移已复用 CLI 的同一 TS 备份迁移 owner：读取当前策略、预览
+归属／租约、执行，以及丢响应或同标签页刷新后恢复原操作。合成真实 File/SQLite
+HTTP 路径覆盖 metadata 保留、过期源、跨 Goal／摘要拒绝、过期但未释放的租约和
+损坏备份。打包 App 使用合成工作区目录与真实 SQLite authority，覆盖应用响应丢失、
+刷新重试及窄屏回读。这是源码验证，不代表安装采用或 legacy 执行退役；飞书策略
+编辑不在本批，既有飞书操作仍读 canonical 状态。下一步验收创建／升级调用方并
+逐 Goal 按授权采用，再按最后调用方删除活跃 legacy 分支。
 
 ### 有依赖顺序的交付包与出口
 
 | 交付包／既有 owner | 要做什么、凭什么完成 | 依赖／删除机会／节奏 |
 | --- | --- | --- |
-| 现有 head 收尾；R3/R5 | 修完上述 3 个 PR 的 exact-head finding，处理相关失败与冲突，提交已评审 head 给维护者合并；区分已合并和已安装。 | 第一目标为 1–2 个工作日，取决于真实评审／修复结果；收尾前不另开无关优化。 |
+| 现有 head 收尾；R3/R5 | 修完上述开放 PR 的 exact-head finding，处理相关失败与冲突，提交已评审 head 给维护者合并；区分已合并和已安装。 | 第一目标为 1–2 个工作日，取决于真实评审／修复结果；收尾前不另开无关优化。 |
 | 安装态恢复候选；D1/D3、整 Goal 晋升任务 | 固定合并源码和 CLI/App/Effect 实际 Node/SQLite 身份；独立恢复并验证备份，用隔离真实快照及合成负例执行下表，完成 File→SQLite→新增写入→File。之后按授权逐 Goal 采用并日常回读。 | 相关 PR 合并后立即开始，有界矩阵目标 1–2 个工作日；保留兼容的恢复版本和 archive，不对活跃 Goal 注入崩溃／损坏。 |
 | 有界自愿试用；D2/D3 | 安装态恢复及相关执行控制通过后，邀请不超过 20 位核心开发者。公开负载／平台范围、备份迁移关闭步骤、已知缺口、停止条件与反馈入口；观察真实日常使用和失败。 | 不必等待全部正式 D2 轴或一份新的十天证书；携带新写入回退未通过前不邀请。试用不认证发布默认值。 |
 | Canonical 创建／默认接入；D3/T3 | 复用 `machine_configuration/goal_storage.py` 和 `local_authority_defaults.ts`。当前设置只选择**晋升后的目标**，返回 `promotion_performed: false`。补齐新建初始化／重试、升级、设置及打包 App/CLI/Lark 读回，已有显式 selector 保持固定。 | 有界候选可用后实现，发布默认启用仍服从下方决策；同包删除被替代的创建／选择决策。只把设置里的 file 改成 sqlite 不够。 |
@@ -114,7 +123,7 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 | --- | --- | --- |
 | 备份与完整数据 | 验证 SQLite 在线快照及逻辑 archive 恢复；比较完整 Todo JSON、缺省/null/false、未知 metadata、role/task class、归档依赖、验收合同／版本、claim／lease generation、原 events／receipt／cursor，以及受支持 Goal/source 状态。枚举全部持久状态家族，不能只比数量或最后 head hash。 | `test_authority_archive.py`、`authority_archive_audit.test.ts`、archive crash/restore 和迁移套件 |
 | 正反向迁移 | File→SQLite，真正新增／修改／完成并重放一笔新操作，重启后导回 File；全部旧事实和**新增写入**都保留。丢响应与相同重试回原结果，同 operation ID 不同意图拒绝。 | `local_authority_migration.test.ts`、archive 与 reviewed-cutover CLI 套件 |
-| 写入与所有权 | create/claim/update/complete/supersede/archive，quota 选择→refresh→spend，同 Todo 竞争、旧 revision/epoch、lease 续期／释放及适用策略迁移；一笔 commit/effect/settlement，不凭空造所有权。 | 真实 File/SQLite 命令套件；#5413/#5436/#5466；共享修改还须隔离真实 PostgreSQL |
+| 写入与所有权 | create/claim/update/complete/supersede/archive，quota 选择→refresh→spend，同 Todo 竞争、旧 revision/epoch、lease 续期／释放及适用策略迁移；一笔 commit/effect/settlement，不凭空造所有权。 | 真实 File/SQLite 命令套件；`test_quota_authority_settlement_journey.py` 串起 legacy→hard 迁移、无租约修改拒绝、带租约写入、返回的结算命令重试、新写入后的迁移重放和下一轮准入，且 Markdown 源已移除。#5413/#5436/#5466 覆盖相邻迁移／生命周期边界；共享修改还须隔离真实 PostgreSQL。 |
 | 中断与恢复 | durable commit／selector 发布前后进程中断、provider unavailable/busy、空间不足注入、投影卡住和 consumer 滞后；重启／重试只结算一次且后续合法工作可继续。子进程还活着不能报告已停止／已结算。 | 既有 crash/migration/process 套件；#5308 相关 Host 路径 |
 | 安装态消费者 | CLI status/quota/Todo list/detail；打包 App 列表／inspector 和普通修改；纳入范围时验证 Lark。数量、metadata、新鲜度、错误／恢复反馈、原路返回与 canonical 事实一致，覆盖重启和旧标签页资源。 | 既有投影／消费者任务、打包前端 smoke；受影响处采用 #5398 |
 | 成本与持续运行 | 相同数据／历史／durability／命令，分别测完整冷 CLI 和 warm store，报告 p50/p95/p99／样本数、RSS、DB/WAL／写增长、锁竞争及 consumer lag。正式 macOS 冷 CLI 失败及缺项保持可见，披露相对当前 release 的绝对值与相对变化。 | #4224、SQLite comparison/rehearsal runner、既有 performance-diagnosis capability |
@@ -403,6 +412,21 @@ Archive restore／audit 已使用 provider 通用的 1–64 个操作批量回�
 测量，不是相同完整性工作下的 provider 比较、整次恢复延迟、冷读或 D2／默认项
 验收。File 每恢复一笔仍重写保留的文件；此前一次完整历史恢复超出调用方的
 300 秒超时，随后才发布精确匹配的确认。批量回执优化没有闭合这项恢复成本。
+CLI 现在区分恢复响应不确定与已知失败，并返回只读的
+`authority-archive restore-receipt` 命令。它有界读取现有、绑定 Goal／摘要／provider
+的历史完成回执，无需再次重放或扫描归档。回执缺失不代表后台仍在运行或已经失败。
+当前完整性仍走原有 audit，不改变 provider 激活或 D2／默认项门槛。下一项恢复成本
+工作仍是已测量的完整文件重写和解码路径，不再增加超时或另一套回执／状态格式。
+
+下一项已测量的 File 改动，在一个 checkpoint 窗口内复用 `AuthorityStateReplay`，
+不再为每条历史重建重放器、重新规范化未变化的完整状态。非可信 metadata 仍经
+共享 transaction decoder，每条原始 revision、回执和最终 head 都保留校验。
+存储格式、缓存预算、writer 和公开 API 不变。macOS arm64／Node 24.21.0 上，
+同一份隔离的 2,107 笔 File 历史每组运行三个全新进程，冷读中位数从 35.6 降至
+25.9 秒，约减少 27%；完整 head、revision、cursor 一致。两组连续采样未清空
+OS 缓存，未控制其他进程负载，不代表 p95、provider 对比或完整恢复时间。
+完整文件重写与剩余 revision 哈希成本仍归原有恢复任务；这不闭合 D2／默认项
+或旧 writer 退役验收。
 #4224 的 soak 已启动；其最终证据和对当前候选的适用性仍待核对。
 
 ### 委派完成阶段的原租约衔接

@@ -323,7 +323,8 @@ def test_operator_target_grant_fails_closed_without_audited_source_or_agent(fixt
     assert json.loads(policy_path.read_text())["sources"][channel]["targets"] == []
 
 
-def test_manager_inbox_cli_previews_and_applies_one_delivery_target(fixture):
+@pytest.mark.parametrize("whole_goal", [False, True])
+def test_manager_inbox_cli_previews_and_applies_delivery_scope(fixture, whole_goal):
     root, registry, _, _, request = fixture
     channel = "manager.external." + "c" * 24
     policy_path = _root(root) / "policy.json"
@@ -335,8 +336,9 @@ def test_manager_inbox_cli_previews_and_applies_one_delivery_target(fixture):
         sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--runtime-root", str(root), "manager-inbox",
     ]
-    options = ["--channel-id", channel, "--goal-id", request["goal_id"],
-               "--agent-id", request["agent_id"]]
+    options = ["--channel-id", channel, "--goal-id", request["goal_id"]]
+    if not whole_goal:
+        options.extend(["--agent-id", request["agent_id"]])
 
     def call(action, execute=False):
         completed = subprocess.run(
@@ -351,6 +353,41 @@ def test_manager_inbox_cli_previews_and_applies_one_delivery_target(fixture):
     assert call("grant-delivery-target", execute=True)["granted_after"]
     assert call("revoke-delivery-target", execute=True)["granted_after"] is False
     assert json.loads(policy_path.read_text())["sources"][channel]["targets"] == []
+
+
+def test_goal_delivery_grant_inherits_agents_and_rechecks_specific_revocation(fixture):
+    root, registry, session, turn, request = fixture
+    channel = "manager.external." + "d" * 24
+    session["channel_id"] = channel
+    turn["origin"] = "lark"
+    policy_path = _root(root) / "policy.json"
+    _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: {
+        "sender_ids": ["owner"], "targets": [{"goal_id": "research"}],
+    }}})
+    register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+                     channel=channel, sender_id="owner", message=turn["message"], source_id="lark:original")
+    assert authority(root, registry, session, turn)["targets"] == [request]
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("future")
+    registry.write_text(json.dumps(data))
+    future = {"goal_id": "research", "agent_id": "future"}
+    assert authority(root, registry, session, turn)["targets"] == [future, request]
+    receipt = deliver(root, registry, session=session, turn=turn, request=future)
+    assert receipt["status"] == "delivered"
+    configure_delivery_target(root, registry, channel=channel, **future, grant=False, execute=True)
+    assert authority(root, registry, session, turn)["targets"] == [request]
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=session, turn=turn, request=future)
+    # Restoring the whole Goal does not silently restore an individually revoked Agent.
+    configure_delivery_target(root, registry, channel=channel, goal_id="research", grant=True, execute=True)
+    assert authority(root, registry, session, turn)["targets"] == [request]
+    configure_delivery_target(root, registry, channel=channel, **future, grant=True, execute=True)
+    assert deliver(root, registry, session=session, turn=turn, request=future)["request_id"] == receipt["request_id"]
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=session, turn=turn, request={"goal_id": "other", "agent_id": "peer"})
+    data["goals"][0]["activation_state"] = "stopped"
+    registry.write_text(json.dumps(data))
+    assert authority(root, registry, session, turn)["targets"] == []
 
 
 def test_same_goal_recipients_keep_inboxes_and_decisions_separate(fixture):

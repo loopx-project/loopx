@@ -4,36 +4,27 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { satisfies, validRange } from 'semver'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
 
-function versionTuple(value) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/u.exec(value)
-  assert(match, `unsupported version ${value}`)
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    prerelease: match[4] ?? null,
-  }
-}
-
-function supportsPrerelease(range, version) {
-  const tuple = versionTuple(version)
-  if (tuple.prerelease === null) return true
-  const tuplePrefix = `${tuple.major}.${tuple.minor}.${tuple.patch}-`
-  return range.split('||').some(branch => branch.includes(tuplePrefix))
-}
-
 for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
   if (!name.startsWith('@deepseek-ai/')) continue
+  assert(validRange(range), `invalid peer range for ${name}: ${range}`)
   const testedVersion = manifest.devDependencies?.[name]
   assert(testedVersion, `missing tested version for official peer ${name}`)
-  assert(
-    supportsPrerelease(range, testedVersion),
-    `${name} tested version ${testedVersion} is excluded by peer range ${range}`,
-  )
+  assert(satisfies(testedVersion, range), `${name} excludes pinned host ${testedVersion}`)
+  if (!name.startsWith('@deepseek-ai/dsh')) continue
+  // SemVer excludes prereleases of a different tuple unless that tuple is
+  // explicitly declared. The 0.1.5 and 0.1.7 candidates have packed-host qualification;
+  // do not opt every future release candidate into compatibility.
+  for (const version of ['0.1.5-rc.1', '0.1.5-rc.2', '0.1.7-rc.2', '0.1.7']) {
+    assert(satisfies(version, range), `${name} excludes supported host ${version}`)
+  }
+  for (const version of ['0.1.4', '0.1.5-rc.0', '0.1.7-rc.1', '0.1.8-rc.1', '0.2.0-rc.2', '0.2.0']) {
+    assert(!satisfies(version, range), `${name} admits unqualified host ${version}`)
+  }
 }
 
 process.stdout.write('dsh-loopx peer range smoke passed\n')

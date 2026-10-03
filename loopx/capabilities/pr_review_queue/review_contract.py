@@ -8,7 +8,7 @@ from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 15
+REVIEW_POLICY_REVISION = 16
 
 # Reuse the existing evidence fields for publication, rather than inventing a
 # second problem assessment or treating a jargon denylist as comprehension.
@@ -182,14 +182,24 @@ REVIEWER_DECLARATION = {
         "build names the family it knows instead of inventing a version. The declaration "
         "is provenance, not a credential: it authenticates nothing, authorizes no private "
         "access and gives the verdict no extra weight. Never put an endpoint, gateway, "
-        "account, credential or router-qualified identifier in it."
+        "account, credential or router-qualified identifier in it. When reviewer_execution "
+        "is runtime_reported, use its model, provider, reasoning_effort and observation_id "
+        "in declared_model, declared_provider, declared_reasoning_effort and "
+        "execution_observation_id. Publish runtime_reported and the effort (or "
+        "effort_unavailable) on the Reviewer line. This is the latest host-recorded Turn, "
+        "not a configured preference or proof of backend weights. CLI result checking "
+        "rereads that session; a switch requires fresh execution attribution. The bounded "
+        "read may leave active_turn_verified false; identity does not prove liveness. When the "
+        "host observation is unavailable, retain that gap and publish self_reported; do "
+        "not invent an exact build, claim runtime_reported or blame the PR author. "
+        "An offline saved-packet consistency check cannot establish current execution."
     ),
 }
 
 # Reviewers from different operators share no context or memory; the accepted
 # specification is the one reference both sides can open independently. Map the
 # head onto it criterion by criterion instead of onto the author's narrative.
-SPEC_BASIS_ASSESSMENT = {
+SPEC_BASIS_ASSESSMENT: dict[str, Any] = {
     "decision_values": ["mapped", "no_spec", "not_yet_proven"],
     "blocking_decisions": ["not_yet_proven"],
     "fields": ["decision", "spec_source", "reason"],

@@ -186,6 +186,8 @@ def _goal_capability_options(
     """Translate one validated UI contract into configure-goal options."""
 
     if configuration is None:
+        if capability_id == "goal_capability_organization":
+            return {"clear_capability_improvement_configuration": True}
         if capability_id == "periodic_report":
             return {"clear_periodic_report_configuration": True}
         if capability_id == "todo_replan_cadence":
@@ -201,6 +203,7 @@ def _goal_capability_options(
         raise ValueError(f"Goal capability cannot be cleared: {capability_id}")
     config = dict(configuration)
     allowed: dict[str, set[str]] = {
+        "goal_capability_organization": {"mode", "discovery_budget_minutes", "max_trials"},
         "todo_replan_cadence": {"completed_todos"},
         "multi_subagent": {
             "enabled",
@@ -232,6 +235,8 @@ def _goal_capability_options(
 
     if capability_id == "multi_subagent":
         return _multi_subagent_options(config)
+    if capability_id == "goal_capability_organization":
+        return {"capability_improvement_configuration": config}
     if capability_id == "todo_replan_cadence":
         return {
             "execution_replan_after_todos": normalize_completed_todo_replan_threshold(

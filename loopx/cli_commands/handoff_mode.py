@@ -135,23 +135,11 @@ def handle_handoff_mode_command(
                 raise ValueError("plan-migration requires --mode; apply options are unsupported")
             if action == "migrate" and (not plan_sha256 or args.mode):
                 raise ValueError("migrate requires --plan-sha256; the reviewed plan owns --mode")
-            from ..agent_registry import registered_agent_ids_for_goal
-            from ..control_plane.projects.registry_codec import load_registry
-            from ..registry import find_registry_goal
-            from ..control_plane.todos.provider_handoff_mode import migrate_canonical_handoff_mode
-            from ..paths import resolve_runtime_root
-            from ..control_plane.coordination.authority_source_capture import authority_registry_source
-            with authority_registry_source(registry_path) as witness:
-                registry = load_registry(registry_path)
-                goal = find_registry_goal(registry, args.goal_id)
-                if goal is None:
-                    raise ValueError("Goal is not registered")
-                agents = registered_agent_ids_for_goal(goal)
-                source = {**witness, "registered_agents": agents}
-            payload = migrate_canonical_handoff_mode(
-                runtime_root=resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path),
-                goal_id=args.goal_id, action=action, plan=plan,
-                registered_agents=agents, registry_source=source, mode=args.mode,
+            from ..control_plane.todos.provider_handoff_mode import migrate_registered_handoff_mode
+            payload = migrate_registered_handoff_mode(
+                registry_path=registry_path,
+                runtime_root=runtime_root_arg,
+                goal_id=args.goal_id, action=action, plan=plan, mode=args.mode,
                 plan_sha256=plan_sha256, execute=execute,
             )
         elif plan or plan_sha256 or execute:

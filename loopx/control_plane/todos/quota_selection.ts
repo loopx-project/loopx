@@ -6,6 +6,7 @@ import { requireJsonObject, requireBoolean, requireInteger, requireStringArray,
 import { projectTodoResumePlanning } from "./resume_planning.ts";
 import { gateAddressesAgent, actionAddressesAgent, claimAllowsAgent } from "./agent_scope.ts";
 import { missingRequiredCapabilities } from "../agents/capability_gate.ts";
+import {claimedAdvancementCountFromIndex} from "./frontier_revision.ts";
 
 interface Row {
   payload: JsonObject; display: JsonObject; claim: string | null;
@@ -163,6 +164,11 @@ export function projectQuotaSelection(value: unknown): JsonObject {
     (request.source_complete === undefined || requireBoolean(request.source_complete, "source_complete"));
   const countOpen = !agent && !userMode && Number.isSafeInteger(request.source_open_count)
     ? Math.max(Number(request.source_open_count), displayed.length) : displayed.length;
+  const claimVisibility = visibility(blocking, agent, backlog, visibilityLimit);
+  if (agent && !userMode) {
+    const completeCount = claimedAdvancementCountFromIndex(request.frontier_revision_index, agent);
+    if (completeCount !== null) claimVisibility.current_agent_claimed_advancement_count = completeCount;
+  }
   return {work_counts: countTodoWork(displayed, countOpen, sourceComplete, agent && !userMode ? agent : null), lanes: {
     all_open_items: payloads(source), blocking_open_items: payloads(blocking),
     user_action_open_items: payloads(actions), other_agent_bound_user_action_items: payloads(otherActions),
@@ -179,7 +185,7 @@ export function projectQuotaSelection(value: unknown): JsonObject {
     active_next_action_items: active.filter(activeVisible).map(row => row.display),
     active_next_action_executable_items: activeExecutable.filter(activeVisible).map(row => row.display),
     open_count: userMode ? open.length + actions.length : scope ? open.length : request.source_open_count,
-  }, claim_visibility: visibility(blocking, agent, backlog, visibilityLimit)};
+  }, claim_visibility: claimVisibility};
 }
 
 /** One quota read boundary composes scope/claim selection and existing resume rules. */
