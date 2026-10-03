@@ -576,8 +576,9 @@ The audit also exposes a compact deterministic `vision_gap_judge_v0`
 instruction packet for the agent. It borrows the strict done-judge stance used
 by autonomous goal loops without calling an LLM: the agent is told to compare
 the active vision `acceptance_summary` with the host-projected coverage ledger,
-then permitted registry-declared material references. The agent-scoped
-`loopx evidence-log` remains an operator diagnostic, not a mandatory model ritual.
+then permitted registry-declared material references. `replan_context` supplies
+scoped readable evidence and exact history read actions; no separate evidence
+command or mandatory model read ritual remains.
 Bounded public web research is the next
 fallback when those sources are missing or stale and the gap depends on public
 facts. `done=true` is only valid

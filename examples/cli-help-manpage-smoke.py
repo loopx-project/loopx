@@ -49,7 +49,8 @@ def assert_concise_default_help(output: str) -> None:
     assert "Codex App" in output, output
     assert "Claude Code" in output, output
     assert "loopx commands" in output, output
-    assert "evidence-log --goal-id ID --agent-id AGENT --thin" in output, output
+    assert "evidence-log" not in output, output
+    assert "Read this agent's thin ledger" not in output, output
     assert "man loopx" in output, output
     assert LONG_TAIL_COMMAND not in output, output
     assert len(output.splitlines()) <= 39, output
@@ -72,8 +73,8 @@ def assert_command_reference_surface() -> None:
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     assert "LoopX command reference" in result.stdout, result.stdout
     assert "Daily operator commands" in result.stdout, result.stdout
-    assert "required evidence-log reads" in result.stdout, result.stdout
-    assert "before replan or handoff" in result.stdout, result.stdout
+    assert "host-projected replan context" in result.stdout, result.stdout
+    assert "evidence-log" not in result.stdout, result.stdout
     assert "Loop driver hints" in result.stdout, result.stdout
     assert "Claude Code /loop" in result.stdout, result.stdout
     assert "Maintainer and adapter commands" in result.stdout, result.stdout

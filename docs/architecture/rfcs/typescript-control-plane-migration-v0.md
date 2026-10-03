@@ -440,6 +440,19 @@ replan source while retaining independently evidenced vision paths. This
 corrects false advancement admission; it does not add a blocked-wait settlement
 route or certify Goal completion.
 
+Replan decision context now follows the same boundary: `work_items/replan_context.ts`
+owns scoping, chronology, repetition reduction, result/route diversity and bounded
+coverage projection. Its Python codec reads the existing Goal and compact index,
+normalizes historical observations and reuses the private snapshot transport.
+The core Goal, scoped acceptance contract, evidence and uncovered frontier enter
+one context; the standalone evidence command is retired. Selection reads beyond
+the status display window. The readable view retains up to 24 distinct
+observations, while writeback novelty checks retain complete available history.
+Real CLI references, file/SQLite receipt reentry, wrong-scope/stale reads and
+omitted-old-blocker rejection qualify this S3/S6 slice. Ordinary guard output
+remains unchanged; the required-replan information budget increases explicitly.
+This does not complete T3, qualify ten-day costs or establish S11 score gains.
+
 The delivery-history boundary now treats `classification`, `health_check`, and
 `recommended_action` as narrative. They cannot create or discharge a
 follow-through obligation, prove an outcome, or classify delivery scale.

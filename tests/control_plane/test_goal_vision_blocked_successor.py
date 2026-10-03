@@ -14,9 +14,6 @@ from loopx.control_plane.goals.goal_frontier import (
     build_goal_frontier_projection_context_from_status,
     select_autonomous_replan_obligation,
 )
-from loopx.control_plane.runtime.agent_scoped_evidence_log import (
-    build_agent_scoped_evidence_log_command,
-)
 from loopx.control_plane.quota.monitor_poll import build_quota_monitor_poll_event
 from loopx.control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
@@ -224,10 +221,11 @@ def _quota(payload: dict) -> dict:
                 "agent_id": AGENT_ID,
                 "status": "completed",
                 "recorded_at": acked_at,
-                "command": build_agent_scoped_evidence_log_command(
-                    goal_id=GOAL_ID,
-                    agent_id=AGENT_ID,
-                    required_read_id=obligation_id,
+                # Frozen persisted command from the retired interface, not executed.
+                "command": (
+                    f"loopx --format json evidence-log --goal-id {GOAL_ID}"
+                    f" --agent-id {AGENT_ID} --thin --limit 24"
+                    + (f" --required-read-id {obligation_id}" if obligation_id else "")
                 ),
                 "read_window": {"mode": "thin", "limit": 24},
                 **(

@@ -207,7 +207,7 @@ from .control_plane.agents.subagent_activity import (
 from .control_plane.agents.management_projection import (
     build_agent_management_projection as _build_agent_management_projection_read_model,
 )
-from .control_plane.runtime.agent_scoped_evidence_log import (
+from .control_plane.runtime.agent_evidence_history import (
     MAX_PROJECTED_READ_RECEIPTS,
     project_evidence_log_read_receipts,
 )

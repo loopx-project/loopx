@@ -51,16 +51,6 @@ def _latest_runs_for_goal(
     )
 
 
-def latest_runs_for_goal(
-    status_payload: dict[str, Any],
-    *,
-    goal_id: str,
-) -> list[dict[str, Any]]:
-    """Return newest-first compact runs used by semantic reducers."""
-
-    return _latest_runs_for_goal(status_payload, goal_id=goal_id)
-
-
 def _semantic_agent_context_for_goal(
     status_payload: dict[str, Any],
     *,

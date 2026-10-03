@@ -45,7 +45,7 @@ def test_generic_stall_obligation_carries_novelty_guidance() -> None:
 
     policy = obligation["replan_novelty_policy"]
     assert policy["schema_version"] == "replan_evidence_delivery_policy_v0"
-    assert policy["evidence_source"] == "agent_scoped_evidence_log"
+    assert policy["evidence_source"] == "compact_run_history"
     assert policy["delivery"] == "host_projected"
     assert policy["writeback"] == "typed_semantic_delta"
 
@@ -68,7 +68,7 @@ def test_dead_monitor_obligation_reuses_the_same_repair_delta_contract() -> None
     )
 
     policy = obligation["replan_novelty_policy"]
-    assert policy["evidence_source"] == "agent_scoped_evidence_log"
+    assert policy["evidence_source"] == "compact_run_history"
     assert policy["writeback"] == "typed_semantic_delta"
     action = obligation["recommended_action"]
     assert "resolve a dead monitor loop" in action
@@ -87,7 +87,7 @@ def test_periodic_review_obligation_reuses_the_same_preflight_contract() -> None
     )
 
     policy = obligation["replan_novelty_policy"]
-    assert policy["evidence_source"] == "agent_scoped_evidence_log"
+    assert policy["evidence_source"] == "compact_run_history"
     action = obligation["recommended_action"]
     assert "bounded autonomous periodic review" in action
     assert "host-projected coverage ledger" in action
@@ -134,7 +134,7 @@ def test_compact_replan_obligation_keeps_only_authoritative_seam_refs() -> None:
     )
     compact = compact_replan_obligation(obligation)
     assert compact["replan_novelty_policy"] == {
-        "evidence_source": "agent_scoped_evidence_log",
+        "evidence_source": "compact_run_history",
         "delivery": "host_projected",
         "writeback": "typed_semantic_delta",
     }
@@ -154,7 +154,7 @@ def test_payload_builder_defaults_to_novelty_guidance_and_policy() -> None:
 
     assert "host-projected coverage ledger" in payload["recommended_action"]
     policy = payload["replan_novelty_policy"]
-    assert policy["evidence_source"] == "agent_scoped_evidence_log"
+    assert policy["evidence_source"] == "compact_run_history"
     assert policy["delivery"] == "host_projected"
     assert policy["writeback"] == "typed_semantic_delta"
 
@@ -199,7 +199,7 @@ def test_payload_builder_replaces_conflicting_policy_extra_fields() -> None:
 
     assert payload["replan_novelty_policy"] == {
         "schema_version": "replan_evidence_delivery_policy_v0",
-        "evidence_source": "agent_scoped_evidence_log",
+        "evidence_source": "compact_run_history",
         "delivery": "host_projected",
         "writeback": "typed_semantic_delta",
     }
@@ -218,7 +218,7 @@ def test_novelty_policy_materializes_host_context_and_action_packet() -> None:
     enriched = {**obligation, "replan_context": context}
     action = build_replan_action_packet(enriched)
 
-    assert context["evidence_source"] == "agent_scoped_evidence_log"
+    assert context["evidence_source"] == "compact_run_history"
     assert context["delivery"] == "host_projected"
     assert action["obligation_id"] == obligation["obligation_id"]
     assert action["required_outcome"] == "semantic_delta"

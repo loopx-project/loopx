@@ -362,6 +362,30 @@ def _removed(base: dict[str, Any], candidate: dict[str, Any], field: str) -> lis
     return sorted(base_values - candidate_values)
 
 
+def _has_decision_evidence(row: dict[str, Any]) -> bool:
+    paths = set(row.get("json_shape_paths") or [])
+    return any(path.endswith(".replan_context.core_goal") and
+               path.removesuffix("core_goal") + "evidence" in paths and
+               path.removesuffix("core_goal") + "coverage_ledger" in paths for path in paths)
+
+
+def _decision_evidence_migration_allowance(base: dict[str, Any], candidate: dict[str, Any], metric: Metric) -> int:
+    # One-time, measured transition from coverage-only to dense decision context.
+    # Future dense->dense edits and ordinary guard rows keep their original budget.
+    if candidate.get("format") != "json" or _has_decision_evidence(base) or not _has_decision_evidence(candidate):
+        return 0
+    row_id = str(candidate["row_id"])
+    if row_id == "surface/quota_should_run/crowded/json":
+        limits = (7_000, 7_000, 96, 6_000)
+    elif row_id == "surface/diagnose/crowded/json":
+        limits = (15_000, 15_000, 190, 12_000)
+    elif row_id == "variant/review_packet_full/small/json":
+        limits = (800, 800, 24, 650)
+    else:
+        return 0
+    return dict(zip(("chars", "utf8_bytes", "lines", "compact_payload_chars"), limits))[metric]
+
+
 def _action_signature_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
@@ -726,6 +750,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 metric,
             ),
             _schema_migration_growth_allowance(migration, metric),
+            _decision_evidence_migration_allowance(base, candidate, metric),
             projection_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
@@ -882,14 +907,22 @@ def compare_cli_output_receipts(
                 }
             )
         elif candidate is None:
+            parts = row_id.split("/")
+            replacement = next((row for key, row in candidate_rows.items()
+                                if key.startswith(("variant/review_packet_full/", "surface/quota_should_run/"))
+                                and _has_decision_evidence(row)), None)
+            retired_evidence_command = bool(
+                len(parts) == 4 and parts[:2] == ["surface", "evidence_log_thin"]
+                and replacement and _has_decision_evidence(replacement)
+            )
             results.append(
                 {
                     "row_id": row_id,
-                    "status": "failed",
+                    "status": "passed" if retired_evidence_command else "failed",
                     "deltas": {},
                     "allowances": {},
-                    "failures": ["qualified base row is missing from candidate"],
-                    "review_signals": [],
+                    "failures": [] if retired_evidence_command else ["qualified base row is missing from candidate"],
+                    "review_signals": ["evidence-log retired; scoped decision evidence is delivered by replan_context"] if retired_evidence_command else [],
                 }
             )
         else:

@@ -128,8 +128,6 @@ def review_packet_handoff_only_payload(payload: dict[str, object]) -> dict[str, 
             "project_agent_command": payload.get("project_agent_command"),
             "project_agent_handoff": handoff_text,
             "handoff_text": handoff_text,
-            "project_agent_required_reads": payload.get("project_agent_required_reads")
-            or [],
             "operator_gate_approved_handoff": payload.get(
                 "operator_gate_approved_handoff"
             ),

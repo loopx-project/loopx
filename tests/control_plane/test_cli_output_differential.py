@@ -1151,3 +1151,29 @@ def test_malformed_command_never_grants_route_growth(command, render) -> None:
 def test_json_escaped_paths_and_duplicate_arguments_are_counted_once() -> None:
     command = """loopx --format json --registry '/tmp/a \"quoted\" path' --registry /tmp/final --runtime-root '/tmp/root path' turn plan"""
     assert command_route_counts(json.dumps({"command": command})) == {"registry": 1, "runtime_root": 1}
+
+
+def test_dense_replan_growth_is_one_time_and_keeps_semantic_checks():
+    paths = ['$.autonomous_replan_obligation.replan_context.' + key
+             for key in ('core_goal', 'evidence', 'coverage_ledger')]
+    base = _row(row_id='surface/quota_should_run/crowded/json', surface_id='quota_should_run', scenario='crowded')
+    candidate = {**base, 'json_shape_paths': [*base['json_shape_paths'], *paths],
+                 'chars': base['chars'] + 6600, 'lines': base['lines'] + 88}
+    assert compare_cli_output_receipts(_receipt(base), _receipt(candidate))['ok']
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt({**candidate, 'chars': candidate['chars'] + 6600}))['ok']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt({**candidate, 'chars': base['chars'] + 7001}))['ok']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt({**candidate, 'action_signature_sha256': 'changed'}))['ok']
+    ordinary_base = {**base, 'row_id': 'surface/quota_should_run/small/json'}
+    ordinary_head = {**candidate, 'row_id': ordinary_base['row_id']}
+    assert not compare_cli_output_receipts(_receipt(ordinary_base), _receipt(ordinary_head))['ok']
+
+
+def test_only_retired_evidence_command_with_real_replacement_is_allowed():
+    base = _row(row_id='surface/evidence_log_thin/small/json', surface_id='evidence_log_thin')
+    replacement = _row(row_id='variant/review_packet_full/small/json', json_shape_paths=[
+        '$.replan_context.core_goal', '$.replan_context.evidence', '$.replan_context.coverage_ledger'])
+    result = compare_cli_output_receipts(_receipt(base), _receipt(replacement))
+    assert result['ok'] and result['review_required']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt())['ok']
+    assert not compare_cli_output_receipts(_receipt(base), _receipt({**replacement, 'json_shape_paths': []}))['ok']
+    assert not compare_cli_output_receipts(_receipt({**base, 'row_id': 'surface/status/small/json'}), _receipt(replacement))['ok']

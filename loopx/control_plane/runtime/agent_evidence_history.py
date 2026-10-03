@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shlex
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
@@ -11,7 +10,6 @@ from .time import chronology_key, parse_timestamp
 
 
 SCHEMA_VERSION = "agent_scoped_evidence_log_v0"
-REQUIRED_READ_SCHEMA_VERSION = "loopx_agent_required_read_v0"
 READ_RECEIPT_SCHEMA_VERSION = "evidence_log_read_receipt_v0"
 MAX_PROJECTED_READ_RECEIPTS = 12
 
@@ -221,100 +219,25 @@ def goal_history_runs(
 ) -> list[dict[str, Any]]:
     """Select compact history rows for one goal from either supported history shape."""
 
-    goals = history_payload.get("goals")
-    for goal in goals if isinstance(goals, list) else []:
-        if not isinstance(goal, Mapping) or str(goal.get("id") or "") != goal_id:
-            continue
-        latest_runs = goal.get("latest_runs")
-        if not isinstance(latest_runs, list):
+    if history_payload.get("ok") is False:
+        raise ValueError("history source failed")
+    if "goals" in history_payload:
+        goals = history_payload["goals"]
+        if not isinstance(goals, list) or any(not isinstance(goal, Mapping) for goal in goals):
+            raise ValueError("history.goals must be an array of objects")
+        for goal in goals:
+            if str(goal.get("id") or "") == goal_id:
+                runs = goal.get("latest_runs")
+                break
+        else:
             return []
-        return [dict(row) for row in latest_runs if isinstance(row, Mapping)]
-    runs = history_payload.get("runs")
-    return [
-        dict(row)
-        for row in (runs if isinstance(runs, list) else [])
-        if isinstance(row, Mapping) and str(row.get("goal_id") or "") == goal_id
-    ]
-
-
-def build_agent_scoped_evidence_log_command(
-    *,
-    goal_id: str,
-    agent_id: str,
-    todo_id: str | None = None,
-    cli_bin: str = "loopx",
-    output_format: str = "json",
-    limit: int = 24,
-    required_read_id: str | None = None,
-) -> str:
-    safe_goal_id = _compact_text(goal_id, limit=180)
-    safe_agent_id = _compact_text(agent_id, limit=180)
-    if not safe_goal_id:
-        raise ValueError("goal_id is required")
-    if not safe_agent_id:
-        raise ValueError("agent_id is required")
-    safe_todo_id = _compact_text(todo_id, limit=180) if todo_id else None
-    parts = [
-        cli_bin or "loopx",
-        "--format",
-        output_format or "json",
-        "evidence-log",
-        "--goal-id",
-        safe_goal_id,
-        "--agent-id",
-        safe_agent_id,
-        "--thin",
-        "--limit",
-        str(max(0, int(limit))),
-    ]
-    if safe_todo_id:
-        parts.extend(["--todo-id", safe_todo_id])
-    safe_required_read_id = (
-        _compact_text(required_read_id, limit=180) if required_read_id else None
-    )
-    if safe_required_read_id:
-        parts.extend(["--required-read-id", safe_required_read_id])
-    return " ".join(shlex.quote(part) for part in parts)
-
-
-def build_agent_scoped_required_read(
-    *,
-    goal_id: str,
-    agent_id: str | None,
-    todo_id: str | None = None,
-    reason: str = "read this agent's thin public-safe evidence ledger before replan",
-    cli_bin: str = "loopx",
-    limit: int = 24,
-    required_read_id: str | None = None,
-) -> dict[str, Any] | None:
-    safe_agent_id = _compact_text(agent_id, limit=180) if agent_id else None
-    if not safe_agent_id:
-        return None
-    command = build_agent_scoped_evidence_log_command(
-        goal_id=goal_id,
-        agent_id=safe_agent_id,
-        todo_id=todo_id,
-        cli_bin=cli_bin,
-        limit=limit,
-        required_read_id=required_read_id,
-    )
-    required_read = {
-        "schema_version": REQUIRED_READ_SCHEMA_VERSION,
-        "kind": "agent_scoped_evidence_log",
-        "goal_id": _compact_text(goal_id, limit=180),
-        "agent_id": safe_agent_id,
-        "todo_id": _compact_text(todo_id, limit=180) if todo_id else None,
-        "mode": "thin",
-        "command": command,
-        "reason": _compact_text(reason, limit=180),
-        "other_agent_policy": "frontier_only",
-    }
-    if required_read_id:
-        required_read["required_read_id"] = _compact_text(
-            required_read_id,
-            limit=180,
-        )
-    return required_read
+    elif "runs" in history_payload:
+        runs = history_payload["runs"]
+    else:
+        raise ValueError("history source is missing goals/runs")
+    if not isinstance(runs, list) or any(not isinstance(row, Mapping) for row in runs):
+        raise ValueError("history runs must be an array of objects")
+    return [dict(row) for row in runs if row.get("goal_id", goal_id) == goal_id]
 
 
 def _other_agent_frontier(

@@ -162,6 +162,7 @@ import { reduceTurnSettlementTransaction } from "./turn_driver/settlement.ts";
 import { evaluateHostTodoCompletion } from "./turn_driver/host_todo_completion.ts";
 import { projectReplanHistory } from "./work_items/replan_history.ts";
 import { projectReplanHistorySnapshot } from "./work_items/replan_history_snapshot.ts";
+import {projectReplanContext, projectReplanContextSnapshot} from "./work_items/replan_context.ts";
 import { projectReplanSemantics } from "./work_items/replan_semantics.ts";
 import {
   projectReplanSettlementContract,
@@ -929,6 +930,8 @@ export function createEffectRuntimeHandlers(
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     ["work_item.replan_semantics.project", projectReplanSemantics],
+    ["work_item.replan_context.project", projectReplanContext],
+    ["work_item.replan_context.project_snapshot", projectReplanContextSnapshot],
     ["explore.research.normalize", normalizeResearchObservation],
     ["explore.research.validate_attribution", validateResearchAttribution],
     ["explore.research.frontier", projectResearchFrontier],

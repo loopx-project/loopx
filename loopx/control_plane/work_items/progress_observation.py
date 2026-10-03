@@ -19,13 +19,10 @@ from .progress_result import (
     normalize_progress_identifier,
 )
 
-REPLAN_CONTEXT_SCHEMA_VERSION = "replan_context_v0"
-REPLAN_CONTEXT_RECEIPT_SCHEMA_VERSION = "replan_context_delivery_receipt_v0"
 REPLAN_ACTION_PACKET_SCHEMA_VERSION = "replan_action_packet_v0"
 PROGRESS_REPEAT_TRIGGER_KIND = "typed_progress_repeat"
 PROGRESS_REPEAT_THRESHOLD = 2
 MAX_PROGRESS_EVIDENCE_IDS = 12
-MAX_COVERAGE_LEDGER_ITEMS = 6
 
 SEMANTIC_DIMENSIONS = (
     "surface_id",
@@ -406,6 +403,7 @@ def semantic_delta_from_writeback(
     obligation: Mapping[str, Any],
     progress_observation: Mapping[str, Any] | None,
     agent_vision: Mapping[str, Any] | None = None,
+    history_runs: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Qualify concrete typed writeback evidence against one obligation.
 
@@ -437,10 +435,27 @@ def semantic_delta_from_writeback(
             None,
         )
     context = obligation.get("replan_context")
-    coverage = context.get("coverage_ledger") if isinstance(context, Mapping) else None
+    if context is not None:
+        from .replan_context_codec import validate_replan_context
+        context = validate_replan_context(context)
+        if context["obligation_id"] != obligation.get("obligation_id"):
+            raise ValueError("replan context obligation identity mismatch")
+    coverage = context["coverage_ledger"] if context is not None else None
     claimed = list(window) if isinstance(window, list) else []
     if isinstance(coverage, list):
         claimed.extend(coverage)
+    if history_runs is not None and context is not None:
+        from .replan_context_codec import replan_evidence_rows
+
+        # The readable context has a display budget; admission does not forget
+        # an older claim merely because it was omitted from that display.
+        claimed.extend(
+            row["progress_observation"]
+            for row in replan_evidence_rows(history_runs, goal_id=context["goal_id"], agent_id=context["agent_id"])
+            if row["progress_observation"] is not None
+        )
+    elif context is not None and context.get("coverage_truncated"):
+        raise ValueError("replan writeback requires the complete evidence history when coverage is truncated")
     observation_delta = semantic_progress_delta(
         progress_observation,
         baseline=baseline if isinstance(baseline, Mapping) else None,
@@ -464,90 +479,19 @@ def semantic_delta_from_writeback(
     }
 
 
-def _latest_typed_observations(
-    newest_first_runs: Iterable[Mapping[str, Any]],
-    *,
-    agent_id: str | None,
-) -> list[dict[str, Any]]:
-    normalized_agent_id = str(agent_id or "").strip()
-    observations: list[dict[str, Any]] = []
-    for run in newest_first_runs:
-        run_agent_id = str(run.get("agent_id") or "").strip()
-        if normalized_agent_id and run_agent_id not in {"", normalized_agent_id}:
-            continue
-        observation = progress_observation_from_run(run)
-        if observation is None:
-            continue
-        observations.append(
-            {
-                **observation,
-                "generated_at": str(run.get("generated_at") or ""),
-            }
-        )
-        if len(observations) >= MAX_COVERAGE_LEDGER_ITEMS:
-            break
-    return observations
-
-
 def build_replan_context(
-    obligation: Mapping[str, Any],
-    *,
-    goal_id: str,
-    agent_id: str | None,
+    obligation: Mapping[str, Any], *, goal_id: str, agent_id: str | None,
     newest_first_runs: Iterable[Mapping[str, Any]],
+    source_status: Mapping[str, Any] | None = None,
+    goal_acceptance_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Project compact evidence context into the action packet on the host."""
+    from .replan_context_codec import project_replan_context
 
-    obligation_id = _stable_id(
-        obligation.get("obligation_id"),
-        field="obligation_id",
-        required=True,
+    return project_replan_context(
+        goal_id=goal_id, agent_id=agent_id or obligation.get("agent_id"),
+        runs=newest_first_runs, obligation=obligation, source_status=source_status,
+        goal_acceptance_contract=goal_acceptance_contract,
     )
-    coverage_ledger = _latest_typed_observations(
-        newest_first_runs,
-        agent_id=agent_id,
-    )
-    baseline = obligation.get("progress_baseline")
-    if not isinstance(baseline, Mapping):
-        baseline = next(
-            (
-                trigger.get("progress_baseline")
-                for trigger in obligation.get("triggers") or []
-                if isinstance(trigger, Mapping)
-                and isinstance(trigger.get("progress_baseline"), Mapping)
-            ),
-            None,
-        )
-    uncovered_frontier = {
-        "baseline": dict(baseline) if isinstance(baseline, Mapping) else None,
-        "required_any_of": required_semantic_outcomes(obligation),
-    }
-    context_identity = {
-        "goal_id": goal_id,
-        "agent_id": str(agent_id or "").strip() or None,
-        "obligation_id": obligation_id,
-        "coverage_fingerprints": [
-            item["fingerprint"] for item in coverage_ledger
-        ],
-        "uncovered_frontier": uncovered_frontier,
-    }
-    context_id = "replan-context-" + _digest(context_identity)
-    return {
-        "schema_version": REPLAN_CONTEXT_SCHEMA_VERSION,
-        "context_id": context_id,
-        "obligation_id": obligation_id,
-        "evidence_source": "agent_scoped_evidence_log",
-        "delivery": "host_projected",
-        "coverage_ledger": coverage_ledger,
-        "uncovered_frontier": uncovered_frontier,
-        "delivery_receipt": {
-            "schema_version": REPLAN_CONTEXT_RECEIPT_SCHEMA_VERSION,
-            "context_id": context_id,
-            "obligation_id": obligation_id,
-            "status": "delivered",
-            "delivered_by": "quota_host_projection",
-        },
-    }
 
 
 def build_replan_action_packet(
@@ -561,8 +505,10 @@ def build_replan_action_packet(
     if isinstance(settlement_packet, Mapping):
         return dict(settlement_packet)
     context = obligation.get("replan_context")
-    if not isinstance(context, Mapping):
-        raise TypeError("replan obligation is missing host-projected context")
+    from .replan_context_codec import validate_replan_context
+    context = validate_replan_context(context)
+    if context["obligation_id"] != obligation.get("obligation_id"):
+        raise ValueError("replan context obligation identity mismatch")
     todo_actions = obligation.get("todo_actions")
     todo_action = next(
         (
@@ -646,7 +592,7 @@ def build_replan_action_packet(
         "schema_version": REPLAN_ACTION_PACKET_SCHEMA_VERSION,
         "decision": "replan_required",
         "obligation_id": obligation.get("obligation_id"),
-        "uncovered_frontier": context.get("uncovered_frontier"),
+        "uncovered_frontier": context["uncovered_frontier"],
         "required_outcome": "semantic_delta",
         "planning_guidance": requirements["planning_guidance"],
         "writeback_contract": writeback_contract,

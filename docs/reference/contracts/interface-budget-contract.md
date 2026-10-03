@@ -84,7 +84,6 @@ removed without a separately validated caller migration.
 | `heartbeat-prompt --thin` | absolute hot path | agent scope, multi-agent fixture matrix, and exact Agent-input field allowlist | Markdown diagnostics, `--compact`, `--full` |
 | `todo list` | baseline and growth | todo-count growth and agent filtering semantics | `--thin`, `--limit N`, role/status filters, direct todo-id lifecycle commands |
 | `history --limit 5` | explicit-limit cold path | returned-run bound | individual run JSON/Markdown artifacts |
-| `evidence-log --thin --limit 5` | explicit-limit cold path | returned-evidence bound | referenced run-history and rollout-event artifacts |
 
 `quota should-run` uses one repeatable cold-path selector:
 `--include-detail scheduler`, `agent-todos`, `user-todos`, `vision`, or
@@ -164,7 +163,10 @@ structural refactor does not become a permanent CI red light.
 The receipts contain counts, shape paths, headings, and digests only; they do
 not persist raw CLI output. Candidate-only surfaces are allowed after their
 absolute characterization passes, while removing a qualified base row fails
-closed.
+closed. The intentional evidence-command retirement is recognized only with a
+qualified replacement replan-context projection and remains a review signal.
+Coverage-only to dense replan context has a measured, one-time allowance on its
+three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
 Both budget layers are intentionally about projections, not the full archival
 facts. When a surface needs more detail, put that detail behind a queryable
@@ -172,6 +174,21 @@ cold-path command or a linked run-history artifact instead of making the
 recurring heartbeat prompt carry it. `nested_keys` counts dictionary keys
 through three payload levels and samples at most 20 list items per level; it is
 a hot-path structure budget, not an archival record-size budget.
+
+Required replan is a decision phase with a separate information need. Its
+`replan_context` carries the core Goal and up to 24 distinct observations from
+the full compact index, reducing repetitions before selection. On the unchanged
+crowded public CLI fixture, emitted JSON grows from 26,844 to 33,523 characters
+and 718 to 806 lines. The replan scenario ceiling moves from 30,000/750 to
+34,000/830, with 6,000 fixed semantic growth characters; ordinary and multi-Agent
+non-replan guards retain their previous output and ceilings. Handoff forwarding
+keeps a brief evidence pointer and the full review packet owns the structured
+context, removing duplicate JSON. The explicit cold-path diagnosis retains its
+existing selected-packet plus Goal-array contract; its replan fixture measures
+43,132 characters / 804 lines and uses 44,000 / 850 ceilings with 7,000 fixed
+semantic growth characters. These are output measurements, not model-token,
+latency or long-horizon quality qualifications. Settlement checks use complete
+available history even when the readable context omits older observations.
 
 Restraint rules for new fields:
 

@@ -58,7 +58,6 @@ def _load_exports() -> None:
         register_first_run_report_command,
     )
     from .dreaming import handle_dreaming_command, register_dreaming_commands
-    from .evidence_log import handle_evidence_log_command, register_evidence_log_command
     from .explore import handle_explore_command, register_explore_commands
     from .handoff_mode import handle_handoff_mode_command, register_handoff_mode_command
     from .history import handle_history_command, register_history_command
@@ -197,7 +196,6 @@ __all__ = [
     "handle_doctor_command",
     "handle_first_run_report_command",
     "handle_dreaming_command",
-    "handle_evidence_log_command",
     "handle_explore_command",
     "handle_handoff_mode_command",
     "handle_history_command",
@@ -250,7 +248,6 @@ __all__ = [
     "register_doctor_command",
     "register_first_run_report_command",
     "register_dreaming_commands",
-    "register_evidence_log_command",
     "register_explore_commands",
     "register_handoff_mode_command",
     "register_history_command",
