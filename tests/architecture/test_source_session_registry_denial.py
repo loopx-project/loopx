@@ -18,6 +18,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/configure_goal.py",
     "loopx/control_plane/collaboration/goal_instance_scope.py",
     "loopx/control_plane/collaboration/peers.py",
+    "loopx/control_plane/collaboration/source_grant_observation.py",
     "loopx/control_plane/goals/first_party_host_admission.py",
     "loopx/control_plane/coordination/runtime_shadow.py",
     "loopx/control_plane/coordination/shadow_goal_scope.py",

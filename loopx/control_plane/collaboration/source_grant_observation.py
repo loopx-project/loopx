@@ -4,7 +4,10 @@ from pathlib import Path
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ..goals.activation import goal_is_stopped
-from ..projects.registry_codec import load_project_registry
+from ..projects.registry_codec import (
+    load_project_registry,
+    require_runtime_compatible_project_registry,
+)
 from . import conversation_scope
 from .inbox import _hash, _read, _root
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -40,6 +43,9 @@ def source_context_authority(
         registry = load_project_registry(registry_path)
         if not isinstance(registry, dict):
             raise ValueError("invalid registry")
+        require_runtime_compatible_project_registry(
+            registry, operation="context source recipient observation"
+        )
     except (OSError, ValueError, TypeError):
         return {"mode": "unavailable", "targets": []}
     observed = registered_context_recipients(registry)
