@@ -73,6 +73,10 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
     count: 2,
     reason: "whitespace class assembled from a shared character-class constant",
   },
+  "control_plane/presentation/decision_notice.ts": {
+    count: 1,
+    reason: "escaped request identifier with exact-reference boundaries, not a digest matcher",
+  },
   "control_plane/quota/monitor_poll_commit.ts": {
     count: 1,
     reason: "artifact file name grammar keyed by a runtime effect token",
@@ -90,6 +94,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/collaboration/chat_mode.ts",
   "control_plane/collaboration/delegation.ts",
   "control_plane/collaboration/goal_instance_lifecycle.ts",
+  "control_plane/collaboration/result_publication.ts",
   "control_plane/collaboration/return_delivery.ts",
   "control_plane/collaboration/semantic_request.ts",
   "control_plane/coordination/authority_archive_read.ts",
@@ -116,6 +121,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/goals/source_session_lifetime.ts",
   "control_plane/governed_capability.ts",
   "control_plane/quota/refresh_external_delivery.ts",
+  "control_plane/runtime/execution_identity.ts",
   "control_plane/runtime/usage_statistics_cycles.ts",
   "control_plane/runtime/usage_statistics_goal_contract.ts",
   "control_plane/runtime/usage_statistics_goals.ts",

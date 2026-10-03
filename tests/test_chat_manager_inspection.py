@@ -349,6 +349,8 @@ for line in sys.stdin:
     elif m == 'turn/start':
         text = json.dumps(r['params']['input'])
         assert 'manager_evidence_index_v1' in text
+        assert 'Required input has not arrived' in text
+        assert 'owner_must_act' in text
         print(json.dumps({'id':r['id'],'result':{'turn':{'id':'fixture-turn'}}}), flush=True)
         print(json.dumps({'id':900,'method':'item/tool/call','params':{
             'threadId':'fixture-thread','turnId':'fixture-turn','tool':'loopx_manager_read',
@@ -385,7 +387,10 @@ for line in sys.stdin:
 
     def collect(*args, **kwargs):
         collected.append(kwargs)
-        return {"scope": "owner_global", "goals": [{"goal_id": "alpha"}], "snapshot_id": "fixture"}
+        return {"scope": "owner_global", "goals": [{"goal_id": "alpha", "attention": {
+            "status": "read", "items": [{"owner_must_act": False,
+                "blocker": {"cause": "Required input has not arrived"}}],
+        }}], "snapshot_id": "fixture"}
 
     monkeypatch.setattr(context, "collect_manager_turn_context", collect)
     monkeypatch.setattr(

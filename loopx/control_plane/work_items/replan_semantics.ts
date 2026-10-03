@@ -234,6 +234,10 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   // Evaluate an independently evidenced Vision path after removing the replay.
   if (replayed) outcomes = [];
   else if (identityWithoutEvidence) outcomes = outcomes.filter(outcome => !PROGRESS_IDENTITY_OUTCOMES.has(outcome));
+  // Blocker identity survives a new Turn/work-item binding and refreshed proof.
+  // The codec compares the host's coverage ledger as well as its baseline/window.
+  const knownBlocker = outcomes.includes("new_concrete_blocker") && observation.blocker_repeated === true;
+  if (knownBlocker) outcomes = outcomes.filter(outcome => outcome !== "new_concrete_blocker");
   const inconsistentTerminal = outcomes.includes("coverage_backed_no_followup") &&
     (vision.state !== "no_followup" || path.outcome !== "stop");
   if (inconsistentTerminal) outcomes = outcomes.filter(outcome => outcome !== "coverage_backed_no_followup");
@@ -243,7 +247,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     outcomes.push("fresh_vision_path_outcome");
   }
   const satisfying = inconsistentTerminal ? [] : outcomes.filter(outcome => required.includes(outcome as SemanticOutcome));
-  const replayRefused = replayed && !satisfying.length && !inconsistentTerminal;
+  const replayRefused = (replayed || knownBlocker) && !satisfying.length && !inconsistentTerminal;
   const identityRefused = identityWithoutEvidence && !satisfying.length && !inconsistentTerminal;
   return {
     schema_version: "replan_semantic_delta_v0", accepted: satisfying.length > 0,
@@ -251,7 +255,9 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     observation_fingerprint: observation.observation_fingerprint ?? null,
     reason: satisfying.length ? "writeback changes an outcome accepted by this obligation source"
       : inconsistentTerminal ? "coverage-backed no-follow-up requires agent_vision.state=no_followup and path_delta.outcome=stop"
-      : replayRefused ? "external progress review does not accept a typed observation already claimed in the obligation window"
+      : replayRefused ? (knownBlocker
+        ? "replan does not accept a blocker already recorded in its baseline, window or coverage ledger"
+        : "external progress review does not accept a typed observation already claimed in the obligation window")
       : identityRefused ? "external progress review accepts a new surface, hypothesis or probe family only with evidence ids absent from the evaluated baseline and every claim in the obligation window"
       : "writeback does not satisfy this obligation's typed outcomes",
     ...(inconsistentTerminal ? {reason_code: "no_followup_vision_path_inconsistent"}

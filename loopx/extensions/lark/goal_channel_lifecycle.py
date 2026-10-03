@@ -379,6 +379,8 @@ def sync_human_gate_after_refresh(
             external_sink_delivery_authorized=external_sink_delivery_authorized,
             runner=observation,
             admit_delivery=admit_delivery,
+            registry_path=source_registry_path, runtime_root=runtime_root,
+            before_receipt_write=lambda: setattr(observation, "stage", "receipt_write"),
         )
     except Exception as error:
         result = (
@@ -401,6 +403,7 @@ def sync_human_gate_after_refresh(
         notification = result.get("notification") or {}
         blocker = str(notification.get("blocker") or "")
         failure_causes: dict[str, tuple[FailureStage, str]] = {
+            "steward_notice_unavailable": ("gate_selection", "steward_notice_unavailable"),
             "provider_identity_unverified": (
                 "provider_preflight",
                 "provider_identity_unverified",
@@ -546,4 +549,5 @@ def sync_blocked_notice_after_refresh(
         provider_target=target,
         external_sink_delivery_authorized=external_sink_delivery_authorized,
         runner=runner,
+        registry_path=source_registry_path, runtime_root=runtime_root,
     )

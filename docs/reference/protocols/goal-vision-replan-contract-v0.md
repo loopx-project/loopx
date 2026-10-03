@@ -702,6 +702,19 @@ obligations; an outstanding pre-upgrade Turn should refresh its guard.
 义务身份使用 typed owner 给出的 owned 实质 revision，同伴修改共享池不会让正在
 处理的义务换 ID；自己任务的实质修改仍重新触发。证据补充或更新时间不重新触发。
 
+The Agent-lane claimed advancement total comes from the evaluated full-source
+frontier index, before bounded claimant/status display. Adding peer Todos or
+reordering the display cannot turn 15 owned commitments into a smaller chain.
+Historical indexes without the evaluated count retain observed lower bounds;
+incomplete identities cannot supply a complete count. This read fact changes
+neither the threshold nor checkpoint/ACK identity, claim/exclusion selection,
+lease, acceptance, or settlement authority. It does not make hidden work executable.
+
+Agent lane 的已认领推进总数来自展示裁剪前、已评估的完整 frontier 索引。同伴新增
+Todo 或展示重排不能把 15 项自身承诺变成更短的任务链。没有该计数的历史索引仍使用
+已观察下界；身份不完整不能提供完整计数。计数事实不修改阈值、checkpoint／ACK
+身份、认领／排除选择、租约、验收或结算权限，也不让隐藏任务获得执行资格。
+
 ## Replan Output
 
 A valid replan writes at least one bounded delta:

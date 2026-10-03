@@ -204,7 +204,9 @@ export const conversationActivityScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "先检查最新证据。", "blocked storage preserves drafts within this page");
       await page.getByRole("button", { name: "发送调整", exact: true }).click();
-      await page.getByText("执行器已接收本轮追加指令。", { exact: true }).waitFor();
+      await page.locator(".personal-message")
+        .filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) })
+        .getByRole("status").filter({ hasText: "执行器已接收本轮追加指令。" }).waitFor();
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
       assert.deepEqual(api.interrupts.at(-1), { sessionId: goalTurn.sessionId, turnId: goalTurn.turnId });

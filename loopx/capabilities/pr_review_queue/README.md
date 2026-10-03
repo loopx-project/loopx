@@ -94,6 +94,27 @@ not establish recovery. These are reviewer-executed counterfactuals, not semanti
 facts inferred by the checker.
 
 Save the exact final Markdown in the result's `review_body` before `--check-result`.
+Policy revision 16 also makes reviewer attribution observable. For actionable
+live packets invoked inside a bound Codex session, `reviewer_execution` reads
+only that exact thread in its selected `CODEX_HOME`, using read-only SQLite
+discovery and bounded host-record metadata. It never searches sibling homes or
+uses mutable model preferences as execution evidence. The result template
+preserves the recorded model, public provider, effort and opaque observation id.
+The published `Reviewer:` line names the model/provider plus `runtime_reported`
+and the effort; missing effort is `effort_unavailable`. No session id, transcript,
+path, endpoint or account enters this public attribution.
+
+`loopx pr-review --check-result RESULT --packet PACKET` rereads the invoking
+session: stale model/effort declarations, an altered snapshot or a different
+recorded Turn cannot qualify for publication. An unavailable host record remains
+an explicit gap; use an honest family declaration marked `self_reported`, not a
+configured preference or an invented exact build. This is a reviewer publication
+error, not a PR-author finding. Inventory-only and fixture scans do not read host
+metadata. Offline saved-packet checking proves consistency only. The bounded
+reader may retain recorded identity with `active_turn_verified=false` when the
+opening event is outside its window; neither metadata nor this marker proves
+backend weights, review independence, host delivery, liveness or merge authority.
+
 The same body validator is used for published review readback and merge readiness.
 For behavior-bearing changes, the five sections require respectively 40, 80,
 180, 120 and 60 explanatory letters/numbers; reviews without executable or

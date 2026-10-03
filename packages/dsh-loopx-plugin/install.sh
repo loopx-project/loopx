@@ -85,7 +85,18 @@ else
   dsh_bin="$SCRIPT_DIR/node_modules/.bin/dsh"
 fi
 [[ -x "$dsh_bin" ]] || { echo "install: DSH CLI is unavailable: $dsh_bin" >&2; exit 2; }
-"$dsh_bin" --version >/dev/null
+dsh_version="$("$dsh_bin" --version)"
+node - "$PACKAGE_JSON" "$dsh_version" <<'NODE' || exit 2
+const fs = require('node:fs')
+const semver = require('node:module').createRequire(process.argv[2])('semver')
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+const version = process.argv[3].trim()
+const range = manifest.peerDependencies['@deepseek-ai/dsh']
+if (!semver.satisfies(version, range)) {
+  console.error(`install: DSH ${version} is outside the supported peer range ${range}; no profile change was made`)
+  process.exit(1)
+}
+NODE
 
 mkdir -p "$OUTPUT_DIR"
 tarball="$OUTPUT_DIR/$PACKAGE_NAME-$PACKAGE_VERSION.tgz"
@@ -105,6 +116,7 @@ printf '%s' "$profile_dump" | node -e '
     ["loopx-goalbar", "dsh-loopx-plugin"],
     ["loopx-init-command", "dsh-loopx-plugin/init-command"],
     ["loopx-driver", "dsh-loopx-plugin/driver"],
+    ["loopx-shadow-observer", "dsh-loopx-plugin/observer"],
   ]
   const packageNames = dump
     .split(/\r?\n/u)
@@ -123,6 +135,16 @@ printf '%s' "$profile_dump" | node -e '
   }
 ' || {
   echo 'install: DSH profile readback did not match the Host/Client plugin contract' >&2
+  exit 1
+}
+
+"$dsh_bin" plugin --profile "$PROFILE_NAME" exec node -e '
+  const manifest = require("dsh-loopx-plugin/package.json")
+  if (manifest.name !== "dsh-loopx-plugin" || manifest.version !== process.argv[1]) {
+    throw new Error(`installed plugin version does not match ${process.argv[1]}`)
+  }
+' "$PACKAGE_VERSION" || {
+  echo 'install: DSH installed package did not match the built version' >&2
   exit 1
 }
 

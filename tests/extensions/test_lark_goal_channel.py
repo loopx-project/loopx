@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 
+from tests.extensions.conftest import notification_transport_synthesis  # noqa: F401
+
 from loopx.cli_commands import goal_channel as goal_channel_cli
 from loopx.cli_commands import goal_channel_operation as goal_channel_operation_cli
 from loopx.extensions.lark import goal_channel_contracts
@@ -909,8 +911,13 @@ def test_refresh_gate_receipt_failure_keeps_send_identity_for_retry(
     runner = _fake_runner(calls)
     save = goal_channel_runtime.save_goal_binding
 
+    writes = 0
     def fail(**kwargs):
-        raise PermissionError("private receipt path")
+        nonlocal writes
+        writes += 1
+        if writes > 1:
+            raise PermissionError("private receipt path")
+        save(**kwargs)
 
     monkeypatch.setattr(goal_channel_runtime, "save_goal_binding", fail)
     result = run(runner)
@@ -918,7 +925,7 @@ def test_refresh_gate_receipt_failure_keeps_send_identity_for_retry(
     assert result["failure"]["reason_code"] == "permission_denied"
     assert result["failure"]["external_write_status"] == "performed"
     assert result["external_write_performed"] is True
-    assert binding_path.read_bytes() == before
+    assert binding_path.read_bytes() != before  # prepared body survives final receipt failure
     monkeypatch.setattr(goal_channel_runtime, "save_goal_binding", save)
     assert run(runner)["status"] == "sent_verified"
     sends = [args for args in calls if "+messages-send" in args]
@@ -1687,9 +1694,8 @@ def test_notify_gate_honors_admission_and_does_not_present_labels_as_decisions(
         quota_packet=quota_packet,
         runner=_fake_runner(calls),
     )
-    message, _question = goal_channel_contracts.gate_message(
+    notice = goal_channel_contracts._gate_notice_projection(
         goal_id=GOAL_ID,
-        objective="Deliver one bounded change.",
         quota_packet={
             **quota_packet,
             "interaction_contract": {
@@ -1703,20 +1709,14 @@ def test_notify_gate_honors_admission_and_does_not_present_labels_as_decisions(
                 }
             },
         },
-        kanban_url="https://example.invalid/kanban",
     )
 
     assert rejected["status"] == "rejected"
     assert rejected["blocker"] == "state_transition_rejected"
     assert calls == []
-    assert message.startswith("LoopX · Action required\n\nGoal:")
-    assert "Request details are unavailable" in message
-    assert "Approve the bounded change" not in message
-    assert "Revoke the test key" not in message
-    assert "Reply with" not in message
-    assert "Current recommendation" not in message
-    assert "Next safe action" not in message
-    assert "\n- " not in message
+    assert notice["source"] == "unavailable"
+    assert notice["items"] == []
+
 
 
 def test_notify_gate_reports_missing_shared_target_for_direct_caller(
@@ -2689,14 +2689,14 @@ def test_gate_notice_delivers_request_body_instead_of_compact_label(tmp_path: Pa
             "evidence": "https://example.org/release/2.0",
         }]},
     }
-    message, _ = goal_channel_contracts.gate_message(
-        goal_id=GOAL_ID, objective="Public release", quota_packet=quota, kanban_url="",
+    notice = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID, quota_packet=quota,
     )
+    message = json.dumps(notice, ensure_ascii=False)
     assert body in message
     assert "todo_release_review" in message
     assert "Only the stable-channel publication needs a decision." in message
     assert "https://example.org/release/2.0" in message
-    assert "bounded preview" in message
     calls: list[list[str]] = []
     runner = _fake_runner(calls)
     first = _notify_test_gate(tmp_path=tmp_path, binding_path=binding_path, quota_packet=quota, runner=runner)
@@ -2710,18 +2710,20 @@ def test_gate_notice_delivers_request_body_instead_of_compact_label(tmp_path: Pa
 
 
 def test_gate_notice_redacts_and_bounds_additional_context() -> None:
-    message, _ = goal_channel_contracts.gate_message(
-        goal_id=GOAL_ID, objective="Public release", kanban_url="",
+    notice = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID,
         quota_packet={"user_todo_summary": {"gate_open_items": [{
             "todo_id": "todo_release_review", "text": "Review " + "public facts " * 200,
             "note": "See /tmp/private-review.txt and api_key=synthetic_fixture_secret_123456789",
             "evidence": "https://example.org/release/2.0",
         }]}},
     )
+    message = json.dumps(notice, ensure_ascii=False)
     assert "/tmp/private-review.txt" not in message
     assert "synthetic_fixture_secret_123456789" not in message
     assert len(message) < 2000
-    assert "Review the current request in LoopX" in message
+    assert notice["source"] == "unavailable"
+    assert notice["incomplete"][0]["reason_code"] == "content_redacted"
 
 
 def test_notify_cli_compact_quota_joins_same_read_complete_request(tmp_path: Path, monkeypatch) -> None:
@@ -2751,8 +2753,8 @@ def test_notify_cli_compact_quota_joins_same_read_complete_request(tmp_path: Pat
     assert len(reads) == 1  # no second provider read or snapshot race
     short = quota["user_todo_summary"]["gate_open_items"][0]
     assert len(short["text"]) <= 180 and "note" not in short
-    message, _ = goal_channel_contracts.gate_message(goal_id=GOAL_ID, objective="Release", quota_packet=quota,
-                                                    kanban_url="https://example.org/loopx")
+    notice = goal_channel_contracts._gate_notice_projection(goal_id=GOAL_ID, quota_packet=quota)
+    message = json.dumps(notice, ensure_ascii=False)
     assert body in message and canonical["note"] in message and canonical["evidence"] in message
     assert "Expires at 2026-10-01T07:00:00Z" in message
     calls = []
@@ -2760,12 +2762,11 @@ def test_notify_cli_compact_quota_joins_same_read_complete_request(tmp_path: Pat
     result = _notify_test_gate(tmp_path=tmp_path, binding_path=binding_path, quota_packet=quota, runner=_fake_runner(calls))
     assert result["status"] == "sent_verified" and result["readback_verified"] is True
     sent = next(args for args in calls if "+messages-send" in args)
-    binding = read_goal_channel_binding(binding_path)["bindings"][GOAL_ID]
-    expected, _ = goal_channel_contracts.gate_message(
-        goal_id=GOAL_ID, objective=_registry(tmp_path)["goals"][0]["objective"],
-        quota_packet=quota, kanban_url=binding["kanban"]["base_url"],
+    expected = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID,
+        quota_packet=quota,
     )
-    assert sent[sent.index("--text") + 1] == expected
+    assert json.loads(sent[sent.index("--text") + 1])["decision_notice"] == expected
     assert status == before
     # A trailing content/evidence change beyond scheduler bounds is material.
     old_generation = goal_channel_contracts.quota_human_gate_state_generation(quota)
@@ -2790,13 +2791,12 @@ def test_notify_complete_source_mismatch_or_overflow_is_not_decision_ready(misma
         canonical["status"] = "deferred"
     if mismatch == "overflow":
         canonical["note"] = "x" * 451
-    message, _ = goal_channel_contracts.gate_message(
-        goal_id=GOAL_ID, objective="Release", kanban_url="https://example.org/loopx",
+    notice = goal_channel_contracts._gate_notice_projection(
+        goal_id=GOAL_ID,
         quota_packet={"user_todo_summary": {"gate_open_items": [selected]}, "request_snapshot": snapshot},
     )
-    assert "not decision-ready" in message and "todo_release_review" in message
-    assert "https://example.org/loopx" in message
-    assert "Reply with" not in message and canonical["text"] not in message
+    assert notice["items"] == []
+    assert notice["incomplete"][0]["request_id"] == "todo_release_review"
 
 
 def test_refresh_auto_notify_uses_same_complete_snapshot(tmp_path: Path, monkeypatch) -> None:

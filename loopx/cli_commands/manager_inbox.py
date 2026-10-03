@@ -50,7 +50,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--brief-file", help="For request: collaboration_brief_v0 JSON file.")
     parser.add_argument("--parent-request-id", help="For request: an inbox request received by the sender.")
     parser.add_argument("--goal-id")
-    parser.add_argument("--agent-id")
+    parser.add_argument("--agent-id", help="Agent identity; for delivery grants, omit to cover all current/future Agents in --goal-id.")
     parser.add_argument("--channel-id")
     parser.add_argument("--ssh-host")
     parser.add_argument("--read-goal-id", action="append", default=[])
@@ -106,7 +106,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 registry_path,
                 channel=args.channel_id or "",
                 goal_id=args.goal_id or "",
-                agent_id=args.agent_id or "",
+                agent_id=args.agent_id,
                 grant=args.manager_inbox_action == "grant-delivery-target",
                 execute=args.execute,
             )

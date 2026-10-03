@@ -166,6 +166,15 @@ instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
 
+A Todo-bound path replan can be qualified during execution even when the
+initial guard selected no replan obligation. Its exact durable writeback must
+carry a recorded `autonomous_replan_ack_v0` with an accepted semantic delta or
+a qualified repair delta. After the matching spend receipt commits, both
+same-Turn replay and later-Turn recovery recognize the Turn as settled. Missing
+receipts or unqualified acknowledgements cannot close the binding. This does
+not complete the Todo, waive its completion validator, or release a dependency
+wait; a new Turn selects work from the current eligible frontier.
+
 When a quota spend remains owed after verified writeback,
 `settlement_owed.command` carries the original Goal, Agent, Todo or replan
 obligation, Turn, registry/runtime route and spend source. Execute it unchanged.

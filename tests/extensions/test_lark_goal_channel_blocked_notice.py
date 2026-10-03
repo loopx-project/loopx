@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.extensions.conftest import notification_transport_synthesis  # noqa: F401
+
 from loopx.extensions.lark.goal_channel_blocked_notice import deliver_blocked_notices
 from loopx.extensions.lark import goal_channel_lifecycle, goal_channel_notification
 from loopx.extensions.lark.goal_channel_runtime import (
@@ -275,13 +277,13 @@ def test_owner_blocker_requests_action_and_agent_blocker_does_not(
     messages = [
         args[args.index("--text") + 1] for args in calls if "+messages-send" in args
     ]
-    assert len(messages) == 1 and "Owner action required." in messages[0]
+    assert len(messages) == 1 and json.loads(messages[0])["blockers"][0]["owner_must_act"] is True
     calls.clear()
     _send(path, _status(), calls)
     agent_message = next(
         args[args.index("--text") + 1] for args in calls if "+messages-send" in args
     )
-    assert "No owner action required." in agent_message
+    assert json.loads(agent_message)["blockers"][0]["owner_must_act"] is False
 
 
 def test_failed_provider_send_stays_pending_for_retry(tmp_path: Path) -> None:

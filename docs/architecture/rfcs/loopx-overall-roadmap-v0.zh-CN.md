@@ -488,6 +488,16 @@ Goal 成果页可打开正文；原管家对话仅在已确认团队计划的回
 
 ### R3：语义请求与自动回报
 
+**S1/S5 注意力 checkpoint。** 本地管家/Goal Turn 无须 Lark 连接，即收到 canonical
+阻塞与具体用户请求。共用 TS 读模型合成同一 Todo 的阻塞/决策；正文 adapter 和
+阻塞收集服务本地与外部投递。这闭合 Turn preparation 的证据缺口；已有外发使用
+配置的 restricted 管家生成，复用保存正文的重试与同阻塞版本覆盖，不关闭本地主动
+呈现或 G1/G2。Presentation Stage 2 与 [Goal Channel 合同](goal-channel-collaboration-v0.zh-CN.md#本地管家接收与可选-channel-投递)
+继续承接实质变化 admission、既有预算内唤醒、语义汇总、已呈现/已读/恢复回执及
+独立授权的 sink 投递。宣称自动智能通知前，在原打包对话验收无 Channel 的阻塞、
+安全回退、用户决定与恢复旅程。
+
+
 - **Owner：** 管家 RFC M2/M3；从已有 `manager_context` request/tracking/return 迁移到单一 typed collaboration 事务，纳入 #4094 adapter。
 - **交付：** 交接保存目的、决策、约束、证据引用和期望回报；receiver 读取后自行 adopt/defer/reject/replan。用独立事实表示 accepted work、result committed、answer delivered；从已有 outbox 自动回传。
 - **退出：** manager→worker 和 worker→worker 两个真实 caller，补充消息、来源会话消失、超长答案、重复回调、发送成功但 ACK 丢失及传输重启；同一结果在 CLI、packaged frontend、Lark 回读一致且受众隔离。普通已授权工作不增加第二次人工确认。

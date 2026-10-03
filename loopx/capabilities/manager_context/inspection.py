@@ -164,6 +164,9 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
                 "quality": row.get("quality"),
                 "progress": row.get("progress"),
                 "lifecycle_phase": _lifecycle_phase(row.get("goal_lifecycle")),
+                "attention": row.get("attention") or {
+                    "status": "unavailable", "items": [], "reason": "goal_not_read",
+                },
                 "details": "use_" + read_tool,
             }
             for row in context.get("goals", [])

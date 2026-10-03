@@ -11,6 +11,7 @@ export const blockedNoticeSettingsScenario = {
         goal_id: "product-release", configured: true, enabled: true,
         human_gate_auto_notify_enabled: false, blocked_notice_auto_notify_enabled: false,
         receipt_count: 1,
+        steward_notice_delivery: { pending_count: 1, failed_count: 1 },
         blocked_notice_delivery: { delivered_count: 1, unverified_count: 0, resolved_count: 0 },
       }],
     };
@@ -43,8 +44,10 @@ export const blockedNoticeSettingsScenario = {
       await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("product-release");
       await page.getByRole("navigation", { name: "Goal 能力目录" })
         .getByRole("button", { name: /飞书事件收件箱/ }).click();
-      const toggle = page.getByLabel("任务受阻时推送到此目标群");
+      const toggle = page.getByLabel("任务受阻时由管家解释并推送到此目标群");
       await toggle.waitFor();
+      await page.getByText("使用已配置的管家模型说明决策与影响。没有 Channel 时，本地管家仍可读取这些事实。").waitFor();
+      await page.getByRole("status").filter({ hasText: "1 条消息尚未取得投递确认" }).waitFor();
       await page.getByText("受阻通知：已核验 1 条，未核验 0 条，已解除 0 条").waitFor();
       await page.screenshot({ path: resolve(outputDir, "blocked-notice-settings.png"), animations: "disabled" });
       if (await toggle.isChecked()) throw new Error("Blocked notifications must start disabled");
@@ -59,7 +62,7 @@ export const blockedNoticeSettingsScenario = {
       }
       await page.waitForFunction(() => {
         const input = [...document.querySelectorAll("input[type=checkbox]")]
-          .find((item) => item.closest("label")?.textContent?.includes("任务受阻时推送到此目标群"));
+          .find((item) => item.closest("label")?.textContent?.includes("任务受阻时由管家解释并推送到此目标群"));
         return input?.checked === true;
       });
       await page.setViewportSize({ width: 390, height: 844 });
@@ -89,7 +92,7 @@ export const blockedNoticeSettingsScenario = {
       }
       await page.screenshot({ path: resolve(outputDir, "blocked-notice-settings-mobile-readback.png"), animations: "disabled" });
       if (context.errors.length) throw new Error(context.errors.join(" | "));
-      return { coverageEntries: await context.close(), note: "Goal Channel blocked notice default-off, failed-write correction, reload, keyboard disable and pending/retired readback verified." };
+      return { coverageEntries: await context.close(), note: "Steward model purpose and pending-generation readback; blocked notice default-off, failed-write correction, reload and keyboard disable verified." };
     } catch (error) { await context.close(); throw error; }
   },
 };

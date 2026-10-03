@@ -14,7 +14,7 @@ export type ActionReviewReason =
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
   | "operation_confirmation_expired" | "operation_expiry_unknown"
-  | "canonical_update_retry" | "canonical_update_projection_pending";
+  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry";
 
 export type OperationReviewContent = {
   title: string;
@@ -472,6 +472,17 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   }
   const basis = objectValue(proposal.canonical_update_basis);
   const parameters = objectValue(proposal.normalized_parameters);
+  const creationSteps = objectValue(objectValue(proposal.checkpoint)?.steps);
+  // Bootstrap may have published the registry before storage initialization
+  // failed. Keep its original request; a new preview now sees an existing Goal.
+  // Later creation steps do not yet have the same recovery guarantee.
+  if (proposal.action_kind === "goal.create" && proposal.status === "failed"
+      && proposal.permission_classification === "durable_write"
+      && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
+      && objectValue(creationSteps?.workspace_validated)?.outcome === "workspace_validated"
+      && creationSteps?.goal_bootstrapped == null) {
+    return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
+  }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null
     && ((proposal.action_kind === "todo.update")

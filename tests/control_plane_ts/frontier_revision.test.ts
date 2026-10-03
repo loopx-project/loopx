@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {deflateSync} from "node:zlib";
-import {projectAdvancementFrontier, evaluateLongTodoChain} from "../../loopx/control_plane/todos/frontier_revision.ts";
+import {projectAdvancementFrontier, evaluateLongTodoChain, claimedAdvancementCountFromIndex} from "../../loopx/control_plane/todos/frontier_revision.ts";
 
 function row(id: string, claim: string | null = null, excluded: string[] = []) {
   return {id, claim, excluded, advancement: true, updated: "2026-09-01T00:00:00.000001Z",
@@ -56,6 +56,25 @@ test("excluded-only agents receive an explicit checkpoint instead of the unclaim
     operation: "read", index, agent_id: "worker-a"}).checkpoint;
   assert.deepEqual(read, project([rows[0]], "worker-a"));
   assert.notDeepEqual(read, project(rows));
+});
+
+test("complete claimant census counts actionable advancement, not monitors or closed work", () => {
+  const own = {...row("todo_own", "worker-a"), actionable: true};
+  const rows = [own, {...own, id: "todo_monitor", advancement: false},
+    {...own, id: "todo_blocked", actionable: false},
+    {...own, id: "todo_peer", claim: "worker-b"},
+    {...own, id: "todo_free", claim: null}];
+  const request = {schema_version: "todo_frontier_revision_request_v0", operation: "index"};
+  const index = projectAdvancementFrontier({...request, rows}).index;
+  assert.equal(claimedAdvancementCountFromIndex(index, "worker-a"), 1);
+  assert.equal(claimedAdvancementCountFromIndex(index, "worker-b"), 1);
+  assert.equal(claimedAdvancementCountFromIndex(index, "worker-c"), 0);
+  assert.equal(claimedAdvancementCountFromIndex(index, "constructor"), 0);
+  assert.deepEqual(projectAdvancementFrontier({...request, rows: [...rows].reverse()}).index, index);
+  for (const incomplete of [[row("todo_legacy", "worker-a")], [own, own], [{...own, id: ""}]]) {
+    assert.equal(claimedAdvancementCountFromIndex(projectAdvancementFrontier({...request, rows: incomplete}).index, "worker-a"), null);
+  }
+  assert.throws(() => projectAdvancementFrontier({...request, rows: [{...own, actionable: "true"}]}));
 });
 
 test("duplicate identities and malformed or absent revision facts cannot authorize an ACK", () => {

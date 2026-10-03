@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 from collections.abc import Callable
 from pathlib import Path
 
-from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.effect_runtime import EffectRuntimeResponseAmbiguous, effect_runtime_result
 from ..paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from ..control_plane.projects.registry_codec import load_registry
 
@@ -27,6 +28,11 @@ def register_authority_archive_command(
     mode.add_argument("--execute", action="store_true")
     upgrade.add_argument("--all-known", action="store_true", help="Include runtime roots of registered projects.")
     mode.add_argument("--require-current", action="store_true", help="Fail if a format upgrade is needed; never write.")
+    receipt = actions.add_parser("restore-receipt", help="Read an isolated restore's historical completion receipt without replaying or auditing history.")
+    receipt.add_argument("--goal-id", required=True)
+    receipt.add_argument("--destination", type=Path, required=True)
+    receipt.add_argument("--provider", choices=("file", "sqlite"), required=True)
+    receipt.add_argument("--archive-sha256", required=True)
     for name in ("plan-migration", "migrate"):
         action = actions.add_parser(name, help="Review or execute a quiescent File/SQLite provider migration.")
         action.add_argument("--goal-id", required=True)
@@ -80,14 +86,16 @@ def handle_authority_archive_command(
                 request["provider"] = args.provider
             else:
                 request.update(plan_sha256=args.plan_sha256, execute=args.execute)
-        else:
+        elif args.authority_archive_action != "restore-receipt":
             request["archive"] = str(args.archive.expanduser().resolve())
         if args.authority_archive_action == "export":
             request.update(goal_id=args.goal_id, runtime_root=str(resolve_runtime_root(
                 load_registry(registry_path), runtime_root_arg, registry_path=registry_path)))
-        elif args.authority_archive_action == "restore":
+        elif args.authority_archive_action in {"restore", "restore-receipt"}:
             request.update(goal_id=args.goal_id, destination=str(args.destination.expanduser().resolve()),
-                           provider=args.provider, archive_sha256=args.archive_sha256, execute=args.execute)
+                           provider=args.provider, archive_sha256=args.archive_sha256)
+            if args.authority_archive_action == "restore":
+                request["execute"] = args.execute
         elif args.authority_archive_action == "audit":
             request.update(goal_id=args.goal_id, archive_sha256=args.archive_sha256,
                            allow_newer_head=args.allow_newer_head)
@@ -105,16 +113,25 @@ def handle_authority_archive_command(
                   "authority_changed": None if uncertain else False}
         if uncertain:
             result.update(reason_code="migration_outcome_unknown", requires_same_plan_retry=True)
+        elif (isinstance(error, EffectRuntimeResponseAmbiguous)
+              and args.authority_archive_action == "restore" and args.execute):
+            result.update(status="outcome_unknown", reason_code="restore_outcome_unknown",
+                          destination_is_active=False, automatic_retry_performed=False,
+                          recovery_command=["loopx", "--format", "json", "authority-archive", "restore-receipt",
+                                            "--goal-id", args.goal_id, "--destination", str(args.destination.expanduser().resolve()),
+                                            "--provider", args.provider, "--archive-sha256", args.archive_sha256])
     if (args.authority_archive_action == "upgrade" and args.require_current
             and any(row.get("status") == "planned" for row in result.get("results", []))):
         result.update(status="failed", reason="Authority format upgrade required before activating this runtime.")
+    recovery = result.get("recovery_command")
+    recovery_hint = "\nRecovery command: " + shlex.join(recovery) if isinstance(recovery, list) else ""
     print_payload(result, output_format(args), lambda value: (
         f"Authority archive: {value.get('status')}\n"
         f"{value.get('reason', 'Authority changed: ' + str(value.get('authority_changed')))}\n"
         f"Plan digest: {value.get('plan_sha256', 'not applicable')}\n"
-        f"{value.get('audit', '')}"
+        f"{value.get('audit', '')}{recovery_hint}"
     ))
-    return 1 if result.get("status") == "failed" else 0
+    return 1 if result.get("status") in {"failed", "outcome_unknown"} else 0
 
 
 def authority_upgrade_roots(registry_path: Path, runtime_root_arg: str | None,

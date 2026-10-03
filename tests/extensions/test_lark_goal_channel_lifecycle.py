@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+from tests.extensions.conftest import notification_transport_synthesis  # noqa: F401
+
 from loopx.extensions.lark import goal_channel_lifecycle
 from loopx.extensions.lark.goal_channel_contracts import (
     GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
