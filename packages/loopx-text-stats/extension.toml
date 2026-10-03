@@ -1,0 +1,12 @@
+schema_version = "loopx_extension_manifest_v0"
+id = "loopx-text-stats"
+version = "0.1.0"
+requires_loopx_api = ">=1,<2"
+permissions = []
+
+[runtime]
+protocol = "loopx_text_stats_extension_v0"
+entrypoint = "loopx-text-stats"
+doctor_args = ["--doctor"]
+required_permissions = []
+timeout_seconds = 30

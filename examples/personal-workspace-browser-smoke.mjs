@@ -42,6 +42,7 @@ import { progressiveLoadingScenario } from "./personal-workspace-browser/progres
 import { stewardJourneyScenario } from "./personal-workspace-browser/steward-journey.mjs";
 import { teamPlanScenario } from "./personal-workspace-browser/team-plan.mjs";
 import { typedActionsScenario } from "./personal-workspace-browser/typed-actions.mjs";
+import { goalDeletionScenario } from "./personal-workspace-browser/goal-deletion.mjs";
 import { confirmedOperationsScenario } from "./personal-workspace-browser/confirmed-operations.mjs";
 import { stewardModelSettingsScenario } from "./personal-workspace-browser/steward-model-settings.mjs";
 import { workspaceLocaleScenario } from "./personal-workspace-browser/workspace-locale.mjs";
@@ -63,6 +64,7 @@ import { chatTodoProposalScenario } from "./personal-workspace-browser/chat-todo
 
 const scenarioCatalog = [conversationStartupScenario,goalDraftScenario, capabilityScopeScenario, stewardGroupTriggerScenario, conversationInputScenario, goalActivityScenario, conversationActivityScenario, navigationSortingScenario, automationCadenceScenario, chatRecoveryScenario, composerSessionAdmissionScenario, attachedHostFollowUpScenario, conversationReturnContinuityScenario, conversationHistoryRecoveryScenario, answerPresentationScenario, loopxModeScenario, teamEvidenceScenario, managedGoalResultsScenario, typedActionsScenario, teamPlanScenario, stewardJourneyScenario, executionChipScenario, stewardModelSettingsScenario, progressiveLoadingScenario, workspaceLocaleScenario, newestDraftScenario, larkCliMissingScenario, executionServiceOfflineScenario, chatTodoProposalScenario];
 scenarioCatalog.push(confirmedOperationsScenario);
+scenarioCatalog.push(goalDeletionScenario);
 scenarioCatalog.push(conversationImageRequestScenario);
 scenarioCatalog.push(workspaceViewRecoveryScenario);
 scenarioCatalog.push(monitorReadbackScenario);

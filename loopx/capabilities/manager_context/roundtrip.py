@@ -33,10 +33,13 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtim
 
 from ...control_plane.collaboration.inbox import (
     _request_lock,
+    iter_result_paths,
+    result_paths,
+    result_identity_matches,
+    prior_result_delivered,
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
-PHASES = ("decision", "conclusion")
 DELIVERY_STATUSES = {
     "admitted",
     "queued",
@@ -211,6 +214,7 @@ def report(
     registry=None,
     caller_goal_ref=None,
     scope=None,
+    update_id=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -232,6 +236,7 @@ def report(
                 phase,
                 text,
                 scope=goal_scope,
+                update_id=update_id,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
@@ -249,6 +254,7 @@ def report(
             text,
             scope=scope,
             route=route,
+            update_id=update_id,
         ),
         "status": (
             "queued_for_requester"
@@ -260,17 +266,16 @@ def report(
 
 def reply_status(root, row):
     result = []
-    for phase in PHASES:
-        path = _root(root) / "replies" / row["request_id"] / (phase + ".json")
-        if not path.exists():
-            continue
-        state_path = path.with_name(phase + ".delivery.json")
+    for path in result_paths(_root(root) / "replies" / row["request_id"]):
+        phase = "decision" if path.stem == "decision" else "conclusion"
+        state_path = path.with_name(path.stem + ".delivery.json")
         try:
             reply = _read(path)
             state = _read(state_path) if state_path.exists() else {}
         except (OSError, ValueError):
             result.append({
                 "phase": phase, "status": "explicit_unverified",
+                **({"result_key": path.stem} if path.stem != phase else {}),
                 "created_at": None, "delivered_at": None,
                 "error": "delivery_state_unreadable",
             })
@@ -286,6 +291,7 @@ def reply_status(root, row):
             delivered_at = None
         item = {
             "phase": phase,
+            **({"result_key": path.stem} if path.stem != phase else {}),
             "status": status,
             "created_at": reply.get("created_at"),
             "delivered_at": delivered_at,
@@ -319,16 +325,8 @@ def project_chat_return_deliveries(root, session_id, messages):
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
-            route_message_ids = {
-                "handoff." + _hash([request_id, phase]) for phase in PHASES
-            }
-            if pending_message_ids.isdisjoint(route_message_ids):
-                continue
             for item in reply_status(root, route):
-                phase = item.get("phase")
-                if phase not in PHASES:
-                    continue
-                message_id = "handoff." + _hash([request_id, phase])
+                message_id = "handoff." + _hash([request_id, item.get("result_key", item["phase"])])
                 if message_id not in pending_message_ids:
                     continue
                 statuses[message_id] = {
@@ -401,7 +399,7 @@ def _exact_return_context(root, registry, store, path, state_path, now):
         )
         if (
             path.parent.name != row["request_id"]
-            or reply.get("phase") != path.stem
+            or not result_identity_matches(reply, row, path)
             or any(
                 reply.get(key) != row.get(key)
                 for key in ("source_id", "goal_ref")
@@ -440,6 +438,8 @@ def _exact_return_context(root, registry, store, path, state_path, now):
             scope,
             path.with_suffix(".lock"),
         ):
+            if not prior_result_delivered(path, reply):
+                return None
             state = _read(state_path) if state_path.exists() else {}
             if state.get("status") in {
                 "delivered",
@@ -566,7 +566,8 @@ def _write_exact_return_state(
                 or admission.get("token") != context["token"]
             ):
                 raise ValueError("exact return delivery admission changed")
-            result = {**value, "goal_ref": row["goal_ref"]}
+            result = {**value, "goal_ref": row["goal_ref"],
+                      **({"result_key": reply["result_key"]} if "result_key" in reply else {})}
             if preserve_admission:
                 result["admission"] = admission
             else:
@@ -598,11 +599,9 @@ def _retry_state(state, now, *, error):
 
 def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
     processed = 0
-    for path in sorted((_root(root) / "replies").glob("*/*.json")):
+    for path in iter_result_paths(_root(root) / "replies"):
         if cancelled():
             break
-        if path.stem not in PHASES:
-            continue
         state_path = path.with_name(path.stem + ".delivery.json")
         effect_locks = ExitStack()
         try:
@@ -642,7 +641,7 @@ def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
         turn = context["turn"]
         reply = context["reply"]
         state = context["state"]
-        prefix = "处理结论" if path.stem == "conclusion" else "处理进展"
+        prefix = "处理结论" if reply["phase"] == "conclusion" else "处理进展"
         text = (
             f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}"
             f"\n\n{reply['text']}"
@@ -890,11 +889,9 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
             cancelled=cancelled,
         )
     processed = 0
-    for path in sorted((_root(root) / "replies").glob("*/*.json")):
+    for path in iter_result_paths(_root(root) / "replies"):
         if cancelled():
             break
-        if path.stem not in PHASES:
-            continue
         state_path = path.with_name(path.stem + ".delivery.json")
         with exclusive_file_lock(path.with_suffix(".lock")):
             try:
@@ -915,7 +912,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                 )
                 if (
                     path.parent.name != row["request_id"]
-                    or reply.get("phase") != path.stem
+                    or not result_identity_matches(reply, row, path)
                     or reply.get("source_id") != row["source_id"]
                 ):
                     raise ValueError("return_reply_identity_mismatch")
@@ -954,9 +951,11 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                         {"status": "superseded", "reason": "conclusion_ready"},
                     )
                     continue
+                if not prior_result_delivered(path, reply):
+                    continue
                 # A conclusion can be a deferral or rejection. Transport completion
                 # is not completion of the delegated work.
-                prefix = "协作回复" if path.stem == "conclusion" else "协作进展"
+                prefix = "协作回复" if reply["phase"] == "conclusion" else "协作进展"
                 text = f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}\n\n{reply['text']}"
                 # Transcript writes are independently idempotent, including when
                 # Lark is offline. Keep the original Turn and logical conversation.
@@ -1066,6 +1065,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                                 state_path,
                                 {
                                     "status": "delivered",
+                                    **({"result_key": path.stem} if "result_key" in reply else {}),
                                     "delivered_at": now.isoformat(),
                                     "message_id": mid,
                                     "provider_receipt": attempt["provider_receipt"],
@@ -1168,6 +1168,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     state_path,
                     {
                         "status": "delivered",
+                        **({"result_key": path.stem} if "result_key" in reply else {}),
                         "delivered_at": now.isoformat(),
                         "message_id": mid,
                         **transport,

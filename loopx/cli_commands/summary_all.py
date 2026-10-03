@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -72,6 +73,7 @@ def register_summary_all_command(
     add_subcommand_format(portfolio)
     portfolio.add_argument("--manager-view", choices=("portfolio", "todos", "deliveries", "agents"), help="Export an audience-safe manager evidence page from this registry.")
     portfolio.add_argument("--query", default="", help="Search registered Agent identities and responsibilities with --manager-view agents.")
+    portfolio.add_argument("--todo-id", dest="context_todo_id", help="Read an exact permitted Todo with --manager-view todos and one --goal-id.")
     portfolio.add_argument("--offset", type=int, default=0)
     portfolio.add_argument("--days", type=int, default=1)
     portfolio.add_argument("--include-stopped", action="store_true")
@@ -174,13 +176,16 @@ def handle_summary_all_command(
     }:
         return None
     if args.command == "goal-portfolio":
+        if getattr(args, "context_todo_id", None) is not None and not args.manager_view:
+            payload = {"ok": False, "error": "--todo-id requires --manager-view todos and one --goal-id.", "rows": []}
+            print_payload(payload, output_format(args), lambda p: json.dumps(p, ensure_ascii=False, indent=2))
+            return 1
         if args.manager_view:
             from ..capabilities.manager_context.evidence_export import export_page
             try:
                 payload = export_page(registry_path, runtime_root_arg, args)
             except (OSError, ValueError, TypeError):
                 payload = {"ok": False, "error": "manager_evidence_unavailable_or_invalid", "rows": []}
-            import json
             print_payload(payload, output_format(args), lambda p: json.dumps(p, ensure_ascii=False, indent=2))
             return 0 if payload.get("ok") else 1
         try:

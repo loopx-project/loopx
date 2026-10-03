@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-text-stats"
+version = "0.1.0"
+description = "Zero-permission teaching extension for the LoopX Developer Book"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+loopx-text-stats = "loopx_text_stats.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -81,6 +81,9 @@ include = ["loopx*"]
   "skills/loopx-performance-diagnosis/SKILL.md",
   "skills/loopx-performance-diagnosis/.loopx-skill-scope",
 ]
+"share/loopx/skills/loopx-performance-diagnosis/agents" = [
+  "skills/loopx-performance-diagnosis/agents/openai.yaml",
+]
 "share/loopx/skills/loopx-project" = [
   "skills/loopx-project/SKILL.md",
   "skills/loopx-project/.loopx-skill-scope",

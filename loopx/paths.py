@@ -147,6 +147,11 @@ def _is_route_observation(path: Path) -> bool:
         return False
     if path.name == GLOBAL_REGISTRY_FILENAME + ".lock":
         return path.is_file()
+    # The native effect runtime locks every registry it writes through, so a
+    # mere lock file must not turn a default root into a second authority.
+    # Spelled here because file_lock imports this module.
+    if path.name == GLOBAL_REGISTRY_FILENAME + ".ts-effect.lock":
+        return path.is_file()
     if path.name == "lark-consumers" and path.is_dir():
         import re
 

@@ -1,6 +1,7 @@
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps";
 import { z } from "zod";
+import { actionSourceBasisSchema } from "./action-source-basis.js";
 
 import {
   todoApplyResultMatchesRequest,
@@ -447,12 +448,7 @@ export const typedActionProposalSchema = z.object({
   error: z.record(z.string(), z.unknown()).nullable().optional(),
   checkpoint: z.record(z.string(), z.unknown()).nullable().optional(),
   failure: z.record(z.string(), z.unknown()).nullable().optional(),
-  canonical_update_basis: z.object({
-    schema_version: z.enum(["loopx_chat_canonical_update_basis_v0", "loopx_chat_canonical_terminal_basis_v0"]),
-    provider_revision: z.string().min(1),
-    source_authority: z.enum(["file_v0", "sqlite_v0"]),
-    registry_sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  }).optional(),
+  canonical_update_basis: actionSourceBasisSchema.optional(),
   regenerated_from: z.string().nullable().optional(),
   operation: typedOperationEnvelopeSchema.nullable().optional(),
   created_at: z.string(),
@@ -686,6 +682,8 @@ export type ChatSessionSummary = {
   last_error_code: string | null;
   created_at: string;
   updated_at: string;
+  /** Opaque transcript read hint, independent of execution updated_at. */
+  transcript_revision?: string | null;
   last_activity_at: string;
   resumable: boolean;
   session_mode?: ChatSessionMode;
@@ -2251,6 +2249,7 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
   );
 }
 
+export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract";
 const usageStatisticsSchema = z.object({
   consent: z.enum(["default", "enabled", "disabled"]),
   sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
@@ -2259,12 +2258,18 @@ const usageStatisticsSchema = z.object({
   automatic_notice_required: z.boolean(),
   next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
   diagnostic_preview: z.unknown().optional(), diagnostic_dropped: z.number().optional(),
+  stored_context: z.string().optional(), effective_context: z.string().optional(), context_source: z.string().optional(),
+  installation_preview: z.unknown().optional(),
   identity_scope: z.string().optional(), delivery_history: z.array(z.object({
-    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal"]), rows: z.number(),
+    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal", "installation"]), rows: z.number(),
     status: z.enum(["accepted", "rejected", "unavailable"]),
   })).optional(),
 });
 export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
+export async function setUsageContext(context: string): Promise<UsageStatistics> {
+  return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
+    { method: "POST", body: JSON.stringify({ context }) }));
+}
 export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {
   return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
     enabled === undefined ? undefined : { method: "POST", body: JSON.stringify({ enabled }) }));

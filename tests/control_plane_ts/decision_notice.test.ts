@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {projectDecisionNotice} from "../../loopx/control_plane/presentation/decision_notice.ts";
+import {projectDecisionNotice, validateDecisionNoticeReferences} from "../../loopx/control_plane/presentation/decision_notice.ts";
 
 test("decision bodies outrank lossy scheduler labels and preserve distinct requests", () => {
   const body = "Review the public release candidate. ".repeat(9) + "Only publish after the signed build passes.";
@@ -56,4 +56,30 @@ test("transport bounds reject the entire body instead of silently losing trailin
     assert.deepEqual(result, {source: "unavailable", items: [], incomplete: [{request_id: "todo_bound", reason_code: "content_overflow"}]});
   }
   assert.equal(projectDecisionNotice({requests: [{text: "🌏".repeat(900), reason: "x".repeat(450)}]}).source, "request_items");
+});
+
+test("complete references allow punctuation and Markdown but reject identifier extensions", () => {
+  const id = "todo_abcdef0123456789abcdef01";
+  for (const text of [id, `(${id}).`, `（${id}）。`, `**${id}**`, "`" + id + "`",
+    `[${id}](https://example.org/review)`, `请决定${id}。`]) {
+    assert.deepEqual(validateDecisionNoticeReferences({text, requests: [{request_id: id}]}),
+      {valid: true, missing_request_ids: []});
+  }
+  for (const text of [`prefix_${id}`, `${id}_other`, `prefix-${id}`, `${id}-other`,
+    `x${id}x`, `${id}2`, `X${id}`, "Review the release."]) {
+    assert.deepEqual(validateDecisionNoticeReferences({text, requests: [{request_id: id}]}),
+      {valid: false, missing_request_ids: [id]});
+  }
+});
+
+test("every complete request requires a literal reference rather than a partial match", () => {
+  const requests = [{request_id: "todo_release"}, {request_id: "todo_icon"}];
+  assert.deepEqual(validateDecisionNoticeReferences({text: "todo_release, todo_icon_other", requests}),
+    {valid: false, missing_request_ids: ["todo_icon"]});
+  assert.deepEqual(validateDecisionNoticeReferences({text: "todo_release; todo_icon.", requests}),
+    {valid: true, missing_request_ids: []});
+  assert.deepEqual(validateDecisionNoticeReferences({text: "(legacy.ref+1)", requests: [{request_id: "legacy.ref+1"}]}),
+    {valid: true, missing_request_ids: []});
+  assert.deepEqual(validateDecisionNoticeReferences({text: "(legacyXreff1)", requests: [{request_id: "legacy.ref+1"}]}),
+    {valid: false, missing_request_ids: ["legacy.ref+1"]});
 });

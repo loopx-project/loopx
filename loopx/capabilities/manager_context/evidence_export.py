@@ -12,6 +12,8 @@ def export_page(registry_path, runtime_root_arg, args):
     registry = load_registry(Path(registry_path))
     root = resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path)
     ids = args.portfolio_goal_ids
+    if getattr(args, "context_todo_id", None) is not None and args.manager_view != "todos":
+        raise ValueError("--todo-id is only valid for --manager-view todos")
     if not 1 <= args.limit <= 12 or not 1 <= args.days <= 90 or args.offset < 0:
         raise ValueError("invalid evidence bounds")
     if args.manager_view not in {"portfolio", "agents"} and (not ids or len(ids) != 1):
@@ -48,6 +50,8 @@ def export_page(registry_path, runtime_root_arg, args):
         query["goal_id"] = ids[0]
     if args.manager_view == "deliveries":
         query["days"] = args.days
+    if getattr(args, "context_todo_id", None) is not None:
+        query["todo_id"] = args.context_todo_id
     result = inspector.read(TOOL_NAME, query)
     for row in result.get("rows", []):
         row.setdefault("goal_id", query.get("goal_id"))

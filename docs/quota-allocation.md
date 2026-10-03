@@ -408,8 +408,14 @@ wait state: quota uses the typed `future_monitor_wait` rule, returns
 synthetic replan. A due monitor remains executable through
 `due_monitor_execution`. Missing or invalid schedules, no-change streaks,
 vision/succession gaps, user gates, and real blockers still enter their
-higher-priority repair or replan rules. Projected ACKs from a different agent
-lane remain diagnostic only and cannot clear a current-lane obligation.
+higher-priority repair or replan rules. If an autonomous replan is selected
+while only a future-due monitor and an unrelated scoped user gate remain,
+`effective_action=autonomous_replan_required` keeps the agent's execution
+obligation active even when the user-gate notification is also shown. The
+quiet monitor lane cannot turn that replan into a no-op; the scheduler keeps
+`run_now` until the replan produces a typed outcome. Projected ACKs from a
+different agent lane remain diagnostic only and cannot clear a current-lane
+obligation.
 
 Executable todos can also declare explicit write-scope requirements through
 todo metadata, for example `required_write_scopes=runner%2F%2A%2A` or the CLI

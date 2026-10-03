@@ -82,8 +82,8 @@ class TestPackagedSkills:
                 encoding="utf-8"
             ).strip() == "global", skill_id
 
-    def test_repo_has_seven_skills(self):
-        assert len(REQUIRED_HOST_SKILL_IDS) == 7  # loopx + 6 packaged
+    def test_required_skills_match_the_shipped_catalog(self):
+        assert set(REQUIRED_HOST_SKILL_IDS) == {"loopx", *PACKAGED_HOST_SKILL_IDS}
 
 
 # -- Skill install readback lifecycle -----------------------------------------

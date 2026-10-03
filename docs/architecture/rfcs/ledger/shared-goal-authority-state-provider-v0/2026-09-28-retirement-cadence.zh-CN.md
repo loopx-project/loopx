@@ -1,6 +1,6 @@
 # 合并后的本地权威退役节奏
 
-- 核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
+- 当前计划：2026-10-02，`9b0486dc1`；历史核对基线：`ce3862e33`；采用后续核对：`71525ab90`，2026-09-28；[English](2026-09-28-retirement-cadence.md)。
 - Owner：总 roadmap R3/R4/R5/R6、shared authority D1–D3、TS 迁移 T0–T4。
 - 本记录替代 9 月 27 日 recovery、Host supervision 记录的**当前清单和估算**，
   不替代其历史验证结果。
@@ -63,27 +63,109 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 `db3672f3c`，验证了干净源码清单、具备资格的 SQLite runtime、已知权威格式均为
 当前版本及健康的 canonical 合同读回。这不证明所有已安装 Host 或 D2 已验收。
 
-## 下一轮交付顺序
+## 当前收尾：验证、迁移与删除（2026-10-02）
 
-| 顺序 | 完整结果／owner | 具体出口与删除机会 |
+按 main `9b0486dc1` 和所列 PR head 重新核对。本节是 **R5 / D1–D3 / T0–T4**
+的当前执行计划，替代旧 A–D 排期；历史测量仍只适用于原源码和负载。R6 单独推进。
+存储格式、权威选择、所有权策略是三种不同迁移：有 SQLite 数据库，不代表新 Goal
+已经默认使用 canonical authority，也不代表 `legacy` handoff 策略已经退役。
+
+### 实际基线与合并队列
+
+| 状态 | 已交付边界／下一步 |
+| --- | --- |
+| 已合并：#4931、#5251 | SQLite 重放／证明和分配优化；复用实现及匹配证据，合并不等于 D2 已验收。 |
+| 已合并：#5395、#5417 | 无调用方的 Python lease／handoff 跨界、重复结算准入／恢复决策已退役。继续按最后调用方删除，不重复计账。 |
+| 已合并：#5436 | 委派 Host 原租约续期；最终 Todo 验收和停止确认仍是不同边界。 |
+| 复审中：[#5413](https://github.com/loopx-project/loopx/pull/5413)，`2c99505c7` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。CLI 恢复修复的 99 项相关测试、File/SQLite 真实旧 CLI→新 CLI 演练通过，最终 head 独立复审待完成。没有自动迁移存量 legacy Goal。 |
+| 待审：[#5466](https://github.com/loopx-project/loopx/pull/5466)，`60a052383` | 原租约保持到最终验收；独立评审、维护者合并后验证安装态执行路径。 |
+| 待审：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`73d1fe663` | 不缩减决策输入地降低 preflight 投影成本，末次 capture 显式报告 provider 不可用。作者报告固定源码下 96 次 File/SQLite 检查及完整投影等价；仍需独立复审和安装后读回。合成故障不证明历史瞬态打开失败的根因。 |
+| 按实际路径建立依赖 | [#5308](https://github.com/loopx-project/loopx/pull/5308) 要证明子进程停止后才报告已结算；[#5398](https://github.com/loopx-project/loopx/pull/5398) 保留 UI 历史和 inspector 完整事实。只对纳入试用的相关消费者建依赖，不将其说成 SQLite 引擎前置，也不能发布已知损坏的用户路径。 |
+
+当前优先收尾的是 **3 个已存在的开放 PR**，不等于再合 3 个就全部结束。
+剩余实现包是 canonical 创建／默认接入、策略迁移与 legacy 策略删除、旧 writer／
+捕获退役。仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
+不再制造固定“剩余 PR 数”，也不为维持这个数字重做已完成的工作。
+
+### 有依赖顺序的交付包与出口
+
+| 交付包／既有 owner | 要做什么、凭什么完成 | 依赖／删除机会／节奏 |
 | --- | --- | --- |
-| A：现在开始 | 整 Goal 执行／消费者集成；R3/R5、现有 Host/Turn owner | 串起捕获→drain→晋升→CLI/status/quota/App/Lark 读写→settlement→重启→携带新写入迁回。核对 managed、attached、external 执行；真正取消确认／settlement 才是结束证明，过期不算。复用 #5173/#5175，在完整链路内删除重复编排。 |
-| B：与 A 并行 | 本地 profile 验证；D1/D2，复用 #4931 | File/SQLite 同负载比较，包含领域图、metadata、历史、延迟／RSS、burst/lag、安装后冷 CLI，记录平台／runtime／限额。哪里失败就修其 owner。SQLite 仍是候选；优化或小演练不能决定发布默认值。File 是对照组，不是资格失败后的自动替代。 |
-| C：A 与 profile 决策通过后 | 新 Goal／默认／安装／设置接入，加受支持存量升级；D3/T3 | 新装和升级、CLI、打包 App、Lark 使用同一选定权威。备份验证、reviewed migration、中断恢复、未升级拒绝及携带新写入回退可用；发布默认值显式决定。同一调用家族 PR 删除已替代的 legacy writer，不留“以后再清理”。 |
-| D：伴随 C，按最后调用方推进 | 其余传输与捕获退役；T4 | native 消费者接管后删 facade／dispatch／producer，保留必要 Host IO 和迁移 reader。全部 Python 消失既不是 canonical 默认的前置，也不是切换后的自动结果。 |
+| 现有 head 收尾；R3/R5 | 修完上述 3 个 PR 的 exact-head finding，处理相关失败与冲突，提交已评审 head 给维护者合并；区分已合并和已安装。 | 第一目标为 1–2 个工作日，取决于真实评审／修复结果；收尾前不另开无关优化。 |
+| 安装态恢复候选；D1/D3、整 Goal 晋升任务 | 固定合并源码和 CLI/App/Effect 实际 Node/SQLite 身份；独立恢复并验证备份，用隔离真实快照及合成负例执行下表，完成 File→SQLite→新增写入→File。之后按授权逐 Goal 采用并日常回读。 | 相关 PR 合并后立即开始，有界矩阵目标 1–2 个工作日；保留兼容的恢复版本和 archive，不对活跃 Goal 注入崩溃／损坏。 |
+| 有界自愿试用；D2/D3 | 安装态恢复及相关执行控制通过后，邀请不超过 20 位核心开发者。公开负载／平台范围、备份迁移关闭步骤、已知缺口、停止条件与反馈入口；观察真实日常使用和失败。 | 不必等待全部正式 D2 轴或一份新的十天证书；携带新写入回退未通过前不邀请。试用不认证发布默认值。 |
+| Canonical 创建／默认接入；D3/T3 | 复用 `machine_configuration/goal_storage.py` 和 `local_authority_defaults.ts`。当前设置只选择**晋升后的目标**，返回 `promotion_performed: false`。补齐新建初始化／重试、升级、设置及打包 App/CLI/Lark 读回，已有显式 selector 保持固定。 | 有界候选可用后实现，发布默认启用仍服从下方决策；同包删除被替代的创建／选择决策。只把设置里的 file 改成 sqlite 不够。 |
+| 两种所有权策略；R3/R5/T4 | 复用 #5413 的 backup/plan/migrate owner。清点旧／缺省 mode，结清适用的 claim／lease 和 Host 效果，逐个迁移获授权 Goal，再将正常运行类型及默认值收敛为 soft_claim / hard_lease。复用既有 Goal 设置入口和同一 owner，提供预览、获授权执行、结果及失败／恢复；只有 CLI 的迁移阶段标为部分交付。 | 与试用观察并行；不和 File↔SQLite 转换绑定。受支持升级路径和调用方通过后删除 legacy 执行，不能默默把 legacy 当成 soft。 |
+| 旧 writer／跨界删除；T3/T4 | 最后真实调用方切到 TS owner 后验证下表，同时删除 Python 决策／私有 dispatch 和旧 Markdown 写入；清理 capture producer 前对账 outbox。在旧路径已不存在的包上验证 CLI。 | 已证明无消费者的内部删除现在就做；业务 writer 删除随对应迁移接入，不等 R6 全部完成或所有 Python 消失。每批有具体清单和回退方式。 |
+| 发布默认决策；R5/D2/D3 | 对账受支持安装、当前 release 对照、代表性持续读写／恢复、资源增长和既有 soak 适用性；发布明确 profile、failed/missing、升级说明及关闭路径，显式披露默认变化。 | 不按测试／PR 数推算日期；正式十天／100k 资格保留各自证据要求。已有 File 选择继续受支持并固定；SQLite 不可用不能静默唤回旧 writer。 |
 
-Canonical 任务已覆盖整 Goal 晋升、本地 profile 与退役清单、持久 Markdown 投影／
-显式重建。先对齐这些任务的证据并沿用已有 owner；投影失败应能明确重建，不能
-因此把 Markdown 重新变成第二套可写权威。
+以上是工程目标，不是资格证书。先按源码和变化边界核对 #4224 的旧 soak，再决定
+哪些证据需补跑；无关提交不抹掉自然时间。当前公开记录未证明已完成且适用于当前
+候选的 soak 结果。
 
-A/C 若因不同执行或 onboarding owner 需要独立回退，可以拆分，但须写明原因和
-剩余出口。B 是证据工作，可能暴露新的修复，不预先折算为 PR。之后 R6 仍须完成
-PostgreSQL 认证传输、tenant／identity 运维、连接池／取消／failover 和跨 Host 验证，
-复用现有 store/archive/service owner；不让 R6 阻止本地代码退役。
+### 一份可复用的验证矩阵
 
-R3 实例／session 接入和 R4 意图／验收连续性仍是独立产品结果。受影响调用方复用
-[后续连续性场景](../../goal-immutability-coherence-defense-v0.zh-CN.md)，不把它扩张为
-尚未实现的全局门禁；CAS 成功不能证明当前 Goal 身份或任务质量。
+每行记录候选／独立对照源码、实际 runtime、完整 fixture／历史摘要、命令、
+通过／失败／未测和停止／回退结果。性能使用当前受支持 release 做对照，最初迁移前
+基线保留为独立产品比较。同时隔离数据与 Effect 进程，不靠截断 metadata、历史或
+决策输入赢指标。
+
+| 边界 | 必做实验及不变量 | 复用的证据 owner |
+| --- | --- | --- |
+| 备份与完整数据 | 验证 SQLite 在线快照及逻辑 archive 恢复；比较完整 Todo JSON、缺省/null/false、未知 metadata、role/task class、归档依赖、验收合同／版本、claim／lease generation、原 events／receipt／cursor，以及受支持 Goal/source 状态。枚举全部持久状态家族，不能只比数量或最后 head hash。 | `test_authority_archive.py`、`authority_archive_audit.test.ts`、archive crash/restore 和迁移套件 |
+| 正反向迁移 | File→SQLite，真正新增／修改／完成并重放一笔新操作，重启后导回 File；全部旧事实和**新增写入**都保留。丢响应与相同重试回原结果，同 operation ID 不同意图拒绝。 | `local_authority_migration.test.ts`、archive 与 reviewed-cutover CLI 套件 |
+| 写入与所有权 | create/claim/update/complete/supersede/archive，quota 选择→refresh→spend，同 Todo 竞争、旧 revision/epoch、lease 续期／释放及适用策略迁移；一笔 commit/effect/settlement，不凭空造所有权。 | 真实 File/SQLite 命令套件；#5413/#5436/#5466；共享修改还须隔离真实 PostgreSQL |
+| 中断与恢复 | durable commit／selector 发布前后进程中断、provider unavailable/busy、空间不足注入、投影卡住和 consumer 滞后；重启／重试只结算一次且后续合法工作可继续。子进程还活着不能报告已停止／已结算。 | 既有 crash/migration/process 套件；#5308 相关 Host 路径 |
+| 安装态消费者 | CLI status/quota/Todo list/detail；打包 App 列表／inspector 和普通修改；纳入范围时验证 Lark。数量、metadata、新鲜度、错误／恢复反馈、原路返回与 canonical 事实一致，覆盖重启和旧标签页资源。 | 既有投影／消费者任务、打包前端 smoke；受影响处采用 #5398 |
+| 成本与持续运行 | 相同数据／历史／durability／命令，分别测完整冷 CLI 和 warm store，报告 p50/p95/p99／样本数、RSS、DB/WAL／写增长、锁竞争及 consumer lag。正式 macOS 冷 CLI 失败及缺项保持可见，披露相对当前 release 的绝对值与相对变化。 | #4224、SQLite comparison/rehearsal runner、既有 performance-diagnosis capability |
+| 删除证明 | 一次性 checkout 中删掉／禁用候选旧路径，跑真实入口与历史恢复；检查 import、动态 handler、打包和 fixture 最后调用方。不支持的旧输入提示迁移，不能退回 Markdown 写入。 | 实现 PR 的退役清单、独立语义和负例测试 |
+
+有界试用中，显著用户路径退化或恢复失败阻止该路径采用；提议的微基准预算不构成
+所有合并的否决权，实测权衡不能重写冻结报告。数据丢失、原回执改变、重复效果、
+Goal 身份错误或 fence 破坏始终停止相关写入，保留只读证据并按 journal 恢复。
+回退必须导出当前已提交状态，不能用迁移前快照盖掉后续写入。
+
+### 迁移顺序与准确删除边界
+
+1. 逐 Goal 清点 provider／格式、晋升状态、策略、runtime、未结 Turn/outbox/projection
+   和真实 writer。已 canonical 的 SQLite Goal 做验证，不重复 promote；canonical
+   File 按需做 provider 迁移；未晋升 Markdown 做完整捕获和 writer fence。
+   数据库文件不等于已选中的 authority。
+2. 迁移前备份并独立恢复验证；停止该 Goal 新准入，drain／结算真实在途工作，重新
+   校验 source digest 和计划，再走已有 CAS／selector owner。lease 过期或进程退出
+   均不能单独证明外部效果已停止。
+3. 按授权逐个采用并回读，后续写入以 canonical 为准。source/provider/policy 迁移
+   各有独立回执和恢复。计划无结果或丢响应按 operation ID 续接，不能手改 registry／
+   selector，或把已发生效果当成新操作重做。
+4. 按下表删除；以下是真实源码候选，不是在宣称每个模块现在就能整文件删除：
+
+| 删除对象 | 替代和最早出口 | 保留／明确不删 |
+| --- | --- | --- |
+| 活跃所有权策略 legacy，以及缺 mode 的运行默认值 | `handoff_mode_policy.ts`、`handoff_mode_facts.ts` 和真实 lease/Todo/Host 调用方完成版本化升级、消费者验收，正常路径只运行两种显式策略 | 旧值只留迁移解析和原回执恢复。重放旧操作不授予新执行权、不覆盖后来的策略；没有旧回执就拒绝新 legacy 意图。 |
+| `todos.py` / `todos/line_update.py` 的可写 Markdown Todo 分支 | canonical create/update/terminal owner；新建／默认与受支持存量 Goal 路径完成迁移 | 人工叙述、永久 Markdown 投影／重建、合格 import/export 与旧备份恢复；provider 缺失不回退 |
+| `runtime_shadow_writer_adapter.py` 等旧捕获 producer | 最后受支持源 writer 已退役，prepared/committed outbox 均已分类和对账 | 真实恢复义务结束前，迁移内历史 outbox reader 保留；不保留第二套持续捕获权威 |
+| Python 重复决策和私有 RPC facade | TS 事务拥有语义、效果与输出；最后生产／动态／打包调用方切走并完成等价／恢复验证 | 仍使用的 transport、Host IO、专门 provider；不因 Python 语言就整删 authority_core.py 或 provider adapter |
+| 旧正常格式 reader/writer | 正常 runtime 打开前走版本化备份升级，日常只读写当前格式 | 支持窗口内的迁移 codec、原历史／回执。删 reader 需明确兼容决策，不能由本机升级成功推断全部用户升级。 |
+
+策略默认值按执行责任而不是数据库品牌选择：协作式所有权、效果不需要排他执行
+凭据的本地工作流候选为 `soft_claim`；共享／云端、重叠 worker 和须 fence 的外部
+效果候选为 `hard_lease`，本地 managed 执行需要时同样采用 hard。未知拓扑要求
+明确选择，不隐含 legacy，也不统一降到 soft。既有显式策略经 reviewed migration
+才改变；最终默认值须用真实调用方验证，不能仅按“本地／云端”字面分类。
+
+### Canonical Todo 归属与更新规则
+
+沿用 SQLite 准入／Python 退役任务作为计划 owner，在 note 写入下一个具体交付包、
+依赖、精确证据和删除出口。整 Goal 晋升、canonical 消费者清单、永久 Markdown
+投影、Host lease 生命周期、完整 summary/detail 复用各自任务；旧 note 提到已合并
+PR 不构成重复开工的理由。现有收尾 monitor 归并相关 head／review／merge 变化，
+唤醒对应 owner；安静轮询不算推进。
+
+实际实现缺口要有 owner 和验收：canonical 默认／升级接入、两策略迁移及 legacy
+执行删除、最后 writer／capture 删除。用现有 successor／dependency 字段关联，
+不另造 RFC，不给每个 PR 建一个 monitor。安装回读及约定删除完成后才结项，发布
+计划／请求评审／合并均不能代替完成。私有 Goal 清单、备份路径、测量和 Todo ID
+不进入公共文档。
 
 ## 删除 writer 前，本机可以积极做的验证
 
@@ -103,7 +185,8 @@ R3 实例／session 接入和 R4 意图／验收连续性仍是独立产品结�
    WAL 增长、最老积压／consumer lag、不确定结果恢复、重复效果和实例污染。
    每日读回，定期在隔离 observer／副本中验证恢复。适用的 D2 十天自然时间 soak
    不能靠循环测试或回填时间戳加速；有记录的起点才开始计时，明确重启间隙和源码变化。
-4. **先 cohort 后默认：** 所需证据通过后，对有限且获授权 cohort 做 reviewed
+4. **先 cohort 后默认：** 按 RFC 7.2 的三层决策，安装恢复及相关执行控制通过后，
+   有界自愿试用可以先于正式自然时间资格开展。对有限且获授权 cohort 做 reviewed
    备份／迁移／观察，以恢复证据决定扩面。本机所有 Goal 迁移也不等于外部用户
    已升级。旧 binary/artifact 保留用于诊断，但操作／回退必须用与当前格式兼容的版本。
 
@@ -321,3 +404,15 @@ Archive restore／audit 已使用 provider 通用的 1–64 个操作批量回�
 验收。File 每恢复一笔仍重写保留的文件；此前一次完整历史恢复超出调用方的
 300 秒超时，随后才发布精确匹配的确认。批量回执优化没有闭合这项恢复成本。
 #4224 的 soak 已启动；其最终证据和对当前候选的适用性仍待核对。
+
+### 委派完成阶段的原租约衔接
+
+#5436 的 TS Host 监督覆盖模型执行和 Turn 验证，最终 Todo 独立验收位于其后。
+因此完成前先按原获取 TTL 续租同一执行，分别持久化续租与完成的 CAS 版本，再
+进入验收。两种回复丢失都重放原请求；历史回执不能恢复已过期或被替换的执行。
+验收期间不写租约，避免自己改变验收所依赖的 provider revision。
+
+隔离 File／SQLite 回归覆盖剩余短租约跨越最终验收，以及续租／完成回复丢失、
+过期和新 epoch。Python 仅衔接既有 TS claim、renew、terminal 权威合同，没有
+新增 provider 规则、公开配置或前端权限。Stop ACK 与中断后的无进展结算仍归
+#5308；持续 D2、默认准入和旧 writer 删除仍需各自证据。

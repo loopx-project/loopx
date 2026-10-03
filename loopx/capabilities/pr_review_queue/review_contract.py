@@ -8,7 +8,30 @@ from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 14
+REVIEW_POLICY_REVISION = 15
+
+# Reuse the existing evidence fields for publication, rather than inventing a
+# second problem assessment or treating a jargon denylist as comprehension.
+PROBLEM_EXPLANATION_PUBLICATION: dict[str, Any] = {
+    "section": "动机",
+    "fields": ["affected_caller_or_operator", "before_after_scenario",
+               "observable_outcome", "non_goals"],
+    "increment_fields": ["remaining_gap"],
+    "rule": (
+        "Write these existing problem_context fields as concise public-safe plain-language "
+        "sentences and publish their wording in 动机 before architecture and specification detail. "
+        "Name who encounters the problem and the triggering task; use one concrete before/after "
+        "scenario with the old failure and its practical cost; describe the proposed observable "
+        "improvement and this PR's boundary. Distinguish intended improvement from verified "
+        "behavior and remaining defects. For justified_increment also publish remaining_gap. "
+        "A reader unfamiliar with repository internals must understand why this change matters "
+        "without opening an issue, RFC or source file. Define necessary terms at first use; "
+        "symbols, protocol identifiers, test counts and verdicts cannot replace the explanation. "
+        "Then attach exact-head code and specification evidence in the later sections. "
+        "Publication matching checks visibility and consistency, not truth or comprehension; "
+        "the reviewer must independently judge clarity and whether the scenario is real."
+    ),
+}
 
 # A red check is an observation, not evidence that the reviewed PR caused it.
 # This contract belongs to review judgment; merge readiness still owns whether
@@ -295,7 +318,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             _section(
                 "动机",
                 floors["动机"],
-                "Use `problem_context`: verified goal basis, old behavior, before/after outcome and delivery verdict. Cite `spec_basis.spec_ref` and map each criterion_id to implemented/deferred/out_of_scope/not_met at this head, or state that no written specification exists. Explain outcome_impact on sustained progress and the user journey, including accepted tradeoffs or scoped inapplicability. Distinguish completing the scoped goal from a justified increment; explain why this is a complete useful slice, not just why the code works.",
+                PROBLEM_EXPLANATION_PUBLICATION["rule"] + " Use verified problem_context, not author claims alone. Explain why doing nothing leaves a real problem and why this is a complete useful slice. Put the specification reference and criterion mapping in 具体改动, and delivery verdict/outcome_impact in 我的整体评价; keep the opening understandable on its own.",
             ),
             _section(
                 "改动思路",
@@ -305,7 +328,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             _section(
                 "具体改动",
                 floors["具体改动"],
-                "Use `changed_line_classification` and `symbol_map`. Code changes require `### 关键代码讲解` for 2-5 behavior-bearing exact-head symbols; docs-only changes use `### 关键内容讲解`.",
+                "Use `changed_line_classification` and `symbol_map`. Code changes require `### 关键代码讲解` for 2-5 behavior-bearing exact-head symbols; docs-only changes use `### 关键内容讲解`. Cite problem_context.spec_basis.spec_ref and map each criterion_id to implemented/deferred/out_of_scope/not_met at this head, or state that no written specification exists.",
             ),
             _section(
                 "对主干的风险",
@@ -408,6 +431,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
         "evidence_requirements": [
             {
                 "evidence_id": "problem_context",
+                "publication": deepcopy(PROBLEM_EXPLANATION_PUBLICATION),
                 "outcome_impact": OUTCOME_IMPACT_ASSESSMENT,
                 "required_when": "always",
                 "verdict_values": [

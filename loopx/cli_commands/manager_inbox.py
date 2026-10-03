@@ -60,6 +60,8 @@ def register_manager_inbox(subparsers, add_format):
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
     parser.add_argument("--reply-text")
+    parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
+    parser.add_argument("--result-key", help="For acknowledge-return: the exact peer result read; defaults to the initial conclusion.")
     parser.add_argument("--related-todo-id", action="append", default=[])
     parser.add_argument("--evidence-id", action="append", default=[])
     parser.add_argument("--offset", type=int, default=0)
@@ -72,6 +74,10 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        if getattr(args, "update_id", None) is not None and args.manager_inbox_action != "report":
+            raise ValueError("--update-id is only supported for report")
+        if getattr(args, "result_key", None) is not None and args.manager_inbox_action != "acknowledge-return":
+            raise ValueError("--result-key is only supported for acknowledge-return")
         cursor = getattr(args, "cursor", None)
         operation_cursor = getattr(args, "operation_cursor", None)
         if cursor is not None and args.manager_inbox_action != "read":
@@ -161,6 +167,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.agent_id,
                 args.request_id,
                 registry=registry_path,
+                result_key=getattr(args, "result_key", None) or "conclusion",
             )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
@@ -179,6 +186,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id or "",
                 args.phase,
                 args.reply_text or "",
+                update_id=getattr(args, "update_id", None),
                 registry=registry_path,
             )
         elif args.manager_inbox_action == "link":

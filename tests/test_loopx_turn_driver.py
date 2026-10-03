@@ -1111,6 +1111,45 @@ def test_turn_plan_rejects_contradictory_scheduler_owner() -> None:
     assert "cannot be owned by host_automation" in payload["error"]
 
 
+@pytest.mark.parametrize(
+    "effective_action",
+    ["autonomous_replan", "autonomous_replan_required", "successor_replan_required"],
+)
+def test_turn_plan_keeps_todoless_replan_for_controller(effective_action: str) -> None:
+    envelope = _envelope(effective_action=effective_action)
+    envelope["action"]["selected_todo"] = None
+    payload = build_loopx_turn_plan(
+        envelope, host="generic-cli", execution_mode="isolated-headless",
+    )
+
+    assert payload["ok"] is True
+    assert payload["route"]["kind"] == "blocked"
+    assert payload["route"]["would_invoke_host"] is False
+    assert payload["session"]["action"] == "none"
+    assert payload["transaction"]["status"] == "not_applicable"
+    assert not any(payload["effects"].values())
+    assert payload["turn_envelope"] == envelope
+
+
+@pytest.mark.parametrize("invalid_signature", [False, True])
+def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
+    invalid_signature: bool,
+) -> None:
+    envelope = _envelope(
+        effective_action="autonomous_replan_required" if invalid_signature else "normal_run",
+    )
+    envelope["action"]["selected_todo"] = None
+    if invalid_signature:
+        envelope["action_signature"]["matches"] = False
+    payload = build_loopx_turn_plan(
+        envelope, host="generic-cli", execution_mode="isolated-headless",
+    )
+
+    assert payload["ok"] is False
+    assert payload["route"]["kind"] == "contract_error"
+    assert payload["route"]["would_invoke_host"] is False
+
+
 def test_turn_plan_preserves_safe_bypass_when_user_action_is_visible() -> None:
     payload = build_loopx_turn_plan(
         _envelope(action_required=True),
@@ -2154,8 +2193,13 @@ def run_dsh_turn(**kwargs):
     assert state_path.read_text(encoding="utf-8") == before_state
 
 
+@pytest.mark.parametrize(
+    "next_action",
+    ["Select the next Todo from a fresh decision.", "Assess remaining work."],
+)
 def test_turn_run_once_cli_completes_selected_todo_after_validation(
     tmp_path: Path,
+    next_action: str,
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
     host_project = tmp_path / "isolated-host-workspace"
@@ -2180,6 +2224,9 @@ json.dump({
     "summary": "One public fixture completed."
 }, sys.stdout)
 """
+    host_script = host_script.replace(
+        "Select the next Todo from a fresh decision.", next_action,
+    )
     validation_script = """
 import json
 import pathlib
@@ -2291,7 +2338,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
             ]
         )
     next_plan = json.loads(next_plan_output.getvalue())
-    assert next_plan_exit_code == 0, next_plan
+    assert next_plan_exit_code == 0, json.dumps(next_plan, indent=2)
     # The completion-created obligation is deferred only for the causal
     # closeout write.  It must be visible immediately at the next decision;
     # Turn itself stays blocked until that replan creates a runnable successor.

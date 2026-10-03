@@ -549,3 +549,52 @@ def test_nested_coordinators_return_to_each_immediate_requester(scenario):
     )
     consume_return(root, "delivery", "builder", outer)
     assert not returns(root, "delivery", "builder")["items"]
+
+
+def test_peer_updates_have_independent_read_and_consumption_receipts(scenario):
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.control_plane.collaboration.peers import return_result
+
+    root, registry, brief, _, _, _, parent = scenario
+    peer = request(root, registry, "delivery", "builder", "reviewer", "update-review", brief, parent)
+    rid = peer["request_id"]
+    acknowledge(root, "delivery", "reviewer", rid, "adopt", "Review accepted")
+    return_result(root, "delivery", "reviewer", rid, "Waiting for evidence.")
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        updates = list(executor.map(lambda _: return_result(root, "delivery", "reviewer", rid, "Evidence checked; review complete.", update_id="evidence-ready"), range(4)))
+    update = updates[0]
+    assert {item["result_key"] for item in updates} == {update["result_key"]}
+    with pytest.raises(ValueError, match="read the peer"):
+        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+    offered = returns(root, "delivery", "builder", mark_read=True)["items"]
+    assert [item["text"] for item in offered] == ["Waiting for evidence.", "Evidence checked; review complete."]
+    consume_return(root, "delivery", "builder", rid)
+    assert [item["result_key"] for item in returns(root, "delivery", "builder")["items"]] == [update["result_key"]]
+    consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+    assert returns(root, "delivery", "builder")["items"] == []
+    assert return_result(root, "delivery", "reviewer", rid, "Evidence checked; review complete.", update_id="evidence-ready")["result_key"] == update["result_key"]
+    assert returns(root, "delivery", "builder")["items"] == []
+
+
+def test_peer_update_rejects_another_results_read_and_consumption_receipts(scenario):
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.control_plane.collaboration.peers import return_result
+
+    root, registry, brief, _, _, _, parent = scenario
+    rid = request(root, registry, "delivery", "builder", "reviewer", "update-review", brief, parent)["request_id"]
+    acknowledge(root, "delivery", "reviewer", rid, "adopt", "Accepted")
+    return_result(root, "delivery", "reviewer", rid, "Draft ready.")
+    returns(root, "delivery", "builder", mark_read=True)
+    consume_return(root, "delivery", "builder", rid)
+    update = return_result(root, "delivery", "reviewer", rid, "Review complete.", update_id="reviewed")
+    folder = root / ".local/manager-context/replies" / rid
+    delivery = folder / (update["result_key"] + ".delivery.json")
+    delivery.write_bytes((folder / "conclusion.delivery.json").read_bytes())
+    with pytest.raises(ValueError, match="read the peer"):
+        consume_return(root, "delivery", "builder", rid, result_key=update["result_key"])
+    consumed = folder / (update["result_key"] + ".consumed.json")
+    consumed.write_bytes((folder / "conclusion.consumed.json").read_bytes())
+    with pytest.raises(ValueError, match="receipt scope"):
+        returns(root, "delivery", "builder")

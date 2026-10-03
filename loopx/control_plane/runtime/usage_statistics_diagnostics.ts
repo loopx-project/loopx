@@ -1,9 +1,24 @@
 /** Versioned, content-free diagnostics. This is observation, never work authority. */
-import { counterKey, DURATIONS, FEATURES, MAX_COUNT, MAX_ROWS, object } from "./usage_statistics_contract.ts";
+import { counterKey, CONTEXTS, DURATIONS, FEATURES, MAX_COUNT, MAX_ROWS, object } from "./usage_statistics_contract.ts";
 import type { Counter } from "./usage_statistics_contract.ts";
 
 export const DIAGNOSTIC_SCHEMA = "loopx_usage_diagnostics_v1";
-export const CONTEXTS = ["unknown", "personal", "shared_service", "ephemeral", "organization_managed", "maintainer"] as const;
+export { CONTEXTS } from "./usage_statistics_contract.ts";
+export const DIAGNOSTIC_FEATURES = [...FEATURES, "heartbeat", "state", "agent", "memory", "capability", "maintenance"] as const;
+export type DiagnosticFeature = typeof DIAGNOSTIC_FEATURES[number];
+/** Fixed parser command names, not argv values or user-supplied extension names. */
+export function diagnosticFeature(command: string): DiagnosticFeature {
+  if ((DIAGNOSTIC_FEATURES as readonly string[]).includes(command)) return command as DiagnosticFeature;
+  const families: Record<string, DiagnosticFeature> = {
+    "heartbeat-prompt": "heartbeat", "refresh-state": "state", "checkpoint-context": "state",
+    "agent-context": "agent", "agent-capabilities": "agent", "agent-directory": "agent", "manager-inbox": "agent",
+    "reward-memory": "memory", "agent-turn-recall": "memory", "semantic-preference": "memory",
+    extension: "capability", "workflow-skills": "capability", "project-skill": "capability",
+    doctor: "maintenance", update: "maintenance", "migrate-local-state": "maintenance",
+    "serve-status": "chat", dashboard: "chat",
+  };
+  return Object.hasOwn(families, command) ? families[command] : "other";
+}
 export const DIAGNOSTIC_OPERATIONS = ["default", "plan", "run-once", "status", "should-run", "spend-slot", "monitor-poll", "list", "add", "claim", "update", "complete", "register", "resolve", "bind-session", "unbind-session", "merge-readiness", "check-result", "result-return"] as const;
 export const REASONS = ["none", "not_ready", "invalid_input", "permission", "not_found", "timeout", "connection", "interrupted", "command_failed"] as const;
 export const SIGNALS = ["none", "project_registered", "managed_turn_committed", "todo_completed", "todo_validated", "result_returned"] as const;
@@ -16,7 +31,8 @@ const SIGNAL_SOURCES: Record<string, readonly [string, string]> = {
   project_registered: ["project", "register"], managed_turn_committed: ["turn", "run-once"],
   todo_completed: ["todo", "complete"], todo_validated: ["todo", "complete"], result_returned: ["other", "result-return"],
 };
-export type Diagnostic = Omit<Counter, "outcome" | "error"> & {
+export type Diagnostic = Omit<Counter, "outcome" | "error" | "feature"> & {
+  feature: DiagnosticFeature;
   outcome: "ok" | "blocked" | "failed" | "cancelled"; error: typeof REASONS[number];
   operation: typeof DIAGNOSTIC_OPERATIONS[number]; signal: typeof SIGNALS[number];
   version: string; activity_day: string; context: typeof CONTEXTS[number];
@@ -30,7 +46,7 @@ export function diagnosticKey(value: Diagnostic): string {
 }
 export function validDiagnostic(value: unknown): value is Diagnostic {
   if (!object(value) || Object.keys(value).sort().join() !== "activity_day,context,count,duration,error,feature,operation,outcome,signal,version") return false;
-  if (!(FEATURES as readonly unknown[]).includes(value.feature) || !(DURATIONS as readonly unknown[]).includes(value.duration)
+  if (!(DIAGNOSTIC_FEATURES as readonly unknown[]).includes(value.feature) || !(DURATIONS as readonly unknown[]).includes(value.duration)
     || !(DIAGNOSTIC_OPERATIONS as readonly unknown[]).includes(value.operation) || !(SIGNALS as readonly unknown[]).includes(value.signal)
     || !(CONTEXTS as readonly unknown[]).includes(value.context) || !(REASONS as readonly unknown[]).includes(value.error)
     || typeof value.version !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,4}$/.test(value.version)

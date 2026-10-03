@@ -1,6 +1,7 @@
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { withTurnActivity, type TurnStep } from "../data/turn-steps";
-import { conversationReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
+import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
+import { readConversationReturns } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
@@ -1195,6 +1196,7 @@ function buildPersonalHomeModel(
       configured: row.configured,
       enabled: row.enabled,
       humanGateAutoNotifyEnabled: row.human_gate_auto_notify_enabled,
+      stewardNoticeDelivery: row.steward_notice_delivery,
       blockedNoticeAutoNotifyEnabled: row.blocked_notice_auto_notify_enabled,
       blockedNoticeDelivery: row.blocked_notice_delivery ? {
         deliveredCount: row.blocked_notice_delivery.delivered_count,
@@ -1497,44 +1499,63 @@ function PersonalGoalHome({
     statusSourceControl.activeSource.statusUrl,
   ]);
 
-  // Read the active session plus older sessions that still owe a result. The
-  // stable key changes only when that set changes, never on each stream delta.
-  const conversationReturnSessionKey = JSON.stringify(conversationReturnSessions(
-    runtimeBindings[contextId]?.sessionId, messagesByContext[contextId] ?? [],
+  // Keep visited conversations observable after a first result and across
+  // navigation. A single index read detects changes; snapshots refresh only
+  // their original context and never take ownership of the current stream.
+  const conversationReturnSessionKey = JSON.stringify(Object.fromEntries(
+    [...new Set([...Object.keys(runtimeBindings), ...Object.keys(messagesByContext)])].sort().map<[string, string[]]>((id) => [
+      id, conversationReturnSessions(runtimeBindings[id]?.sessionId, messagesByContext[id] ?? []),
+    ]).filter(([, ids]) => ids.length > 0),
   ));
+  const conversationMessagesRef = useRef(messagesByContext);
+  conversationMessagesRef.current = messagesByContext;
+  const conversationReadRevisions = useRef(new Map<string, string>());
   useEffect(() => {
     if (readOnly) return;
-    const sessionIds: string[] = JSON.parse(conversationReturnSessionKey);
-    let cancelled = false;
-    const timers = new Set<ReturnType<typeof setTimeout>>();
-    const receive = async (sessionId: string) => {
+    const contexts: Record<string, string[]> = JSON.parse(conversationReturnSessionKey);
+    const sessionIds = [...new Set(Object.values(contexts).flat())];
+    if (!sessionIds.length) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failedIndexReads = 0;
+    const receive = async () => {
       try {
-        const snapshot = await fetchChatSession(sessionId);
-        if (cancelled) return;
-        setMessagesByContext((current) => {
-          const previous = current[contextId] ?? [];
-          const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
-            id: managerMessageId.current++, sourceMessageId: row.message_id,
-            sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
-            role: "assistant" as const,
-            agentLabel: "协作回执",
-            sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-            returnDelivery: row.return_delivery, collaboration: row.collaboration,
-          }));
-          return updated === previous ? current : { ...current, [contextId]: updated };
+        await readConversationReturns({
+          sessionIds, revisions: conversationReadRevisions.current,
+          pendingSessionIds: new Set(Object.values(conversationMessagesRef.current).flatMap(conversationPendingReturnSessions)),
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
+          receive(snapshot) {
+            if (controller.signal.aborted) return;
+            const sessionId = snapshot.session.session_id;
+            setMessagesByContext((current) => {
+              let next = current;
+              for (const [targetContextId, ids] of Object.entries(contexts)) {
+                if (!ids.includes(sessionId)) continue;
+                const previous = current[targetContextId] ?? [];
+                const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
+                  id: managerMessageId.current++, sourceMessageId: row.message_id,
+                  sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
+                  role: "assistant" as const,
+                  agentLabel: "协作回执", sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
+                  returnDelivery: row.return_delivery, collaboration: row.collaboration,
+                }));
+                if (updated !== previous) next = { ...next, [targetContextId]: updated };
+              }
+              return next;
+            });
+          },
         });
+        failedIndexReads = 0;
       } catch {
-        // Retry this transcript read independently; never replay the model.
+        // Keep the saved transcript. Recovery reads; it never replays work.
+        failedIndexReads += 1;
       } finally {
-        if (!cancelled) {
-          const timer = setTimeout(() => { timers.delete(timer); void receive(sessionId); }, 3000);
-          timers.add(timer);
-        }
+        if (!controller.signal.aborted) timer = setTimeout(() => void receive(), Math.min(3000 * 2 ** failedIndexReads, 30_000));
       }
     };
-    sessionIds.forEach((sessionId) => { void receive(sessionId); });
-    return () => { cancelled = true; timers.forEach(clearTimeout); };
-  }, [readOnly, conversationReturnSessionKey, contextId]);
+    void receive();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [readOnly, conversationReturnSessionKey]);
 
   function recordSessionAdmission(session: ChatSessionSummary) {
     const queues = chatSessionQueuesFollowUps(session);

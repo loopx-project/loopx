@@ -26,13 +26,13 @@ function sameGoalRef(left: unknown, right: unknown): boolean {
     && a.value.goalInstanceId.value === b.value.goalInstanceId.value;
 }
 
-function sameRequest(receipt: JsonObject | null, request: JsonObject, source: boolean): receipt is JsonObject {
+export function sameRequest(receipt: JsonObject | null, request: JsonObject, source: boolean): receipt is JsonObject {
   return receipt !== null && ["request_id", "goal_id", "agent_id"].every((key) => receipt[key] === request[key])
     && sameGoalRef(receipt.goal_ref, request.goal_ref)
     && (!source || receipt.source_id === request.source_id);
 }
 
-function receiverDecision(value: unknown): Decision | null {
+export function receiverDecision(value: unknown): Decision | null {
   switch (value) {
     case "adopt": case "defer": case "reject": case "no_change": return value;
     default: return null;

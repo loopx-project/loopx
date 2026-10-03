@@ -355,6 +355,7 @@ export type WorkspaceGoalNotification = {
   configured: boolean;
   enabled: boolean;
   humanGateAutoNotifyEnabled: boolean;
+  stewardNoticeDelivery?: { pending_count: number; failed_count: number };
   blockedNoticeAutoNotifyEnabled?: boolean;
   blockedNoticeDelivery?: { deliveredCount: number; unverifiedCount: number; resolvedCount: number };
   lastNotifiedAt?: string | null;

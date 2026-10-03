@@ -82,6 +82,13 @@ def reviewer_declaration_lines(body: str) -> list[str]:
     return lines
 
 
+def normalized_review_prose(prose: str) -> str:
+    """Compare visible wording while tolerating ordinary Markdown formatting."""
+    prose = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", prose)
+    prose = re.sub(r"[`*_]", "", prose)
+    return "".join(prose.split())
+
+
 def _prose_size(lines: list[str]) -> int:
     prose = "\n".join(dict.fromkeys(lines))
     prose = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", prose)
@@ -89,8 +96,7 @@ def _prose_size(lines: list[str]) -> int:
     return sum(char.isalnum() for char in prose)
 
 
-def check_review_body(body: str, *, head_oid: str, behavior_bearing: bool) -> dict[str, Any]:
-    floors = review_body_requirements(behavior_bearing=behavior_bearing)
+def _review_sections(body: str) -> tuple[dict[str, list[str]], list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
     section_level = 0
@@ -101,7 +107,7 @@ def check_review_body(body: str, *, head_oid: str, behavior_bearing: bool) -> di
         heading = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", stripped)
         if heading:
             level, label = len(heading[1]), heading[2]
-            if label in floors:
+            if label in REQUIRED_FINAL_SECTIONS:
                 if label in sections:
                     reasons.append(f"duplicate_section:{label}")
                 sections.setdefault(label, [])
@@ -113,6 +119,18 @@ def check_review_body(body: str, *, head_oid: str, behavior_bearing: bool) -> di
             continue
         if current and stripped:
             sections[current].append(stripped)
+    return sections, reasons
+
+
+def review_section_text(body: str, label: str) -> str:
+    sections, _ = _review_sections(body)
+    return "\n".join(sections.get(label, []))
+
+
+def check_review_body(body: str, *, head_oid: str, behavior_bearing: bool) -> dict[str, Any]:
+    floors = review_body_requirements(behavior_bearing=behavior_bearing)
+    sections, reasons = _review_sections(body)
+    visible_lines = list(_visible_lines(body))
     sizes = {label: _prose_size(lines) for label, lines in sections.items()}
     for label, floor in floors.items():
         if label not in sections:

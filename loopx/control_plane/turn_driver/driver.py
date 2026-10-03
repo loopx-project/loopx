@@ -460,6 +460,11 @@ def build_loopx_turn_plan(
         else LoopXTurnRoute.CONTRACT_ERROR
     )
     selected_todo = selected_turn_todo(envelope)
+    # Replanning an empty frontier is valid, but this Host executor settles
+    # against a Todo. Preserve the replan packet for the controller to resolve;
+    # do not turn the absence of a successor into a malformed Host session.
+    if route is LoopXTurnRoute.REPLAN_REQUIRED and not selected_todo:
+        route = LoopXTurnRoute.BLOCKED
     lineage = _turn_lineage(envelope, selected_todo=selected_todo)
     session, session_error = _session_plan(
         route=route,

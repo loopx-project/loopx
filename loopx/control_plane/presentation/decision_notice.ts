@@ -1,6 +1,26 @@
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
+import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {todoRequestContent} from "./todo_request_content.ts";
+
+/** Exact references are a delivery obligation, not a prose quality score.
+ * Todo identifiers admit ASCII letters, digits, underscores and hyphens;
+ * surrounding punctuation/Markdown is presentation, while those characters
+ * extend the reference. Keep this rule shared by fresh and cached notices. */
+export function validateDecisionNoticeReferences(input: JsonObject): JsonObject {
+  const text = requireNonEmptyString(input.text, "decision_notice.text");
+  const requests = input.requests === undefined ? [] : input.requests;
+  if (!Array.isArray(requests)) throw new TypeError("decision_notice.requests must be an array");
+  const missing: string[] = [];
+  for (const raw of requests) {
+    const request = requireJsonObject(raw, "decision_notice.requests[]");
+    if (request.request_id === undefined || request.request_id === null || request.request_id === "") continue;
+    const id = requireNonEmptyString(request.request_id, "decision_notice.request_id");
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const reference = new RegExp("(^|[^A-Za-z0-9_-])" + escaped + "(?=$|[^A-Za-z0-9_-])");
+    if (!reference.test(text)) missing.push(id);
+  }
+  return {valid: missing.length === 0, missing_request_ids: missing};
+}
 
 /** Read-only content selection. Callers supply public-safe, bounded projection
  * fields; this neither resolves a gate nor authorizes an operation. */

@@ -188,6 +188,64 @@ def test_conclusion_coalesces_unsent_intermediate_decision_and_is_immutable(flow
     assert {x["status"] for x in reply_status(root, r)} == {"superseded", "delivered"}
 
 
+@pytest.mark.parametrize("external", [False, True])
+def test_later_completion_returns_to_original_conversation_once(flow, external):
+    root, registry, store, create = flow
+    session, turn, receipt = create(external)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Work accepted")
+    report(root, "research", "worker", rid, "conclusion", "Draft ready; awaiting review.")
+    sent = []
+
+    def sender(route, source_session, source_turn, text):
+        sent.append((route["session_id"], source_turn["turn_id"], text))
+        return {"ok": True, "reply_verified": True}
+
+    drain(root, registry, store, sender)
+    before = (root / ".local/manager-context/replies" / rid / "conclusion.json").read_bytes()
+    update = report(root, "research", "worker", rid, "conclusion", "Review passed; delivery complete.", update_id="review-complete")
+    assert update["result_key"] != "conclusion"
+    assert report(root, "research", "worker", rid, "conclusion", "Review passed; delivery complete.", update_id="review-complete")["result_key"] == update["result_key"]
+    with pytest.raises(ValueError, match="conflicting"):
+        report(root, "research", "worker", rid, "conclusion", "Another result", update_id="review-complete")
+    report(root, "research", "worker", rid, "conclusion", "Receiver adopted the delivery.", update_id="receiver-adopted")
+    store = ChatSessionStore(root)  # The ordinary production reader after restart.
+    drain(root, registry, store, sender)
+    drain(root, registry, store, sender)
+    messages = [m for m in store.messages(session["session_id"]) if m.get("origin") == "manager_followup"]
+    assert len(messages) == 3
+    assert messages[1]["text"].endswith("Review passed; delivery complete.")
+    assert messages[-1]["text"].endswith("Receiver adopted the delivery.")
+    assert len({m["message_id"] for m in messages}) == 3
+    assert {m["turn_id"] for m in messages} == {turn["turn_id"]}
+    assert (root / ".local/manager-context/replies" / rid / "conclusion.json").read_bytes() == before
+    assert [r["status"] for r in reply_status(root, receipt)] == ["delivered"] * 3
+    if external:
+        assert len(sent) == 3
+        assert len({m[-1] for m in sent}) == 3
+
+
+def test_result_update_does_not_overtake_unknown_external_delivery(flow):
+    root, registry, store, create = flow
+    session, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Accepted")
+    report(root, "research", "worker", rid, "conclusion", "Waiting for review.")
+    report(root, "research", "worker", rid, "conclusion", "Review complete.", update_id="reviewed")
+    calls = []
+
+    def unknown(route, source_session, source_turn, text):
+        calls.append(text)
+        return {"ok": False, "external_write_performed": True}  # No readback locator.
+
+    drain(root, registry, store, unknown)
+    drain(root, registry, ChatSessionStore(root), unknown)
+    assert len(calls) == 1
+    assert [r["status"] for r in reply_status(root, receipt)] == ["explicit_unverified", "queued"]
+    messages = [m for m in store.messages(session["session_id"]) if m.get("origin") == "manager_followup"]
+    assert len(messages) == 1 and messages[0]["text"].endswith("Waiting for review.")
+
+
 def test_external_failure_retries_same_reply_after_restart_without_duplicate_transcript(
     flow,
 ):

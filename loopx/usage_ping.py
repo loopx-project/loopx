@@ -17,9 +17,13 @@ from .paths import select_default_runtime_root
 
 STATE_FILENAME = "usage-ping.json"
 # Scheduling hint only; keep aligned with the TypeScript notice revision.
-_NOTICE_VERSION = 5
+_NOTICE_VERSION = 6
 _ENTRY = Path(__file__).parent / "control_plane/runtime/usage_statistics_cli.ts"
 _observation: ContextVar[dict[str, Any] | None] = ContextVar("usage_observation", default=None)
+
+
+class UsageSettingsInputError(ValueError):
+    """Typed input rejection from the existing TypeScript settings owner."""
 
 
 def select_operation(args: Any) -> None:
@@ -105,6 +109,8 @@ def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, A
     result = subprocess.run(_command(), input=json.dumps(_request(action, path or state_path(), **fields)),
                             capture_output=True, text=True, encoding="utf-8", timeout=4, check=False)
     payload = json.loads(result.stdout)
+    if isinstance(payload, dict) and payload.get("error") == "usage_context_invalid":
+        raise UsageSettingsInputError("Invalid device deployment context; see the usage-ping reference.")
     if result.returncode or not isinstance(payload, dict) or "error" in payload:
         raise RuntimeError("Usage settings unavailable. Inspect the local usage-ping.json; disable can repair invalid state.")
     return payload

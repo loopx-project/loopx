@@ -329,6 +329,14 @@ regression, a dated public-research deliverable, and optional visual polish.
 Freeze effort/dependency estimates and one missing evidence source. Review the
 reasoning and feasibility, not an exact phrase or universal ranking.
 
+Before judging GQ09/GQ10 reasoning, qualify the shared evidence path: a deferred
+task retains its declared dependency and false/unknown readiness; nested decision
+scopes remain structured; a draft-only constraint beyond an overview excerpt can
+be read by exact Todo identity. Missing/revoked sources stay unavailable and an
+external export never gains owner-only continuation text. Recovering those facts
+is a prerequisite, not a passing prioritization or adoption result. Include the
+same cases for ordinary Goal conversations; do not build a manager-only rule.
+
 ## GQ06 material-to-work pilot / 从材料到实际改进
 
 “看看这篇，有用的记下来，能改进我们的就推进。” / “Read this. Save what's

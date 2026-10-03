@@ -108,6 +108,19 @@ This is a proposed App presentation improvement, not installed readback or
 full GQ10 prioritization. Cross-project selection, at most two recommended
 priorities and actual scoped adoption remain in the existing P1 attention work.
 
+The shared conversation evidence lens must preserve declared resume conditions,
+successor relationships and decision scopes as structured facts. Overview text
+is bounded and carries `content_truncated`; an exact `view=todos`, `goal_id`,
+`todo_id` read recovers permitted text through the existing manager/Goal context
+tool. CLI/SSH export uses `goal-portfolio --manager-view todos --goal-id GOAL
+--todo-id TODO` and retains its external audience boundary. Neither a condition
+nor a completed referent grants execution or proves readiness. Large local
+catalogs use the existing private snapshot transport; conversation row limits
+remain unchanged. Real File/SQLite readback, source loss, revocation, oversized
+rows and the executor tool bridge qualify this evidence slice. They do not
+qualify model prioritization, packaged App adoption or the complete GQ09/GQ10
+journey; release evaluation must still prove those outcomes.
+
 ### Waiting is part of the conversation
 
 One shared TypeScript activity surface serves manager and Goal conversations,
@@ -342,6 +355,16 @@ Todo/lease, model admission and artifact acceptance keep their existing owners.
 Dispatch events wake the existing driver within admission; polling repairs gaps.
 An inbox is not permission to start another automation.
 
+Returning a blocker or reviewable draft must not prevent later completion from
+reaching the same conversation. Preserve the initial immutable conclusion and
+append explicitly identified result updates through the shared TS publication
+owner. Retries retain one result identity; conflicting replacements fail closed.
+Chat/Lark sends wait for the preceding result's verified delivery, and peer
+consumption acknowledges only the result that was read. Qualify restart,
+duplicate retry, uncertain prior delivery and exact Goal-instance isolation in
+the packaged conversation. This is result continuity within R3/T1–T2, not a new
+work request, permission grant, task-completion claim or separate manager queue.
+
 The return-verification slice uses the existing TS classification owner for
 both adapter results and typed resolution failures. Exception text is diagnostic,
 not route/authority evidence: a transient read failure retains its locator and
@@ -429,7 +452,7 @@ separate; a browser fixture cannot qualify a real attached host.
 | Scope | Navigate A→B→A, late response, old subscription terminal event: update the original source/session/Turn only. Full snapshots and delta streams have different merge rules |
 | Stream | Duplicate/late events and hydrate overlap preserve one logical answer. A new event does not force scrolling while the user reads history |
 | Correction/stop | During tool execution and at completion: actual receiver adopts the latest scope or reports queued/unsupported. Stop targets the original Turn, never its successor or all peers implicitly |
-| Result | Replacing the active session must not hide a result owed by an older session in the same conversation. Readback updates only its own session, preserves streamed text and retires old reads after verified return. Missing file retries read only; v1 review cannot certify v2; opening a report is not adoption. Lost return ACK reconciles before another send |
+| Result | Replacing the active session or navigating away must not hide later results or revisions. One delivered reply does not close observation. Quiet transcripts use the compact session index; changed transcripts and outstanding metadata refresh only their own context and preserve streamed text. Missing file retries read only; v1 review cannot certify v2; opening a report is not adoption. Lost return ACK reconciles before another send |
 | Attached | Native host offline, stale binding, unsupported steering, next-Turn-only adapter and restart: request remains visible; no guessed success or competing driver |
 | Managed | Runtime start failure, quota denial, missing login and stop/restart: effective profile and actual condition readable; no silent model/account substitution |
 | Authority | Revoked access or source change rejects stale effects; unrelated permitted branches continue. No private history enters a shared audience |
@@ -447,13 +470,19 @@ classification. Shared queue preparation now settles accepted start failures
 instead of leaving requests indefinitely queued. Neither change proves a whole
 managed or attached journey.
 
-The next qualified frontend slice retains late worker returns after active-session
-replacement. The existing Chat snapshot supplies session/message lineage to a
-shared TypeScript read model; only sessions still owing a conclusion or delivery
-verification remain alongside the active session. No model replay, execution
-driver, persisted schema or new inbox owner is introduced. Browser acceptance
-covers a replacement session, one lost old-session read, automatic return and
-cross-session isolation. Real host execution and receiver adoption retain their
+The shared TypeScript read model retains visited conversations after a first
+delivered reply and across navigation. The existing session index now includes
+an opaque `transcript_revision`, since appending a receiver result does not
+change execution `updated_at`. Python observes the stored transcript file;
+TypeScript selects changed reads and reconciles each result into its original
+context. Outstanding collaboration/delivery metadata still needs readback even
+without a new message. Quiet transcripts do not download their full histories
+repeatedly; failed reads retain their prior revision for retry. This additive
+read hint creates no persisted schema, lifecycle authority, model replay or
+inbox owner. Packaged acceptance uses the production HTTP/store with synthetic
+result writes: first result, later revision while another context is visible,
+one lost read, deduplication and current-conversation preservation. Installed
+native execution, receiver adoption and multi-result publication retain their
 separate acceptance requirements.
 
 Keep work in this order: qualify the installed App's existing-owner-to-original-

@@ -1092,3 +1092,23 @@ def test_lost_answer_readback_cannot_invent_or_rebind_a_commitment(tmp_path, dam
     snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=registry)
     assert snapshot["messages"] == before
     assert not any(m.get("collaboration") for m in snapshot["messages"])
+
+
+def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _manager_request(tmp_path, registry)
+    rid, goal_ref = receipt["request_id"], receipt["goal_ref"]
+    acknowledge(tmp_path, "delivery", "builder", rid, "adopt", "Accepted", registry=registry, caller_goal_ref=goal_ref)
+    report(tmp_path, "delivery", "builder", rid, "conclusion", "Waiting for review.", registry=registry, caller_goal_ref=goal_ref)
+    assert drain(tmp_path, registry, store, None) == 1
+    _recreate(registry)
+    update = report(tmp_path, "delivery", "builder", rid, "conclusion", "Review complete.", registry=registry, caller_goal_ref=goal_ref, update_id="review-complete")
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 1
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 0
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+    messages = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
+    assert [m["text"].split("\n\n")[-1] for m in messages] == ["Waiting for review.", "Review complete."]
+    assert messages[-1]["return_delivery"]["result_key"] == update["result_key"]
+    assert messages[-1]["return_delivery"]["status"] == "delivered"
+    with pytest.raises((ValueError, FileNotFoundError)):
+        report(tmp_path, "delivery", "builder", rid, "conclusion", "Wrong generation.", registry=registry, caller_goal_ref={"goal_id": "delivery", "goal_instance_id": INSTANCE_B}, update_id="wrong-instance")

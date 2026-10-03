@@ -47,3 +47,23 @@ def set_canonical_handoff_mode(*, runtime_root: Path, goal_id: str, mode: str,
             code=str(payload.get("reason_code") or "handoff_mode_unavailable"), payload=payload)
     return {**result, "ok": True, "schema_version": "goal_handoff_mode_v0", "action": "set",
             "source": "canonical_provider", "dry_run": dry_run}
+
+
+def migrate_canonical_handoff_mode(*, runtime_root: Path, goal_id: str, action: str,
+                                  plan: Path, registered_agents: list[str],
+                                  registry_source: dict[str, Any],
+                                  mode: str | None, plan_sha256: str | None,
+                                  execute: bool) -> dict[str, Any]:
+    """Adapt explicit operator input; TS owns review, backup and policy decisions."""
+    result = effect_runtime_result("coordination.local_authority.handoff_mode_migrate", {
+        "schema_version": "loopx_handoff_mode_migration_request_v0", "action": action,
+        "runtime_root": str(runtime_root.expanduser().resolve()), "goal_id": goal_id,
+        "plan": str(plan.expanduser().resolve()), "requested_mode": mode,
+        "plan_sha256": plan_sha256, "registered_agents": registered_agents,
+        "registry_source": registry_source,
+        "observed_at": now_local_iso(), "execute": execute,
+    }, timeout=300.0, retry_safe=False)
+    if not isinstance(result, dict):
+        raise ValueError("invalid handoff migration response")
+    return {**result, "ok": result.get("status") in {"planned", "applied", "no_change", "replayed", "recovered"},
+            "action": action, "goal_id": goal_id}

@@ -12,6 +12,7 @@ from loopx.capabilities.pr_review_queue import (
     build_review_plan,
     build_review_template,
 )
+from loopx.capabilities.pr_review_queue.review_contract import build_review_execution_contract
 
 
 def _item(*, areas: dict[str, int]) -> dict[str, object]:
@@ -648,3 +649,16 @@ def test_pr_review_skill_tracks_the_capability_policy_revision() -> None:
     assert "review_execution_contract.policy_revision" in skill
     assert "review_policy_revision" in skill
     assert re.search(r"policy_revision\s*==\s*\d+", skill) is None, skill
+
+
+def test_motivation_publishes_existing_problem_context_before_implementation():
+    contract = build_review_execution_contract()
+    context = next(row for row in contract["evidence_requirements"]
+                   if row["evidence_id"] == "problem_context")
+    publication = context["publication"]
+    assert publication["section"] == "动机"
+    assert publication["fields"] == ["affected_caller_or_operator", "before_after_scenario",
+                                      "observable_outcome", "non_goals"]
+    assert set(publication["fields"] + publication["increment_fields"]) <= (
+        set(context["fields"]) | set(context["fields_by_verdict"]["justified_increment"]))
+    assert "not truth or comprehension" in publication["rule"]

@@ -7,6 +7,7 @@ from typing import Any
 from .review_contract import (
     COMPATIBILITY_ASSESSMENT,
     OUTCOME_IMPACT_ASSESSMENT,
+    PROBLEM_EXPLANATION_PUBLICATION,
     REVIEWER_DECLARATION,
     SCOPE_COVERAGE_ASSESSMENT,
     SEMANTIC_CANDIDATE_DECISIONS,
@@ -17,6 +18,8 @@ from .review_contract import (
 )
 from .review_body import (
     check_review_body,
+    normalized_review_prose,
+    review_section_text,
     reviewer_declaration_lines,
     visible_review_text,
 )
@@ -381,6 +384,25 @@ def _check_scope_coverage(blockers: list[str], value: object) -> None:
             blockers.append(f"{key}:covered_subject_not_proven")
 
 
+def _unpublished_problem_explanation(context: object, body: str) -> list[str]:
+    """Bind the public motivation to evidence; do not grade its semantics."""
+    if not isinstance(context, Mapping):
+        return ["review_body:problem_explanation_missing"]
+    fields = list(PROBLEM_EXPLANATION_PUBLICATION["fields"])
+    if context.get("verdict") == "justified_increment":
+        fields.extend(PROBLEM_EXPLANATION_PUBLICATION["increment_fields"])
+    motivation = normalized_review_prose(review_section_text(
+        body, PROBLEM_EXPLANATION_PUBLICATION["section"]))
+    errors: list[str] = []
+    for field in fields:
+        text = context.get(field)
+        if not isinstance(text, str) or not normalized_review_prose(text):
+            errors.append(f"review_body:problem_explanation_not_text:{field}")
+        elif normalized_review_prose(text) not in motivation:
+            errors.append(f"review_body:problem_explanation_not_published:{field}")
+    return errors
+
+
 def check_review_result(
     packet: Mapping[str, Any],
     result: Mapping[str, Any],
@@ -548,6 +570,7 @@ def check_review_result(
     body_text = str(result.get("review_body") or "")
     errors.extend(_reviewer_errors(result.get("reviewer"), body_text))
     problem_context = evidence.get("problem_context")
+    errors.extend(_unpublished_problem_explanation(problem_context, body_text))
     errors.extend(_unpublished_spec_references(
         problem_context.get("spec_basis") if isinstance(problem_context, Mapping) else None,
         body_text,

@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 import tomllib
+from urllib.parse import unquote
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -23,14 +25,17 @@ CHAPTERS = (
     "00-reading-guide",
     "01-from-session-to-loop",
     "02-session-goal-loopx",
+    "02b-long-horizon-requirements",
     "state-substrate",
     "work-graph-and-authority",
     "core-state-machines",
     "03-one-turn",
     "04-runtime-boundaries",
+    "04b-budget-and-admission",
     "05-connect-existing-project",
     "06-codex-app",
     "07-codex-cli",
+    "07b-when-loopx-is-not-the-answer",
     "source-protocol-map",
     "source-trace-protocol-chain",
     "source-change-control-plane-rule",
@@ -177,6 +182,27 @@ def assert_community_casebook_is_bilingual() -> None:
             assert en_targets.count(target) == 1, target
 
 
+def assert_local_fragments_resolve(html: str, route: str) -> None:
+    class FragmentIndex(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ids: set[str] = set()
+            self.fragments: set[str] = set()
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            attributes = dict(attrs)
+            if identifier := attributes.get("id"):
+                self.ids.add(identifier)
+            href = attributes.get("href") or ""
+            if tag == "a" and href.startswith("#") and len(href) > 1:
+                self.fragments.add(unquote(href[1:]))
+
+    index = FragmentIndex()
+    index.feed(html)
+    missing = sorted(index.fragments - index.ids)
+    assert not missing, f"{route}: missing local fragment targets: {missing}"
+
+
 def validate_rendered_site(site_dir: Path) -> None:
     def assert_state_machine_diagrams(html: str, route: str) -> None:
         diagram_count = len(re.findall(r'<pre class="mermaid">', html))
@@ -316,6 +342,11 @@ def validate_rendered_site(site_dir: Path) -> None:
         ):
             assert chinese_section not in html
 
+    for locale in ("", "en/"):
+        for chapter in CHAPTERS:
+            route = f"{locale}chapters/{chapter}/index.html"
+            assert_local_fragments_resolve(read(site_dir / route), route)
+
     main_docs_dir = site_dir.parent
     for page in COURSE_PAGES:
         target = main_docs_dir / "development" / "control-plane-course" / page / "index.html"
@@ -328,6 +359,14 @@ def main() -> int:
     args = parser.parse_args()
 
     assert not (BOOK / "labs").exists(), "Dev Book publication must not include Labs"
+    companion = REPO_ROOT / "packages" / "loopx-text-stats"
+    for relative_path in (
+        "pyproject.toml", "extension.toml", "README.md", "README.zh-CN.md",
+        "src/loopx_text_stats/__init__.py", "src/loopx_text_stats/cli.py",
+        "schemas/request.schema.json", "schemas/response.schema.json",
+        "examples/request.json", "tests/test_provider.py",
+    ):
+        assert (companion / relative_path).is_file(), f"missing book companion asset: {relative_path}"
     assert not (REPO_ROOT / "mkdocs.book.zh.yaml").exists()
     assert not (REPO_ROOT / "mkdocs.book.en.yaml").exists()
 

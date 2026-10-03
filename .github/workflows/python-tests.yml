@@ -30,7 +30,7 @@ permissions:
 
 concurrency:
   group: python-tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   LOOPX_USAGE_PING: "0"

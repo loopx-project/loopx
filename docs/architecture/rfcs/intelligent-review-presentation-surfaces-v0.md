@@ -971,6 +971,21 @@ codes and proposal status instead of classifying translated error messages.
 
 ### Stage 2: attention and disclosure plan
 
+Local conversation intake now composes current blocked-transition facts and
+concrete owner requests in the existing TS presentation owner. Steward/Goal Turn
+preparation includes this evidence even without external channel configuration.
+One subject preserves both blocker and decision; owner-action candidates precede
+background blockers and omitted coverage stays visible. The model explains
+consequences, prior decisions and safe continuation rather than replaying the
+adapter's message template. The existing channel senders now use the configured steward to synthesize
+notifications and suppress a blocker already covered by a verified gate message.
+This is not the full interaction compiler or a local notification receipt. Material-delta eligibility,
+presented/read/recovery deduplication and autonomous wake remain open; use existing
+runtime/budget and delivery owners instead of another inbox or scheduler. Channel
+renderers must not infer a new authority from generated language. See the
+[shared intake boundary](goal-channel-collaboration-v0.md#local-steward-intake-and-optional-channel-delivery).
+
+
 Current Dashboard slice: opening a Needs You item shows the reason, evidence,
 linked Todo/Agent, declared decision scope, and supersession relationship already
 present in the public Todo projection. Only explicit `user_gate` records are
