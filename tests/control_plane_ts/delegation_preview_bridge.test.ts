@@ -9,8 +9,10 @@ import test from "node:test";
 
 const bridge = new URL("../../loopx/control_plane/collaboration/delegation_preview_bridge.ts", import.meta.url);
 
-function transport(script: string, cwd = process.cwd()) {
-  const child = spawn(process.execPath, ["--no-warnings", "--experimental-strip-types", bridge.pathname],
+function transport(script: string, cwd = process.cwd(), lifetimeClock?: number) {
+  const clock = lifetimeClock === undefined ? [] : ["--import", "data:text/javascript," + encodeURIComponent(
+    `const original=globalThis.setTimeout;globalThis.setTimeout=(f,ms,...a)=>original(f,ms===300000?${lifetimeClock}:ms,...a)`)];
+  const child = spawn(process.execPath, [...clock, "--no-warnings", "--experimental-strip-types", bridge.pathname],
     {stdio: ["pipe", "pipe", "pipe"]});
   const lines = createInterface({input: child.stdout})[Symbol.asyncIterator]();
   let id = 0;
@@ -28,7 +30,7 @@ function transport(script: string, cwd = process.cwd()) {
   const request = (argv: string[], timeout_ms = 3000) => {
     send({kind: "request", id: ++id, argv, timeout_ms}); return read();
   };
-  return {child, ready, request, read, send, exited};
+  return {child, ready, request, read, send, exited, lines};
 }
 
 const echo = `const readline=require('readline');let n=0;
@@ -94,4 +96,12 @@ test("the bounded session retires after its 128th response", async () => {
     assert.equal(response.value.n, index);
   }
   assert.equal(await session.exited, 0);
+});
+
+test("lifetime expiration with an accepted request fails without a retirement permission", async () => {
+  const session = transport("process.stdin.resume();setInterval(()=>{},1000)", process.cwd(), 500);
+  await session.ready();
+  assert.deepEqual(await session.request(["wait"]), {kind: "failure", id: 1, outcome: "timeout"});
+  assert.equal(await session.exited, 0);
+  assert.equal((await session.lines.next()).done, true, "accepted work must not receive a retry fence");
 });

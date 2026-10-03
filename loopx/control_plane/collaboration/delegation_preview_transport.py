@@ -22,14 +22,28 @@ from ..effect_runtime import _node_executable
 def _source_snapshot(release: Path) -> tuple:
     """Loaded-code identity only; authority/configuration is read per request."""
     files = []
-    for directory, children, names in os.walk(release / "loopx"):
-        children.sort()
-        for name in sorted(names):
-            path = Path(directory, name)
-            if path.suffix in {".py", ".ts", ".json"}:
-                metadata = path.stat()
-                files.append((str(path.relative_to(release)), metadata.st_mtime_ns,
-                              metadata.st_ctime_ns, metadata.st_size))
+    pending = [("loopx", os.fspath(release / "loopx"))]
+    while pending:
+        relative, directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                entries = sorted(entries, key=lambda item: item.name)
+        except OSError:
+            continue  # Match os.walk's directory-error behavior.
+        children = []
+        for entry in entries:
+            name = os.path.join(relative, entry.name)
+            try:
+                is_directory = entry.is_dir()
+            except OSError:
+                is_directory = False  # os.walk classifies the same entry as a file.
+            if is_directory:
+                if not entry.is_symlink():
+                    children.append((name, entry.path))
+            elif entry.name.endswith((".py", ".ts", ".json")):
+                metadata = entry.stat()
+                files.append((name, metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
+        pending.extend(reversed(children))
     return tuple(files)
 
 
@@ -91,42 +105,55 @@ class DelegationPreviewTransport:
                          metadata.st_ino, str(registry), str(runtime_root), goal_id,
                          agent_id, todo_id, snapshot,
                          hashlib.sha256(json.dumps(environment, sort_keys=True).encode()).digest())
-            if (self._partition != partition or self._process is None
-                    or self._process.poll() is not None or self._sequence >= 128):
-                self._close()
-                bridge = Path(__file__).with_name("delegation_preview_bridge.ts")
-                self._process = subprocess.Popen(
-                    [_node_executable(), "--no-warnings", "--experimental-strip-types", str(bridge)],
-                    env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
-                    start_new_session=True,
-                )
-                self._finalizer = weakref.finalize(self, _close_bridge, self._process)
-                self._partition = partition
-                self._send({"kind": "start", "request": {
-                    "argv": [*command, "--registry", str(registry), "--runtime-root",
-                             str(runtime_root), "--goal-id", goal_id, "--agent-id",
-                             agent_id, "--todo-id", todo_id],
-                    "cwd": str(workspace), "input": "", "timeout_ms": 60000,
-                    "drain_timeout_ms": 2000, "stdout_limit_bytes": 1_048_576,
-                }}, started + timeout, timeout)
-                if self._read(started + timeout, timeout) != {"kind": "ready"}:
-                    raise ValueError("delegation preview did not start")
-            remaining = timeout - (time.monotonic() - started)
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired(["delegation-preview"], timeout)
-            self._sequence += 1
-            self._send({"kind": "request", "id": self._sequence,
-                        "argv": list(argv), "timeout_ms": min(remaining, 60) * 1000},
-                       started + timeout, timeout)
-            response = self._read(started + timeout, timeout)
-            if response.get("kind") == "failure" and response.get("outcome") == "timeout":
-                raise subprocess.TimeoutExpired(["delegation-preview"], timeout)
-            if response.get("kind") != "preview" or response.get("id") != self._sequence:
-                raise ValueError("delegation preview returned no structured result")
-            if _source_snapshot(release) != snapshot:
-                raise ValueError("delegation preview source changed during inspection")
-            return response["value"]
+            for replacement in (False, True):
+                if (self._partition != partition or self._process is None
+                        or self._process.poll() is not None or self._sequence >= 128):
+                    self._close()
+                    bridge = Path(__file__).with_name("delegation_preview_bridge.ts")
+                    self._process = subprocess.Popen(
+                        [_node_executable(), "--no-warnings", "--experimental-strip-types", str(bridge)],
+                        env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                        start_new_session=True,
+                    )
+                    self._finalizer = weakref.finalize(self, _close_bridge, self._process)
+                    self._partition = partition
+                    self._send({"kind": "start", "request": {
+                        "argv": [*command, "--registry", str(registry), "--runtime-root",
+                                 str(runtime_root), "--goal-id", goal_id, "--agent-id",
+                                 agent_id, "--todo-id", todo_id],
+                        "cwd": str(workspace), "input": "", "timeout_ms": 60000,
+                        "drain_timeout_ms": 2000, "stdout_limit_bytes": 1_048_576,
+                    }}, started + timeout, timeout)
+                    if self._read(started + timeout, timeout) != {"kind": "ready"}:
+                        raise ValueError("delegation preview did not start")
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(["delegation-preview"], timeout)
+                self._sequence += 1
+                try:
+                    self._send({"kind": "request", "id": self._sequence,
+                                "argv": list(argv), "timeout_ms": min(remaining, 60) * 1000},
+                               started + timeout, timeout)
+                except BrokenPipeError:
+                    # EOF alone is not permission to retry. A completed idle
+                    # retirement may have left its cleanup fence in stdout.
+                    pass
+                response = self._read(started + timeout, timeout)
+                if (not replacement and response == {"kind": "retired", "last_id": self._sequence - 1}
+                        and type(response["last_id"]) is int):
+                    # The TS owner confirms this request was not accepted and
+                    # its old group stopped. Reuse the original deadline/binding.
+                    self._close()
+                    continue
+                if response.get("kind") == "failure" and response.get("outcome") == "timeout":
+                    raise subprocess.TimeoutExpired(["delegation-preview"], timeout)
+                if response.get("kind") != "preview" or response.get("id") != self._sequence:
+                    raise ValueError("delegation preview returned no structured result")
+                if _source_snapshot(release) != snapshot:
+                    raise ValueError("delegation preview source changed during inspection")
+                return response["value"]
+            raise ValueError("delegation preview retirement did not complete")
         except BaseException:
             self._close()
             raise

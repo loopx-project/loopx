@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from threading import Timer
+from urllib.parse import quote
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -21,6 +22,29 @@ from test_local_delegation import demo, service as delegation_service
 def reusable_service(runner):
     return Delegations(runner.root, runner.registry, runner.goal_id, runner.agent_id,
                        runner.config, reuse_preview=True)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX source symlink observation")
+def test_loaded_source_snapshot_keeps_complete_ordered_metadata(tmp_path):
+    from loopx.control_plane.collaboration.delegation_preview_transport import _source_snapshot
+
+    package = tmp_path / "loopx"
+    nested = package / "nested"
+    nested.mkdir(parents=True)
+    (package / "a.py").write_text("one")
+    (package / "skip.lock").write_text("ignored")
+    (nested / "b.json").write_text("{}")
+    (nested / "c.ts").write_text("export {}")
+    (package / "linked.py").symlink_to(nested / "c.ts")
+    (package / "linked-dir").symlink_to(nested, target_is_directory=True)
+    expected = ["loopx/a.py", "loopx/linked.py", "loopx/nested/b.json", "loopx/nested/c.ts"]
+    snapshot = _source_snapshot(tmp_path)
+    assert [row[0] for row in snapshot] == expected
+    for name, modified, changed, size in snapshot:
+        metadata = (tmp_path / name).stat()
+        assert (modified, changed, size) == (metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size)
+    (nested / "b.json").write_text('{"changed":true}')
+    assert _source_snapshot(tmp_path) != snapshot
 
 
 @pytest.fixture
@@ -395,3 +419,81 @@ def test_backpressured_supervisor_input_uses_original_parent_deadline(tmp_path, 
         if process and process.poll() is None:
             os.kill(process.pid, signal.SIGCONT)
         transport.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX retirement cleanup fence")
+@pytest.mark.parametrize("retirement", ["idle", "lifetime", "broken_pipe"])
+def test_unaccepted_request_recovers_only_after_owned_retirement(tmp_path, monkeypatch, retirement):
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    marker = tmp_path / "retiring"
+    worker = (
+        "import json,sys,signal\nfrom pathlib import Path\n"
+        f"signal.signal(signal.SIGTERM,lambda *_:Path({str(marker)!r}).touch())\n"
+        "for line in sys.stdin:\n"
+        " r=json.loads(line);print(json.dumps({'kind':'preview','id':r['id'],"
+        "'returncode':0,'value':{'read_only':True}}),flush=True)"
+    )
+    # Shorten only the production retirement clock. The real Host's 300ms
+    # cleanup grace, framed IO, request deadline and process group stay intact.
+    timer = 300000 if retirement == "lifetime" else 30000
+    preload = "const original=globalThis.setTimeout;globalThis.setTimeout=(f,ms,...a)=>original(f,ms===" + str(timer) + "?200:ms,...a)"
+    environment = {**_pinned_release_environment(), "NODE_OPTIONS": "--import=data:text/javascript," + quote(preload, safe="")}
+    transport = DelegationPreviewTransport()
+    options = dict(command=[sys.executable, "-c", worker], workspace=tmp_path,
+                   release=tmp_path, environment=environment,
+                   registry=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+                   goal_id="fixture", agent_id="lead", todo_id="todo_fixture",
+                   argv=("inspect",), timeout=5)
+    try:
+        assert transport.preview(**options) == {"read_only": True}
+        original = transport._process
+        until = time.monotonic() + 5
+        while not marker.exists():
+            assert time.monotonic() < until, "retirement did not start"
+            time.sleep(0.005)
+        assert original.poll() is None, "probe must enter the cleanup window"
+        if retirement == "broken_pipe":
+            send = transport._send
+
+            def send_after_exit(value, *args):
+                if value.get("kind") == "request" and value["id"] == 2:
+                    original.wait(timeout=5)
+                return send(value, *args)
+
+            monkeypatch.setattr(transport, "_send", send_after_exit)
+        assert transport.preview(**options) == {"read_only": True}
+        assert original.poll() == 0
+        assert transport._process.pid != original.pid
+        assert transport._sequence == 1
+    finally:
+        transport.close()
+
+
+@pytest.mark.parametrize("frame", [
+    {"kind": "retired", "last_id": 1},
+    {"kind": "retired", "last_id": 0, "extra": True},
+    {"kind": "retired", "last_id": False},
+])
+def test_invalid_retirement_fence_cannot_replay_a_request(tmp_path, monkeypatch, frame):
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    worker = "import sys,json\nfor line in sys.stdin:\n r=json.loads(line);print(json.dumps({'kind':'preview','id':r['id'],'returncode':0,'value':{}}),flush=True)"
+    transport = DelegationPreviewTransport()
+    read = transport._read
+    calls = []
+
+    def read_invalid_fence(*args):
+        response = read(*args)
+        calls.append(response)
+        return frame if response.get("kind") == "preview" else response
+
+    monkeypatch.setattr(transport, "_read", read_invalid_fence)
+    with pytest.raises(ValueError, match="no structured result"):
+        transport.preview(command=[sys.executable, "-c", worker], workspace=tmp_path,
+                          release=tmp_path, environment=_pinned_release_environment(),
+                          registry=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+                          goal_id="fixture", agent_id="lead", todo_id="todo_fixture",
+                          argv=("inspect",), timeout=5)
+    assert len(calls) == 2, "invalid fence must not start a second worker"
+    assert transport._process is None
