@@ -751,7 +751,7 @@
     },
     {
       "site": "loopx/cli_commands/pr_review.py::<module>.handle_pr_review_command::codec_read:load_registry#1",
-      "line": 262,
+      "line": 264,
       "column": 39,
       "kind": "codec_read",
       "api": "load_registry",

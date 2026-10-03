@@ -1,4 +1,5 @@
 import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
+import {readCodexExecutionIdentity, matchExecutionDeclaration} from "./runtime/execution_identity.ts";
 import {deriveAgentOperationActor, managedOperationBindingCurrent, normalizeAgentOperationExecutor, planAgentOperationHandoff, projectAgentOperationInbox, projectManagedOperationTransport, resolveOperationSourceRoute} from "./work_items/operation_agent_handoff.ts";
 import {projectDecisionNotice, validateDecisionNoticeReferences} from "./presentation/decision_notice.ts";
 import {boundGoalAttention, projectGoalAttention} from "./presentation/goal_attention.ts";
@@ -785,6 +786,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.result.plan_publication", planCollaborationResult],
     ["collaboration.result.delivery_ready", collaborationResultDeliveryReady],
     ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],
+    ["runtime.execution_identity.codex", readCodexExecutionIdentity],
+    ["runtime.execution_identity.match", matchExecutionDeclaration],
     [
       "collaboration.goal_instance.decide",
       (params) => decideCollaborationLifecycle(params),
