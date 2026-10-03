@@ -752,6 +752,42 @@ Target an ingress receipt within two seconds on a healthy local service, indepen
 
 Use existing service recovery and receipt pumps. No manager-specific business automation for each kind of request. Expose configuration and failures through the existing CLI, capability settings and manager conversation. Troubleshooting distinguishes model failure, tool/policy denial, state conflict, unreachable receiver and transport formatting/delivery failure.
 
+**Realtime IM entry (S1/S5/S10):** qualify long-connection reception, durable
+admission, host execution and visible return separately. While one answer is
+blocked, another request or correction must receive bounded, truthful admission
+feedback; Core queue/steering support alone does not qualify the Lark consumer.
+Retain persistent Sessions, provisional progress, exact permission decisions
+and explicit media availability through existing Chat/Turn/operation owners.
+No parallel bridge ledger or scheduler is required. The bundled provider's
+[readiness guide](../../../loopx/extensions/lark/docs/realtime-conversation-readiness.md)
+records bounded cross-conversation dispatch and remaining replacement qualification;
+private DM onboarding, ordinary non-Goal chat, streaming and media remain
+unqualified until the pinned installed journey passes.
+
+**Product boundary:** the Bot is a realtime conversation entry, not another
+steward. Ordinary project chat and direct conversation with a selected existing
+Agent must remain useful without team decomposition or a new Goal/Todo. The
+steward is an explicit recipient when the user needs persistent commitments,
+coordination and acceptance. Share authenticated ingress, Session/Turn,
+execution/progress/attachments, operation decisions and recovery; keep recipient
+purpose, audience, transcript and workspace grants distinct. A channel must not
+inherit the global steward objective or portfolio visibility just to obtain a
+working executor. Shared changes belong to the
+[conversation-entry RFC](app-conversation-and-async-inbox-v0.md), not a second Bot
+execution or approval authority. Replacing a tenant-controlled App on another
+machine requires a freshly authorized App; credentials, source transcripts and
+permission bindings do not travel as a workstation backup.
+
+Deliver these through M1/M3 and the existing S5 journey, without adding a parallel
+milestone or treating a periodic heartbeat as realtime transport:
+
+| Order | User-visible exit | Existing owner and qualification |
+| --- | --- | --- |
+| First | A slow role does not hold every other conversation on the same Bot; follow-ups remain ordered | Lark transport has bounded workers/buffering, fresh binding checks, reply/ACK readback and stop/drain evidence; Core retains Session admission and budgets |
+| Next | A first DM and explicit role choice continue the intended conversation; busy work promptly reports durable admission or rejection | Chat Session/Turn and typed ingress own continuity, audience and queue/steering; ordinary chat must not require users to manufacture a Goal Topic, and role names alone grant no authority |
+| Then | Progress, images/files and permission answers work for each advertised host | Existing event/attachment/operation owners; bounded provisional cards, explicit unsupported media, authenticated exact-operation callbacks and delivery-only recovery |
+| Switch gate | The installed provider/host journey survives reconnect, duplicates, cancellation and unavailable delivery | Pin versions and run the actual entry/readback; retire an old bridge only after qualification, with one consumer owner per App and no copied credentials or sessions |
+
 **Accepted queue preparation failures (S1/S10, A12/A22/A23):** an accepted
 request owns a terminal outcome even before an adapter starts. A missing runtime
 asset, invalid workspace or failed session restoration must settle the affected

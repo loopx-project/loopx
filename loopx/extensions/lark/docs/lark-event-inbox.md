@@ -158,6 +158,12 @@ Agent-labelled Topic for each route. Users send requests inside the matching
 Topic. A group-level message with more than one eligible Agent route is
 deliberately rejected as ambiguous instead of guessing an Agent from prose.
 
+For interactive replacement and busy-listener qualification, use the
+[native realtime conversation readiness guide](realtime-conversation-readiness.md).
+The long-lived listener is independent of a Goal's periodic heartbeat;
+independent conversations can progress concurrently, while a busy conversation
+still waits for its current answer before admitting a follow-up.
+
 For a periodic-report request, semantic activation belongs to the Agent. After
 reading an exact item, the Agent calls `loopx periodic-report request` with its
 `message_id`. The Lark adapter validates binding and addressing evidence only;
