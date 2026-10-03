@@ -584,6 +584,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["collaboration.source_context.normalize", lazyHandler(() => import("./collaboration/semantic_request.ts"), ({normalizeCollaborationSourceContext}) => normalizeCollaborationSourceContext)],
     ["collaboration.inbox.inspect_receipts", lazyHandler(() => import("./collaboration/inbox_receipts.ts"), ({inspectCollaborationInboxReceipts}) => inspectCollaborationInboxReceipts)],
+    ["collaboration.inbox.receiver_followthrough", lazyHandler(() => import("./collaboration/inbox_receipts.ts"), ({projectReceiverFollowthrough}) => projectReceiverFollowthrough)],
     ["collaboration.result.plan_publication", lazyHandler(() => import("./collaboration/result_publication.ts"), ({planCollaborationResult}) => planCollaborationResult)],
     ["collaboration.result.delivery_ready", lazyHandler(() => import("./collaboration/result_publication.ts"), ({collaborationResultDeliveryReady}) => collaborationResultDeliveryReady)],
     ["collaboration.peer_host_route.select", lazyHandler(() => import("./collaboration/peer_route_selection.ts"), ({selectObservedPeerHostRoute}) => selectObservedPeerHostRoute)],

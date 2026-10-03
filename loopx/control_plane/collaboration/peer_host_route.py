@@ -29,11 +29,32 @@ from ...thread_agent_binding import (
     summarize_agent_binding_routes,
 )
 from ..effect_runtime import effect_runtime_result
-from ..projects.registry_codec import load_registry
+from ..projects.registry_codec import decode_registry_snapshot
 
 
 PEER_HOST_ROUTE_SCHEMA_VERSION = "loopx_peer_host_route_v0"
 MAX_PUBLISHED_CANDIDATES = 3
+
+
+def _read_route_registry(path: Path) -> dict[str, Any]:
+    """A route requires a complete source, never a synthetic empty registry."""
+    registry = decode_registry_snapshot(path, path.expanduser().read_bytes())
+    goals = registry.get("goals")
+    if not isinstance(goals, list) or any(
+        not isinstance(goal, dict) or not isinstance(goal.get("id"), str)
+        for goal in goals
+    ) or len({goal["id"] for goal in goals}) != len(goals):
+        raise ValueError("invalid registry inventory")
+    return registry
+
+
+def _unavailable_registry(result: dict[str, Any]) -> dict[str, Any]:
+    result.pop("host_observation", None)
+    result.pop("withheld_candidate_count", None)
+    result.update(ok=False, status="unavailable", reason="agent_inventory_unavailable",
+                  unknown=True, candidate_count=None, candidates=[], selected_route=None,
+                  next_action="Restore the registered source before concluding that no Agent exists.")
+    return result
 
 
 def _matching_bindings(
@@ -120,7 +141,10 @@ def resolve_peer_host_route(
         "host_delivery": "not_attempted",
         "authority": "locator_only",
     }
-    registry = load_registry(registry_path)
+    try:
+        registry = _read_route_registry(registry_path)
+    except (OSError, ValueError, TypeError):
+        return _unavailable_registry(result)
     goal = find_registry_goal(registry, goal_id)
     if goal is None or agent_id not in registered_agent_ids_for_goal(goal):
         result.update(status="not_authorized", reason="peer_not_registered")
@@ -173,7 +197,11 @@ def resolve_peer_host_route(
     index = selection["selected_index"]
     selected = matching[index]
     # Host I/O must not hide a newly bound alternative or a revoked registration.
-    latest_goal = find_registry_goal(load_registry(registry_path), goal_id)
+    try:
+        latest_registry = _read_route_registry(registry_path)
+    except (OSError, ValueError, TypeError):
+        return _unavailable_registry(result)
+    latest_goal = find_registry_goal(latest_registry, goal_id)
     if latest_goal is None or agent_id not in registered_agent_ids_for_goal(latest_goal):
         result.update(status="not_authorized", reason="peer_not_registered")
         return result
@@ -188,6 +216,7 @@ def resolve_peer_host_route(
         return result
     exact = resolve_registry_thread_agent_binding(
         registry_path=registry_path,
+        registry_snapshot=latest_registry,
         host_surface=selected["host_surface"],
         thread_id=selected["thread_id"],
     )

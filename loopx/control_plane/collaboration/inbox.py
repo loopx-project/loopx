@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from ...file_lock import exclusive_file_lock
+from ..runtime.file_paths import windows_extended_path
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
 from ..todos.contract import TODO_ID_PATTERN
 
@@ -40,7 +41,9 @@ def _hash(value: Any) -> str:
 
 def _root(runtime_root: Path) -> Path:
     """Retain the shipped storage address; Agent topology is not encoded in it."""
-    return runtime_root / ".local" / "manager-context"
+    # Full request hashes plus lock sidecars can exceed MAX_PATH even in an
+    # ordinary workspace. Keep extended syntax inside the private store.
+    return windows_extended_path(runtime_root / ".local" / "manager-context")
 
 
 def _write(path: Path, value: dict) -> None:
@@ -192,9 +195,10 @@ def pending(
                 if lifecycle.get("kind") == "omit":
                     continue
             item = {**row, "inbox_state": state["kind"]}
+            item["recorded_decision"] = state["recorded_decision"]
             if state["recorded_decision"] is not None:
                 item["receiver_decision_recorded"] = True
-                item["next_action"] = "Return the original audience a conclusion with manager-inbox report; do not repeat the recorded decision or reprioritize unrelated work."
+                item["next_action"] = "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."
             if state["warnings"]:
                 item["warnings"] = state["warnings"]
                 item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."

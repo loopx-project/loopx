@@ -509,7 +509,10 @@ def test_goal_configuration_service_rechecks_revision_before_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry_path = tmp_path / "registry.json"
-    registry_path.write_text("{}\n", encoding="utf-8")
+    import json
+    initial_registry = json.dumps({"common_runtime_root": str(tmp_path / "runtime"),
+        "goals": [{"id": "goal-example", "repo": str(tmp_path)}]}) + "\n"
+    registry_path.write_text(initial_registry, encoding="utf-8")
     calls: list[dict[str, Any]] = []
 
     def configure_goal_stub(**kwargs: Any) -> dict[str, Any]:
@@ -534,4 +537,4 @@ def test_goal_configuration_service_rechecks_revision_before_write(
         )
 
     assert len(calls) == 1
-    assert registry_path.read_text(encoding="utf-8") == "{}\n"
+    assert registry_path.read_text(encoding="utf-8") == initial_registry

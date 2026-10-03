@@ -113,6 +113,37 @@ policy editing remains outside this slice; existing Lark actions read canonical
 state. Next: qualified creation/upgrade callers and authorized Goal adoption,
 then delete live legacy branches at their last callers.
 
+### Installed delegation boundary at `9ac4efa90`
+
+A macOS arm64 installation from that merged source aligns the CLI, rebuilt App
+bundle and restarted Chat/Status services. The served HTML matches the installed
+bundle; both current entry assets and all 14 assets from the preceding delivery
+remain readable. This is process/HTTP readback, not a full GUI interaction test.
+
+An independently staged installation exercises real File/SQLite stores, actual
+CLI subprocesses and a deterministic generic Host process: six final-acceptance
+renewal/lost-reply cases, four expired/replaced-execution rejection cases, and
+four last-Todo completion→controller-replan cases pass. Loaded LoopX modules are
+checked against the installed snapshot. The first run had 9 passes and 5 failures:
+a short setup lease preempted one intended negative case; an extension of the
+Markdown fixture incorrectly expected a changed canonical completion intent to
+replay. The corrected fixture loses authority at the tested boundary, requires
+changed-intent rejection, and verifies original Turn resume without new effects.
+All affected cases were rerun; the failures are not counted as product successes.
+
+The adjacent source regression now starts its 20-second Host lease at managed
+execution dispatch. A matched 22-second delay after fixture preparation rejected
+the old execution before Host start; the corrected fixture reaches real renewal,
+completion and lost-reply replay. Lease identity, expiry rejection and the
+existing runtime and validation budgets remain unchanged.
+
+This closes this bounded installed #5466 path. It does not qualify live model
+providers, interrupted-Host stop acknowledgement, Windows, full Goal recovery,
+formal D2, release defaults or last-writer retirement. No active Goal provider or
+ownership mode changes are part of this installation. Keep those existing exits;
+recovery observation and File decode measurements retain their separate evidence
+below.
+
 ### Ordered delivery packages and exits
 
 | Package / existing owner | Work and decisive exit | Dependency / deletion / schedule |
@@ -268,6 +299,16 @@ At `ce3862e33`, local real-backend migration/crash suites passed 15 cases;
 The existing SQLite rehearsal completed 100 and 1,000 commits with cold CLI
 sampling and cleanup. Its report remains **incomplete**, with formal workload,
 capacity, platform and elapsed-soak rows missing; this run starts no soak.
+
+The retained-consumer regression in `authority_archive_audit.test.ts` now fixes
+a consumer checkpoint at cursor 63, then resumes in fresh Node processes over
+131 commits across checkpoint boundaries. Both File→SQLite→File and
+SQLite→File→SQLite retain the complete submitted transactions, nested Todo
+metadata and original receipts; commit 132 made after the first restore survives
+the return export. The fixture explicitly rebinds its checkpoint only after a
+verified archive restore. It does not deliver automatic migration of registered
+consumer cursors. A logical one-day timestamp gap is accelerated backlog
+coverage, **not** 24 hours of observed lag, elapsed soak or formal D2 admission.
 
 A detached previously captured real source with 1,101 complete Todo records was
 reconstructed into three synthetic source transactions. The current production

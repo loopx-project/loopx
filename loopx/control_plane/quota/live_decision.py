@@ -72,9 +72,16 @@ def _apply_retained_action_selection_reentry(
     )
     payload["retained_action_selection"] = verdict
     disposition = verdict.get("disposition")
+    consumed_fields = verdict.get("clear_fields", [])
+    if not isinstance(consumed_fields, list) or not all(
+        isinstance(field, str) for field in consumed_fields
+    ):
+        raise RuntimeError("TypeScript retained action-selection fields are malformed")
+    for field in consumed_fields:
+        payload.pop(field, None)
     if disposition == "preserve_retained_todo":
-        return
-    if disposition == "bind_autonomous_replan":
+        pass
+    elif disposition == "bind_autonomous_replan":
         payload.pop("selected_todo", None)
         payload.pop("todo_id", None)
         payload.pop("agent_lane_next_action", None)

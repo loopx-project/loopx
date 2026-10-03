@@ -413,3 +413,56 @@ def test_cross_runtime_cleanup_failure_cannot_replace_success(
         pass
 
     assert calls == [True]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Win32 extended path regression")
+def test_long_lock_paths_release_and_keep_one_identity(tmp_path):
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+    target = tmp_path / ("nested-" * 12) / ("a" * 64 + ".json")
+    extended = windows_extended_path(target)
+    assert file_lock._lock_id(target) == file_lock._lock_id(extended)
+    with exclusive_cross_runtime_file_lock(target):
+        assert file_lock.cross_runtime_lock_witness(target)["token"]
+    # Long claim-file cleanup must succeed while this process is still alive.
+    with exclusive_cross_runtime_file_lock(extended, timeout_seconds=0):
+        with pytest.raises(LockAcquireTimeoutError):
+            with exclusive_cross_runtime_file_lock(target, timeout_seconds=0):
+                pytest.fail("normal and extended addresses acquired two locks")
+    assert not file_lock._effect_mutation_lock_path(target).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Win32 extended path regression")
+def test_long_lock_paths_exclude_other_process_and_release_while_holder_alive(tmp_path):
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+    target = tmp_path / ("nested-" * 24) / ("a" * 64 + ".json")
+    assert len(str(target)) > 260
+    extended = windows_extended_path(target)
+    script = """
+import sys
+from pathlib import Path
+from loopx.file_lock import exclusive_cross_runtime_file_lock
+with exclusive_cross_runtime_file_lock(Path(sys.argv[1])):
+    print("ready", flush=True)
+    sys.stdin.readline()
+print("released", flush=True)
+sys.stdin.readline()
+"""
+    holder = subprocess.Popen([sys.executable, "-c", script, str(target)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout is not None and holder.stdin is not None
+        assert holder.stdout.readline().strip() == "ready"
+        with pytest.raises(LockAcquireTimeoutError):
+            with exclusive_cross_runtime_file_lock(extended, timeout_seconds=0):
+                pytest.fail("extended address bypassed another process's lock")
+        holder.stdin.write("release\n")
+        holder.stdin.flush()
+        assert holder.stdout.readline().strip() == "released"
+        assert holder.poll() is None
+        with exclusive_cross_runtime_file_lock(extended, timeout_seconds=0):
+            assert file_lock._lock_id(target) == file_lock._lock_id(extended)
+        assert not file_lock._effect_mutation_lock_path(target).exists()
+    finally:
+        _stop(holder)

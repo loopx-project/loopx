@@ -18,7 +18,7 @@ READ_TOOL = {
     "name": TOOL_NAME,
     "description": (
         "Read authorized LoopX Core evidence on demand: the global Goal portfolio, "
-        "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. "
+        "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. Use view=agent_route with exact goal_id and agent_id to observe an existing local host binding before asking the user for a task link. A readable route is not execution readiness or delivery authority. "
         "Every portfolio row carries its Goal lifecycle readback: reached milestones with "
         "their evidence refs and the phase (starting/qualifying/waiting_owner/closing/closed), "
         "or a typed unavailable gap naming why it could not be derived. Use that to state where "
@@ -32,11 +32,15 @@ READ_TOOL = {
         "properties": {
             "view": {
                 "type": "string",
-                "enum": ["sources", "portfolio", "todos", "deliveries", "handoffs", "agents"],
+                "enum": ["sources", "portfolio", "todos", "deliveries", "handoffs", "agents", "agent_route"],
             },
             "source_id": {"type": "string", "description": "Default local. For SSH use an exact source_id from view=sources; local Goal IDs do not discover remote Goals."},
             "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Deliveries lookback; expand for latest known progress older than yesterday."},
             "goal_id": {"type": "string"},
+            "agent_id": {"type": "string", "minLength": 1,
+                         "description": "Agent_route only, with goal_id: exact registered Agent to locate. Search view=agents first; does not delegate or create an execution driver."},
+            "thread_link": {"type": "string", "minLength": 1,
+                            "description": "Agent_route only: optional exact host task link already supplied by the user. Do not guess a link to resolve ambiguous bindings."},
             "todo_id": {"type": "string", "minLength": 1,
                         "description": "Todos only, with goal_id: read one exact record including its complete permitted text. Recover content_truncated excerpts; a completed record does not authorize new work."},
             "query": {"type": "string", "maxLength": 200, "description": "Agents only: case-insensitive text match on identity and declared responsibility. Omit to browse all permitted registrations."},
@@ -63,6 +67,7 @@ CONTEXT_READ_TOOL = {**deepcopy(READ_TOOL), "name": CONTEXT_TOOL_NAME,
     "description": "Read this conversation's authorized Goal, Todos, deliveries and handoff receipts. "
     "The Goal row carries its lifecycle readback: reached milestones with evidence refs and the phase "
     "(starting/qualifying/waiting_owner/closing/closed), or a typed unavailable gap naming why. "
+    "Use view=agents to find registered peers, then view=agent_route with exact goal_id and agent_id to observe an existing local host binding. A route is not execution readiness. "
     "Paginate with next_offset. No cross-Goal access, shell, writes or execution authority."}
 
 
@@ -100,6 +105,19 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
         rejected.append("view:must_be_one_of_" + ",".join(READ_VIEWS))
     if "request_id" in arguments and view != "handoffs":
         rejected.append("request_id:only_for_view_handoffs")
+    for name in ("agent_id", "thread_link"):
+        if name in arguments:
+            if view != "agent_route":
+                rejected.append(f"{name}:only_for_view_agent_route")
+            elif not isinstance(arguments[name], str) or not arguments[name].strip():
+                rejected.append(f"{name}:must_be_a_nonempty_string")
+    if view == "agent_route":
+        for name in ("goal_id", "agent_id"):
+            if not arguments.get(name):
+                rejected.append(f"agent_route:requires_{name}")
+        for name in ("offset", "limit"):
+            if name in arguments:
+                rejected.append(f"{name}:not_for_view_agent_route")
     if "todo_id" in arguments:
         if view != "todos":
             rejected.append("todo_id:only_for_view_todos")
@@ -176,7 +194,7 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
         "evidence_sources": context.get("evidence_sources", [])[:12],
         "evidence_source_count": len(context.get("evidence_sources", [])),
         "agent_discovery": {"tool": read_tool, "view": "agents", "scope": "permitted_registry",
-                            "independent_of_delivery_targets": True},
+                            "independent_of_delivery_targets": True, "route_view": "agent_route"},
         "read_tool": read_tool,
     }
 
@@ -263,6 +281,9 @@ class ManagerInspection:
             self.record(result)
             return result
         if source_id != "local":
+            if view == "agent_route":
+                return {"ok": False, "error": "remote_agent_route_not_supported",
+                        "detail": "Observe bindings on the trusted source host with resolve-peer-route; a local host observation cannot qualify a remote route."}
             if not source_id.startswith("ssh:") or view == "handoffs" or (view not in {"portfolio", "agents"} and not goal_id):
                 return {"ok": False, "error": "invalid_remote_read"}
             from .ssh_evidence import read_remote
@@ -271,8 +292,7 @@ class ManagerInspection:
                                  **({"runner": self.remote_runner} if self.remote_runner else {}))
             self.record(result)
             return result
-        if view == "agents":
-            from .discovery import agent_page
+        if view in {"agents", "agent_route"}:
             # The current audience scope is independent of bounded portfolio
             # collection and the sender's narrower context-delivery grants.
             ids = (self.discovery_scope() if self.discovery_scope else
@@ -286,6 +306,18 @@ class ManagerInspection:
                 if ids is not None and goal_id not in ids:
                     return {"ok": False, "error": "goal_outside_available_scope"}
                 ids = [goal_id]
+            if view == "agent_route":
+                from ...control_plane.collaboration.peer_host_route import resolve_peer_host_route
+
+                result = resolve_peer_host_route(self.registry_path, goal_id=goal_id,
+                                                agent_id=arguments["agent_id"],
+                                                thread_link=arguments.get("thread_link"))
+                if not self.scope_valid():
+                    return {"ok": False, "error": "authorization_changed"}
+                self.record(result)
+                return result
+            from .discovery import agent_page
+
             grant = self.delegation_authority() if self.delegation_authority else self.context.get("context_delegation")
             result = agent_page(self.registry_path, goal_ids=ids, query=arguments.get("query", ""),
                                 include_stopped=include_stopped, offset=offset, limit=limit, delegation=grant)

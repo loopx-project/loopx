@@ -531,7 +531,7 @@ def input_readiness(
                 # Nonblocking open plus fstat prevents a FIFO/device reference
                 # from hanging the worker's entire Inbox read.
                 with os.fdopen(
-                    os.open(path, os.O_RDONLY | os.O_NONBLOCK), "rb"
+                    os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)), "rb"
                 ) as stream:
                     if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                         raise OSError("input is not a regular file")
@@ -601,6 +601,9 @@ def read_inbox(
             result["peer_returns"] = peer_returns
         record_read(root, result["items"], scope=goal_scope)
 
+    from .links import receiver_followthrough
+
+    receiver_followthrough(root, registry, result["items"])
     # Input hashing can touch arbitrary workspace files and does not participate
     # in Goal lifetime admission.
     for item in result["items"]:
@@ -609,6 +612,12 @@ def read_inbox(
                 registry, goal_id, item["brief"], workspace=workspace
             )
     result["followthrough"] = (
+        "Use each request's receiver_followthrough to reconcile it with actual Core work. "
+        "Record an explicit assessment even when continuing other work; a read is not a decision. "
+        "Integrate accepted work into your existing plan using the normal Goal/Todo workflow; "
+        "if deferring or rejecting it, return the reason and any concrete resume condition. "
+        "For adopted work, resume the linked commitment or assess whether this can be answered directly; "
+        "do not manufacture a Todo for a short answer. "
         "Independently assess requests and actual input versions before accepting work. "
         "Use request_peer for help or independent review. Assess peer conclusions against "
         "actual artifacts, then consume_peer_result after using or rejecting the result. "

@@ -123,6 +123,7 @@ def cli(root, registry, agent, action, *args, ok=True):
         capture_output=True,
         text=True,
         timeout=30,
+        cwd=registry.parent,
     )
     result = json.loads(proc.stdout)
     assert proc.returncode == (0 if ok else 1), (proc.stdout, proc.stderr)
@@ -450,7 +451,12 @@ def test_changed_missing_and_escaping_artifacts_are_explicit(scenario, tmp_path)
     assert input_readiness(registry, "delivery", brief)[0]["status"] == "changed"
     (root / "inputs/demand.csv").unlink()
     assert input_readiness(registry, "delivery", brief)[0]["status"] == "unavailable"
-    (root / "inputs/demand.csv").symlink_to(root.parent / "outside.csv")
+    try:
+        (root / "inputs/demand.csv").symlink_to(root.parent / "outside.csv")
+    except OSError as exc:
+        if sys.platform == "win32" and exc.winerror == 1314:
+            pytest.skip("Windows symlink fixture requires privileges")
+        raise
     assert (
         input_readiness(registry, "delivery", brief)[0]["status"] == "outside_workspace"
     )
@@ -597,6 +603,7 @@ def test_consumption_rejects_corrupt_reply_and_receipt(scenario):
         consume_return(root, "delivery", "builder", rid)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX FIFO fixture")
 def test_special_file_read_is_bounded_and_stopped_goal_remains_readable(scenario):
     import os
     from loopx.control_plane.collaboration.peers import read_inbox
@@ -733,3 +740,47 @@ def test_peer_update_rejects_another_results_read_and_consumption_receipts(scena
     consumed.write_bytes((folder / "conclusion.consumed.json").read_bytes())
     with pytest.raises(ValueError, match="receipt scope"):
         returns(root, "delivery", "builder")
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 extended path regression")
+def test_peer_exchange_survives_long_private_store_paths(scenario):
+    root, registry, brief, *_ = scenario
+    from loopx.control_plane.collaboration.inbox import _root
+
+    long_root = root / ("nested-runtime-" * 7)
+    packet = root / "long-path-brief.json"
+    packet.write_text(json.dumps(brief))
+    args = ("--peer-agent-id", "reviewer", "--operation-id", "long-path-review",
+            "--brief-file", str(packet))
+    sent = cli(long_root, registry, "builder", "request", *args)
+    rid = sent["request_id"]
+    assert cli(long_root, registry, "reviewer", "read")["items"][0]["request_id"] == rid
+    cli(long_root, registry, "reviewer", "acknowledge", "--request-id", rid,
+        "--decision", "adopt", "--reason", "Reviewing the pinned artifact")
+    cli(long_root, registry, "reviewer", "report", "--request-id", rid,
+        "--phase", "conclusion", "--reply-text", "Independent review complete")
+    assert cli(long_root, registry, "builder", "read")["peer_returns"]["items"][0]["request_id"] == rid
+    cli(long_root, registry, "builder", "acknowledge-return", "--request-id", rid)
+    replay = cli(long_root, registry, "builder", "request", *args)
+    assert replay["replayed"] and replay["request_id"] == rid
+    requests = [path for path in (_root(long_root) / "entries").glob("*/*.json") if path.stem == rid]
+    assert len(requests) == 1 and len(str(requests[0])) > 260
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 binary input regression")
+def test_peer_binary_artifact_preserves_crlf_and_ctrl_z_digest(scenario):
+    root, registry, brief, *_ = scenario
+    content = b"before\r\n\x1aafter\r\n\x00\xff"
+    artifact = root / "inputs" / "packet.bin"
+    artifact.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    brief = {**brief, "inputs": [{"ref": "inputs/packet.bin",
+        "description": "Binary fixture", "sha256": digest}]}
+    packet = root / "binary-brief.json"
+    packet.write_text(json.dumps(brief), encoding="utf-8")
+    sent = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+        "--operation-id", "binary-review", "--brief-file", str(packet))
+    item = cli(root, registry, "reviewer", "read")["items"][0]
+    assert item["request_id"] == sent["request_id"]
+    [readiness] = item["input_readiness"]
+    assert readiness["status"] == "available"
+    assert readiness["observed_sha256"] == readiness["expected_sha256"] == digest
+    assert readiness["content_supplied"] is False

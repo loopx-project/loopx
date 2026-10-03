@@ -9,6 +9,23 @@ export interface Latency {
   p99_ms: number;
 }
 
+/** Public-boundary input, measured outside CLI timing by the existing scanner. */
+export interface CapacityScanInput {
+  sha256: string;
+  files: number;
+  bytes: number;
+  skipped_private_files: number;
+}
+
+export function sameCapacityScan(left: CapacityScanInput | undefined, right: CapacityScanInput | undefined): boolean {
+  return !!left && !!right && /^[a-f0-9]{64}$/.test(left.sha256) &&
+    Number.isSafeInteger(left.files) && left.files > 0 &&
+    Number.isSafeInteger(left.bytes) && left.bytes > 0 &&
+    Number.isSafeInteger(left.skipped_private_files) && left.skipped_private_files >= 0 &&
+    left.sha256 === right.sha256 && left.files === right.files && left.bytes === right.bytes &&
+    left.skipped_private_files === right.skipped_private_files;
+}
+
 export function latency(samples: readonly number[]): Latency {
   if (!samples.length || samples.some(value => !Number.isFinite(value) || value < 0)) {
     throw new Error("latency requires nonempty finite nonnegative samples");
@@ -67,6 +84,7 @@ export interface CapacityAxis {
   warm: Record<"commit" | "head" | "receipt" | "scan_100", Latency> | null;
   cold_node: Latency | null;
   cold_cli: Record<"mutation" | "status" | "quota", Latency> | null;
+  cold_cli_scan: {before: CapacityScanInput; after: CapacityScanInput} | null;
   application_request_json_bytes: number;
   files_at_target: {database_bytes: number; wal_bytes: number; shm_bytes: number} | null;
   /** Retained-state profile of the filled history; null when it was unavailable. */
@@ -140,7 +158,11 @@ export function capacityLedger(axes: readonly CapacityAxis[], profileId: Capacit
     const denominator = baseline?.warm?.[key].p95_ms;
     add(`${key}_history_growth`, denominator && final?.warm ? final.warm[key].p95_ms / denominator : undefined, 2, "ratio");
   }
-  add("cold_cli_status_p95", valid(final?.cold_cli?.status, 20) ? final?.cold_cli?.status.p95_ms : undefined, 2000, "ms");
+  // Missing or different scan inputs cannot certify the status budget. Todo
+  // mutation does not scan, and its independent budget remains usable.
+  const matchedScan = [baseline, final].every(axis => sameCapacityScan(axis?.cold_cli_scan?.before, axis?.cold_cli_scan?.after)) &&
+    sameCapacityScan(baseline?.cold_cli_scan?.before, final?.cold_cli_scan?.before);
+  add("cold_cli_status_p95", matchedScan && valid(final?.cold_cli?.status, 20) ? final?.cold_cli?.status.p95_ms : undefined, 2000, "ms");
   add("cold_cli_mutation_increment_p95", valid(baseline?.cold_cli?.mutation, 20) && valid(final?.cold_cli?.mutation, 20) && baseline?.cold_cli && final?.cold_cli
     ? final.cold_cli.mutation.p95_ms - baseline.cold_cli.mutation.p95_ms : undefined, 200, "delta_ms");
   // Retained state must be bounded by checkpoint windows rather than by how

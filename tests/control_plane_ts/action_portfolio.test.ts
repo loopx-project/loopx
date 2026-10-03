@@ -182,6 +182,56 @@ test("planning packet preserves bounded horizon completeness", () => {
   assert.equal(completeness.complete, false);
 });
 
+test("unbound hard replans expose planning choices even for a sole candidate", () => {
+  const primary = candidate("todo_primary001", "Review the primary slice.", "P1");
+  for (const alternatives of [[], [candidate("todo_other001", "Another slice.", "P2")]]) {
+    const result = projectQuotaActionPortfolio(planningPacketRequest(primary, alternatives, [], {
+      projection_enabled: false,
+      include_detail: false,
+      replan_selection_context: {
+        has_turn_identity: true, should_run: true, receipt_bound: false, selection_requested: false, monitor_only: false,
+      },
+    }));
+    const portfolio = result?.action_portfolio as Record<string, unknown>;
+    const policy = portfolio.selection_policy as Record<string, unknown>;
+    assert.equal(policy.requires_explicit_turn_binding, true);
+    assert.equal(policy.recommendation_role, "default_not_binding");
+    assert.equal(policy.direct_delivery_before_selection, false);
+    assert.equal("agent_todo_planning_inventory" in (result ?? {}), false);
+  }
+});
+
+test("replan planning does not unbind receipts or override delivery and monitor gates", () => {
+  const primary = candidate("todo_primary001", "Review the primary slice.", "P1");
+  for (const override of [
+    { has_turn_identity: false },
+    { should_run: false }, { receipt_bound: true },
+    { selection_requested: true }, { monitor_only: true },
+  ]) {
+    const result = projectQuotaActionPortfolio(planningPacketRequest(primary, [], [], {
+      projection_enabled: false,
+      include_detail: false,
+      replan_selection_context: {
+        has_turn_identity: true, should_run: true, receipt_bound: false, selection_requested: false, monitor_only: false,
+        ...override,
+      },
+    }));
+    assert.equal("action_portfolio" in (result ?? {}), false);
+  }
+});
+
+test("every supplied replan planning fact is validated without short-circuiting", () => {
+  const primary = candidate("todo_primary001", "Review the primary slice.", "P1");
+  for (const field of ["has_turn_identity", "should_run", "receipt_bound", "selection_requested", "monitor_only"]) {
+    assert.throws(() => projectQuotaActionPortfolio(planningPacketRequest(primary, [], [], {
+      replan_selection_context: {
+        has_turn_identity: false, should_run: false, receipt_bound: true, selection_requested: true, monitor_only: true,
+        [field]: "yes",
+      },
+    })), new RegExp(`replan_selection_context.${field} must be a boolean`));
+  }
+});
+
 test("action portfolio exposes one recommendation and bounded selectable alternatives", () => {
   const primary = candidate("todo_primary001", "Run the primary slice.", "P0");
   const result = projectQuotaActionPortfolio(request(
@@ -410,6 +460,7 @@ test("retained explicit selection cannot be replaced by a projected default", ()
     disposition: "preserve_retained_todo",
     retained_todo_id: "todo_explicit001",
     projected_todo_id: "todo_explicit001",
+    clear_fields: ["action_portfolio"],
   });
 
   assert.deepEqual(reconcileRetainedActionSelection({
@@ -422,6 +473,7 @@ test("retained explicit selection cannot be replaced by a projected default", ()
     projected_todo_id: "todo_recommended001",
     replan_obligation_id: "replan-0123456789abcdef",
     continuation: "fresh_turn_after_replan_closeout",
+    clear_fields: ["action_portfolio"],
   });
 
   assert.deepEqual(reconcileRetainedActionSelection({

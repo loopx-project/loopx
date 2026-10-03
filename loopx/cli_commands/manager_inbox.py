@@ -173,8 +173,10 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             from ..control_plane.collaboration.peers import read_inbox
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor)
-            result["followthrough"] = (
-                "After reading and deciding, associate Core work with manager-inbox link. Then use manager-inbox report --phase conclusion --reply-text to return this request's concrete result, replan decision, or explicit blocker/defer reason to its original audience automatically. Use optional --phase decision only for meaningful interim news during longer work. Adoption/linking alone is not a completed exchange. Do not wait for the owner to ask again. Write audience-ready text, not private deliberation."
+            result["followthrough"] += (
+                " CLI: record assessment with manager-inbox acknowledge; optionally associate existing work "
+                "with manager-inbox link. Return audience-ready results with manager-inbox report "
+                "--phase conclusion --reply-text; use --phase decision for meaningful interim news."
             )
         elif args.manager_inbox_action == "report":
             from ..capabilities.manager_context.roundtrip import report
@@ -190,7 +192,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 registry=registry_path,
             )
         elif args.manager_inbox_action == "link":
-            from ..capabilities.manager_context.tracking import link
+            from ..control_plane.collaboration.links import link
 
             result = link(
                 runtime_root,

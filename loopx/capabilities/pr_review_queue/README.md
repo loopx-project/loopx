@@ -685,7 +685,12 @@ the gate still requires the public review body to name the observed exact head.
 For check-runs with a reliable workflow/job identity and start time, it evaluates
 only the latest attempt and reports raw and superseded counts; ambiguous rows are
 retained so the gate fails closed. It also rejects missing, pending, failed, or
-unknown effective checks and incomplete or unresolved review threads. An admin
+unknown effective checks and incomplete or unresolved review threads. A branch
+update is not required merely because GitHub reports `BEHIND`: the gate also
+reads GitHub's independent `mergeable` result and permits a conflict-free
+`MERGEABLE` head when every other check passes. `CONFLICTING` or `DIRTY` still
+requires repair; `BEHIND` with missing or unknown mergeability remains unverified.
+Branch protection may still require a separately authorized admin bypass. An admin
 bypass may satisfy GitHub's author-owned
 self-review limitation, but it never overrides this capability gate or supplies
 user merge authority.
@@ -696,7 +701,7 @@ compact public-safe readiness result under the local Goal runtime. It excludes
 review bodies, raw logs, credentials, private payloads, and local paths. Queue
 construction consumes the observation only when every readiness input still
 matches; a changed head, base, review conclusion, CI policy/result, review
-thread, draft flag, merge state, or PR state fails open to a fresh
+thread, draft flag, merge state, mergeability, or PR state fails open to a fresh
 qualification.
 
 They must not include raw logs, private connector payloads, credentials, local

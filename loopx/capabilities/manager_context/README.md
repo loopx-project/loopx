@@ -307,6 +307,13 @@ loopx manager-inbox report --goal-id research --agent-id worker \
   --request-id <id> --phase conclusion --reply-text 'What was assessed or changed, what was validated, and what remains.'
 ```
 
+Each CLI/MCP read includes the recorded receiver decision and fresh Core work
+from explicit request links. `receiver_followthrough` separates assessment,
+accepted work, owed answers and unavailable evidence; it is advice, not a priority
+override. Scoped MCP workers use `link_work` to reuse their current Todo or opaque
+evidence IDs. An unrelated busy worker establishes no request progress, and a
+short answer needs no manufactured Todo. See the [shared collaboration boundary](../../control_plane/collaboration/README.md).
+
 For longer work, `--phase decision` optionally returns a meaningful intermediate
 update. A ready conclusion supersedes an unsent intermediate update. Do not send
 one notification per poll, quote private deliberation, or claim an implementation
@@ -402,6 +409,24 @@ loopx manager-inbox request --goal-id allocation --agent-id builder \
   --peer-agent-id reviewer --operation-id review-round-1 \
   --brief-file review.json --parent-request-id <received-request-id>
 ```
+
+In App and Goal conversations, the existing read tools expose the same bounded
+local observation without shell access: search `view=agents`, then read
+`{"view":"agent_route","goal_id":"allocation","agent_id":"reviewer"}` through
+`loopx_manager_read` or the Goal-scoped `loopx_context_read`. Optional
+`thread_link` carries an exact user-selected task link when bindings remain
+ambiguous. Audience scope is checked before and after the observation. Remote
+sources return `remote_agent_route_not_supported`; they cannot fall back to a
+local host. Ordinary inventory reads do not perform host observation.
+Missing, unreadable or malformed registration sources remain
+`agent_inventory_unavailable` with `unknown=true`, including source loss during
+host observation. Restore the same source and retry; only a complete source can
+establish `peer_not_registered`. Read failure grants no identity or effect authority.
+
+The reader reuses the shared TypeScript route selector and read-only host
+adapter. A resolved locator still reports `host_delivery=not_attempted` and
+`authority=locator_only`: it does not prove executor availability, adoption,
+or grant permission to message, stop or replace an Agent.
 
 When the intended recipient is an existing Codex host task, resolve that peer
 before substituting a temporary child. First inspect `agent-directory` for the
@@ -525,7 +550,7 @@ the normal governed Turn arguments:
 
 Use the Python interpreter with this LoopX checkout/release installed and
 absolute configuration paths. Each server exposes only `read_context`,
-`assess_request`, `request_peer`, `return_result` and `consume_peer_result`.
+`assess_request`, `link_work`, `request_peer`, `return_result` and `consume_peer_result`.
 Identity and filesystem roots are host-bound, absent from model tool arguments;
 every call rechecks the registered actor. The server has no shell, Todo/lease
 writer, credential tools or network listener. Installing/configuring it does not

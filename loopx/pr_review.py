@@ -964,6 +964,7 @@ def _normalize_pr(
         "merge_state": str(
             pr.get("mergeStateStatus") or pr.get("mergeable") or "UNKNOWN"
         ),
+        "mergeability": str(pr.get("mergeable") or "UNKNOWN").upper(),
         "motivation": _motivation(pr),
         "scale": {
             "changed_files": int(pr.get("changedFiles") or len(files) or 0),

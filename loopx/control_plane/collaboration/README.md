@@ -14,7 +14,7 @@ manager's conversation return adapter.
 | Discover collaborators | `control_plane/agents/directory.py`, `agent-directory` | Existing same-Goal directory remains the discovery contract; registration is not presence |
 | Validate semantic requests | `semantic_request.ts` | One typed validator for manager and peer callers |
 | Retain requests, decisions and results | `inbox.py`, `peers.py` | Immutable identity, parent lineage, artifact versions, explicit result consumption |
-| Classify pending receiver receipts | `inbox_receipts.ts` | One bounded read model for CLI/MCP callers; missing, unreadable and conflicting results remain distinct |
+| Classify pending receiver receipts and followthrough | `inbox_receipts.ts`, `links.py` | One bounded typed read model; explicit request links read current Core work, not worker presence or copied progress |
 | Sandboxed Agent access | `loopx/collaboration_mcp.py` | Same tools and identity binding at every coordination level |
 | Source context authorization | `source_grants.ts`, `source_grant_observation.py`, `peer_context.ts` | Typed sender/Goal/recipient rules, provider observations and peer admission; no execution authority |
 | Owner conversation and external audience | `capabilities/manager_context` | Intent extraction, Chat/Lark routing and display; no peer scheduling |
@@ -79,3 +79,25 @@ record lets the existing pump return once to the original conversation; it does
 not grant permission to reassign work or send to a different audience. Native
 file/CLI and real HTTP tests qualify this recovery boundary. Model routing,
 receiver adoption and live external-provider delivery require their own evidence.
+
+Receiver reads retain the recorded decision and `receiver_followthrough` advice:
+assess an undecided request, review accepted linked work, return an answer, or
+recover unavailable evidence. This is advisory context, not scheduler admission
+or a second task lifecycle. `links.py` adapts existing receipts and Core reads;
+`inbox_receipts.ts` owns the shared rule. One page reads each linked Goal once.
+The sender's inspection uses that same link reader. Missing work, changed
+ownership and damaged links remain unknown; they never become inferred progress.
+
+A scoped MCP worker can use `link_work(request_id, todo_ids, evidence_ids)` to
+associate its existing work, just as the trusted CLI uses `manager-inbox link`.
+The host-bound identity, live registration and exact Goal instance remain in
+force. A foreign Todo is rejected; retries preserve the receipt. Linking creates
+no Todo, claim, execution grant or priority override. A short factual answer can
+use assessment and return without a task. An active worker doing unrelated work
+is not evidence that this request has advanced. A done Todo does not certify the
+request's overall outcome; check the actual result before returning it.
+
+Native CLI tests cover both File and SQLite authority; real stdio tests cover
+assessment, fresh linked work, replay, foreign ownership, revocation and direct
+answers. These qualify the tools and context, not autonomous receiver adoption,
+live original-channel delivery, installed App behavior or complete golden queries.
