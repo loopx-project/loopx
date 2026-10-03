@@ -186,6 +186,12 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
             assert (await call("read_context", {}))["items"] == []
             # A short factual answer requires neither a fabricated task nor a link.
             quick = request(root, registry, "goal-a", "agent-b", "agent-a", "short-answer", brief)["request_id"]
+            ref = "sha256:" + "b" * 64
+            await call("link_work", {"request_id": quick, "evidence_ids": [ref]})
+            quick_view = (await call("read_context", {}))["items"][0]["receiver_followthrough"]
+            assert quick_view["evidence_refs"] == [ref]
+            assert quick_view["linked_todos"] == []
+            assert quick_view["step"] == "assess_request"
             await call("assess_request", {"request_id": quick, "decision": "no_change", "reason": "Already satisfied"})
             await call("return_result", {"request_id": quick, "text": "Already satisfied; no new task."})
             config["goals"][0]["coordination"]["registered_agents"] = ["agent-b"]

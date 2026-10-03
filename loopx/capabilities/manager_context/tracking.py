@@ -110,7 +110,7 @@ def query(
     for row in rows[offset : offset + limit]:
         read, read_error = _receipt(root, "reads", row)
         decision, decision_error = _receipt(root, "decisions", row)
-        work = read_linked_work(root, registry_path, row, todos_cache)
+        work = read_linked_work(root, registry_path, row, todos_cache, include_core_details=owner_scope)
         warnings = [x for x in (read_error, decision_error) if x] + work["warnings"]
         item = {
             key: row[key]

@@ -65,7 +65,7 @@ test("batches remain bounded and do not truncate Unicode reply limits", () => {
 
 test("receiver advice keeps assessment, linked work and return distinct", () => {
   const project = (patch: object = {}) => projectReceiverFollowthrough({ observations: [{
-    kind: "pending", recorded_decision: null, linked_todos: [], evidence_unavailable: false, ...patch,
+    kind: "pending", recorded_decision: null, linked_todos: [], evidence_refs: [], evidence_unavailable: false, ...patch,
   }] }).items as Array<Record<string, unknown>>;
   assert.equal(project()[0].step, "assess_request");
   assert.equal(project()[0].assessment_required, true);
@@ -84,6 +84,10 @@ test("receiver advice keeps assessment, linked work and return distinct", () => 
     assert.equal(project({ recorded_decision: decision, kind: "awaiting_conclusion" })[0].step, "return_answer");
   }
   assert.equal(project({ evidence_unavailable: true })[0].step, "recover_evidence");
+  const evidence = "sha256:" + "a".repeat(64);
+  assert.deepEqual(project({ evidence_refs: [evidence] })[0].evidence_refs, [evidence]);
+  assert.throws(() => project({ evidence_refs: ["/private/report"] }), /opaque SHA256/);
+  assert.throws(() => project({ evidence_refs: Array(17).fill(evidence) }), /at most 16/);
   assert.equal(project({ kind: "receipt_unavailable" })[0].step, "recover_evidence");
   assert.throws(() => project({ recorded_decision: "in_progress" }), /unsupported/);
   assert.throws(() => projectReceiverFollowthrough({ observations: Array(21).fill({}) }), /at most 20/);

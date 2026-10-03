@@ -614,6 +614,8 @@ def read_inbox(
     result["followthrough"] = (
         "Use each request's receiver_followthrough to reconcile it with actual Core work. "
         "Record an explicit assessment even when continuing other work; a read is not a decision. "
+        "Integrate accepted work into your existing plan using the normal Goal/Todo workflow; "
+        "if deferring or rejecting it, return the reason and any concrete resume condition. "
         "For adopted work, resume the linked commitment or assess whether this can be answered directly; "
         "do not manufacture a Todo for a short answer. "
         "Independently assess requests and actual input versions before accepting work. "

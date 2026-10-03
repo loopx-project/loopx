@@ -208,6 +208,38 @@ def test_invalid_link_ids_fail_before_core_read_or_receipt(fixture, monkeypatch,
     assert not (_root(root) / "links" / (rid + ".json")).exists()
 
 
+def test_external_handoff_keeps_links_without_reading_receiver_private_work(fixture, monkeypatch):
+    import loopx.control_plane.collaboration.links as links
+
+    root, registry, session, turn, target = fixture
+    channel = "manager.external.one"
+    external = dict(session, channel_id=channel)
+    incoming = dict(turn, origin="lark")
+    _write(_root(root) / "policy.json", {
+        "schema_version": POLICY_SCHEMA,
+        "sources": {channel: {"sender_ids": ["owner"], "targets": [target]}},
+    })
+    register_ingress(root, session_id=external["session_id"],
+                     client_turn_id=turn["client_turn_id"], channel=channel,
+                     sender_id="owner", message=turn["message"], source_id="lark:" + channel)
+    rid = deliver(root, registry, session=external, turn=incoming, request=target)["request_id"]
+    monkeypatch.setattr(links, "list_goal_todos", lambda **_: {
+        "ok": True, "todos": [{"todo_id": "todo_private", "claimed_by": "worker",
+                                "status": "blocked", "text": "Confidential acquisition decision"}],
+    })
+    ref = "sha256:" + "b" * 64
+    link(root, registry, "research", "worker", rid, ["todo_private"], [ref])
+    owner = query(root, registry, goal_ids=["research"], owner_scope=True)["rows"][0]
+    assert owner["linked_todos"][0]["title"] == "Confidential acquisition decision"
+    assert owner["linked_todos"][0]["status"] == "blocked"
+    monkeypatch.setattr(links, "list_goal_todos", lambda **_: pytest.fail("external audience read private Core"))
+    external = query(root, registry, goal_ids=["research"], owner_scope=False,
+                     channel_id=channel)["rows"][0]
+    assert external["linked_todos"] == [{"todo_id": "todo_private"}]
+    assert external["evidence_refs"] == [ref]
+    assert "Confidential acquisition decision" not in json.dumps(external)
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch, provider):
     from tests.control_plane.canonical_authority_fixture import (
@@ -287,6 +319,11 @@ def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch,
         (tid, "Verified current work", "open")
     ]
     assert follow["answer_owed"] is True
+    # Evidence-only linking must survive the next ordinary CLI receiver read.
+    ref = "sha256:" + "c" * 64
+    cli("manager-inbox", "link", *inbox, "--evidence-id", ref)
+    follow = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]["receiver_followthrough"]
+    assert follow["evidence_refs"] == [ref]
     assert state.exists()
 
 
@@ -325,6 +362,11 @@ def test_pagination_and_conflicts_do_not_erase_gaps(fixture):
     )["rows"][0]
     assert row["evidence_refs"] == []
     assert "links_unreadable_or_conflicting" in row["warnings"]
+    from loopx.control_plane.collaboration.peers import read_inbox
+    receiver = next(item for item in read_inbox(root, registry, "research", "worker")["items"]
+                    if item["request_id"] == rid)["receiver_followthrough"]
+    assert receiver["evidence_refs"] == []
+    assert receiver["step"] == "recover_evidence"
     with pytest.raises(ValueError, match="links_unreadable_or_conflicting"):
         link(root, registry, "research", "worker", rid, [], ["sha256:" + "b" * 64])
     assert (

@@ -2,6 +2,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 type Observation =
   | Readonly<{ state: "absent" | "unavailable" }>
@@ -23,6 +24,11 @@ function receiverFollowthrough(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("receiver followthrough needs at most 16 linked Todos");
   }
   const work = linked.map((value) => requireJsonObject(value, "linked Todo"));
+  const refs = params.evidence_refs;
+  if (!Array.isArray(refs) || refs.length > 16 || refs.some(
+    (ref) => typeof ref !== "string" || !ENVELOPED_SHA256_PATTERN.test(ref))) {
+    throw new EffectRuntimeRequestError("receiver evidence references need at most 16 opaque SHA256 identifiers");
+  }
   const evidenceUnavailable = requireBoolean(params.evidence_unavailable, "receiver evidence availability");
   // Only explicit request links can establish its work. A busy Agent, a
   // matching title, and an unrelated rolling review task are not such links.
@@ -36,6 +42,7 @@ function receiverFollowthrough(value: unknown): JsonObject {
     assessment_required: decision === null,
     recorded_decision: decision,
     linked_todos: work,
+    evidence_refs: refs,
     answer_owed: kind !== "settled",
     request_completion: "not_established_by_receipts_or_todo_status",
   };

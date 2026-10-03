@@ -24,10 +24,20 @@ def _core_todos(registry_path, root, goal_id):
     return {r["todo_id"]: r for r in result.get("todos", []) if r.get("todo_id")}
 
 
-def read_linked_work(root, registry_path, item, todos_cache):
+def read_linked_work(root, registry_path, item, todos_cache, *, include_core_details):
     """Read explicit links and current receiver-owned Core facts, never copied progress."""
     links, error = _receipt(root, "links", item)
     tids = links.get("todo_ids", [])
+    if not include_core_details:
+        # An audience-bound handoff grants access to its receipt, not the
+        # receiver's private Core work. Keep references for separately scoped
+        # inspection without reading or projecting private title/status.
+        return {
+            "linked_todos": [{"todo_id": tid} for tid in tids],
+            "evidence_refs": links.get("evidence_ids", []),
+            "warnings": [error] if error else [],
+            "evidence_unavailable": bool(error),
+        }
     gid, aid = item["goal_id"], item["agent_id"]
     goal_ref = item.get("goal_ref")
     cache_key = (gid, (goal_ref or {}).get("goal_instance_id"))
@@ -70,11 +80,12 @@ def receiver_followthrough(root, registry_path, items):
     """
     todos_cache, observations = {}, []
     for item in items:
-        work = read_linked_work(root, registry_path, item, todos_cache)
+        work = read_linked_work(root, registry_path, item, todos_cache, include_core_details=True)
         observations.append({
             "kind": item["inbox_state"],
             "recorded_decision": item["recorded_decision"],
             "linked_todos": work["linked_todos"],
+            "evidence_refs": work["evidence_refs"],
             "evidence_unavailable": work["evidence_unavailable"],
         })
         if work["warnings"]:
