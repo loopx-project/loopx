@@ -307,6 +307,15 @@ projection with synthetic receiver results. This closes a saved-answer
 presentation gap; external-conversation selection, native adoption/correction
 and the two real collaboration cycles remain separate acceptance work.
 
+Returned web destinations must be usable in the conversation and its saved
+answer, even when the receiver supplies a plain HTTP(S) URL rather than a named
+Markdown link. Reuse the shared safe prose renderer for Steward, Goal Chat and
+artifacts. Preserve query strings and balanced path punctuation; separate CJK
+prose punctuation from bare destinations. Code stays literal, HTML stays inert,
+and email or unqualified domains are not inferred as destinations. Opening a
+link preserves the original conversation and does not rerun work. This is a
+presentation boundary, not evidence that an external artifact is adopted.
+
 Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
 recovery, GoalRef and late-return changes. Shared TS refactors accompany the
 affected transaction; full migration, Lark visual parity, scale and promotional

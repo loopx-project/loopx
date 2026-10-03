@@ -64,6 +64,9 @@ try {
   await page.getByText("Earlier public report", { exact: true }).waitFor({ state: "visible" });
   await command("result");
   await page.getByText("First checked result", { exact: true }).waitFor({ state: "visible", timeout: 12_000 });
+  const firstLink = page.locator('a[href="https://example.org/forms/result"]');
+  assert.equal(await firstLink.count(), 1, "A real stored return exposes its plain destination");
+  assert.equal(await firstLink.getAttribute("target"), "_blank");
   await page.waitForTimeout(3500);
   const oldReadCount = () => reads.filter(row => row.path === "/api/chat/sessions/old").length;
   const settledReads = oldReadCount();
@@ -82,6 +85,8 @@ try {
   await page.getByText("Revised checked result", { exact: true }).waitFor({ state: "visible" });
   assert.equal(await page.getByText("First checked result", { exact: true }).count(), 1);
   assert.equal(await page.getByText("Revised checked result", { exact: true }).count(), 1);
+  assert.equal(await page.locator('a[href="https://example.org/forms/revision"]').count(), 1,
+    "A recovered revision retains its own usable destination");
   assert.equal(await page.getByText("Current public report", { exact: true }).count(), 1);
   assert.equal(api.turnRequests.length, 0);
   assert.deepEqual(await command("inspect"), { store_unchanged: true, turn_count: 0 });
