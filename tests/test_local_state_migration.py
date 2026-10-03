@@ -159,6 +159,29 @@ def test_reparse_point_observations_are_not_ignored(tmp_path, monkeypatch, relat
     assert paths.configured_runtime_route(runtime_root_override=str(redirected))["status"] == "invalid"
 
 
+@pytest.mark.parametrize("relative", ["registry.global.json.lock",
+                                      "registry.global.json.ts-effect.lock"])
+def test_own_registry_locks_do_not_declare_a_second_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str,
+) -> None:
+    """A route must not read its own write-locks back as machine state.
+
+    Goal configuration locks every candidate runtime registry before writing,
+    and the native effect runtime locks the same file too. On a fresh machine
+    those locks are the only entries in the untouched legacy root, so treating
+    them as state made the first configured Goal fail as a two-root conflict.
+    """
+
+    source, target = tmp_path / "home" / ".codex" / "loopx", tmp_path / "home" / ".loopx"
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    for root in (source, target):
+        root.mkdir(parents=True)
+        (root / relative).touch()
+    assert paths.default_runtime_route()["status"] == "fresh"
+    assert paths.select_default_runtime_root() == target
+
+
 def test_global_service_selector_keeps_a_registered_route_amid_real_conflict(tmp_path, monkeypatch):
     from loopx.cli_commands.support_control_registry import explicit_global_registry
     source, target, projects = _fixture(tmp_path, projects=1)

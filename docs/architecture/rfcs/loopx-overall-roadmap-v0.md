@@ -644,6 +644,20 @@ Current status is design proposal; no G1 or default-screen promotion.
 
 ### R3: Semantic Requests and Automatic Return
 
+**S1/S5 attention checkpoint.** Local steward/Goal Turns now receive canonical
+blocker and concrete owner-request facts without a Lark connection. The shared
+TS read model coalesces one Todo's blocker/decision; common content adapters and
+blocker collection serve local intake and external transport. This closes a
+Turn-preparation evidence gap. Existing external sends now use configured,
+restricted steward synthesis, with saved-body retries and same-blocker coverage.
+This does not close local proactive presentation or G1/G2 acceptance.
+Presentation Stage 2 and the [Goal Channel contract](goal-channel-collaboration-v0.md#local-steward-intake-and-optional-channel-delivery)
+retain material-delta admission, existing-budget wake, semantic synthesis,
+presented/read/recovery receipts and independently authorized sink delivery.
+Qualify one no-channel blocker/fallback/owner-decision/recovery journey through
+the original packaged conversation before claiming smart automatic notices.
+
+
 - **Owner:** manager RFC M2/M3; migrate existing `manager_context` request/tracking/return into one typed collaboration transaction, incorporating the #4094 adapter.
 - **Delivery:** preserve purpose, decisions, constraints, evidence references and expected return. Receivers independently adopt/defer/reject/replan. Accepted work, committed result and delivered answer are separate facts; existing outbox provides automatic return.
 - **Exit:** actual manager→worker and worker→worker callers; follow-up messages, lost source session, oversized answer, duplicate callback, successful send with lost ACK and transport restart. CLI, packaged frontend and Lark read back the same result with audience isolation. Ordinary already-authorized work gains no second confirmation.

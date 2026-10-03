@@ -16,7 +16,8 @@ manager's conversation return adapter.
 | Retain requests, decisions and results | `inbox.py`, `peers.py` | Immutable identity, parent lineage, artifact versions, explicit result consumption |
 | Classify pending receiver receipts | `inbox_receipts.ts` | One bounded read model for CLI/MCP callers; missing, unreadable and conflicting results remain distinct |
 | Sandboxed Agent access | `loopx/collaboration_mcp.py` | Same tools and identity binding at every coordination level |
-| Owner conversation and external audience | `capabilities/manager_context` | Intent extraction, ingress grants, Chat/Lark routing and display; no peer scheduling |
+| Source context authorization | `source_grants.ts`, `source_grant_observation.py`, `peer_context.ts` | Typed sender/Goal/recipient rules, provider observations and peer admission; no execution authority |
+| Owner conversation and external audience | `capabilities/manager_context` | Intent extraction, Chat/Lark routing and display; no peer scheduling |
 
 The existing `manager-context` capability lifecycle, `manager-inbox` CLI and
 `.local/manager-context` record address are retained for compatibility. They do
@@ -28,8 +29,25 @@ new capability registration or speculative workflow engine is introduced.
 Parent lineage retains root semantic context without recursively copying the
 entire ancestor transcript. Immediate request ids keep each return unambiguous;
 brief authors must preserve decision-relevant intermediate constraints. A parent
-reference proves which request was received, not authority inheritance. Local
-peer forwarding of external-audience parent requests is rejected.
+reference proves which request was received, not authority inheritance.
+External-source context may be forwarded only to recipients already allowed by
+that source's current sender-bound grant. Each hop follows immutable parent
+references back to the original provider ingress and Chat route, then the shared
+TypeScript admission rule checks source identity and every recipient in that
+lineage. Missing provenance or revoked grants reject the send before a peer
+operation is stored. Private owner conversations retain their existing scope;
+independent local peer requests do not gain an external audience or work rights.
+
+`peer_context_observation.py` reads parent records and trusted source routes;
+`peer_context.ts` decides peer context admission. The existing provider-specific
+ingress and policy reader lives in `source_grant_observation.py`; the Chat
+capability retains its public `authority` API and supplies its own instruction.
+This removes a dependency from shared coordination to a product adapter without
+introducing a second policy writer or migrating existing records. The typed
+`source_grants.ts` owner resolves exact recipients and managed Goal targets;
+Goal grants include future registered Agents while explicit recipient exclusions
+remain effective. The existing operator configuration path delegates changes to
+that same owner. Read grants and executor permissions do not imply delegation.
 
 `inbox.py` adapts the existing private file stores; typed request validation stays
 in TypeScript. This does not promote a canonical shared-authority backend. General

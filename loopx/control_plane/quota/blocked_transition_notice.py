@@ -154,6 +154,7 @@ def build_blocked_transition_notice(
     item: Mapping[str, Any],
     *,
     selected_executable: Mapping[str, Any] | None = None,
+    fallback_assessed: bool = True,
 ) -> dict[str, Any] | None:
     """Build the typed first-transition notice for one blocked Todo.
 
@@ -219,6 +220,8 @@ the reason stays a thin caller instead of growing a second copy of the rules.
             else " No executable fallback is selected, so no agent work advances."
         )
     )
+    if not fallback_assessed:
+        impact = f"'{text}' waits for {recovery}. Execution and fallback availability have not been assessed."
     superseded_by = _compact(item.get("superseded_by"), limit=120)
 
     notice: dict[str, Any] = {
@@ -258,6 +261,11 @@ the reason stays a thin caller instead of growing a second copy of the rules.
             "readback_verified_at": None,
         },
     }
+    if not fallback_assessed and not owner_must_act:
+        notice["next_action"] = (
+            "No owner action is required by this blocker. The agent should assess "
+            "independent work while waiting for the recovery condition."
+        )
     notice["blocker_revision"] = _digest(
         {
             "blocker_identity": identity,
@@ -317,3 +325,47 @@ def blocked_priority_fallback_owner_reason(fallback: Mapping[str, Any]) -> str |
                 return reason
     prose = str(fallback.get("reason") or "").strip()
     return prose or None
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def collect_blocked_transition_notices(
+    status: Mapping[str, Any], goal_id: str, quota_packet: Mapping[str, Any],
+    *, fallback_assessed: bool = True,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Collect canonical blockers; shared by local attention and Lark delivery."""
+    fallback = _mapping(quota_packet.get("blocked_priority_fallback"))
+    selected = _mapping(fallback.get("selected_executable"))
+    notices = {
+        str(value["blocker_identity"]): dict(value)
+        for value in fallback.get("blocked_transition_notices", [])
+        if isinstance(value, Mapping)
+        and value.get("blocker_identity") and value.get("blocker_revision")
+        and not value.get("superseded_by")
+    }
+    observed: dict[str, dict[str, Any]] = {}
+    queue = _mapping(status.get("attention_queue"))
+    for goal in queue.get("items", []):
+        if not isinstance(goal, Mapping) or str(goal.get("goal_id") or "") != goal_id:
+            continue
+        for lane in ("agent_todos", "user_todos"):
+            group = _mapping(goal.get(lane))
+            for item in group.get("items", []):
+                if not isinstance(item, Mapping):
+                    continue
+                identity = blocked_transition_notice_identity(item)
+                if identity is None:
+                    continue
+                observed[identity] = dict(item)
+                notice = build_blocked_transition_notice(
+                    item, selected_executable=selected or None,
+                    fallback_assessed=fallback_assessed,
+                )
+                # Explicit canonical rows supersede an older quota projection.
+                if notice is not None and not notice.get("superseded_by"):
+                    notices[identity] = notice
+                else:
+                    notices.pop(identity, None)
+    return list(notices.values()), observed

@@ -25,7 +25,7 @@ from .inbox import (
     _write,
     normalize_request,
 )
-from . import conversation_scope
+from .peer_context_observation import require_parent_context_access
 from .goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
@@ -125,22 +125,9 @@ def request(
                 parent_request_id,
                 scope=goal_scope,
             )
-            if parent.get("source_kind") != "peer":
-                audience_scope = conversation_scope(
-                    {
-                        "channel_id": parent.get("source_channel"),
-                        "goal_id": goal_id,
-                    },
-                    origin=(
-                        "web"
-                        if str(parent.get("source_id", "")).startswith("web:")
-                        else "unknown"
-                    ),
-                )
-                if not audience_scope["private_conversation"]:
-                    raise ValueError(
-                        "external-audience requests cannot be forwarded to peers"
-                    )
+            require_parent_context_access(
+                root, registry, parent, target_agent_id, scope=goal_scope
+            )
             inherited = parent.get("inherited_context") or {
                 "request_id": parent_request_id,
                 "message": parent["message"],

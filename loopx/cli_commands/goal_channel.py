@@ -752,6 +752,8 @@ def handle_goal_channel_command(
                                 agent_id=args.agent_id,
                             ),
                             execute=execute,
+                            registry_path=source_registry_path,
+                            runtime_root=runtime_root,
                         )
                     else:
                         raise ValueError(f"unknown goal-channel command: {command}")

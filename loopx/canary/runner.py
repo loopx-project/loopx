@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
+from ..extensions.process_runtime import terminate_process_tree
 from .planner import REPO_ROOT, build_catalog_canary_plan, flatten_catalog_canary_checks
 from .smoke_profiles import list_smoke_suite_profiles, resolve_smoke_suite_profiles
 
@@ -284,12 +285,23 @@ def _run_check(
             ):
                 env[name] = str(home / directory)
             try:
-                completed = subprocess.run(
+                with subprocess.Popen(
                     normalized["argv"], cwd=REPO_ROOT, env=env,
                     text=True, encoding="utf-8", errors="replace",
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    timeout=timeout_seconds, check=False,
-                )
+                    start_new_session=os.name == "posix",
+                ) as process:
+                    try:
+                        stdout, stderr = process.communicate(timeout=timeout_seconds)
+                    except BaseException:
+                        # Deadline/cancellation must stop the owned children
+                        # before deleting their fixture, even after leader exit.
+                        # Reuse OS transport; keep the caller's existing budget.
+                        terminate_process_tree(process, grace_seconds=0)
+                        raise
+                    completed = subprocess.CompletedProcess(
+                        normalized["argv"], process.returncode, stdout, stderr,
+                    )
             finally:
                 # Each fixture owns its Effect process as well as its data.
                 # Use the existing shutdown owner in the same temporary scope.

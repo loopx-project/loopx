@@ -11,7 +11,7 @@ from .goal_channel_contracts import (
     clear_blocked_notice_auto_notify_marker,
     write_blocked_notice_auto_notify_marker,
     clear_human_gate_auto_notify_marker,
-    gate_message,
+    _gate_notice_projection,
     goal_from_registry,
     goal_objective,
     human_gate_auto_notify_enabled,
@@ -30,6 +30,10 @@ from .goal_channel_contracts import (
     semantic_key,
     write_human_gate_auto_notify_marker,
 )
+from ...capabilities.manager_context.goal_notice import NoticeSynthesizer
+from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...control_plane.quota.blocked_transition_notice import collect_blocked_transition_notices
+from .goal_channel_notice import render_channel_notice
 from .identity_shapes import (
     LARK_CHAT_ID_SEARCH as CHAT_ID_PATTERN,
     LARK_MESSAGE_ID_SEARCH as MESSAGE_ID_PATTERN,
@@ -204,6 +208,10 @@ def auto_notify_lark_goal_channel_gate(
     external_sink_delivery_authorized: bool,
     runner: CommandRunner = default_subprocess_runner,
     admit_delivery: Callable[[], None] | None = None,
+    registry_path: Path | None = None,
+    runtime_root: Path | None = None,
+    synthesizer: NoticeSynthesizer | None = None,
+    before_receipt_write: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     goal_from_registry(registry, goal_id)
     payload = read_goal_channel_binding(binding_path)
@@ -240,6 +248,8 @@ def auto_notify_lark_goal_channel_gate(
         execute=True,
         runner=runner,
         admit_delivery=admit_delivery,
+        registry_path=registry_path, runtime_root=runtime_root, synthesizer=synthesizer,
+        before_receipt_write=before_receipt_write,
     )
     result["notification"] = notification
     blocker = str(notification.get("blocker") or "")
@@ -536,6 +546,10 @@ def notify_lark_goal_channel_gate(
     execute: bool = False,
     runner: CommandRunner = default_subprocess_runner,
     admit_delivery: Callable[[], None] | None = None,
+    registry_path: Path | None = None,
+    runtime_root: Path | None = None,
+    synthesizer: NoticeSynthesizer | None = None,
+    before_receipt_write: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     goal = goal_from_registry(registry, goal_id)
     payload = read_goal_channel_binding(binding_path)
@@ -609,12 +623,21 @@ def notify_lark_goal_channel_gate(
     cli_bin = str(identity_config.get("cli_bin") or DEFAULT_CLI_BIN)
     identity = str(identity_config.get("sender_identity") or "")
     profile = str(identity_config.get("sender_profile") or "") or None
-    message, question = gate_message(
-        goal_id=goal_id,
-        objective=goal_objective(goal),
-        quota_packet=quota_packet,
-        kanban_url=str(kanban.get("base_url") or ""),
-    )
+    question = public_safe_compact_text(quota_packet.get("gate_prompt")
+        or quota_packet.get("operator_question") or quota_packet.get("reason")
+        or "A human decision is required.", limit=900)
+    facts = {"goal_id": goal_id,
+        "objective": public_safe_compact_text(goal_objective(goal), limit=500),
+        "decision_notice": _gate_notice_projection(goal_id=goal_id, quota_packet=quota_packet),
+        "continuation": quota_packet.get("blocked_priority_fallback") or {},
+        "kanban_url": str(kanban.get("base_url") or "")}
+    requests = (quota_packet.get("request_snapshot") or {}).get("items", [])
+    blockers, _ = collect_blocked_transition_notices({"attention_queue": {"items": [{
+        "goal_id": goal_id, "user_todos": {"items": requests}}]}}, goal_id, quota_packet,
+        fallback_assessed=bool(quota_packet.get("blocked_priority_fallback")))
+    request_ids = {r["request_id"] for r in facts["decision_notice"]["items"]}
+    facts["blockers"] = [b for b in blockers if b["task"]["todo_id"] in request_ids]
+    covered_blockers = {b["blocker_identity"]: b["blocker_revision"] for b in facts["blockers"]}
     gate_identity = quota_human_gate_identity(quota_packet)
     state_generation = quota_human_gate_state_generation(quota_packet)
     reminder_generation = quota_human_gate_reminder_generation(quota_packet)
@@ -631,7 +654,7 @@ def notify_lark_goal_channel_gate(
     )
     receipts = _mapping(binding.get("receipts"))
     existing_receipt = _mapping(receipts.get(key))
-    if existing_receipt:
+    if existing_receipt and existing_receipt.get("message_id"):
         return operation_packet(
             ok=True,
             goal_id=goal_id,
@@ -669,6 +692,7 @@ def notify_lark_goal_channel_gate(
         for receipt in receipts.values()
         if isinstance(receipt, Mapping)
         and receipt.get("kind") == "gate_notification"
+        and receipt.get("message_id")
         and str(receipt.get("gate_identity") or "") == gate_identity
         and str(receipt.get("target_generation") or "") == target_generation
     ]
@@ -748,6 +772,38 @@ def notify_lark_goal_channel_gate(
             public_summary="the configured Lark channel is not reachable by the sender",
             idempotency_key=key,
         )
+    try:
+        message = render_channel_notice(
+            cached_text=existing_receipt.get("delivery_text"),
+            facts=facts, synthesizer=synthesizer,
+            registry_path=registry_path, runtime_root=runtime_root,
+            binding_path=binding_path, goal_id=goal_id, chat_id=chat_id,
+            provider_target=provider_target,
+        )
+    except (ValueError, RuntimeError, OSError, TimeoutError):
+        receipts[key] = {**existing_receipt, "kind": "gate_notification", "gate_identity": gate_identity,
+            "target_generation": target_generation, "state_generation": state_generation,
+            "delivery_generation": delivery_generation, "readback_verified": False,
+            "failure_code": "steward_notice_unavailable"}
+        if before_receipt_write is not None:
+            before_receipt_write()
+        save_goal_binding(binding_path=binding_path, payload=payload, goal_id=goal_id,
+                          binding={**raw_binding, "receipts": receipts})
+        return operation_packet(ok=False, goal_id=goal_id, operation="notify_gate",
+            execute=True, status="blocked", blocker="steward_notice_unavailable",
+            public_summary="the steward could not prepare a current notification; retry after recovery",
+            idempotency_key=key)
+    # Keep the generated body with the existing effect receipt before transport.
+    # Provider retries use identical text under the same idempotency key.
+    receipts[key] = {"kind": "gate_notification", "gate_identity": gate_identity,
+        "target_generation": target_generation, "state_generation": state_generation,
+        "delivery_generation": delivery_generation, "delivery_text": message,
+        "covered_blockers": covered_blockers,
+        "readback_verified": False}
+    if before_receipt_write is not None:
+        before_receipt_write()
+    save_goal_binding(binding_path=binding_path, payload=payload, goal_id=goal_id,
+                      binding={**raw_binding, "receipts": receipts})
     send = call(
         runner,
         lark_args(
@@ -799,6 +855,8 @@ def notify_lark_goal_channel_gate(
     mutable_receipts = dict(receipts)
     mutable_receipts[key] = {
         "kind": "gate_notification",
+        "delivery_text": message,
+        "covered_blockers": covered_blockers,
         "gate_identity": gate_identity,
         "target_generation": target_generation,
         "state_generation": state_generation,

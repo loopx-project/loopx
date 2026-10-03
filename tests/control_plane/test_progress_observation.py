@@ -242,6 +242,45 @@ def test_repeated_blocker_cannot_close_replan() -> None:
     ]
 
 
+@pytest.mark.parametrize("history_source", ["coverage", "window", "trigger_window"])
+@pytest.mark.parametrize("evidence_id", ["evidence-route-map", "evidence-readback"])
+def test_known_blocker_does_not_become_new_under_another_work_item(
+    history_source: str, evidence_id: str,
+) -> None:
+    prior = normalize_progress_observation(
+        _observation(result_class="blocked", blocker_id="blocker-permission")
+    )
+    obligation = {
+        "obligation_id": "replan-0123456789abcdef",
+        "triggers": [{"kind": "vision_acceptance_gap"}],
+    }
+    if history_source == "coverage":
+        obligation["replan_context"] = build_replan_context(
+            obligation, goal_id="goal-fixture", agent_id=AGENT_ID,
+            newest_first_runs=[_run("2026-08-13T01:00:00Z", prior)],
+        )
+    elif history_source == "window":
+        obligation["progress_window"] = [prior]
+    else:
+        obligation["triggers"][0]["progress_window"] = [prior]
+    current = normalize_progress_observation(_observation(
+        result_class="blocked", blocker_id="blocker-permission",
+        work_item_id="replan-0123456789abcdef", evidence_ids=[evidence_id],
+    ))
+    result = semantic_delta_from_writeback(
+        obligation=obligation, progress_observation=current,
+    )
+    assert result["accepted"] is False
+    assert "new_concrete_blocker" not in result["satisfying_outcomes"]
+
+    # A genuinely different blocker can be established by the same evidence.
+    novel = semantic_delta_from_writeback(
+        obligation=obligation,
+        progress_observation={**current, "blocker_id": "blocker-runtime"},
+    )
+    assert novel["satisfying_outcomes"] == ["new_concrete_blocker"]
+
+
 def test_exhaustion_requires_coverage_proof() -> None:
     incomplete = normalize_progress_observation(
         _observation(
