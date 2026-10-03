@@ -92,6 +92,17 @@ execution, live Lark, frontend journey completion or the remaining M1–M4 work.
 
 ## 4. Current-system contract: audited facts
 
+The review command now projects the exact invoking Codex session's recorded
+model/provider/effort into its existing result template and rereads the metadata
+before publication checking. `control_plane/runtime/execution_identity.ts` owns
+bounded metadata projection and declaration matching; the Python Codex adapter
+only locates the exact thread in the selected home through a read-only store.
+Unknown metadata stays explicit, configuration is not execution evidence, and
+public review text contains no host locator or transcript. This is a GQ03/GQ12
+attribution prerequisite, not evidence of independent review, App adoption,
+receiver execution or R2/G1 completion. Other host adapters and the installed
+conversation journey remain with those existing acceptance owners.
+
 The baseline already has substantial reusable machinery:
 
 | Existing owner | Source / fact | Consequence |
