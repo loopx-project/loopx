@@ -67,6 +67,23 @@ requests with the same title remain distinguishable; a replay sends no second
 notice. Bound oversized content explicitly and preserve redaction. A notification
 is a preview, not proof of approval, execution or a fresh authorization grant.
 
+### A working receiver still owes this request / 负责人正在工作，仍需接续这条请求
+
+“回复一下这个 issue。” / “Reply to this issue.” For GQ03/GQ07/GQ09, prepare
+an ordinary public issue and a qualified receiver already doing unrelated review.
+Delivery and read must not pass the test. Require an independent assessment,
+reuse an explicitly linked existing task when needed, inspect current facts,
+post the authorized checked reply and return its link to the original request.
+A short answer requires no invented Todo. A deferral names its actual condition
+and continuation; a monitor responsibility or worker activity is not a task result.
+
+Mutate a linked Todo after assessment and require fresh readback. Reject a
+foreign owner's link; retain damaged/missing evidence as unknown without replaying
+work. Repeat an already-satisfied request and verify facts before deciding whether
+new work is needed. Shared CLI/MCP regression tests qualify these seams only;
+release-only live evaluation must still prove receiver adoption and the original
+App/channel result without human reminders or manual relay.
+
 ### Direct group conversation / 群里直接说话
 
 For the Lark variant of P0 reliable entry, configure the steward connection to

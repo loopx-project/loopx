@@ -248,7 +248,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | S3 | 已接受；Stage 1/2，完整 intent/commit 未闭合 | P1：R4 一个 work-graph amendment class；CAS/lease impact、冲突及丢响应回执 |
 | [Goal Direction Baseline (v0)](goal-direction-baseline-v0.zh-CN.md) | S3/S6 | 已接受；只读设计 | P1：合成 fixture 验同 Agent/current revision 的材料阅读；不写 Vision、不自动建 Todo |
 | [Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | S3/S5 | 已接受；只读设计 | P1：从现有 typed facts 显示 milestone/guard/next transition；不加流程引擎 |
-| [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.zh-CN.md) | S1/S3 | 已接受；profile/intake 局部交付，M1–M4 未完整验收 | P0→P1：R1/R2 真实团队，R3 语义 peer 协作与持久回报；接续矩阵及 A1–A20 |
+| [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.zh-CN.md) | S1/S3 | 已接受；共享请求评估/Core 链接上下文与沙盒关联工作已验证，M1–M4 未完整验收 | P0→P1：R1/R2 真实团队及 R3 验证接收方采用、实际工作与原路回传；接续矩阵及 A1–A20 |
 | [Manager runtime profile v0](manager-runtime-profile-v0.zh-CN.md) | S1/S4 | 已接受；private Codex profile 已有，通用资格未完成 | P0：真实工具/会话/恢复与权限分级；runtime label 不代替资格 |
 | [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.zh-CN.md) | S4 | 持续选型记录；局部 runtime 与 team card 证据 | P0：沿已合格 binding 验 R2；按 harness/model/profile/host 记录资格，不据一次 smoke 统一晋级 |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.zh-CN.md) | S3/S6 | Stage A 已交付；文件名不代表通用 memory substrate | P1：R3 复用 prepare/inspect/adopt；同机无 lease 限制保留至新接续路径验收 |

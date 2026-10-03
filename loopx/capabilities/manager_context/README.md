@@ -307,6 +307,13 @@ loopx manager-inbox report --goal-id research --agent-id worker \
   --request-id <id> --phase conclusion --reply-text 'What was assessed or changed, what was validated, and what remains.'
 ```
 
+Each CLI/MCP read includes the recorded receiver decision and fresh Core work
+from explicit request links. `receiver_followthrough` separates assessment,
+accepted work, owed answers and unavailable evidence; it is advice, not a priority
+override. Scoped MCP workers use `link_work` to reuse their current Todo or opaque
+evidence IDs. An unrelated busy worker establishes no request progress, and a
+short answer needs no manufactured Todo. See the [shared collaboration boundary](../../control_plane/collaboration/README.md).
+
 For longer work, `--phase decision` optionally returns a meaningful intermediate
 update. A ready conclusion supersedes an unsent intermediate update. Do not send
 one notification per poll, quote private deliberation, or claim an implementation
@@ -525,7 +532,7 @@ the normal governed Turn arguments:
 
 Use the Python interpreter with this LoopX checkout/release installed and
 absolute configuration paths. Each server exposes only `read_context`,
-`assess_request`, `request_peer`, `return_result` and `consume_peer_result`.
+`assess_request`, `link_work`, `request_peer`, `return_result` and `consume_peer_result`.
 Identity and filesystem roots are host-bound, absent from model tool arguments;
 every call rechecks the registered actor. The server has no shell, Todo/lease
 writer, credential tools or network listener. Installing/configuring it does not

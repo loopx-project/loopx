@@ -271,6 +271,16 @@ The user-facing exchange is **received → assessed/working → result**, with m
 | Work resolved | Result satisfies the request's completion question, or an explicit rejection/cancellation/terminal inability |
 | Answer delivered | Provider receipt/readback for the original route and answer revision; distinct from resolution |
 
+**Receiver followthrough checkpoint.** Shared CLI/MCP reads now retain each
+request's recorded assessment and fresh explicitly linked Core work, with typed
+advice for assessment, work review, answer return or evidence recovery. Scoped
+workers can link existing work through `link_work`; the Python link adapter is
+shared collaboration code rather than a manager-only owner. Busy unrelated work,
+read receipts and completed linked Todos do not certify the request outcome.
+File/SQLite CLI and real stdio tests qualify this context/tool slice. Receiver
+adoption, actual effects and original-route return remain separate acceptance;
+keep G0/G1 open until the installed ordinary journey proves them.
+
 Migrate current inbox/tracking/roundtrip records into the single collaboration owner; preserve their valid effect semantics and receipts, but retire duplicate manager-specific transition logic after cutover. Persist intent before dispatch; use request revision plus effect identity for idempotency. A changed payload cannot reuse an immutable identity; a correction appends a linked revision and the receiver rechecks relevant state before effectful execution. Multiple messages about one job may be explicitly related by the manager, preserving each original obligation and correction. Do not merge independent same-text requests by a content hash alone.
 
 At-least-once delivery with idempotent Core effects is the target. Do not promise exactly-once external effects: uncertain sends are reconciled using provider receipts before retry. Concurrent workers use existing claims/leases; delegation does not claim the worker's Todo. Cross-host operation uses configured transport and authority, not a bare local path copied to another machine.
