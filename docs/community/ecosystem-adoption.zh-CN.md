@@ -94,6 +94,15 @@
 
 ## 3. 提案与暂缓采用
 
+- **MilkSU**——[issue #189](https://github.com/MilkSU-Official/milksu/issues/189)
+  评估接入 LoopX、借鉴持久 Goal/状态/重试机制，或保留现有 ACP 方案。
+  **状态：开放设计评估**，尚非已接受或已实现的集成。核对于 2026 年 10 月 3 日。
+- **ai-skills**——[issue #468](https://github.com/MichaelHeaton/ai-skills/issues/468)
+  提议借鉴 LoopX 的 quota 门控、冷却与自唤醒检查，不引入 LoopX 运行时依赖。
+  [9 月 23 日后续评论](https://github.com/MichaelHeaton/ai-skills/issues/468#issuecomment-5796952500)
+  因 `/loop` 是内置命令，将 hook 或上游支持留作后续设计。
+  **状态：历史开放提案**，不是已交付的 Skill 或运行时采用。
+  核对于 2026 年 10 月 3 日。
 - **OpenViking / VikingBot**——开放的
   [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) 提议增加可选、
   默认关闭的 LoopX 后台长任务。LoopX 管 Goal/Todo 状态与执行门禁，Bot 提供
@@ -147,6 +156,16 @@
 
 ## 4. 学习、传播与合作
 
+- **General Loop**——[固定版本的 README 对比](https://github.com/CosmosShadow/general-loop/blob/0bd8fb3b5b5c2e8e02b35e627ad715cade23bba0/README.md)
+  将 LoopX 控制面协议与现有 Agent 宿主上的 Markdown 协调方式并列。
+  **状态：比较引用**；提及本身不证明 LoopX 依赖或机制采用。
+  核对于 2026 年 10 月 3 日。
+- **GitHub-Michelin**——已合并的
+  [PR #128](https://github.com/ZhenningLang/GitHub-Michelin/pull/128) 增加双语
+  [LoopX 编辑条目](https://github.com/ZhenningLang/GitHub-Michelin/blob/a75520b79cff3d9818ab6b60100677b93beaef81/categories/agent-tooling/work-state/loopx.md)。
+  **状态：编辑内容收录**，不是运行时采用。条目中 9 月 27 日的评述和快照属于
+  编辑当时的观察，不是对 LoopX 当前行为的实时资格验证。
+  核对于 2026 年 10 月 3 日。
 - **《深入理解 AI Agent》/ ai-agent-book**（bojieli）——已合并的
   [PR #614](https://github.com/bojieli/ai-agent-book/pull/614) 将 LoopX 引入为具体的
   Loop Engineering 框架；[第 10 章](https://github.com/bojieli/ai-agent-book/blob/main/book/chapter10.md)
@@ -163,6 +182,14 @@
 
 ## 5. 衍生实现
 
+- **michaelx1993/loopx → foolzzz/loopx**——同一相关 fork 家族，不计为两个独立采用者。
+  [下游 Changelog](https://github.com/foolzzz/loopx/blob/6c16e4a06797f2b0a81a53827e7fd8082913b36d/CHANGELOG.md)
+  记录了与上游分叉及角色式编排。已合并的
+  [michaelx1993 PR #27](https://github.com/michaelx1993/loopx/pull/27)
+  引入确定性的记账与有界编排摘要；已合并的
+  [foolzzz PR #18](https://github.com/foolzzz/loopx/pull/18) 为该 fork 准备 2.0.0 版本。
+  **状态：下游代码已合并**；这些是 fork 的变更，不是上游 LoopX 发布或独立验证的
+  性能增益。核对于 2026 年 10 月 3 日。
 - **loopx-HPC**（Sande33p）——独立 fork 内的
   [PR #1](https://github.com/Sande33p/loopx-HPC/pull/1) 已合并，增加可选 scientific
   campaign、PBS/Slurm 和 MLflow 集成。**状态：下游代码已合并**；作者明确说明
@@ -192,3 +219,6 @@
   9 月 19 日刷新。
 - 局部更新：**2026-09-30**，覆盖上述 CGC 2046、NoKV 资格验证工具、VikingBot
   提案及已停止的 Opensiro 研究。其余条目沿用此前的核对边界，不代表全表重新验真。
+- 局部更新：**2026-10-03**，覆盖 MilkSU、ai-skills、General Loop、GitHub-Michelin
+  及 michaelx1993/foolzzz fork 家族。核对了当前 Issue/PR 状态、后续评论和固定版本
+  的源文件；本轮未新增可确认的运行时采用者，也不代表其余条目重新验真。

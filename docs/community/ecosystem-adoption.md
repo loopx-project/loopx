@@ -107,6 +107,17 @@ accepted design documents are distinct from depending on the LoopX runtime.
 
 ## 3. Proposals and Deferred Adoption
 
+- **MilkSU** — [issue #189](https://github.com/MilkSU-Official/milksu/issues/189)
+  asks whether to adopt LoopX, borrow its durable Goal/state/retry ideas, or
+  retain the existing ACP approach. **Status: open design evaluation**, not an
+  accepted integration or implementation. Checked October 3, 2026.
+- **ai-skills** — [issue #468](https://github.com/MichaelHeaton/ai-skills/issues/468)
+  proposes LoopX-inspired quota-gated cooldown and self-wake checks without a
+  LoopX runtime dependency. The
+  [September 23 follow-up](https://github.com/MichaelHeaton/ai-skills/issues/468#issuecomment-5796952500)
+  leaves hook/upstream design work open because `/loop` is a built-in command.
+  **Status: historical open proposal**, not a shipped skill or runtime adoption.
+  Checked October 3, 2026.
 - **OpenViking / VikingBot** — open
   [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) proposes
   optional, default-off LoopX-backed background long tasks. LoopX owns
@@ -169,6 +180,17 @@ accepted design documents are distinct from depending on the LoopX runtime.
 
 ## 4. Learning, Coverage and Collaboration
 
+- **General Loop** — its
+  [pinned README comparison](https://github.com/CosmosShadow/general-loop/blob/0bd8fb3b5b5c2e8e02b35e627ad715cade23bba0/README.md)
+  contrasts LoopX's control-plane protocol with Markdown coordination on
+  existing agent hosts. **Status: comparative reference**; the mention does not
+  establish a LoopX dependency or adopted mechanism. Checked October 3, 2026.
+- **GitHub-Michelin** — merged
+  [PR #128](https://github.com/ZhenningLang/GitHub-Michelin/pull/128) adds a bilingual
+  [LoopX editorial entry](https://github.com/ZhenningLang/GitHub-Michelin/blob/a75520b79cff3d9818ab6b60100677b93beaef81/categories/agent-tooling/work-state/loopx.md).
+  **Status: editorial coverage**, not runtime adoption. Its September 27
+  assessment and snapshots are the editor's dated observations, not a live
+  qualification of current LoopX behavior. Checked October 3, 2026.
 - **ai-agent-book / Understanding AI Agents** (bojieli) —
   [PR #614](https://github.com/bojieli/ai-agent-book/pull/614), merged, introduces
   LoopX as a concrete Loop Engineering framework. [Chapter 10](https://github.com/bojieli/ai-agent-book/blob/main/book/chapter10.md)
@@ -188,6 +210,16 @@ accepted design documents are distinct from depending on the LoopX runtime.
 
 ## 5. Derivatives
 
+- **michaelx1993/loopx → foolzzz/loopx** — one related fork family, not two
+  independent adopters. The
+  [downstream changelog](https://github.com/foolzzz/loopx/blob/6c16e4a06797f2b0a81a53827e7fd8082913b36d/CHANGELOG.md)
+  documents divergence from upstream and role-based orchestration. Merged
+  [michaelx1993 PR #27](https://github.com/michaelx1993/loopx/pull/27) introduces
+  deterministic bookkeeping and a bounded orchestrator digest; merged
+  [foolzzz PR #18](https://github.com/foolzzz/loopx/pull/18) prepares that fork's
+  2.0.0 release. **Status: downstream code merged**; these are fork changes,
+  not an upstream LoopX release or independently verified performance gain.
+  Checked October 3, 2026.
 - **loopx-HPC** (Sande33p) — [PR #1](https://github.com/Sande33p/loopx-HPC/pull/1)
   is merged in an independent fork, adding optional scientific campaigns,
   PBS/Slurm and MLflow integration. **Status: downstream code merged**;
@@ -224,3 +256,7 @@ accepted design documents are distinct from depending on the LoopX runtime.
 - Scoped update: **2026-09-30**, covering CGC 2046, NoKV qualification tooling,
   the VikingBot proposal and the retired Opensiro study above. Other entries
   retain their earlier review boundary; this is not a full-table revalidation.
+- Scoped update: **2026-10-03**, covering MilkSU, ai-skills, General Loop,
+  GitHub-Michelin and the michaelx1993/foolzzz fork family. Current issue/PR
+  states, later comments and pinned source files were checked; this update
+  adds no confirmed runtime adopter and does not revalidate the rest of the table.
