@@ -41,14 +41,32 @@ if(committed.status!=="applied") throw new Error(JSON.stringify(committed));
     assert prepared.returncode == 0, prepared.stderr
     binding = runner.binding("analysis")
     runner._acquire_delegation_lease(runner.path("lease-lifetime"), row, binding)
-    lease = row["task_lease"]["lease"]
+    lease = dict(row["task_lease"]["lease"])
     if ttl is None:
         return lease
-    renewed = runner._cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
-        "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
-        "--idempotency-key", lease["idempotency_key"], "--expected-version", str(lease["version"]),
-        "--ttl-seconds", str(ttl))
-    return renewed["lease"]
+    # Start the short lifetime at managed execution, not before acceptance
+    # preparation. Cold setup may outlast 20s without exercising Host renewal.
+    cli = runner._cli
+    shortened = False
+
+    def at_launch(binding, *args, **kwargs):
+        nonlocal shortened
+        if args[:2] == ("turn", "run-once") and not shortened:
+            context = kwargs["delegated_lease"]
+            renewed = cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
+                "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
+                "--idempotency-key", lease["idempotency_key"],
+                "--expected-version", str(context["lease"]["version"]), "--ttl-seconds", str(ttl))
+            proof = renewed["lease"]
+            assert (proof["owner"], proof["idempotency_key"], proof["lease_epoch"]) == (
+                lease["owner"], lease["idempotency_key"], lease["lease_epoch"])
+            lease.update(proof)
+            kwargs["delegated_lease"] = {**context, "lease": proof}
+            shortened = True
+        return cli(binding, *args, **kwargs)
+
+    monkeypatch.setattr(runner, "_cli", at_launch)
+    return lease
 
 
 def inspect(runner):

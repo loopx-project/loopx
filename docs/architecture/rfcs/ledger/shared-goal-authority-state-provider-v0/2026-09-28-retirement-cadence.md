@@ -131,11 +131,18 @@ replay. The corrected fixture loses authority at the tested boundary, requires
 changed-intent rejection, and verifies original Turn resume without new effects.
 All affected cases were rerun; the failures are not counted as product successes.
 
+The adjacent source regression now starts its 20-second Host lease at managed
+execution dispatch. A matched 22-second delay after fixture preparation rejected
+the old execution before Host start; the corrected fixture reaches real renewal,
+completion and lost-reply replay. Lease identity, expiry rejection and the
+existing runtime and validation budgets remain unchanged.
+
 This closes this bounded installed #5466 path. It does not qualify live model
 providers, interrupted-Host stop acknowledgement, Windows, full Goal recovery,
 formal D2, release defaults or last-writer retirement. No active Goal provider or
 ownership mode changes are part of this installation. Keep those existing exits;
-#5490/#5494 remain review candidates for recovery observation and File decode cost.
+recovery observation and File decode measurements retain their separate evidence
+below.
 
 ### Ordered delivery packages and exits
 
