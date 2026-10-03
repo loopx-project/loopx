@@ -262,11 +262,8 @@ def handle_turn_command(
                     goal_id=args.goal_id,
                     turn_key=args.resume_turn_key,
                 )
-                envelope = (
-                    payload.get("turn_envelope")
-                    if isinstance(payload.get("turn_envelope"), dict)
-                    else {}
-                )
+                raw_envelope = payload.get("turn_envelope")
+                envelope = raw_envelope if isinstance(raw_envelope, dict) else {}
                 if envelope.get("agent_id") != args.agent_id:
                     raise ValueError(
                         "LoopX Turn resume journal belongs to another agent"
