@@ -5,6 +5,10 @@ LoopX's optional Lark provider receives messages through a long-lived
 periodic heartbeat is a separate work trigger. Installation or a healthy
 listener alone does not qualify an interactive conversation.
 
+For separate assistant and steward Apps, follow the
+[owner-controlled Bot handoff](owner-controlled-bots.md). App setup, live product
+qualification and optional state inheritance remain separate outcomes.
+
 ## Existing path and its limits
 
 Configure a verified Bot profile and the intended group/Agent connections in
