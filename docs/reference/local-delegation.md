@@ -263,6 +263,24 @@ Node 正常退出时写出；首次填充、已有缓存的重启和常驻复用
 这不新增 capability 设置、前端／Lark 状态或权限 owner。模块加载变快不等于完整
 CLI 耗时或原请求方采用已验收。
 
+The shared TS Effect dispatcher loads a business owner only when its registered
+method is selected. It retains the resolved handler, not request parameters,
+authority reads or results. The complete source fingerprint still invalidates
+the runtime after source changes; the method table, authentication, source
+transfer, admission and settlement owners remain unchanged. This also changes
+the failure boundary: an unavailable unselected module no longer prevents
+transport startup, while selecting that module rejects the request without a
+fallback. A successful `runtime.ping` proves transport readiness, not execution
+or qualification of every registered method. First-use module cost is included
+in the real caller measurement below, not hidden in a startup-only timer.
+
+中文：共享 TS Effect dispatcher 只在选中已注册方法时加载业务 owner；保留解析后的
+handler，不缓存请求参数、权限读取或结果。完整源码指纹仍负责升级失效，方法表、
+认证、source transfer、准入及结算 owner 不变。错误边界有明确变化：未选模块不可用
+不再阻止传输启动，实际选中该模块时仍拒绝，不静默回退。`runtime.ping` 成功只证明
+传输就绪，不证明全部方法可执行或已验收。首次模块加载计入下方真实调用方测量，
+不能只用启动计时将成本移走后声称提速。
+
 ### Preview performance qualification / 预检性能验收
 
 Qualify the useful caller path, not the total duration of a pytest suite. A

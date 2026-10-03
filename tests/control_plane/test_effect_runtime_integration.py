@@ -895,6 +895,11 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "150")
+    # Keep the tested idle lifecycle independent of client source-scan cost.
+    fingerprint = effect_runtime._runtime_fingerprint()
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint,
+    )
 
     original = effect_runtime.effect_runtime_result("runtime.ping", {})
     original_pid = int(original["pid"])
@@ -922,14 +927,22 @@ def test_runtime_drains_admitted_write_before_exit(
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
     monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "250")
-    original = effect_runtime.effect_runtime_result("runtime.ping", {})
-    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
-    info = json.loads(info_path.read_text(encoding="utf-8"))
     journal_path = tmp_path / "admitted-turn.json"
     lock_path = Path(f"{journal_path}.ts-effect.lock")
     lock_path.write_text(json.dumps({"pid": os.getpid(), "token": "fixture-holder"}))
     effect_id = _effect_id("drain-before-exit")
     journal = _journal(effect_id)
+    # This test covers draining an admitted effect, not cold source discovery.
+    # Resolve the unchanged fixture revision before starting the 250 ms idle
+    # window; otherwise client-side scans can retire the server before send.
+    # Source freshness/replacement is exercised separately in this suite.
+    fingerprint = effect_runtime._runtime_fingerprint()
+    monkeypatch.setattr(
+        effect_runtime, "_runtime_fingerprint_for_request", lambda: fingerprint,
+    )
+    original = effect_runtime.effect_runtime_result("runtime.ping", {})
+    info_path = effect_runtime._runtime_info_path(fingerprint)
+    info = json.loads(info_path.read_text(encoding="utf-8"))
 
     def write() -> dict[str, object]:
         return effect_runtime.effect_runtime_result(
