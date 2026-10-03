@@ -4,6 +4,7 @@ from ..quota.effective_action import EffectiveAction
 
 import json
 from collections.abc import Mapping
+from enum import StrEnum
 from hashlib import sha256
 from typing import Any
 
@@ -34,7 +35,22 @@ LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION = (
 LOOPX_CHILD_HOST_OPERATION_SCHEMA_VERSION = "loopx_child_host_operation_v0"
 SUPPORTED_HOSTS = {"codex-cli", "claude-code", "dsh", "generic-cli"}
 SUPPORTED_EXECUTION_MODES = {"interactive-visible", "isolated-headless"}
-SUPPORTED_ITERATION_CONTEXT_POLICIES = {"fresh", "resume_if_available"}
+SUPPORTED_ITERATION_CONTEXT_POLICIES = {"fresh", "resume"}
+
+
+class SessionBindingScope(StrEnum):
+    TODO = "todo"
+    AGENT = "agent"
+
+
+def session_identity_fields(scope: str) -> tuple[str, ...]:
+    """Conversation identity is independent of a Turn's settlement identity."""
+    selected = SessionBindingScope(scope)
+    if selected is SessionBindingScope.TODO:
+        return ("goal_id", "agent_id", "todo_id")
+    return ("goal_id", "agent_id")
+
+
 REPLAN_ACTIONS = {
     "autonomous_replan",
     "autonomous_replan_required",
@@ -221,7 +237,15 @@ def _session_plan(
     lineage: Mapping[str, str],
     session_binding: Mapping[str, Any] | None,
     iteration_context_policy: str,
+    session_scope: str = "agent",
 ) -> tuple[dict[str, Any], str | None]:
+    identity_fields = session_identity_fields(session_scope)
+    context_policy = {
+        "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
+        "mode": iteration_context_policy,
+        "scope": "iteration",
+        **({"binding_scope": session_scope} if session_scope != "todo" else {}),
+    }
     host_route = route in {
         LoopXTurnRoute.READY_FOR_HOST,
         LoopXTurnRoute.REPAIR_REQUIRED,
@@ -232,11 +256,7 @@ def _session_plan(
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "none",
             "binding_status": "not_applicable",
-            "context_policy": {
-                "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-                "mode": iteration_context_policy,
-                "scope": "iteration",
-            },
+            "context_policy": context_policy,
         }, None
     if not all(lineage.values()):
         return {
@@ -252,11 +272,7 @@ def _session_plan(
             "binding_status": (
                 "existing_binding_ignored" if session_binding else "not_found"
             ),
-            "context_policy": {
-                "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-                "mode": "fresh",
-                "scope": "iteration",
-            },
+            "context_policy": context_policy,
         }, None
 
     binding = dict(session_binding or {})
@@ -264,11 +280,7 @@ def _session_plan(
         return {
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "start_new",
-            "context_policy": {
-                "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-                "mode": "resume_if_available",
-                "scope": "iteration",
-            },
+            "context_policy": context_policy,
         }, None
     if binding.get("schema_version") != LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION:
         return {
@@ -277,7 +289,6 @@ def _session_plan(
             "binding_status": "unsupported_schema",
         }, "unsupported LoopX Turn session binding schema"
 
-    identity_fields = ("goal_id", "agent_id", "todo_id")
     actual = {field: str(binding.get(field) or "") for field in identity_fields}
     expected = {field: lineage[field] for field in identity_fields}
     if actual != expected:
@@ -285,16 +296,12 @@ def _session_plan(
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "reject",
             "binding_status": "identity_mismatch",
-        }, "session binding does not match the current goal, agent, and todo"
+        }, "session binding does not match the current " + ", ".join(identity_fields)
     return {
         "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
         "action": "resume",
         "binding_status": "compatible",
-        "context_policy": {
-            "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
-            "mode": "resume_if_available",
-            "scope": "iteration",
-        },
+        "context_policy": context_policy,
     }, None
 
 
@@ -308,11 +315,13 @@ def reconcile_failed_turn_session_request(
     envelope = _mapping(request.get("turn_envelope"))
     selected_todo = selected_turn_todo(envelope)
     lineage = _turn_lineage(envelope, selected_todo=selected_todo)
+    planned_session = _mapping(request.get("session"))
     session, session_error = _session_plan(
         route=LoopXTurnRoute.READY_FOR_HOST,
         lineage=lineage,
         session_binding=session_binding,
-        iteration_context_policy="resume_if_available",
+        iteration_context_policy="resume",
+        session_scope=str(_mapping(planned_session.get("context_policy")).get("binding_scope") or "todo"),
     )
     if session_error:
         status = str(session.get("binding_status") or "")
@@ -331,7 +340,6 @@ def reconcile_failed_turn_session_request(
             "failed-Turn recovery requires a compatible persisted session binding",
         )
 
-    planned_session = _mapping(request.get("session"))
     planned_action = str(planned_session.get("action") or "")
     if planned_action not in {"start_new", "resume"}:
         raise FailedTurnSessionRecoveryError(
@@ -434,7 +442,8 @@ def build_loopx_turn_plan(
     scheduler_owner: str | None = None,
     session_binding: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
-    iteration_context_policy: str = "resume_if_available",
+    iteration_context_policy: str = "resume",
+    session_scope: str | None = None,
     goal_ref: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Project a TurnEnvelope into a typed, side-effect-free host decision."""
@@ -445,8 +454,13 @@ def build_loopx_turn_plan(
         raise ValueError(f"unsupported LoopX Turn execution mode: {execution_mode}")
     if iteration_context_policy not in SUPPORTED_ITERATION_CONTEXT_POLICIES:
         raise ValueError(
-            "iteration context policy must be fresh or resume_if_available"
+            "iteration context policy must be fresh or resume"
         )
+    if session_scope is None:
+        session_scope = "agent" if host == "codex-cli" else "todo"
+    session_identity_fields(session_scope)
+    if session_scope != "todo" and host != "codex-cli":
+        raise ValueError("agent session scope requires the codex-cli host")
 
     execution_context = scheduler_execution_context_for_turn(
         host=host,
@@ -471,6 +485,7 @@ def build_loopx_turn_plan(
         lineage=lineage,
         session_binding=session_binding,
         iteration_context_policy=iteration_context_policy,
+        session_scope=session_scope,
     )
     if session_error:
         route = LoopXTurnRoute.CONTRACT_ERROR

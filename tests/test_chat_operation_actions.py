@@ -322,8 +322,8 @@ def test_managed_replacement_has_evidence_only_access_and_never_inherits_executi
     from contextlib import contextmanager
     from threading import Event, current_thread
     from loopx.control_plane.collaboration import operation_handoff
-    from loopx.control_plane.turn_driver import codex_cli
-    from loopx.control_plane.turn_driver.codex_cli import _discard_codex_cli_session
+    from loopx.control_plane.turn_driver import codex_sessions
+    from loopx.control_plane.turn_driver.codex_sessions import _discard_codex_cli_session
 
     service, store = _service(tmp_path)
     original = _managed_handler(service, store)
@@ -394,7 +394,7 @@ def test_managed_replacement_has_evidence_only_access_and_never_inherits_executi
         "reconciles_outcome_digest": reported["outcome_digest"],
     }
     attempted, acquired = Event(), Event()
-    original_lock = codex_cli.exclusive_file_lock
+    original_lock = codex_sessions.exclusive_file_lock
     original_binding = operation_handoff._binding
     original_write = ChatActionStore._write
     commits = []
@@ -424,7 +424,7 @@ def test_managed_replacement_has_evidence_only_access_and_never_inherits_executi
         original_write(self, payload)
         commits.append("report")
 
-    monkeypatch.setattr(codex_cli, "exclusive_file_lock", observed_lock)
+    monkeypatch.setattr(codex_sessions, "exclusive_file_lock", observed_lock)
     monkeypatch.setattr(ChatActionStore, "_write", record_report)
     with ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="managed-revoker"
@@ -506,7 +506,7 @@ def test_managed_tool_rejects_actor_injection_native_mismatch_and_revoked_profil
         decision="confirm",
         confirmation=_confirmation(delivered),
     )
-    from loopx.control_plane.turn_driver.codex_cli import _store_codex_cli_session
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
     _store_codex_cli_session(
         store.root.parent.parent,

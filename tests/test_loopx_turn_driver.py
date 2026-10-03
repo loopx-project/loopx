@@ -32,7 +32,7 @@ from loopx.control_plane.turn_driver import (
     reward_memory_reflection_digest,
     run_loopx_turn_once,
 )
-from loopx.control_plane.turn_driver.codex_cli import _store_codex_cli_session
+from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 from loopx.control_plane.turn_driver.subagent_execution_topology import (
     CHILD_FALLBACK_ACTIONS,
 )
@@ -100,8 +100,9 @@ def test_turn_plan_projects_ready_route_without_side_effects() -> None:
         "action": "start_new",
         "context_policy": {
             "schema_version": "loopx_iteration_context_policy_v0",
-            "mode": "resume_if_available",
+            "mode": "resume",
             "scope": "iteration",
+            "binding_scope": "agent",
         },
     }
     assert payload["transaction"]["status"] == "planned"
@@ -896,6 +897,25 @@ def test_turn_plan_resumes_only_a_matching_session_binding() -> None:
     assert payload["boundary"]["opaque_session_handle_omitted"] is True
 
 
+@pytest.mark.parametrize("field", ["goal_id", "agent_id", "todo_id"])
+def test_agent_session_scope_preserves_current_turn_identity(field) -> None:
+    binding = {
+        "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
+        "goal_id": "fixture-goal", "agent_id": "codex-fixture",
+        "todo_id": "todo_fixture0001",
+    }
+    binding[field] = "different-identity"
+    payload = build_loopx_turn_plan(
+        _envelope(), host="codex-cli", execution_mode="interactive-visible",
+        session_binding=binding, session_scope="agent",
+    )
+    assert payload["ok"] is (field == "todo_id")
+    assert payload["session"]["action"] == ("resume" if field == "todo_id" else "reject")
+    if field == "todo_id":
+        assert payload["session"]["context_policy"]["binding_scope"] == "agent"
+        assert payload["transaction"]["settlement_plan"]["identity"]["todo_id"] == "todo_fixture0001"
+
+
 def test_turn_plan_rejects_session_binding_identity_drift() -> None:
     payload = build_loopx_turn_plan(
         _envelope(),
@@ -916,6 +936,59 @@ def test_turn_plan_rejects_session_binding_identity_drift() -> None:
     assert payload["session"]["binding_status"] == "identity_mismatch"
     assert payload["transaction"]["status"] == "not_applicable"
     assert payload["effects"]["host_invoked"] is False
+
+
+def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, monkeypatch):
+    from benchmark.runtime.codex import Execution
+    from benchmark.runtime.sessions import BenchmarkSessionWake
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    project, runtime, registry = _write_live_fixture(tmp_path, extra_agent_todo_lines=(
+        "- [ ] [P1] Complete the successor fixture.",
+        "  <!-- loopx:todo todo_id=todo_fixture0002 status=open task_class=advancement_task "
+        "action_kind=fixture claimed_by=codex-fixture priority=P1 -->",
+    ))
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    # A planning exec observes the native ID before either Todo is executed.
+    env = {"LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_REGISTRY": str(registry),
+           "LOOPX_GOAL_ID": "loopx-turn-fixture", "LOOPX_AGENT_ID": "codex-fixture",
+           "LOOPX_PROJECT": str(project), "CODEX_HOME": str(home), "CODEX_BIN": str(binary),
+           "MODEL_NAME": "fixture-model", "REASONING_EFFORT": "high"}
+    wake = BenchmarkSessionWake(env, Execution(context="resume", sandbox="read-only"), {})
+    observed = tmp_path / "planning-stream.jsonl"
+    observed.write_text('{"type":"thread.started","thread_id":"session-fixture-0001"}\n')
+    wake.observe(observed)
+    binary.write_text(binary.read_text().replace('"validated_progress"', '"validated_completion"').replace(
+        'output_path = ', 'pathlib.Path("completed-todo.txt").write_text("complete")\noutput_path = ',
+    ))
+    argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+            "--codex-bin", str(binary), "--codex-model", "fixture-model",
+            "--codex-reasoning-effort", "high", "--codex-sandbox", "read-only",
+            "--no-global-sync", "--validation-command-json",
+            json.dumps([sys.executable, "-c", "from pathlib import Path; assert Path('completed-todo.txt').read_text() == 'complete'"]),
+            "--execute"]
+    results = []
+    for number in range(2):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main([*argv, "--turn-instance-id", f"completion-{number}"])
+        result = json.loads(output.getvalue())
+        assert code == 0, result
+        assert result["status"] == "committed", result
+        results.append(result)
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 2 and all("resume" in call and "session-fixture-0001" in call for call in calls)
+    assert results[0]["resume_turn_key"] != results[1]["resume_turn_key"]
+    journals = [json.loads(path.read_text()) for path in (runtime / "goals/loopx-turn-fixture/turns").glob("*.json")]
+    assert {journal["writeback"]["completion"]["todo_id"] for journal in journals} == {
+        "todo_fixture0001", "todo_fixture0002",
+    }
 
 
 def test_turn_plan_transaction_key_is_stable_and_todo_scoped() -> None:
@@ -1036,6 +1109,7 @@ def test_turn_plan_fresh_iteration_ignores_compatible_session_binding() -> None:
             "schema_version": "loopx_iteration_context_policy_v0",
             "mode": "fresh",
             "scope": "iteration",
+            "binding_scope": "agent",
         },
     }
     assert payload["transaction"]["turn_instance_id"] == "cycle-2:iteration-1"
@@ -1685,6 +1759,7 @@ def test_turn_cli_projects_explicit_fresh_iteration_context(
         "schema_version": "loopx_iteration_context_policy_v0",
         "mode": "fresh",
         "scope": "iteration",
+        "binding_scope": "agent",
     }
 
 
@@ -2180,8 +2255,8 @@ def run_dsh_turn(**kwargs):
 
     run("fresh-fixture-1", "fresh")
     run("fresh-fixture-2", "fresh")
-    run("resume-fixture-1", "resume-if-available")
-    run("resume-fixture-2", "resume-if-available")
+    run("resume-fixture-1", "resume")
+    run("resume-fixture-2", "resume")
 
     session_ids = (host_project / "dsh-session-ids.txt").read_text(
         encoding="utf-8"
@@ -3523,6 +3598,7 @@ def test_turn_run_once_cli_resumes_session_from_recoverable_failed_turn(
     def fake_session_binding(
         _runtime_root: Path,
         _turn_envelope: dict[str, object],
+        **_kwargs: object,
     ) -> dict[str, str] | None:
         nonlocal session_binding_calls
         session_binding_calls += 1

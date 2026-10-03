@@ -219,7 +219,7 @@ def agent_operation_action(
         # Session writes and operation commits share Goal -> registry -> session
         # -> action-store order. No lock is held across a domain effect.
         from ...file_lock import exclusive_file_lock
-        from ..turn_driver.codex_cli import _session_path
+        from ..turn_driver.codex_sessions import _session_path
 
         executor = parameters["executor"]
         session_paths = set()

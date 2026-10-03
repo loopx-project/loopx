@@ -167,6 +167,17 @@ receipt → observed work or actionable failure → readable answer in the same 
   promise reload recovery. This tab-local cache is not delivery authority.
   Acceptance means the executor received the instructions, not that it adopted
   them or that delegated/team work stopped. Live adoption stays a release gate.
+- The shared App composer owns pending submission, instruction receipts, feedback
+  and unsent images by its existing Goal/Agent conversation key. Waiting in one
+  conversation cannot lock Send in another. Returning retains that conversation's
+  actual wait or receipt; a late completion cannot clear a peer's pending request,
+  replace a newer draft or open an old proposal over the current conversation.
+  Failed delivery restores the submitted text and images together only while
+  that composer's draft is still empty; later text or pasted images take precedence.
+  Navigation now retains unsent images in their original composer, rather than
+  discarding them; nothing is automatically resent. Packaged browser regressions
+  inject delayed receipts and a rejected independent request. This qualifies App
+  state ownership, not live model adoption, host steering or a new effect grant.
 - The compact receipt and full conversation offer the same controls. Failure
   ends the live indicator, preserves the request/partial answer and names the
   next supported action. A completed delegation still shows receiver adoption

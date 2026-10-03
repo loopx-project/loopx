@@ -76,7 +76,7 @@ def _prepare_agent_handoff(
     }
     parameters["operation_kind"] = "fixture.submit"
     if managed:
-        from loopx.control_plane.turn_driver.codex_cli import _store_codex_cli_session
+        from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
         _store_codex_cli_session(
             store.root.parent.parent,

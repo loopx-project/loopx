@@ -958,8 +958,11 @@ model planning through the product's `todo plan` checkpoint. Planning runs
 before the selected driver, uses the shared Goal planner/Todo-delta contract,
 and consumes the phase budget without counting as advancement. Qualification
 must read back task identity and actual Todos, preserve blocked state and
-disclose the separate planning session; synthetic task success alone does not
-prove equivalence to interactive `$loopx` startup or planning effectiveness.
+disclose the context policy: heartbeat/Turn resume shares the Goal/Agent
+conversation across planning and execution, while fresh uses separate sessions.
+Exact native session ID/history conformance qualifies continuity, not task
+quality or matched-budget gains; synthetic task success alone does not prove
+equivalence to interactive `$loopx` startup or planning effectiveness.
 
 ### 11.3 Required delivery slice
 

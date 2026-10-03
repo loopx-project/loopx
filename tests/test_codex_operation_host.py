@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.turn_driver.codex_cli import (
-    _lineage,
     load_codex_cli_session,
     run_codex_cli_host,
 )
+from loopx.control_plane.turn_driver.codex_sessions import _lineage
 from loopx.control_plane.turn_driver.codex_operation_host import (
     run_codex_operation_host,
 )
@@ -167,7 +167,7 @@ def test_callback_launch_fence_rejects_drift_before_native_process_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
 ) -> None:
     from loopx.control_plane.turn_driver import codex_operation_host as owner
-    from loopx.control_plane.turn_driver.codex_cli import _store_codex_cli_session
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
     store, claimed, request, options = _claimed_native_fixture(tmp_path)
     if drift == "session":

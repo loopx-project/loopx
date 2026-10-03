@@ -208,12 +208,13 @@ Before wiring Trae CLI, Codex CLI, or another host, answer these five questions:
    dedicated result file. Do not scrape arbitrary conversation text as the
    completion contract.
 3. **What is its resume handle?** Keep the opaque handle in local adapter
-   state, keyed by `(goal_id, agent_id, todo_id)`. Never put it in LoopX state
-   or public evidence.
+   state, keyed by the declared scope: Goal/Agent for Codex exec by default,
+   or Goal/Agent/Todo for isolated Todo context. Keep it out of public Goal
+   narratives and evidence.
 4. **Which failures may resume?** A bounded timeout or lost transport may
-   preserve an observed session. A rejected startup contract, incompatible
-   host version, or missing session invalidates it so the next Turn starts
-   cleanly.
+   preserve an observed session. For agent-scoped Codex exec, a rejected
+   startup contract, incompatible host version or missing session requires
+   repair or explicit fresh context; it cannot silently fork.
 5. **What proves the work independently?** Name a command that checks the real
    repository, artifact, service readback, document revision, or other
    postcondition without trusting the agent CLI's own claim.
@@ -232,7 +233,8 @@ A thin adapter can be implemented with this host-neutral algorithm:
 ```text
 request = read_one_json(stdin)
 todo = request.turn_envelope.action.selected_todo
-session = load_local_session(goal_id, agent_id, todo.todo_id)
+scope = request.session.context_policy.get("binding_scope", "todo")
+session = load_local_session(goal_id, agent_id, scope, todo.todo_id)
 prompt = render_bounded_prompt(todo, request.result_contract, temporary_result_path)
 invoke_agent_cli(prompt, workspace, session, explicit_timeout)
 candidate = read_and_shape_temporary_result(temporary_result_path)
@@ -762,10 +764,10 @@ Session recovery is fail-closed:
 
 | Host observation | Session disposition | Next Turn |
 | --- | --- | --- |
-| Typed result returned | Keep the opaque session eligible. | Resume when the same todo remains selected. |
+| Typed result returned | Keep the opaque session eligible. | Resume within the selected conversation scope; refresh current Todo inputs. |
 | Timeout or transport loss after a session was observed | Keep it eligible, but do not infer progress. | Retry the side-effect-safe host phase. |
-| Incompatible host version or rejected startup/output contract | Invalidate it. | Start a fresh session after repair. |
-| Host reports the session is missing | Invalidate it. | Start a fresh session if policy still allows execution. |
+| Incompatible host version or rejected startup/output contract | Agent-scoped Codex exec retains the binding and fails closed; Todo scope invalidates it. | Repair, then explicitly select fresh for agent scope. |
+| Host reports the session is missing | Agent-scoped Codex exec retains the binding and fails closed; Todo scope invalidates it. | Repair history or explicitly select fresh for agent scope. |
 | Failure before any session was observed | Store nothing. | Re-decide, then start fresh only if allowed. |
 
 Session eligibility is recovery metadata, not evidence that work happened. It
@@ -777,13 +779,26 @@ writeback ordering.
 Each `turn plan` or `turn run-once` invocation declares an iteration context
 policy independently from the Todo and Goal lifecycle:
 
-- `resume-if-available` preserves the existing behavior and resumes a compatible
-  opaque Host Session for the same Goal, Agent, and Todo;
-- `fresh` ignores a compatible saved session for this invocation and starts a
-  clean Host Session. Selecting `fresh` does not itself delete the prior binding;
-  after a successful host start, the newly observed session becomes the eligible
-  binding for later iterations. It does not imply a new Todo, successor, retry,
-  or Goal.
+- `resume` is the CLI default. The first invocation starts a session; later
+  invocations reuse its exact native ID. The retired context name is rejected.
+- Codex exec defaults to `--session-scope agent`: the same Goal and Agent keep
+  their conversation when Todos change. `--session-scope todo` explicitly
+  isolates conversations per Todo. These scopes use separate persistence keys;
+  existing Todo-scoped bindings are not automatically adopted into agent scope.
+- `fresh` starts a clean session. After a native ID is observed, that session
+  replaces the binding for the selected scope, including on timeout. It implies
+  no new Todo, successor, retry, progress or Goal.
+
+The Codex exec binding includes the exact Goal lifetime where available and a
+profile digest for agent scope: workspace, Codex home/settings, executable,
+model, effort, sandbox and MCP configuration. A corrupt/incompatible binding,
+missing native history or unexpected resumed ID fails closed; it cannot silently
+fork. Explicit `fresh` is the recovery operation. Current Turn selection, task
+lease, validation and settlement remain Todo-bound. Session scope grants no
+additional tool or effect authority. Managed operation-equipped app-server
+sessions retain their existing Todo-bound approval/handoff contract; this CLI
+option applies to exec conversations. Other hosts retain their adapter's
+Todo-based session contract.
 
 Use a new `turn_instance_id` for each new iteration. Reuse the same id only for
 an explicit replay or failed-Turn recovery. The context policy controls Host

@@ -64,6 +64,7 @@ def planning_env(tmp_path):
         f"#!{sys.executable}\n"
         + """
 import json, os, pathlib, subprocess, sys
+print(json.dumps({"type": "thread.started", "thread_id": "planning-fixture-session"}), flush=True)
 packet = json.loads(sys.stdin.read().split("Host-supplied planning checkpoint:\\n", 1)[1])
 command = [os.environ["LOOPX_CLI"], "--format", "json", "--registry", os.environ["LOOPX_REGISTRY"],
            "--runtime-root", os.environ["LOOPX_RUNTIME_ROOT"], "todo", "add", "--goal-id", "planning-goal",

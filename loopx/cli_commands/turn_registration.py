@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 
 from ..control_plane.operator_provider import operator_provider_environ
+from ..control_plane.turn_driver.driver import SessionBindingScope, SUPPORTED_ITERATION_CONTEXT_POLICIES
 from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     resolve_default_turn_host,
@@ -383,13 +384,19 @@ def _add_turn_decision_arguments(
     )
     parser.add_argument(
         "--iteration-context",
-        choices=["fresh", "resume-if-available"],
-        default="resume-if-available",
+        choices=sorted(SUPPORTED_ITERATION_CONTEXT_POLICIES),
+        default="resume",
         help=(
             "Host context policy for this iteration. fresh starts a clean "
             "session even when a compatible prior session exists; "
-            "resume-if-available preserves the existing continuation behavior."
+            "resume continues the recorded session."
         ),
+    )
+    parser.add_argument(
+        "--session-scope",
+        choices=[scope.value for scope in SessionBindingScope],
+        default=SessionBindingScope.AGENT.value,
+        help="Codex exec conversation binding: todo isolates each Todo; agent continues across Todos in the same Goal/Agent. Turn authority and settlement stay Todo-scoped.",
     )
     parser.add_argument(
         "--resume-goal-id",

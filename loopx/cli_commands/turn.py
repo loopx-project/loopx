@@ -154,11 +154,16 @@ def handle_turn_command(
             decision,
             scheduler_execution_context=scheduler_context,
         )
+        # Operation-equipped app-server sessions retain their Todo-bound
+        # approval/handoff contract; this option controls exec conversation reuse.
+        session_scope = (args.session_scope if args.host == "codex-cli"
+                         and not getattr(args, "codex_operation_tools", False) else "todo")
         if (
             args.turn_command == "run-once"
             and args.host == "codex-cli"
             and not resume_requested
             and not args.resume_turn_key
+            and args.iteration_context != "fresh"
             and turn_envelope.get("effective_action") != EffectiveAction.GOVERNED_CAPABILITY_INTENT.value
         ):
             from ..control_plane.turn_driver.codex_cli import codex_cli_session_binding
@@ -168,9 +173,10 @@ def handle_turn_command(
                     runtime_root,
                     turn_envelope,
                     goal_admission=strict_goal_admission,
+                    session_scope=session_scope,
                 )
                 if strict_goal_admission is not None
-                else codex_cli_session_binding(runtime_root, turn_envelope)
+                else codex_cli_session_binding(runtime_root, turn_envelope, session_scope=session_scope)
             )
         payload = build_loopx_turn_plan(
             turn_envelope,
@@ -179,7 +185,8 @@ def handle_turn_command(
             scheduler_owner=args.scheduler_owner,
             session_binding=session_binding,
             turn_instance_id=args.turn_instance_id,
-            iteration_context_policy=args.iteration_context.replace("-", "_"),
+            iteration_context_policy=args.iteration_context,
+            session_scope=session_scope,
             goal_ref=goal_ref,
         )
         # Resolve machine authentication once for the readback and host launch.

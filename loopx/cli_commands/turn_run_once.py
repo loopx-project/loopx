@@ -801,16 +801,19 @@ def execute_turn_run_once(
             def resolve_built_in_session_binding(
                 turn_envelope: Mapping[str, Any],
             ) -> dict[str, str] | None:
+                session_scope = str((payload.get("session", {}).get("context_policy") or {}).get("binding_scope") or "todo")
                 return (
                     codex_cli_session_binding(
                         runtime_root,
                         turn_envelope,
                         goal_admission=goal_admission,
+                        session_scope=session_scope,
                     )
                     if goal_admission is not None
                     else codex_cli_session_binding(
                         runtime_root,
                         turn_envelope,
+                        session_scope=session_scope,
                     )
                 )
 
