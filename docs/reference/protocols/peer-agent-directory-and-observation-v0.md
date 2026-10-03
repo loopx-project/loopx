@@ -254,7 +254,7 @@ from host submission and from each other.
 
 ### Real-host qualification
 
-`examples/peer-handoff-live-smoke.py` is an explicit opt-in qualification of the
+`examples/peer-handoff-live-qualification.py` is an explicit opt-in qualification of the
 existing Codex app-server adapter and the same request/return CLI. It creates
 two synthetic host threads in the selected authenticated home, a disposable
 Goal/registry/runtime, and a bounded artifact pinned to the checkout head and
@@ -263,8 +263,14 @@ SHA-256. It does not resume a user thread or create replacement child workers.
 From the source checkout:
 
 ```bash
-uv run --extra test python examples/peer-handoff-live-smoke.py --execute-real-host
+uv run --extra test python examples/peer-handoff-live-qualification.py --execute-real-host
 ```
+
+The qualification filename keeps this paid host run outside the automatically
+discovered `*-smoke.py` fleet. Ordinary offline coverage remains in
+`tests/test_peer_collaboration.py` and `tests/control_plane/test_peer_host_route.py`;
+neither default CI nor the public smoke fleet
+authorizes model calls or host thread creation.
 
 On Windows select `--codex-bin codex.cmd` if the installed launcher needs it.
 The command consumes model quota and leaves the host's own test-thread records

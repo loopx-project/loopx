@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
+import pytest
+
 from loopx.control_plane.effect_program import interpret_quota_should_run_packet
 from loopx.control_plane.quota.cli_projection import (
     compact_quota_should_run_cli_payload,
@@ -16,6 +20,88 @@ from loopx.control_plane.testing.quota_fixtures import (
 from loopx.control_plane.work_items.autonomous_replan_obligation import (
     build_autonomous_replan_obligation_payload,
 )
+from loopx.control_plane.testing.action_portfolio_scenarios import (
+    accepted_replan_successor_status,
+    ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID as REPLAN_AGENT,
+    ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID as REPLAN_GOAL,
+)
+
+
+def test_accepted_replan_promotes_the_new_route_and_keeps_explicit_choice() -> None:
+    status = accepted_replan_successor_status()
+    packet = build_quota_should_run(status, goal_id=REPLAN_GOAL, agent_id=REPLAN_AGENT)
+    assert packet["selected_todo"]["todo_id"] == "todo_replan_successor"
+    assert packet["agent_lane_next_action"]["todo_id"] == "todo_replan_successor"
+    assert packet["recommended_action"] == packet["agent_lane_next_action"]["text"]
+    portfolio = packet["action_portfolio"]
+    assert portfolio["primary"]["todo_id"] == "todo_replan_successor"
+    assert [
+        (row["todo_id"], row["selection_role"])
+        for row in portfolio["suggested_actions"]
+    ] == [("todo_replan_successor", "recommended"), ("todo_prior_plan", "alternative")]
+    assert portfolio["selection_policy"]["recommendation_role"] == "default_not_binding"
+    compact = compact_quota_should_run_cli_payload(packet)
+    assert compact["action_portfolio"]["primary"]["todo_id"] == "todo_replan_successor"
+    envelope = build_turn_envelope(packet)
+    assert (
+        envelope["action"]["action_portfolio"]["primary"]["todo_id"]
+        == "todo_replan_successor"
+    )
+    chosen = build_quota_should_run(
+        status,
+        goal_id=REPLAN_GOAL,
+        agent_id=REPLAN_AGENT,
+        requested_action_todo_id="todo_prior_plan",
+    )
+    assert chosen["action_selection_qualification"]["state"] == "qualified"
+    assert chosen["selected_todo"]["todo_id"] == "todo_prior_plan"
+    bound = build_quota_should_run(
+        status,
+        goal_id=REPLAN_GOAL,
+        agent_id=REPLAN_AGENT,
+        receipt_bound_todo_id="todo_prior_plan",
+    )
+    assert bound["selected_todo"]["todo_id"] == "todo_prior_plan"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["peer_ack", "newer_plan", "wrong_origin", "blocked", "missing_capability"],
+)
+def test_invalid_or_superseded_replan_keeps_the_existing_default(mutation: str) -> None:
+    status = deepcopy(accepted_replan_successor_status())
+    latest = status["run_history"]["goals"][0]["latest_runs"][0]
+    if mutation == "peer_ack":
+        latest["agent_id"] = "another-agent"
+    elif mutation == "newer_plan":
+        latest["autonomous_replan_ack"]["semantic_delta"] = {
+            "accepted": True,
+            "outcomes": ["fresh_vision_path_outcome"],
+        }
+    else:
+        for summary in [
+            status["attention_queue"]["items"][0]["agent_todos"],
+            status["attention_queue"]["items"][0]["project_asset"]["agent_todos"],
+        ]:
+            for value in summary.values():
+                if isinstance(value, list):
+                    for row in value:
+                        if (
+                            isinstance(row, dict)
+                            and row.get("todo_id") == "todo_replan_successor"
+                        ):
+                            if mutation == "wrong_origin":
+                                row["replan_obligation_id"] = "replan-fedcba9876543210"
+                            elif mutation == "blocked":
+                                row["status"] = "blocked"
+                            else:
+                                row["required_capabilities"] = [
+                                    "unavailable_fixture_capability"
+                                ]
+    packet = build_quota_should_run(
+        status, goal_id=REPLAN_GOAL, agent_id=REPLAN_AGENT, available_capabilities=[]
+    )
+    assert packet["selected_todo"]["todo_id"] == "todo_prior_plan"
 
 
 GOAL_ID = "action-portfolio-fixture"

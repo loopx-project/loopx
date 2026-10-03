@@ -764,7 +764,7 @@ test("monitor closeout requires the exact committed effect, not a matching obser
         await writeFile(path, `${JSON.stringify({...row, ...patch})}\n`);
         const result = await readQuotaSettlement(request(root));
         assert.equal(result.monitor_phase, expected);
-        assert.equal(result.replay_phase, "open");
+        assert.equal(result.replay_phase, expected === "settled" ? "settled" : "open");
         assert.equal((result.spend as any).payload.ok, false);
       } finally { await rm(root, {recursive: true, force: true}); }
     });
@@ -839,7 +839,7 @@ test("reads the complete receipt chain and workspace causality once", async () =
   });
 });
 
-test("keeps ordinary partial settlement fail-closed while the monitor poll is closed", async () => {
+test("committed monitor replay closes without manufacturing delivery or spend receipts", async () => {
   const runtimeRoot = await fixture({ writeback: true, monitor: true });
 
   const result = await readQuotaSettlement(request(runtimeRoot));
@@ -848,7 +848,7 @@ test("keeps ordinary partial settlement fail-closed while the monitor poll is cl
   assert.equal((result.spend as any).payload.ok, false);
   assert.equal((result.settlement as any).result.failure.kind, "receipt_missing");
   assert.equal(result.monitor_phase, "settled");
-  assert.equal(result.replay_phase, "open");
+  assert.equal(result.replay_phase, "settled");
   assert.equal((result.writeback_run as any).delivery_outcome, "outcome_progress");
 });
 

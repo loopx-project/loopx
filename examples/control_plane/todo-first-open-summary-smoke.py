@@ -12,6 +12,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.quota import build_quota_should_run, render_quota_should_run_markdown  # noqa: E402
+from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
+    GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+)
 from loopx.control_plane.todos.active_state_todo_parser import (  # noqa: E402
     parse_active_state_todos as parse_active_state_todos_read_model,
 )
@@ -230,6 +233,7 @@ def assert_blocked_priority_fallback_notice_visible() -> None:
         build_blocked_priority_fallback_status_payload(),
         goal_id=GOAL_ID,
         agent_id="codex-main-control",
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
     assert decision["should_run"] is True, decision
     fallback = decision["blocked_priority_fallback"]
@@ -359,7 +363,10 @@ def assert_claimed_frontstage_lanes_visible() -> None:
             ]
         },
     }
-    decision = build_quota_should_run(status_payload, goal_id=GOAL_ID, agent_id="codex-side-bypass")
+    decision = build_quota_should_run(
+        status_payload, goal_id=GOAL_ID, agent_id="codex-side-bypass",
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+    )
     summary = decision["agent_todo_summary"]
     assert [item["index"] for item in summary["unclaimed_priority_open_items"]] == [1, 2], summary
     assert summary["payload_compaction"]["compacted_lanes"]["unclaimed_priority_open_items"] == {
@@ -527,6 +534,7 @@ def assert_claimed_markdown_todos_survive_visibility_lanes() -> None:
         status_payload,
         goal_id=GOAL_ID,
         agent_id="codex-side-bypass",
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
     summary = decision["agent_todo_summary"]
     assert [item["todo_id"] for item in summary["current_agent_claimed_open_items"]] == [
@@ -636,19 +644,24 @@ def assert_claimed_advancement_lanes_preserve_claimants() -> None:
         status_payload,
         goal_id=GOAL_ID,
         agent_id="codex-main-control",
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
     primary_summary = primary_decision["agent_todo_summary"]
     assert primary_summary["first_executable_items"][0]["todo_id"] == "todo_primary_1", primary_summary
     assert primary_summary["claim_scope"]["agent_model"] == "peer_v1", primary_summary
     assert "agent_role" not in primary_summary["claim_scope"], primary_summary
     assert primary_summary["claim_scope"]["other_agent_claimed_items"][0]["todo_id"] == "todo_side_tui", primary_summary
-    assert "Primary claimed advancement item 1" in primary_decision["recommended_action"], primary_decision
+    # Twenty claimed primary tasks require the shipped long-chain replan before
+    # ordinary delivery. The quota read model must still preserve their owners.
+    assert primary_decision["decision"] == "autonomous_replan_required", primary_decision
+    assert primary_decision["normal_delivery_allowed"] is False, primary_decision
     assert "state_action_projection_warning" not in primary_decision, primary_decision
 
     decision = build_quota_should_run(
         status_payload,
         goal_id=GOAL_ID,
         agent_id="codex-side-bypass",
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
     summary = decision["agent_todo_summary"]
     current_agent_advancement_ids = [
@@ -768,7 +781,10 @@ def main() -> int:
             ]
         },
     }
-    decision = build_quota_should_run(status_payload, goal_id=GOAL_ID)
+    decision = build_quota_should_run(
+        status_payload, goal_id=GOAL_ID,
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+    )
     assert decision["should_run"] is True, decision
     agent_summary = decision["agent_todo_summary"]
     assert agent_summary["open_count"] == 4, decision

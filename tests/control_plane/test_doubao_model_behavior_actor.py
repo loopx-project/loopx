@@ -102,6 +102,19 @@ def test_semantic_instruction_requires_exact_peer_route() -> None:
     assert "same_agent_non_delivery" in instruction
 
 
+def test_todo_validation_does_not_extend_the_actor_result_vocabulary() -> None:
+    for arm in ("full_packet", "candidate_packet"):
+        instruction = _decision_instruction(arm=arm, semantic_contract_required=False)
+        assert "Represent\nvalidation as test" in instruction
+    decision = _decision()
+    decision["intended_action_kinds"] = ["validate"]
+    with pytest.raises(ValueError, match="unknown action kind"):
+        normalize_model_behavior_actor_result({
+            "schema_version": "model_behavior_actor_result_v0",
+            "actor_ref": "fixture-validation", "decision": decision, "tool_calls": [],
+        })
+
+
 def test_semantic_instruction_preserves_candidate_scheduler_and_vision_exactly() -> (
     None
 ):

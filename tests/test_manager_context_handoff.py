@@ -72,6 +72,42 @@ def test_project_conversation_delivers_only_to_its_registered_goal(fixture):
     assert not pending(root, "other", "peer")["items"]
 
 
+@pytest.mark.parametrize("strict_envelope", [False, True])
+@pytest.mark.parametrize("origin", ["web", "lark"])
+def test_lifecycle_only_registry_cannot_supply_context_recipients(
+    fixture, monkeypatch, strict_envelope, origin
+):
+    from loopx.control_plane.collaboration import source_grant_observation
+    from loopx.control_plane.projects import registry_codec
+
+    root, registry, session, turn, _ = fixture
+    payload = json.loads(registry.read_text())
+    payload["profile_id"] = registry_codec.SOURCE_SESSION_PROFILE_ID
+    source_registry = registry.with_name("source-session-registry.json")
+    if strict_envelope:
+        with registry_codec.source_session_registry_transaction(
+            source_registry,
+            operation="create lifecycle-only fixture",
+            create=lambda: payload,
+        ) as transaction:
+            transaction.commit(payload)
+    else:
+        source_registry.write_text(json.dumps(payload))
+    before = source_registry.read_bytes()
+
+    def reject_enumeration(_registry):
+        pytest.fail("lifecycle-only registry reached recipient enumeration")
+
+    monkeypatch.setattr(
+        source_grant_observation, "registered_context_recipients", reject_enumeration
+    )
+    assert authority(root, source_registry, session, {**turn, "origin": origin}) == {
+        "mode": "unavailable", "targets": []
+    }
+    assert source_registry.read_bytes() == before
+    assert not _root(root).exists()
+
+
 def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     root, registry, session, turn, request = fixture
     assert request in authority(root, registry, session, turn)["targets"]

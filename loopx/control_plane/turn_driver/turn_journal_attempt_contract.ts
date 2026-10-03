@@ -1,9 +1,9 @@
 /** The journal owner's prepared-intent contract, shared by writes and reads. */
 import transactionContract from "../turn_transaction_contract.json" with { type: "json" };
-import { SETTLEMENT_STEP_KINDS, type JsonObject } from "../effect_program.ts";
+import { TURN_PROVIDER_STEP_KINDS, type JsonObject } from "../effect_program.ts";
 
 const preparedStepKinds: ReadonlySet<string> = new Set(
-  SETTLEMENT_STEP_KINDS.filter((kind) => kind !== "validation"),
+  TURN_PROVIDER_STEP_KINDS,
 );
 
 interface AttemptViolation {

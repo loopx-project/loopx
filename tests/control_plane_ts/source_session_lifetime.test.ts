@@ -5,10 +5,15 @@ import {
   decideGoalRecreation,
   decideProjectSessionBind,
   decideProjectSessionUnbind,
+  decideSourceTurnEffectAbsentResolution,
+  decideSourceTurnEffectAdmission,
+  decideSourceTurnEffectGate,
+  decideSourceTurnEffectRelease,
 } from "../../loopx/control_plane/goals/source_session_lifetime.ts";
 
 const INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const INSTANCE_C = "ginst_cccccccccccccccccccccccccccccccc";
 
 function bindFacts(currentGoalInstanceId: string) {
   return {
@@ -180,6 +185,243 @@ test("session capacity rejects new work after preserving exact replay", () => {
       receipt_count: 4096,
     }),
     { kind: "reject", code: "history_capacity_exhausted" },
+  );
+});
+
+test("Turn effects admit once and release while retirement is closing", () => {
+  const goalRef = {
+    goal_id: "release",
+    goal_instance_id: INSTANCE_A,
+  };
+  const admission = {
+    schema_version: "loopx_source_turn_effect_admission_v1",
+    goal_ref: goalRef,
+    turn_key: `sha256:${"c".repeat(64)}`,
+    step_kind: "durable_writeback",
+    effect_ref: `sha256:${"d".repeat(64)}`,
+  };
+  const admitted = decideSourceTurnEffectAdmission({
+    profile_id: "source_session_v1",
+    requested_goal_ref: goalRef,
+    current_goal_ref: goalRef,
+    gate: null,
+    admission,
+    existing_admission: null,
+  });
+  assert.equal(admitted.kind, "commit");
+  if (admitted.kind !== "commit") return;
+  assert.equal(admitted.gate.state, "open");
+  assert.throws(
+    () => decideSourceTurnEffectAdmission({
+      profile_id: "source_session_v1",
+      requested_goal_ref: goalRef,
+      current_goal_ref: goalRef,
+      gate: admitted.gate,
+      admission: {
+        ...admission,
+        step_kind: "validation",
+      },
+      existing_admission: null,
+    }),
+    /step_kind/,
+  );
+  assert.deepEqual(
+    decideSourceTurnEffectAdmission({
+      profile_id: "source_session_v1",
+      requested_goal_ref: goalRef,
+      current_goal_ref: goalRef,
+      gate: admitted.gate,
+      admission,
+      existing_admission: admission,
+    }),
+    {
+      kind: "replay",
+      gate: admitted.gate,
+      admission,
+    },
+  );
+
+  const closing = decideSourceTurnEffectGate({
+    profile_id: "source_session_v1",
+    operation: "close",
+    operation_id: "recreate-release",
+    request_digest: `sha256:${"e".repeat(64)}`,
+    requested_goal_ref: goalRef,
+    current_goal_ref: goalRef,
+    reserved_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_B,
+    },
+    gate: admitted.gate,
+  });
+  assert.equal(closing.kind, "commit");
+  if (closing.kind !== "commit") return;
+  assert.deepEqual(
+    decideSourceTurnEffectAdmission({
+      profile_id: "source_session_v1",
+      requested_goal_ref: goalRef,
+      current_goal_ref: goalRef,
+      gate: closing.gate,
+      admission: {
+        ...admission,
+        step_kind: "quota_spend",
+        effect_ref: `sha256:${"f".repeat(64)}`,
+      },
+      existing_admission: null,
+    }),
+    { kind: "reject", code: "goal_retirement_in_progress" },
+  );
+  assert.deepEqual(
+    decideSourceTurnEffectAbsentResolution({
+      profile_id: "source_session_v1",
+      current_goal_ref: goalRef,
+      gate: closing.gate,
+      admission,
+      existing_admission: admission,
+    }),
+    { kind: "abort" },
+  );
+  assert.deepEqual(
+    decideSourceTurnEffectRelease({
+      profile_id: "source_session_v1",
+      current_goal_ref: goalRef,
+      gate: closing.gate,
+      admission,
+      existing_admission: admission,
+    }),
+    { kind: "commit" },
+  );
+});
+
+test("Turn effect publication requires an empty matching closing gate", () => {
+  const facts = {
+    profile_id: "source_session_v1",
+    operation: "close",
+    operation_id: "recreate-release",
+    request_digest: `sha256:${"e".repeat(64)}`,
+    requested_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_A,
+    },
+    current_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_A,
+    },
+    reserved_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_B,
+    },
+    gate: null,
+  };
+  const closing = decideSourceTurnEffectGate(facts);
+  assert.equal(closing.kind, "commit");
+  if (closing.kind !== "commit") return;
+
+  assert.deepEqual(
+    decideSourceTurnEffectGate({
+      ...facts,
+      operation: "publish",
+      gate: closing.gate,
+      admission_count: 1,
+    }),
+    { kind: "reject", code: "effect_drain_required" },
+  );
+  assert.deepEqual(
+    decideSourceTurnEffectGate({
+      ...facts,
+      operation: "publish",
+      gate: closing.gate,
+      admission_count: 0,
+    }),
+    {
+      kind: "commit",
+      gate: {
+        schema_version: "loopx_source_turn_effect_gate_v1",
+        state: "open",
+        goal_ref: facts.reserved_goal_ref,
+      },
+    },
+  );
+  assert.deepEqual(
+    decideSourceTurnEffectGate({
+      ...facts,
+      operation: "publish",
+      current_goal_ref: facts.reserved_goal_ref,
+      gate: null,
+      admission_count: 0,
+    }),
+    {
+      kind: "replay",
+      gate: {
+        schema_version: "loopx_source_turn_effect_gate_v1",
+        state: "open",
+        goal_ref: facts.reserved_goal_ref,
+      },
+    },
+  );
+});
+
+test("historical recreation replay preserves a later Goal gate", () => {
+  const repairFacts = {
+    profile_id: "source_session_v1",
+    operation: "repair",
+    operation_id: "recreate-release-b",
+    request_digest: `sha256:${"e".repeat(64)}`,
+    requested_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_A,
+    },
+    reserved_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_B,
+    },
+    admission_count: 1,
+  };
+  const laterGate = {
+    schema_version: "loopx_source_turn_effect_gate_v1",
+    state: "closing",
+    retired_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_B,
+    },
+    new_goal_ref: {
+      goal_id: "release",
+      goal_instance_id: INSTANCE_C,
+    },
+    operation_id: "recreate-release-c",
+    request_digest: `sha256:${"f".repeat(64)}`,
+  };
+  assert.deepEqual(
+    decideSourceTurnEffectGate({
+      ...repairFacts,
+      current_goal_ref: laterGate.retired_goal_ref,
+      gate: laterGate,
+    }),
+    { kind: "preserve" },
+  );
+  assert.deepEqual(
+    decideSourceTurnEffectGate({
+      ...repairFacts,
+      current_goal_ref: repairFacts.requested_goal_ref,
+      gate: {
+        schema_version: "loopx_source_turn_effect_gate_v1",
+        state: "open",
+        goal_ref: repairFacts.requested_goal_ref,
+      },
+    }),
+    { kind: "reject", code: "recreation_operation_conflict" },
+  );
+  assert.deepEqual(
+    decideSourceTurnEffectGate({
+      ...repairFacts,
+      current_goal_ref: laterGate.new_goal_ref,
+      gate: {
+        ...laterGate,
+        retired_goal_ref: repairFacts.requested_goal_ref,
+        operation_id: "conflicting-recreation",
+      },
+    }),
+    { kind: "reject", code: "recreation_operation_conflict" },
   );
 });
 

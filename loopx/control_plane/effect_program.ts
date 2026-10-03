@@ -97,6 +97,10 @@ export const SETTLEMENT_STEP_KINDS = [
   "terminal_closeout",
 ] as const;
 export type SettlementStepKind = (typeof SETTLEMENT_STEP_KINDS)[number];
+export type TurnProviderStepKind = Exclude<SettlementStepKind, "validation">;
+export const TURN_PROVIDER_STEP_KINDS = SETTLEMENT_STEP_KINDS.filter(
+  (kind): kind is TurnProviderStepKind => kind !== "validation",
+);
 
 export const SETTLEMENT_BINDING_KINDS = [
   "todo",

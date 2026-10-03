@@ -790,6 +790,30 @@ effect-drain 门槛全部满足；涉及孤儿 resolution 时还需 M4。组件�
   binary 或其他 M3 行已完成。`execution_authority: false` 和总 activation hold
   保持不变。
 
+### 2026-09-30：M3 source Turn effect 准入与 drain 候选
+
+- **基线：** `3ec049e138917a8cce4f84197ba196d26445b2b0`。
+- **已交付：** Source profile Turn settlement 在 durable writeback、quota spend
+  或 terminal closeout 前持久化逐 effect admission。既有 alias guard 覆盖
+  admission 与 prepared journal checkpoint，之后再覆盖 committed/aborted
+  checkpoint 与 admission release。最后一个 provider admission 会保持到
+  scheduler apply 和可选 post-settlement observer 完成。持久化
+  `source_effect_hold` 标记让 crash 和 `scheduler_action_required` 可恢复；该
+  admission 只在最终 journal checkpoint 时释放。Provider 调用、readback 和
+  tail callback 都不持 alias guard。
+- **Retirement：** Recreation 先关闭精确 Goal A 的 gate。仍有 effect 需要
+  provider readback 时返回 `drain_required`；只有 admission 集合为空后才发布
+  Goal B。Committed readback 只 checkpoint 一次；absent readback 直接 abort，
+  不重新调用 provider；unknown readback 保持 Goal A 为当前实例。
+- **证据：** 确定性的线程与 crash 测试覆盖 provider commit 先于 checkpoint、
+  close 与下一 settlement step admission 的竞争、scheduler 与 post-settlement
+  callback 期间的 recreation，以及 committed、absent、unknown 三类 readback。
+  既有 source-session recreation 与非 source Turn 的 schema 和行为保持不变。
+- **剩余 hold：** 本切片只资格化 `first_party_host_runtime` 中内置 source Turn
+  settlement 的部分。其他 Host effect、不支持或常驻 binary，以及其余 partial
+  inventory owner 仍处于 hold。`execution_authority: false` 和 M3 总 activation
+  hold 保持不变。
+
 ### 2026-09-30：M3 quota settlement owner 候选
 
 - **基线：** `3ec049e13`。

@@ -27,6 +27,32 @@ vision drift or missing closeout satisfy, block, or wake another role.
 `goal_frontier_projection`. It should not grow per-agent vision storage,
 budgeting, dreaming, or product-specific replan logic.
 
+## Accepted successor recommendations
+
+After a replan records an accepted `new_runnable_successor`, fresh quota planning
+recommends that exact successor as the action portfolio's `primary`, ahead of an
+older default or prior delivery continuation. The recommendation, selected Todo
+and Agent next action share the existing TypeScript delivery-route decision.
+This intentionally changes the default recommendation; it does not rewrite Todo
+priorities, authorize execution, or bind the Turn before explicit selection.
+Other eligible work remains selectable as `alternative`.
+
+Only the latest accepted ACK in the current Agent lane supplies this preference.
+The current canonical Todo must still belong to that Agent, match the successor's
+exact origin obligation, and pass execution/capability gates. A replaced ACK,
+missing, blocked, deferred, completed or reassigned successor leaves ordinary
+selection in effect. An explicit choice, bound Turn receipt, human/control gate
+or required replan keeps its existing precedence. A prose-only vision change
+does not identify a preferred Todo; use the existing typed successor binding.
+
+replan 持久记录已接受的 `new_runnable_successor` 后，新一轮 quota 默认将该
+确切后续任务作为 `primary`，优先于旧默认任务或上一轮交付延续。推荐、选中任务
+及 Agent next action 共用现有 TS 路由判断。这是默认推荐行为变化，不改 Todo
+优先级、不授予执行权限，也不提前绑定 Turn；其他合格任务仍可作为 `alternative`
+被显式选择。仅当前 Agent 最新已接受的 ACK 提供偏好；后续任务必须仍归属该
+Agent、匹配确切来源义务并通过准入。方案被替换或任务失效时恢复普通选择；
+显式选择、已绑定回执及现有 Gate 保持优先。纯文字 Vision 不能标识要推荐的任务。
+
 ## CLI Budget
 
 Per-agent vision is an executable control-plane field, so the CLI/write API must

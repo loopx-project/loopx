@@ -19,6 +19,7 @@ from .action_portfolio_scenarios import (
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
     external_wait_fallback_scenario_source as _external_wait_fallback_scenario_source,
     future_primary_fallback_scenario_source as _future_primary_fallback_scenario_source,
+    accepted_replan_successor_scenario_source as _accepted_replan_successor_scenario_source,
     planning_horizon_strategic_context_scenario_source as _planning_horizon_strategic_context_scenario_source,
     validate_external_wait_fallback_scenario as _validate_external_wait_fallback_scenario,
     validate_future_primary_fallback_scenario as _validate_future_primary_fallback_scenario,
@@ -165,6 +166,14 @@ _SCENARIOS = (
             "selected_fallback",
             "resume_condition_visibility",
         ),
+    ),
+    _ScenarioSpec(
+        "turn_accepted_replan_successor",
+        "turn",
+        None,
+        "execute",
+        "quota_action_portfolio",
+        ("accepted_replan", "primary_successor", "explicit_selection"),
     ),
     _ScenarioSpec(
         "turn_planning_horizon_strategic_context",
@@ -697,6 +706,7 @@ def _build_actual_default_model_behavior_scenario_sources(
                 _future_primary_fallback_scenario_source()
             ),
             "turn_external_wait_fallback": (_external_wait_fallback_scenario_source()),
+            "turn_accepted_replan_successor": _accepted_replan_successor_scenario_source(),
             "turn_planning_horizon_strategic_context": (
                 _planning_horizon_strategic_context_scenario_source()
             ),
@@ -933,6 +943,20 @@ def _validate_planning_context_scenario(
 ) -> None:
     if spec.scenario_id == "turn_future_primary_fallback":
         _validate_future_primary_fallback_scenario(source_packet)
+    if spec.scenario_id == "turn_accepted_replan_successor":
+        portfolio = source_packet.get("action_portfolio") or {}
+        if not (
+            (source_packet.get("selected_todo") or {}).get("todo_id") == "todo_replan_successor"
+            and (portfolio.get("primary") or {}).get("todo_id") == "todo_replan_successor"
+            and [row.get("todo_id") for row in portfolio.get("suggested_actions", [])] == [
+                "todo_replan_successor", "todo_prior_plan",
+            ]
+            and portfolio.get("selection_policy", {}).get("requires_explicit_turn_binding") is True
+        ):
+            raise ValueError(
+                "accepted-replan scenario must recommend the successor "
+                "without binding the alternative"
+            )
     if spec.scenario_id == "turn_external_wait_fallback":
         _validate_external_wait_fallback_scenario(source_packet)
     if spec.scenario_id == "turn_planning_horizon_strategic_context":

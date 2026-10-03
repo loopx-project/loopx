@@ -1,13 +1,14 @@
 /** Pure admission and recovery rules for the existing Turn settlement providers. */
-import { isCommittedPayload, type JsonObject, type SettlementFailure } from "../effect_program.ts";
+import {
+  isCommittedPayload,
+  TURN_PROVIDER_STEP_KINDS,
+  type JsonObject,
+  type SettlementFailure,
+  type TurnProviderStepKind,
+} from "../effect_program.ts";
 import { requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 
-const PROVIDER_STEP_KINDS = [
-  "durable_writeback",
-  "quota_spend",
-  "terminal_closeout",
-] as const;
-export type ProviderStepKind = (typeof PROVIDER_STEP_KINDS)[number];
+export type ProviderStepKind = TurnProviderStepKind;
 
 const PROVIDER_RESOLUTION_KINDS = ["committed", "absent", "unknown"] as const;
 type ProviderResolutionKind = (typeof PROVIDER_RESOLUTION_KINDS)[number];
@@ -54,7 +55,7 @@ export function decodeProviderAttemptResult(
   return {
     step_kind: requireStringLiteral(
       attempt.step_kind,
-      PROVIDER_STEP_KINDS,
+      TURN_PROVIDER_STEP_KINDS,
       `${label}.step_kind`,
     ),
     payload: requireJsonObject(
@@ -75,7 +76,7 @@ export function decodeProviderRecord<Value>(
   for (const [rawStep, rawValue] of Object.entries(record)) {
     const step = requireStringLiteral(
       rawStep,
-      PROVIDER_STEP_KINDS,
+      TURN_PROVIDER_STEP_KINDS,
       `${label} step`,
     );
     decoded[step] = decode(rawValue, `${label}.${step}`);

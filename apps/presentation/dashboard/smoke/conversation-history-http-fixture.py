@@ -63,9 +63,10 @@ def main() -> None:
                     server.unavailable_session_id = "old"
                     print(json.dumps({"unavailable": "old"}), flush=True)
                 elif command in {"result", "revision"}:
+                    heading = "First checked result" if command == "result" else "Revised checked result"
                     store.append_message("old", role="agent", origin="manager_followup",
                                          message_id=f"handoff.{command}",
-                                         text="First checked result" if command == "result" else "Revised checked result")
+                                         text=f"{heading}\n\nForm: https://example.org/forms/{command}。")
                     # Fixture writes are intentional. Subsequent browser reads
                     # must neither mutate this state nor create an execution.
                     before = {str(path.relative_to(store.sessions_root)): path.read_bytes()

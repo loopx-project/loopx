@@ -5,14 +5,19 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from ..effect_program import (
     SettlementResult,
     SettlementStepKind,
+    TurnProviderStepKind,
+    require_turn_provider_step_kind,
     settlement_result_payload,
 )
 from ..effect_runtime import effect_runtime_result
+from ..goals.source_session_turn_effects import (
+    SOURCE_TURN_EFFECT_HOLD_SCHEMA_VERSION,
+)
 from ..settlement_driver import decode_settlement_result
 from .driver import selected_turn_todo
 from .transaction import (
@@ -33,6 +38,36 @@ TurnSettlementCheckpoint = Callable[
 
 TerminalCloseoutCheckpoint = Callable[[Mapping[str, Any]], None]
 CompletionIntent = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+SourceJournalPersist = Callable[[Mapping[str, Any]], None]
+
+
+class TurnSettlementEffectAdmission(Protocol):
+    def prepare(
+        self,
+        step_kind: TurnProviderStepKind,
+        effect_ref: str,
+        persist_journal: SourceJournalPersist,
+    ) -> None: ...
+
+    def hold(
+        self,
+        step_kind: TurnProviderStepKind,
+        effect_ref: str,
+        persist_journal: SourceJournalPersist,
+    ) -> None: ...
+
+    def release(
+        self,
+        step_kind: TurnProviderStepKind,
+        effect_ref: str,
+        persist_journal: SourceJournalPersist,
+    ) -> None: ...
+
+    def allows_absent_reexecute(
+        self,
+        step_kind: TurnProviderStepKind,
+        effect_ref: str,
+    ) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +154,9 @@ class TurnSettlementJournalAdapter:
     effects: dict[str, bool]
     persist: Callable[[], None]
     compact_payload: Callable[[Mapping[str, Any]], Mapping[str, Any]]
+    source_effects: TurnSettlementEffectAdmission | None = None
+    persist_source: SourceJournalPersist | None = None
+    deferred_release_step: SettlementStepKind | None = None
 
     @property
     def effect_attempts(self) -> Mapping[str, Mapping[str, Any]]:
@@ -133,11 +171,25 @@ class TurnSettlementJournalAdapter:
             "status": "prepared",
             "effect_ref": effect_ref,
         }
-        self.persist()
+        if self.source_effects is None:
+            self.persist()
+            return
+        self.source_effects.prepare(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
+            self._require_source_persist(),
+        )
 
     def abort(self, step_kind: SettlementStepKind, effect_ref: str) -> None:
         self._forget(step_kind, effect_ref)
-        self.persist()
+        if self.source_effects is None:
+            self.persist()
+            return
+        self.source_effects.release(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
+            self._require_source_persist(),
+        )
 
     def checkpoint(
         self,
@@ -145,6 +197,7 @@ class TurnSettlementJournalAdapter:
         payload: Mapping[str, Any],
         phases: tuple[str, ...],
     ) -> None:
+        effect_ref = self._effect_ref(step_kind, payload)
         if step_kind is SettlementStepKind.DURABLE_WRITEBACK:
             self.effects["state_written"] = True
             self.journal["writeback"] = self._completion_payload(payload)
@@ -152,10 +205,15 @@ class TurnSettlementJournalAdapter:
             self.effects["quota_spent"] = True
             self.journal["quota_spend"] = dict(self.compact_payload(payload))
         self.journal["completed_phases"] = list(phases)
-        self._forget(step_kind, str(payload.get("effect_ref") or ""), strict=False)
-        self.persist()
+        self._forget(step_kind, effect_ref)
+        if self.source_effects is None:
+            self.persist()
+            return
+        self._checkpoint_source_effect(step_kind, effect_ref)
 
     def checkpoint_terminal(self, payload: Mapping[str, Any]) -> None:
+        step_kind = SettlementStepKind.TERMINAL_CLOSEOUT
+        effect_ref = self._effect_ref(step_kind, payload)
         compact = self._completion_payload(payload)
         self.journal["terminal_closeout"] = compact
         writeback = self.journal.get("writeback")
@@ -163,12 +221,99 @@ class TurnSettlementJournalAdapter:
             **(dict(writeback) if isinstance(writeback, Mapping) else {}),
             "completion": compact.get("completion"),
         }
-        self._forget(
-            SettlementStepKind.TERMINAL_CLOSEOUT,
-            str(payload.get("effect_ref") or ""),
-            strict=False,
+        self._forget(step_kind, effect_ref)
+        if self.source_effects is None:
+            self.persist()
+            return
+        self._checkpoint_source_effect(step_kind, effect_ref)
+
+    def allows_absent_reexecute(
+        self,
+        step_kind: SettlementStepKind,
+        effect_ref: str,
+    ) -> bool:
+        if self.source_effects is None:
+            return True
+        return self.source_effects.allows_absent_reexecute(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
         )
-        self.persist()
+
+    def hold_tail(
+        self,
+        step_kind: SettlementStepKind,
+        effect_ref: str,
+    ) -> None:
+        if self.source_effects is None:
+            raise RuntimeError("source Turn effect admission is unavailable")
+        self._set_tail_hold(step_kind, effect_ref)
+        self.source_effects.hold(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
+            self._require_source_persist(),
+        )
+
+    def release_tail(
+        self,
+        step_kind: SettlementStepKind,
+        effect_ref: str,
+    ) -> None:
+        expected = self._tail_hold(step_kind, effect_ref)
+        if self.journal.get("source_effect_hold") != expected:
+            raise RuntimeError("source Turn effect hold identity changed")
+        self.journal.pop("source_effect_hold")
+        if self.source_effects is None:
+            raise RuntimeError("source Turn effect admission is unavailable")
+        self.source_effects.release(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
+            self._require_source_persist(),
+        )
+
+    def _checkpoint_source_effect(
+        self,
+        step_kind: SettlementStepKind,
+        effect_ref: str,
+    ) -> None:
+        if self.source_effects is None:
+            raise RuntimeError("source Turn effect admission is unavailable")
+        persist = self._require_source_persist()
+        if step_kind is self.deferred_release_step:
+            self._set_tail_hold(step_kind, effect_ref)
+            self.source_effects.hold(
+                require_turn_provider_step_kind(step_kind),
+                effect_ref,
+                persist,
+            )
+            return
+        self.source_effects.release(
+            require_turn_provider_step_kind(step_kind),
+            effect_ref,
+            persist,
+        )
+
+    @staticmethod
+    def _tail_hold(
+        step_kind: SettlementStepKind,
+        effect_ref: str,
+    ) -> dict[str, str]:
+        return {
+            "schema_version": SOURCE_TURN_EFFECT_HOLD_SCHEMA_VERSION,
+            "status": "held",
+            "step_kind": step_kind.value,
+            "effect_ref": effect_ref,
+        }
+
+    def _set_tail_hold(
+        self,
+        step_kind: SettlementStepKind,
+        effect_ref: str,
+    ) -> None:
+        expected = self._tail_hold(step_kind, effect_ref)
+        existing = self.journal.get("source_effect_hold")
+        if existing is not None and existing != expected:
+            raise RuntimeError("source Turn effect hold identity changed")
+        self.journal["source_effect_hold"] = expected
 
     def _completion_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return {
@@ -179,6 +324,29 @@ class TurnSettlementJournalAdapter:
                 else {}
             ),
         }
+
+    def _effect_ref(
+        self,
+        step_kind: SettlementStepKind,
+        payload: Mapping[str, Any],
+    ) -> str:
+        payload_ref = str(payload.get("effect_ref") or "")
+        attempt = self.effect_attempts.get(step_kind.value)
+        attempt_ref = (
+            str(attempt.get("effect_ref") or "") if isinstance(attempt, Mapping) else ""
+        )
+        if attempt_ref:
+            if payload_ref and payload_ref != attempt_ref:
+                raise RuntimeError("Turn provider effect ref changed")
+            return attempt_ref
+        if payload_ref:
+            return payload_ref
+        raise RuntimeError("Turn journal prepared effect ref is missing")
+
+    def _require_source_persist(self) -> SourceJournalPersist:
+        if self.persist_source is None:
+            raise RuntimeError("source Turn effect persistence is unavailable")
+        return self.persist_source
 
     def _forget(
         self,
@@ -273,7 +441,9 @@ def execute_turn_driver_settlement(
     terminal_closeout: TurnEffect | None = None,
     terminal_checkpoint: TerminalCloseoutCheckpoint | None = None,
     prepare: TurnSettlementPrepare | None = None,
+    resume_prepare: TurnSettlementPrepare | None = None,
     abort: TurnSettlementAbort | None = None,
+    allow_absent_reexecute: Callable[[SettlementStepKind, str], bool] | None = None,
     effect_attempts: Mapping[str, Mapping[str, Any]] | None = None,
     effect_resolvers: Mapping[SettlementStepKind, TurnEffectResolver] | None = None,
     turn_result_kind: str | None = None,
@@ -364,6 +534,8 @@ def execute_turn_driver_settlement(
             if not effect_ref:
                 raise RuntimeError("TypeScript Turn settlement effect ref is empty")
             if action == "resolve_prepared":
+                if resume_prepare is not None:
+                    resume_prepare(step_kind, effect_ref)
                 observations[step_kind.value] = _read_prepared_effect(
                     resolvers, step_kind, effect_ref
                 )
@@ -376,6 +548,20 @@ def execute_turn_driver_settlement(
                         "status": "prepared",
                         "effect_ref": effect_ref,
                     }
+                elif (
+                    allow_absent_reexecute is not None
+                    and not allow_absent_reexecute(step_kind, effect_ref)
+                ):
+                    returned_attempt = {
+                        "step_kind": step_kind.value,
+                        "payload": {
+                            "ok": False,
+                            "appended": False,
+                            "reason": "Goal retirement closed effect re-execution",
+                        },
+                    }
+                    observations.pop(step_kind.value, None)
+                    continue
                 provider = (
                     terminal_closeout
                     if step_kind is SettlementStepKind.TERMINAL_CLOSEOUT
@@ -489,4 +675,8 @@ def turn_settlement_failure_outcome(
         raise RuntimeError(
             "TypeScript Turn settlement failure has unsupported result_kind"
         ) from exc
-    return result_kind, tuple(str(phase) for phase in outcome["completed_phases"]), failed_phase
+    return (
+        result_kind,
+        tuple(str(phase) for phase in outcome["completed_phases"]),
+        failed_phase,
+    )

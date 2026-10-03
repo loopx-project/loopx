@@ -2,6 +2,12 @@
 
 Status: co-located optional LoopX extension sample.
 
+The separate read-only position operation accepts private normalized account
+facts; its receipts must stay private and cannot be published to the research
+dashboard. See [Position guard and portable installation](POSITION_GUARD.md).
+独立的只读持仓操作接受私有账户归一化事实；回执必须保密，不能发布到研究
+Dashboard。见[持仓守护与可重建安装](POSITION_GUARD.md)。
+
 ## Placement
 
 - extension id: `loopx-finance-value-discovery`

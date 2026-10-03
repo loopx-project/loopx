@@ -1,0 +1,287 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "position_guard_result_v0"
+      ]
+    },
+    "extension_id": {
+      "enum": [
+        "loopx-finance-value-discovery"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "evaluate_finance_position_guard"
+      ]
+    },
+    "invocation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "trade_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "target_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "request_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "state": {
+      "enum": [
+        "protected_open",
+        "review_due",
+        "exit_review_required",
+        "attention_required",
+        "closed_verified",
+        "closure_unverified"
+      ]
+    },
+    "urgent": {
+      "type": "boolean"
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+      },
+      "maxItems": 32
+    },
+    "next_action": {
+      "enum": [
+        "propose_close_monitor",
+        "reconcile_exit_and_residual_orders",
+        "refresh_or_repair_readback",
+        "prepare_human_exit_draft",
+        "review_position",
+        "keep_core_monitor"
+      ]
+    },
+    "open_quantity": {
+      "type": "string",
+      "maxLength": 50,
+      "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+    },
+    "protection_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stop_loss": {
+          "type": "string",
+          "maxLength": 50,
+          "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+        },
+        "take_profit": {
+          "type": "string",
+          "maxLength": 50,
+          "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+        }
+      },
+      "required": [
+        "stop_loss",
+        "take_profit"
+      ]
+    },
+    "risk_estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "estimated_stop_loss_cash": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "USDC",
+            "USDT"
+          ]
+        },
+        "is_loss_guarantee": {
+          "enum": [
+            false
+          ]
+        }
+      },
+      "required": [
+        "estimated_stop_loss_cash",
+        "currency",
+        "is_loss_guarantee"
+      ]
+    },
+    "monitor_projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "todo_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "next_due_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "maximum_hold_until": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "suggested_next_due_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "keep_monitor_open": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "todo_id",
+        "next_due_at",
+        "maximum_hold_until",
+        "suggested_next_due_at",
+        "keep_monitor_open"
+      ]
+    },
+    "exit_draft": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "manual_final_check_required"
+              ]
+            },
+            "asset": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "side": {
+              "enum": [
+                "buy",
+                "sell"
+              ]
+            },
+            "quantity": {
+              "type": "string",
+              "maxLength": 50,
+              "pattern": "^(0|[1-9][0-9]{0,23})(\\.[0-9]{1,18})?$"
+            },
+            "reduce_only": {
+              "enum": [
+                true
+              ]
+            },
+            "financial_authority": {
+              "enum": [
+                "human_final_submit"
+              ]
+            },
+            "price_terms": {
+              "enum": [
+                "fresh_venue_preview_required"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "asset",
+            "side",
+            "quantity",
+            "reduce_only",
+            "financial_authority",
+            "price_terms"
+          ]
+        }
+      ]
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "financial_mutations": {
+          "enum": [
+            false
+          ]
+        },
+        "monitor_mutations": {
+          "enum": [
+            false
+          ]
+        },
+        "scheduler_created": {
+          "enum": [
+            false
+          ]
+        }
+      },
+      "required": [
+        "financial_mutations",
+        "monitor_mutations",
+        "scheduler_created"
+      ]
+    },
+    "privacy": {
+      "enum": [
+        "private_account_material"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "extension_id",
+    "operation",
+    "invocation_id",
+    "trade_id",
+    "target_key",
+    "evaluated_at",
+    "request_digest",
+    "state",
+    "urgent",
+    "reasons",
+    "next_action",
+    "open_quantity",
+    "protection_coverage",
+    "risk_estimate",
+    "monitor_projection",
+    "exit_draft",
+    "effects",
+    "privacy"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopx.dev/schemas/finance/position-guard-result-v0"
+}

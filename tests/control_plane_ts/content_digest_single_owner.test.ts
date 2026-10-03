@@ -94,6 +94,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/collaboration/chat_mode.ts",
   "control_plane/collaboration/delegation.ts",
   "control_plane/collaboration/goal_instance_lifecycle.ts",
+  "control_plane/collaboration/inbox_receipts.ts",
   "control_plane/collaboration/result_publication.ts",
   "control_plane/collaboration/return_delivery.ts",
   "control_plane/collaboration/semantic_request.ts",

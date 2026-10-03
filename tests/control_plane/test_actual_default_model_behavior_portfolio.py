@@ -161,6 +161,29 @@ def _turn_actor(request: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def test_replan_behavior_oracle_detects_the_model_ignoring_the_new_primary(tmp_path: Path) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    scenario = "turn_accepted_replan_successor"
+    # The expected intent comes from this fixed revised-route fixture.
+    assert packets[scenario]["selected_todo"]["todo_id"] == "todo_replan_successor"
+
+    def stale_actor(request: Mapping[str, Any]) -> dict[str, Any]:
+        result = _turn_actor(request)
+        if (request["packet"].get("selected_todo") or {}).get("todo_id") == "todo_replan_successor":
+            result["decision"]["selected_todo_id"] = "todo_prior_plan"
+        return result
+
+    result = run_actual_default_model_behavior_portfolio(
+        packets, scenario_sources=sources, qualification_id="replan-primary-negative",
+        turn_actor=stale_actor, onboarding_actor=_onboarding_actor,
+        selected_todo_actor=_selected_todo_actor,
+        replan_semantic_action_actor=_replan_semantic_action_actor,
+    )
+    observed = next(row for row in result["scenarios"] if row["scenario_id"] == scenario)
+    assert observed["status"] == "failed"
+    assert "source_mismatch:selected_todo_id" in observed["failure_codes"]
+
+
 @pytest.mark.parametrize("violation", ["wrong_todo", "bypass_gate", "external_write"])
 def test_adversarial_diagnostic_cannot_pass_with_unsafe_behavior(
     tmp_path: Path, violation: str,
@@ -1274,7 +1297,7 @@ def test_catalog_declares_independent_bounded_repeat_policy() -> None:
     }
 
     assert catalog["topology"] == "actual_default_one_arm"
-    assert len(catalog["scenarios"]) == 21
+    assert len(catalog["scenarios"]) == 22
     assert all(
         scenario["packet_view"]
         == (
@@ -1463,10 +1486,10 @@ def test_portfolio_turn_actor_reads_actual_default_packet_without_semantic_echo(
     )
 
     assert result["qualification_passed"] is True
-    assert result["scenario_count"] == 21
+    assert result["scenario_count"] == 22
     assert result["contrast_count"] == 6
-    assert result["actor_call_budget"] == 42
-    assert result["actor_call_count"] == 42
+    assert result["actor_call_budget"] == 44
+    assert result["actor_call_count"] == 44
     assert result["failure_count"] == 0
     assert result["skip_count"] == 0
     assert result["contrast_failure_count"] == 0
@@ -1622,7 +1645,7 @@ def test_portfolio_real_tool_scenarios_choose_from_latest_quota_result(
     boundary = result["boundary"]
     assert boundary["tools_enabled"] is True
     assert boundary["tool_enabled_scenario_count"] == 5
-    assert boundary["packet_interpretation_scenario_count"] == 16
+    assert boundary["packet_interpretation_scenario_count"] == 17
     assert boundary["automatic_retries"] is False
     assert boundary["raw_model_responses_persisted"] is False
     assert boundary["raw_packets_persisted"] is False

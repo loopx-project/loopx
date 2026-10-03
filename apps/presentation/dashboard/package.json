@@ -59,7 +59,7 @@
     "smoke:attention-details": "tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --resolveJsonModule --esModuleInterop --jsx react-jsx --skipLibCheck --strict --outDir /tmp/loopx-attention-details-smoke smoke/attention-details-smoke.ts && NODE_PATH=\"$PWD/node_modules\" node /tmp/loopx-attention-details-smoke/apps/presentation/dashboard/smoke/attention-details-smoke.js",
     "smoke:delivery-review": "tsc --ignoreConfig --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --strict --rootDir src --outDir node_modules/.cache/delivery-review src/data/delivery-review.ts src/data/goal-work-map.ts src/data/goal-acceptance-observation.ts src/features/personal-workspace/delivery-review-copy.ts && node smoke/delivery-review-smoke.mjs",
     "smoke:team-artifact-comparison": "tsc --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --skipLibCheck --strict --rootDir src --outDir node_modules/.cache/team-comparison src/features/personal-workspace/team-artifact-comparison.ts src/vite-env.d.ts && node smoke/team-artifact-comparison-smoke.mjs",
-    "smoke:team-report": "tsc --ignoreConfig --target ES2022 --module ES2022 --moduleResolution Bundler --jsx react-jsx --skipLibCheck --strict --rootDir src --outDir node_modules/.cache/team-report src/features/personal-workspace/team-artifact-content.tsx src/vite-env.d.ts && node smoke/team-report-smoke.mjs",
+    "smoke:team-report": "vite build --ssr smoke/team-report-smoke.mjs --outDir node_modules/.cache/team-report --emptyOutDir && node node_modules/.cache/team-report/team-report-smoke.js",
     "build:chat:vite": "tsc --noEmit && vite build --config vite.chat.config.ts",
     "smoke:chat-upgrade": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node ../../../examples/chat-bundle-upgrade-browser-smoke.mjs",
     "test:conversation-returns": "node --experimental-strip-types src/data/conversation-returns.test.mjs",
@@ -77,6 +77,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "linkify-it": "5.0.0",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -86,6 +87,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/linkify-it": "5.0.0",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "playwright": "^1.62.1",

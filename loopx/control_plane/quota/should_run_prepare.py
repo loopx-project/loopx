@@ -164,6 +164,7 @@ class _QuotaDecisionPreparation:
     replan_obligation: dict[str, Any] | None
     replan_scope: dict[str, Any]
     goal_frontier_projection: dict[str, Any]
+    latest_replan_ack: dict[str, Any] | None
     projection_gap: dict[str, Any] | None
     boundary_projection_repair: dict[str, Any] | None
     include_scheduler_detail: bool
@@ -930,6 +931,7 @@ def _prepare_quota_should_run_item(
         replan_obligation=replan_obligation,
         replan_scope=replan_scope,
         goal_frontier_projection=goal_frontier_projection,
+        latest_replan_ack=goal_frontier_context.get("latest_replan_ack"),
         projection_gap=projection_gap,
         boundary_projection_repair=boundary_projection_repair,
         include_scheduler_detail=include_scheduler_detail,

@@ -74,6 +74,13 @@ advancement work remains active.
   scheduler view agree: no new poll, delivery, replan, refresh or spend in that
   Turn. Pending gates and independent work remain diagnostic facts; the next
   Turn recomputes them. The automation stays active and quiet between Turns.
+  Completing, superseding or archiving the Monitor cannot reopen its committed
+  Turn. The settlement reader reports `replay_phase=settled`; CLI replay retains
+  the original identity in `heartbeat_receipt.settlement_identity` and has no
+  executable `selected_todo`. Consumers must use the receipt for historical
+  identity instead of requiring the Monitor to remain in the open frontier.
+  Uncommitted observation rows and auxiliary polls for another Todo do not
+  qualify this closeout.
 
 ### Acceptance
 
@@ -277,6 +284,11 @@ using a complete read-only snapshot with disposable File/SQLite/PostgreSQL arms.
   fallback 和其他投影都必须保留其 settled 状态。work-lane、执行义务、interaction
   命令和 scheduler 读回一致：本 Turn 不新增 poll、delivery、replan、refresh 或 spend。
   未决 gate 和独立工作保留为诊断事实，由新 Turn 重新计算；自动化保持 active quiet。
+  Monitor 完成、被替代或归档都不能重开已提交的 Turn。结算读取返回
+  `replay_phase=settled`；CLI 重放通过 `heartbeat_receipt.settlement_identity`
+  保留原身份，不再投影可执行的 `selected_todo`。消费者应从回执读取历史身份，
+  不要求 Monitor 继续出现在未完成列表中。未提交的观察行，以及针对另一个 Todo
+  的辅助 poll，均不能构成该结算依据。
 
 ### 验收
 

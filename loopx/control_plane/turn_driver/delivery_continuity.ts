@@ -51,6 +51,7 @@ export interface DeliveryContinuityTodo {
   claimed_by: string | null;
   actionable: boolean;
   capability_ready: boolean;
+  replan_obligation_id?: string | null;
 }
 
 interface DeliveryContinuityFacts {
@@ -110,7 +111,7 @@ export type DeliveryBoundaryResult = JsonObject & {
   todo_id: string | null;
 };
 
-export type DeliveryRoutingSelection = "continuity" | "fallback" | "none";
+export type DeliveryRoutingSelection = "continuity" | "fallback" | "replan" | "none";
 
 interface DeliveryRoutingRequest {
   schema_version: typeof DELIVERY_ROUTING_REQUEST_SCHEMA;
@@ -119,6 +120,8 @@ interface DeliveryRoutingRequest {
   previous_delivery_outcome: MaterialDeliveryOutcome | null;
   continuity_todo: DeliveryContinuityTodo | null;
   fallback_todo: DeliveryContinuityTodo | null;
+  replan_todo: DeliveryContinuityTodo | null;
+  latest_replan_ack: JsonObject | null;
   preemptions: readonly DeliveryContinuityPreemption[];
 }
 
@@ -172,6 +175,7 @@ function currentTodo(
       todo.capability_ready,
       `${label}.capability_ready`,
     ),
+    replan_obligation_id: optionalNonEmptyString(todo.replan_obligation_id, `${label}.replan_obligation_id`),
   };
 }
 
@@ -311,8 +315,40 @@ function decodeDeliveryRoutingRequest(value: unknown): DeliveryRoutingRequest {
     ),
     continuity_todo: currentTodo(request.continuity_todo, "continuity_todo"),
     fallback_todo: currentTodo(request.fallback_todo, "fallback_todo"),
+    replan_todo: currentTodo(request.replan_todo, "replan_todo"),
+    latest_replan_ack: request.latest_replan_ack == null ? null
+      : requireJsonObject(request.latest_replan_ack, "latest_replan_ack"),
     preemptions: preemptions(request.preemptions),
   };
+}
+
+/** A durable accepted successor biases fresh planning, never delivery authority.
+ * The latest scoped ACK replaces older preferences; current admission and exact
+ * origin must still agree. Missing historical facts preserve the old route.
+ */
+function prefersReplanSuccessor(request: DeliveryRoutingRequest): boolean {
+  const ack = request.latest_replan_ack;
+  const todo = request.replan_todo;
+  if (
+    !ack || !todo || request.preemptions.length ||
+    todo.claimed_by !== request.agent_id ||
+    ack.schema_version !== "autonomous_replan_ack_v0" || ack.recorded !== true ||
+    ack.agent_id !== request.agent_id
+  ) return false;
+  const raw = ack.semantic_delta;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const delta = raw as JsonObject;
+  if (
+    delta.schema_version !== "replan_semantic_delta_v0" || delta.accepted !== true ||
+    !Array.isArray(delta.outcomes) || !delta.outcomes.includes("new_runnable_successor") ||
+    delta.successor_todo_id !== todo.todo_id || !todo.replan_obligation_id ||
+    (delta.successor_origin_obligation_id ?? delta.obligation_id) !== todo.replan_obligation_id
+  ) return false;
+  return resolveDeliveryBoundary({
+    agent_id: request.agent_id,
+    current_todo: todo,
+    preemptions: request.preemptions,
+  }).delivery_boundary === "in_flight_continuation";
 }
 
 /** Resolve one quota delivery route behind one runtime request/response. */
@@ -328,13 +364,17 @@ export function evaluateDeliveryRoute(value: unknown): DeliveryRoutingResult {
       preemptions: request.preemptions,
     });
   const selection: DeliveryRoutingSelection =
-    continuity?.decision === "resume_in_flight"
+    prefersReplanSuccessor(request)
+      ? "replan"
+      : continuity?.decision === "resume_in_flight"
       ? "continuity"
       : request.fallback_todo === null
       ? "none"
       : "fallback";
   const selectedTodo = selection === "continuity"
     ? request.continuity_todo
+    : selection === "replan"
+    ? request.replan_todo
     : selection === "fallback"
     ? request.fallback_todo
     : null;

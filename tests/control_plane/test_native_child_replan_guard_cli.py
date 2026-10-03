@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -67,11 +68,11 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, tod
         goal_id=GOAL, todos=todos, handoff_mode="soft_claim", leases=[],
     ), state_path=state, provider=provider)
 
-    def call(*args: str) -> dict:
+    def call(*args: str, expected_code: int = 0) -> dict:
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=ROOT,
             capture_output=True, text=True, timeout=60)
-        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert result.returncode == expected_code, (result.stdout, result.stderr)
         return json.loads(result.stdout)
 
     return call, runtime, index
@@ -86,6 +87,17 @@ def test_legal_replan_reports_native_child_without_settling_parent(
     guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
                  "--agent-id", AGENT, "--turn-instance-id", TURN)
     assert guard["decision"] == "autonomous_replan_required", guard
+    if todo_bound:
+        # A recommendation does not bind the hard-replan Turn. Choose the
+        # existing Todo, then follow its retained-selection recovery command.
+        assert "settlement_identity" not in guard["heartbeat_receipt"]
+        assert guard["interaction_contract"]["cli_channel"]["selection_required"]
+        deferred = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+                        "--agent-id", AGENT, "--turn-instance-id", TURN,
+                        "--todo-id", TODO, expected_code=1)
+        assert deferred["action_selection_qualification"]["state"] == "deferred"
+        [reentry] = deferred["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        guard = call(*shlex.split(reentry)[1:])
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity.get("todo_id") == (TODO if todo_bound else None)
     assert bool(identity.get("replan_obligation_id")) is not todo_bound

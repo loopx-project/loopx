@@ -147,6 +147,35 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+// A destination request comes from the trusted workspace, not a new privileged
+// WebView. Send only web destinations to the system browser; retain the main
+// window's origin restriction and never launch custom handlers or local files.
+fn open_web_destination(
+    url: &Url,
+    launch: impl FnOnce(&str) -> std::io::Result<()>,
+) -> tauri::webview::NewWindowResponse<tauri::Wry> {
+    if matches!(url.scheme(), "http" | "https") {
+        if let Err(error) = launch(url.as_str()) {
+            eprintln!("LoopX could not open web destination: {error}");
+        }
+    }
+    tauri::webview::NewWindowResponse::Deny
+}
+
+fn workspace_navigation(
+    url: &Url,
+    origin: &Url,
+    launch: impl FnOnce(&str) -> std::io::Result<()>,
+) -> bool {
+    if url.scheme() == "tauri" || url.origin() == origin.origin() {
+        return true;
+    }
+    // WKWebView evaluates navigation policy before its new-window delegate.
+    // Hand external web links off here while keeping them out of this WebView.
+    open_web_destination(url, launch);
+    false
+}
+
 pub fn run() {
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
@@ -215,7 +244,12 @@ pub fn run() {
                         .page_reached(payload.url(), &origin_for_load);
                 })
                 .on_navigation(move |url| {
-                    url.scheme() == "tauri" || url.origin() == navigation_origin.origin()
+                    workspace_navigation(url, &navigation_origin, |destination| {
+                        open::that_detached(destination)
+                    })
+                })
+                .on_new_window(|url, _features| {
+                    open_web_destination(&url, |destination| open::that_detached(destination))
                 })
                 .build()?;
 
@@ -308,9 +342,84 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{NavigationRetry, WorkspaceHandoff};
+    use super::{open_web_destination, workspace_navigation, NavigationRetry, WorkspaceHandoff};
     use std::time::Instant;
     use tauri::Url;
+
+    #[test]
+    fn requested_web_destinations_open_once_without_creating_a_native_child() {
+        for destination in [
+            "https://example.org/form?lang=en&view=all",
+            "http://127.0.0.1:8767/chat/?reportSessionId=example",
+        ] {
+            let url: Url = destination.parse().unwrap();
+            let mut opened = Vec::new();
+            let response = open_web_destination(&url, |value| {
+                opened.push(value.to_string());
+                Ok(())
+            });
+            assert_eq!(opened, [url.as_str()]);
+            assert!(matches!(response, tauri::webview::NewWindowResponse::Deny));
+        }
+    }
+
+    #[test]
+    fn new_window_rejects_non_web_handlers_and_keeps_launcher_failures_contained() {
+        for destination in [
+            "file:///tmp/example.txt",
+            "javascript:alert(1)",
+            "data:text/html,example",
+            "mailto:someone@example.org",
+            "tauri://localhost/",
+        ] {
+            let response = open_web_destination(&destination.parse().unwrap(), |_| {
+                panic!("non-web destination must never reach a system handler")
+            });
+            assert!(matches!(response, tauri::webview::NewWindowResponse::Deny));
+        }
+        let response = open_web_destination(&"https://example.org/".parse().unwrap(), |_| {
+            Err(std::io::Error::other("browser unavailable"))
+        });
+        assert!(matches!(response, tauri::webview::NewWindowResponse::Deny));
+    }
+
+    #[test]
+    fn navigation_keeps_the_workspace_fence_and_hands_external_web_links_off_once() {
+        let origin: Url = "http://127.0.0.1:8767/chat/".parse().unwrap();
+        for destination in [
+            "tauri://localhost/",
+            "http://127.0.0.1:8767/chat/?goalId=example",
+        ] {
+            assert!(workspace_navigation(
+                &destination.parse().unwrap(),
+                &origin,
+                |_| { panic!("workspace navigation must not leave the App") }
+            ));
+        }
+        let external: Url = "https://example.org/form?lang=en&view=all".parse().unwrap();
+        let mut opened = Vec::new();
+        let allowed = workspace_navigation(&external, &origin, |value| {
+            opened.push(value.to_string());
+            Ok(())
+        });
+        // macOS never reaches the new-window delegate after this rejection.
+        assert!(!allowed);
+        assert_eq!(opened, [external.as_str()]);
+        for destination in [
+            "file:///tmp/example.txt",
+            "javascript:alert(1)",
+            "mailto:someone@example.org",
+        ] {
+            assert!(!workspace_navigation(
+                &destination.parse().unwrap(),
+                &origin,
+                |_| { panic!("non-web navigation must not reach a system handler") }
+            ));
+        }
+        assert!(!workspace_navigation(&external, &origin, |_| {
+            Err(std::io::Error::other("browser unavailable"))
+        }));
+    }
 
     #[test]
     fn failed_workspace_load_retries_until_a_native_commit() {

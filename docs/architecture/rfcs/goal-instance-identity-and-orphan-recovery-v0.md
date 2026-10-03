@@ -877,6 +877,33 @@ only `quota_settlement`; missing companion owners remain open in #5206.
   drain, unsupported/warm binary coverage, or any other M3 row.
   `execution_authority: false` and the overall activation hold remain.
 
+### 2026-09-30: M3 source Turn effect admission and drain candidate
+
+- **Baseline:** `3ec049e138917a8cce4f84197ba196d26445b2b0`.
+- **Delivered:** Source-profile Turn settlement now records a per-effect
+  admission before durable writeback, quota spend, or terminal closeout. The
+  existing alias guard covers admission plus the prepared journal checkpoint,
+  and later covers the committed or aborted checkpoint plus admission release.
+  The final provider admission remains held through scheduler apply and the
+  optional post-settlement observer. A durable `source_effect_hold` marker keeps
+  crashes and `scheduler_action_required` resumable, and the admission releases
+  only with the final journal checkpoint. Provider calls, readbacks, and tail
+  callbacks remain outside the alias guard.
+- **Retirement:** Recreation first closes the exact Goal A gate. It returns
+  `drain_required` while an admitted effect still needs provider readback and
+  publishes Goal B only after the admission set is empty. A committed readback
+  checkpoints once, an absent readback aborts without provider re-execution,
+  and an unknown readback keeps Goal A current.
+- **Evidence:** Deterministic thread and crash tests cover provider commit
+  before checkpoint, close versus next-step admission, recreation during
+  scheduler and post-settlement callbacks, and committed, absent, and unknown
+  readbacks. Existing source-session recreation and non-source Turn paths
+  retain their schemas and behavior.
+- **Remaining hold:** This qualifies the built-in source Turn settlement slice
+  of `first_party_host_runtime`. Other Host effects, unsupported or warm
+  binaries, and every other partial inventory owner remain blocked.
+  `execution_authority: false` and the overall M3 activation hold remain.
+
 ### 2026-09-30: M3 quota settlement owner candidate
 
 - **Baseline:** `3ec049e13`.

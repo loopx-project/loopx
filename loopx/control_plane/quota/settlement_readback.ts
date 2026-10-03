@@ -1123,7 +1123,16 @@ function readQuotaSettlementFromRequest(
     isAcceptedInFlightWriteback(writebackRun, identity);
   const replanWriteback = writeback.failure === null &&
     isAcceptedReplanWriteback(writebackRun, identity);
-  const replayPhase = receiptBoundReplayPhase({
+  const monitorPhase = receiptBoundMonitorPhase({
+    poll_present: monitorPoll !== null,
+    material_change: isMaterialMonitorPoll(monitorPoll),
+    durable_writeback_present: writeback.failure === null,
+    quota_spend_present: spend.failure === null,
+  });
+  // A committed observation closes its exact Turn independently of whether
+  // the monitor still appears in the current Todo frontier. Reuse the monitor
+  // reducer so completion, retirement or archival cannot reopen that Turn.
+  const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
     writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback || replanWriteback,
     completion_receipt_present: completionEvent !== null,
@@ -1172,12 +1181,7 @@ function readQuotaSettlementFromRequest(
     writeback_event: writebackEvent,
     spend_event: spendEvent,
     completion_event: completionEvent,
-    monitor_phase: receiptBoundMonitorPhase({
-      poll_present: monitorPoll !== null,
-      material_change: isMaterialMonitorPoll(monitorPoll),
-      durable_writeback_present: writeback.failure === null,
-      quota_spend_present: spend.failure === null,
-    }),
+    monitor_phase: monitorPhase,
     replay_phase: replayPhase,
     native_child_admission: nativeChildReportAdmission(
       receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,

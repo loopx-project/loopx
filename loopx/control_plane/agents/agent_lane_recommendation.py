@@ -694,6 +694,7 @@ def selected_action_with_agent_lane(
         "capability_gate.runnable_candidates",
         "agent_todo_summary.active_next_action_executable_items",
         "delivery_continuity.latest_accountable_delivery",
+        "authoritative_agent_todo",
     }:
         return selected_action
     selected_by = agent_lane_next_action.get("selected_by")

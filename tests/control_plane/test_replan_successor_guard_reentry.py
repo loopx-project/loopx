@@ -147,12 +147,23 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
     todo = call("todo", "list", "--goal-id", GOAL, "--todo-id", added["todo_id"])["todo"]
     assert todo["status"] == "open"
+    # A later display/priority head must not displace the accepted new route.
+    competing = call("todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--claimed-by", AGENT, "--text", "[P0] Validate the older independent route",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--operation-id", "competing-prior-route")
     fresh = _guard(call, "turn-independent-vision-review")
     assert fresh["effective_action"] != "heartbeat_settled_skip"
     assert fresh["scheduler_hint"]["action"] == "run_now"
     assert fresh["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 3
     assert fresh["goal_frontier_projection"]["acceptance_gaps"]
     assert fresh["goal_frontier_projection"]["vision_continuation_audit"]["decision"] == "acceptance_gap_open"
+    assert fresh["selected_todo"]["todo_id"] == added["todo_id"]
+    assert fresh["agent_lane_next_action"]["todo_id"] == added["todo_id"]
+    portfolio = fresh["action_portfolio"]
+    assert portfolio["primary"]["todo_id"] == added["todo_id"]
+    assert any(row["todo_id"] == competing["todo_id"] and row["selection_role"] == "alternative"
+               for row in portfolio["suggested_actions"])
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

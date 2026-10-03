@@ -1044,10 +1044,14 @@ python3 scripts/qualify-doubao-capability-monitor-repair-tool-live.py \
 ```
 
 The regular live suite is
-`actual_default_model_behavior_portfolio_v0`: twenty-one one-arm scenarios and two
+`actual_default_model_behavior_portfolio_v0`: twenty-two one-arm scenarios and two
 attempts each. Its selected-Todo case starts from a production thin heartbeat,
 executes real quota, and requires the model to perform the selected Todo's
-read-only target action. Its required-vision replan case independently builds a
+read-only target action. Its accepted-replan-successor case requires the model
+to select the new primary while an older higher-priority alternative remains
+visible. This is packet interpretation evidence; the real CLI successor tests
+separately prove durable replan writeback and fresh-Turn adoption. Its
+required-vision replan case independently builds a
 hermetic required-profile/missing-vision state with a future monitor and
 peer-owned work. The actor must author an evidence-linked vision, execute the
 projected bound refresh and spend, and pass durable checkpoint, one-spend and
@@ -1128,7 +1132,7 @@ Exact scheduler, vision, writeback, and warning fields stay in deterministic
 action-signature coverage; pair mode keeps TurnEnvelope semantic extraction for
 explicit packet differentials or outcome claims.
 
-常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：21 个 one-arm
+常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：22 个 one-arm
 场景，每个重复 2 次。9 个 core-contract 场景覆盖正常接入、agent 身份与
 goal 选择、selected todo、peer 身份路由、same-agent 续接、最终 human gate、
 健康继续和 projection repair；1 个 effect-settlement 场景覆盖 terminal closeout；

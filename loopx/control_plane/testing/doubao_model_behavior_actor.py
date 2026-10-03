@@ -340,6 +340,9 @@ decision, preserve its ordered action_sequence in intended_action_kinds, and
 obey silent_wait_allowed. Choose intended_action_kinds from the execution
 obligation when no response_plan is present, not packet verbosity, and use the
 same ordered normalization for both arms.
+Todo action_kind and intended_action_kinds use different vocabularies. Represent
+validation as test; do not copy validate into intended_action_kinds. Use only
+individual values from the listed intended action kinds.
 Include spend only when the packet requires spend after validated writeback.
 """
     if arm == "candidate_packet":

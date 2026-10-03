@@ -59,7 +59,9 @@ from .session_recovery import (
     build_host_recovery_record,
 )
 from .settlement import (
+    SourceJournalPersist,
     TurnEffectResolver,
+    TurnSettlementEffectAdmission,
     TurnSettlementJournalAdapter,
     execute_turn_driver_settlement,
     invoke_result_effect,
@@ -666,21 +668,42 @@ def _run_host(
         stderr_chars += len(text)
 
     try:
-        observed = run_host_process(argv, project=project,
+        observed = run_host_process(
+            argv,
+            project=project,
             input_text=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
-            timeout_seconds=timeout_seconds, stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
-            on_stdout=stdout.append, on_stderr=count_stderr)
+            timeout_seconds=timeout_seconds,
+            stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
+            on_stdout=stdout.append,
+            on_stderr=count_stderr,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if observed["outcome"] == "output_limit":
-        return {"ok": False, "reason": "host stdout exceeded the result budget", "returncode": observed["returncode"]}
+        return {
+            "ok": False,
+            "reason": "host stdout exceeded the result budget",
+            "returncode": observed["returncode"],
+        }
     if observed["outcome"] != "exited":
-        return {"ok": False, "reason": "host process " + observed["outcome"], "returncode": observed["returncode"]}
+        return {
+            "ok": False,
+            "reason": "host process " + observed["outcome"],
+            "returncode": observed["returncode"],
+        }
     if not observed["output_complete"]:
-        return {"ok": False, "reason": "host output observation incomplete", "returncode": observed["returncode"]}
+        return {
+            "ok": False,
+            "reason": "host output observation incomplete",
+            "returncode": observed["returncode"],
+        }
     if observed["returncode"] != 0:
-        return {"ok": False, "reason": "host command returned non-zero",
-                "returncode": observed["returncode"], "stderr_chars": stderr_chars}
+        return {
+            "ok": False,
+            "reason": "host command returned non-zero",
+            "returncode": observed["returncode"],
+            "stderr_chars": stderr_chars,
+        }
     try:
         value = json.loads("".join(stdout))
     except json.JSONDecodeError:
@@ -779,7 +802,12 @@ def _host_result_stage(
         if confirm_start is not None:
             confirm_start()
         from ...usage_goal import observe_goal_execution
-        with observe_goal_execution(usage_runtime_root or project, usage_goal_id, host=str((plan.get("host") or {}).get("kind") or "unknown")):
+
+        with observe_goal_execution(
+            usage_runtime_root or project,
+            usage_goal_id,
+            host=str((plan.get("host") or {}).get("kind") or "unknown"),
+        ):
             host_observation = (
                 _run_host_runner(request, runner=host_runner)
                 if host_runner is not None
@@ -994,8 +1022,7 @@ def _ensure_turn_settlement_plan(
         execution_mode=str(host_fields.get("execution_mode") or "isolated-headless"),
         session_action=str(host_fields.get("session_action") or "resume"),
         turn_instance_id=(
-            transaction_plan.get("turn_instance_id")
-            or transaction_plan.get("turn_key")
+            transaction_plan.get("turn_instance_id") or transaction_plan.get("turn_key")
         ),
         goal_ref=(
             plan.get("goal_ref")
@@ -1024,6 +1051,8 @@ def _typed_settlement_stage(
     effect_resolvers: Mapping[SettlementStepKind, TurnEffectResolver],
     scheduler: Scheduler,
     post_settlement: PostSettlement | None,
+    source_effects: TurnSettlementEffectAdmission | None,
+    persist_source_journal: SourceJournalPersist | None,
 ) -> dict[str, Any]:
     transaction_plan = (
         plan.get("transaction") if isinstance(plan.get("transaction"), Mapping) else {}
@@ -1069,10 +1098,19 @@ def _typed_settlement_stage(
         return invoke_result_effect(writeback, result, effect_ref)
 
     journal_adapter = TurnSettlementJournalAdapter(
-        journal,
-        effects,
-        lambda: persist_journal(journal),
-        _compact_callback,
+        journal=journal,
+        effects=effects,
+        persist=lambda: persist_journal(journal),
+        compact_payload=_compact_callback,
+        source_effects=source_effects,
+        persist_source=persist_source_journal,
+        deferred_release_step=(
+            SettlementStepKind.TERMINAL_CLOSEOUT
+            if source_effects is not None and terminal_closeout_required
+            else (
+                SettlementStepKind.QUOTA_SPEND if source_effects is not None else None
+            )
+        ),
     )
 
     terminal_effect = None
@@ -1109,7 +1147,9 @@ def _typed_settlement_stage(
         terminal_closeout=terminal_effect,
         terminal_checkpoint=terminal_checkpoint,
         prepare=journal_adapter.prepare,
+        resume_prepare=journal_adapter.prepare if source_effects is not None else None,
         abort=journal_adapter.abort,
+        allow_absent_reexecute=journal_adapter.allows_absent_reexecute,
         effect_attempts=journal_adapter.effect_attempts,
         effect_resolvers=effect_resolvers,
         turn_result_kind=str(result.get("result_kind") or "") or None,
@@ -1153,7 +1193,29 @@ def _typed_settlement_stage(
     result = {**result, "result_kind": outcome["result_kind"]}
     completed_phases = [str(phase) for phase in outcome["completed_phases"]]
     spend_payload = dict(settlement_state.quota_spend)
-    persist_journal(journal)
+    tail_effect: tuple[SettlementStepKind, str] | None = None
+    if source_effects is None:
+        persist_journal(journal)
+    else:
+        effect_id = _journal_committed_effect_id(journal)
+        if effect_id is None or persist_source_journal is None:
+            raise RuntimeError("source Turn tail admission identity is unavailable")
+        tail_step = (
+            SettlementStepKind.TERMINAL_CLOSEOUT
+            if terminal_closeout_required
+            else SettlementStepKind.QUOTA_SPEND
+        )
+        tail_effect = (tail_step, f"{effect_id}#{tail_step.value}")
+        journal_adapter.hold_tail(tail_effect[0], tail_effect[1])
+
+    def persist_tail_checkpoint(*, release: bool) -> None:
+        if tail_effect is None:
+            persist_journal(journal)
+            return
+        if release:
+            journal_adapter.release_tail(tail_effect[0], tail_effect[1])
+        else:
+            journal_adapter.hold_tail(tail_effect[0], tail_effect[1])
 
     scheduler_payload = scheduler(spend_payload)
     journal["scheduler"] = scheduler_payload
@@ -1169,7 +1231,7 @@ def _typed_settlement_stage(
             status="scheduler_action_required",
             receipt=_receipt(plan, result, completed_phases=completed_phases),
         )
-        persist_journal(journal)
+        persist_tail_checkpoint(release=False)
         return execution_payload(
             plan,
             journal,
@@ -1185,7 +1247,7 @@ def _typed_settlement_stage(
         completed_phases=completed_phases,
         receipt=_receipt(plan, result, completed_phases=completed_phases),
     )
-    persist_journal(journal)
+    persist_tail_checkpoint(release=True)
     return execution_payload(
         plan,
         journal,
@@ -1301,6 +1363,13 @@ def run_loopx_turn_once(
                 raise FirstPartyHostRuntimeRejected(exc.diagnostic_code) from exc
             raise
 
+    def persist_source_journal(source_admission: Mapping[str, Any]) -> None:
+        _write_journal(
+            journal_path,
+            journal,
+            source_admission=source_admission,
+        )
+
     with exclusive_file_lock(journal_path):
         journal = _load_journal(journal_path)
         recovery_decision: dict[str, Any] | None = None
@@ -1352,24 +1421,31 @@ def run_loopx_turn_once(
             and receipt.get("failed_phase") == "validation"
             and journal.get("validation_stage") != "task_postcondition"
         )
-        needs_host = validation_reinvokes_host or journal is None or "typed_result" not in list(
-            journal.get("completed_phases") or []
+        needs_host = (
+            validation_reinvokes_host
+            or journal is None
+            or "typed_result" not in list(journal.get("completed_phases") or [])
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
         admission = None
         if needs_host and admit_start is not None:
-            admission = admit_start({
-                "turn_key": turn_key,
-                "attempt": int(journal.get("host_attempt_count") or 0) + 1
-                if journal is not None else 1,
-            })
+            admission = admit_start(
+                {
+                    "turn_key": turn_key,
+                    "attempt": int(journal.get("host_attempt_count") or 0) + 1
+                    if journal is not None
+                    else 1,
+                }
+            )
             if admission.get("admitted") is not True:
                 waiting = {
                     "status": "interval_wait",
                     "host": host_projection,
                     "completed_phases": [],
-                    "reason": str(admission.get("reason") or "automatic start not admitted"),
+                    "reason": str(
+                        admission.get("reason") or "automatic start not admitted"
+                    ),
                     "admission": admission,
                 }
                 return execution_payload(
@@ -1377,7 +1453,10 @@ def run_loopx_turn_once(
                 )
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
-                recovery_decision, journal, status="started", host_invoked=None,
+                recovery_decision,
+                journal,
+                status="started",
+                host_invoked=None,
             )
             persist_journal(journal)
 
@@ -1495,5 +1574,18 @@ def run_loopx_turn_once(
             ),
             scheduler=scheduler,
             post_settlement=post_settlement,
+            source_effects=(
+                goal_admission.turn_effect_admission(
+                    turn_key=turn_key,
+                    journal_path=journal_path,
+                )
+                if goal_admission is not None
+                else None
+            ),
+            persist_source_journal=(
+                persist_source_journal
+                if goal_admission is not None and goal_admission.enabled
+                else None
+            ),
         )
         return finish_recovery(settled)
