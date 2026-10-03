@@ -1,0 +1,15 @@
+{
+  "schema_version": "codex_spawn_agent_contract_fixture_v0",
+  "source": "Codex spawn_agent tool schema",
+  "context_mode_arguments": {
+    "fresh": {
+      "fork_turns": "none"
+    },
+    "forked_snapshot": {
+      "fork_turns": "all"
+    }
+  },
+  "forbidden_arguments": [
+    "fork_context"
+  ]
+}
