@@ -57,6 +57,15 @@ def inspect(runner):
                        "--todo-id", "todo_analyst-initial")
 
 
+def renew_current_lease(runner, cli, ttl):
+    binding = runner.binding("analysis")
+    current = inspect(runner)["lease"]
+    return cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
+        "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
+        "--idempotency-key", current["idempotency_key"],
+        "--expected-version", str(current["version"]), "--ttl-seconds", str(ttl))["lease"]
+
+
 @pytest.fixture(params=["file", "sqlite"])
 def completion_service(tmp_path, request, monkeypatch):
     """Pin a real slow final acceptance command before preparing authority."""
@@ -109,13 +118,8 @@ def test_completion_renews_before_validation_and_replays_each_intent(completion_
     def enter_completion(row, binding):
         nonlocal shortened
         if shortened is None:
-            current = inspect(runner)["lease"]
-            # Fix the phase boundary, independent of whether the Host happened
-            # to cross its earlier renewal timer. Use the real canonical API.
-            shortened = cli(binding, "task-lease", "renew", "--goal-id", runner.goal_id,
-                "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
-                "--idempotency-key", current["idempotency_key"],
-                "--expected-version", str(current["version"]), "--ttl-seconds", "20")["lease"]
+            # Start the short lease at the boundary this test qualifies.
+            shortened = renew_current_lease(runner, cli, 20)
             # Cross the actual pre-renewal deadline, not an assumed amount of
             # CLI startup time. Allow cold claim/renew commands to reach the
             # boundary; the independent validator still outlives that lease.
@@ -168,10 +172,21 @@ def test_completion_renews_before_validation_and_replays_each_intent(completion_
 @pytest.mark.parametrize("authority_loss", ["expiry", "replacement"])
 def test_completion_renewal_receipt_cannot_revive_lost_execution(service, monkeypatch, authority_loss):
     root, runner = service
-    prepare_lease(root, runner, monkeypatch)
-    cli = runner._cli
+    # Setup and Host execution are not the completion-recovery deadline.
+    # The 20s lease begins at completion, and the later 1s expiry/new epoch
+    # still proves a historical renewal receipt cannot revive the execution.
+    prepare_lease(root, runner, monkeypatch, ttl=None)
+    cli, complete = runner._cli, runner._complete_delegated_todo
     dropped = False
+    shortened = False
     completions = []
+
+    def enter_completion(row, binding):
+        nonlocal shortened
+        if not shortened:
+            renew_current_lease(runner, cli, 20)
+            shortened = True
+        return complete(row, binding)
 
     def lose_renewal_reply(binding, *args, **kwargs):
         nonlocal dropped
@@ -183,6 +198,7 @@ def test_completion_renewal_receipt_cannot_revive_lost_execution(service, monkey
             raise ValueError("fixture lost renewal response before terminal intent")
         return result
 
+    monkeypatch.setattr(runner, "_complete_delegated_todo", enter_completion)
     monkeypatch.setattr(runner, "_cli", lose_renewal_reply)
     runner.execute("lease-lifetime")
     row = _read(runner.path("lease-lifetime"))

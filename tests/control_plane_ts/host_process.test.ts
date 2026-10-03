@@ -63,9 +63,27 @@ for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const)
         ${mode === "leader_exit" || mode === "closed_pipes" ? "process.exit(0)" : "setInterval(()=>{},1000)"}
       }},5)`;
     const controller = new AbortController();
+    let expire: (() => void) | undefined;
+    let ready = false;
+    if (mode === "timeout") {
+      // Control only the supervisor deadline, not real process IO or cleanup.
+      // This case proves drain of a known-ready descendant. A separate real
+      // 500ms case below covers expiry before readiness, without assuming IO.
+      const timer = globalThis.setTimeout;
+      t.mock.method(globalThis, "setTimeout", (callback: () => void, ms: number) => {
+        if (ms !== 500) return timer(callback, ms);
+        expire = callback;
+        return timer(() => { controller.abort(); }, 3000); // fixture readiness watchdog
+      });
+    }
     const result = await runHostProcess(request(script, {timeout_ms: mode === "timeout" ? 500 : 3000}), async item => {
-      if (mode === "abort" && item.text.includes("ready")) controller.abort();
+      if (item.text.includes("ready")) {
+        ready = true;
+        if (mode === "abort") controller.abort();
+        if (mode === "timeout") { assert.ok(expire); expire(); }
+      }
     }, controller.signal);
+    assert.equal(ready, true, "descendant readiness was not established");
     assert.equal(result.outcome, mode === "abort" ? "cancelled" : mode === "timeout" ? "timeout" : "exited");
     assert.equal(result.cleanup_scope, "process_group"); assert.equal(result.group_signal_sent, true);
     const counter = await readFile(marker, "utf8"); await delay(100);
@@ -73,6 +91,21 @@ for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const)
     if (mode === "leader_exit") assert.equal(result.output_complete, false);
   });
 }
+
+test("real timeout before readiness prevents later Host effects", {skip: process.platform === "win32"}, async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-host-pre-ready-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const marker = join(root, "late-effect");
+  const result = await runHostProcess(request(
+    `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'unexpected'),900)`,
+    {timeout_ms: 500}), async () => {});
+  assert.equal(result.outcome, "timeout");
+  assert.equal(result.cleanup_scope, "process_group");
+  assert.equal(result.group_signal_sent, true);
+  assert.equal(existsSync(marker), false);
+  await delay(900);
+  assert.equal(existsSync(marker), false, "Host performed an effect after timeout returned");
+});
 
 test("output consumer failure cancels execution rather than leaving an orphan", async () => {
   const result = await runHostProcess(request(`setInterval(()=>process.stdout.write('tick\\n'),10)`),
