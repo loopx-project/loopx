@@ -184,6 +184,11 @@ supervises that worker: each preview retains its 60-second request deadline;
 timeout, cancellation, malformed output and parent EOF stop its process group
 before a verifiable failure is returned. If cleanup cannot be established, the
 transport fails closed without a preview or an automatic fallback/retry.
+An ordinary idle, lifetime or request-limit retirement emits a terminal fence
+only after the Host has stopped the old process group. If that fence confirms
+a racing request was never accepted, the caller may replace the worker once
+within the same binding and original deadline. An accepted request, missing or
+invalid fence, crash or uncertain cleanup never grants retry permission.
 Input backpressure and partial output reads share the parent's original absolute
 deadline; waiting for the supervised cleanup remains a separate bounded fence.
 POSIX cleanup is process-group scoped; Windows retains the Host owner's
@@ -214,7 +219,10 @@ is no automatic retry, provider promotion or fallback.
 最多复用一个固定工作区的只读 Python CLI
 进程；既有 TS Host owner 负责生命周期。单次预检仍有 60 秒截止时间，超时、取消、
 非法输出或父端 EOF 后，先确认进程组停止，再返回可核验失败；若无法确认清理，
-不给预检结果，也不自动回退或重试。POSIX 按进程组清理，Windows 保留既有的
+不给预检结果，也不自动回退或重试。正常空闲、寿命或请求数到期，只有在 TS Host
+确认旧进程组停止后才返回退役屏障。屏障确认竞争中的请求从未被接收时，可在相同
+绑定和原截止时间内更换一次 worker；已接收请求、缺失或非法屏障、崩溃及不确定
+清理均不允许重试。POSIX 按进程组清理，Windows 保留既有的
 best-effort 进程树边界。
 输入管道背压和不完整输出共用父端原绝对截止时间；监督清理仍是另一个有界屏障。
 

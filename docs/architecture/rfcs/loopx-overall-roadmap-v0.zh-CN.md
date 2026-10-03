@@ -458,63 +458,60 @@ executor/profile 检查启动条件。任务准入、当前 pinned 验收绑定�
 表达；未探测的通用/云端运行时保留未知。CLI、已启用 MCP 和新 Chat 工具共用此
 检查，不新增状态账本，也不启动执行。
 
-草稿 [#5283](https://github.com/loopx-project/loopx/pull/5283) 合并同一 TS owner 的
-摘要/继承验证请求，跳过空行传输，并隔离只读与写入依赖；完整源读取、计数、排序、
-新鲜度和当前验收仍保留。滚动扣额账本读函数与 spend/void 提交隔离；DSH、
-managed-step、报告生成/扩展发现及 Lark 发送、采集器、Turn 启动同步依赖只在对应
-路径选中时加载。兼容导出保留原 owner 对象身份，不另建 Python 决策源或放松完成
-门禁。构建尚未选中的 Lark 紧急度投影器也不再加载 inbox 路由或扩展运行时；
-实际选中时仍先执行原激活与权限检查，再加载原路由 owner，未激活则在路由加载
-前拒绝。File/SQLite 配对的完整预览结果相同、fixture 未变，但冷/热耗时仍有
-涨有跌，既定全套预算仍失败；这批改动不构成端到端提速验收。
-在确切头 `ed673eab6` 的同版本隔离诊断中，每个 provider 六组交替配对、每臂
-六次冷读和十八次热读，均执行原 CLI main：File 热读中位数 1.643→0.306s，
-SQLite 1.003→0.284s，完整公开结果相同、fixture 未变。这定位每次 Python CLI
-启动和源码加载成本，只是反事实，不是已交付传输或 base/head 提速验收。
-冷读仍慢，File 冷读最大值反而 2.412→2.749s；未控制共享宿主负载。
-55 次 TS 请求已共享同一次逻辑请求源码指纹，不是 55 次哈希；另做清缓存对照后，
-原八线程源码读取优于串行，保留原并发策略。
-RPC/导入减少不能替代原全套预算验收。该诊断要求沿现有 canonical Turn/TS owner
-实现完整切片，明确 workspace/Goal/调用方隔离、每次新鲜权限与验收读取、源码
-升级失效、超时/取消与进程恢复；不另建 Python 规划器或缓存成功判决。
-R2 持续运行验收保持开放。
+[#5283](https://github.com/loopx-project/loopx/pull/5283) 是拟交付的 S2/S10
+只读预检成本切片：摘要与继承验证共用既有 TS owner 请求，空继承行跳过传输；
+读模型与写适配器分离，未选中的报告、Lark、扩展及 Host 路由延迟加载。兼容导出
+保持原 owner 对象身份，完整源事实、计数、排序与当前验收仍是权威。
+只有长驻 MCP 服务复用由既有 TS Host 监督的私有只读 Python CLI worker，每次
+重新进入原 CLI/Turn owner 并新读权限与 validator；CLI 与 Goal Chat HTTP 保留
+fresh subprocess，执行、恢复和写入沿用原租约传输。固定 workspace/registry/
+runtime/Goal/Agent/Todo 分区、源码/环境失效、单次 60 秒、最多 128 次、空闲 30 秒
+及总寿命 5 分钟形成边界。确认正常退役且请求尚未接收时，才可在原截止时间内换一次
+worker；已接收请求失败或清理不确定不允许重放。源码元数据仍完整新读，目录条目
+遍历只减少调用方 IO，不缓存权限或结果。Git 根目录只在同次新鲜观测内复用。
+投影发现仍拒绝歧义镜像，不选择机器默认、不迁移状态。
 
-English: The isolated same-revision diagnostic at `ed673eab6` uses six alternating
-pairs per provider (six cold/eighteen warm samples per arm), executing original
-CLI main. Warm medians are File 1.643→0.306s and SQLite 1.003→0.284s with complete
-output equality and unchanged fixtures. This is a process-policy counterfactual,
-not shipped transport or base/head speed qualification. Cold latency remains
-substantial; File cold maximum regresses 2.412→2.749s, and shared-host load is not
-controlled. The 55 TS requests already share one logical source fingerprint;
-cache-cleared measurement retains the existing eight source readers. That
-diagnostic called for canonical Turn/TS owner reuse with workspace/Goal/caller isolation,
-fresh authority/validation reads, source invalidation, timeout/cancellation and
-process recovery. No second Python planner or verdict cache; original suite
-budget and R2 acceptance remain open.
+按既定[调用路径标准](../../reference/local-delegation.md#preview-performance-qualification--预检性能验收)
+保留全部原功能案例，核对完整结果相等、fixture 未变及每个 File/SQLite provider
+六组交替配对。旧失败保持失败：`b7cb2dc3` 的 File 冷读最大值新增超过 1 秒，虽热读、
+序列净节省及 SQLite 已通过。本次还修复了已复现的空闲/寿命退役竞争，最终头须
+独立验收；导入/RPC 减少或单次加速不算验收。确切头及当前结果由 PR 验证记录维护。
+R2 持续运行、真实调用方采用、冷 CLI/p95 与 provider 准入仍是独立开放验收；
+此 PR 不代表 Python 规划退役或机器默认切换。
 
-2026-10-02 草稿检查点：#5283 已实现由现有 TS Host 进程监督器管理的私有只读预检
-进程复用。固定 Python worker 仅为 IO 适配器，每次重新进入原 CLI/Turn 决策 owner，
-不另建规划器、不缓存判决。固定工作区及 registry/runtime/Goal/Agent/Todo 分区、
-源码和环境失效、启动与请求期限、输出上限及子孙进程清理均在本切片；执行、恢复和
-写入保留原传输。仅长驻 MCP 服务启用热预检复用；Goal Chat HTTP 与独立 CLI
-保留原有的一次性子进程，MCP 首次请求仍支付额外桥接冷成本。PR 分别记录确切头上
-的结果等价、真实 MCP、取消与配对计时。
-投影候选发现不选择机器默认源：两个现有目录按声明的源注册表核对，多重匹配仍判
-歧义，不迁移机器状态。原全套预算、真实调用方采用与 R2 持续运行验收仍开放；
-不声称安装、G1/G3 晋级或金融最小闭环完成。
-English: The 2026-10-02 draft slice implements private read-only preview process
-reuse under the existing TS Host supervisor. Its pinned Python worker is only an
-IO adapter, re-entering original CLI/Turn owners each time, with fixed workspace
-and authority partitions, source/environment invalidation, bounded startup and
-request deadlines, output caps and descendant cleanup. Execute/resume/mutations
-retain original transport. Only the long-lived MCP service opts into warm
-inspection reuse; Goal Chat HTTP and standalone CLI retain the original fresh
-subprocess. MCP pays the additional bridge cost on its first request. The PR
-separates exact-head parity, real MCP, cancellation and paired timing evidence. Projection discovery
-checks both existing stores against declared source registries without selecting
-a default; multiple matching mirrors stay ambiguous and nothing is migrated.
-Original suite budget, real caller adoption and sustained R2 acceptance remain
-open; no installation, G1/G3 promotion or financial-loop completion is claimed.
+English:
+[PR #5283](https://github.com/loopx-project/loopx/pull/5283) is the proposed
+S2/S10 read-preview cost slice. Summary and succession validation share the
+existing TS owner request; empty succession skips transport. Read models are
+isolated from mutation adapters, and unselected report, Lark, extension and Host
+routes load lazily. Compatibility exports retain the original owner objects;
+complete provider facts, counts, ordering and acceptance remain authoritative.
+Only the long-lived MCP service reuses a private read-only Python CLI worker,
+under the existing TS Host supervisor. Each request re-enters the original
+CLI/Turn owner with fresh authority and validation reads. CLI and Goal Chat HTTP
+retain fresh subprocesses; execution, resume and mutations keep their existing
+leased transport. Fixed workspace/registry/runtime/Goal/Agent/Todo partitions,
+source/environment invalidation, 60-second requests, 128 requests, 30-second idle
+and five-minute lifetime limits bound the worker. A confirmed ordinary retirement
+can replace the worker for an unaccepted request within the original deadline;
+accepted-request failures and uncertain cleanup never permit replay. Source
+metadata remains complete and fresh; directory-entry traversal reduces caller
+IO without caching authority or results. Git-root reuse is confined to a single
+fresh observation. Projection discovery still rejects ambiguous mirrors and
+never selects a machine default or migrates state.
+
+Qualification follows the frozen
+[caller-path protocol](../../reference/local-delegation.md#preview-performance-qualification--预检性能验收),
+with all original functional cases, exact complete-result parity, unchanged
+fixtures and six alternating pairs per File/SQLite provider. Historical failed
+experiments remain failed: at `b7cb2dc3`, File's added cold maximum exceeded the
+one-second allowance, although warm/sequence savings and SQLite passed. The
+current repair also closes reproduced idle/lifetime retirement races. Its final
+head needs independent qualification; fewer imports/RPCs or one fast sample are
+not acceptance. Current results and exact head belong in the PR's validation
+record. Sustained R2, real caller adoption, cold-CLI/p95 qualification and provider
+admission remain separate open acceptances; this PR does not retire Python
+planning or establish a machine default.
 
 同一 owner 本地面板可打开当前核验产物正文、版本及来源标识，向原协调员收件箱
 反馈，并显示协调员暂停的实际范围。读取失效时清除旧内容；投递不等于应用、验收
