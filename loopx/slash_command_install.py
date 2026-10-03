@@ -15,6 +15,11 @@ from .kiro_cli_goal_mode import (
     SKILLS_ROOT_LABEL as _KIRO_SKILLS_ROOT_LABEL,
     kiro_home as _kiro_home,
 )
+from .kiro_cli_goal_mode.gated_agent import (
+    GATED_AGENT_LAUNCH,
+    gated_agent_path,
+    sync_gated_agent,
+)
 from .opencode_goal_mode import plugin_source, runtime_source
 from .pi_goal_mode import extension_source as pi_extension_source
 from .pi_goal_mode import runtime_source as pi_runtime_source
@@ -807,6 +812,7 @@ def install_slash_commands(
     execute: bool,
     uninstall: bool = False,
     with_goal_bridge: bool = False,
+    with_gated_agent: bool = False,
     surfaces: list[str] | None = None,
     cli_bin: str = "loopx",
     include_legacy_aliases: bool = True,
@@ -856,6 +862,20 @@ def install_slash_commands(
                 "status": "blocked_goal_bridge_requires_opencode_surface",
                 "invoke_as": [],
                 "reason": "Select --surface opencode when using --with-goal-bridge.",
+            }
+        )
+
+    if with_gated_agent and "kiro-cli" not in effective_surfaces:
+        installed.append(
+            {
+                "surface": "kiro-cli",
+                "host_surfaces": ["kiro-cli"],
+                "mechanism": "kiro_cli_gated_agent",
+                "command": GATED_AGENT_LAUNCH,
+                "path": None,
+                "status": "blocked_gated_agent_requires_kiro_cli_surface",
+                "invoke_as": [],
+                "reason": "Select --surface kiro-cli when using --with-gated-agent.",
             }
         )
 
@@ -1106,6 +1126,29 @@ def install_slash_commands(
                 "invoke_as": [],
             }
         )
+        # The enforcing agent is opt-in, but uninstalling the surface always
+        # retires it: a managed agent left pointing at a removed hook would run
+        # every tool ungated, since a failed hook does not block in Kiro.
+        if with_gated_agent or uninstall:
+            gated_status = sync_gated_agent(
+                kiro_root, uninstall=uninstall, execute=execute
+            )
+            gated_row = {
+                "surface": "kiro-cli",
+                "host_surfaces": ["kiro-cli"],
+                "mechanism": "kiro_cli_gated_agent",
+                "command": GATED_AGENT_LAUNCH,
+                "path": str(gated_agent_path(kiro_root)),
+                "status": gated_status,
+                "invoke_as": [GATED_AGENT_LAUNCH],
+            }
+            if gated_status == "blocked_unverified_kiro_cli_version":
+                gated_row["reason"] = (
+                    "The gate's embedded preToolUse hook is verified on Kiro CLI "
+                    "2.x only; this host would load the agent without the hook "
+                    "and run every tool ungated."
+                )
+            installed.append(gated_row)
 
     if "cursor" in effective_surfaces:
         # Cursor reads SKILL.md from CURSOR_HOME/skills (its skill roots also
@@ -1448,6 +1491,7 @@ def install_slash_commands(
         "operation": "uninstall" if uninstall else "install",
         "execute": execute,
         "with_goal_bridge": with_goal_bridge,
+        "with_gated_agent": with_gated_agent,
         "requested_surfaces": surfaces or ["all"],
         "effective_surfaces": effective_surfaces,
         "catalog_schema_version": build_slash_command_catalog(
@@ -1465,6 +1509,7 @@ def install_slash_commands(
             "agy_skill_dir": str(agy_root / "skills") if "agy" in effective_surfaces else None,
             "kiro_cli_skill_dir": str(kiro_root / "skills") if "kiro-cli" in effective_surfaces else None,
             "kiro_cli_mcp_path": str(kiro_root / _KIRO_MCP_CONFIG_SUBPATH) if "kiro-cli" in effective_surfaces else None,
+            "kiro_cli_gated_agent_path": str(gated_agent_path(kiro_root)) if "kiro-cli" in effective_surfaces and (with_gated_agent or uninstall) else None,
             "opencode_skill_dir": str(opencode_root / "skills") if "opencode" in effective_surfaces else None,
             "opencode_command_dir": str(opencode_root / "commands") if "opencode" in effective_surfaces else None,
             "opencode_plugin_path": str(opencode_root / "plugins" / "loopx-goal.js") if "opencode" in effective_surfaces and with_goal_bridge else None,
@@ -1490,7 +1535,7 @@ def install_slash_commands(
             "Cursor discovers skills from CURSOR_HOME/skills and has no user-defined slash commands, so the cursor surface installs the skill facade and registers the LoopX MCP server in CURSOR_HOME/mcp.json; run `cursor-agent mcp enable loopx` once to approve it.",
             "ZCode discovers user skills from ZCODE_HOME/skills (default ~/.zcode/skills) and exposes each skill for invocation via `$skill-name` or Settings -> Skills.",
             "Antigravity CLI discovers global skills from the fixed ~/.gemini/antigravity-cli/skills root using the documented flat layout (one <name>.md per skill); the agy surface is opt-in and offers no home override because the host documents none.",
-            f"Kiro CLI discovers global skills from {_KIRO_SKILLS_ROOT_LABEL}/<name>/SKILL.md (default ~/.kiro/skills) and exposes each as a `/<skill-name>` slash command; the kiro-cli surface is opt-in and resolves KIRO_HOME so install and uninstall target the profile the running host reads. Kiro resolves .kiro/prompts and KIRO_HOME/prompts before skills, so a same-named user prompt shadows the managed skill. The kiro-cli surface also registers the LoopX MCP server in KIRO_HOME/settings/mcp.json; it acts only for a session whose KIRO_SESSION_ID start-goal bound to a registered agent.",
+            f"Kiro CLI discovers global skills from {_KIRO_SKILLS_ROOT_LABEL}/<name>/SKILL.md (default ~/.kiro/skills) and exposes each as a `/<skill-name>` slash command; the kiro-cli surface is opt-in and resolves KIRO_HOME so install and uninstall target the profile the running host reads. Kiro resolves .kiro/prompts and KIRO_HOME/prompts before skills, so a same-named user prompt shadows the managed skill. The kiro-cli surface also registers the LoopX MCP server in KIRO_HOME/settings/mcp.json; it acts only for a session whose KIRO_SESSION_ID start-goal bound to a registered agent. --with-gated-agent also installs the `loopx` agent (`kiro-cli chat --agent loopx`), whose preToolUse hook denies state-changing tool calls unless `quota should-run` allows them; uninstalling the surface retires it.",
             "OpenCode discovers global skills from OPENCODE_CONFIG_DIR/skills in addition to the static command facade; a command is typed by the user, a skill can be reached by the model itself.",
             "The default all surface installs only OpenCode's static command facade; the executable goal bridge requires --with-goal-bridge.",
             f"The Pi surface is opt-in and installs the self-contained goal extension and its loop runtime into {pi_target_note}; it is not part of the default all surface.",
