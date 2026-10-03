@@ -464,6 +464,14 @@ def handle_registry_admin_command(
                     args.clear_progress_review_configuration
                 ),
                 multi_subagent_feature=args.multi_subagent_feature,
+                capability_improvement_configuration=({
+                    key: value for key, value in {
+                        "mode": args.capability_improvement_mode,
+                        "discovery_budget_minutes": args.capability_discovery_budget_minutes,
+                        "max_trials": args.capability_max_trials,
+                    }.items() if value is not None
+                } or None),
+                clear_capability_improvement_configuration=args.clear_capability_improvement_configuration,
                 orchestration_mode=args.orchestration_mode,
                 spawn_allowed=args.spawn_allowed,
                 max_children=args.max_children,

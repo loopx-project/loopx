@@ -61,12 +61,22 @@ def test_archive_cli_complete_isolated_recovery(tmp_path, monkeypatch, provider)
                          "--destination", str(destination), "--provider", target_provider)
             preview = cli(*arguments)
             assert preview["status"] == "planned" and not destination.exists()
+            observation_args = ("restore-receipt", "--goal-id", goal, "--archive-sha256",
+                                verified["archive"]["archive_sha256"], "--destination", str(destination),
+                                "--provider", target_provider)
+            assert cli(*observation_args)["status"] == "receipt_missing"
+            assert not destination.exists()
             restored = cli(*arguments, "--execute")
             assert restored["status"] == "restored" and not restored["destination_is_active"]
             assert not restored["execution_authority_granted"]
             assert restored["requires_separate_authority_cutover"]
             assert cli(*arguments, "--execute")["archive"] == restored["archive"]
             proof = json.loads((destination / "verified-restore.json").read_text())
+            observed = cli(*observation_args)
+            assert observed["status"] == "receipt_found"
+            assert observed["receipt"] == proof
+            assert observed["current_integrity_verified"] is False
+            assert observed["worker_liveness"] == "unknown"
             assert proof["archive_sha256"] == verified["archive"]["archive_sha256"]
             assert proof["target_store_identity"] != proof["source_store_identity"]
             audited = cli(*audit_args, "--destination", str(destination))
@@ -228,3 +238,41 @@ def test_migration_transport_loss_never_asserts_that_execution_did_not_publish(t
     if execute:
         assert outputs[0]["requires_same_plan_retry"] is True
         assert outputs[0]["reason_code"] == "migration_outcome_unknown"
+
+
+@pytest.mark.parametrize("execute,ambiguous", [(True, True), (False, True), (True, False)])
+def test_restore_transport_loss_points_to_read_only_observation_without_retry(tmp_path, monkeypatch, execute, ambiguous):
+    from argparse import Namespace
+    from loopx.cli_commands import authority_archive
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+
+    calls = []
+
+    def disconnected(method, request, **kwargs):
+        calls.append(request)
+        assert kwargs["retry_safe"] is False
+        assert kwargs["timeout"] == 300.0
+        if ambiguous:
+            raise EffectRuntimeResponseAmbiguous(method, timeout=300.0)
+        raise RuntimeError("Invalid runtime before request delivery")
+
+    monkeypatch.setattr(authority_archive, "effect_runtime_result", disconnected)
+    args = Namespace(command="authority-archive", authority_archive_action="restore", goal_id="example",
+                     archive=tmp_path / "archive", archive_sha256="a" * 64, provider="sqlite",
+                     destination=tmp_path / "destination with spaces", execute=execute)
+    outputs = []
+    status = authority_archive.handle_authority_archive_command(
+        args, registry_path=tmp_path / "unused-registry", runtime_root_arg=None,
+        print_payload=lambda payload, *_: outputs.append(payload), output_format=lambda _: "json")
+    assert status == 1 and len(calls) == 1
+    result = outputs[0]
+    assert result["authority_changed"] is False
+    if execute and ambiguous:
+        assert result["status"] == "outcome_unknown"
+        assert result["reason_code"] == "restore_outcome_unknown"
+        assert result["automatic_retry_performed"] is False
+        assert result["recovery_command"] == [
+            "loopx", "--format", "json", "authority-archive", "restore-receipt", "--goal-id", "example",
+            "--destination", str(args.destination), "--provider", "sqlite", "--archive-sha256", "a" * 64]
+    else:
+        assert result["status"] == "failed" and "recovery_command" not in result

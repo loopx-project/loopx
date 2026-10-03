@@ -192,6 +192,18 @@ Resolve a request from authenticated principal, origin/audience, resource scope 
 
 For a trusted owner-private manager, grant the normal host-agent tool profile that the owner configured. For a shared/untrusted audience, run a restricted context with enforceable resource/tool limits. A broad private process followed only by output filtering is **not** sufficient isolation. A verified owner message in a group may trigger private work with a separately scoped return, when a standing policy permits it; other participants do not inherit that policy.
 
+Use managed Goal scope for an authenticated owner's context-delegation grant:
+all current and future registered Agents within those Goals inherit it. Avoid
+requiring separate enrollment every time a worker joins. Retain exact-recipient
+grants for restricted sources, and explicit recipient revocations that override
+the Goal grant. New Goals, evidence-read scope and execution permissions are
+separate authority; registration or a quoted request cannot expand them.
+The shared `collaboration/source_grants.ts` owner resolves the same current
+policy for the catalog, direct handoff and peer forwarding. The existing local
+operator command can configure a Goal target by omitting `--agent-id`, with
+preview, locked apply and readback. This bounded configuration slice does not
+qualify settings-UI editing, native receiver adoption or the full M1–M3 journey.
+
 LoopX state mutations always use the existing typed command boundary, even if initiated through shell. The manager does not edit registry/authority files behind the control plane. Repository modifications use the project's normal worktree/review practice. Scoped merge/deploy authorization may be reused; unrelated payment or trading authority cannot be inferred from it.
 
 If an approval bridge is needed, it presents the exact operation and existing grant mismatch and waits for a real answer. A noninteractive `approvalPolicy=never` rejection must not be misreported as the user refusing. Host policy, provider rejection and application restrictions remain separate diagnoses. This design does not attempt to bypass an upstream safety decision.

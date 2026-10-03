@@ -540,6 +540,14 @@ cold-read or D2/default qualification. File still rewrites the retained envelope
 on each restored commit; a prior full-history restore exceeded its caller's
 300-second timeout and later published an exact matching acknowledgement.
 That remaining recovery cost is not closed by this receipt-read optimization.
+The CLI now distinguishes an ambiguous restore response from a known failure
+and returns the read-only `authority-archive restore-receipt` command. This
+observes the existing goal/digest/provider-bound historical completion receipt
+using bounded metadata reads, without another replay or archive scan. Missing
+receipts do not imply a running or failed worker. Current integrity still needs
+the existing audit; no provider activation or D2/default gate changes. The next
+recovery-cost work remains the measured full-envelope rewrite and decode path,
+not another timeout increase or a second receipt/state format.
 The #4224 soak was started; its final evidence and applicability remain pending.
 
 ### Runtime retirement drains admitted effects

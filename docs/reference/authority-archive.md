@@ -79,6 +79,42 @@ The source physical provider revisions remain in the archive for provenance;
 restored transactions receive the destination provider's own revision tokens.
 Business operation identities and receipt payloads remain unchanged.
 
+### When the CLI stops waiting
+
+An executed restore whose Effect response is lost or exceeds the 300-second
+request budget returns nonzero with `status=outcome_unknown`,
+`reason_code=restore_outcome_unknown` and a `recovery_command` argument array.
+The worker may still finish. The CLI does not retry automatically, cancel the
+worker or claim that the isolated copy was not written. `authority_changed=false`
+means that this operation never switches the active provider.
+
+Read the matching completion receipt without re-running recovery:
+
+```bash
+loopx --format json authority-archive restore-receipt \
+  --goal-id example-goal --archive-sha256 <verified-digest> \
+  --provider sqlite --destination ./recovered-authority
+```
+
+`receipt_found` means that the existing binding and historical completion
+receipt match the reviewed goal, digest and provider. `receipt_missing` means
+that no completion receipt is recorded; it proves neither failure nor worker
+liveness. Malformed or mismatched metadata fails. The query performs bounded
+metadata reads only; it does not open a provider, acquire the restore lock,
+replay history or create a destination. It accepts existing completion receipts
+without changing their persisted format.
+
+Both observations explicitly report `current_integrity_verified=false` and
+`worker_liveness=unknown`. Before adopting a copy, use `authority-archive audit`
+with the original archive, digest, goal and destination to verify its **current**
+history. A copied receipt or later modification cannot substitute for that
+audit. If recovery needs to resume, repeat only the original `restore --execute`
+command with the same reviewed inputs and destination; retain partial output.
+The original lock, prefix audit and divergent-history rejection still apply.
+
+This readback fixes completion visibility, not the remaining File restore cost
+or the need for separately qualified provider activation.
+
 The full archive is validated before restore writes begin and again during
 replay. Modifying the input during recovery fails verification; any partial
 result stays isolated and must not be adopted. A separate authority transition

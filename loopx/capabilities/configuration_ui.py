@@ -83,6 +83,15 @@ def capability_configuration_editor(
     # effort the owning namespace would reject.
     steward_endpoints, steward_efforts = _steward_executor_editor_options()
     definitions: dict[str, dict[str, Any]] = {
+        "goal_capability_organization": {
+            "supported_scopes": ["goal"], "writable_scopes": ["goal"],
+            "fields": [
+                _field("mode", "Improvement intent", "select", options=["off", "bounded"], required=True,
+                       description="Advisory discovery only; individual capability owners still decide enablement and admission."),
+                _field("discovery_budget_minutes", "Discovery budget (minutes)", "number", minimum=1, maximum=30, required=True),
+                _field("max_trials", "Maximum proposed trials", "number", minimum=0, maximum=2, required=True),
+            ],
+        },
         "goal_storage": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [_field("new_goal_provider", "New Goal storage target (after promotion)", "select",

@@ -26,6 +26,8 @@ import {resolveConversationTrigger} from "./collaboration/conversation_trigger.t
 import {admitGoalDraft} from "./collaboration/goal_draft.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
+import {requirePeerContextAccess} from "./collaboration/peer_context.ts";
+import {configureSourceRecipient, resolveSourceRecipients} from "./collaboration/source_grants.ts";
 import {projectConversationReplyContext} from "./collaboration/conversation_reply_context.ts";
 import {mayContinueChatTurn, planChatTurnAcceptance} from "./turn_driver/chat_turn_acceptance.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
@@ -37,7 +39,9 @@ import {setLocalHandoffMode, migrateLocalHandoffMode} from "./coordination/hando
 import {projectOwnershipObservation} from "./coordination/ownership_observation.ts";
 import {observeLocalCoordinationOwnership} from "./coordination/local_authority_runtime.ts";
 import {evaluateTaskLeaseOwnerEligibility} from "./work_items/task_lease_eligibility.ts";
-import { evaluateSubagentContext, describeSubagentContext } from "./subagent_context.ts";
+import { describeSubagentContext } from "./subagent_context.ts";
+import { evaluateGoalAgentContext } from "./goal_agent_context.ts";
+import { inspectImprovementPolicy, planImprovementConfiguration } from "./capabilities/goal_capability_organization.ts";
 import {
   effectIdsMatch,
   effectProgramFromOrderedSteps,
@@ -728,7 +732,15 @@ export function createEffectRuntimeHandlers(
     ],
     [
       "capability_hook.agent_context.project",
-      (params) => evaluateSubagentContext(params),
+      (params) => evaluateGoalAgentContext(params),
+    ],
+    [
+      "capability.improvement.inspect",
+      (params) => inspectImprovementPolicy(params.policy),
+    ],
+    [
+      "capability.improvement.configuration",
+      (params) => planImprovementConfiguration(params),
     ],
     [
       "capability_hook.interaction_projection.validate_registration",
@@ -769,6 +781,9 @@ export function createEffectRuntimeHandlers(
     ["collaboration.goal_draft", (params) => ({draft: admitGoalDraft(params)})],
     ["collaboration.conversation.trigger", resolveConversationTrigger],
     ["collaboration.conversation.scope", resolveConversationScope],
+    ["collaboration.peer.context_access", requirePeerContextAccess],
+    ["collaboration.source.recipients", resolveSourceRecipients],
+    ["collaboration.source.configure_recipient", configureSourceRecipient],
     ["collaboration.conversation.reply_context", projectConversationReplyContext],
     ["chat.turn.accept", planChatTurnAcceptance],
     ["chat.turn.execution_allowed", mayContinueChatTurn],
