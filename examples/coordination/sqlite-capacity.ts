@@ -6,7 +6,7 @@ import {existsSync, mkdtempSync, readFileSync, readdirSync, rmSync,
   statfsSync, statSync, writeFileSync} from "node:fs";
 import {cpus, platform, release, tmpdir, totalmem} from "node:os";
 import {DatabaseSync} from "node:sqlite";
-import {delimiter, dirname, join, relative, sep} from "node:path";
+import {delimiter, dirname, join, relative, resolve, sep} from "node:path";
 import {performance} from "node:perf_hooks";
 import {fileURLToPath} from "node:url";
 import {parseArgs} from "node:util";
@@ -17,15 +17,19 @@ import {selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {authorityProjectionFixture} from "../../tests/control_plane_ts/authority_projection_fixture.ts";
-import {CAPACITY_PROFILES, capacityLedger, latency, type CapacityAxis, type CapacityProfileId,
+import {CAPACITY_PROFILES, capacityLedger, latency, sameCapacityScan, type CapacityScanInput, type CapacityAxis, type CapacityProfileId,
   type QualificationRow} from "./sqlite-capacity-report.ts";
 
 const {values: options} = parseArgs({options: {
   profile: {type: "string", default: "rehearsal"}, output: {type: "string"},
   python: {type: "string", default: "python3"}, cli: {type: "boolean", default: false},
+  "scan-root": {type: "string"},
 }});
 const goal = "sqlite-capacity";
 const script = fileURLToPath(import.meta.url), repository = fileURLToPath(new URL("../../", import.meta.url));
+assert(options.cli || !options["scan-root"], "--scan-root requires --cli");
+const scanRoot = resolve(options["scan-root"] ?? join(repository, "loopx"));
+if (options.cli) assert(statSync(scanRoot).isDirectory(), "--scan-root must be a nonempty public source directory");
 const sqlite = (() => {
   try { return sqliteAuthorityRuntime(); }
   catch (error) {
@@ -56,6 +60,8 @@ const report: Record<string, unknown> = {
     traffic_window: "8 warmup commits, then one bounded window (1000 formal / 100 rehearsal) with a held read mark that blocks WAL resets; exact frames from WAL file growth",
     lock_probe: "a probe process holds the write lock for 200 ms per sample (12 formal / 3 rehearsal); the end-to-end store commit wait is reported",
     cold_cli: options.cli ? "new Python process and newly started managed Effect runtime per sample; shutdown outside timing" : "not_requested",
+    cold_cli_scan_root: options.cli ? scanRoot : null,
+    cold_cli_scan_control: "explicit identical root for status/quota; Todo mutation has no scan option; before/after input hashes outside timing; no OS cache drop or scan suppression",
     cold_node: "new Node process and import plus first load; OS file cache is not dropped",
     warm: "same process, actual provider opens and closes each connection"},
   durability: {journal_mode: "WAL", synchronous: "FULL", altered_for_measurement: false},
@@ -104,6 +110,35 @@ function sourceIdentity(): Record<string, unknown> {
     fingerprint_scope: "LoopX Python/TS/JSON source, capacity entrypoint/report and shared fixture; includes uncommitted source"};
 }
 
+function scanInput(environment: NodeJS.ProcessEnv): CapacityScanInput {
+  // Python is an I/O probe here, not a second scanner owner. Reuse production
+  // enumeration and privacy classification, including tracked-file overrides.
+  const child = spawnSync(options.python!, ["-c", `
+import hashlib, json, os, sys
+from pathlib import Path
+from loopx.contract import iter_scan_files, _is_local_private_state_path, _git_probe
+root = Path(sys.argv[1]).resolve()
+digest = hashlib.sha256()
+count = size = skipped = 0
+for path in iter_scan_files(root):
+    name = os.path.relpath(path, root).replace(os.sep, "/")
+    private = _is_local_private_state_path(path, root) and not _git_probe(path).get("tracked")
+    digest.update(json.dumps([name, bool(private)], ensure_ascii=True).encode() + b"\\0")
+    if private:
+        skipped += 1
+        continue
+    data = path.read_bytes()
+    digest.update(hashlib.sha256(data).digest())
+    count += 1
+    size += len(data)
+print(json.dumps(dict(sha256=digest.hexdigest(), files=count, bytes=size, skipped_private_files=skipped)))
+`, scanRoot], {cwd: repository, env: environment, encoding: "utf8", timeout: 60000});
+  assert.equal(child.status, 0, "public scan input capture failed");
+  const input = JSON.parse(child.stdout) as CapacityScanInput;
+  assert(sameCapacityScan(input, input), "public scan input must contain readable nonempty source files");
+  return input;
+}
+
 async function measureAxis(count: number): Promise<CapacityAxis> {
   const projection = authorityProjectionFixture(goal, [{todo_id: "todo_capacity", role: "agent", status: "open",
     done: false, text: "Capacity 000000", archive_state: "active", claimed_by: "agent-a", task_class: "advancement_task"}],
@@ -117,7 +152,7 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
   const directory = join(runtime, "authority", "sqlite-v0");
   const store = new SqliteAuthorityStore(directory, goal);
   const axis: CapacityAxis = {target_commits: count, completed_commits: 0, projection_json_bytes: profile.payload,
-    sample_window: Math.min(1000, count), status: "failed", warm: null, cold_node: null, cold_cli: null,
+    sample_window: Math.min(1000, count), status: "failed", warm: null, cold_node: null, cold_cli: null, cold_cli_scan: null,
     application_request_json_bytes: 0, files_at_target: null, sampled_peak_rss_bytes: process.memoryUsage().rss,
     bounded_profile: null, history_audit: null, wal_traffic_window: null, logical_writes: null, lock_wait: null,
     resource_peak_rss_bytes: 0, fill_seconds: 0, cli_commits: 0, cleanup_verified: false};
@@ -143,7 +178,8 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
     return performance.now() - started;
   };
   const environment = {...process.env, PATH: dirname(process.execPath) + delimiter + (process.env.PATH ?? ""),
-    NODE_OPTIONS: "--experimental-sqlite", TMPDIR: root, TMP: root, TEMP: root};
+    NODE_OPTIONS: "--experimental-sqlite", TMPDIR: root, TMP: root, TEMP: root,
+    LOOPX_USAGE_PING: "0", DO_NOT_TRACK: "1"};
   let phase = "setup", managedRuntimeUsed = false;
   const stopRuntime = () => {
     if (!managedRuntimeUsed) return;
@@ -356,6 +392,7 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
     axis.cold_node = latency(cold);
     if (options.cli) {
       phase = "cold_cli";
+      const before = scanInput(environment);
       const fence = await engageLegacyCoordinationWriterFence({schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
         runtime_root: runtime, goal_id: goal, state_path: state, fence: {schema_version: "loopx_legacy_coordination_writer_fence_v0",
           state: "engaged", goal_id: goal, fence_id: "capacity-fixture", source_version: "capacity-fixture",
@@ -363,10 +400,10 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
       assert.equal(fence.status, "applied");
       const mutation: number[] = [], status: number[] = [], quota: number[] = [];
       for (let i = 0; i < samples; i++) {
-        const statusResult = cli(["status", "--goal-id", goal], status);
+        const statusResult = cli(["status", "--goal-id", goal, "--scan-root", scanRoot], status);
         const index = statusResult.todo_index as {items?: {todo_id?: string}[]} | undefined;
         assert(index?.items?.some(row => row.todo_id === "todo_capacity"), "status lost the canonical Todo");
-        const quotaResult = cli(["quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a"], quota);
+        const quotaResult = cli(["quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--scan-root", scanRoot], quota);
         const selected = quotaResult.selected_todo as {todo_id?: string} | undefined;
         const summary = quotaResult.agent_todo_summary as {first_executable_items?: {todo_id?: string}[]} | undefined;
         assert(selected?.todo_id === "todo_capacity" || summary?.first_executable_items?.some(row => row.todo_id === "todo_capacity"),
@@ -376,6 +413,9 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
         assert.equal(result.source_authority, "sqlite_v0"); axis.cli_commits++;
       }
       axis.cold_cli = {mutation: latency(mutation), status: latency(status), quota: latency(quota)};
+      phase = "cold_cli_scan_stability";
+      axis.cold_cli_scan = {before, after: scanInput(environment)};
+      assert(sameCapacityScan(before, axis.cold_cli_scan.after), "public scan input changed during CLI samples");
       const final = await store.loadAuthority(); assert.equal(final.status, "loaded");
       if (final.status === "loaded") assert.equal(final.cursor, String(count + extraCommits + samples));
     }

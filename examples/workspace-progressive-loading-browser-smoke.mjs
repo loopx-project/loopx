@@ -138,7 +138,7 @@ try {
       historyRequests++;
       return route.fulfill({ json: { ok: true, total: 1, next_cursor: null, items: [{
         todo_id: "todo_native_done", text: historyText, claimed_by: null,
-        evidence: "Verified public evidence", priority: "P2", task_class: "advancement_task",
+        evidence: "Verified public evidence", priority: "P2", task_class: "advancement_task", done: true, status: "done",
       }] } });
     });
     await accessPage.goto(`${origin}/chat/`);

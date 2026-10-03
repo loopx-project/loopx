@@ -1,12 +1,19 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { z } from "zod";
-import {compactWorkspaceText} from "./personal-workspace-model";
+import {compactWorkspaceText, workspaceAgentTodoFromItem} from "./personal-workspace-model";
+import { todoItemSchema } from "../../data/status";
 import type { WorkspaceAgentTodo, WorkspaceDrawerSelection, WorkspaceGoal } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
 
 const pageSchema = z.object({
   ok: z.literal(true), total: z.number().int().nonnegative(), next_cursor: z.string().nullable(),
-  items: z.array(z.object({ todo_id: z.string(), text: z.string(), claimed_by: z.string().nullable(), evidence: z.string().nullable(), priority: z.string().nullable(), task_class: z.string().nullable() })).max(40),
+  items: z.array(z.object(todoItemSchema.shape).pick({
+    todo_id: true, text: true, done: true, status: true, claimed_by: true,
+    evidence: true, note: true, priority: true, task_class: true, task_domain: true,
+    completed_at: true, resume_when: true, resume_ready: true, resume_condition: true,
+    completion_validation_sha256: true, completion_validation_revision: true,
+    completion_validation_revision_history: true,
+  }).extend({ todo_id: z.string().min(1), done: z.literal(true), status: z.literal("done") })).max(40),
 });
 
 /** Fixed-height previews keep layout/DOM cost bounded; the drawer retains full text. */
@@ -69,7 +76,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
       if (!response.ok) throw new Error("history unavailable");
       const page = pageSchema.parse(await response.json());
       if (controller.signal.aborted) return;
-      const next = page.items.map((todo): WorkspaceAgentTodo => ({ todoId: todo.todo_id, text: todo.text, claimedBy: todo.claimed_by, evidence: todo.evidence, priority: todo.priority, taskClass: todo.task_class, done: true, status: "done" }));
+      const next = page.items.map((todo) => workspaceAgentTodoFromItem(todo, todo.todo_id));
       setRows((current) => cursor === undefined ? next : [...current, ...next.filter((todo) => !current.some((existing) => existing.todoId === todo.todoId))]);
       setTotal(page.total);
       setCursor(page.next_cursor);

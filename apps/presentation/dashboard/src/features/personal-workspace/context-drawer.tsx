@@ -43,6 +43,7 @@ import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
+import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
@@ -643,12 +644,13 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 <div><dt>{t("common.owner")}</dt><dd>{selection.item.ownerLabel ?? selection.item.claimedBy ?? t("drawer.notAssigned")}</dd></div>
                 <div><dt>{t("common.status")}</dt><dd>{selection.item.done ? t("drawer.taskStatusCompleted") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}</dd></div>
                 <div><dt>{t("drawer.priority")}</dt><dd>{selection.item.priority ?? t("drawer.notSet")}</dd></div>
-                <div><dt>{t("drawer.dependencies")}</dt><dd>{selection.item.dependencies?.join(" · ") || t("common.none")}</dd></div>
+                {selection.item.completedAt ? <div><dt>{t("drawer.completedAt")}</dt><dd><time dateTime={selection.item.completedAt}>{selection.item.completedAt}</time></dd></div> : null}
+                {selection.item.dependencies ? <div><dt>{t("drawer.dependencies")}</dt><dd>{selection.item.dependencies.join(" · ") || t("common.none")}</dd></div> : null}
                 {selection.item.status === "deferred" || selection.item.resumeWhen ? <div><dt>{t("drawer.resumeWhen")}</dt><dd>{selection.item.resumeWhen || t("drawer.notSet")}</dd></div> : null}
-                {selection.item.resumeWhen ? <div><dt>{t("drawer.resumeState")}</dt><dd>{selection.item.resumeReady ? t("drawer.resumeReady") : t("drawer.resumePending")}</dd></div> : null}
+                {selection.item.resumeWhen ? <div><dt>{t("drawer.resumeState")}</dt><dd>{selection.item.resumeReady == null ? t("drawer.notSet") : selection.item.resumeReady ? t("drawer.resumeReady") : t("drawer.resumePending")}</dd></div> : null}
                 {selection.item.resumeReceiptId ? <div><dt>{t("drawer.resumeReceipt")}</dt><dd>{selection.item.resumeReceiptId}</dd></div> : null}
                 {selection.item.validationDigest ? <>
-                  <div><dt>{t("drawer.validationRevision")}</dt><dd>{selection.item.validationRevision ?? 0}</dd></div>
+                  <div><dt>{t("drawer.validationRevision")}</dt><dd>{selection.item.validationRevision ?? t("drawer.notSet")}</dd></div>
                   <div><dt>{t("drawer.validationDigest")}</dt><dd><code>{selection.item.validationDigest}</code></dd></div>
                   {selection.item.validationRevisionActor ? <div><dt>{t("drawer.validationRevisionActor")}</dt><dd>{selection.item.validationRevisionActor}</dd></div> : null}
                 </> : null}
@@ -708,6 +710,10 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               </details>
               <button className="personal-primary-action" onClick={() => void previewTodoTransition(selection.item, "complete", t("drawer.taskComplete"))} type="button"><Check size={17} />{t("drawer.taskComplete")}</button>
             </div> : null}
+            {selection.item.evidence ? <section className="personal-detail-card" aria-label={t("drawer.evidence")}>
+              <h4>{t("drawer.evidence")}</h4>
+              <MarkdownText text={selection.item.evidence} />
+            </section> : null}
             {selection.item.done ? <div className="personal-task-completed-note"><Check size={16} /><span><strong>{t("drawer.taskCompletedTitle")}</strong><small>{t("drawer.taskCompletedNote")}</small></span></div> : null}
           </>
         ) : null}

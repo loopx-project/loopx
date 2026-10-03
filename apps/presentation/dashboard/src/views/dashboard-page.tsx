@@ -3,7 +3,7 @@ import { withTurnActivity, type TurnStep } from "../data/turn-steps";
 import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
 import { readConversationReturns } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
-import {compactWorkspaceText as compactShareText} from "../features/personal-workspace/personal-workspace-model";
+import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
 import type { AttentionDetails } from "../features/personal-workspace/attention-details";
@@ -238,8 +238,6 @@ type TodoExplorerItem = {
   todo: TodoItem;
 };
 
-type PersonalAgentTodoItem = WorkspaceAgentTodo;
-
 function inferLifecyclePhase(status?: string | null, run?: RunRecord) {
   if (run?.controller_readiness?.decision_advisor_ready || run?.controller_readiness?.write_controller_ready) {
     return "controller_ready";
@@ -457,7 +455,7 @@ type PersonalGoalItem = {
   activationState: "active" | "stopped";
   agentId: string;
   agentSentence: string;
-  agentTodos: PersonalAgentTodoItem[];
+  agentTodos: WorkspaceAgentTodo[];
   doneTodoCount: number;
   goalId: string;
   latestActivity?: string;
@@ -702,34 +700,14 @@ function personalTodoText(todo: TodoItem) {
   return compactShareText(todo.title ?? todo.text, 112);
 }
 
-function personalTodoResumeReceiptId(todo: TodoItem) {
-  const receipt = todo.resume_condition?.resume_receipt;
-  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return null;
-  const receiptId = (receipt as Record<string, unknown>).receipt_id;
-  return typeof receiptId === "string" && receiptId.trim() ? receiptId.trim() : null;
-}
-
-function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): PersonalAgentTodoItem {
-  const latestValidationRevision = todo.completion_validation_revision_history.at(-1);
+function personalAgentTodoFromItem(todo: TodoItem, row: GoalDirectoryRow): WorkspaceAgentTodo {
   return {
     ...monitorTodoReadback(todo),
-    completedAt: todo.completed_at ?? null,
-    resumeWhen: todo.resume_when ?? null,
-    resumeReady: todo.resume_ready ?? null,
-    resumeReceiptId: personalTodoResumeReceiptId(todo),
-    claimedBy: todo.claimed_by ?? null,
-    // Legacy summaries mark deferred entries checked; they are not completed work.
-    done: todo.status === "deferred" ? false : todo.done,
+    ...workspaceAgentTodoFromItem(todo, `${row.goal.id}:agent:${todo.index}`),
+    // Preserve the active queue's existing preview budget. History and its
+    // inspector use full text/evidence from the retained read.
     evidence: todo.evidence ? compactShareText(todo.evidence, 96) : null,
-    priority: todo.priority ?? null,
-    status: todo.status ?? null,
-    taskClass: todo.task_class ?? null,
-    taskDomain: todo.task_domain ?? null,
     text: personalTodoText(todo),
-    todoId: todo.todo_id?.trim() || `${row.goal.id}:agent:${todo.index}`,
-    validationDigest: todo.completion_validation_sha256 ?? null,
-    validationRevision: todo.completion_validation_revision ?? null,
-    validationRevisionActor: latestValidationRevision?.actor_agent_id ?? null,
   };
 }
 
@@ -746,16 +724,16 @@ function personalAgentTodoItems(row: GoalDirectoryRow): TodoItem[] {
   return [...merged.values()];
 }
 
-function personalAgentTodos(row: GoalDirectoryRow): PersonalAgentTodoItem[] {
+function personalAgentTodos(row: GoalDirectoryRow): WorkspaceAgentTodo[] {
   return personalAgentTodoItems(row).map((todo) => personalAgentTodoFromItem(todo, row));
 }
 
 function personalSubagentDomainCandidates(
   payload: StatusPayload,
   row: GoalDirectoryRow,
-  fallbackTodos: PersonalAgentTodoItem[],
+  fallbackTodos: WorkspaceAgentTodo[],
 ) {
-  const candidateTodos = new Map<string, PersonalAgentTodoItem>();
+  const candidateTodos = new Map<string, WorkspaceAgentTodo>();
   for (const todo of payload.todo_index?.items ?? []) {
     if (todo.goal_id !== row.goal.id || todo.role !== "agent") continue;
     const projected = personalAgentTodoFromItem(todo, row);
@@ -778,7 +756,7 @@ function personalSubagentDomainCandidates(
 function personalAgentTodoFromProjection(
   todo: NonNullable<AgentManagementProjection["agents"][number]["current_todo"]>,
   row: GoalDirectoryRow,
-): PersonalAgentTodoItem {
+): WorkspaceAgentTodo {
   return {
     claimedBy: todo.claimed_by ?? null,
     done: todo.status === "done" || todo.status === "completed",
@@ -791,10 +769,10 @@ function personalAgentTodoFromProjection(
 }
 
 function mergePersonalAgentTodos(
-  projectedTodos: PersonalAgentTodoItem[],
+  projectedTodos: WorkspaceAgentTodo[],
   agentRows: AgentManagementRow[],
   row: GoalDirectoryRow,
-): PersonalAgentTodoItem[] {
+): WorkspaceAgentTodo[] {
   const merged = new Map(projectedTodos.map((todo) => [todo.todoId, todo]));
   for (const agent of agentRows) {
     const current = agent.currentTodo;
@@ -813,7 +791,7 @@ function mergePersonalAgentTodos(
 function personalAgentTodoFacts(row: GoalDirectoryRow): {
   doneTodoCount: number;
   nextTodoText: string | null;
-  recentCompleted: PersonalAgentTodoItem[];
+  recentCompleted: WorkspaceAgentTodo[];
 } {
   const assetTodos = row.queueItem?.project_asset?.agent_todos;
   const queueTodos = row.queueItem?.agent_todos;
@@ -840,7 +818,7 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
   return { doneTodoCount, nextTodoText, recentCompleted };
 }
 
-function personalVisiblePlanTodos(todos: PersonalAgentTodoItem[], limit = 4) {
+function personalVisiblePlanTodos(todos: WorkspaceAgentTodo[], limit = 4) {
   if (todos.length <= limit) {
     return todos;
   }

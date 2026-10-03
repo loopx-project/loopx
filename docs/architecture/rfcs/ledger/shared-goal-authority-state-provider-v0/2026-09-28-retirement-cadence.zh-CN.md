@@ -210,6 +210,13 @@ PR 不构成重复开工的理由。现有收尾 monitor 归并相关 head／rev
 SQLite 既有 rehearsal 完成 100 和 1,000 次提交、冷 CLI 采样及清理；报告仍为
 **incomplete**，正式负载、容量、平台和 elapsed-soak 项未完成，本次没有启动 soak。
 
+`authority_archive_audit.test.ts` 的保留历史消费者回归将游标持久到 63，再用新的
+Node 进程跨 checkpoint 读取 131 笔提交。File→SQLite→File 与 SQLite→File→SQLite
+均逐笔保留原提交的完整事务、Todo 嵌套 metadata 和原始回执；首次恢复后新增的第
+132 笔写入也随返回归档保留。fixture 仅在归档校验和恢复后显式换绑游标，不提供
+已注册消费者游标的自动迁移。一日逻辑时间戳间隔只是加速积压回归，**不是**实际
+24 小时滞后观察、elapsed soak 或正式 D2 准入。
+
 将先前捕获的真实来源隔离快照中 1,101 个完整 Todo 重建为三笔合成源事务，当前生产
 CLI 全部 drain，原 Todo JSON 完整相等。所得四笔事务恢复／审计到 SQLite 后追加
 第五笔已确认合成写入，再 export／restore／audit 到 File，新写入保留。没有修改
@@ -376,7 +383,23 @@ Todo／租约集合中位数为 File 输入 32.4→27.5 ms、SQLite 输入 32.9�
 响应不变。代表性复核请求从超过 2 MiB 降到约 0.96 MB，没有提高预算。
 真实 File/SQLite CLI 验证精确计数、跨远端记录的推断后继、metadata 保留与
 provider 状态不变。这只修复有界容量，不证明任意规模、稳定延迟、D2 验收，
-也不授予默认 provider 切换；整 Goal summary/list/detail 消费和持续观察仍待推进。
+也不授予默认 provider 切换。
+
+### 保留完成记录的消费
+
+完成历史消费者现在显式读取活跃与归档的保留记录，
+复用既有类型化 summary／filter owner。此前 85 条完成记录归档 84 条后，工作区
+历史只返回 1 条；有界 HTTP 分页现在包含全部 85 条，保留完整任务文本、证据和
+Agent 筛选，仅暴露展示字段。显式历史读取不再套用既有的 500 字符摘要上限；
+默认活跃 Todo 列表与调度输入仍排除归档，并保留原展示上限。真实 File／SQLite
+和旧 Markdown 读取保持 provider 状态不变。打包工作区沿用已有分页，在只读
+Todo 详情中用共享 Markdown 组件呈现保留证据，不增加导航步骤或编辑动作。
+历史同时保留完成时间、恢复事实及验收声明的版本／修订者。活跃列表和历史
+复用同一 TS 详情映射与既有 Todo schema，活跃队列的预览预算保持不变。
+未提供的依赖列表不再展示为“无依赖”，缺失的恢复就绪性或验收版本也不虚构。
+这关闭历史枚举与详情缺口，不代表整 Goal summary/list/detail
+消费、持续观察、D2 或默认 provider 准入完成；不改变持久格式、writer 或
+PostgreSQL 消费者。
 
 ### 打包源码指纹成本
 
