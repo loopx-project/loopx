@@ -6,6 +6,8 @@ import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
+import fs from "node:fs/promises";
+import {syncBuiltinESMExports} from "node:module";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
@@ -18,6 +20,46 @@ function sqliteSkipReason(): string | undefined {
   catch { return "requires a WAL-fixed SQLite runtime with finalized statements"; }
 }
 const sqliteSkip = sqliteSkipReason();
+
+for (const platform of ["win32", "linux"] as const) {
+  test(`archive publication preserves the ${platform} directory-sync boundary`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "authority-archive-"));
+    const source = new FileAuthorityStore(join(root, "source"), "goal");
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const originalOpen = fs.open;
+    let directoryOpens = 0;
+    try {
+      assert.equal((await source.commitAuthority({expected_provider_revision: null,
+        operation_id: "op", events: [], receipts: [{done: true}],
+        next_projection: {goal_id: "goal", value: 1}})).status, "applied");
+      // Windows does not support fsync on a directory handle. Inject that
+      // exact IO failure while retaining real file writes, sync and readback.
+      fs.open = (async (...args: Parameters<typeof originalOpen>) => {
+        if (args[0] === root) {
+          directoryOpens += 1;
+          throw Object.assign(new Error("directory fsync unavailable"), {code: "EPERM"});
+        }
+        return originalOpen(...args);
+      }) as typeof originalOpen;
+      syncBuiltinESMExports();
+      Object.defineProperty(process, "platform", {...descriptor, value: platform});
+      const archive = join(root, "backup.ndjson");
+      if (platform === "win32") {
+        const result = await exportAuthorityArchive(source, "goal", archive);
+        assert.deepEqual(await verifyAuthorityArchive(archive), result);
+        assert.equal(directoryOpens, 0);
+      } else {
+        await assert.rejects(exportAuthorityArchive(source, "goal", archive), {code: "EPERM"});
+        assert.equal(directoryOpens, 1, "non-Windows sync errors must still propagate");
+      }
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+      fs.open = originalOpen;
+      syncBuiltinESMExports();
+      await rm(root, {recursive: true, force: true});
+    }
+  });
+}
 
 // Expectations come from the retained-journal contract: exact historical state,
 // operation identities and receipts survive; physical revision tokens do not.

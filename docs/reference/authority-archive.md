@@ -43,6 +43,16 @@ A process killed before publication may leave a private `.partial` sibling;
 verify any completed output before deciding whether an interrupted export needs
 to be repeated.
 
+Publication syncs the archive file and uses the existing File authority owner's
+directory-sync policy: directory fsync is required on supported non-Windows
+paths, while Windows retains file sync without unsupported directory fsync.
+Other IO errors still reject; verification and no-overwrite publication remain
+required on every platform.
+
+中文：发布仍同步归档文件，并复用既有 File authority owner 的目录同步规则：
+非 Windows 路径执行目录 fsync，Windows 保留文件同步，不调用不支持的目录 fsync。
+其他 IO 错误仍拒绝；完整校验与不覆盖既有输出的规则在所有平台保持不变。
+
 ## Restore an isolated copy
 
 The destination is a **new directory**, not a runtime root or a provider selector.
