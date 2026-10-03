@@ -257,6 +257,16 @@ The existing SQLite rehearsal completed 100 and 1,000 commits with cold CLI
 sampling and cleanup. Its report remains **incomplete**, with formal workload,
 capacity, platform and elapsed-soak rows missing; this run starts no soak.
 
+The retained-consumer regression in `authority_archive_audit.test.ts` now fixes
+a consumer checkpoint at cursor 63, then resumes in fresh Node processes over
+131 commits across checkpoint boundaries. Both File→SQLite→File and
+SQLite→File→SQLite retain the complete submitted transactions, nested Todo
+metadata and original receipts; commit 132 made after the first restore survives
+the return export. The fixture explicitly rebinds its checkpoint only after a
+verified archive restore. It does not deliver automatic migration of registered
+consumer cursors. A logical one-day timestamp gap is accelerated backlog
+coverage, **not** 24 hours of observed lag, elapsed soak or formal D2 admission.
+
 A detached previously captured real source with 1,101 complete Todo records was
 reconstructed into three synthetic source transactions. The current production
 CLI drained all three, with full original Todo JSON unchanged. Four resulting

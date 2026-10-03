@@ -202,6 +202,13 @@ PR 不构成重复开工的理由。现有收尾 monitor 归并相关 head／rev
 SQLite 既有 rehearsal 完成 100 和 1,000 次提交、冷 CLI 采样及清理；报告仍为
 **incomplete**，正式负载、容量、平台和 elapsed-soak 项未完成，本次没有启动 soak。
 
+`authority_archive_audit.test.ts` 的保留历史消费者回归将游标持久到 63，再用新的
+Node 进程跨 checkpoint 读取 131 笔提交。File→SQLite→File 与 SQLite→File→SQLite
+均逐笔保留原提交的完整事务、Todo 嵌套 metadata 和原始回执；首次恢复后新增的第
+132 笔写入也随返回归档保留。fixture 仅在归档校验和恢复后显式换绑游标，不提供
+已注册消费者游标的自动迁移。一日逻辑时间戳间隔只是加速积压回归，**不是**实际
+24 小时滞后观察、elapsed soak 或正式 D2 准入。
+
 将先前捕获的真实来源隔离快照中 1,101 个完整 Todo 重建为三笔合成源事务，当前生产
 CLI 全部 drain，原 Todo JSON 完整相等。所得四笔事务恢复／审计到 SQLite 后追加
 第五笔已确认合成写入，再 export／restore／audit 到 File，新写入保留。没有修改
