@@ -3,6 +3,86 @@ import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
+async function recoveryObserverHandover(browser, url) {
+  const sessionId = "session-goal-product-release-codex";
+  const turnId = "recovered-survey-draft";
+  let releasePreview;
+  let releaseNewTurn;
+  let markPreviewStarted;
+  let previewHeld = false;
+  const previewWait = new Promise(resolve => { releasePreview = resolve; });
+  const newTurnWait = new Promise(resolve => { releaseNewTurn = resolve; });
+  const previewStarted = new Promise(resolve => { markPreviewStarted = resolve; });
+  const context = await openWorkspacePage(browser, url, {
+    async beforeGoto(api, page) {
+      const runtime = page.__loopxRuntime;
+      runtime.sessions.set(sessionId, {
+        session_id: sessionId, goal_id: "product-release", agent_id: "codex", adapter_kind: "codex_app_server",
+        channel_id: "goal.product-release", status: "busy", active_turn_id: turnId, resumable: true,
+        created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:01Z",
+        last_activity_at: "2026-08-13T01:00:01Z", last_error_code: null,
+      });
+      runtime.messages.set(sessionId, [{ message_id: "survey-request", turn_id: turnId, role: "user",
+        text: "给 LoopX 做份社区问卷，先给我草稿。", created_at: "2026-08-13T01:00:01Z" }]);
+      runtime.turnMessages.set(turnId, "community survey");
+      api.answerForMessage = () => ({ message: "问卷草稿已整理。", proposals: [
+        { kind: "todo", priority: "P1", text: "审阅社区问卷草稿", rationale: "发布前先审阅。" },
+      ] });
+      await page.route("**/events/**", async route => {
+        // Keep the replacement worker active until its scoped Stop is tested;
+        // completion of the old projection must not control this stream.
+        await newTurnWait;
+        await route.fulfill({ contentType: "text/event-stream", body: "", status: 200 });
+      });
+      await page.route("**/api/actions?**", async route => {
+        if (!previewHeld && runtime.completedTurns.has(JSON.stringify([sessionId, turnId]))) {
+          previewHeld = true;
+          markPreviewStarted();
+          await previewWait;
+        }
+        await route.fallback();
+      });
+    },
+  });
+  const { page, api } = context;
+  const goalChat = async () => {
+    await page.locator(".personal-goal-link").filter({ hasText: "Product Release" }).click();
+    await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
+  };
+  try {
+    await goalChat();
+    await Promise.race([previewStarted, new Promise((_, reject) => setTimeout(() => reject(new Error("Recovery never reached its draft read")), 10000))]);
+    assert.equal(previewHeld, true, "The completed recovery is still awaiting its draft projection");
+    await page.locator(".personal-manager-link").click();
+    await goalChat();
+    await page.locator(".personal-message-pending").waitFor({ state: "hidden", timeout: 5000 });
+    assert.equal(api.turnRequests.length, 0, "Leaving and returning only observes the stored completion");
+    const composer = page.getByLabel("向 LoopX 发送消息");
+    await composer.fill("先做中文，别发布。");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await page.locator(".personal-message-pending").waitFor({ state: "visible" });
+    assert.equal(api.turnRequests.length, 1, "The new request is admitted rather than steered to the ended Turn");
+    releasePreview();
+    await page.locator(".personal-proposal-row").filter({ hasText: "审阅社区问卷草稿" }).waitFor({ state: "visible" });
+    const stop = page.getByRole("button", { name: "中断本轮", exact: true });
+    await stop.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: resolve(outputDir, "conversation-observer-handover-desktop.png"), animations: "disabled" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator("body").evaluate(body => body.scrollWidth <= innerWidth + 1));
+    await stop.focus();
+    await page.screenshot({ path: resolve(outputDir, "conversation-observer-handover-mobile.png"), animations: "disabled" });
+    await stop.press("Enter");
+    await page.waitForFunction(() => !document.querySelector(".personal-message-pending"));
+    assert.equal(api.interrupts.at(-1)?.turnId, api.turnRequests[0].turnId,
+      "Late cleanup of the old observer cannot erase the new Turn's control identity");
+    assert.equal(api.actionApplies.length, 0, "Observation and interruption do not apply a proposed task");
+  } finally {
+    releasePreview();
+    releaseNewTurn();
+    await context.close();
+  }
+}
+
 export const conversationHistoryRecoveryScenario = {
   id: "conversation-history-recovery",
   async run({ browser, collectCoverage, url }) {
@@ -94,7 +174,8 @@ export const conversationHistoryRecoveryScenario = {
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       assert.equal(await page.getByText("只看当前状态。", { exact: true }).count(), 1, "Projection-only messages retain their exact stored identities");
       assert.equal(api.turnRequests.length, 1, "Projection history does not run an Agent");
-      return { coverageEntries: context.coverageEntries, note: "One failed history read preserves readable messages; read-only retry recovers session-scoped records, retains the draft and sends exactly once into the recovered current session." };
+      await recoveryObserverHandover(browser, url);
+      return { coverageEntries: context.coverageEntries, note: "History read recovery retains the draft and exact session. Navigation retires only its display observer; delayed recovery projection cannot block a new request or erase its interrupt target." };
     } finally {
       await context.close();
     }
