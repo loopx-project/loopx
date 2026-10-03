@@ -48,7 +48,7 @@ async function legacyHistory(store: FileAuthorityStore, projections: JsonObject[
 function projection(i: number): JsonObject {
   // Array insertion/removal/reorder, deleted object members and JSON keys that
   // ordinary property assignment mishandles must survive historical replay.
-  const special = JSON.parse('{"__proto__":{"stored":true},"":42}');
+  const special = JSON.parse('{"__proto__":{"stored":true},"":42,"10":"ten","2":"two","𐀀":"astral","￿":"BMP","quote\\\"":"escaped"}');
   return {authority_revision: i, special, nested: i % 2 ? {retained: i} : {removed: true},
     values: i % 3 ? [i, "unchanged", {value: i}] : [{value: i}, "unchanged"],
     stable: "retained-".repeat(1000)};

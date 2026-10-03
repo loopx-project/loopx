@@ -1,6 +1,7 @@
 """Read-only lifecycle context for hosts whose native tools bypass LoopX Turn."""
 
 import argparse
+import json
 
 from ..agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ..capabilities.multi_subagent.native_child_receipts import load_native_child_activity
@@ -44,6 +45,9 @@ def register_agent_context(subparsers, add_format):
         help="Read durable native child activity for this exact admitted Turn.",
     )
     parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    parser.add_argument("--capability-gap-ref", help="Stable public-safe Goal gap reference; does not grant discovery or execution authority.")
+    parser.add_argument("--capability-candidate-json", action="append", default=[], help="Bounded original-owner candidate facts (maximum 8); advice only.")
+    parser.add_argument("--capability-planning-trigger", choices=["before_plan", "replan"])
 
 
 def handle_agent_context(args, registry_path, runtime_root, print_payload, output_format):
@@ -120,6 +124,19 @@ def handle_agent_context(args, registry_path, runtime_root, print_payload, outpu
         )
         return 1
     observations = {}
+    if args.capability_gap_ref or args.capability_candidate_json or args.capability_planning_trigger:
+        if args.phase != "before_plan":
+            print_payload({"ok": False, "error": "capability improvement observations require --phase before_plan"}, output_format(args), render_agent_context)
+            return 1
+        try:
+            observations["capability_improvement"] = {
+                "gap_ref": args.capability_gap_ref,
+                "trigger": args.capability_planning_trigger or "before_plan",
+                "candidates": [json.loads(item) for item in args.capability_candidate_json],
+            }
+        except json.JSONDecodeError:
+            print_payload({"ok": False, "error": "capability candidate must be JSON"}, output_format(args), render_agent_context)
+            return 1
     if operation:
         native_capacity = {
             "schema_version": "native_subagent_capacity_observation_v0",
@@ -174,6 +191,9 @@ def handle_agent_context(args, registry_path, runtime_root, print_payload, outpu
         "host_receipts_observed": False,
         "host_receipts_scope": "native_tool_input",
     }
+    if context and any(item.get("capability_id") == "goal_capability_organization"
+                       for item in context.get("contributions") or []):
+        payload["source"] += "+goal_improvement_intent"
     if operation:
         payload.update(
             {

@@ -208,14 +208,18 @@ function boundedDelegationContext(value: unknown): JsonObject | null {
   return result;
 }
 
-export function evaluateSubagentContext(value: unknown): JsonObject | null {
-  const input = requireJsonObject(value, "subagent context");
-  const policy = jsonObject(input.orchestration) ?? {};
+export function subagentContextConfiguration(value: unknown): JsonObject {
+  const policy = jsonObject(value) ?? {};
   const enabled = policy.mode === "multi_subagent" && policy.spawn_allowed === true
     && Number.isInteger(policy.max_children) && Number(policy.max_children) > 0;
+  return { ...policy, enabled };
+}
+
+export function evaluateSubagentContext(value: unknown): JsonObject | null {
+  const input = requireJsonObject(value, "subagent context");
   return projectAgentContext({
     phase: input.phase, scope: input.scope, observations: input.observations ?? {},
-    capabilities: { multi_subagent: { ...policy, enabled } },
+    capabilities: { multi_subagent: subagentContextConfiguration(input.orchestration) },
   }, [subagentContextProvider]);
 }
 

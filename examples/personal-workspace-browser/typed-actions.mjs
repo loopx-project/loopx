@@ -110,6 +110,18 @@ export const typedActionsScenario = {
     const operationUi = await openWorkspacePage(browser, url, {
       apiOptions: {
         initialActionProposals: [
+          {
+            schema_version: "loopx_chat_action_proposal_v1",
+            proposal_id: "goal-bootstrap-recovery", action_kind: "goal.create",
+            summary: "Resume interrupted Goal creation", status: "failed",
+            normalized_parameters: {goal_id: "product-release", title: "Storage recovery", workspace_ref: "current"},
+            context: {kind: "goal", goal_id: "product-release"},
+            expected_state_fingerprint: "creation-basis", permission_classification: "durable_write",
+            validation_evidence: ["Workspace validated before storage initialization."], available_transitions: ["apply", "cancel"],
+            checkpoint: {steps: {workspace_validated: {outcome: "workspace_validated"}}},
+            failure: {error_code: "canonical_action_failed"}, receipt: null, stale: null,
+            created_at: "2026-09-14T01:00:00Z", updated_at: "2026-09-14T01:00:01Z",
+          },
           ...["edit", "complete", "agent-complete", "monitor-stop"].map(operation => ({
             schema_version: "loopx_chat_action_proposal_v1",
             proposal_id: `reviewed-${operation}-recovery`, action_kind: operation === "monitor-stop" ? "monitor.update" : "todo.update",
@@ -154,6 +166,23 @@ export const typedActionsScenario = {
       const { page } = operationUi;
       await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+
+      await page.locator(".personal-proposal-row", {hasText: "Storage recovery"}).click();
+      const creationRecovery = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
+      await creationRecovery.getByText("Goal 初始化尚未完成。请重试原创建操作，已记录的存储选择会保留。", {exact: true}).waitFor();
+      if ((await creationRecovery.innerText()).includes("没有写入任何变更")) throw new Error("Partial creation claimed no writes");
+      await page.setViewportSize({width: 390, height: 844});
+      const creationRetry = creationRecovery.getByRole("button", {name: "重试原操作", exact: true});
+      await creationRetry.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "goal-creation-recovery.png"), animations: "disabled"});
+      const previewsBeforeCreationRetry = operationUi.api.actionPreviews.length;
+      await creationRetry.focus();
+      await page.keyboard.press("Enter");
+      await creationRecovery.getByText("已应用，LoopX 状态将刷新。", {exact: true}).waitFor();
+      if (!operationUi.api.actionApplies.includes("goal-bootstrap-recovery")) throw new Error("Creation recovery lost its original request");
+      if (operationUi.api.actionPreviews.length !== previewsBeforeCreationRetry) throw new Error("Creation recovery regenerated an existing Goal");
+      await page.getByRole("button", {name: /关闭详情/}).click();
+      await page.setViewportSize({width: 1512, height: 982});
 
       // A loaded failure must remain discoverable and retry its original id,
       // rather than being hidden or regenerated into a second business edit.
@@ -917,6 +946,17 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, 'completed-history-4087.png'), fullPage: false, animations: 'disabled' });
       await historyScroll.evaluate(element => { element.scrollTop = 0; });
       await completedColumn.getByText('Completed A', { exact: true }).waitFor();
+      await completedColumn.getByText('Completed A', { exact: true }).click();
+      const completedDetail = page.getByRole('dialog', { name: 'Todo 详情' });
+      await completedDetail.getByRole('region', { name: '证据', exact: true }).getByText('Verified retained completion evidence.', { exact: true }).waitFor();
+      await completedDetail.getByText('todo_done:todo_history_1', { exact: true }).waitFor();
+      await completedDetail.getByText('receipt-completed-history', { exact: true }).waitFor();
+      await completedDetail.getByText('example-reviewer', { exact: true }).waitFor();
+      await completedDetail.getByText('a'.repeat(64), { exact: true }).waitFor();
+      await completedDetail.getByText('2026-08-01T00:00:00Z', { exact: true }).waitFor();
+      if (await completedDetail.getByText('依赖', { exact: true }).count()) throw new Error('An absent dependency projection was reported as no dependencies');
+      if (await completedDetail.getByRole('button', { name: '完成任务', exact: true }).count()) throw new Error('Completed history exposed a write action');
+      await page.keyboard.press('Escape');
       // Both presentations retain one snapshot, including archived history and evidence.
       let historyRequests = 0;
       page.on('request', request => { if (request.url().includes('/api/chat/completed-todos?')) historyRequests += 1; });

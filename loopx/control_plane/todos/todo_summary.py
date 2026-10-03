@@ -789,6 +789,7 @@ def _structured_todo_group_items(
     *,
     source_section: str | None,
     role: str | None,
+    text_limit: int | None,
 ) -> list[dict[str, Any]]:
     return [
         structured_todo_item(
@@ -796,6 +797,7 @@ def _structured_todo_group_items(
             role=role,
             source_section=source_section,
             archive_state=todo_archive_state(item),
+            text_limit=text_limit,
         )
         if isinstance(item, dict)
         else item
@@ -967,6 +969,7 @@ def compact_todo_group(
     rollout_events: list[dict[str, Any]] | None = None,
     available_capabilities: Any = None,
     item_limit: int | None = MAX_STATUS_TODOS_PER_ROLE,
+    text_limit: int | None = 500,
     include_task_orchestration_authority: bool = False,
     vision_runs: list[dict[str, Any]] | None = None,
     evaluated_at: str | None = None,
@@ -977,6 +980,7 @@ def compact_todo_group(
         items,
         source_section=source_section,
         role=role,
+        text_limit=text_limit,
     )
     _apply_resume_conditions(
         items,

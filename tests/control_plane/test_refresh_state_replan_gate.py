@@ -916,6 +916,32 @@ def test_rotated_vision_obligation_accepts_terminal_progress(
     assert semantic_delta["satisfying_outcomes"] == [expected_outcome]
 
 
+def test_writeback_gate_rejects_known_blocker_from_projected_history() -> None:
+    observation = {
+        "schema_version": "typed_progress_observation_v0",
+        "result_class": "blocked",
+        "surface_id": "surface-current-path",
+        "work_item_id": "todo-current-path",
+        "blocker_id": "blocker-current-path",
+        "evidence_ids": ["evidence-current-blocker"],
+    }
+    runs = [{
+        "agent_id": AGENT_ID,
+        "generated_at": "2026-08-13T11:28:00+08:00",
+        "progress_observation": observation,
+    }, *_rotated_vision_runs()]
+    with pytest.raises(ReplanWritebackRejected, match="blocker already recorded"):
+        enforce_open_replan_writeback(
+            newest_first_runs=runs,
+            state_text=_completed_advancement_chain_state(),
+            agent_id=AGENT_ID, goal_id=GOAL_ID,
+            progress_observation={
+                **observation, "work_item_id": "replan-0123456789abcdef",
+                "evidence_ids": ["evidence-new-readback"],
+            },
+        )
+
+
 def test_semantic_no_followup_cannot_replace_todo_lifecycle_settlement() -> None:
     with pytest.raises(ValueError, match="first run loopx todo complete"):
         enforce_open_replan_writeback(

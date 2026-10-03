@@ -519,7 +519,15 @@ export function createEffectRuntimeHandlers(
     ],
     [
       "capability_hook.agent_context.project",
-      lazyHandler(() => import("./subagent_context.ts"), ({evaluateSubagentContext}) => (params) => evaluateSubagentContext(params)),
+      lazyHandler(() => import("./goal_agent_context.ts"), ({evaluateGoalAgentContext}) => (params) => evaluateGoalAgentContext(params)),
+    ],
+    [
+      "capability.improvement.inspect",
+      lazyHandler(() => import("./capabilities/goal_capability_organization.ts"), ({inspectImprovementPolicy}) => (params) => inspectImprovementPolicy(params.policy)),
+    ],
+    [
+      "capability.improvement.configuration",
+      lazyHandler(() => import("./capabilities/goal_capability_organization.ts"), ({planImprovementConfiguration}) => (params) => planImprovementConfiguration(params)),
     ],
     [
       "capability_hook.interaction_projection.validate_registration",
@@ -560,6 +568,9 @@ export function createEffectRuntimeHandlers(
     ["collaboration.goal_draft", lazyHandler(() => import("./collaboration/goal_draft.ts"), ({admitGoalDraft}) => (params) => ({draft: admitGoalDraft(params)}))],
     ["collaboration.conversation.trigger", lazyHandler(() => import("./collaboration/conversation_trigger.ts"), ({resolveConversationTrigger}) => resolveConversationTrigger)],
     ["collaboration.conversation.scope", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({resolveConversationScope}) => resolveConversationScope)],
+    ["collaboration.peer.context_access", lazyHandler(() => import("./collaboration/peer_context.ts"), ({requirePeerContextAccess}) => requirePeerContextAccess)],
+    ["collaboration.source.recipients", lazyHandler(() => import("./collaboration/source_grants.ts"), ({resolveSourceRecipients}) => resolveSourceRecipients)],
+    ["collaboration.source.configure_recipient", lazyHandler(() => import("./collaboration/source_grants.ts"), ({configureSourceRecipient}) => configureSourceRecipient)],
     ["collaboration.conversation.reply_context", lazyHandler(() => import("./collaboration/conversation_reply_context.ts"), ({projectConversationReplyContext}) => projectConversationReplyContext)],
     ["chat.turn.accept", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({planChatTurnAcceptance}) => planChatTurnAcceptance)],
     ["chat.turn.execution_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayContinueChatTurn}) => mayContinueChatTurn)],
@@ -576,6 +587,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.result.plan_publication", lazyHandler(() => import("./collaboration/result_publication.ts"), ({planCollaborationResult}) => planCollaborationResult)],
     ["collaboration.result.delivery_ready", lazyHandler(() => import("./collaboration/result_publication.ts"), ({collaborationResultDeliveryReady}) => collaborationResultDeliveryReady)],
     ["collaboration.peer_host_route.select", lazyHandler(() => import("./collaboration/peer_route_selection.ts"), ({selectObservedPeerHostRoute}) => selectObservedPeerHostRoute)],
+    ["runtime.execution_identity.codex", lazyHandler(() => import("./runtime/execution_identity.ts"), ({readCodexExecutionIdentity}) => readCodexExecutionIdentity)],
+    ["runtime.execution_identity.match", lazyHandler(() => import("./runtime/execution_identity.ts"), ({matchExecutionDeclaration}) => matchExecutionDeclaration)],
     [
       "collaboration.goal_instance.decide",
       lazyHandler(() => import("./collaboration/goal_instance_lifecycle.ts"), ({decideCollaborationLifecycle}) => (params) => decideCollaborationLifecycle(params)),

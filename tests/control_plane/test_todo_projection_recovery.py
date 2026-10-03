@@ -132,11 +132,10 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     assert manager["authority_revision"] == before["provider_revision"]
     assert manager["todos"][0]["todo_id"] == record["todo_id"]
     assert manager["todos"][0]["title"].startswith("Independent evidence")
-    # The existing TS context owner includes its marker in the 420-codepoint
-    # overview budget; the exact canonical record above remains untruncated.
-    assert manager["todos"][0]["title"] == listed["todo"]["title"][:417] + "..."
-    assert len(manager["todos"][0]["title"]) == 420
     assert manager["todos"][0]["content_truncated"] is True
+    assert len(manager["todos"][0]["title"]) == 420
+    # The shared context projection counts its marker inside the text budget.
+    assert manager["todos"][0]["title"] == listed["todo"]["title"][:417].rstrip() + "..."
     code, create_replay = _cli(registry, *create)
     assert code == 0 and create_replay["status"] == "replayed", create_replay
     assert _read(runtime) == before  # No new Todo, provider revision or business receipt.

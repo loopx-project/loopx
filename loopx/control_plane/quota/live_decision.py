@@ -715,6 +715,9 @@ def build_live_quota_should_run_decision(
                 goal=goal,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
+                observations={"capability_improvement": {
+                    "trigger": "replan" if payload.get("replan_action_packet") else "before_plan",
+                }},
             )
         else:
             context = project_agent_context(

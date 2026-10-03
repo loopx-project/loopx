@@ -18,7 +18,9 @@ test("runtime loads selected owners without importing unrelated methods", () => 
     const handlers = createEffectRuntimeHandlers({fingerprint: "loading-test",
       requestShutdown: () => { shutdowns++; }});
     const imported = (suffix) => [...loaded].some(url => url.endsWith(suffix));
-    for (const suffix of ["/task_lease_acquire_decision.ts", "/external_evidence.ts", "/performance_diagnosis.ts"]) {
+    for (const suffix of ["/task_lease_acquire_decision.ts", "/external_evidence.ts", "/performance_diagnosis.ts",
+      "/goal_agent_context.ts", "/goal_capability_organization.ts", "/peer_context.ts",
+      "/source_grants.ts", "/execution_identity.ts"]) {
       assert.equal(imported(suffix), false, suffix);
     }
     const ping = await dispatchEffectRuntimeMethod(handlers, "runtime.ping", {});
@@ -40,6 +42,41 @@ test("runtime loads selected owners without importing unrelated methods", () => 
     assert.equal(imported("/task_lease_acquire_decision.ts"), true);
     assert.equal(imported("/external_evidence.ts"), false);
     assert.equal(imported("/performance_diagnosis.ts"), false);
+    const policy = {mode: "bounded", discovery_budget_minutes: 5, max_trials: 1};
+    const inspect = await dispatchEffectRuntimeMethod(handlers, "capability.improvement.inspect", {policy});
+    assert.equal(inspect.mode, "bounded");
+    const configured = await dispatchEffectRuntimeMethod(handlers, "capability.improvement.configuration",
+      {current: policy, patch: {max_trials: 0}});
+    assert.deepEqual(configured, {configuration: {...policy, max_trials: 0}});
+    await assert.rejects(dispatchEffectRuntimeMethod(handlers, "capability.improvement.configuration",
+      {patch: {mode: "auto_install"}}));
+    const context = await dispatchEffectRuntimeMethod(handlers, "capability_hook.agent_context.project",
+      {phase: "before_plan", scope: {goal_id: "example", agent_id: "coordinator"},
+        capability_improvement: policy});
+    assert.equal(context.authority, "guidance_only");
+    assert.equal(context.contributions[0].capability_id, "goal_capability_organization");
+    const worker = {goal_id: "example", agent_id: "worker"};
+    const source = {sender_ids: ["owner"], targets: [{goal_id: "example"}]};
+    assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "collaboration.source.recipients",
+      {sender_id: "owner", source, available: [worker]}), {targets: [worker]});
+    const revoked = await dispatchEffectRuntimeMethod(handlers, "collaboration.source.configure_recipient",
+      {source, goal_id: "example", agent_id: "worker", grant: false,
+        available: [worker], active_goal_ids: ["example"]});
+    assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "collaboration.source.recipients",
+      {sender_id: "owner", source: revoked.source, available: [worker]}), {targets: []});
+    const peer = {conversation: {channel_id: "goal.example", goal_id: "example", origin: "web"},
+      source_id: "fixture", goal_id: "example", agent_ids: ["worker"]};
+    assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "collaboration.peer.context_access",
+      peer), {allowed: true});
+    await assert.rejects(dispatchEffectRuntimeMethod(handlers, "collaboration.peer.context_access",
+      {...peer, conversation: {channel_id: "manager.external.fixture", goal_id: "example"}}));
+    assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "runtime.execution_identity.match",
+      {declaration: {actor_kind: "model_agent", declaration_source: "runtime_reported"}}),
+      {errors: ["runtime_observation_missing"]});
+    assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "runtime.execution_identity.codex", {}),
+      {status: "unavailable", reason: "session_not_bound"});
+    for (const suffix of ["/goal_agent_context.ts", "/goal_capability_organization.ts", "/peer_context.ts",
+      "/source_grants.ts", "/execution_identity.ts"]) assert.equal(imported(suffix), true, suffix);
     await dispatchEffectRuntimeMethod(handlers, "runtime.shutdown", {});
     assert.equal(shutdowns, 1);
   `;
