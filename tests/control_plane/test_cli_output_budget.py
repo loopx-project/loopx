@@ -1522,7 +1522,9 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # A reproducible 128-character absolute root, independent of pytest's
     # ever-growing temp/worker prefix. Do not shorten rendered paths or raise
     # the absolute output ceiling to make this case pass.
-    parent = Path(tempfile.gettempdir()).resolve()
+    # Reuse the other budget fixtures' short namespace. A canary's nested
+    # TMPDIR can already exceed 128 characters before we create this root.
+    parent = Path("/tmp").resolve()
     # tempfile contributes an eight-character random suffix. Hold input size
     # constant across Linux /tmp and macOS's longer temporary-directory root.
     prefix = "loopx-brief-".ljust(128 - len(str(parent)) - 1 - 8, "p")
@@ -1530,6 +1532,16 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
         root = Path(directory).resolve()
         assert len(str(root)) == 128
         _assert_mode_variant_budgets(root, only="heartbeat_prompt_brief")
+
+
+def test_long_path_budget_is_independent_of_runner_temp_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    parent = tmp_path / ("nested-canary-" + "p" * 128)
+    parent.mkdir()
+    assert len(str(parent.resolve())) > 128
+    monkeypatch.setattr(tempfile, "tempdir", str(parent))
+    test_brief_budget_retains_full_commands_on_real_long_paths()
 
 
 def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
