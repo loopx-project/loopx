@@ -64,10 +64,22 @@ export async function verifyWorkspaceLocales({ browser, url, installApi, outputD
 
   const page = await browser.newPage({ locale: "en-US", viewport: { width: 1440, height: 960 } });
   try {
-    await installApi(page);
+    const api = await installApi(page);
     await page.goto(url, { waitUntil: "networkidle" });
     await page.getByTestId("personal-goal-home").waitFor();
+    assert.match(await page.getByRole("region", { name: "Control plane source" }).innerText(), /This machine/);
+    const englishText = await page.locator("body").innerText();
+    for (const chinese of ["本机", "仅查状态"]) assert.ok(!englishText.includes(chinese), `English Workspace shows ${chinese}`);
     await page.screenshot({ path: resolve(outputDir, "locale-default-english.png") });
+    await page.getByRole("combobox", { name: "Select chat runtime", exact: true }).click();
+    const statusOnly = page.getByRole("option", { name: "Status only", exact: true });
+    assert.ok(await statusOnly.isVisible(), "English Runtime picker shows the translated status-only route");
+    await statusOnly.click();
+    await page.getByLabel("Send a message to LoopX").fill("Show the current state.");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.locator(".personal-manager-conversation-messages article.is-assistant > strong").getByText("Status only", { exact: true }).waitFor();
+    assert.equal(api.turnRequests.length, 0, "Localizing the status-only route must not start an Agent Turn");
+    assert.ok(!(await page.locator("body").innerText()).includes("LoopX 状态投影"), "The status-only reply source follows the selected language");
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator(".personal-channel-scroll").evaluate((element) => { element.scrollTop = 0; });
     const clippedStats = await page.locator(".personal-digest-stats span").evaluateAll((stats) =>
@@ -86,6 +98,7 @@ export async function verifyWorkspaceLocales({ browser, url, installApi, outputD
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId("personal-goal-home").waitFor();
     assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+    assert.match(await page.getByRole("region", { name: "控制面来源" }).innerText(), /本机/);
     await page.screenshot({ path: resolve(outputDir, "locale-saved-chinese.png") });
     await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.getByRole("button", { name: /语言/ }).click();

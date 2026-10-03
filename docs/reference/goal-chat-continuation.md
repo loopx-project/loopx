@@ -98,6 +98,25 @@ messages; images use the ordinary conversation after pausing.
 - Browser refresh reconnects to the existing local run. After service loss,
   reconnect restores and pauses the original native thread before resuming.
   The Chat hard timeout remains in force; this is not an unattended daemon.
+- When a delegated result is first accepted, the Chat service continues the
+  lead once through the same admission as `resume`. The wake belongs to the
+  conversation whose Turn started the operation: another conversation of the
+  same Goal and coordinator is never selected instead, so exiting, closing or
+  reconfiguring that conversation refuses the wake rather than moving it. The
+  operation record keeps a separate wake receipt: `woken` with the Turn id,
+  `pending` with `lead_turn_active`, `lead_paused`, `allowance_exhausted` or
+  `wake_dispatch_pending`, or `refused` with `goal_stopped`, `lead_unbound`,
+  `binding_revoked`, `native_goal_complete`, `native_goal_absent`,
+  `wake_identity_conflict`, `wake_turn_ended_unstarted` or `no_wake_owner`. Its
+  Turn is accepted once under a client id derived from the intent, and only a
+  Turn the provider actually started — recorded as `upstream_turn_id` — is
+  recorded as dispatched: a Turn accepted but not yet dispatched stays
+  `wake_dispatch_pending`, and a still-queued Turn from an interrupted dispatch
+  is handed back to the same native acceptance and dispatch owner, so the lead is
+  continued once without creating a second Turn. A wake never unpauses the lead, never starts a
+  native Goal and never raises the allowance. A lead that already read the result
+  in its own Turn is marked `observed_in_turn` and is not woken again. It
+  requires the Chat service to be running; stopping it leaves intents pending.
 - To roll back, pause/close the Chat service before installing an older build.
   Disabling mode or deleting a binding does not cancel already admitted children;
   use their own execution/recovery controls and retain their evidence.
@@ -139,6 +158,19 @@ For a disposable mixed-team setup, use the
 升级底层线程；已有未结束的原生 Goal 时拒绝替换。以后恢复都沿用该线程。
 服务重启先恢复并暂停原线程；浏览器刷新不会另起运行。运行仍有硬超时，尚非
 无人值守 daemon。配置文件在未结束的 Goal 中保持摘要绑定，改变后需先协调处理。
+
+成员结果首次被接受时，Chat 服务按与 `resume` 相同的准入规则继续协调员一次。
+唤醒绑定在「启动该操作的回合所属会话」上：同一 Goal 与身份下的其他会话不会被选为
+替代，所以该会话退出、关闭或改配置时只做拒绝，而不是把唤醒移交给别的会话。操作记录
+里另存唤醒回执：`woken` 附 Turn id；`pending` 附 `lead_turn_active`、`lead_paused`、
+`allowance_exhausted` 或 `wake_dispatch_pending`；`refused` 附 `goal_stopped`、`lead_unbound`、
+`binding_revoked`、`native_goal_complete`、`native_goal_absent`、`wake_identity_conflict`、
+`wake_turn_ended_unstarted` 或 `no_wake_owner`。其 Turn 由意图派生的 client id 只接受一次，
+且只有 provider 真正开始过的 Turn（记为 `upstream_turn_id`）才算已派发：已接受但尚未派发的
+Turn 保持 `wake_dispatch_pending`；中断派发后仍处于 queued 的 Turn 会交回同一套原生接受与
+派发 owner 继续，因此协调员只被续跑一次，也不会新建第二个 Turn。唤醒不会解除暂停、不会新开原生 Goal、
+也不会提高额度。协调员已在自己回合内读到结果时记为 `observed_in_turn`，不再唤醒。
+它依赖 Chat 服务在运行；停掉服务时意图保持待处理。
 
 协调员保留只读沙箱，成员权限来自各自执行绑定，不继承管家的扩大权限。
 成员通过验收与协调员报告、整个 Goal 验收分别显示；本模式不直接完成报告 Todo

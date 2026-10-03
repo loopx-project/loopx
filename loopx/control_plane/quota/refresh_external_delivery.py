@@ -1,4 +1,5 @@
 """Persist the typed resume decision inside the existing refresh serialization lock."""
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from .settlement import QuotaSettlementReadback, attach_settlement_progress, set
 def finish_external_delivery_refresh(
     payload: dict[str, Any], readback: QuotaSettlementReadback | None,
     runtime_root: Path, *, dry_run: bool,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if readback is None:
         return payload
@@ -29,6 +31,7 @@ def finish_external_delivery_refresh(
                 todo_id=identity.todo_id, run_id=identity.turn_instance_id,
                 event_kind="refresh_external_delivery", status=transition["state"],
                 summary="Refresh external delivery preference recorded.", details=transition,
+                goal_ref=goal_ref,
             ),
         )
         plan["transition"] = None  # The planned journal effect was committed once.
@@ -38,6 +41,7 @@ def finish_external_delivery_refresh(
 def refresh_recovery_payload(
     readback: QuotaSettlementReadback, *, registry_path: Path,
     runtime_root: Path, goal_id: str, dry_run: bool,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     recovery = readback.refresh_recovery
     identity = readback.identity.value
@@ -50,7 +54,13 @@ def refresh_recovery_payload(
         # Record a requested pause before a new writeback can commit. If later
         # validation fails, retaining the pause is conservative and retryable.
         if (plan.get("transition") or {}).get("state") == "paused":
-            finish_external_delivery_refresh({"ok": True}, readback, runtime_root, dry_run=dry_run)
+            finish_external_delivery_refresh(
+                {"ok": True},
+                readback,
+                runtime_root,
+                dry_run=dry_run,
+                goal_ref=goal_ref,
+            )
         return None
     payload = {
         **(readback.writeback_run or {}), "ok": decision != "reject" and not delivery_error,
@@ -62,7 +72,13 @@ def refresh_recovery_payload(
         "settlement_result": settlement_result_payload(readback.delivery),
     }
     if not dry_run:
-        attach_settlement_progress(payload, readback, registry_path=registry_path, runtime_root=runtime_root)
+        attach_settlement_progress(
+            payload,
+            readback,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_ref=goal_ref,
+        )
     if decision == "reject":
         payload["error"] = (
             f"{recovery['reason']}: committed writeback is unchanged; "
@@ -81,4 +97,10 @@ def refresh_recovery_payload(
                f"--resume-external-sinks {key} instead of --suppress-external-sinks. " if key else "")
             + "Existing provider permissions still apply; do not repeat business mutations or spend."
         )
-    return finish_external_delivery_refresh(payload, readback, runtime_root, dry_run=dry_run)
+    return finish_external_delivery_refresh(
+        payload,
+        readback,
+        runtime_root,
+        dry_run=dry_run,
+        goal_ref=goal_ref,
+    )

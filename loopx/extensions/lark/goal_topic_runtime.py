@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+from ...control_plane.collaboration import conversation_reply_context
 from ...file_lock import exclusive_file_lock
 from .manager_routing import (
     has_manager_binding,
@@ -682,13 +683,22 @@ def answer_lark_goal_topic(
     if manager:
         objective = MANAGER_AGENT_OBJECTIVE
     resolved_work_dir = Path(work_dir).expanduser().resolve()
+    reply_context = (
+        str(conversation_reply_context(dict(route))["context_text"])
+        if route.get("parent_id") or route.get("thread_context")
+        else ""
+    )
     if manager:
-        message = manager_message(text, route.get("context_materials"))
+        message = manager_message(
+            text, route.get("context_materials"), reply_context=reply_context
+        )
     else:
         message = (
             "这是来自已绑定 Lark Goal Topic 的用户消息。请直接回答当前问题；"
             "任何 Goal、Todo 或其他持久状态修改只生成预览，等待用户在 LoopX 明确确认后应用。"
-            "\n\n用户消息：" + str(text or "").strip()
+            + ("\n\n" + reply_context if reply_context else "")
+            + "\n\n用户消息："
+            + str(text or "").strip()
         )
     client_turn_id = "lark." + _opaque_digest(
         route.get("message_id"),
@@ -737,7 +747,10 @@ def answer_lark_goal_topic(
                     sender_id=str(route["source_sender_id"]),
                     message=message,
                     source_id="lark:" + str(route["message_id"]),
-                    source_message=str(text or "").strip(),
+                    source_message=(
+                        (reply_context + "\n\nUser message:\n" if reply_context else "")
+                        + str(text or "").strip()
+                    ),
                 )
             turn, _created = runtime_controller.enqueue_turn(
                 session_id=session_id,
@@ -985,12 +998,15 @@ def _process_lark_goal_topic_event(
         "sender_type": str(event.get("sender_type") or ""),
         "sender_id": str(event.get("sender_id") or ""),
         "root_id": str(event.get("root_id") or ""),
+        "thread_id": str(event.get("thread_id") or ""),
+        "thread_context": event.get("thread_context"),
         "parent_id": str(event.get("parent_id") or ""),
         "mentions": event.get("mentions")
         if isinstance(event.get("mentions"), list)
         else [],
         "reply_context_verified": event.get("reply_context_verified") is True,
         "reply_to_bot": event.get("reply_to_bot") is True,
+        "reply_context": event.get("reply_context"),
     }
     ingest = ingest_lark_event_inbox(
         project=root,
@@ -1108,9 +1124,19 @@ def _process_lark_goal_topic_event(
         if manager
         else []
     )
+    captured_event = next(
+        item for item in projection["items"] if item.get("message_id") == message_id
+    )
     route = {
         **route,
         "source_sender_id": str(canonical.get("sender_id") or ""),
+        "source_conversation_id": str(event.get("chat_id") or ""),
+        # The immutable captured event owns reply ancestry on delivery retries.
+        "parent_id": captured_event.get("parent_id", ""),
+        "reply_context": captured_event.get("reply_context"),
+        "root_id": captured_event.get("root_id", ""),
+        "thread_id": captured_event.get("thread_id", ""),
+        "thread_context": captured_event.get("thread_context"),
         **({"context_materials": context_materials} if context_materials else {}),
     }
     delivery_path: Path | None = None

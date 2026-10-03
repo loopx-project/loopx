@@ -18,6 +18,54 @@ loopx usage-ping enable      # 阅读告知后明确开启
 
 ## 能回答什么
 
+### 设备用途与安装级运行时长（告知版本 6）
+
+一次设置即可跨 Goal 和终端持久使用，不自动加载仓库里的任意 `.env`：
+
+```bash
+loopx usage-ping context --context maintainer
+loopx usage-ping status --format json
+loopx usage-ping context --context unknown
+```
+
+Workspace 设备设置复用同一个 TypeScript owner。优先级是显式
+`LOOPX_USAGE_CONTEXT` 环境变量 → 保存的设备标签 → `unknown`。非法环境值保持
+未知，非法设置拒绝写入。设置用途不等于开启统计，不更换安装 ID、不授予工作权限。
+关闭统计清除标识与测量记录，但保留自愿用途标签。
+
+新增 `POST /v1/installation`，契约 `loopx_installation_usage_v1`。
+同一个随机安装 ID 会与每日固定 CLI 功能计数、数字版本、UTC 活动日期、自愿环境
+标签、已观测运行分钟、快照 revision 和截断标志关联。每天首次观察后固定该日
+标签和版本，后续配置不能反向改写历史。这是**新增关联**，不是匿名汇总。
+CLI 诊断及安装概要增加 `heartbeat|state|agent|memory|capability|maintenance`
+固定分类；来自解析器命令名，不上传参数或自定义插件名，旧汇总契约不变。
+
+对 `host_call`、`codex_turn`、`quota_cycle` 分别取**同一安装所有 Goal/Host**
+实际区间的并集，跨 UTC 午夜拆分，每天向下取整为分钟。并行和嵌套重叠只算一次，
+重放不增加时长，区间之间的空闲不增加时长。没有区间时不填 runtime 行；已有行的
+零分钟表示观测不足一分钟，不是没有工作。三种口径重叠，不能相加；轮次与推进
+周期可包含暂停、工具和审批等待，直接 Host 调用沿用短检查点的休眠间隔排除规则。
+这不是机器在线、进程 uptime、CPU、任务完成、模型思考或计费用时。
+
+本机最多保留八个 UTC 日期，每个日期/口径最多 1,024 个离散区间，溢出明确标记
+`truncated`，不外推。只上传每日整分钟，不上传区间时间戳、Goal/Agent/Host
+身份或对话。完整快照由活动触发，至少间隔 15 分钟，不增加常驻计时器；安静结束的
+当天末段可能未发出，前七天的迟到区间可以修正。收集端按安装/日期只替换更新
+revision，并保留首次标签和版本，传输重试或乱序不会累加。状态损坏或丢失可能
+漏计；复制标识可能合并多台机器，不能作为账本。
+
+扩大的范围必须重新告知，旧 worker 被 generation 隔离，旧缓冲丢弃，不回填历史。
+CI、请勿追踪、明确关闭与需要明确同意的策略继续生效。关闭删除本机
+`.installation` 区间缓冲，已经开始的网络请求不能撤回。收集端保留 30 个活动日，
+和 400 天心跳保留期独立。公共接口不暴露每个 ID 的概要。
+
+维护者可按**实际保留窗口**统计每个安装/口径的已观测分钟，同时分开看活跃日、
+日历跨度和 CLI 功能分布，不称为终身运行时长。缺失日期不可补零，旧匿名 CLI
+计数不可按安装数分摊。`maintainer` 排除只适用于以后明确标注的概要；未知不等于
+外部用户或个人用户。[固定只读查询](../../apps/usage-collector/queries/installation-usage.sql)。
+先在隔离数据库验证，再应用增量迁移 `0005-installation-usage.sql` 并部署 Worker，
+然后发布告知版本 6 客户端；合并代码不等于已经部署，回滚保留新增表。
+
 - 每日版本、系统、CPU 架构、Python 小版本和安装渠道：哪些环境需要优先维护。
 - 随机安装 ID 跨日心跳：持久机器状态目录的活跃与成熟的 1/7/30 天回访，不是
   用户或组织数；删除状态或关闭后重开可能计为新安装。
@@ -46,17 +94,17 @@ ID 随机生成，属于持久机器状态目录，不绑定账号、不从硬�
 安装渠道只允许 `pip|local_release|source|unknown`。版本只接受数字三段式，包含
 自定义后缀的版本不会上传。
 
-当前 CLI 诊断 `POST /v1/aggregate`（告知版本 5）：
+无 ID CLI 诊断 `POST /v1/aggregate`（最初随告知版本 5 引入）：
 
 ```json
 {"schema":"loopx_usage_diagnostics_v1","counters":[{"feature":"pr-review","operation":"merge-readiness","outcome":"blocked","error":"not_ready","duration":"lt_1s","count":4,"version":"1.2.3","activity_day":"2026-09-30","context":"unknown","signal":"none"}]}
 ```
 
 默认新增数字三段版本、UTC 活动**日期**（非事件时间）、固定子操作、结果/原因及
-回执支持的生命周期信号。环境类型由 `LOOPX_USAGE_CONTEXT` 自愿声明：
+回执支持的生命周期信号。环境类型由设备设置或优先级更高的 `LOOPX_USAGE_CONTEXT` 自愿声明：
 `unknown`（默认）、`personal`、`shared_service`、`ephemeral`、`organization_managed`、
 `maintainer`；无效值成为 `unknown`，不猜企业、人数或机器拓扑，不接受公司名称。
-维护者可声明 `maintainer`，分开**未来诊断计数**；不会标注心跳，也无法追溯识别旧
+维护者可声明 `maintainer`，分开**未来诊断计数和每日安装概要**；不会标注心跳表，也无法追溯识别旧
 无 ID 汇总。需要排除整机所有采集时仍用统一关闭开关。
 
 收集器另加接收日期，仅接收此前七天至当天的活动日期，拒绝过期或未来数据。
@@ -143,9 +191,13 @@ canary smoke 执行器也在本地验证时关闭采集。Native Codex 评测 pr
 
 ## 发送与关闭边界
 
-整机状态在 `~/.codex/loopx/usage-ping.json`，权限 `0600`。它不进入 Goal 状态或
+新安装的整机状态在 `~/.loopx/usage-ping.json`，权限 `0600`。已有默认全局 registry
+位于 `.codex/loopx` 时，统计状态继续沿旧路由，直到显式迁移；两份默认 registry
+并存时拒绝隐式设置写入。整机路径独立于 Goal runtime root。它不进入 Goal 状态或
 authority provider 备份、公共投影。普通命令只读取很小的本地提示；独立 Node 后台
 进程负责计数、锁和网络。首次告知和设置操作可能等待本机 Node，不等待收集服务。
+离线 `migrate-local-state` 命令不调度这些观察，避免后台写入改变预览和回滚收据
+所绑定的整机状态字节。
 
 每天最多尝试一次心跳。首次可采集的 CLI 命令结束后立即尝试发送汇总，包括失败结果；
 后续有合格活动时，每隔至少 15 分钟发送一批新增计数，UTC 换日不重置间隔。
@@ -218,6 +270,17 @@ Codex 发现使用既有 Goal/agent/task 绑定和所选 `CODEX_HOME` 的只读�
 读取 1 MiB 新 JSONL（首次读取尾部），本地仅保留时间游标和未结束轮次身份。
 原始会话内容不上传。spend 后才写入的结束事件需要等下次观测，并非全局实时监听。
 绑定缺失、歧义或文件不可用不会阻断通用周期统计；不回填历史，不外推崩溃后的时间。
+
+Codex 的 `started_at`/`completed_at` 支持 Unix 秒数和旧版 ISO 日期。
+优先使用明确的 provider 时间；缺少起点时，结束事件必须匹配已观测的同一 Turn。
+仅已结束或中止的 Turn 生成区间：`token_count` 的记录时间可能晚于实际完成，
+不再用于外推未结束 Turn。本机原生会话可统计已完成的轮次，当前未结束轮次须
+等结束事件被读取后计入。这修正了原来的前缀计时，不改写已发送的历史聚合。
+
+三种口径没有强制大小关系。quota 周期通常包含多轮工作和等待；受管 Host 调用
+可能比对应 Codex Turn 多出启动、收尾时间。原生会话、未结算周期和观测缺口
+会改变总量关系。应在同一窗口分别核验覆盖，不能假定
+`host_call <= codex_turn <= quota_cycle`，也不能将三者相加。
 
 每个 Goal/口径/Host 分别计算 **span**（首次至最近观测活动，包含中间暂停）和
 **duration**（已观测区间的并集）。同口径同 Host 内并行重叠只计一次；没有新证据

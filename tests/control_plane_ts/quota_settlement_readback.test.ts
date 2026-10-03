@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   appendFile,
   mkdir,
@@ -8,10 +9,14 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { settlementIdentity } from "../../loopx/control_plane/effect_program.ts";
+import {
+  acquireFileMutationLock,
+  releaseFileMutationLock,
+} from "../../loopx/control_plane/effect_runtime_io.ts";
 import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait } from "../../loopx/control_plane/quota/blocked_wait.ts";
 import { evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION } from "../../loopx/control_plane/todos/resume_condition.ts";
 import {
@@ -20,11 +25,14 @@ import {
   readQuotaSettlement,
   readQuotaSettlementSnapshot,
 } from "../../loopx/control_plane/quota/settlement_readback.ts";
+import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
 
 const goalId = "settlement-goal";
 const agentId = "codex-settlement";
 const todoId = "todo_settlement";
 const turnId = "turn-settlement-1";
+const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const instanceB = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const identity = settlementIdentity({
   goal_id: goalId,
   agent_id: agentId,
@@ -82,10 +90,20 @@ async function fixture(options: {
   progressObservation?: Record<string, unknown>;
   blockedRetry?: boolean | Record<string, unknown>;
   visionCheckpoint?: Record<string, unknown>;
+  goalRef?: Record<string, string>;
+  turnId?: string;
 } = {}) {
   const runtimeRoot = await mkdtemp(join(tmpdir(), "loopx-settlement-readback-"));
   const goalRoot = join(runtimeRoot, "goals", goalId);
   const runsRoot = join(goalRoot, "runs");
+  const ownerProjection = options.goalRef ? { goal_ref: options.goalRef } : {};
+  const fixtureTurnId = options.turnId ?? turnId;
+  const fixtureIdentity = settlementIdentity({
+    goal_id: goalId,
+    agent_id: agentId,
+    todo_id: todoId,
+    turn_instance_id: fixtureTurnId,
+  });
   await mkdir(runsRoot, { recursive: true });
   const events: Record<string, unknown>[] = options.guard === false
     ? []
@@ -95,13 +113,14 @@ async function fixture(options: {
       event_kind: "quota_should_run",
       goal_id: goalId,
       agent_id: agentId,
-      run_id: turnId,
+      run_id: fixtureTurnId,
+      ...ownerProjection,
       details: {
         ...(options.guardUnbound
           ? {}
           : {
             todo_id: todoId,
-            settlement_effect_id: identity.effect_id,
+            settlement_effect_id: fixtureIdentity.effect_id,
           }),
         ...(options.workspace
           ? {
@@ -124,8 +143,9 @@ async function fixture(options: {
       event_kind: "quota_should_run",
       goal_id: goalId,
       agent_id: agentId,
-      run_id: turnId,
+      run_id: fixtureTurnId,
       status: "action_selection_deferred",
+      ...ownerProjection,
       details: {
         pending_action_selection_todo_id: todoId,
         pending_action_selection_state: "deferred",
@@ -143,8 +163,9 @@ async function fixture(options: {
       event_kind: "refresh_state",
       goal_id: goalId,
       agent_id: agentId,
-      run_id: turnId,
-      details: { settlement_effect_id: identity.effect_id },
+      run_id: fixtureTurnId,
+      ...ownerProjection,
+      details: { settlement_effect_id: fixtureIdentity.effect_id },
     });
     runs.push({
       classification: "state_refreshed",
@@ -152,8 +173,9 @@ async function fixture(options: {
       goal_id: goalId,
       agent_id: agentId,
       todo_id: todoId,
-      turn_instance_id: turnId,
-      settlement_identity: identity,
+      turn_instance_id: fixtureTurnId,
+      settlement_identity: fixtureIdentity,
+      ...ownerProjection,
       ...(options.visionCheckpoint ? {vision_checkpoint: options.visionCheckpoint} : {}),
       ...(options.blockedRetry ? {blocked_retry: typeof options.blockedRetry === "object" ? options.blockedRetry : {
         schema_version: "quota_blocked_retry_v0",
@@ -175,16 +197,18 @@ async function fixture(options: {
       event_kind: "quota_spend",
       goal_id: goalId,
       agent_id: agentId,
-      run_id: turnId,
-      details: { settlement_effect_id: identity.effect_id },
+      run_id: fixtureTurnId,
+      ...ownerProjection,
+      details: { settlement_effect_id: fixtureIdentity.effect_id },
     });
     runs.push({
       classification: "quota_slot_spent",
       goal_id: goalId,
       agent_id: agentId,
       todo_id: todoId,
-      turn_instance_id: turnId,
-      settlement_identity: identity,
+      turn_instance_id: fixtureTurnId,
+      settlement_identity: fixtureIdentity,
+      ...ownerProjection,
     });
   }
   if (options.completion) {
@@ -194,9 +218,10 @@ async function fixture(options: {
       event_kind: "todo_complete",
       goal_id: goalId,
       agent_id: agentId,
-      run_id: turnId,
+      run_id: fixtureTurnId,
+      ...ownerProjection,
       details: {
-        settlement_effect_id: identity.effect_id,
+        settlement_effect_id: fixtureIdentity.effect_id,
         no_followup: options.noFollowup === true,
       },
     });
@@ -207,11 +232,12 @@ async function fixture(options: {
       goal_id: goalId,
       agent_id: agentId,
       todo_id: todoId,
-      turn_instance_id: turnId,
+      turn_instance_id: fixtureTurnId,
       material_change: true,
+      ...ownerProjection,
       quota_monitor_poll_commit: {
         schema_version: "quota_monitor_poll_commit_receipt_v0",
-        effect_id: `quota-monitor-poll:${goalId}:${agentId}:${turnId}:todo:${todoId}`,
+        effect_id: `quota-monitor-poll:${goalId}:${agentId}:${fixtureTurnId}:todo:${todoId}`,
         request_digest: "fixture",
       },
     });
@@ -227,6 +253,19 @@ async function fixture(options: {
   return runtimeRoot;
 }
 
+async function appendHistory(targetRoot: string, sourceRoot: string): Promise<void> {
+  const relativePaths = [
+    join("goals", goalId, "rollout-event-log.jsonl"),
+    join("goals", goalId, "runs", "index.jsonl"),
+  ];
+  for (const relativePath of relativePaths) {
+    await appendFile(
+      join(targetRoot, relativePath),
+      await readFile(join(sourceRoot, relativePath), "utf8"),
+    );
+  }
+}
+
 function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
   return {
     schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
@@ -240,6 +279,72 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
     allow_unbound_binding: false,
     ...overrides,
   };
+}
+
+function sourceGuardPath(registryPath: string): string {
+  const digest = createHash("sha256").update(goalId, "utf8").digest("hex");
+  return join(
+    dirname(registryPath),
+    ".loopx",
+    "lifecycle",
+    "goal-instance",
+    "guards",
+    `${digest}.guard`,
+  );
+}
+
+async function withSourceAdmission<T>(
+  runtimeRoot: string,
+  plannedInstanceId: string,
+  currentInstanceId: string,
+  run: (binding: Record<string, unknown>) => Promise<T>,
+): Promise<T> {
+  const indexPath = join(runtimeRoot, "goals", goalId, "runs", "index.jsonl");
+  const registryPath = join(runtimeRoot, "project", ".loopx", "registry.json");
+  const guardPath = sourceGuardPath(registryPath);
+  const indexLock = await acquireFileMutationLock(indexPath);
+  const guardLock = await acquireFileMutationLock(guardPath);
+  try {
+    return await run({
+      goal_ref: {
+        goal_id: goalId,
+        goal_instance_id: plannedInstanceId,
+      },
+      source_admission: {
+        schema_version: "loopx_quota_source_admission_v0",
+        profile_id: "source_session_v1",
+        registry_path: registryPath,
+        planned_goal_ref: {
+          goal_id: goalId,
+          goal_instance_id: plannedInstanceId,
+        },
+        authority: {
+          kind: "present",
+          goal_ref: {
+            goal_id: goalId,
+            goal_instance_id: currentInstanceId,
+          },
+        },
+        locks: [
+          {
+            role: "run_index",
+            target: indexPath,
+            pid: process.pid,
+            token: indexLock.token,
+          },
+          {
+            role: "source_guard",
+            target: guardPath,
+            pid: process.pid,
+            token: guardLock.token,
+          },
+        ],
+      },
+    });
+  } finally {
+    await releaseFileMutationLock(guardPath, guardLock.token, null, true);
+    await releaseFileMutationLock(indexPath, indexLock.token, null, true);
+  }
 }
 
 test("scoped supersede settles only its exact Turn and never terminal acceptance", async t => {
@@ -296,6 +401,213 @@ test("settlement progress requires both effects and exact receipts", async t => 
       });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
+});
+
+test("settlement readback enforces exact source ownership before identity inference", async () => {
+  const goalRefA = {
+    goal_id: goalId,
+    goal_instance_id: instanceA,
+  };
+  const root = await fixture({
+    writeback: true,
+    spend: true,
+    goalRef: goalRefA,
+  });
+  try {
+    const unscoped = await readQuotaSettlement(request(root));
+    assert.equal(unscoped.found, true);
+    const unscopedIdentity = requireJsonObject(
+      requireJsonObject(unscoped.identity, "unscoped identity").result,
+      "unscoped identity result",
+    );
+    assert.equal(
+      requireJsonObject(
+        unscopedIdentity.failure,
+        "unscoped identity failure",
+      ).kind,
+      "receipt_missing",
+    );
+    assert.equal(unscoped.spend_run, null);
+
+    const inferred = await withSourceAdmission(
+      root,
+      instanceB,
+      instanceB,
+      async (binding) => await readQuotaSettlement(request(root, {
+        ...binding,
+        turn_instance_id: null,
+        infer_turn_instance_id: true,
+      })),
+    );
+    assert.deepEqual(inferred, {
+      schema_version: "loopx_quota_settlement_readback_result_v0",
+      found: false,
+    });
+
+    await assert.rejects(
+      withSourceAdmission(
+        root,
+        instanceA,
+        instanceB,
+        async (binding) => await readQuotaSettlement(request(root, binding)),
+      ),
+      (error: unknown) => {
+        assert.equal(
+          requireJsonObject(error, "stale GoalRef error").code,
+          "stale_goal_instance",
+        );
+        return true;
+      },
+    );
+
+    const matching = await withSourceAdmission(
+      root,
+      instanceA,
+      instanceA,
+      async (binding) => await readQuotaSettlement(request(root, binding)),
+    );
+    const matchingSpend = requireJsonObject(matching.spend, "matching spend");
+    const matchingPayload = requireJsonObject(
+      matchingSpend.payload,
+      "matching spend payload",
+    );
+    assert.equal(matchingPayload.ok, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("alias and exact histories remain independently readable", async () => {
+  const legacy = await fixture({ writeback: true, spend: true });
+  const exact = await fixture({
+    writeback: true,
+    spend: true,
+    goalRef: {
+      goal_id: goalId,
+      goal_instance_id: instanceA,
+    },
+  });
+  try {
+    await appendHistory(legacy, exact);
+    const aliasReadback = await readQuotaSettlement(request(legacy));
+    assert.equal(
+      requireJsonObject(
+        requireJsonObject(aliasReadback.settlement, "alias settlement").payload,
+        "alias settlement payload",
+      ).ok,
+      true,
+    );
+    const exactReadback = await withSourceAdmission(
+      legacy,
+      instanceA,
+      instanceA,
+      async (binding) => await readQuotaSettlement(request(legacy, binding)),
+    );
+    assert.equal(
+      requireJsonObject(
+        requireJsonObject(exactReadback.settlement, "exact settlement").payload,
+        "exact settlement payload",
+      ).ok,
+      true,
+    );
+  } finally {
+    await rm(legacy, { recursive: true, force: true });
+    await rm(exact, { recursive: true, force: true });
+  }
+});
+
+test("a delayed stale owner cannot replace the current owner's inferred Turn", async () => {
+  const current = await fixture({
+    writeback: true,
+    spend: true,
+    goalRef: {
+      goal_id: goalId,
+      goal_instance_id: instanceB,
+    },
+  });
+  const delayed = await fixture({
+    writeback: true,
+    spend: true,
+    turnId: "turn-stale-a",
+    goalRef: {
+      goal_id: goalId,
+      goal_instance_id: instanceA,
+    },
+  });
+  try {
+    await appendHistory(current, delayed);
+    const inferred = await withSourceAdmission(
+      current,
+      instanceB,
+      instanceB,
+      async (binding) => await readQuotaSettlement(request(current, {
+        ...binding,
+        turn_instance_id: null,
+        infer_turn_instance_id: true,
+      })),
+    );
+    assert.equal(inferred.found, true);
+    assert.equal(
+      requireJsonObject(
+        requireJsonObject(inferred.settlement, "current settlement").payload,
+        "current settlement payload",
+      ).ok,
+      true,
+    );
+  } finally {
+    await rm(current, { recursive: true, force: true });
+    await rm(delayed, { recursive: true, force: true });
+  }
+});
+
+test("borrowed exact admission remains valid for an enclosing transaction", async () => {
+  const root = await fixture({
+    writeback: true,
+    goalRef: {
+      goal_id: goalId,
+      goal_instance_id: instanceA,
+    },
+  });
+  try {
+    await withSourceAdmission(
+      root,
+      instanceA,
+      instanceA,
+      async (binding) => {
+        const borrowed = {
+          ...binding,
+          borrow_source_admission: true,
+        };
+        assert.equal(
+          (await readQuotaSettlement(request(root, borrowed))).found,
+          true,
+        );
+        assert.equal(
+          (await readQuotaSettlement(request(root, borrowed))).found,
+          true,
+        );
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy settlement still consumes legacy rows", async () => {
+  const root = await fixture({ writeback: true, spend: true });
+  try {
+    const result = await readQuotaSettlement(request(root));
+    assert.equal(result.found, true);
+    assert.equal(
+      requireJsonObject(
+        requireJsonObject(result.settlement, "legacy settlement").payload,
+        "legacy settlement payload",
+      ).ok,
+      true,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("settlement progress preserves typed source and rejects malformed sources", async () => {

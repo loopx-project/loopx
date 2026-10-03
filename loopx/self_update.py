@@ -573,6 +573,8 @@ def build_update_plan(
     check_only: bool = False,
     execute: bool = False,
     doctor_payload: dict[str, Any] | None = None,
+    registry_path: Path | None = None,
+    runtime_root: str | None = None,
 ) -> dict[str, Any]:
     requested_action = resolve_update_action(
         action,
@@ -581,7 +583,10 @@ def build_update_plan(
     )
     check_only = requested_action is UpdateAction.CHECK
     execute = requested_action is UpdateAction.APPLY
-    doctor = doctor_payload or collect_doctor()
+    doctor = doctor_payload or (
+        collect_doctor(registry_path=registry_path, runtime_root_override=runtime_root)
+        if registry_path is not None or runtime_root is not None else collect_doctor()
+    )
     install_freshness = (
         doctor.get("install_freshness")
         if isinstance(doctor.get("install_freshness"), dict)
@@ -879,6 +884,7 @@ def _execute_python_distribution_update(
     payload: dict[str, Any],
     *,
     timeout_seconds: int,
+    route_arguments: list[str],
 ) -> dict[str, Any]:
     lifecycle = (
         payload.get("install_lifecycle")
@@ -934,6 +940,9 @@ def _execute_python_distribution_update(
             "json",
         ],
     }
+    for step, command in commands.items():
+        if step != "install":
+            command[3:3] = route_arguments
     results: dict[str, subprocess.CompletedProcess[str]] = {}
     results["install"] = subprocess.run(
         commands["install"],
@@ -1042,8 +1051,14 @@ def _execute_python_distribution_update(
 
 
 def execute_update_plan(
-    payload: dict[str, Any], *, timeout_seconds: int = 600
+    payload: dict[str, Any], *, timeout_seconds: int = 600,
+    registry_path: Path | None = None, runtime_root: str | None = None,
 ) -> dict[str, Any]:
+    route_arguments = []
+    if registry_path is not None:
+        route_arguments += ["--registry", str(registry_path.resolve())]
+    if runtime_root is not None:
+        route_arguments += ["--runtime-root", runtime_root]
     lifecycle = (
         payload.get("install_lifecycle")
         if isinstance(payload.get("install_lifecycle"), dict)
@@ -1058,6 +1073,7 @@ def execute_update_plan(
         return _execute_python_distribution_update(
             payload,
             timeout_seconds=timeout_seconds,
+            route_arguments=route_arguments,
         )
     if driver != "archive_snapshot":
         updated = dict(payload)
@@ -1092,6 +1108,10 @@ def execute_update_plan(
             current_release_root if isinstance(current_release_root, str) else None
         ),
     )
+    if registry_path is not None:
+        env["LOOPX_REGISTRY"] = str(registry_path.resolve())
+    if runtime_root is not None:
+        env["LOOPX_RUNTIME_ROOT"] = runtime_root
     install_result, download_observation = run_archive_installer(
         installer_url,
         env=env,
@@ -1099,7 +1119,7 @@ def execute_update_plan(
     )
     loopx_bin = Path.home() / ".local" / "bin" / "loopx"
     doctor_result = subprocess.run(
-        [str(loopx_bin), "--format", "json", "doctor"],
+        [str(loopx_bin), *route_arguments, "--format", "json", "doctor"],
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
         env=env,
@@ -1119,6 +1139,7 @@ def execute_update_plan(
         extension_doctor_result = subprocess.run(
             [
                 str(loopx_bin),
+                *route_arguments,
                 "--format",
                 "json",
                 "extension",

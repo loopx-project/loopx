@@ -2,11 +2,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { settlementIdentity, type JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
+import {
+  acquireFileMutationLock,
+  releaseFileMutationLock,
+} from "../../loopx/control_plane/effect_runtime_io.ts";
 import {
   evaluateQuotaMonitorPollCommit, QUOTA_MONITOR_POLL_COMMIT_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/quota/monitor_poll_commit.ts";
@@ -16,20 +20,25 @@ const agent = "agent-monitor-fixture";
 const turn = "turn-completed-advancement";
 const primary = "todo_primary";
 const monitor = "todo_monitor";
+const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const identity = settlementIdentity({ goal_id: goal, agent_id: agent, turn_instance_id: turn, todo_id: primary });
 
-function event(kind: string): JsonObject {
+function event(kind: string, goalRef?: JsonObject): JsonObject {
   return { schema_version: "loopx_rollout_event_v0", event_id: `event-${kind}`,
     event_kind: kind, goal_id: goal, agent_id: agent, run_id: turn,
+    ...(goalRef ? { goal_ref: goalRef } : {}),
     details: { todo_id: primary, settlement_effect_id: identity.effect_id } };
 }
 
-async function fixture(t: test.TestContext): Promise<{ runtime: string; params: JsonObject }> {
+async function fixture(
+  t: test.TestContext,
+  goalRef?: JsonObject,
+): Promise<{ runtime: string; params: JsonObject }> {
   const runtime = await mkdtemp(join(tmpdir(), "loopx-auxiliary-settlement-"));
   t.after(() => rm(runtime, { recursive: true, force: true }));
   await mkdir(join(runtime, "goals", goal, "runs"), { recursive: true });
   await writeFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "");
-  await writeFile(join(runtime, "goals", goal, "rollout-event-log.jsonl"), `${JSON.stringify(event("quota_should_run"))}\n`);
+  await writeFile(join(runtime, "goals", goal, "rollout-event-log.jsonl"), `${JSON.stringify(event("quota_should_run", goalRef))}\n`);
   const candidate = { todo_id: monitor, task_class: "continuous_monitor", claimed_by: agent,
     target_key: "public-watch", due: true };
   return { runtime, params: {
@@ -57,14 +66,71 @@ async function fixture(t: test.TestContext): Promise<{ runtime: string; params: 
   } };
 }
 
-async function settlePrimary(runtime: string): Promise<void> {
+async function settlePrimary(runtime: string, goalRef?: JsonObject): Promise<void> {
+  const ownerProjection = goalRef ? { goal_ref: goalRef } : {};
   await appendFile(join(runtime, "goals", goal, "rollout-event-log.jsonl"),
-    [event("refresh_state"), event("quota_spend")].map(row => JSON.stringify(row)).join("\n") + "\n");
+    [event("refresh_state", goalRef), event("quota_spend", goalRef)]
+      .map(row => JSON.stringify(row)).join("\n") + "\n");
   await appendFile(join(runtime, "goals", goal, "runs", "index.jsonl"), [
     { classification: "state_refreshed", delivery_outcome: "outcome_progress" },
     { classification: "quota_slot_spent" },
   ].map(row => JSON.stringify({ ...row, goal_id: goal, agent_id: agent, todo_id: primary,
-    turn_instance_id: turn, settlement_identity: identity })).join("\n") + "\n");
+    turn_instance_id: turn, settlement_identity: identity, ...ownerProjection })).join("\n") + "\n");
+}
+
+function sourceGuardPath(registryPath: string): string {
+  const digest = createHash("sha256").update(goal, "utf8").digest("hex");
+  return join(
+    dirname(registryPath),
+    ".loopx",
+    "lifecycle",
+    "goal-instance",
+    "guards",
+    `${digest}.guard`,
+  );
+}
+
+async function withSourceAdmission<T>(
+  runtime: string,
+  run: (binding: JsonObject) => Promise<T>,
+): Promise<T> {
+  const indexPath = join(runtime, "goals", goal, "runs", "index.jsonl");
+  const registryPath = join(runtime, "project", ".loopx", "registry.json");
+  const guardPath = sourceGuardPath(registryPath);
+  const indexLock = await acquireFileMutationLock(indexPath);
+  const guardLock = await acquireFileMutationLock(guardPath);
+  try {
+    return await run({
+      goal_ref: { goal_id: goal, goal_instance_id: instanceA },
+      source_admission: {
+        schema_version: "loopx_quota_source_admission_v0",
+        profile_id: "source_session_v1",
+        registry_path: registryPath,
+        planned_goal_ref: { goal_id: goal, goal_instance_id: instanceA },
+        authority: {
+          kind: "present",
+          goal_ref: { goal_id: goal, goal_instance_id: instanceA },
+        },
+        locks: [
+          {
+            role: "run_index",
+            target: indexPath,
+            pid: process.pid,
+            token: indexLock.token,
+          },
+          {
+            role: "source_guard",
+            target: guardPath,
+            pid: process.pid,
+            token: guardLock.token,
+          },
+        ],
+      },
+    });
+  } finally {
+    await releaseFileMutationLock(guardPath, guardLock.token, null, true);
+    await releaseFileMutationLock(indexPath, indexLock.token, null, true);
+  }
 }
 
 test("fresh auxiliary admission requires exact advancement identity and ordinary due-work gates before and after settlement", async t => {
@@ -72,8 +138,10 @@ test("fresh auxiliary admission requires exact advancement identity and ordinary
     ["other Turn", p => ({ ...p, turn_instance_id: "other-turn" }), "heartbeat_receipt_identity_conflict"],
     ["other binding", p => ({ ...p, observation: { ...p.observation as JsonObject, settlement_todo_id: "todo_other" } }), "heartbeat_receipt_identity_conflict"],
     ["missing lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject, auxiliary_settlement_todo: null } }), "heartbeat_receipt_identity_conflict"],
-    ["blocked lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject,
-      auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "blocked" } } }), "heartbeat_receipt_identity_conflict"],
+    ["invalid lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject,
+      auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "unknown" } } }), "heartbeat_receipt_identity_conflict"],
+    ["deferred lifecycle", p => ({ ...p, decision: { ...p.decision as JsonObject,
+      auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "deferred" } } }), "heartbeat_receipt_identity_conflict"],
     ["foreign primary", p => ({ ...p, decision: { ...p.decision as JsonObject,
       auxiliary_settlement_todo: { todo_id: primary, task_class: "advancement_task", status: "done", claimed_by: "peer" } } }), "heartbeat_receipt_identity_conflict"],
     ["excluded actor", p => ({ ...p, decision: { ...p.decision as JsonObject,
@@ -86,9 +154,11 @@ test("fresh auxiliary admission requires exact advancement identity and ordinary
       work_lane_contract: { must_attempt_work: false }, should_run: false } }), "monitor_poll_admission_rejected"],
     ["user action", p => ({ ...p, decision: { ...p.decision as JsonObject, requires_user_action: true } }), "monitor_poll_admission_rejected"],
   ];
-  for (const settled of [false, true]) for (const [name, change, code] of cases) {
-    await t.test(`${settled ? "settled" : "pending"}: ${name}`, async st => {
+  for (const settled of [false, true]) for (const status of settled ? ["done", "blocked"] : ["done"]) for (const [name, change, code] of cases) {
+    await t.test(`${settled ? "settled" : "pending"} ${status}: ${name}`, async st => {
       const { runtime, params } = await fixture(st);
+      const decision = params.decision as JsonObject;
+      decision.auxiliary_settlement_todo = { ...decision.auxiliary_settlement_todo as JsonObject, status };
       if (settled) await settlePrimary(runtime);
       const initialIndex = await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8");
       const changed = change(params);
@@ -117,8 +187,11 @@ function providerReceipt(params: JsonObject): JsonObject {
     todo_update: { ok: true }, next_todos: [], successor_receipts: [] };
 }
 
-test("settled primary admits the first due auxiliary observation without another debit or delivery", async t => {
+for (const status of ["done", "blocked"]) {
+test(`settled ${status} primary admits the first due auxiliary observation without another debit or delivery`, async t => {
   const { runtime, params } = await fixture(t);
+  const decision = params.decision as JsonObject;
+  decision.auxiliary_settlement_todo = { ...decision.auxiliary_settlement_todo as JsonObject, status };
   await settlePrimary(runtime);
   const index = await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"));
   const request = { ...params, expected_index_digest: `sha256:${createHash("sha256").update(index).digest("hex")}` };
@@ -137,6 +210,54 @@ test("settled primary admits the first due auxiliary observation without another
   assert.equal(rows.filter(row => row.classification === "state_refreshed").length, 1);
   assert.equal(rows.filter(row => row.classification === "quota_slot_spent").length, 1);
   assert.equal(rows.length, 3);
+});
+}
+
+for (const status of ["blocked", "deferred"]) {
+test(`unsettled ${status} primary does not admit a new auxiliary effect`, async t => {
+  const { runtime, params } = await fixture(t);
+  const decision = params.decision as JsonObject;
+  decision.auxiliary_settlement_todo = { ...decision.auxiliary_settlement_todo as JsonObject, status };
+  await assert.rejects(evaluateQuotaMonitorPollCommit(params), error => {
+    assert.ok(error instanceof EffectRuntimeRequestError);
+    assert.equal(error.code, "heartbeat_receipt_identity_conflict");
+    return true;
+  });
+  assert.equal(await readFile(join(runtime, "goals", goal, "runs", "index.jsonl"), "utf8"), "");
+});
+}
+
+test("exact auxiliary monitor borrows one admission through preflight, commit, and replay", async t => {
+  const goalRef = { goal_id: goal, goal_instance_id: instanceA };
+  const { runtime, params } = await fixture(t, goalRef);
+  await settlePrimary(runtime, goalRef);
+  const indexPath = join(runtime, "goals", goal, "runs", "index.jsonl");
+  const index = await readFile(indexPath);
+
+  await withSourceAdmission(runtime, async binding => {
+    const request = {
+      ...params,
+      ...binding,
+      expected_index_digest: `sha256:${createHash("sha256").update(index).digest("hex")}`,
+    };
+    const preflight = await evaluateQuotaMonitorPollCommit(request);
+    assert.equal(preflight.status, "provider_required", JSON.stringify(preflight));
+
+    const commit = {
+      ...request,
+      phase: "commit",
+      provider_receipt: providerReceipt(request),
+    };
+    await assert.rejects(
+      evaluateQuotaMonitorPollCommit({ ...commit, provider_receipt: null }),
+      /requires a provider receipt/,
+    );
+    assert.equal((await evaluateQuotaMonitorPollCommit(commit)).status, "written");
+    assert.equal((await evaluateQuotaMonitorPollCommit(commit)).status, "replayed");
+  });
+
+  const indexLock = await acquireFileMutationLock(indexPath);
+  await releaseFileMutationLock(indexPath, indexLock.token, null, true);
 });
 
 test("completed primary preserves an admitted pending effect across settlement and replay reads current closeout", async t => {

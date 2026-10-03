@@ -42,6 +42,19 @@ class MonitorScheduleProjection:
     cadence_seconds: int | None
 
 
+def project_settled_replay_schedule(*, observed_host_rrule: Any = None) -> dict[str, Any]:
+    """Adapt the typed scheduler owner's hold-only replay packet."""
+    result = _runtime_result({
+        "schema_version": SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
+        "operation": "settled_replay",
+        "observed_host_rrule": observed_host_rrule,
+    })
+    hint = result.get("hint")
+    if result.get("operation") != "settled_replay" or not isinstance(hint, dict):
+        raise RuntimeError("TypeScript settled scheduler result shape mismatch")
+    return hint
+
+
 def project_monitor_todo_schedule(
     *,
     generated_at: str,

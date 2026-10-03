@@ -26,6 +26,7 @@ from ..effect_program import (
     receipt_bound_terminal_phase,
     settlement_result_payload,
 )
+from ..goals.goal_ref_validation import exact_goal_ref
 
 __all__ = [
     "SETTLEMENT_IDENTITY_SCHEMA_VERSION",
@@ -76,6 +77,23 @@ def _settlement_actor_args(arguments: str, agent_id: str) -> str:
     return f"{arguments} --agent-id {shlex.quote(agent_id)}"
 
 
+def _settlement_goal_ref(
+    goal_ref: Mapping[str, object] | None,
+    *,
+    goal_id: str,
+) -> dict[str, str] | None:
+    if goal_ref is None:
+        return None
+
+    normalized = exact_goal_ref(
+        str(goal_ref.get("goal_id") or ""),
+        str(goal_ref.get("goal_instance_id") or ""),
+    )
+    if normalized["goal_id"] != goal_id:
+        raise ValueError("settlement GoalRef does not match goal_id")
+    return normalized
+
+
 def build_codex_app_settlement_plan(
     *,
     goal_id: str,
@@ -89,6 +107,7 @@ def build_codex_app_settlement_plan(
     writeback_path_args: str = "",
     delivery_boundary: str | None = None,
     quota_spend_source: str = "heartbeat",
+    goal_ref: Mapping[str, object] | None = None,
 ) -> SettlementPlan:
     return build_turn_scoped_cli_settlement_plan(
         goal_id=goal_id,
@@ -102,6 +121,7 @@ def build_codex_app_settlement_plan(
         writeback_path_args=writeback_path_args,
         delivery_boundary=delivery_boundary,
         quota_spend_source=quota_spend_source,
+        goal_ref=goal_ref,
     )
 
 
@@ -118,6 +138,7 @@ def build_turn_scoped_cli_settlement_plan(
     writeback_path_args: str = "",
     delivery_boundary: str | None = None,
     quota_spend_source: str = "heartbeat",
+    goal_ref: Mapping[str, object] | None = None,
 ) -> SettlementPlan:
     if bool(todo_id) == bool(replan_obligation_id):
         raise ValueError(
@@ -138,6 +159,7 @@ def build_turn_scoped_cli_settlement_plan(
     )
     scoped_cli_args = _settlement_actor_args(scoped_cli_args, identity.agent_id)
     lifecycle_actor_args = _settlement_actor_args(lifecycle_actor_args, identity.agent_id)
+    normalized_goal_ref = _settlement_goal_ref(goal_ref, goal_id=identity.goal_id)
     quoted_turn = _quoted_turn_ref(turn_instance_id)
     binding_arg = (
         f" --todo-id {shlex.quote(todo_id)}"
@@ -145,6 +167,11 @@ def build_turn_scoped_cli_settlement_plan(
         else f" --replan-obligation-id {shlex.quote(str(replan_obligation_id))}"
     )
     turn_arg = f" --turn-instance-id {quoted_turn}"
+    goal_ref_arg = (
+        f" --goal-instance-id {shlex.quote(normalized_goal_ref['goal_instance_id'])}"
+        if normalized_goal_ref is not None
+        else ""
+    )
     boundary_arg = (
         " --delivery-boundary in_flight_continuation"
         if delivery_boundary == "in_flight_continuation"
@@ -153,22 +180,23 @@ def build_turn_scoped_cli_settlement_plan(
     cli_prefix = command_prefix.strip() or "loopx"
     ordinary_completion = (
         f"{cli_prefix} todo complete --goal-id {shlex.quote(goal_id)}{binding_arg}"
-        f"{lifecycle_actor_args}{turn_arg} --evidence '<validated evidence>'"
+        f"{lifecycle_actor_args}{turn_arg}{goal_ref_arg} --evidence '<validated evidence>'"
     )
     terminal_closeout = ordinary_completion + " --no-follow-up"
     writeback = (
         f"{cli_prefix} refresh-state --goal-id {shlex.quote(goal_id)} "
         "--classification <validated_progress> --delivery-batch-scale <scale> "
-        f"--delivery-outcome <outcome>{boundary_arg}{binding_arg}{turn_arg}"
+        f"--delivery-outcome <outcome>{boundary_arg}{binding_arg}{turn_arg}{goal_ref_arg}"
         f"{scoped_cli_args}{writeback_path_args}"
     )
     spend = (
         f"{cli_prefix} quota spend-slot --goal-id {shlex.quote(goal_id)} --slots 1 "
-        f"--source {quota_spend_source} --execute{binding_arg}{turn_arg}"
+        f"--source {quota_spend_source} --execute{binding_arg}{turn_arg}{goal_ref_arg}"
         f"{scoped_cli_args}"
     )
     payload = effect_runtime_result("settlement.turn_scoped_cli_plan", {
         "identity": identity.as_dict(), "delivery_boundary": delivery_boundary,
+        **({"goal_ref": normalized_goal_ref} if normalized_goal_ref is not None else {}),
         "command_templates": {
             "todo_completion": ordinary_completion, "durable_writeback": writeback,
             "quota_spend": spend, "terminal_closeout": terminal_closeout,
@@ -219,4 +247,20 @@ def settlement_binding_args(plan: Mapping[str, Any] | None) -> str:
         if todo_id
         else f" --replan-obligation-id {shlex.quote(replan_obligation_id)}"
     )
-    return binding_arg + (f" --turn-instance-id {_quoted_turn_ref(turn_instance_id)}")
+    goal_ref = plan.get("goal_ref")
+    goal_ref_arg = ""
+    if isinstance(goal_ref, Mapping):
+        normalized_goal_ref = _settlement_goal_ref(
+            goal_ref,
+            goal_id=str(identity.get("goal_id") or ""),
+        )
+        assert normalized_goal_ref is not None
+        goal_ref_arg = (
+            f" --goal-instance-id "
+            f"{shlex.quote(normalized_goal_ref['goal_instance_id'])}"
+        )
+    return (
+        binding_arg
+        + f" --turn-instance-id {_quoted_turn_ref(turn_instance_id)}"
+        + goal_ref_arg
+    )

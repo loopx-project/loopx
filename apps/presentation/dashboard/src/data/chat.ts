@@ -1,9 +1,12 @@
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import { parseTurnStep, type TurnStep } from "./turn-steps";
 import { z } from "zod";
+import { actionSourceBasisSchema } from "./action-source-basis.js";
 
 import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
+  type AgentResponse,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -427,6 +430,7 @@ const typedOperationEnvelopeSchema = z.object({
 
 export const typedActionProposalSchema = z.object({
   schema_version: z.literal("loopx_chat_action_proposal_v1"),
+  idempotency_key: z.string().optional(),
   proposal_id: z.string().min(1),
   action_kind: typedActionKindSchema,
   summary: z.string().min(1),
@@ -444,12 +448,7 @@ export const typedActionProposalSchema = z.object({
   error: z.record(z.string(), z.unknown()).nullable().optional(),
   checkpoint: z.record(z.string(), z.unknown()).nullable().optional(),
   failure: z.record(z.string(), z.unknown()).nullable().optional(),
-  canonical_update_basis: z.object({
-    schema_version: z.enum(["loopx_chat_canonical_update_basis_v0", "loopx_chat_canonical_terminal_basis_v0"]),
-    provider_revision: z.string().min(1),
-    source_authority: z.enum(["file_v0", "sqlite_v0"]),
-    registry_sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  }).optional(),
+  canonical_update_basis: actionSourceBasisSchema.optional(),
   regenerated_from: z.string().nullable().optional(),
   operation: typedOperationEnvelopeSchema.nullable().optional(),
   created_at: z.string(),
@@ -498,13 +497,13 @@ const typedActionListEnvelopeSchema = z.object({
   proposals: z.array(typedActionProposalSchema),
 });
 
-export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}) {
+export async function listTypedActions(filters: { contextKind?: string; goalId?: string } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   if (filters.contextKind) query.set("context_kind", filters.contextKind);
   if (filters.goalId) query.set("goal_id", filters.goalId);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return typedActionListEnvelopeSchema.parse(
-    await requestJson<unknown>(`/api/actions${suffix}`),
+    await requestJson<unknown>(`/api/actions${suffix}`, { signal }),
   ).proposals;
 }
 
@@ -683,6 +682,8 @@ export type ChatSessionSummary = {
   last_error_code: string | null;
   created_at: string;
   updated_at: string;
+  /** Opaque transcript read hint, independent of execution updated_at. */
+  transcript_revision?: string | null;
   last_activity_at: string;
   resumable: boolean;
   session_mode?: ChatSessionMode;
@@ -1106,16 +1107,34 @@ export function readManagedGoalResult(goalId: string, todoId: string) {
     `/api/chat/goal-results/${encodeURIComponent(todoId)}?goal_id=${encodeURIComponent(goalId)}`,
   );
 }
+export type DelegationState = "unavailable" | "accepted" | "rejected" | "recovery_required"
+  | "executing" | "validating" | "dispatched" | "unknown";
+type DelegationStateFacts = {status: string; worker_active?: boolean; recovery_required: boolean | null};
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
-export function delegationStateLabel(row: {status: string; worker_active?: boolean; recovery_required: boolean | null}, zh: boolean) {
-  if (row.status === "unavailable") return zh ? "无法核验" : "Unavailable";
-  if (row.status === "accepted") return zh ? "已通过当前验收" : "Currently accepted";
-  if (row.status === "rejected") return zh ? "未通过验收" : "Rejected";
-  if (row.recovery_required) return zh ? "需要恢复原执行" : "Original execution needs recovery";
-  if (row.status === "running" && row.worker_active) return zh ? "执行中" : "Executing";
-  if (row.status === "turn_returned" && row.worker_active) return zh ? "正在验收" : "Validating";
-  if (["prepared", "running", "turn_returned"].includes(row.status)) return zh ? "已派发，等待执行回读" : "Dispatched; awaiting execution readback";
-  return zh ? "状态未知" : "Unknown state";
+// "executing" and "validating" require an active worker observation, never the stored status alone.
+export function delegationState(row: DelegationStateFacts): DelegationState {
+  if (row.status === "unavailable") return "unavailable";
+  if (row.status === "accepted") return "accepted";
+  if (row.status === "rejected") return "rejected";
+  if (row.recovery_required) return "recovery_required";
+  if (row.status === "running" && row.worker_active) return "executing";
+  if (row.status === "turn_returned" && row.worker_active) return "validating";
+  if (["prepared", "running", "turn_returned"].includes(row.status)) return "dispatched";
+  return "unknown";
+}
+const DELEGATION_STATE_LABELS: Record<DelegationState, {zh: string; en: string}> = {
+  unavailable: {zh: "无法核验", en: "Unavailable"},
+  accepted: {zh: "已通过当前验收", en: "Currently accepted"},
+  rejected: {zh: "未通过验收", en: "Rejected"},
+  recovery_required: {zh: "需要恢复原执行", en: "Original execution needs recovery"},
+  executing: {zh: "执行中", en: "Executing"},
+  validating: {zh: "正在验收", en: "Validating"},
+  dispatched: {zh: "已派发，等待执行回读", en: "Dispatched; awaiting execution readback"},
+  unknown: {zh: "状态未知", en: "Unknown state"},
+};
+export function delegationStateLabel(row: DelegationStateFacts, zh: boolean) {
+  const label = DELEGATION_STATE_LABELS[delegationState(row)];
+  return zh ? label.zh : label.en;
 }
 export function fetchLoopXTeamWork(sessionId: string, cursor?: string) {
   return requestJson<DelegationInventory>(`/api/chat/sessions/${sessionId}/loopx`, {
@@ -1145,7 +1164,7 @@ export async function sendChatTurnStreaming(
     attachments?: ChatImageAttachmentInput[];
     clientTurnId?: string;
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -1173,7 +1192,7 @@ async function receiveChatTurnStreaming(
   eventsUrl: string,
   options: {
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -1193,7 +1212,7 @@ async function receiveChatTurnStreaming(
         }
         if (event.kind === "agent.phase") {
           const label = typeof event.payload.label === "string" ? event.payload.label.trim() : "";
-          if (label) options.onActivity?.(label);
+          if (label) options.onActivity?.(label, parseTurnStep(event.payload.step));
         }
         if (event.kind === "turn.completed") {
           finalResponse = event.payload.response;
@@ -1240,12 +1259,24 @@ async function receiveChatTurnStreaming(
   };
 }
 
+/** Read a stored Turn's terminal outcome without submitting or resuming work.
+ * Failed/interrupted Turns have no completed proposals; transport failures throw
+ * so callers can retry instead of treating an unavailable response as empty.
+ */
+export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
+  let completed: AgentResponse | null = null;
+  await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
+    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+  }, signal);
+  return completed;
+}
+
 export async function resumeChatTurnStreaming(
   sessionId: string,
   turnId: string,
   options: {
     onDelta?: (text: string) => void;
-    onActivity?: (label: string) => void;
+    onActivity?: (label: string, step: TurnStep | null) => void;
     onPhase?: (phase: string, turnId: string) => void;
     signal?: AbortSignal;
   } = {},
@@ -1475,12 +1506,12 @@ export async function setupGoalChannel(options: { execute: boolean; goalId: stri
   );
 }
 
-export async function configureGoalChannelAutoNotify(options: { autoNotify: boolean; goalId: string }) {
+export async function configureGoalChannelAutoNotify(options: { autoNotify: boolean; goalId: string; kind?: "human_gate" | "blocked_notice" }) {
   return goalChannelOperationSchema.parse(
     await requestJson<unknown>("/api/chat/goal-channel/configure", {
       method: "POST",
       body: JSON.stringify({
-        auto_notify_human_gates: options.autoNotify,
+        ...(options.kind === "blocked_notice" ? { auto_notify_blocked_notices: options.autoNotify } : { auto_notify_human_gates: options.autoNotify }),
         goal_id: options.goalId,
       }),
     }),
@@ -2218,6 +2249,7 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
   );
 }
 
+export { CONTEXTS as usageContexts } from "../../../../../loopx/control_plane/runtime/usage_statistics_contract";
 const usageStatisticsSchema = z.object({
   consent: z.enum(["default", "enabled", "disabled"]),
   sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
@@ -2226,12 +2258,18 @@ const usageStatisticsSchema = z.object({
   automatic_notice_required: z.boolean(),
   next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
   diagnostic_preview: z.unknown().optional(), diagnostic_dropped: z.number().optional(),
+  stored_context: z.string().optional(), effective_context: z.string().optional(), context_source: z.string().optional(),
+  installation_preview: z.unknown().optional(),
   identity_scope: z.string().optional(), delivery_history: z.array(z.object({
-    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal"]), rows: z.number(),
+    day: z.string(), channel: z.enum(["heartbeat", "cli", "goal", "installation"]), rows: z.number(),
     status: z.enum(["accepted", "rejected", "unavailable"]),
   })).optional(),
 });
 export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
+export async function setUsageContext(context: string): Promise<UsageStatistics> {
+  return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
+    { method: "POST", body: JSON.stringify({ context }) }));
+}
 export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {
   return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
     enabled === undefined ? undefined : { method: "POST", body: JSON.stringify({ enabled }) }));

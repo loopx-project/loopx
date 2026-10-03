@@ -74,7 +74,7 @@ def _direct(operation, payload):
 
 def _turn(identity, **overrides):
     return {
-        "schema_version": "loopx_turn_settlement_transaction_v0",
+        "schema_version": "loopx_turn_settlement_transaction_v1",
         "transaction_plan": {"settlement_plan": {"identity": identity}},
         "transaction_phases": PHASES,
         "completed_phases": PHASES,

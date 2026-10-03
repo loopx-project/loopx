@@ -153,6 +153,8 @@ def collect_status(
             activation_filter is GoalActivationState.STOPPED
         ),
         events_for_goal=rollout_events.events_for_goal,
+        current_registry=registry,
+        registry_path=registry_path,
     )
     # No later projection consumes canonical rows; release retained archive
     # data before assembling the rest of the display.

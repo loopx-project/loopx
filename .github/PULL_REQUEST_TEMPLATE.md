@@ -14,6 +14,42 @@ concrete gap and consumer. These author facts are independently reviewed.
 - Observable before → after, with the validation row that proves it:
 - Issue/task and intended base: <!-- Use Closes only for the issue actually completed; otherwise Related to. -->
 
+## Author Declaration
+
+<!--
+Who wrote this change, and what it was implemented against. A reviewer may be a
+different operator's agent, working from a different host and context: this
+section is the only place it can learn both without guessing, and unlike the
+rest of the body it is published attribution rather than a reviewed claim. Keep
+it to one short line plus the spec rows; do not paste runtime identifiers,
+endpoints, credentials or internal routing detail, and never claim a
+verification you did not run.
+-->
+
+- Written by: <!-- model_agent or human_operator; for an agent, the model and provider in ordinary product-family wording; keep it to one line -->
+
+### Implemented against
+
+<!-- The accepted specification this change was built for: an accepted RFC,
+accepted contract/protocol document, the linked issue or task, or a
+maintainer-agreed review frame. Give the exact file path or public link and the
+revision, so a reviewer can open the same text. One row per criterion the
+specification states, using its own section or identifier when it has one.
+Disposition: implemented | deferred | out_of_scope | not_met — a not_met row
+blocks approval and needs its gap and repair. Write "no written specification;
+the request in this PR is the basis" when none exists. Ignore aspirational or
+future properties; they are not obligations.
+-->
+
+- Specification and revision:
+- Criteria:
+
+| Criterion (spec clause) | Disposition | Symbol / path | Test or command |
+| --- | --- | --- | --- |
+|  |  |  |  |
+
+- Self-check before submission: <!-- What you ran, what you read, and what you deliberately left out. Separate what you verified from what you assumed; "none" with a reason is valid. -->
+
 ## Scope And Continuation
 
 <!-- A scoped fix may be complete while the parent program remains open.

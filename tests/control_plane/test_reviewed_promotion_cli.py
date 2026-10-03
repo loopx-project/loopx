@@ -12,12 +12,12 @@ import pytest
 from tests.control_plane.shadow_e2e_fixture import REPO, workspace
 
 
-def prepare(tmp_path: Path, provider: str, strategy: str | None = None):
+def prepare(tmp_path: Path, provider: str, strategy: str | None = None, source_mode: str | None = None):
     ws = workspace(tmp_path, bootstrap=False)
-    if strategy is not None:
+    if strategy is not None or source_mode is not None:
         ws.state.write_text(
             ws.state.read_text().replace(
-                "handoff_mode: hard_lease", "handoff_mode: legacy"
+                "handoff_mode: hard_lease", f"handoff_mode: {source_mode or 'legacy'}"
             )
         )
     if provider == "sqlite":
@@ -159,3 +159,14 @@ def test_saved_plan_rechecks_current_registered_agents(tmp_path):
     assert result["ok"] is False
     assert result["promotion"]["reason_code"] == "promotion_registration_changed_retry"
     assert result["promotion"]["legacy_writer_fenced"] is False
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_default_promotion_preserves_soft_policy(tmp_path, provider):
+    ws, saved, preview = prepare(tmp_path, provider, source_mode="soft_claim")
+    policy = preview["promotion"]["plan"]["handoff_mode_migration"]
+    assert policy["strategy"] == "preserve" and policy["target_mode"] == "soft_claim"
+    applied = ws.cli("coordination-shadow", "promote", "--reviewed-plan", str(saved), "--execute")
+    assert applied["ok"], applied
+    shown = ws.cli("handoff-mode", "show")
+    assert shown["handoff_mode"] == "soft_claim"

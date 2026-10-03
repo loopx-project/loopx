@@ -153,7 +153,8 @@ projection-only 输出，不授予控制权限，也不激活 observer。并发�
 [DSH/Pi 评估](../../../docs/architecture/rfcs/harness-selection-dsh-pi-v0.zh-CN.md)
 中的全量读取与身份边界。
 
-ledger 位于 `<runtime-root>/reliability_diagnostics/<goal-id>.ndjson`；默认 runtime root
+新 ledger 位于 `<runtime-root>/reliability_diagnostics/by-goal/<sha256>.ndjson`，Python 与 DSH
+均使用精确 Goal id 的 UTF-8 SHA-256 小写摘要；默认 runtime root
 与 LoopX 其它部分一致，CLI 只打印相对的 `ledger_ref`。`ingest` 会重新校验每一行；干净的
 ingest 是透明拷贝。任何损坏或被拒绝的输入都会追加持久化
 `reliability_ingest_violation_v0` 标记，让后续 receipt 成为 `invalid`，而不是在进程退出后
@@ -169,7 +170,8 @@ parity）。启用后，`observer.ts` 只观察 `session/created`、`session/eve
 [本地 retention 参考方案（v0）](docs/local-retention-v0.md#中文)。它保留完整 ledger 字节与
 负面完整性证据，要求冻结 writer 并由 owner 选择有限保留期限；没有实现自动 TTL，也不构成
 live 部署验收。操作 regular file 前会验证 provider 目录与 CLI 的 canonical runtime 布局一致。
-方案说明了当前文件名别名边界，归属不明确时须暂停删除。
+旧文件仍可只读回查，但必须离线核对后才能恢复追加；方案说明了升级和回退步骤，
+归属不明确时须暂停删除。冻结 writer 后一起升级 CLI 与插件。
 
 ## 验证
 

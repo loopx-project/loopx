@@ -146,6 +146,8 @@ def _resolve_preview_settlement(
     todo_id: str | None,
     replan_obligation_id: str | None,
     turn_instance_id: str | None,
+    registry_path: Path | None,
+    goal_ref: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     if turn_instance_id and source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
         result = SettlementResult.failed(
@@ -176,6 +178,8 @@ def _resolve_preview_settlement(
             and not todo_id
             and not replan_obligation_id
         ),
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if readback is None:
         return {}
@@ -382,6 +386,7 @@ def _latest_unspent_turn_settlement_run(
     goal_id: str,
     *,
     agent_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return the latest same-agent Turn settlement that still needs accounting.
 
@@ -395,6 +400,10 @@ def _latest_unspent_turn_settlement_run(
 
     safe_agent_id = normalize_todo_claimed_by(agent_id)
     for run in reversed(_load_goal_run_index_records(runtime_root, goal_id)):
+        if goal_ref is None and "goal_ref" in run:
+            continue
+        if goal_ref is not None and run.get("goal_ref") != dict(goal_ref):
+            continue
         run_agent_id = normalize_todo_claimed_by(run.get("agent_id"))
         if safe_agent_id and run_agent_id and safe_agent_id != run_agent_id:
             continue
@@ -579,6 +588,8 @@ def build_quota_slot_preview_for_decision(
     replan_obligation_id: str | None = None,
     turn_instance_id: str | None = None,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _validate_goal_id_path_segment(str(goal_id or ""))
     safe_slots = max(1, _int_number(slots, default=1))
@@ -627,6 +638,8 @@ def build_quota_slot_preview_for_decision(
         todo_id=normalized_todo_id,
         replan_obligation_id=normalized_replan_obligation_id,
         turn_instance_id=turn_instance_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     settlement_identity = settlement.get("identity")
     settlement_result = settlement.get("result")
@@ -698,6 +711,7 @@ def build_quota_slot_preview_for_decision(
             Path(str(raw_runtime_root)).expanduser(),
             safe_goal_id,
             agent_id=safe_requested_agent_id,
+            goal_ref=goal_ref,
         )
         if raw_runtime_root
         else None

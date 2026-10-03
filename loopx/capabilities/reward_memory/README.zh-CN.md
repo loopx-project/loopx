@@ -7,18 +7,20 @@ Reward Memory 的核心边界是把反馈证据、策略内容和动作 authorit
 权限。经过验证的仓库 owner 或核心贡献者反馈，可以在其独立验证过的仓库作用域内推导出
 持久策略。这里需要区分的是“贡献者希望系统怎么做”和“贡献者有权允许系统做什么”。
 
-这份合同定义五类一等记忆、带护栏的优先级和 pilot/meta 分工；Stage 1 增加 corpus
-registry 与健康状态 read model；Stage 2 增加无状态 candidate/review 薄缝；Stage 3 增加
-显式 recall/application。最简 ingest 闭环只把这些既有薄缝串成一次 corpus-owner 授权的
-provider 写入与精确读回；它不新增第二套 memory store、候选调度器、后台 recall、
-语义路由器、评测框架或 rollout。可选 runtime hook 只在模块自有边界复用这些薄缝，
-不会变成后台学习器。
+这份合同定义五类一等记忆、带护栏的优先级和 pilot/meta 分工。架构分阶段包括：Stage 1
+的 corpus registry 与健康状态 read model、Stage 2 的无状态 candidate/review 薄缝，以及
+Stage 3 的显式 recall/application。Post-outcome utility 使用同一观察合同：utility Stage 1
+产出 observation，utility Stage 2 提供幂等 reducer 与只读 projection。最简 ingest 闭环只把
+既有薄缝串成一次 corpus-owner 授权的 provider 写入与精确读回；它不新增第二套 memory
+store、候选调度器、后台 recall、语义路由器、评测框架或 rollout。可选 runtime hook 只在
+模块自有边界复用这些薄缝，不会变成后台学习器。
 
 机器可读合同通过下面的命令查看：
 
 ```bash
 loopx reward-memory architecture --format json
 loopx reward-memory candidate-review --case issue-fix-verified-contributor --decision accept --format json
+loopx reward-memory utility-project --input utility-observations.json --format json
 loopx reward-memory ingest-event --input full-public-fixture.json --format json
 ```
 
@@ -459,6 +461,14 @@ loopx reward-memory route-check --case pr-3237 --format json
 - Stage 5：受限的 cross-module dogfood、可选 post-outcome utility attribution，
   以及 operator edit/retire control。
 
+上面的架构阶段编号与 post-outcome utility 阶段是两条独立维度。Utility Stage 1 校验并产出
+`memory_utility_observation_v0`；Utility Stage 2 将完整观察流归约为
+[`memory_utility_projection_v0`](../../../docs/reference/protocols/reward-memory-utility-projection-v0.md)。
+Reducer 是纯计算、默认关闭的边界：语义重试只计一次，同一 identity 的冲突进入 review，
+并在 rejection 记录上标记 `quarantine_proposed`；类型化证据按强度归约，并保持 item、
+set 与未解析 lineage 分离。最高 tier 的 `unknown` 也会阻断较弱的有方向推断。它不会改变 retrieval ranking、
+provider state、memory lifecycle、authority、quota、scheduler 或主工作流。
+
 后续阶段必须在这份合同上扩展，不能合并五类记忆、重复建设 context/provider 能力，也
 不能把 provider availability 变成 user gate。Stage 1 继续保持 stateless read model，
 不执行 provider 或 external write。
@@ -566,7 +576,8 @@ Evidence basis 必须类型化，不能从自然语言推断。`owner_correction
 `controlled_replay` 与 `deterministic_effect` 属于较强证据，evaluator proposal
 至少要带一个 opaque `evidence_ref`，即使 label 仍是 `unknown` 也不能省略。
 `evaluator_inference` 较弱，`insufficient` 只表示存在 lineage。Stage 1 保留这组类型差异；
-弱证据与强证据之间的 precedence 由 Stage 2 reducer 负责。
+弱证据与强证据之间的 precedence 由 Stage 2 reducer 负责，最高 tier 的 `unknown` 会阻断
+较弱的有方向推断。
 
 公共 observation 只包含 opaque ref、canonical memory digest、类型化 reason code、
 evaluator/version identity 和紧凑的 public-safe evidence；URL、本地路径、raw-content
@@ -576,8 +587,9 @@ Evaluator 缺失、超时或输出畸形时 fail open：main result、applicatio
 dogfood readiness 都不改变。归因对象、证据、evaluator identity 与 evaluation version
 共同生成稳定 observation id，供 replay 对齐；同一键下出现不同判断属于冲突 delivery，
 不能算作额外 support，修正判断必须提供新 evidence 或提升 evaluation version。
-Utility-attribution Stage 1 不持久化也不归约 observation，因此尚不声明 duplicate
-delivery 是 no-op。Stage 5 batch 会拒绝重复的 `application_receipt_id`，每条 application
+Utility Stage 2 将完整 observation 流归约为有界 projection，并把相同语义的 retry 视为
+no-op。冲突 delivery 不进入 subject state，而是在 rejection 记录上保留 quarantine proposal；
+最高 tier 的 `unknown` 不能被较弱的有方向推断覆盖。Stage 5 batch 会拒绝重复的 `application_receipt_id`，每条 application
 settlement 只计数一次。Settlement `receipt_id` 会刻意排除 evaluator status 与
 `observation_id`，utility retry 和新 evidence 改用 observation identity 区分。同一
 settlement 的新 utility observation 应进入后续 append-only utility ledger，不能重复累计
@@ -587,8 +599,8 @@ disposition 或 cost metric。
 LoopX domain 结果、`applied`/`not_applied`/`refuted` 三类 application disposition，以及
 edit/retire 两类 operator control，`reward_memory_dogfood_batch_v1` 才会进入
 `ready_for_bounded_issue_fix_pilot`。Utility observation 不参与 readiness 判断。这只是
-试用就绪声明，semantic uplift 与 production rollout 仍然为 false；Stage 2 reducer 与
-projection、ranking influence，以及 OpenViking writeback 都不属于本次实现。
+试用就绪声明，semantic uplift 与 production rollout 仍然为 false；Utility Stage 2 不增加
+ranking influence 或 OpenViking writeback。
 
 Edit/retire control 同样保持克制：
 

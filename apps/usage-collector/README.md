@@ -10,6 +10,7 @@ The TypeScript client/collector allowlist lives in
 | `POST /v1/ping` | Daily random-ID heartbeat with version/OS/CPU/Python/channel; ≤1 KiB |
 | `POST /v1/aggregate` | Fixed CLI counts, no installation ID or join key; ≤16 KiB |
 | `POST /v1/goals` | Independent Goal/measurement/Host-day span/duration buckets, no identity; ≤16 KiB |
+| `POST /v1/installation` | Installation-linked fixed daily CLI counts and independent interval-union minutes; ≤16 KiB; operator-only rows |
 | `GET /v1/goal-stats` | Independent 30-day duration histograms; cells below 5 omitted |
 | `GET /v0/stats` | Deduplicated active/new installations, including retained v0 clients; version/OS/CPU/channel breakdown |
 | `GET /v1/aggregate-stats` | Independent 30-day feature/result/duration/error totals; cells below 5 omitted |
@@ -79,6 +80,18 @@ migrations and deploy the updated Worker. It preserves existing installs,
 pings and legacy counters. An older Worker rejects new diagnostics; loss is
 not retried. Roll back the Worker/client without dropping the additive table.
 Merging this code does not deploy the collector.
+
+Before releasing notice-v6 clients, back up and apply additive migration
+`0005-installation-usage.sql`, then deploy the Worker. `installation_usage`
+keeps one snapshot per random installation/UTC activity day for 30 activity
+days. Newer revisions replace counts, never add them; context and version
+freeze per day. No historical profiles or runtime are backfilled. Rollback
+retains the table, and all existing endpoint contracts remain supported.
+Daily runtime is partial instrumented interval union, **not uptime**. Different
+clocks cannot be added. [Operator read queries](queries/installation-usage.sql)
+separate span, active days, fixed-family usage and measured minutes.
+Only authorized D1/Access-protected operator surfaces may render linked rows;
+do not add per-ID results to unauthenticated public stats.
 
 Qualify `/v1/ping`, `/v1/aggregate`, `/v1/goals`, all stats endpoints, and invalid-field/size
 rejections on a separate database first. Deploy the collector before releasing

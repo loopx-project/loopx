@@ -33,7 +33,7 @@ class FirstPartyHostRuntimeRejected(RuntimeError):
         self.code = code
 
 
-def _source_authority(registry_path: Path, goal_id: str) -> dict[str, Any]:
+def source_goal_authority(registry_path: Path, goal_id: str) -> dict[str, Any]:
     if not registry_path.is_file():
         return {"kind": "unavailable", "reason": "registry_missing"}
     try:
@@ -79,7 +79,7 @@ def capture_first_party_host_goal_ref(
         guard_path(requested_registry, goal_id),
         operation="first_party_host_goal_capture",
     ):
-        authority = _source_authority(requested_registry, goal_id)
+        authority = source_goal_authority(requested_registry, goal_id)
         if authority.get("kind") != "present":
             raise FirstPartyHostRuntimeRejected(
                 "goal_not_registered"
@@ -149,7 +149,7 @@ class FirstPartyHostGoalAdmission:
                 ),
                 "operation": operation,
                 "planned_goal_ref": self.planned_goal_ref,
-                "authority": _source_authority(
+                "authority": source_goal_authority(
                     self.registry_path,
                     self.goal_id,
                 ),
@@ -220,7 +220,7 @@ class FirstPartyHostGoalAdmission:
                 "profile_id": SOURCE_SESSION_PROFILE_ID,
                 "registry_path": str(self.registry_path),
                 "planned_goal_ref": self.planned_goal_ref,
-                "authority": _source_authority(
+                "authority": source_goal_authority(
                     self.registry_path,
                     self.goal_id,
                 ),

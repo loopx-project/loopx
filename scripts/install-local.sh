@@ -217,10 +217,8 @@ acquire_install_lock() {
 
 warn_stale_promotion_readiness() {
   local python_bin="${LOOPX_PYTHON:-python3}"
-  local runtime_root="${LOOPX_RUNTIME_ROOT:-$codex_home/loopx}"
   # Reuse the same collector and registry resolution without importing every CLI.
-  LOOPX_PROMOTION_WARNING_RUNTIME_ROOT="$runtime_root" \
-    PYTHONSAFEPATH=1 PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" \
+  PYTHONSAFEPATH=1 PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" \
     "$python_bin" - <<'PY_WARNING' || true
 import argparse
 import os
@@ -230,7 +228,7 @@ from loopx.cli_runtime import resolve_cli_registry
 from loopx.paths import default_registry_path
 from loopx.promotion_gate import build_promotion_gate
 
-runtime_root = os.environ["LOOPX_PROMOTION_WARNING_RUNTIME_ROOT"]
+runtime_root = os.environ.get("LOOPX_RUNTIME_ROOT") or None
 args = argparse.Namespace(command="promotion-gate", registry=str(default_registry_path()), runtime_root=runtime_root)
 registry_path, _ = resolve_cli_registry(args, [])
 try:
@@ -281,9 +279,12 @@ excluded = {"node_modules", ".next", "dist", "build", "coverage"}
 
 def ignore(directory, names):
     root = Path(directory)
+    # Cargo's default output directory belongs to its manifest, not every
+    # source/asset directory named target. It can also be a cache symlink.
+    ignored = excluded | ({"target"} if (root / "Cargo.toml").is_file() else set())
     return [
         name for name in names
-        if name in excluded and ((root / name).is_dir() or (root / name).is_symlink())
+        if name in ignored and ((root / name).is_dir() or (root / name).is_symlink())
     ]
 
 shutil.copytree(sys.argv[1], sys.argv[2], symlinks=True, ignore=ignore)

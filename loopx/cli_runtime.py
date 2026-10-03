@@ -8,7 +8,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
-from .paths import DEFAULT_RUNTIME_ROOT, default_registry_path, global_registry_path
+from .paths import default_registry_path, global_registry_path, select_default_runtime_root
+
+
+HOST_GLOBAL_REGISTRY_SELECTOR = "@host-global"
 
 
 GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format"})
@@ -41,6 +44,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"doctor",
 		"first-run-report",
 		"usage-ping",
+		"performance-diagnosis",
 		"new-project-prompt",
 		"resolve-agent-thread",
 		"resolve-peer-route",
@@ -55,6 +59,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"uninstall-project",
 		"version",
 		"host-mode-plan",
+		"migrate-local-state",
 	}
 )
 
@@ -130,7 +135,7 @@ def build_cli_parser(
 	parser.add_argument(
 		"--registry",
 		default=str(default_registry_path()),
-		help="Path to a project-local registry.",
+		help="Registry path, or @host-global for this host's selected default global registry.",
 	)
 	parser.add_argument("--runtime-root", help="Override registry common_runtime_root.")
 	parser.add_argument("--format", choices=["markdown", "json"])
@@ -151,6 +156,16 @@ def resolve_cli_registry(
 	registry_was_configured = user_supplied_registry(raw_argv) or bool(
 		os.environ.get("LOOPX_REGISTRY")
 	)
+	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
+		return global_registry_path(runtime_root), True
 	project_register_uses_default_registry = (
 		args.command == "project"
 		and args.project_command == "register"
@@ -160,15 +175,19 @@ def resolve_cli_registry(
 		registry_path = Path(args.knowledge_root).expanduser() / ".loopx" / "registry.json"
 	if (
 		args.command not in _REGISTRY_OPTIONAL_COMMANDS
+		and not (args.command == "canary" and not getattr(args, "goal_id", None))
 		and not project_register_uses_default_registry
 		and not registry_was_configured
 		and not registry_path.exists()
 	):
-		runtime_root = (
-			Path(args.runtime_root).expanduser()
-			if args.runtime_root
-			else DEFAULT_RUNTIME_ROOT
-		)
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
 		fallback_registry = global_registry_path(runtime_root)
 		if fallback_registry.exists():
 			registry_path = fallback_registry
@@ -285,7 +304,7 @@ def _dispatch_common_command(
 	if args.command == "doctor":
 		from .cli_commands.doctor import handle_doctor_command
 
-		return handle_doctor_command(args, print_payload)
+		return handle_doctor_command(args, print_payload, registry_path=registry_path)
 	if args.command == "commands":
 		from .help_surface import (
 			build_command_reference_payload, render_command_reference_markdown,

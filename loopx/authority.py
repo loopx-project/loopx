@@ -15,7 +15,8 @@ from .control_plane.projects.registry_codec import (
 from .control_plane.runtime.time import now_local_iso
 from .public_safe_text import (
     PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
-    find_private_text_match,
+    TEXT_OWNER_CATEGORIES,
+    classify_private_text,
 )
 
 
@@ -98,7 +99,9 @@ def public_safe_optional(label: str, value: str | None) -> str | None:
 
 
 def validate_public_safe_text(label: str, value: str | None) -> None:
-    if find_private_text_match(value) is not None:
+    # Internal-state policy: a credential *word* is recognized but not rejected
+    # here; shapes that carry a value still are (Refs #5136, direction 2).
+    if classify_private_text(value, categories=TEXT_OWNER_CATEGORIES) is not None:
         raise ValueError(f"{label} contains a private-looking value; keep raw evidence in private payloads")
 
 

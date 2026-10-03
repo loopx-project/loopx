@@ -1,3 +1,5 @@
+import type {DecisionOutcome, ResumeState} from "../todos/user_completion_types.js";
+
 export type ActionReviewIdentity = {
   schemaVersion: "action_review_plan_v0";
   proposalId: string;
@@ -11,6 +13,7 @@ export type ActionReviewReason =
   | "apply_pending" | "readback_verified" | "readback_unverified"
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
+  | "operation_confirmation_expired" | "operation_expiry_unknown"
   | "canonical_update_retry" | "canonical_update_projection_pending";
 
 export type OperationReviewContent = {
@@ -33,22 +36,30 @@ type OperationReviewFrameBase = {
 
 export type OperationReviewFrame = OperationReviewFrameBase & (
   | {
+      kind: "inactive";
+      attentionKind: "progress";
+      interactionMode: "inform";
+      reason: "operation_confirmation_expired" | "operation_expiry_unknown";
+    }
+  | {
       kind: "confirmation";
       attentionKind: "authority";
       interactionMode: "confirm_reject";
       decisions: readonly ["confirm", "reject"];
+      /** Canonical transport receipt, not proof of confirmation or execution. */
+      confirmationDeliveryVerified: boolean;
     }
   | {
       kind: "pending";
       attentionKind: "progress";
       interactionMode: "inform";
-      executionState?: "host_authentication_required" | "managed_turn_pending" | "consumed_outcome_pending";
+      executionState?: "host_authentication_required" | "managed_turn_pending" | "managed_turn_started" | "consumed_outcome_pending";
     }
   | {
       kind: "result";
       attentionKind: "progress";
       interactionMode: "inform";
-      resultKind: "rejected" | "simulation_completed" | "completed" | "unknown" | "not_executed";
+      resultKind: "rejected" | "cancelled" | "simulation_completed" | "completed" | "unknown" | "not_executed";
       resultDeliveryVerified: boolean;
       summary: string;
     }
@@ -63,9 +74,21 @@ type ActionReviewState =
       canApply: false;
     };
 
+/** An owner decision on one User request, recorded by the canonical User completion owner. */
+export type DecisionReviewFrame = {
+  decision: DecisionOutcome;
+  /**
+   * What the canonical receipt says happened to the work waiting on it. Only
+   * present after a verified apply; an unrecognized or mismatched receipt is
+   * `unknown`, never a guessed success.
+   */
+  dependentEffect?: "resumed" | "still_waiting" | "paused" | "no_waiting_work" | "unknown";
+};
+
 export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   operationFrame?: OperationReviewFrame;
   reviewCardFrame?: ReviewCardFrame;
+  decisionFrame?: DecisionReviewFrame;
   /** Recover this exact canonical command; generating a new preview loses its receipt identity. */
   retryOriginal?: true;
 };
@@ -287,7 +310,7 @@ function operationContent(parameters: JsonRecord): OperationReviewContent | null
   return { title, subtitle, focus, fields, warning };
 }
 
-export function compileOperationReviewFrame(proposalValue: unknown): OperationReviewFrame | undefined {
+export function compileOperationReviewFrame(proposalValue: unknown, nowMs?: number): OperationReviewFrame | undefined {
   const proposal = objectValue(proposalValue);
   if (proposal?.action_kind !== "operation.execute") return undefined;
   const parameters = objectValue(proposal.normalized_parameters);
@@ -315,13 +338,33 @@ export function compileOperationReviewFrame(proposalValue: unknown): OperationRe
     expiresAt,
     content,
   };
+  // Cancellation is an administrative terminal state, not a domain execution
+  // outcome. Preserve the original envelope; never manufacture an execution
+  // receipt or offer the old confirmation again.
+  if (proposal.status === "cancelled") {
+    return {...base, kind: "result", attentionKind: "progress", interactionMode: "inform",
+      resultKind: "cancelled", resultDeliveryVerified: false, summary: ""};
+  }
   if (lifecycleState === "awaiting_confirmation") {
+    // An explicit read-time/fresh-delivery guard. Card reconstruction omits the
+    // clock so delayed callbacks still reach canonical confirmed_at
+    // validation. Never mutate the envelope or invent an outcome.
+    const expiryMs = /(?:Z|[+-]\d{2}:\d{2})$/i.test(expiresAt) ? Date.parse(expiresAt) : NaN;
+    if (nowMs !== undefined && (!Number.isFinite(expiryMs) || !Number.isFinite(nowMs) || nowMs > expiryMs)) {
+      return {...base, kind: "inactive", attentionKind: "progress", interactionMode: "inform",
+        reason: Number.isFinite(expiryMs) && Number.isFinite(nowMs)
+          ? "operation_confirmation_expired" : "operation_expiry_unknown"};
+    }
+    const delivery = objectValue(operation.delivery);
     return {
       ...base,
       kind: "confirmation",
       attentionKind: "authority",
       interactionMode: "confirm_reject",
       decisions: ["confirm", "reject"],
+      confirmationDeliveryVerified: delivery?.provider === "lark"
+        && ["message_id", "chat_id", "app_id", "binding_digest", "card_digest", "delivered_at"]
+          .every(key => textValue(delivery[key]) !== null),
     };
   }
   if (lifecycleState === "claimed") {
@@ -332,7 +375,10 @@ export function compileOperationReviewFrame(proposalValue: unknown): OperationRe
       interactionMode: "inform",
       ...(["agent_session", "managed_turn"].includes(String(objectValue(parameters.executor)?.kind))
         ? {executionState: objectValue(operation.agent_handoff) ? "consumed_outcome_pending" as const
-          : objectValue(parameters.executor)?.kind === "managed_turn" ? "managed_turn_pending" as const : "host_authentication_required" as const}
+          : objectValue(parameters.executor)?.kind === "managed_turn"
+          ? objectValue(operation.host_start)?.schema_version === "loopx_operation_host_start_v0"
+            ? "managed_turn_started" as const : "managed_turn_pending" as const
+          : "host_authentication_required" as const}
         : {}),
     };
   }
@@ -354,11 +400,38 @@ export function compileOperationReviewFrame(proposalValue: unknown): OperationRe
   };
 }
 
+// Presentation buckets over `ResumeState` in control_plane/todos/user_completion.ts.
+const DEPENDENT_EFFECTS = {
+  resumed: "resumed",
+  decision_requirements_remaining: "still_waiting",
+  other_user_blockers_active: "still_waiting",
+  explicit_blocker_repair_required: "still_waiting",
+  decision_rejected: "paused",
+  decision_cancelled: "paused",
+  target_not_blocked: "no_waiting_work",
+  target_not_active: "no_waiting_work",
+  target_not_found: "no_waiting_work",
+  target_or_decision_scope_not_found: "unknown",
+} as const satisfies Readonly<Record<ResumeState, NonNullable<DecisionReviewFrame["dependentEffect"]>>>;
+
+function compileDecisionReviewFrame(proposal: Record<string, unknown>): DecisionReviewFrame | undefined {
+  if (proposal.action_kind !== "gate.resolve") return undefined;
+  const decision = objectValue(proposal.normalized_parameters)?.decision;
+  if (decision !== "approve" && decision !== "reject" && decision !== "cancel") return undefined;
+  const receipt = objectValue(proposal.receipt);
+  if (proposal.status !== "applied" || receipt?.projection_verified !== true) return { decision };
+  if (receipt.outcome !== "gate_resolved" || receipt.decision_outcome !== decision
+      || !Object.hasOwn(receipt, "unblock_resume_state")) return { decision, dependentEffect: "unknown" };
+  const state = receipt.unblock_resume_state;
+  return { decision, dependentEffect: typeof state === "string" && Object.hasOwn(DEPENDENT_EFFECTS, state)
+    ? DEPENDENT_EFFECTS[state as keyof typeof DEPENDENT_EFFECTS] : "unknown" };
+}
+
 /**
  * Compile provider-neutral presentation semantics from a typed action proposal.
  * This reducer owns no action authority and performs no external effects.
  */
-export function compileActionReviewPlan(proposalValue: unknown): ActionReviewPlan {
+export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number): ActionReviewPlan {
   const proposal = objectValue(proposalValue) ?? {};
   const identity: ActionReviewIdentity = {
     schemaVersion: "action_review_plan_v0",
@@ -367,19 +440,22 @@ export function compileActionReviewPlan(proposalValue: unknown): ActionReviewPla
       ? proposal.expected_state_fingerprint
       : "",
   };
-  const operationFrame = compileOperationReviewFrame(proposal);
+  const operationFrame = compileOperationReviewFrame(proposal, nowMs);
   const reviewCardFrame = compileReviewCardFrame(proposal);
+  const decisionFrame = compileDecisionReviewFrame(proposal);
   const finish = (state: ActionReviewState): ActionReviewPlan => ({
     ...identity,
     ...state,
     ...(operationFrame ? { operationFrame } : {}),
     ...(reviewCardFrame ? { reviewCardFrame } : {}),
+    ...(decisionFrame ? { decisionFrame } : {}),
   });
   const held = (
     interaction: "gated" | "refresh" | "repair" | "pending" | "completed" | "inactive",
     reason: ActionReviewReason,
   ): ActionReviewPlan => finish({ interaction, reason, canApply: false });
   const lifecycle = proposal.action_kind === "goal.lifecycle";
+  if (operationFrame?.kind === "inactive") return held("inactive", operationFrame.reason);
   // Lifecycle uses conservative fact precedence. Generic deferred proposals may
   // retain a historical gate; their existing status-based retry path is preserved.
   if ((lifecycle && proposal.gate != null) || proposal.status === "gated") return held("gated", "authority_gate");
@@ -403,7 +479,8 @@ export function compileActionReviewPlan(proposalValue: unknown): ActionReviewPla
   const isCanonicalTerminal = basis?.schema_version === "loopx_chat_canonical_terminal_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null
     && ((proposal.action_kind === "todo.update" && parameters?.operation === "complete")
-      || (proposal.action_kind === "monitor.update" && parameters?.operation === "stop"));
+      || (proposal.action_kind === "monitor.update" && parameters?.operation === "stop")
+      || (proposal.action_kind === "gate.resolve" && ["approve", "reject", "cancel"].includes(String(parameters?.decision))));
   if ((isCanonicalUpdate || isCanonicalTerminal) && (proposal.status === "applying" || proposal.status === "failed")) {
     const failure = objectValue(proposal.failure);
     return {...finish({interaction: "review", canApply: true,

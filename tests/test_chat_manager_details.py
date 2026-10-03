@@ -38,6 +38,40 @@ def test_unreadable_todos_do_not_look_empty_or_expose_error(monkeypatch, tmp_pat
     assert 'private failure body' not in str(result)
 
 
+def test_large_local_catalog_keeps_bounded_context_without_a_larger_wire_limit(monkeypatch, tmp_path):
+    # Escaped Unicode exceeds the RPC request ceiling before selection.
+    records = [{'todo_id': f'todo_{i}', 'status': 'open', 'text': f'Public task {i}',
+                'note': '公开资料🙂' * 150} for i in range(600)]
+    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todos': records})
+    result = details.read_manager_goal_details(tmp_path/'r', tmp_path, 'alpha',
+                                             owner_scope=True, limit=1)
+    assert result['status'] == 'read'
+    assert result['coverage'] == {'active': 600, 'included': 1, 'omitted': 599}
+    assert result['todos'][0]['content_truncated'] is True
+
+
+def test_priority_context_keeps_conditions_and_scoped_decision(monkeypatch, tmp_path):
+    row = {'todo_id': 'todo_work', 'role': 'agent', 'status': 'open',
+           'text': 'Prepare the public research report',
+           'resume_when': 'todo_done:todo_data', 'resume_ready': False,
+           'successor_todo_ids': ['todo_check'],
+           'required_decision_scopes': [{'kind': 'direction', 'granularity': 'action',
+                                         'scope_key': 'publish_report'}],
+           'note': 'Context. ' * 60 + 'Keep this a draft; do not publish.'}
+    monkeypatch.setattr(details, 'list_goal_todos', lambda **_: {'ok': True, 'todos': [row]})
+    result = details.read_manager_goal_details(tmp_path/'r', tmp_path, 'alpha', owner_scope=True)
+    overview = result['todos'][0]
+    assert overview['resume_when'] == row['resume_when']
+    assert overview['resume_ready'] is False
+    assert overview['successor_todo_ids'] == ['todo_check']
+    assert overview['required_decision_scopes'] == row['required_decision_scopes']
+    assert overview['content_truncated'] is True
+    exact = details.read_manager_goal_details(tmp_path/'r', tmp_path, 'alpha',
+                                             owner_scope=True, todo_id='todo_work')
+    assert exact['todos'][0]['continuation'].endswith('Keep this a draft; do not publish.')
+    assert exact['todos'][0]['content_truncated'] is False
+
+
 def test_manager_receives_default_operating_instructions_without_overwriting_custom(tmp_path):
     workspace = manager_workspace(tmp_path)
     instructions = workspace / 'AGENTS.md'

@@ -22,6 +22,7 @@ def _receipt_bound_monitor_todo_id(
     *,
     runtime_root: Path,
     turn_instance_id: str | None,
+    goal_ref: Mapping[str, object] | None,
 ) -> str | None:
     if not turn_instance_id:
         return None
@@ -30,6 +31,7 @@ def _receipt_bound_monitor_todo_id(
         goal_id=args.goal_id,
         agent_id=args.agent_id,
         turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
     )
     if receipt is None:
         raise HeartbeatReceiptIdentityConflictError(
@@ -57,6 +59,7 @@ def record_quota_monitor_poll_for_cli(
     operator_inbox_urgency_projector: Callable[..., dict[str, object]],
     status_reloader: Callable[[], dict[str, object]],
     monitor_poll_recorder: Callable[..., dict[str, object]],
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Execute the monitor-poll CLI request with receipt-bound settlement identity."""
     return monitor_poll_recorder(
@@ -87,10 +90,12 @@ def record_quota_monitor_poll_for_cli(
         task_lease_expected_version=getattr(args, "task_lease_expected_version", None),
         use_current_task_lease=bool(getattr(args, "use_current_task_lease", False)),
         turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
         receipt_bound_todo_id=_receipt_bound_monitor_todo_id(
             args,
             runtime_root=runtime_root,
             turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
         ),
         scheduler_execution_context=scheduler_execution_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,

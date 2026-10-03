@@ -264,19 +264,18 @@ and interaction-contract surface:
 - `user_todo_summary`;
 - `user_gate_notification_cooldown`.
 
-The message includes:
-
-- goal label and short objective;
-- concrete gate question;
-- up to three user-gate or user-action todos;
-- expected reply format;
-- Kanban link or channel control link;
-- next safe action while waiting, if any.
+The steward explains the selected decision, its effect on the Goal and a useful
+next step. Up to three complete selected requests retain their exact references,
+scope and evidence; incomplete requests remain explicit gaps. It may combine a
+related blocker with the decision, but does not broaden approval. Kanban links
+remain available when useful. This replaces the fixed `Action required / Decision
+requests` template; selection, cooldown and provider permissions retain their owners.
 
 It excludes local paths, raw active state, private logs, credentials, message
 ids, and raw provider payloads.
 
-Automatic delivery is disabled by default. After Goal Channel setup, preview
+New Goal Channel setup enables human-gate delivery by default; existing bindings
+keep their recorded setting. Blocked-notice delivery stays default-off. Preview
 and then enable it explicitly:
 
 ```bash
@@ -301,6 +300,37 @@ delivery persistently with:
 loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-human-gates --execute
 ```
 
+Blocked Todo notices use a separate, default-off opt-in. They carry the task,
+cause, impact, responsible party, recovery condition, and next action. A blocked
+primary Todo remains visible when safe fallback work continues. Enable or
+remove this delivery through the same private Goal Channel binding:
+
+```bash
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices
+loopx goal-channel configure --goal-id <goal-id> --auto-notify-blocked-notices --execute
+loopx goal-channel configure --goal-id <goal-id> --no-auto-notify-blocked-notices --execute
+```
+
+A material refresh sends only through the authorized Lark sink. Deduplication
+binds blocker identity, revision, destination chat, and delivery generation.
+An explicitly observed open Todo retires the old blocker as resumed; terminal
+or superseding canonical facts retire it separately. Missing or paginated rows
+never prove recovery. Repeated recovery works even within one timestamp.
+
+Each refresh attempts at most eight pending effects, prioritizing unattempted
+notices before retries. Verified receipts do not consume that budget; the full
+frontier and deferred pending receipts remain available for later refreshes.
+A batch with pending work is not reported as fully verified. Switching channels
+requires independent send/readback for the new destination and retains the old
+history. Public status counts refer to the current target and exclude retired
+receipts from active delivery totals.
+
+The private binding records pending, sent-but-unverified, delivered, resumed,
+resolved, and superseded receipts. Provider failure or a missing sink leaves
+notices pending without stopping safe fallback. `status.json` exposes only
+public-safe counts and the two opt-ins. Chat replies do not approve or recover
+Todos; recovery remains a canonical Todo fact.
+
 The opt-in is stored only in the project-local private Goal Channel binding.
 It does not grant repository or LoopX transition authority. Chat replies can
 provide context, but a gate changes only after LoopX validates and records the
@@ -320,6 +350,68 @@ to distinguish a never-configured project from a configured sink whose
 extension became unavailable. The latter fails closed with a retryable
 `extension_unavailable` postcondition; the marker contains no provider ids,
 credentials, channel metadata, or raw payloads.
+
+### Local steward intake and optional channel delivery
+
+The private local steward is the default attention consumer for its permitted
+Goals. An absent Lark connection, disabled external delivery or failed transport
+cannot hide a canonical blocker or owner request. Goal Chat uses the same facts within
+its selected Goal; external audiences retain their exact grants. Intake grants
+neither publication nor execution authority.
+
+Compose one subject from a Todo's blocker and owner request, retaining concrete
+decision terms. “The owner should know” and “the owner must act” remain separate.
+Reuse the blocked-transition builder and shared TS decision/attention projection;
+keep provider addressing, send/readback and private receipts in Lark. A channel
+switch changes transport receipts, not source visibility. Model rewording is not
+a source revision; source inspection is not proof the owner was notified.
+
+The steward relates a material change to the objective, prior decisions and
+independent work, groups related causes and recommends a useful next step.
+Agent-owned recovery stays background work. Owner decisions retain their object,
+terms, evidence and inaction consequence; unknown or redacted facts remain gaps.
+Do not replay each transition mechanically or turn a blocker into a new approval.
+Use the configured conversation runtime for synthesis; the model does not own
+eligibility, authorization or receipt transitions.
+
+**Implementation checkpoint.** Existing steward/Goal Turns read current canonical
+attention without a Channel or run history. The shared TS owner coalesces a Todo's
+blocker and decision, prioritizes owner action and discloses omitted subjects.
+The whole Turn includes at most twelve subjects; per-Goal coverage retains the
+omitted count, and the existing scoped Todo read supplies complete remaining facts.
+Python supplies canonical I/O and public-safe fields, with no second selection rule.
+
+The existing human-gate and blocked-notice senders now use one steward synthesis
+adapter instead of separate message templates. An admitted external notification
+uses the configured steward executor/model in an isolated, restricted Chat Turn
+(startup up to 30 seconds, reasoning up to 90 seconds). Read authority is limited
+to this Goal and audience; no host, delegation or publication grant is added.
+Canonical request content, lifecycle, blocker revisions and referenced continuation
+facts are checked before and after synthesis. Full canonical reads remain required;
+unrelated Todo updates or creation do not invalidate the selected notice. Exact
+request references protect reply routing: fresh and cached bodies
+must contain each complete identifier as a whole token. Punctuation and Markdown
+may surround it; a prefixed or suffixed identifier does not satisfy this delivery
+obligation. Unknown execution or fallback remains unknown; advice is not proof
+that a worker is running.
+
+The generated body is saved in the existing private effect receipt before send;
+retries reuse the exact text and provider key. A verified gate message records the
+blocker revisions it covered so the separate blocker adapter does not send the
+same fact again. Failed generation remains pending and never falls back to a
+mechanical template; the existing frontend settings describe model usage and show
+unverified delivery. Legacy verified receipts stay quiet. Legacy ambiguous blocker
+receipts without a saved body require reconciliation rather than generating new
+text under an already attempted provider key.
+
+No new inbox, scheduler or notification store is introduced. Default local intake
+means evidence in the next existing Turn, not autonomous presentation or a read
+receipt. Local material-delta wake, budgeted proactive synthesis, read/recovery
+acknowledgments, cross-Goal semantic batching and sustained quality remain open
+under presentation Stage 2/R3. One live synthetic Codex synthesis qualifies the
+model path; it does not establish long-running notification quality or a live
+Lark deployment. The isolated external transcript does not share a live owner
+session or claim full conversation continuity.
 
 ## Command Contract
 
@@ -416,7 +508,8 @@ The first slice must prove:
 - a Goal Control message is sent, pinned, and readback verified;
 - human-gate notification respects cooldown and idempotency;
 - repeated notification retries do not duplicate visible messages;
-- automatic delivery is disabled by default and can be suppressed per refresh;
+- new-channel human-gate delivery defaults on; blocked notices default off; both
+  retain explicit disable and per-refresh external-sink suppression;
 - automatic delivery reads canonical quota and does not send for non-gate state;
 - doctor reports missing bot auth, missing channel, missing Kanban, or stale
   extension activation with typed blockers;

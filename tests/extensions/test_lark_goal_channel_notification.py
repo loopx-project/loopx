@@ -79,12 +79,19 @@ def test_goal_without_binding_is_unconfigured(tmp_path: Path) -> None:
             "configured": False,
             "enabled": False,
             "human_gate_auto_notify_enabled": False,
+            "blocked_notice_auto_notify_enabled": False,
             "receipt_count": 0,
         }
     ]
 
 
-def test_configured_binding_projects_public_state(tmp_path: Path) -> None:
+def test_configured_binding_projects_public_state(tmp_path: Path, monkeypatch) -> None:
+    def unexpected_target_read(*args):
+        raise AssertionError("A human-gate-only binding must not read blocked-notice targets")
+    monkeypatch.setattr(
+        "loopx.extensions.lark.goal_channel_notification.read_goal_channel_targets",
+        unexpected_target_read,
+    )
     registry_path = _registry(tmp_path)
     _write_binding(
         tmp_path,

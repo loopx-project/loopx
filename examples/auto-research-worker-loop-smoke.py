@@ -75,7 +75,7 @@ def main() -> int:
         state_file = (
             temp
             / "visible-control-plane"
-            / ".codex"
+            / ".loopx"
             / "goals"
             / GOAL_ID
             / "ACTIVE_GOAL_STATE.md"

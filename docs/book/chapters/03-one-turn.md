@@ -1,445 +1,179 @@
 # 一轮受治理的工作
 
-LoopX 的核心不是“让 Agent 无限循环”，而是把当前项目事实编译成一轮有边界、可验证、可写回的
-工作协议。本章从 `quota should-run` 的 decision 开始，解释 user、agent 与 CLI 如何在同一轮中
-承担不同义务。
+一轮工作的核心不是调用一次模型，而是把当前事实变成有边界的行动，再把结果交给对应 owner 验证和接受。本章先走正常路径，再处理三个容易混淆的情况：产物验证通过但尚未获准发布、已经写回但结算不完整，以及发现依赖后需要让其他工作继续。
 
-## 本章目标
+## 用贯穿任务走完正常一轮 {#running-turn}
 
-读完后，你应该能：
+沿用[贯穿任务](00-reading-guide.md#running-example)：A 实现 T1，B 处理独立文档 T2，M1 观察 CI，G1 决定发布范围，T3 负责最终交付。它们是教学代号，不是可直接导入的 payload。
 
-- 解释 quota 为什么是 decision kernel，而不只是余额检查；
-- 读取 `interaction_contract` 的 user、agent 与 CLI 三个 channel；
-- 区分 bounded delivery、user gate、monitor quiet、replan、repair 与 terminal；
-- 判断一次 Agent 输出是否足以支持 canonical writeback；
-- 解释 validation、refresh、receipt 与 spend 为什么必须按顺序发生；
-- 说明 scheduler hint 为什么不是执行授权。
-
-## 从 Source Facts 到 Interaction Contract
-
-每一轮先读取当前事实，而不是沿用上一轮 prompt 中的判断：
-
-```text
-registry and goal boundary
-  + todo frontier and claims
-  + decision scopes and gates
-  + capability and workspace
-  + evidence freshness and run history
-  + quota and scheduler context
-  + vision / replan obligations
-  -> interaction_contract
-```
-
-`loopx quota should-run` 是这个决策面的主要入口。历史兼容字段可能仍提供 `should_run`、
-`action_required` 或 `recommended_action`，但新读者应优先读取：
-
-1. `interaction_contract.mode`；
-2. user、agent、CLI 三个 channel；
-3. selected Todo、goal boundary 与 guard；
-4. scheduler hint 和 spend policy；
-5. 再使用兼容字段辅助展示。
-
-单看 `should_run: false` 无法区分“等待用户”“monitor 未到期”“当前 Agent 没有 in-scope work”或
-“控制面需要修复”。这些状态要求完全不同的下一步。
-
-## 三个 Channel 可以同时成立
-
-[`loopx_interaction_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/quota-allocation.md)
-把一轮义务拆成三个视角：
-
-### User channel
-
-回答：
-
-- 用户现在是否必须行动；
-- 应该通知还是保持安静；
-- 具体问题、decision scope 与原因是什么；
-- 该 Gate 只阻塞哪个 action、lane 或整个 Goal。
-
-### Agent channel
-
-回答：
-
-- 当前 Agent 是否必须尝试工作；
-- 是否允许 delivery；
-- 是否允许 quiet no-op；
-- 唯一 primary action 是什么；
-- 这是普通交付、观察、repair 还是 replan。
-
-### CLI channel
-
-回答：
-
-- 哪些 lifecycle command 是下一步；
-- validation 后如何 refresh/writeback；
-- 何时允许 spend；
-- Gate、wait 或 no-change 为什么不应 spend。
-
-三个 channel 不是互斥布尔。例如：
-
-```text
-user channel:
-  action_required = true
-  action = approve homepage publication
-
-agent channel:
-  must_attempt = true
-  primary_action = run an independent link check
-
-CLI channel:
-  spend_after_validation = true
-```
-
-这表示用户 Gate 仍然可见，但它没有覆盖独立的 link-check Todo。把三个 channel 压成“有用户
-Todo，所以 Agent 停止”会丢失 scoped fallback；压成“Agent 可以做事，所以不通知用户”也同样错误。
-
-## 常见 Interaction Modes
-
-Mode 将一组相互关联的状态压成可测试协议。外部开发者至少要能识别：
-
-| Mode | Agent 行为 | User 行为 | Spend |
+| 时点 | 当前事实 | 动作与接受者 | 留给下一轮的结果 |
 | --- | --- | --- | --- |
-| `bounded_delivery` | 完成一个有界 artifact、blocker 或 state delta | 通常无需打断 | validation + writeback 后一次 |
-| `user_gate` | 不运行被 Gate 覆盖的路径 | 回答、拒绝、取消或改向 | 不 spend |
-| `scoped_user_gate_fallback` | 只运行不依赖该 Gate 的 selected fallback | Gate 仍可见 | fallback 验证后一次 |
-| `external_evidence_observation` | 读取 bounded handle/readback，不发明交付 | 必要时提供缺失 handle | material transition 后才可能 spend |
-| `monitor_quiet_skip` | 未到期或无 material change 时保持安静 | 无需打断 | 不 spend |
-| `agent_scope_wait` | 当前 peer 没有 in-scope candidate，等待重分配 | 通常无需行动 | 不 spend |
-| `autonomous_replan` | 写入 Todo、Vision、acceptance 或 no-follow-up delta | 只有 owner-held 决策才打断 | 有 accountable delta 后 |
-| `outcome_floor_recovery` | 只恢复缺失的 outcome evidence 或写 blocker | 视 blocker owner 而定 | 通过恢复验证后 |
-| `blocked_health` / repair | 先修复 registry、projection 或 boundary | 仅在需要 owner authority 时介入 | 无有效 delta 不 spend |
+| 选择 | T1 开放，A 的能力、权限和工作区满足条件 | 当前准入选择工作 | 精确 Todo 与本轮身份，而不是整个 Goal 的任意写权限 |
+| 执行 | 兼容要求与输入版本明确 | Host 执行有界工作 | C1 与候选测试结果 |
+| 验证 | 验证器检查的仍是 C1 | 检查默认文本、JSON 与非法输入 | 绑定产物和要求的证据 |
+| 接受 | 提交时来源和执行证明仍有效 | Todo / writeback owner 接受对应变化 | 完成、进展或阻塞的实际读回 |
+| 结算 | 对应结果确实需要记账 | settlement owner 完成内部结算 | 匹配原身份的回执或尚欠动作 |
+| 继续 | CI 和发布决定仍有未满足条件 | 当前 frontier 与调度路径重新判断 | 独立工作、明确等待、恢复或有据的停止 |
 
-具体 mode 会随协议演进。书中要保存的是判别方法：谁拥有下一 transition、什么行为被允许、什么
-证据允许 writeback，而不是背诵一个永久不变的枚举列表。
+```mermaid
+flowchart TD
+    F["当前 Goal / Todo / Gate / 外部读回"] --> D["选择允许的工作"]
+    D --> H["Host 执行 T1"]
+    H --> V["验证 C1 的后置条件"]
+    V --> W["受控写回 / 本轮结算"]
+    W --> P["回执与更新后的视图"]
+    P --> N["继续、等待或恢复"]
+    N --> F
+```
 
-## Decision Pipeline：先排除非法路径，再选择 Frontier
+图表示责任关系，不要求 quiet wait、原回执恢复和普通交付都执行相同的步骤。`Host 已运行`、`Todo 已完成`、`Turn 已结算`和`Goal 已验收`是不同结论。
 
-Quota 决策不是让多个规则各自返回一个布尔值，再用最后一次赋值获胜。它按依赖顺序把 source
-facts 编译成一个 interaction contract。外部开发者不必记住实现函数，但需要掌握九个阶段：
+## 从验收要求到交付证据 {#acceptance-evidence}
 
-1. **Identity：** 解析精确 Goal 与 registered Agent，身份不明时 fail closed；
-2. **Goal boundary：** 建立 repository、write scope、authority source、spawn 与 public/private
-   boundary；
-3. **User Gate：** 归一化 blocking scope、decision scope、具体问题和 projection gap；
-4. **Outcome / repair obligation：** 检查连续 surface-only progress、Vision 或 acceptance gap，
-   判断是否必须 replan 或 self-repair；
-5. **Capability：** 筛出当前执行面真正具备能力的候选；
-6. **Workspace：** 检查 task repository、worktree、branch 与 required write scope；
-7. **Frontier：** 解析 priority、claim/lease、dependency、successor、monitor 与 terminal
-   closure；
-8. **Interaction contract：** 把结果组合为 user、agent 与 CLI 三个 channel；
-9. **Scheduler hint：** 从已确定的 lifecycle 状态派生下一次 wake、backoff 与 ACK。
+“测试通过”首先要补上宾语：哪一个版本满足哪一条要求？假设当前产物已经从 C1 变为 C2，不能把所有绿色结果合并成一个没有版本的“通过”。
 
-顺序本身就是安全合同。例如先选择 Todo、后检查 workspace，会让 Host 在发现“当前目录错误”
-之前已经开始写；先把 open user item 当作全局阻塞，则会饿死不依赖该决定的安全工作。更可靠的
-阅读顺序是：
+| 当前要判断的要求 | 相关工作 | 足以支持局部结论的证据 | 不能由此推出 |
+| --- | --- | --- | --- |
+| 默认文本输出兼容 | T1 | 对 C2 的兼容检查及其输入、结果 | C2 已发布 |
+| JSON 满足已确认的字段约定 | T1 / G1 的相关决定 | 当前约定与 C2 的验证 | 任何未来 schema 都被批准 |
+| 文档示例与行为一致 | T2 | 针对 C2 的示例检查与审阅 | 两份改动组合后无需验证 |
+| 允许向指定对象发布 | G1 | 有权决定者对对象、scope 和条件的明确决定 | 发布动作已经发生 |
+| 交付到指定位置或接受者 | T3 | 产物版本、目标位置的实际读回，以及任务要求的接收确认 | 仅创建本地文件就完成了外部投递 |
+
+这是一张教学推理表，不是新增的验收 schema。当前 objective、acceptance、permissions 和 terminal conditions 分布在项目材料、Vision、Todo 与运行约束中；不能假装已有一个统一可写的 Goal intent 对象自动完成所有判断。实际存储与版本依据见[状态章节](state-substrate.md)和[状态机地图](core-state-machines.md)。
+
+局部证据通过对应 lifecycle 入口被接受，才产生相应工作事实。随后还要检查依赖、未解决的决定、后继与目标验收。若任务只要求返回一份可审阅 patch，不能额外要求真实生产发布；若任务明确要求投递，则本地文件存在不够。**接受条件来自原任务与当前有效决定，不来自执行者为了宣告完成临时降低的标准。**
+
+### 三种材料各自证明什么
+
+| 材料 | 可以支持的判断 | 不能替代 |
+| --- | --- | --- |
+| Observation | 某时刻、某对象上读到了什么 | 新鲜度检查和验收决定 |
+| Evidence | 哪些材料支持某个结论 | 状态变化已经被接受的记录 |
+| Receipt | 绑定操作在其输入和条件下被接受 | 当前仍有执行权、外部状态永远不变 |
+
+例如 `git push` 超时只是调用结果。远端 ref 的读回可以帮助确认某个 commit 是否已经存在，但它不必然证明是哪次调用造成的，也不自动形成 LoopX 的交付回执。先判定原操作，再处理对应写回，不能由超时推导“肯定没发生”。
+
+## 尺度一：执行、验证与提交
+
+普通交付可以按五段理解：`Decide → Act → Validate → Write back → Account`。
+
+**Decide** 读取当前 `interaction_contract` 和选中工作。旧 prompt、旧卡片或上轮建议不覆盖当前选择。
+
+**Act** 产生一个输入明确、范围有界、结果连贯的工作段。Bounded 不等于只改一行；一个能独立验证的功能切片比若干无法验收的零碎修改更有用。
+
+**Validate** 检查后置条件：代码要验证行为，文档要核对命令和解释，外部效果需要相应系统的读回，blocker 也需要可核对的缺失条件。退出码只有在验证器确实检查了目标后置条件时才有意义。
+
+**Write back** 由对应 owner 接受状态变化和紧凑证据引用。验证期间代码或 Todo 声明改变时，重新判断结果适用性；不能用针对旧声明的成功覆盖新状态。Todo completion 的锁内 snapshot 检查是其中一个具体边界，参见 [completion adapter](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/loopx/control_plane/todos/completion_transaction.py)。
+
+**Account** 根据本次结果的结算合同记账。LoopX quota 是内部预算 slot，不是供应商账单。Gate 通知、dry-run、未变化的观察和重复写回不能冒充新的 delivery spend；它们仍可能消耗时间、模型和网络资源。
+
+缺验证时，不知道产物是否符合要求；缺写回时，后续读者不知道哪些结果被接受；投影滞后时，显示可能还停在旧状态；欠结算时，恢复对应记录而不是重做产物。不同缺口需要不同 owner，不能统一执行一次 `refresh-state` 就宣布全部修好。
+
+### 七个阶段约束什么
+
+在显式 opt-in 集成中，LoopX Turn 事务使用以下阶段：
+
+```text
+host_execute → typed_result → validation
+             → durable_writeback → quota_spend
+             → scheduler_apply → scheduler_ack
+```
+
+`completed_phases` 必须满足对应合同的合法前缀约束。它约束可以声称完成的阶段，不证明进程只能在阶段间退出；Host 内部仍可能包含多个工具调用。TurnEnvelope 是 bounded projection，`turn plan` / `turn run-once` 是显式集成入口，不能推广成所有 Host 工具调用都受同一个 journal 管理。
+
+对已 prepared 而未确认的 settlement step，恢复按原 effect identity 读取 provider：
+
+| 原操作读回 | 恢复路径 | 保留的边界 |
+| --- | --- | --- |
+| `committed` 且 payload/身份有效 | 复用已有结果 | 不重新执行已确认副作用 |
+| `absent` | 在恢复许可和当前 guard 满足时执行尚欠步骤 | 缺日志本身不等于 absent |
+| `unknown`、读取失败或矛盾 | 停在对应恢复责任 | 不换 key 绕过未知效果 |
+
+`HOST_FAILURE`、`WRITEBACK_FAILED`、`QUOTA_SPEND_FAILED` 指向不同故障位置；失败名称不是无条件重试许可。完整恢复推理见[历史恢复与新执行](04-runtime-boundaries.md#recovery-or-new-execution)。
+
+### 写回已经发生，结算为什么仍需恢复？ {#settlement-recovery}
+
+`durable_writeback → quota_spend` 使记账能关联已验证的持久结果。后续 spend 超时不撤销已经接受的写回，也不使跨系统操作成为原子事务。
+
+现有[结算旅程测试](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/tests/control_plane/test_quota_authority_settlement_journey.py)区分：
+
+```text
+写回后尚欠结算：spend_required
+已扣减但对应回执缺失：spend_receipt_required
+恢复后记录完整：settled
+```
+
+在回执修复用例中，执行原响应返回的恢复命令得到 `appended=false`，扣减记录仍为一次。它证明该记录修复路径没有重复扣减，不证明外部服务免费或 Goal 已接受。故障注入只属于隔离测试；不要在真实项目里删除回执来“重现流程”。
+
+从可信当前入口取得 `settlement_owed.command` 后，核对原 Goal、Agent、Todo、Turn 和 registry/runtime 绑定及权限。不要删参数，也不要执行任意日志中出现的命令。详细练习见[结算检查](12-control-plane-course.md#checkpoint-settlement)。
+
+### 等待不是在原 Turn 中换任务 {#wait-closeout}
+
+“独立工作可以继续”还需要时间边界：某轮已绑定 T1，T1 发现依赖，并不意味着同一轮可以直接把结算身份改为 T2。
+
+以下为**源码进阶对照**，依据主线 `f49b4a00…` 的[原 Turn 等待恢复测试](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/tests/test_quota_bound_wait_recovery.py)。当前源码已包含该实现；固定版本链接用于复核，不能倒推为 `v1.2.3` 已发布行为，也不能在较旧 checkout 上直接执行。
+
+```text
+原 Turn 绑定 T1，登记 monitor_changed / todo_done 依赖
+    → 保持原身份，暴露 unsettled_host_turn_recovery
+    → 验证并完成原等待写回
+    → typed_blocked_writeback_no_spend，原 Turn 收口
+    → 新 Turn 重新选择可独立执行的 T2
+```
+
+该测试使用真实 CLI dispatch、TS 进程和 File/SQLite fixture。它断言同一 Turn 强行改绑得到 `heartbeat_receipt_identity_conflict`；原等待写回重放不重复记录，扣减为零；T1 仍为 open，等待条件未满足且验证摘要保留；新 Turn 才选中替代工作。它没有执行远端 CI，也没有证明每一种 Host 都用相同恢复入口。
+
+用户在旧版本遇到类似问题时，应保留原身份并查看本机实际提供的恢复动作；不得通过复制测试中的新字段或换 Todo 绕过。判断“是否等待”见[观察章](04b-budget-and-admission.md#wait-and-next-turn)，而不是把收口与调度揉成一条规则。
+
+## 尺度二：这一轮为什么获准？
+
+### Decision Pipeline：从事实到当前合同
+
+为了阅读，可以把输入整理为：
 
 ```text
 identity
-  -> authority and boundary
-  -> scoped decision
-  -> repair obligation
-  -> capability and workspace eligibility
-  -> frontier and continuation
-  -> interaction contract
-  -> scheduler
+  → authority and boundary
+  → scoped decision / repair obligation
+  → capability and workspace eligibility
+  → frontier and continuation
+  → interaction contract
+  → scheduler hint
 ```
 
-### 三个组合 Case
+这是依赖关系的教学图，不是新的全局 first-match 表。实际优先级取决于当前入口和规则 owner。不能由“余额充足”“Goal active”或“另一个 Agent 很忙”推出本轮允许任意交付。
 
-**Scoped Gate 与独立工作。** P0 被 scoped Gate 阻塞，另有独立 P1 时，user channel 保留
-Gate，agent channel 只执行明确选中的 P1。不能简化成“有 User Todo，所以整个 Goal 停止”。
+身份和来源不明时，不授予交付资格；scope 缺失时不能推断批准；独立工作不应被无关 Gate 冻结；有适用的恢复义务时不能用新交付掩盖原记录缺口。多个条件同时出现，先读最终 contract 与具名 reason，再追到负责的规则，不能让 Host 从零散计数重新拼一个决策。
 
-**未到期的 Monitor。** 没有 advancement work，且 Monitor 尚未到期时，正确结果是 quiet
-wait/backoff：不 poll、不 spend，也不停止 automation。`should_run=false` 不代表 Goal terminal。
+### 三个 channel 不是三次独立授权
 
-**Monitor、Gate 与 Replan 同时变化。** Due Monitor 产生新 Gate，同时 autonomous replan 到期时，
-先写 compact observation；再把 Gate 放进 user channel，并让 replan 形成 machine-visible
-frontier delta；最后重算 scheduler identity。不能因为 Monitor 本轮结束，就沿用旧 cadence quiet。
-
-这些 case 说明规则会组合，而不是互相覆盖。Gate 约束 authority，Monitor 表达何时观察，
-Replan 修订 frontier；只有最终 interaction contract 才定义本轮行为。
-
-需要阅读完整 decision table、九类组合 case、源码 seam 与 smoke 时，进入
-[Control-Plane Course 第 6 讲](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/)；
-Host、heartbeat、stateful backoff 和 scheduler receipt 的实现细节见
-[第 7 讲](/loopx/docs/development/control-plane-course/07-host-scheduler-and-heartbeat/)。
-
-### Quota 是决策编译器，不是余额检查
-
-“还剩多少配额”的直觉是减法思维：每次运行扣一次，耗尽就停。但一轮合法工作可能不需要 spend
-（monitor poll、dry-run、preflight），一轮 spend 也不等于做了有效交付（artifact 无 validation）。
-把 quota 理解为余额检查，会让系统在以下场景出错：
-
-- **PR checks 挂起时**：不能因为 goal 仍在 active 就调用模型。必须先等待外部结果，再决定下一步。
-- **连续 dry-run 或 preflight 失败**：spend 未发生，但系统不应无限重试。连续失败需要 repair 或
-  replan，而不是继续“尝试”。
-- **monitor 未到期**：不应因为“还有配额”就提前 poll，浪费外部资源。
-
-Quota 的正确模型是从 source facts 按稳定 precedence 编译成 interaction contract。它决定“本轮是否
-允许 delivery、允许什么行为、允许几次 spend”，而不是“余额 > 0 就开始”。五个关键 source facts
-及其决策含义：
-
-| Source Fact | 决策含义 |
+| Channel | 要回答的问题 |
 | --- | --- |
-| Goal 是否注册、Agent 是否识别 | 身份不明时 fail closed，不消耗任何资源 |
-| User Gate 是否阻塞当前 scope | 被阻塞的路径不执行，不被阻塞的 fallback 可以独立运行 |
-| Frontier 是否有 claimable Todo | 无可运行候选时进入 monitor/agent-scope wait，不消耗 agent 资源 |
-| 连续 delivery 是否缺乏 outcome | 多轮 surface-only 后，要求真正 outcome 或 self-repair，不无限交付 |
-| 外部 evidence 是否 fresh | 过期证据不能进入当前决策，必须先刷新 readback |
+| User | 有什么决定或通知需要人处理，覆盖什么 scope？ |
+| Agent | 当前是否需要尝试工作，允许哪项 bounded action？ |
+| CLI | 需要哪些受控写回、结算或恢复动作？ |
 
-禁止的捷径包括：凭“goal active”跳过 Gate、凭“曾有配额”跳过 workspace check、凭“用户未投诉”
-跳过 validation。这些都是把局部信号当成全局授权。
+G1 等待发布批准时，user channel 可以要求行动，agent channel 同时允许独立 T2。反之，“用户已看到提醒”不构成批准。`bounded_delivery`、`user_gate`、`scoped_user_gate_fallback`、`external_evidence_observation`、`monitor_quiet_skip`、`agent_scope_wait`、`autonomous_replan` 和 repair 等 mode 应结合当前 payload 阅读，不背成永远固定的枚举表。
 
-完整决策 table、九类组合 case 和规则优先级见
-[Control-Plane Course 第 6 讲](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/)。
+Owner 在 Workspace 停止 Goal 属于相应生命周期，不应先由自动 Turn 的 quota 决定 owner 能否行使该权限。暂停也不抹去历史提交；是否允许某项恢复 mutation，仍由那条入口判断。完整组合 case 见 [Course 第 6 讲](/loopx/docs/development/control-plane-course/06-quota-decision-kernel/)。
 
-## Bounded Delivery 的五段闭环
+### 规则归属不由语言名字决定
 
-一次正常交付至少包含五段：
+已迁移的事务由 TypeScript owner 解释，Python 负责适配或明确的外部 effect。已知切片包括 Turn settlement、Todo completion、Host Todo settlement、spend/void/monitor-poll commit、本地 task-lease 完整生命周期、Vision refresh 与 receipt-bound scheduler follow-up。
 
-```text
-Decide
-  -> Act
-  -> Validate
-  -> Write back
-  -> Account
+`v0.5.4` 仍提供 `turn plan` / `turn run-once`，这是历史迁移基线，不是当前发布版的替代标签，也不意味着“Python 已被移除”。[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)解释 transaction-payoff 与 owner 边界。排查不一致时，找当前合同和实际调用路径，而不是一律相信某一种语言。
+
+## 读回与本章的完成标准
+
+受对应 Turn journal 管理的执行可使用：
+
+```bash
+loopx turn inspect-journal \
+  --goal-id <goal-id> --agent-id <agent-id> \
+  --turn-key <turn-key> --format markdown
 ```
 
-### 1. Decide
+检查原身份、`recorded_effects` 与 `recovery_decision`。诊断命令不执行恢复，也不授予重试权限；没有记录或 `null` 不自动证明效果未发生。其他执行路径应使用自己的回执入口，不伪造一个 Turn key。
 
-读取 current decision，选择 `agent_channel.primary_action` 对应的 Todo。不得用旧 prompt、旧
-dashboard 卡片或上一次 `recommended_action` 覆盖当前 contract。
-
-### 2. Act
-
-完成一个可恢复的 bounded segment。Bounded 不等于“只改一行”，而是这个工作段：
-
-- 有明确输入与边界；
-- 产生 coherent artifact、observation 或 blocker；
-- 能独立验证；
-- 能形成下一项 Todo、等待条件或 no-follow-up。
-
-只读一个文件、重复“正在分析”或运行无关命令不构成交付。
-
-### 3. Validate
-
-验证必须检查真实 postcondition，而不是相信执行者自述：
-
-- 代码：focused test、contract test、smoke 或 build；
-- 文档：构建、链接、命令表面与 public-boundary scan；
-- 外部 effect：远端 readback、revision 或 service state；
-- blocker：缺失依赖、权限或可观察 handle 的明确证据。
-
-`process exited 0` 可能只证明工具启动成功。它不自动证明目标行为、外部状态或 acceptance。
-
-### 4. Write back
-
-验证后，通过 Todo lifecycle、event、evidence 或 `refresh-state` 把 compact truth 写回。写回至少
-说明：
-
-- 交付了什么；
-- 依据什么 revision / command / readback；
-- 哪个 acceptance 或 blocker 被推进；
-- 下一步、successor、replan 或 no-follow-up；
-- per-Agent Vision 是否改变。
-
-Raw transcript 和大段日志不应进入 public-safe state。
-
-### 5. Account
-
-只有 validated writeback 已经存在，才按 CLI channel 记录一次 quota spend。Gate notification、
-dry-run、失败 preflight、未变化 monitor poll、scheduler cadence change 和重复 writeback 都不应
-冒充 delivery spend。
-
-顺序不能倒置：
-
-```text
-wrong: act -> spend -> later decide whether it worked
-right: act -> independent validation -> durable writeback -> spend once
-```
-
-### 缺层的故障模式
-
-五段闭环是连续依赖链。缺哪一层，都会产生不同的故障，而不是“循环仍在继续”：
-
-| 缺失层 | 可见症状 | 后果 |
-| --- | --- | --- |
-| 缺 Validation | 有 artifact 但无 postcondition 检验 | 不合格交付进入 writeback，后续决策基于错误证据 |
-| 缺 Writeback | artifact 已生成但 Todo 仍 open | 下一 peer 看不到完成，重复工作或选错 frontier |
-| 缺 Refresh | Todo 已更新但 status/vision 还是旧值 | quota 选错目标，monitor 按过期条件判断 |
-| 缺 Spend | 交付已写回但没有 quota 记录 | quota accounting / delivery causality 不一致 |
-
-Validation 缺失最危险，因为它把内部信心当成了外部事实。Writeback 缺失最常见，因为 agent 在“完成
-工作”后跳过闭环，只保留了本地 artifact 或聊天记录。Refresh 缺失最隐蔽：表面上看状态正确，实际
-quota 和 monitor 在读取决策前已过时。
-
-这个证据阶梯的完整实验见
-[Control-Plane Course 第 8 讲](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)，
-其中包含每层的失败回放和修复路径。
-
-## Evidence、Receipt 与 Observation
-
-三个概念在一轮中承担不同责任：
-
-| 对象 | 证明什么 | 不证明什么 |
-| --- | --- | --- |
-| Observation | 某个时刻看到了什么 | 结论已被接受或仍然新鲜 |
-| Evidence | 哪些材料支持一个判断 | 状态转换已实际写入 |
-| Receipt | 某个 action/transition 在绑定输入与 revision 下被接受 | 外部世界永远不变 |
-
-例如 `git push` 超时后：
-
-- tool invocation 是 attempt；
-- `git ls-remote` 的结果是 readback observation；
-- remote ref 与 expected commit 相同可以成为 evidence；
-- LoopX 记录发布 transition 才形成 durable receipt。
-
-Proposal 也不是 effect。一个协议声明“建议 publish”不会自动授予凭据、权限或证明远端已经改变。
-
-## TurnEnvelope 与 LoopX Turn
-
-完整 quota decision 可能包含大量诊断信息。可选的
-[`loopx_turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
-把已经计算出的 decision 压缩成 bounded read model，保留：
-
-- selected Todo 与 effective action；
-- Gate、required reads 与 goal boundary；
-- capability/workspace guard；
-- validation、writeback 与 spend policy；
-- scheduler action；
-- compact contract capsule。
-
-TurnEnvelope 是 projection，不重新选择工作，也不改变 quota semantics。
-
-[`LoopX Turn`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
-进一步定义可选的 governed transaction：
-
-```text
-live decision
-  -> typed host request
-  -> Agent/Host candidate result
-  -> independent validator
-  -> durable writeback
-  -> one spend
-```
-
-Codex App heartbeat、Codex CLI visible Goal 或其他 Host 不必都用同一种 adapter 实现，但应保持同一
-控制语义：Host 负责执行与唤醒，LoopX decision 负责合法下一步，validator 不直接相信 Host 的
-完成声明。
-
-!!! info "当前成熟度"
-    TurnEnvelope 目前是显式启用的 bounded projection，不是默认 quota 输出；LoopX Turn 是
-    experimental protocol，但 `v0.5.4` 仍提供可执行的 `turn plan` / `turn run-once` 路径和
-    Host adapter。它们适合贡献者理解边界和做显式 opt-in 集成，不应被描述成所有 Host 都默认采用的
-    recurring runtime。
-
-### TypeScript Effect Program 在这一轮中的位置
-
-`v0.5.4` 在 Effect Program 基础上，进一步把完整 transaction 的 canonical semantics 迁到
-TypeScript：
-
-```text
-Python CLI / Host adapter
-  -> typed request
-  -> managed TypeScript Effect runtime
-  -> domain-owned decision or effect receipt
-  -> Python compatibility projection / explicit external Provider
-```
-
-已发布的 typed owner 包括 Turn settlement、Todo completion 与 Host Todo settlement，quota
-delivery routing、spend/void/monitor-poll commit，本地 task-lease 完整生命周期，Vision refresh、
-governed capability-lifecycle validation，以及 scheduler heartbeat/state 与 receipt-bound scheduler
-follow-up。Python 仍负责当前 CLI transport、明确的外部 Provider/Host effect、legacy projection 和
-尚未迁移的 Markdown/event 写回；不应把迁移理解成“Python 已被移除”，也不能在 Python facade 中
-重新实现同一条规则。
-
-当前 `main` 的
-[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
-把后续工作定义为 transaction-payoff：一次迁移应切走完整 transaction，并删除被替代的 Python
-semantic path；只增加 leaf handler、DTO 或 bridge call 不算迁移进展。
-
-## Monitor 与 Scheduler Hint
-
-当 frontier 只剩外部条件时，建立 `continuous_monitor`，而不是反复让 Agent 问“有变化吗”。一个
-Monitor 至少需要：
-
-- stable target key；
-- cadence 与 next due；
-- bounded observation handle；
-- material-change 判据；
-- expiry 或终止条件；
-- no-change accounting policy。
-
-`scheduler_hint` 把当前状态投影为 Host cadence，例如现在运行、等待 fresh evidence、等待重分配或
-按 monitor cadence 唤醒。它不是 execution permission：
-
-```text
-scheduler hint: when to wake
-interaction contract: what this turn may do
-```
-
-Host 即使在正确时间唤醒，也必须重新运行 current decision。旧 scheduler proposal、旧
-`should_run` 或旧 selected Todo 不能跨状态变化直接复用。
-
-### Scheduler 需要 apply、readback 与 ACK
-
-以 Codex App heartbeat 为例，`recommended_rrule` 只是目标 cadence。完整收敛链是：
-
-```text
-LoopX proposes recommended_rrule
-  -> Host applies one automation update
-  -> Host result / observed RRULE proves the actual cadence
-  -> run the exact ack_hint.cli_args
-  -> LoopX records reset token, identity and applied RRULE
-```
-
-协议上的几个关键分支：
-
-- `apply_needed=true`：Host 最多尝试一次 update；成功后执行 packet 中完整的
-  `ack_hint.cli_args`，失败或超时则不 ACK，并执行一次 `failure_hint.cli_args`；
-- `apply_needed=false, ack_needed=true`：Host readback 已精确匹配 proposal，跳过 no-op update，
-  直接执行绑定的 ACK；
-- `host_observation.status=drift_detected`：实际 cadence 与 ledger 不一致，旧 ACK 不能压过当前
-  readback，需要重新 repair；
-- terminal pause/stop：按 Host contract 验证停止结果，不把它伪装成普通 RRULE ACK。
-
-当前 ACK 使用 `quota scheduler-ack-current` 重新读取 latest hint。Host 必须执行 packet 给出的完整
-argv，因为其中可能绑定 registry、runtime profile、Agent identity 和 capability envelope；手抄
-reset token 或删掉全局参数会把 ACK 写到错误状态。
-
-Scheduler state 还绑定 `reset_token` 与 `identity_signature`。用户反馈、新 Todo、reassignment、
-Gate resolution 或 material evidence transition 会改变 identity，并把 cadence 恢复到当前 profile
-的初始值；连续 unchanged polls 才继续 backoff。Cadence apply、failure writeback 和 ACK 都不产生
-delivery quota spend。
-
-### 多 Monitor 交错时的 per-lane 计数
-
-当 M1 和 M2 两个 monitor 交替轮询时，如果只数“相邻 run 是否无变化”，M1 的 run 会打断 M2 的
-no-change streak，M2 也会打断 M1。最终两个 monitor 的 consecutive_no_change 都永远到不了阈值，
-系统无法进入 backoff，反而变成热轮询。
-
-正确做法是**每个 monitor todo 维护独立的 `consecutive_no_change` 计数器**。M2 有 material change
-时只重置 M2，M1 不受影响。回合顺序（A1、B1、A2、B2...）不会互相清零。
-
-这个 per-lane 设计也适用于多 agent 场景：每个 agent 的 monitor 是独立 lane，共享的是同一个
-frontier 读模型，但 no-change 判断是 per-lane 的。实现细节和交错实验见
-[Control-Plane Course 第 8 讲](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/)。
-
-## 一轮何时结束
-
-当前 Turn 可以以不同结果结束：
-
-- validated delivery + writeback + spend；
-- concrete blocker + recovery condition；
-- user Gate notification；
-- bounded external observation；
-- quiet monitor/no-candidate wait；
-- replan/repair delta；
-- terminal audit 后停止。
-
-“没有写代码”不一定是失败；Gate、wait 和 quiet no-op 可能正是协议要求的合法结果。反过来，写了
-很多代码也不代表这轮有效，如果它绕过 selected Todo、authority、workspace 或 validation。
-
-下一章解释跨 Turn 的恢复、自修复和 terminal closure，并把 Agent、Capability、Provider、
-Extension 与外部系统的运行责任放回同一事实边界。
+读完后应能解释：T1 在哪一版上被验证、什么 owner 接受了什么、哪些结算仍欠缺、M1/G1 为什么仍有责任，以及下一轮为什么可以做 T2 而不能直接发布 T3。再进入[恢复章节](04-runtime-boundaries.md)，把一次合法结果接到多轮推进。

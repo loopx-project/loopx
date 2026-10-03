@@ -1,5 +1,6 @@
 import { validAggregate, validPing, recordAggregate, aggregateStats, validGoalAggregate, recordGoals, goalStats } from "./basic-usage.ts";
 import { validDiagnostics, recordDiagnostics, diagnosticStats } from "./basic-usage.ts";
+import { validInstallationUsage, recordInstallation } from "./installation-usage.ts";
 // Pure request handling for the LoopX usage collector. worker.js binds it to
 // Cloudflare; tests bind it to an in-memory database.
 
@@ -140,6 +141,7 @@ export async function purge(db, day) {
     db.prepare("DELETE FROM goal_usage_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM usage_counts WHERE day < ?1").bind(shiftDays(day, -30)),
     db.prepare("DELETE FROM diagnostic_counts WHERE receipt_day < ?1").bind(shiftDays(day, -30)),
+    db.prepare("DELETE FROM installation_usage WHERE activity_day < ?1").bind(shiftDays(day, -29)),
     db.prepare("DELETE FROM installs WHERE install_id NOT IN (SELECT DISTINCT install_id FROM pings)"),
   ]);
 }
@@ -186,12 +188,12 @@ export async function handle(request, db, now = new Date()) {
     if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
     return json(await aggregateStats(db, shiftDays(day, -29)), 200, { "cache-control": "public, max-age=3600" });
   }
-  if (["/v0/ping", "/v1/ping", "/v1/aggregate", "/v1/goals"].includes(url.pathname)) {
+  if (["/v0/ping", "/v1/ping", "/v1/aggregate", "/v1/goals", "/v1/installation"].includes(url.pathname)) {
     if (request.method !== "POST") return json({ error: "method not allowed" }, 405, { allow: "POST" });
     if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) {
       return json({ error: "content-type must be application/json" }, 415);
     }
-    const limit = ["/v1/aggregate", "/v1/goals"].includes(url.pathname) ? 16384 : MAX_BODY_BYTES;
+    const limit = ["/v1/aggregate", "/v1/goals", "/v1/installation"].includes(url.pathname) ? 16384 : MAX_BODY_BYTES;
     // Bound streaming reads too: Content-Length can be absent or untrusted.
     const reader = request.body?.getReader();
     if (!reader) return json({ error: "missing body" }, 400);
@@ -213,6 +215,14 @@ export async function handle(request, db, now = new Date()) {
       parsed = JSON.parse(raw);
     } catch {
       return json({ error: "invalid JSON" }, 400);
+    }
+    if (url.pathname === "/v1/installation") {
+      if (!validInstallationUsage(parsed)) return json({ error: "invalid installation profile" }, 400);
+      if (parsed.profiles.some(row => row.activity_day > day || row.activity_day < shiftDays(day, -7))) {
+        return json({ error: "activity day outside retention window" }, 400);
+      }
+      await recordInstallation(db, parsed, day);
+      return new Response(null, { status: 204 });
     }
     if (url.pathname === "/v1/goals") {
       if (!validGoalAggregate(parsed)) return json({ error: "invalid goal aggregate" }, 400);

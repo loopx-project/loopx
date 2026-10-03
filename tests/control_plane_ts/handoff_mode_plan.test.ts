@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {HANDOFF_MODES, HANDOFF_MODE_PLAN_SCHEMA, planHandoffMode} from "../../loopx/control_plane/coordination/handoff_mode_policy.ts";
+import {EXECUTION_HANDOFF_MODES, HANDOFF_MODES, HANDOFF_MODE_PLAN_SCHEMA, planHandoffMode} from "../../loopx/control_plane/coordination/handoff_mode_policy.ts";
 import {handoffQuiescence} from "../../loopx/control_plane/coordination/handoff_mode_facts.ts";
 import {LEGACY_HANDOFF_PLAN_SCHEMA, planLegacyHandoffMode, patchHandoffMode} from "../../loopx/control_plane/coordination/handoff_mode_legacy_plan.ts";
 
@@ -13,7 +13,7 @@ const request = {schema_version: LEGACY_HANDOFF_PLAN_SCHEMA, frontmatter_text: "
 
 for (const previous of HANDOFF_MODES) for (const requested of HANDOFF_MODES) {
   for (const blockers of [false, true]) test(`${previous} -> ${requested}, blockers=${blockers}: legacy/canonical decision parity`, () => {
-    const expected = previous === requested ? "no_change" : blockers ? "rejected" : "apply";
+    const expected = requested === "legacy" ? "rejected" : previous === requested ? "no_change" : blockers ? "rejected" : "apply";
     const legacy = planLegacyHandoffMode({...request, previous_value: previous, requested_mode: requested,
       todos: blockers ? [claim] : [], leases: blockers ? [lease] : []});
     const canonical = planHandoffMode({schema_version: HANDOFF_MODE_PLAN_SCHEMA,
@@ -26,7 +26,7 @@ for (const previous of HANDOFF_MODES) for (const requested of HANDOFF_MODES) {
 }
 
 test("invalid persisted mode is an explicit repair; never a fabricated previous valid mode", () => {
-  for (const mode of HANDOFF_MODES) {
+  for (const mode of EXECUTION_HANDOFF_MODES) {
     const requestWithInvalid = {...request, previous_value: "banana", requested_mode: mode};
     const allowed = planLegacyHandoffMode(requestWithInvalid);
     assert.equal(allowed.outcome, "apply");

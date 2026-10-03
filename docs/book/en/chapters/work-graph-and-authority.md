@@ -1,347 +1,134 @@
 # Work graphs, authority, and peer collaboration
 
-A Todo is not an ordinary checklist item. Together with Gates, dependencies, claims, capabilities,
-workspaces, and evidence, it forms a computable work graph. This chapter explains how a Goal produces the
-current frontier and how equal peers collaborate without turning one Agent, Host, or conversation into a
-hidden leader.
+A can implement JSON, B can document it, and the maintainer can still withhold publication approval. A work graph makes these separate, identified pieces of work with dependencies and acceptance conditions. “Someone is working” does not permit every action.
 
-## What you should learn
+Separate assignment, execution proof and decision scope, then follow handoff through integration. Actual writes remain governed by the current authority, handoff mode and writer; this chapter adds no universal authorizer.
 
-After this chapter, you should be able to:
+## Split a task into acceptable work {#design-choice}
 
-- distinguish Goal, Acceptance, and per-Agent Vision;
-- distinguish an Agent Todo, User Gate, User Action, Monitor, and Blocker;
-- explain the different jobs of claims, leases, lifecycle authority, capability Gates, and workspace
-  guards;
-- use dependency, resume, successor, supersede, continuation, and no-follow-up to close work;
-- decide whether a Gate actually covers an action rather than freezing the Goal at any “waiting for user”
-  message;
-- explain why handoff transfers bounded state references instead of a complete transcript.
+In the [running example](00-reading-guide.md#running-example), T1 produces a compatible implementation, T2 produces matching documentation, M1 observes external state, G1 records a decision, and T3 delivers accepted results.
 
-## Goal, Acceptance, and per-Agent Vision
-
-These objects operate at different levels:
-
-| Object | Scope | Question it answers |
+| Choice | Problem addressed | Remaining cost |
 | --- | --- | --- |
-| Goal | Project | What outcome must the project achieve? |
-| Acceptance | Goal or explicit delivery stage | Which observable evidence is sufficient for completion? |
-| Agent Vision | `agent_id` | What direction, role scope, acceptance summary, and replan trigger does this peer currently own? |
+| One Agent continues | Simpler handoff and conflict handling | Still needs cross-session state, validation and external waiting |
+| Peers use soft claims | Makes responsibility and available work explicit | Claim alone does not exclude stale or competing instances |
+| Applicable writers use leases and fences | Current execution proof participates in controlled commit | TTL, revisions, renewal and recovery need handling |
+| Isolated workspaces and independent acceptance | Reduces direct editing interference | Does not replace integration validation or merge permission |
 
-Vision is not a global product vision or free-form scratchpad.
-[`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)
-defines it as bounded per-Agent execution-routing state. It can include:
+Do not decompose merely to increase Agent count. If B depends on each successive A result, both can remain on one critical path. Parallelism is useful when each can produce an independently verifiable result. Define input, artifact and downstream acceptance for each piece.
 
-- `role_scope`;
-- `vision_summary`;
-- `acceptance_summary`;
-- `advancement_policy`;
-- `replan_trigger_summary`;
-- the latest bounded patch.
+## Four judgments that must not be collapsed {#authority-layers}
 
-After material progress, a peer records whether Vision was patched, preserved with a reason, retired, or
-superseded. Without that checkpoint, quota may report `vision_checkpoint_missing` and require replan
-evidence before ordinary delivery.
-
-This protects against two kinds of drift:
-
-1. a busy Todo queue that no longer advances Goal acceptance;
-2. several peers working on the same Goal while each keeps an invisible private account of the next step.
-
-## A Todo is the smallest executable or waiting unit
-
-A Todo can carry:
-
-- role and priority;
-- `task_class` and `action_kind`;
-- dependency and resume condition;
-- required capability and write scope;
-- claim, lease, and continuation policy;
-- Gate, evidence, successor, and supersession references.
-
-It is not a complete project plan or a reminder that exists only in a prompt.
-
-### Five common work classes
-
-| Class | Owner | Typical meaning |
+| Judgment | Basis | Insufficient substitute |
 | --- | --- | --- |
-| `advancement_task` | Agent | Current implementation, documentation, analysis, or repair work |
-| `user_gate` | User/controller | A related action cannot legally continue without a decision |
-| `user_action` | User/controller | A person should act, but independent Agent work need not stop |
-| `continuous_monitor` | Agent/Host | Observe an external condition on a cadence and advance only on material change |
-| `blocker` | Agent/controller | An executable condition is missing and needs a concrete recovery path |
+| Does this work exist and remain actionable? | Current Todo source, status, dependencies and boundaries | An old list still showing open |
+| Who should handle it? | Claim, binding, exclusion and peer/lane rules | An Agent introduction or process name |
+| May this execution instance commit now? | Applicable lease, current owner/key/version and writer fence | An earlier successful acquire |
+| Is this action allowed? | Goal/repository permission, Gate scope, capability and workspace conditions | Callable tools, writable directories or available quota |
 
-Human-readable Todo text is useful. Machine routing must not infer the work class from prose alone.
+Agent identity denotes a work lane, not a Host or organizational rank. `claimed_by` is not process liveness, and a valid lease does not establish correct reasoning. Whether an external sink rejects a stale executor depends on that sink's enforcement; a local lease does not imply system-wide fencing.
 
-## The frontier is not the list of open Todos
+## Gates cover actions, not a global count
 
-The **frontier** is the set that survives every current guard:
-
-```text
-open todos
-  -> dependency and resume
-  -> decision scope and authority
-  -> agent claim and lifecycle authority
-  -> host capability
-  -> workspace and write scope
-  -> freshness and evidence
-  -> current frontier
-```
-
-Therefore:
-
-- open does not mean runnable;
-- priority does not bypass a Gate;
-- claimed does not prove the work is still executable;
-- capability does not grant authority;
-- Todo completion does not prove Goal completion.
-
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
-can render those relations. The graph remains a read-only projection; lifecycle changes still pass through
-Todo, Gate, refresh, and event protocols.
-
-## Claim, lease, and lifecycle authority
-
-These three concepts are often collapsed incorrectly.
-
-### Claim: soft work ownership
-
-A claim says “this peer currently owns the work.” It helps quota and other Agents avoid duplicate
-selection. It is not a lock, and it does not prove that the Agent is alive or in the correct worktree.
-
-### Lease: optional concurrent occupancy
-
-A lease is useful when an operation needs TTL, renewal, transfer, version/CAS, or an idempotent occupancy
-identity. It may protect an expensive or effectful execution, but it does not replace the Todo lifecycle.
-
-A system may have:
-
-- a claim without a lease;
-- a valid lease while a Gate still blocks execution;
-- reassignment after lease expiry;
-- a handoff that deliberately does not transfer the old lease.
-
-### Lifecycle authority: who may change state
-
-A claim answers who plans to execute. Lifecycle authority answers who may complete, supersede, reassign,
-or perform a special override. Delegating one lifecycle mutation to a peer does not turn that peer into a
-global leader.
-
-LoopX live multi-agent work uses an **equal peer** model. An Agent id is a work identity, not proof of a
-Host surface or organizational hierarchy. A `codex-*` name alone cannot prove Codex App or Codex CLI is
-currently running the work.
-
-## A Gate is scoped authority
-
-[`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
-requires a user or controller decision to identify:
-
-- `kind`, such as `private_read`, `write_scope`, `resource`, `production`, `public_claim`, or `direction`;
-- `granularity`, such as action, lane, goal, project, or global;
-- `scope_key`, a public-safe identity for the blocked operation;
-- optional expiry, decision id, and reason.
-
-An Agent Todo can declare `required_decision_scopes`. An unresolved Gate blocks the Todo only when its
-scope covers the selected action.
+G1 constrains T3's publication scope. T2 can continue if it is genuinely independent and satisfies its own conditions, while G1 remains visible to the user. Independent fallback does not bypass a Gate; it never performs the covered action.
 
 ```text
-Gate G1
-  decision_scope = public_claim:action:bilingual_homepage
-
-Todo A
-  required_decision_scopes = public_claim:action:bilingual_homepage
-
-Todo B
-  repair internal link checker
-  required_decision_scopes = none
+G1: publication scope remains unapproved
+T3: requires G1 → do not publish
+T2: does not require G1 and other conditions hold → current admission may select documentation
 ```
 
-G1 blocks A, not B. If a projection only says “waiting for user approval” and has no scope relation, repair
-the projection or ask the concrete question. Do not invent authority, and do not assume a global freeze.
+Missing or conflicting scope must not become guessed approval or an implicit global Gate. The source/projection/decision owner repairs the relationship or asks an authorized person a concrete question. A `user_action` reminder does not substitute for a `user_gate` decision.
 
-A `user_action` is not authority either. Seeing a reminder does not approve production, publication, or
-private reads.
+Owner operations have lifecycle authority; automated work has quota admission. Clicking a Workspace button creates no permission, and quota does not approve every owner operation. See [Workspace actions](workspace-v1.md#action-owners).
 
-## Capability Gate and workspace guard
+## Claims, leases and current execution proof
 
-Decision scope, capability, and workspace are independent axes:
+`handoff_mode` determines applicable constraints. Default `legacy` retains soft-claim/hard-lease compatibility; `soft_claim` and `hard_lease` have their own rules. Some legacy terminal paths can return `terminal_fence_not_required`. A regression in one mode is not proof of strong exclusion across every writer.
 
-| Boundary | Primary question | It does not prove |
+Promoted File/SQLite authority reads from the selected provider rather than falling back to old lease files. Source selection, registration and current Todo eligibility participate alongside the lease. `task-lease inspect` is an observation, not a lock held across subsequent work.
+
+| Lifecycle action | Meaning under the applicable contract | What the caller preserves |
 | --- | --- | --- |
-| Decision scope | Has the required user/controller decision been granted? | Whether this Host can execute |
-| Capability Gate | Does the Host/runtime provide the required ability? | Whether the action is authorized |
-| Workspace guard | Is the Agent in the correct repository, worktree, and write scope? | Whether the result is correct |
+| acquire | Obtain proof for a new legal execution | Work/execution identity, current conditions and result |
+| renew | Extend the current execution's validity | Current owner/key/version, not an arbitrarily old revision |
+| transfer | Hand execution to an eligible recipient | Exact sender proof, recipient and original request intent |
+| release | Legally retire the current proof | Original owner/key/version and operation receipt |
 
-An Agent may have publication approval while its Host lacks network capability. A Host may have shell and
-network access while running in the wrong worktree. Neither case is safe to execute.
+This table does not define generic CLI arguments. Use current help and actual readback: renewal, transfer and release differ in revision, epoch and cleanup rules. See [recovery](04-runtime-boundaries.md#recovery-or-new-execution) for historical replay versus a new acquisition.
 
-Combine these boundaries in the current decision. Do not copy a project-specific `if` chain into an
-automation prompt.
+### What happens when an old executor returns?
 
-## Dependency, resume, and successor
+A can retain a historical receipt after B holds a new current proof. That does not let A keep writing. Read history separately from the current lease. Use the original operation to recover history, and current admission to start new work.
 
-A work graph must explain not only “A before B,” but also how work resumes after waiting.
-
-### Dependency
-
-Names durable facts or Todos that the current item requires.
-
-### Resume condition
-
-Names a machine-readable condition that lets blocked or deferred work re-enter replanning, such as:
-
-```text
-todo_done:<todo-id>
-pr_merged:<pr-id>
-capacity_available:<capability>
-monitor_changed:<monitor-todo-id>
+```mermaid
+flowchart TD
+    S["Read current Todo / mode / lease"] --> K{"Original outcome confirmed?"}
+    K -->|"No"| R["Recover readback under original identity"]
+    K -->|"Yes"| N{"Starting a new execution?"}
+    R --> Q{"Readback confirmed?"}
+    Q -->|"No"| B["Retain uncertainty and recovery responsibility"]
+    Q -->|"Yes"| S
+    N -->|"No"| H["Retain historical result"]
+    N -->|"Yes"| A["Check current assignment, authority and workspace"]
+    A --> P["Obtain current proof through applicable lifecycle"]
+    P --> W["Controlled execution, validation and commit"]
 ```
 
-A satisfied condition does not always make the old Todo runnable. The task may be stale and require a
-successor replan.
+An identical Agent name, restarted terminal or old success screenshot does not bypass this path. `version_mismatch` calls for current-state inspection. `idempotency_key_reuse` after release is not repaired by editing a historical key.
 
-### Successor
+## Follow a handoff through integration {#handoff-to-integration}
 
-Creates the next identified unit of work after completion. A successor moves “what happens next” into the
-durable graph rather than leaving it in the completed Agent's chat.
+Handoff is more than sending a message. A recipient must know which work was received, which input was adopted, and which conditions remain, then confirm eligibility in its actual execution environment.
 
-### Supersede
+**First, A returns a concrete artifact.** T1 references C1, validation declarations/results and outstanding M1/G1, not merely “JSON is done.”
 
-Replaces obsolete work with a new Todo while preserving lineage. Do not mark invalidated work as done.
+**Second, B identifies the adopted input.** Documentation follows C1's field contract. An inaccessible artifact is a missing handoff input, not a reason to reimplement T1. Handoff uses bounded references and legal retrieval, not a public copy of every private transcript.
 
-### No-follow-up
+**Third, assignment changes legally.** Whether lease transfer also updates the Todo claim depends on the selected command. Do not assume lease-only transfer changes claim, or replace an atomic handoff with two manual writes. Recipients must still satisfy registration, binding, exclusion, scope and workspace conditions. Follow the version scope in the [canonical lease reference](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md).
 
-When no successor is necessary, record why acceptance is closed or why later work is outside the Goal.
-Structured no-follow-up is more auditable than “looks finished.”
+**Fourth, validate the combination after validating each artifact.** T1 code checks and T2 example checks establish their own outcomes. Integration must test the two on one candidate revision. Two green branches do not prove a green combined commit.
 
-## Continuation and handoff
+**Fifth, propagate relevant changes through dependencies.** When A revises C1 to C2, B checks whether field or behavior changes affect documentation and validation. Retain history and update affected conclusions. C1-based work is neither automatically worthless nor automatically valid for C2.
 
-After a Todo completes, two common continuation policies are:
+**Sixth, return the result to its acceptor.** T3 reassesses current artifacts and decisions. Message delivery, recipient input adoption, work acceptance, publication permission and actual external delivery each require appropriate evidence. None alone establishes the whole chain.
 
-- `same_agent_non_delivery`: the same peer performs a bounded follow-up that is not an independent
-  delivery;
-- `independent_handoff`: the successor remains unclaimed so any qualified peer may take it unless an
-  explicit assignment says otherwise.
+This six-step teaching case does not claim automatic coordination across every Host, device or repository. Qualify the relationships the user actually needs.
 
-Completing one item does not give an Agent ownership of the whole Goal.
+## Workspace isolation is not integrated correctness {#parallel-editing}
 
-A handoff also does not copy the transcript. A bounded handoff should let the receiver reconstruct:
+Ordinary conservative coordination excludes conflicting write scopes. A newer collaborative-editing mode can permit some same-path edits while still withholding merge authority.
 
-- Goal, Todo, and stop condition;
-- current revision and workspace;
-- Gate, capability, and authority boundary;
-- evidence and material references with freshness;
-- next action and validation;
-- omitted or private material that must be reacquired through a legal route.
+This is an **advanced source comparison**: main `f49b4a00…` documents an explicit `--write-worktree` path in the [independent-worktree reference](https://github.com/loopx-project/loopx/blob/f49b4a00870604d39fa4318da24d6dd35e72bb6e/docs/reference/canonical-lease-renew.md). The current source includes that implementation; the explanation follows its existing contract and must not be backdated to released `v1.2.3` behavior.
 
-The receiver reruns current guards. The prior Agent's receipt does not grant source permission to the new
-Agent, and an old workspace observation does not prove the environment stayed unchanged.
+On that promoted File/SQLite path, verified sibling worktrees on one machine can hold overlapping code-edit scopes under specified conditions, returning `integration_overlap_advisories`. Repository identity comes from the authoritative Todo. Host/path aliases, the same Todo or worktree, unverified workspaces and other machines retain their applicable exclusion rules.
 
-## Multi-repository and parallel work
+| Condition established | What it supports | What remains unproved |
+| --- | --- | --- |
+| Verified workspace isolation | Edits occur in distinguished checkouts | Permission to modify shared runtime data or Git administration |
+| Accepted lease admission | The coordination mode permits this execution | Wider tool permission or a cross-Goal global lock |
+| Both changes independently validated | Each artifact satisfies checked conditions | Correct behavior after combining them |
+| Integration validation passed | This combination satisfies relevant checks | Merge, remote-write or publication authority |
 
-One business outcome may span several Git repositories. That does not require several unrelated Goals when
-acceptance and decision authority belong to one result. Keep one Goal and give every Agent Todo explicit
-repository scope:
+This is cooperative code-edit coordination, not an OS sandbox. Reads and renewals do not upgrade old grants into the new mode. Change execution intent through legal retirement and new proof. Installing a provider or renaming a directory does not promote authority or grant permission.
 
-```text
-todo_id
-task_repository = git:github.com/owner/repo
-required_write_scopes = src/**, tests/**
-claimed_by = <registered-peer>
-continuation_policy = independent_handoff | same_agent_non_delivery
-```
+## Preserve dependencies and successors
 
-`task_repository` is a credential-free repository identity. It selects the repository for workspace
-isolation and **does not grant write authority**. Claims, leases, Goal boundaries, and repository
-maintainer policy still apply.
+`todo_done:<todo-id>`, `monitor_changed:<todo-id>`, `capacity_available:<capability>` and `pr_merged:<pr-id>` express different resume conditions. A satisfied condition informs the next judgment; it need not automatically change persisted Todo status.
 
-The current
-[`peer_agent_runtime_v1`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md)
-and `workspace_guard` require a repository-writing selected Todo to run from a linked independent worktree
-whose origin matches `task_repository`. A matching repository is necessary but not sufficient: the
-canonical checkout may still be rejected.
+Cross-repository dependencies require correct repository identity. `pr_merged:#123` may resolve from the Todo's GitHub `task_repository`; `pr_merged:owner/repo#123` supplies an explicit target. If neither resolves the repository, do not guess from an equal PR number.
 
-### Work that can run in parallel
+A successor identifies subsequent work. Supersede preserves replacement lineage; its lifecycle records the predecessor as done with the replacement marker. No-follow-up explains why this route needs no successor and does not automatically accept the whole Goal. Read actual `independent_handoff` or `same_agent_non_delivery` policy from writeback, not from prose.
 
-| Work type | Parallel policy |
-| --- | --- |
-| Research, source location, triage, read-only review | Fan out, then collect bounded evidence |
-| Implementation in different repositories | Bind each Todo to its own `task_repository` and worktree |
-| One repository with disjoint write scopes | Parallelize only when scopes are proven disjoint and validation is independent |
-| One file or shared schema/state machine | Default to serial work or split an owner/seam first |
-| External effects, merge, or publish | Keep scoped Gates and repository policy authoritative |
+## Inspect named evidence boundaries
 
-A claim is a soft owner, not a lock. Only Hosts with a demonstrated concurrent-write problem need the
-optional `task_lease_v0`. Current quota does not automatically consume a hard lease, so documentation must
-not imply that a server already arbitrates every concurrent write.
+| Claim to check | Source-test entry | What it must not become |
+| --- | --- | --- |
+| Historical acquire differs from current proof | `tests/control_plane/test_canonical_lease_acquire.py` | Proof of every concurrency and TTL case |
+| Current records govern renewal and transfer | `test_canonical_lease_renew.py`, `test_canonical_lease_lifecycle.py` | Enforcement at every external sink |
+| Old writers cannot bypass an active source fence | `test_legacy_coordination_writer_fence.py` | All legacy modes have been removed |
+| Runtime-root override does not bypass source fencing | `test_split_root_todo_writeback_fence.py` | A CLI argument grants extra permission |
 
-### Multi-repository example
+These tests establish their named inputs and writer boundaries, not the health of a live Goal. See the [lease exercise](12-control-plane-course.md#checkpoint-lease) for assertions and the [appendix](appendix-reference.md#read-before-change) for actual inspection.
 
-Suppose one release changes four repositories:
-
-```text
-Goal: ship-cross-repo-release
-├── Todo A -> repo-a -> agent-a -> worktree-a
-├── Todo B -> repo-b -> agent-b -> worktree-b
-├── Todo C -> repo-c -> agent-c -> worktree-c
-└── Todo D -> integration verification -> waits for A/B/C evidence
-```
-
-A, B, and C may run in parallel. D cannot infer readiness from prose. Each implementation Todo writes back
-an exact revision, validation, and completion evidence; D enters the frontier only after dependencies and
-fresh readback agree.
-
-Cross-repository PR conditions also need repository identity. `resume_when=pr_merged:#123` is satisfied
-only when the Todo's GitHub `task_repository` matches the merge-event repository. Use
-`pr_merged:owner/repo#123` across repositories. Missing repository identity fails closed instead of
-guessing from the PR number.
-
-### Automation that is not currently shipped
-
-The product does not promise “point LoopX at a root folder and it automatically runs four Goals in
-parallel,” nor a cloud coordinator that chooses devices and claims work. Bounded multi-agent orchestration
-can enable child-agent planning, while peer identity, claim, workspace guard, Gate, and writeback remain
-per-Todo contracts. Cross-device online authority remains a Draft design boundary.
-
-## Three ways a work item leaves the active frontier
-
-A Todo should leave the active frontier through one of these outcomes:
-
-1. **Completed with evidence**: delivery and validation both hold.
-2. **Superseded with lineage**: direction changed and a replacement Todo takes over.
-3. **Blocked or deferred with a resume contract**: a concrete condition is missing and recovery remains
-   durable.
-
-Deleting an item from a list is not a lifecycle transition.
-
-Goal terminal closure needs additional checks:
-
-- acceptance is satisfied;
-- no unresolved Gate remains;
-- no due monitor, pending external effect, or stale readback remains;
-- no successor, replan obligation, or acceptance gap remains;
-- no retryable postcondition remains;
-- no-follow-up is explicit where required.
-
-## Protocol reading routes
-
-For work-graph or authority changes, start with:
-
-- [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
-  for read-only dependency, Gate, validation, repair, and handoff relations;
-- [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
-  for coverage and fail-closed authority;
-- [`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)
-  for per-Agent Vision and replan checkpoints;
-- [Peer Agent Runtime v1](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md)
-  for equal peer identity and continuation;
-- [Host Integration Surface](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)
-  for claims, optional leases, capability, and Host boundaries.
-
-For changes involving equal peers, lifecycle authority, handoff, dependencies, or successors, continue to
-[Control-Plane Course Lesson 5](/loopx/docs/development/control-plane-course/05-work-graph-and-peers/).
-The course provides combined cases and source walkthroughs; this chapter preserves the work-graph and
-authority model needed by external contributors.
-
-The next chapter compiles these facts and authorities into one governed Turn: who acts, who waits, which
-channel informs the user, and when writeback and spend are legal.
+Collaboration succeeds when the recipient knows what it adopted, the current executor has applicable proof, integration has an owner, and outstanding decisions have a destination. Repair an unclear scope, proof or input relationship instead of redistributing every task and hoping for a different result.

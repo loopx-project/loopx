@@ -5,12 +5,13 @@ from pathlib import Path
 
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _run_generated_cli,
-    _spend_run_count, _write_fixture,
+    _spend_run_count, _write_fixture, _configure_read_only_todo,
 )
 
 
 def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Path) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
     prior_turn = "interrupted-original"
     recovery_turn = "interrupted-recovery"
 

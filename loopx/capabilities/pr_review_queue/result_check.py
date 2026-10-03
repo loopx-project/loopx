@@ -1,18 +1,28 @@
 """Check a review's declared evidence for consistency, never its truth."""
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from .review_contract import (
     COMPATIBILITY_ASSESSMENT,
     OUTCOME_IMPACT_ASSESSMENT,
+    PROBLEM_EXPLANATION_PUBLICATION,
+    REVIEWER_DECLARATION,
     SCOPE_COVERAGE_ASSESSMENT,
     SEMANTIC_CANDIDATE_DECISIONS,
+    SPEC_BASIS_ASSESSMENT,
     VALIDATION_FAILURE_ATTRIBUTION,
     build_review_execution_contract,
     build_review_plan,
 )
-from .review_body import check_review_body
+from .review_body import (
+    check_review_body,
+    normalized_review_prose,
+    review_section_text,
+    reviewer_declaration_lines,
+    visible_review_text,
+)
 
 
 def _missing(value: object) -> bool:
@@ -206,6 +216,141 @@ def _check_outcome_impact(blockers: list[str], value: object) -> None:
                             fields=["acceptance_basis", "bounded_cost_and_recovery"])
 
 
+# The declaration names a product family, so the characters that mark a URL,
+# path, host:port, account or ARN have no place in it. This is a shape rule,
+# not a product-name denylist. Known false positive: router- or
+# version-qualified ids such as `vendor/model` or `model@version` are rejected;
+# declare the product-family name instead. A typed runtime-reported identity
+# would replace this text check once a host supplies one.
+_DECLARED_NAME_FORBIDDEN = re.compile(r"[/:@]")
+_PUBLISHED_LINE_FORBIDDEN = re.compile(r"://|@")
+
+
+# Same full-length object ids the packet accepts for an exact head.
+_COMMIT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def _published_as_token(reference: str, text: str) -> bool:
+    # A whole-token match: EX-1 inside EX-10, or C1 inside a commit id, does not
+    # name the criterion to a reader.
+    pattern = rf"(?<![0-9a-z_-]){re.escape(reference)}(?![0-9a-z_-])"
+    return re.search(pattern, text) is not None
+
+
+def _reviewer_errors(value: object, body: str) -> list[str]:
+    key = "reviewer"
+    contract = REVIEWER_DECLARATION
+    if not isinstance(value, Mapping):
+        return [f"{key}:missing_declaration"]
+    actor_kind = value.get("actor_kind")
+    if actor_kind not in contract["actor_kinds"]:
+        return [f"{key}:invalid_actor_kind"]
+    errors: list[str] = []
+    if value.get("declaration_source") not in contract["declaration_sources"]:
+        errors.append(f"{key}:invalid_declaration_source")
+    declared: list[str] = [str(actor_kind)]
+    if actor_kind == "model_agent":
+        for field in contract["model_agent_fields"]:
+            text = value.get(field)
+            if not isinstance(text, str) or not text.strip():
+                errors.append(f"{key}:missing_field:{field}")
+            elif _DECLARED_NAME_FORBIDDEN.search(text):
+                errors.append(f"{key}:not_a_product_family_name:{field}")
+            else:
+                declared.append(text.strip())
+    lines = reviewer_declaration_lines(body)
+    if len(lines) != 1:
+        errors.append(f"{key}:body_line_missing_or_ambiguous")
+    elif _PUBLISHED_LINE_FORBIDDEN.search(lines[0]):
+        errors.append(f"{key}:body_line_carries_runtime_detail")
+    elif any(not _published_as_token(token.casefold(), lines[0].casefold())
+             for token in declared):
+        errors.append(f"{key}:body_line_disagrees_with_declaration")
+    return errors
+
+
+def _check_spec_basis(blockers: list[str], value: object) -> None:
+    key = "problem_context:spec_basis"
+    contract = SPEC_BASIS_ASSESSMENT
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["fields"])
+    if not isinstance(value, Mapping):
+        return
+    decision = value.get("decision")
+    if decision not in contract["decision_values"]:
+        blockers.append(f"{key}:invalid_decision")
+        return
+    source = value.get("spec_source")
+    if source not in contract["spec_source_values"]:
+        blockers.append(f"{key}:invalid_spec_source")
+    if decision in contract["blocking_decisions"]:
+        blockers.append(f"{key}:blocking_decision")
+    if decision == "no_spec" and source != "none":
+        blockers.append(f"{key}:no_spec_cannot_cite_a_source")
+    if decision != "mapped":
+        return
+    if source == "none":
+        blockers.append(f"{key}:mapped_without_spec_source")
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["mapped_fields"])
+    # The reference and revision are published and matched against the body, so
+    # a non-string value would pass the non-empty check and then never be
+    # compared; require text here, as for criterion_id below.
+    for field in contract["published_text_fields"]:
+        text = value.get(field)
+        if not _missing(text) and (not isinstance(text, str) or not text.strip()):
+            blockers.append(f"{key}:invalid_{field}")
+    revision = value.get("spec_revision")
+    if (source in contract["commit_pinned_spec_sources"] and isinstance(revision, str)
+            and revision.strip() and not _COMMIT_ID.fullmatch(revision.strip().lower())):
+        blockers.append(f"{key}:spec_revision_not_a_commit_id")
+    criteria = _require_items(
+        blockers, evidence_id=key, row=value,
+        requirement={"items_field": "criteria", "item_fields": contract["criterion_fields"],
+                     "item_count": {"minimum": 1}},
+    )
+    seen: set[str] = set()
+    for criterion in criteria:
+        # Membership, hashing and publication all assume a public identity.
+        # A bool hashes and is non-empty, and a non-string identity silently
+        # falls out of the published-body check, so validate the type here
+        # rather than letting a later set or dict operation decide.
+        criterion_id = criterion.get("criterion_id")
+        if not isinstance(criterion_id, str) or not criterion_id.strip():
+            blockers.append(f"{key}:invalid_criterion_id")
+            continue
+        if criterion_id in seen:
+            blockers.append(f"{key}:duplicate_criterion:{criterion_id}")
+        seen.add(criterion_id)
+        disposition = criterion.get("disposition")
+        if not isinstance(disposition, str) or disposition not in contract["disposition_fields"]:
+            blockers.append(f"{key}:invalid_disposition:{criterion_id}")
+            continue
+        _require_fields(blockers, evidence_id=f"{key}:{criterion_id}", value=criterion,
+                        fields=contract["disposition_fields"][disposition])
+        if disposition in contract["blocking_dispositions"]:
+            blockers.append(f"{key}:unmet_criterion:{criterion_id}")
+
+
+def _unpublished_spec_references(value: object, body: str) -> list[str]:
+    # The structured result stays local; another operator reads only the body.
+    # A path alone moves with the branch, so the immutable revision the review
+    # judged against has to travel with it for that reader to open the same text.
+    if not isinstance(value, Mapping) or value.get("decision") != "mapped":
+        return []
+    text = visible_review_text(body).casefold()
+    references = [value.get("spec_ref"), value.get("spec_revision")]
+    criteria = value.get("criteria")
+    if isinstance(criteria, list):
+        references += [item.get("criterion_id") for item in criteria if isinstance(item, Mapping)]
+    # Non-text identities are rejected by _check_spec_basis; they are skipped
+    # here only because they have no text to look for in the body.
+    return [
+        f"review_body:spec_reference_not_published:{reference}"
+        for reference in references
+        if isinstance(reference, str) and reference.strip()
+        and not _published_as_token(reference.strip().casefold(), text)
+    ]
+
+
 def _check_scope_coverage(blockers: list[str], value: object) -> None:
     key = "observable_semantics:scope_coverage"
     contract = SCOPE_COVERAGE_ASSESSMENT
@@ -237,6 +382,25 @@ def _check_scope_coverage(blockers: list[str], value: object) -> None:
             blockers.append(f"{key}:missing_case_reason:{case_id}")
         if case_id == "covered_subject" and status != "passed":
             blockers.append(f"{key}:covered_subject_not_proven")
+
+
+def _unpublished_problem_explanation(context: object, body: str) -> list[str]:
+    """Bind the public motivation to evidence; do not grade its semantics."""
+    if not isinstance(context, Mapping):
+        return ["review_body:problem_explanation_missing"]
+    fields = list(PROBLEM_EXPLANATION_PUBLICATION["fields"])
+    if context.get("verdict") == "justified_increment":
+        fields.extend(PROBLEM_EXPLANATION_PUBLICATION["increment_fields"])
+    motivation = normalized_review_prose(review_section_text(
+        body, PROBLEM_EXPLANATION_PUBLICATION["section"]))
+    errors: list[str] = []
+    for field in fields:
+        text = context.get(field)
+        if not isinstance(text, str) or not normalized_review_prose(text):
+            errors.append(f"review_body:problem_explanation_not_text:{field}")
+        elif normalized_review_prose(text) not in motivation:
+            errors.append(f"review_body:problem_explanation_not_published:{field}")
+    return errors
 
 
 def check_review_result(
@@ -302,6 +466,7 @@ def check_review_result(
             requirement = requirements[key]
             if key == "problem_context":
                 _check_outcome_impact(blockers, row.get("outcome_impact"))
+                _check_spec_basis(blockers, row.get("spec_basis"))
             if key == "code_volume":
                 _check_compatibility_assessment(blockers, row.get("compatibility_assessment"))
             if key == "observable_semantics":
@@ -402,6 +567,14 @@ def check_review_result(
                              head_oid=str(matches[0].get("head_oid") or ""),
                              behavior_bearing=applicability.get("behavior_bearing_change") is True)
     errors.extend(f"review_body:{reason}" for reason in body["invalid_reasons"])
+    body_text = str(result.get("review_body") or "")
+    errors.extend(_reviewer_errors(result.get("reviewer"), body_text))
+    problem_context = evidence.get("problem_context")
+    errors.extend(_unpublished_problem_explanation(problem_context, body_text))
+    errors.extend(_unpublished_spec_references(
+        problem_context.get("spec_basis") if isinstance(problem_context, Mapping) else None,
+        body_text,
+    ))
     if body["verdict"] is not None and body["verdict"] != verdict:
         errors.append("review_body:verdict_mismatch")
     if verdict not in {"APPROVE", "REQUEST_CHANGES"}:

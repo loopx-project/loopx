@@ -631,6 +631,32 @@ Every attempted tick returns one result kind:
 | `validation_failed` | Host output exists but task validation failed or is inconclusive. | Preserve failure evidence and route to repair/replan. |
 | `writeback_failed` | Validated work could not be durably recorded. | Do not spend; retry idempotent writeback before more delivery. |
 
+### Settlement identity decoding / 结算身份解码
+
+Executable settlement decodes exactly one Todo or autonomous-replan binding in
+`effect_program.ts`. Goal, Agent, Turn and active binding IDs must be non-empty
+strings. Declared `binding_kind` and `binding_id` must agree with that target;
+scoped v1 requires both fields. Unknown declared versions and v0 replan records
+are rejected. Legacy Todo v0 records may omit binding metadata, and supported
+schema-less adapter records remain readable. Generated payloads and effect IDs
+are unchanged; unbound planning identities cannot authorize settlement.
+
+This tightens previously permissive malformed-input handling: invalid identities
+return `invalid_identity` before writeback, spend or receipt replay. Journal
+inspection reports `settlement_identity_invalid` and blocks recovery without
+rewriting the stored record. A valid shape still needs current authority and the
+existing commit-time fences.
+
+可执行结算由 `effect_program.ts` 解码唯一的 Todo 或自主 replan 绑定。Goal、Agent、
+Turn 及有效 target ID 必须是非空字符串；声明的 `binding_kind`／`binding_id` 必须
+与 target 一致，scoped v1 必须同时提供两者。不支持的声明版本和 v0 replan 记录会
+被拒绝；旧 Todo v0 可省略 binding metadata，支持的无 schema adapter 记录继续
+可读。生成的 payload 和 effect ID 不变，unbound 规划身份不能授权结算。
+
+本修订收紧此前宽松的损坏输入处理：非法身份在 writeback、扣额或 receipt replay
+前返回 `invalid_identity`。Journal inspection 报告 `settlement_identity_invalid`，
+阻止恢复且不重写记录。合法结构仍需通过当前权限及已有 commit-time fence。
+
 ### In-flight Turn settlement / 在途 Turn 结算
 
 A Todo can stay open across several bounded Turns. An exact accountable

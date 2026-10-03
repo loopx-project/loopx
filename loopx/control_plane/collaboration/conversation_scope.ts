@@ -1,6 +1,4 @@
-import type {JsonObject} from "../effect_program.ts";
-
-type ConversationScope = JsonObject & (
+type ConversationScope = Record<string, unknown> & (
   | {kind: "owner_portfolio"; goal_ids: null; private_conversation: true}
   | {kind: "owner_goal"; goal_ids: [string]; private_conversation: true}
   | {kind: "external_audience" | "unavailable"; goal_ids: []; private_conversation: false}
@@ -9,7 +7,7 @@ type ConversationScope = JsonObject & (
 /** Classify a host-owned conversation, never model-supplied role or scope.
  * This selects existing read/delivery boundaries; it grants no execution rights.
  */
-export function resolveConversationScope(input: JsonObject): ConversationScope {
+export function resolveConversationScope(input: Record<string, unknown>): ConversationScope {
   const channel = input.channel_id;
   const goal = input.goal_id;
   if (channel === "manager") {

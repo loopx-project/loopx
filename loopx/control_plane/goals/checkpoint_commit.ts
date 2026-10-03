@@ -13,7 +13,17 @@ import {requireLocalAuthorityRuntimeRoot} from "../coordination/local_authority_
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {legacyCoordinationTodoLockPath} from "../coordination/legacy_writer_lock_paths.ts";
 import {shadowMaintenanceLockPath, requireShadowPrimaryWriteAllowed} from "../coordination/shadow_management.ts";
-import {readQuotaSettlement, QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA} from "../quota/settlement_readback.ts";
+import {
+  QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+  readAdmittedQuotaSettlementFromSnapshot,
+  readQuotaSettlementFromSnapshot,
+  readQuotaSettlementSnapshot,
+} from "../quota/settlement_readback.ts";
+import {
+  parseQuotaAccountingOwner,
+  quotaAccountingOwnerLocks,
+  requireCurrentQuotaAccountingOwner,
+} from "../quota/source_admission.ts";
 import {evaluateCheckpointReadContext} from "./checkpoint_read_context.ts";
 import {withCheckpointAuthority} from "./checkpoint_authority.ts";
 import {goalPathSegment} from "../rollout_receipt_log.ts";
@@ -112,16 +122,29 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
   const statePath = resolve(requireNonEmptyString(request.state_file, "state_file"));
   const targets = [indexPath, shadowMaintenanceLockPath(root, identity.goal_id),
     legacyCoordinationTodoLockPath(root, identity.goal_id), statePath].map(path => resolve(path));
+  const owner = parseQuotaAccountingOwner({
+    goalRefValue: request.goal_ref,
+    sourceAdmissionValue: request.source_admission,
+    runtimeRoot: root,
+    goalId: identity.goal_id,
+  });
   const retry = requireJsonObject(request.refresh_retry, "refresh retry");
   const receiptPath = join(root, "goals", identity.goal_id, "checkpoint-contexts",
     `${createHash("sha256").update(identity.effect_id).digest("hex")}.json`);
 
   async function admission(): Promise<JsonObject> {
     indexBytes(indexPath);
-    return await readQuotaSettlement({schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+    const value = {schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
       runtime_root: root, goal_id: identity.goal_id, agent_id: identity.agent_id, todo_id: identity.todo_id,
       replan_obligation_id: identity.replan_obligation_id, turn_instance_id: identity.turn_instance_id,
-      infer_turn_instance_id: false, allow_unbound_binding: false, refresh_retry: retry});
+      infer_turn_instance_id: false, allow_unbound_binding: false, refresh_retry: retry,
+      ...(owner.kind === "exact_source"
+        ? {goal_ref: request.goal_ref, source_admission: request.source_admission}
+        : {})};
+    const snapshot = await readQuotaSettlementSnapshot(root, identity.goal_id);
+    return owner.kind === "exact_source"
+      ? readAdmittedQuotaSettlementFromSnapshot(value, snapshot)
+      : readQuotaSettlementFromSnapshot(value, snapshot);
   }
   function replay(readback: JsonObject): JsonObject | null {
     const recovery = requireJsonObject(readback.refresh_recovery, "refresh recovery");
@@ -134,33 +157,85 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
     return committedArtifacts(prior, runsDir);
   }
 
-  const claims: {target: string; token: string; claim: FileMutationLockClaim}[] = [];
+  const claims: {
+    target: string;
+    token: string;
+    claim: FileMutationLockClaim;
+    borrowed: boolean;
+  }[] = [];
   let adopted = false;
+  let sourceClaimed = false;
   try {
     if (!Array.isArray(request.locks) || request.locks.length !== targets.length) {
       throw new EffectRuntimeRequestError("checkpoint requires the complete internal lock handoff");
     }
-    for (const [i, value] of request.locks.entries()) {
+    const checkpointWitnesses = request.locks.map((value, i) => {
       const witness = requireJsonObject(value, "lock witness");
       const token = requireNonEmptyString(witness.token, "lock token");
       if (resolve(String(witness.target)) !== targets[i]) throw new EffectRuntimeRequestError("checkpoint lock target mismatch");
-      const claim = await claimFileMutationLock(targets[i], token);
+      return {
+        target: targets[i],
+        pid: witness.pid,
+        token,
+      };
+    });
+    const sourceLocks = quotaAccountingOwnerLocks(owner);
+    if (
+      owner.kind === "exact_source"
+      && (
+        sourceLocks[0].target !== checkpointWitnesses[0].target
+        || sourceLocks[0].pid !== checkpointWitnesses[0].pid
+        || sourceLocks[0].token !== checkpointWitnesses[0].token
+      )
+    ) {
+      throw new EffectRuntimeRequestError(
+        "checkpoint index handoff does not match quota source admission",
+      );
+    }
+    const handoff = owner.kind === "exact_source"
+      ? [
+        ...sourceLocks.map((witness) => ({...witness, borrowed: true})),
+        ...checkpointWitnesses.slice(1).map((witness) => ({
+          ...witness,
+          borrowed: false,
+        })),
+      ]
+      : checkpointWitnesses.map((witness) => ({...witness, borrowed: false}));
+    for (const [i, witness] of handoff.entries()) {
+      const claim = await claimFileMutationLock(witness.target, witness.token);
       if (!claim) break;
-      claims.push({target: targets[i], token, claim});
-      const owner = await mutationLockOwner(targets[i]);
-      if (owner?.token !== token || owner.pid !== witness.pid) break;
-      if (i === targets.length - 1) adopted = true;
+      claims.push({
+        target: witness.target,
+        token: witness.token,
+        claim,
+        borrowed: witness.borrowed,
+      });
+      const current = await mutationLockOwner(witness.target);
+      if (current?.token !== witness.token || current.pid !== witness.pid) break;
+      if (owner.kind === "exact_source" && i === sourceLocks.length - 1) {
+        sourceClaimed = true;
+      }
+      if (i === handoff.length - 1) adopted = true;
     }
     if (!adopted) {
       // A runtime retry can arrive after a successful save released the locks.
       // It may only read an exact committed result, never reuse the old handoff.
-      for (const entry of claims.splice(0).reverse()) await releaseFileMutationLockClaim(entry.claim);
+      if (sourceClaimed) {
+        requireCurrentQuotaAccountingOwner(owner);
+        const result = replay(await admission());
+        if (result) return result;
+        unknown("checkpoint lock handoff expired");
+      }
+      for (const entry of claims.splice(0).reverse()) {
+        await releaseFileMutationLockClaim(entry.claim);
+      }
       return await withFileMutationLock(indexPath, async () => {
         const result = replay(await admission());
         if (result) return result;
         unknown("checkpoint lock handoff expired");
       });
     }
+    requireCurrentQuotaAccountingOwner(owner);
     const readback = await admission();
     const repeated = replay(readback);
     if (repeated) return repeated;
@@ -210,7 +285,9 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
     // The effect owns the end of the handed-off critical section. Releasing the
     // markers here also handles a caller that timed out but is still alive.
     for (const entry of claims.reverse()) {
-      if (adopted) await releaseFileMutationLock(entry.target, entry.token, entry.claim, true);
+      if (adopted && !entry.borrowed) {
+        await releaseFileMutationLock(entry.target, entry.token, entry.claim, true);
+      }
       else await releaseFileMutationLockClaim(entry.claim);
     }
   }

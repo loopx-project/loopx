@@ -1,10 +1,12 @@
 """Exercise legacy, local and failed-persistence paths through the real backend."""
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from loopx import cli
 from loopx.control_plane.quota import refresh_external_delivery as bridge
+from loopx.control_plane.quota.settlement import SettlementIdentity
 from loopx.state_refresh import refresh_state_run
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _write_fixture,
@@ -101,3 +103,41 @@ def test_receipt_only_repair_preserves_pause_without_requiring_confirmation(sess
     assert run(args)["receipt_repaired"] is True
     assert index.read_bytes() == before
     assert run(args, expected=1)["error_code"] == "external_delivery_resume_required"
+
+
+def test_exact_external_delivery_transition_persists_goal_ref(tmp_path):
+    goal_ref = {
+        "goal_id": GOAL_ID,
+        "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
+    identity = SettlementIdentity(
+        GOAL_ID,
+        AGENT_ID,
+        TODO_ID,
+        TURN_ID,
+    )
+    readback = SimpleNamespace(
+        identity=SimpleNamespace(value=identity),
+        external_delivery={
+            "schema_version": "refresh_external_delivery_v0",
+            "authorized": False,
+            "transition": {
+                "state": "paused",
+                "resume_key": "resume-fixture",
+            },
+        },
+    )
+    result = bridge.finish_external_delivery_refresh(
+        {"ok": True},
+        readback,
+        tmp_path,
+        dry_run=False,
+        goal_ref=goal_ref,
+    )
+    events = json.loads(
+        (tmp_path / "goals" / GOAL_ID / "rollout-event-log.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
+    assert events["goal_ref"] == goal_ref
+    assert result["external_sink_delivery_authorized"] is False

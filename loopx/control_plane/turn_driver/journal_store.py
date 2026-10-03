@@ -9,9 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ...file_lock import exclusive_file_lock
-from ..effect_program import SettlementIdentity
+from ..effect_runtime import EffectRuntimeConflict, effect_runtime_result
 from .turn_journal_runtime import (
-    interpret_turn_journal_projection,
     write_turn_journal,
 )
 
@@ -107,197 +106,26 @@ def find_loopx_turn_key_by_settlement_identity(
     todo_id: str,
     turn_instance_id: str,
 ) -> str | None:
-    """Resolve one journal from its durable settlement identity.
+    """Find one validated history; unreadable or conflicting history blocks retry."""
 
-    A host process can finish after its caller loses the command reply, so the
-    caller-stable ``turn_instance_id`` is the recovery address.  Never select a
-    journal by recency or by a partial Goal/Agent match: the transaction's
-    typed settlement identity must equal every supplied field, and ambiguity
-    fails closed.
-    """
-
-    expected = SettlementIdentity(
-        goal_id=goal_id,
-        agent_id=agent_id,
-        todo_id=todo_id,
-        turn_instance_id=turn_instance_id,
-    )
-    turns_dir = runtime_root / "goals" / goal_id / "turns"
-    if not turns_dir.is_dir():
-        return None
-    matches: list[str] = []
-    for path in sorted(turns_dir.glob("*.json")):
-        turn_key = f"sha256:{path.stem}"
-        if not TURN_KEY_RE.fullmatch(turn_key):
-            continue
-        try:
-            plan = load_loopx_turn_plan_from_journal(
-                runtime_root,
-                goal_id=goal_id,
-                turn_key=turn_key,
-            )
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if _journal_plan_turn_instance_id(plan) != turn_instance_id:
-            continue
-        transaction = plan.get("transaction")
-        settlement = (
-            transaction.get("settlement_plan")
-            if isinstance(transaction, Mapping)
-            else None
-        )
-        identity = (
-            settlement.get("identity") if isinstance(settlement, Mapping) else None
-        )
-        if not isinstance(identity, Mapping):
-            continue
-        try:
-            actual = SettlementIdentity.from_runtime_payload(identity)
-        except RuntimeError:
-            continue
-        if _identity_binding_tuple(actual) == _identity_binding_tuple(expected):
-            matches.append(turn_key)
-    if len(matches) > 1:
-        raise ValueError("LoopX Turn settlement identity matched multiple journals")
-    return matches[0] if matches else None
-
-
-def _journal_plan_turn_instance_id(plan: Mapping[str, Any]) -> str | None:
-    transaction = plan.get("transaction")
-    if isinstance(transaction, Mapping):
-        direct = str(transaction.get("turn_instance_id") or "").strip()
-        if direct:
-            return direct
-    settlement = (
-        transaction.get("settlement_plan")
-        if isinstance(transaction, Mapping)
-        else None
-    )
-    identity = (
-        settlement.get("identity") if isinstance(settlement, Mapping) else None
-    )
-    if isinstance(identity, Mapping):
-        nested = str(identity.get("turn_instance_id") or "").strip()
-        if nested:
-            return nested
-    return None
-
-
-def _envelope_observed_capabilities(envelope: Mapping[str, Any]) -> list[str]:
-    """Read the capability set this Turn's scheduler decision already froze.
-
-    Two durable sub-sources compose the validated set, mirroring what the
-    scheduler consumed: the journaled boundary declares goal/coordination
-    capabilities, and a journaled capability gate whose required capabilities
-    were not missing proves the scheduler observed them for this Turn.
-    Anything else stays absent so downstream gates fail closed.
-    """
-
-    observed: list[str] = []
-
-    def append(values: Any) -> None:
-        if not isinstance(values, list):
-            return
-        for capability in values:
-            rendered = str(capability or "").strip()
-            if rendered and rendered not in observed:
-                observed.append(rendered)
-
-    boundary = (
-        envelope.get("boundary")
-        if isinstance(envelope.get("boundary"), Mapping)
-        else {}
-    )
-    append(boundary.get("available_capabilities"))
-    gate = (
-        envelope.get("capability_gate")
-        if isinstance(envelope.get("capability_gate"), Mapping)
-        else {}
-    )
-    required = gate.get("required_capabilities")
-    missing = gate.get("missing_capabilities")
-    if isinstance(required, list) and required and missing in (None, []):
-        append(required)
-    return observed
-
-
-def _identity_binding_tuple(identity: SettlementIdentity) -> tuple[str, ...]:
-    """Render the typed identity fields that bind one settlement effect."""
-
-    return (
-        identity.goal_id,
-        identity.agent_id,
-        identity.binding_kind.value,
-        identity.binding_id,
-        identity.turn_instance_id,
-        identity.effect_id,
-    )
-
-
-def _journal_settlement_identity_matches(
-    plan: Mapping[str, Any], completion: SettlementIdentity
-) -> bool:
-    """Require the journal's typed settlement identity to be this completion's."""
-
-    transaction = plan.get("transaction")
-    if not isinstance(transaction, Mapping):
-        return False
-    settlement = transaction.get("settlement_plan")
-    if not isinstance(settlement, Mapping):
-        return False
-    identity = settlement.get("identity")
-    if not isinstance(identity, Mapping):
-        return False
     try:
-        journal_identity = SettlementIdentity.from_runtime_payload(identity)
-    except RuntimeError:
-        return False
-    return _identity_binding_tuple(journal_identity) == _identity_binding_tuple(
-        completion
-    )
-
-
-def _settlement_matched_journal_capabilities(
-    path: Path,
-    *,
-    completion: SettlementIdentity,
-) -> list[str] | None:
-    """Read capabilities only after the TS owner validated this journal."""
-
-    turn_key = f"sha256:{path.stem}"
-    if not TURN_KEY_RE.fullmatch(turn_key):
-        return None
-    try:
-        journal = load_turn_journal(path)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None
-    if journal is None or journal.get("goal_id") != completion.goal_id:
-        return None
-    plan = journal.get("plan")
-    if not isinstance(plan, Mapping):
-        return None
-    if _journal_plan_turn_instance_id(plan) != completion.turn_instance_id:
-        return None
-    try:
-        inspection = interpret_turn_journal_projection(
-            journal,
-            goal_id=completion.goal_id,
-            agent_id=completion.agent_id,
-            turn_key=turn_key,
-        )
-    except (RuntimeError, ValueError):
-        return None
-    if (
-        inspection.get("decision") != "replay_legal"
-        or inspection.get("violations") != []
-    ):
-        return None
-    if not _journal_settlement_identity_matches(plan, completion):
-        return None
-    envelope = plan.get("turn_envelope")
-    if not isinstance(envelope, Mapping):
-        return None
-    return _envelope_observed_capabilities(envelope)
+        payload = effect_runtime_result("turn_journal.find_settlement", {
+            "runtime_root": str(runtime_root.resolve()),
+            "goal_id": goal_id,
+            "agent_id": agent_id,
+            "todo_id": todo_id,
+            "turn_instance_id": turn_instance_id,
+        })
+    except EffectRuntimeConflict as exc:
+        # Preserve the public ambiguity exception; the native owner also
+        # rejects incomplete history rather than authorizing a fresh Turn.
+        raise ValueError(str(exc)) from exc
+    if not isinstance(payload, dict) or set(payload) != {"turn_key"}:
+        raise RuntimeError("TypeScript Turn journal lookup shape mismatch")
+    key = payload["turn_key"]
+    if key is not None and (not isinstance(key, str) or not TURN_KEY_RE.fullmatch(key)):
+        raise RuntimeError("TypeScript Turn journal lookup key mismatch")
+    return key
 
 
 def turn_journal_observed_capabilities(
@@ -305,38 +133,22 @@ def turn_journal_observed_capabilities(
     *,
     settlement_identity: Mapping[str, Any],
 ) -> list[str] | None:
-    """Return capabilities only a journal fully bound to this settlement observed.
+    """Read exact terminal Turn evidence through the native journal owner.
 
-    The reader stays a consumer of the TypeScript-owned journal authority:
-    every candidate journal must pass ``turn_journal.inspect`` replay
-    validation for this completion's goal/agent/turn identity, and its typed
-    settlement-plan identity must equal the current completion identity
-    (goal/agent/binding/turn/effect). A journal that only shares the goal and
-    a caller-supplied turn id — another agent's, another Todo's, or one whose
-    transaction and settlement disagree — provides no evidence, so unreadable,
-    missing, unmatched, or ambiguous journals return None and callers fail
-    closed instead of borrowing capabilities from a foreign settlement.
+    Missing, unreadable, contradictory, or ambiguous history lends no
+    capabilities. Historical evidence never grants current execution authority.
     """
 
     try:
-        completion = SettlementIdentity.from_runtime_payload(
-            dict(settlement_identity)
-        )
-    except RuntimeError:
+        payload = effect_runtime_result("turn_journal.observed_capabilities", {
+            "runtime_root": str(runtime_root.resolve()),
+            "settlement_identity": dict(settlement_identity),
+        })
+    except (RuntimeError, ValueError):
         return None
-    turns_dir = runtime_root / "goals" / completion.goal_id / "turns"
-    if not turns_dir.is_dir():
+    if not isinstance(payload, dict) or set(payload) != {"observed_capabilities"}:
         return None
-    matched: list[list[str]] = []
-    for path in sorted(turns_dir.glob("*.json")):
-        evidence = _settlement_matched_journal_capabilities(
-            path, completion=completion
-        )
-        if evidence is not None:
-            matched.append(evidence)
-    if len(matched) != 1:
-        # Zero fully-bound journals means no evidence; more than one would be
-        # an ambiguity about a single settlement effect the reader must not
-        # resolve by picking a winner.
+    observed = payload["observed_capabilities"]
+    if not isinstance(observed, list) or not all(isinstance(item, str) for item in observed):
         return None
-    return matched[0]
+    return observed

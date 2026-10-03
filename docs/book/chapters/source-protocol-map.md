@@ -1,11 +1,25 @@
 # 开发者贡献地图与协议入口
 
-给 LoopX 做贡献不只等于修改 Kernel，也不只等于开发 Extension。外部开发者可以改进协议规则、
-Capability 与 Domain State、Provider、Host/Runner、Projection、Dashboard、文档、fixture 和
-独立分发包。第一步不是挑目录，而是判断这次贡献要交付什么结果、由哪份合同拥有它。
+## 从一个被拒的 PR 开始
 
-阅读源码最容易走错的路径，是先打开最大的 Python 文件，再沿函数调用不断向下钻。这样能看见
-实现，却很难判断一段行为为什么存在、改动后哪些消费者必须保持兼容。更可靠的入口是：
+先看一个教学情境：贡献者希望“非阻塞提醒不影响发布权限”，搜索相关文字后，修改了面向 operator 的摘要 renderer，并为它写了通过的测试。但真正的 scope/authority 决策在另一个 typed owner，实际执行路径没有改变。
+
+这个情境的错误在于混淆了“读取同一个字段”和“拥有这条规则”。搜索可以帮助找到相关位置，还需要沿调用关系确认哪个模块决定合法转换，以及哪些消费者只负责展示。
+
+## 为什么“搜索关键字再改”不够
+
+自然的反应是：搜索得更仔细一点，看得更多一点。但这样只会让问题更隐蔽：
+
+- **命中的数量不说明任何事。** 一个权限概念通常在十几个模块里出现——schema、parser、projection、renderer、decision table、test fixture。它们在同一个概念上扮演完全不同的角色。
+- **文件会移动，协议责任不会。** 迁移把完整 transaction 的语义搬到了另一侧；按目录名建立的直觉会在下一个版本直接失效。
+- **评审看到的是一份函数清单。** 如果 PR 描述只能说“我改了这三个函数”，reviewer 无法判断被破坏的是哪条不变量，也无法判断在什么条件下应该拒绝它。
+- **测试全绿不代表切片正确。** 针对被改模块的回归测试，恰好会为错误的解释背书。
+
+所以需要一条更慢但更稳定的入口：先说清自己正在改变哪份合同，再去找实现。本章给的是这条入口。
+
+给 LoopX 做贡献不只等于修改 Kernel，也不只等于开发 Extension。外部开发者可以改进协议规则、Capability 与 Domain State、Provider、Host/Runner、Projection、Dashboard、文档、fixture 和独立分发包。第一步在于判断这次贡献要交付什么结果、由哪份合同拥有它，而非先挑目录。
+
+阅读源码最容易走错的路径，是先打开最大的 Python 文件，再沿函数调用不断向下钻。这样能看见实现，却很难判断一段行为为什么存在、改动后哪些消费者必须保持兼容。更可靠的入口是：
 
 ```text
 开发任务
@@ -16,20 +30,17 @@ Capability 与 Domain State、Provider、Host/Runner、Projection、Dashboard、
   -> 当前实现与验证
 ```
 
-本章给出一张协议优先的源码地图。它不列完整 API，也不要求你记住当前版本的函数名；目标是让你
-在准备一个 Issue 或 PR 时，先说清自己正在改变哪份合同。
+本章给出一张协议优先的源码地图。它不列完整 API，也不要求你记住当前版本的函数名；目标是让你在准备一个 Issue 或 PR 时，先说清自己正在改变哪份合同。
 
-## 本章目标
-
-读完后，你应该能：
+## 读完之后你应该能
 
 - 判断贡献属于 Control Plane、Capability、Provider、Host/Runner、Projection/Docs 还是 Extension；
 - 记录 capability id、provider id 与 built-in/extension-delivered placement；
 - 把协议级任务归入状态、工作图、Turn/Host 或证据恢复协议族；
 - 区分 canonical contract、read model、host adapter 与 renderer；
-- 根据 change reason 选择 bounded context，而不是根据文件名猜位置；
+- 根据 change reason 选择 bounded context，而非根据文件名猜位置；
 - 从公开 Contributor Task、Issue 和协议文档形成可审阅的最小切片；
-- 用协议、不变量和验证描述改动，而不是提交一份函数清单。
+- 用协议、不变量和验证描述改动，而非提交一份函数清单。
 
 ## 先写一张协议卡
 
@@ -58,7 +69,7 @@ Expected receipt: linked decision and lifecycle event
 Validation surface: decision table + quota integration smoke
 ```
 
-这张卡比“准备修改 `quota.py`”更有信息量。文件可能移动，协议责任和错误结果却仍然可以被评审。
+这张卡比“准备修改 `quota.py`”更有信息量。文件可能移动，协议责任和错误结果却仍然可以被评审。回头看开头的 PR：如果作者先写下 `Invariant at risk: a notice cannot grant authority`，`Source of truth: typed gate and todo requirements` 这一行就会把他带到 owner 模块，而非文案模板。
 
 ## 先选择贡献结果和放置位置
 
@@ -84,19 +95,13 @@ Why the nearest existing owner is or is not sufficient:
 
 这些贡献面可以组合，但不能混成一个模糊的 “plugin”。例如：
 
-- 新增稳定调用者结果：先定义 Capability 和 Domain State，再决定由 core provider 还是 Extension
-  实现；
-- 只替换外部服务实现：保留已有 Capability，新增 Provider，并选择 built-in 或
-  extension-delivered lifecycle；
+- 新增稳定调用者结果：先定义 Capability 和 Domain State，再决定由 core provider 还是 Extension 实现；
+- 只替换外部服务实现：保留已有 Capability，新增 Provider，并选择 built-in 或 extension-delivered lifecycle；
 - 只增加一张操作看板：从 public-safe projection 读取，不解析项目私有文件，也不创建写路径；
-- 只改 Host continuation：复用 quota、scheduler 与 Turn contracts，不在 runner 内增加第二套
-  scheduler；
-- 交付一个零权限、确定性的独立命令：可以使用 standalone Extension，不必先创建虚假的
-  Capability。
+- 只改 Host continuation：复用 quota、scheduler 与 Turn contracts，不在 runner 内增加第二套 scheduler；
+- 交付一个零权限、确定性的独立命令：可以使用 standalone Extension，不必先创建虚假的 Capability。
 
-新增目录、CLI option 或 schema 前，必须有真实 caller、active call site 或明确 compatibility
-contract。只有未来可能使用的 provider、runner 或 projection，先留在设计或 Todo 中，不要把
-假设性结构提交到 production tree。
+新增目录、CLI option 或 schema 前，必须有真实 caller、active call site 或明确 compatibility contract。只有未来可能使用的 provider、runner 或 projection，先留在设计或 Todo 中，不要把假设性结构提交到 production tree。
 
 ## 五个核心协议族
 
@@ -110,8 +115,10 @@ contract。只有未来可能使用的 provider、runner 或 projection，先留
 
 主要入口：
 
-- [`event_sourced_state_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/event-sourced-state-contract-v0.md)：
-  append-only event、replay、idempotency 与 privacy partition；
+- `event_sourced_state_contract_v0`：已退役（历史设计）。当前 Todo 状态以选定的 File/SQLite
+  authority 为准，见[状态底座](state-substrate.md)与
+  [Shared Goal authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/)；
+  run history 与 rollout events 仍有各自的记录职责；
 - [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)：
   从 active-state workbench 生成 typed、read-only projection；
 - [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)：
@@ -121,14 +128,12 @@ contract。只有未来可能使用的 provider、runner 或 projection，先留
 
 适合从这组协议开始的任务包括：
 
-- status 与 event 显示不一致；
 - active-state parser 丢失字段；
 - task graph 缺少 lineage 或 truncation diagnostics；
 - lifecycle writer 在 retry 后重复产生效果；
 - dashboard 想增加一个新字段。
 
-最后一个例子尤其重要。Dashboard 需求通常先回到“这个字段由哪个 source 拥有”，而不是直接给
-UI 增加一份可编辑状态。
+最后一个例子尤其重要。Dashboard 需求通常先回到“这个字段由哪个 source 拥有”，而非直接给 UI 增加一份可编辑状态。
 
 ### 2. 工作图、权限与 Peer
 
@@ -153,8 +158,7 @@ UI 增加一份可编辑状态。
 - monitor 与 advancement 的 precedence 错误；
 - Host 有能力执行，但缺少所需 decision scope。
 
-评审这类 PR 时，先问“authority 来自哪里”，再问“代码进入哪个分支”。文本里出现
-`approved`、`owner` 或 `waiting for user`，都不能替代 typed scope relation。
+评审这类 PR 时，先问“authority 来自哪里”，再问“代码进入哪个分支”。文本里出现 `approved`、`owner` 或 `waiting for user`，都不能替代 typed scope relation。
 
 ### 3. Quota、Interaction 与调度
 
@@ -173,7 +177,7 @@ UI 增加一份可编辑状态。
 - [State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)：
   Todo、Gate、Quota、Evidence 和 Scheduler 如何组合。
 
-这组协议的核心不是一个 `should_run` 布尔值，而是有优先级的最终合同：
+这组协议的核心是一个 `should_run` 布尔值之外的有优先级最终合同：
 
 ```text
 source facts
@@ -183,8 +187,7 @@ source facts
   -> scheduler_hint
 ```
 
-一个用户 Gate 可以要求用户回答，同时 agent channel 仍要求执行不依赖该 Gate 的安全工作。把两个
-channel 压成一个布尔值，会同时损坏交互和调度。
+一个用户 Gate 可以要求用户回答，同时 agent channel 仍要求执行不依赖该 Gate 的安全工作。把两个 channel 压成一个布尔值，会同时损坏交互和调度。
 
 ### 4. Bounded Turn 与 Host Effect
 
@@ -213,8 +216,7 @@ channel 压成一个布尔值，会同时损坏交互和调度。
 | 执行 bounded effect | Host adapter | LoopX 假装外部动作已发生 |
 | 判断 postcondition | 独立 validator | Host 的自然语言自报成功 |
 
-`session_handle`、raw stdout 和 transcript 可以帮助 Host 恢复，但不能成为 Goal authority 或 completion
-proof。
+`session_handle`、raw stdout 和 transcript 可以帮助 Host 恢复，但不能成为 Goal authority 或 completion proof。
 
 ### 5. 证据、恢复与质量
 
@@ -233,7 +235,7 @@ proof。
 - [Public/Private Boundary](https://github.com/huangruiteng/loopx/blob/main/docs/public-private-boundary.md)：
   哪些证据可以进入公开仓库。
 
-这不是最后才补的“测试部分”。协议卡中的 forbidden outcome 和 expected receipt 会直接决定验证形态。
+这属于验证设计的一部分，而非最后才补的“测试部分”。协议卡中的 forbidden outcome 和 expected receipt 会直接决定验证形态。
 
 ## 从协议族落到 bounded context
 
@@ -250,14 +252,7 @@ proof。
 | `handoff` | 跨 runtime handoff、review packet 与 owner route |
 | `work_items` | attention、selection 与 operator-facing work read model |
 
-在 `v0.5.4` 的迁移基线上，bounded context 和实现语言是两个维度。`goals`、`todos`、`quota`、
-`scheduler`、`work_items` 与 `turn_driver` 已有完整 transaction 由 TypeScript module 拥有语义；
-典型例子包括 Vision refresh、本地 task-lease lifecycle、quota spend/void/monitor-poll commit 和
-receipt-bound scheduler follow-up。旁边的 Python facade/module 可能只负责 CLI transport、legacy
-projection、明确的外部 Provider/Host effect 或尚未迁移的写回。定位 owner 时应先读
-[TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
-的 shipped baseline，再沿真实 request handler 和 caller 判断；不要因为入口仍是 Python，就默认
-Python 仍拥有该 decision。
+在 `v0.5.4` 的迁移基线上，bounded context 和实现语言是两个维度。`goals`、`todos`、`quota`、`scheduler`、`work_items` 与 `turn_driver` 已有完整 transaction 由 TypeScript module 拥有语义；典型例子包括 Vision refresh、本地 task-lease lifecycle、quota spend/void/monitor-poll commit 和 receipt-bound scheduler follow-up。旁边的 Python facade/module 可能只负责 CLI transport、legacy projection、明确的外部 Provider/Host effect 或尚未迁移的写回。定位 owner 时应先读 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) 的 shipped baseline，再沿真实 request handler 和 caller 判断；不要因为入口仍是 Python，就默认 Python 仍拥有该 decision。
 
 选择位置时问：
 
@@ -283,7 +278,7 @@ Python 仍拥有该 decision。
 
 ## 从贡献面落到仓库 owner
 
-当前仓库的稳定路由应理解为 owner，而不是看到目录名就自动放入：
+当前仓库的稳定路由应理解为 owner，而非看到目录名就自动放入：
 
 | 目标 | 优先查找 |
 | --- | --- |
@@ -296,14 +291,9 @@ Python 仍拥有该 decision。
 | 操作投影 | status/frontstage/projection owner；renderer 只消费 typed read model |
 | 文档与验证 | owning protocol 文档、`tests/`、`examples/` 或 public-safe fixture |
 
-当前 capability 目录采用 package-owned documentation 与 `catalog_entry.py` 注册。贡献前运行
-`loopx capability list --format json` 和 `loopx capability show <capability-id> --format json`，
-确认 capability 是否真实注册、有哪些 entry command、Provider 边界与 durable validation。仅有
-目录或 README 不证明能力已经发布。
+当前 capability 目录采用 package-owned documentation 与 `catalog_entry.py` 注册。贡献前运行 `loopx capability list --format json` 和 `loopx capability show <capability-id> --format json`，确认 capability 是否真实注册、有哪些 entry command、Provider 边界与 durable validation。仅有 目录或 README 不证明能力已经发布。
 
-`loopx/capabilities/<name>/` 中有代码不自动证明它是公开 Capability；需要显式注册和真实 caller
-contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：只有独立 provider lifecycle 才属于
-这里。私有 helper 留在最近的 owner 中，不因为跨了几个文件就升级为新 Capability 或 Extension。
+`loopx/capabilities/<name>/` 中有代码不自动证明它是公开 Capability；需要显式注册和真实 caller contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：只有独立 provider lifecycle 才属于这里。私有 helper 留在最近的 owner 中，不因为跨了几个文件就升级为新 Capability 或 Extension。
 
 ## 函数名是搜索锚点，不是课程目录
 
@@ -313,8 +303,7 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 2. 沿输入和输出确认它仍承担同一责任，不因名字相似就假定 owner；
 3. 在 PR 说明中引用 invariant 和 contract，函数名只用来帮助 reviewer 定位 diff。
 
-例如，当前版本可以从 `quota should-run` 的 builder、Turn driver 或 task-graph builder 开始搜索。
-这些名字未来可能移动到更合适的 bounded context；你的理解不应因此失效。
+例如，当前版本可以从 `quota should-run` 的 builder、Turn driver 或 task-graph builder 开始搜索。这些名字未来可能移动到更合适的 bounded context；你的理解不应因此失效。
 
 如果一篇文档需要列二十个函数才能解释行为，通常说明它在复制实现，而没有提炼协议。
 
@@ -332,7 +321,7 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 
 不要从这些内容创建公开任务：
 
-- `.loopx/`、`.codex/goals/` 或 live active state；
+- `.loopx/`、`.loopx/goals/` 或 live active state；
 - private benchmark trace、raw agent session 或 verifier output；
 - 内部文档、生产凭据、本机路径；
 - `Maintainer-owned` live run 的推测性复刻。
@@ -347,8 +336,7 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 - fake-host、fake-provider 或 no-sink integration example；
 - Extension scaffold、manifest compatibility 与 lifecycle smoke。
 
-无论交付类型是什么，都要说明它改变了哪个读者结果、由哪个 authority 保持事实，以及什么事件会
-使文档、fixture 或 compatibility claim 过期。
+无论交付类型是什么，都要说明它改变了哪个读者结果、由哪个 authority 保持事实，以及什么事件会使文档、fixture 或 compatibility claim 过期。
 
 ### 社区信号怎样变成有边界的工作
 
@@ -361,7 +349,7 @@ contract。`loopx/extensions/` 也不是“所有外部集成”的收纳箱：�
 [“怎么给任务设置停止点？”](https://github.com/huangruiteng/loopx/discussions/3069)
 中，用户报告的是“任务完成后仍空转”。在确认它属于产品缺陷前，社区先把问题拆成 Goal
 acceptance、terminal closure、quota budget 与 monitor cadence 四个可检查假设。好的 Q&A
-不是立刻猜一处代码，而是把模糊体验变成最小诊断路径。
+重点在于把模糊体验变成最小诊断路径，而非立刻猜一处代码。
 
 <!-- community-casebook:user-idea-to-contract -->
 
@@ -378,7 +366,7 @@ acceptance、terminal closure、quota budget 与 monitor cadence 四个可检查
 把 existing capability owner、Host facade、in-scope、non-goals、目标 base branch 与验证命令写在
 实现之前。它没有把“Pi 需要 lease 操作”扩张成新的 scheduler、存储或自动 lease lifecycle。
 
-这些记录只是学习样本，不是当前任务状态的副本。准备参与时仍要重新打开 Issue，确认它尚未被
+这些记录只是学习样本，并非当前任务状态的副本。准备参与时仍要重新打开 Issue，确认它尚未被
 关闭、改向或认领，并以
 [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
 为当前公开入口；`Maintainer-owned` 工作只能请求独立 helper slice，不能平行复刻。
@@ -419,13 +407,13 @@ disposition，并指出 owner、下一产物与复核条件。需要跨方向同
 
 一个合适的贡献切片通常能用一句协议结果描述：
 
-> 让 `decision_scope_v0` 在缺失 scope relation 时产生 typed repair，而不是把 Gate 当成全局阻塞。
+> 让 `decision_scope_v0` 在缺失 scope relation 时产生 typed repair，而非把 Gate 当成全局阻塞。
 
 以下描述往往过大：
 
 > 重构 status、quota、scheduler 和所有测试。
 
-缩小切片不是只减少行数，而是保持一条完整因果链：
+缩小切片并不等于减少行数，它要保持一条完整因果链：
 
 ```text
 source
@@ -436,21 +424,46 @@ source
   -> validation
 ```
 
-不要只提交链条中间的 helper，也不要为了“未来扩展”提前增加没有调用方的 enum、CLI flag 或
-adapter。
+不要只提交链条中间的 helper，也不要为了“未来扩展”提前增加没有调用方的 enum、CLI flag 或 adapter。
 
-## 本章检查表
+## 代价与边界：这张地图覆盖不到什么
 
-准备进入源码前，确认你已经能回答：
+协议优先的入口比按目录猜更可靠，但它有自己的成本，也有明确失效的条件。
 
-- [ ] 这个问题属于哪个协议族？
-- [ ] canonical source 和 primary writer 是谁？
-- [ ] 哪条 invariant 可能被破坏？
-- [ ] 合法与非法 transition 分别是什么？
-- [ ] 哪个 bounded context 对该 change reason 负责？
-- [ ] 哪个公开 fixture 或 smoke 能证明真实链路？
-- [ ] 任务是否已经公开、可认领且不属于 maintainer-owned live work？
-- [ ] PR 是否可以用一条完整协议结果描述？
+**代价一：定位一个 owner 比 grep 一次慢得多。** 走完“协议族 → 不变量 → bounded context → implementation anchor”需要读协议文档、decision table 和一个真实 caller。对一处明显的一行修复，这套流程看起来过重。它换来的是一份能被评审、能在文件移动后存活的说明。
 
-下一章选择一个 scoped Gate 场景，沿 source、projection、decision、Turn、receipt 和 replay 走完一条
-真实协议链。
+**代价二：协议文档会落后于代码。** 文档由人维护，代码由 CI 检验。当两者冲突时，不要默认文档正确。可操作的判据是：文档说的是**责任归属**（这份合同由谁拥有），代码说的是**当前行为**（这一版实际做了什么）。归属冲突以 RFC 与协议为准；行为冲突以源码为准，并把文档更新作为这次 PR 的一部分。
+
+**代价三：没有一个入口能回答“我应该改哪个文件”。** 这张地图给的是判断顺序，最终定位仍然要落到真实 call site 上。这是有意为之：任何声称能直接给出文件名的索引，在下一个版本就会过期。
+
+**边界一：什么时候读源码比读协议文档更可靠。** 三种情况：文档没有覆盖你遇到的分支；你怀疑 read model 与实际写入不一致；你需要在 PR 里引用一个具体的 invariant，而文档只给了概述。这时读源码，并把发现写回文档。
+
+**边界二：什么时候读协议文档比读源码更可靠。** 当你判断 authority、scope coverage、lifecycle 合法性或迁移归属时。这类问题的答案不写在单个函数里，它在两侧都可能被实现一遍，而 canonical 答案只有一份。此时读源码反而容易被局部实现误导。
+
+**边界三：这张地图不覆盖产品决策。** `Starter`/`Focused` 任务的优先级、哪个方向值得投入、一次 RFC 该不该接受，都不由协议地图回答。它只保证你交付的切片挂对了合同。
+
+## 具名失败：一个真实的错误落点
+
+开头的 PR 可以被改写成一条可复现的检查。在一份干净的 checkout 上：
+
+```bash
+grep -rn "waiting for user" loopx/ | wc -l
+grep -rln "required_decision_scopes" loopx/control_plane/todos/ | head
+```
+
+第一条命令给出的是展示层与 parser 的命中数，第二条给出的是 scope requirement 真正的 owner 位置。两处都能读到同一个概念，但只有后者在维护“提醒不能授予权限”这条不变量。如果一份 PR 只改了第一组文件中的任何一个，它无法让这条不变量变得可测试——它只是增加了一个新的解释点。
+
+第二类具名失败更安静：改了 owner 模块，却没有检查 projection 层是否已经独立解析过同一个字段。此时权限判定正确，但 status 仍然显示旧的阻塞关系，读者看到的是一个不存在的 Gate 覆盖范围。这两种失败在同一章的最后给出判别方法。
+
+## 不变式
+
+准备进入源码前，确认下面几条能独立成立：
+
+1. **一条规则的所有者是决定合法转换的模块，不是首次打印相关字样的模块。** 如果无法指出被保护的不变量，这次改动还没有定位到位。
+2. **PR 描述里必须有一条完整的因果链：source、invariant、decision、projection 或 effect、receipt、validation。** 只能列出函数名的切片无法被评审。
+3. **文档描述责任归属，代码描述当前行为。** 两者冲突时，按冲突类型选择权威，并让这次 PR 把另一方更新掉。
+4. **`loopx/capabilities/<name>/` 下有代码，不证明该 Capability 已经发布。** 注册与真实 caller contract 才是发布判据，用 `loopx capability list --format json` 核对。
+5. **placement 先于实现。** capability id、provider id 与 built-in/extension-delivered 的选择，必须在写第一行代码之前写下理由。
+6. **任务来自公开入口。** 公开的 Contributor Task、Issue 和 fixture 是可参与工作的唯一来源，live active state 与 maintainer-local 判断都不算。
+
+下一章选择一个 scoped Gate 场景，沿 source、projection、decision、Turn、receipt 和 replay 走完一条真实协议链。

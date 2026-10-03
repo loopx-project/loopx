@@ -540,6 +540,7 @@ test("identity and phase violations accumulate in stable order", () => {
     "owner_mismatch",
     "turn_key_mismatch",
     "completed_phases_not_ordered_prefix",
+    "journal_status_phase_mismatch",
   ]);
 });
 

@@ -339,7 +339,75 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   if (to === "accepted") requireThat(params.canonical_done === true
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");
+  if (to === "accepted" && from !== "accepted" && wakesItsConversation(params)) {
+    return {status: to, wake_intent: delegationWakeIntent(params)};
+  }
   return {status: to};
+}
+
+/** Whether an accepted result may produce a wake intent at all.
+ *
+ * Only an operation started from a conversation can be continued there. An
+ * ordinary CLI/MCP delegation has no conversation, so it keeps the transition it
+ * always had: no intent, no wake state, and no change to what a plain
+ * `wait`/`read` returns. Producing an intent and then refusing it in the pump
+ * would still widen a shared persistent projection for every caller who never
+ * enabled this capability.
+ */
+function wakesItsConversation(params: JsonObject): boolean {
+  if (params.requester == null) return false;
+  const requester = requireJsonObject(params.requester, "wake requester");
+  return requester.conversation != null;
+}
+
+/** The first transition to ``accepted`` is the one durable moment a requester
+ * can be continued without polling.  The intent names the requester, the
+ * conversation whose Turn started the operation (null when it was not started
+ * from one) and the exact accepted result; it grants no Turn and is not a
+ * second settlement.  The conversation is part of the intent identity, so the
+ * wake cannot be consumed by another conversation of the same requester. */
+function delegationWakeIntent(params: JsonObject): JsonObject {
+  const requester = requireJsonObject(params.requester, "wake requester");
+  requireThat([requester.goal_id, requester.agent_id, requester.operation_id, requester.request_id].every(text),
+    "wake intent requires the requester and result identity");
+  const goalRef = requester.goal_ref == null ? null : requireJsonObject(requester.goal_ref, "requester goal reference");
+  const origin = requester.conversation == null ? null
+    : requireJsonObject(requester.conversation, "requester conversation");
+  requireThat(origin === null || (text(origin.session_id) && text(origin.turn_id)),
+    "requester conversation requires its session and Turn");
+  const conversation = origin === null ? null : {session_id: origin.session_id, turn_id: origin.turn_id};
+  requireThat(Array.isArray(requester.artifacts) && requester.artifacts.length > 0, "wake intent requires accepted artifacts");
+  const digests = requester.artifacts.map(value => {
+    const artifact = requireJsonObject(value, "accepted artifact");
+    requireThat(text(artifact.ref) && typeof artifact.sha256 === "string"
+      && BARE_SHA256_PATTERN.test(artifact.sha256), "invalid accepted artifact reference");
+    return {ref: artifact.ref, sha256: artifact.sha256};
+  });
+  return {
+    schema_version: "loopx_delegation_wake_intent_v0",
+    intent_id: canonicalAuthoritySha256([requester.goal_id, requester.agent_id, requester.operation_id,
+      requester.request_id, digests, conversation]),
+    requester: {goal_id: requester.goal_id, agent_id: requester.agent_id, goal_ref: goalRef},
+    conversation,
+    operation_id: requester.operation_id, request_id: requester.request_id,
+  };
+}
+
+/** Reading another conversation's result cannot consume its continuation. */
+export function decideDelegationWakeObservation(params: JsonObject): JsonObject {
+  const intent = requireJsonObject(params.intent, "wake intent");
+  const requester = requireJsonObject(intent.requester, "wake requester");
+  const observer = requireJsonObject(params.observer, "wake observer");
+  requireThat([observer.session_id, observer.goal_id, observer.agent_id].every(text),
+    "wake observation requires its conversation and requester");
+  const conversation = intent.conversation == null ? null
+    : requireJsonObject(intent.conversation, "wake conversation");
+  return {
+    observed: conversation?.session_id === observer.session_id
+      && requester.goal_id === observer.goal_id && requester.agent_id === observer.agent_id
+      && canonicalAuthoritySha256(requester.goal_ref ?? null)
+        === canonicalAuthoritySha256(observer.goal_ref ?? null),
+  };
 }
 
 /** Repair only a false terminal observation after the exact Turn validated.

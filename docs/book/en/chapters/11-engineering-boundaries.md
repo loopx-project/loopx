@@ -163,7 +163,7 @@ Review manually for:
 
 - credentials, tokens, and cookies;
 - absolute machine paths;
-- `.loopx/`, `.codex/goals/`, or runtime state;
+- `.loopx/`, `.loopx/goals/`, or runtime state;
 - raw agent transcripts, trajectories, and verifier output;
 - private Issues, internal links, and unredacted organizational narrative;
 - temporary probes and generated logs.

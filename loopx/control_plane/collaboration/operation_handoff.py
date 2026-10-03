@@ -79,6 +79,7 @@ def pending_operation_handoffs(
     scope: CollaborationGoalScope | None = None,
     cursor: str | None = None,
     cursor_scope: str,
+    executor_route: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project canonical tickets into the existing Inbox; do not copy authority."""
     store = (
@@ -155,6 +156,7 @@ def pending_operation_handoffs(
                     "items": result,
                     "cursor": cursor,
                     "cursor_scope": cursor_scope,
+                    "executor_route": dict(executor_route) if executor_route is not None else None,
                 },
             )
         )
@@ -171,6 +173,7 @@ def agent_operation_action(
     action: str,
     consumption_id: str | None = None,
     outcome: Mapping[str, Any] | None = None,
+    turn_key: str | None = None,
 ) -> dict[str, Any]:
     """Internal locked IO seam, not a public caller-authentication endpoint.
 
@@ -194,12 +197,12 @@ def agent_operation_action(
         goal_id=actor["goal_id"],
         agents=(actor["agent_id"],),
         caller_goal_ref=parameters.get("origin_goal_ref"),
-        require_active=action == "consume",
+        require_active=action in {"consume", "observe_host_start"},
         # Recovery-owner binding must stay valid through evidence commit too.
         # Use the same Goal -> registry -> action-store ordering as consumption.
         lock_registry=True,
     ) as scope:
-        if action == "consume":
+        if action in {"consume", "observe_host_start"}:
             decide_collaboration_lifecycle(scope, operation="request_create")
             if goal_is_stopped(scope.goal):
                 raise ActionConflictError("confirmed operation Goal is stopped")
@@ -258,6 +261,7 @@ def agent_operation_action(
                 action,
                 consumption_id,
                 outcome,
+                turn_key,
             )
 
 
@@ -272,6 +276,7 @@ def _commit_agent_operation(
     action: str,
     consumption_id: str | None,
     outcome: Mapping[str, Any] | None,
+    turn_key: str | None,
 ) -> dict[str, Any]:
     current = _binding(registry_path, parameters, runtime_root)
     actor_executor = (
@@ -313,6 +318,10 @@ def _commit_agent_operation(
             "outcome_report": proposal["operation"].get("outcome_report"),
             "reconciliation_report": proposal["operation"].get("reconciliation_report"),
         }
+    if action == "observe_host_start":
+        return store.record_agent_operation_host_start(
+            proposal_id, actor=actor, binding_current=current, turn_key=str(turn_key or ""),
+        )
     if action == "consume":
         return store.consume_agent_operation(
             proposal_id,

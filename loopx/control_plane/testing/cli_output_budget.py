@@ -598,6 +598,12 @@ CLI_OUTPUT_MODE_VARIANT_BY_ID = {
 # cold-path exception.
 CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] = (
     CliOutputCommandClassification(
+        command_id="migrate-local-state",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="explicit offline local-state migration preview, execution, and receipt-bound rollback",
+    ),
+    CliOutputCommandClassification(
         command_id="doctor",
         qualification="explicit_cold_path_exception",
         surface_id=None,

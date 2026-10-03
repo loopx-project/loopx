@@ -17,6 +17,54 @@ async function fixture(t: test.TestContext) {
 }
 const event = (type: string, time: number, fields = {}) => JSON.stringify({ type: "event_msg", timestamp: new Date(time).toISOString(), payload: { type, ...fields } }) + "\n";
 
+test("numeric provider seconds measure the Turn, not a delayed recorder timestamp", async t => {
+  const path=join(await fixture(t),"numeric.jsonl");
+  await writeFile(path,JSON.stringify({type:"session_meta",payload:{id:"thread"}})+"\n");
+  let result=await readCodexTiming(path,"thread",undefined,at,key,"codex_app");
+  await appendFile(path,event("task_started",at+2000,{turn_id:"numeric",started_at:at/1000}));
+  result=await readCodexTiming(path,"thread",result.cursor,at+2001,key,"codex_app");
+  assert.equal(result.cursor.open?.start,at);
+  await appendFile(path,event("token_count",at+394000)+event("task_complete",at+394000,{turn_id:"numeric",started_at:at/1000,completed_at:at/1000+329}));
+  result=await readCodexTiming(path,"thread",result.cursor,at+394001,key,"codex_app");
+  assert.equal(result.observations.length,1);
+  assert.equal(result.observations[0].end-result.observations[0].start,329000);
+  assert.equal(result.cursor.open,undefined);
+  assert.deepEqual((await readCodexTiming(path,"thread",result.cursor,at+400000,key,"codex_app")).observations,[]);
+});
+
+test("numeric starts support legacy terminals without treating token logs or idle gaps as work", async t => {
+  const path=join(await fixture(t),"numeric-prefix.jsonl");
+  await writeFile(path,JSON.stringify({type:"session_meta",payload:{id:"thread"}})+"\n");
+  let result=await readCodexTiming(path,"thread",undefined,at,key,"codex_app");
+  await appendFile(path,event("task_started",at,{turn_id:"first",started_at:at/1000})+event("token_count",at+10000));
+  result=await readCodexTiming(path,"thread",result.cursor,at+10001,key,"codex_app");
+  assert.deepEqual(result.observations,[],"an unfinished Turn has no terminal duration yet");
+  await appendFile(path,event("task_complete",at+20000,{turn_id:"first"})+event("task_started",at+120000,{turn_id:"second",started_at:at/1000+120}));
+  result=await readCodexTiming(path,"thread",result.cursor,at+120001,key,"codex_app");
+  assert.equal(result.observations[0].end-result.observations[0].start,20000);
+  await appendFile(path,event("turn_aborted",at+150000,{turn_id:"second",completed_at:at/1000+150}));
+  result=await readCodexTiming(path,"thread",result.cursor,at+150001,key,"codex_app");
+  assert.equal(result.observations[0].start,at+120000);
+  assert.equal(result.observations[0].end-result.observations[0].start,30000);
+});
+
+test("invalid numeric envelopes cannot become execution or poison later valid timing", async t => {
+  const path=join(await fixture(t),"invalid-time.jsonl");
+  await writeFile(path,JSON.stringify({type:"session_meta",payload:{id:"thread"}})+"\n");
+  let result=await readCodexTiming(path,"thread",undefined,at,key,"codex_app");
+  for(const [start,end] of [[-1,at/1000+5],[at,at+5],[at/1000+10,at/1000+5],[at/1000,at/1000+10000]]) {
+    await appendFile(path,event("task_complete",at+5000,{turn_id:"bad",started_at:start,completed_at:end}));
+  }
+  await appendFile(path,event("task_started",at,{turn_id:"good",started_at:at/1000})+event("token_count",at+86400000)+event("token_count",at+5000));
+  result=await readCodexTiming(path,"thread",result.cursor,at+5001,key,"codex_app");
+  assert.deepEqual(result.observations,[]);
+  assert.equal(result.cursor.open?.start,at);
+  await appendFile(path,event("task_complete",at+6000,{turn_id:"good",completed_at:at/1000+6}));
+  result=await readCodexTiming(path,"thread",result.cursor,at+6001,key,"codex_app");
+  assert.equal(result.observations.length,1);
+  assert.equal(result.observations[0].end-result.observations[0].start,6000);
+});
+
 test("universal cycles preserve first quota and first successful spend across all Host labels and reordered transport", async t => {
   const root = await fixture(t);
   for (const host of ["codex-app", "claude-code", "dsh", "opencode", "generic-cli"]) {
@@ -163,7 +211,7 @@ test("scope expansion renews disclosure and fences old observations without undo
   assert.equal((await inspect(path,ctx)).blocked_by,"notice_required");
   await observe(path,ctx,prior.generation,null,async()=>{throw new Error("unexpected send");},undefined,cycle("start",at));
   await assert.rejects(readFile(path+".cycles"),/ENOENT/);
-  const enabled=await configure(path,ctx,"enable"); assert.equal(enabled.notice.version,5);
+  const enabled=await configure(path,ctx,"enable"); assert.equal(enabled.notice.version,6);
   const current=JSON.parse(await readFile(path,"utf8")); assert.notEqual(current.generation,prior.generation);
   await configure(path,ctx,"disable");
   assert.equal((await inspect(path,ctx)).consent,"disabled");

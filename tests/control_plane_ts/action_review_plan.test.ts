@@ -92,7 +92,57 @@ test("operation frame preserves exact confirmation identity and bounded content"
     attentionKind: "authority",
     interactionMode: "confirm_reject",
     decisions: ["confirm", "reject"],
+    confirmationDeliveryVerified: false,
   });
+});
+
+test("preparation is not card delivery, and cancellation never becomes execution completion", () => {
+  const proposal: Record<string, any> = operationProposal("awaiting_confirmation");
+  proposal.operation.delivery = {};
+  let frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "confirmation" && frame.confirmationDeliveryVerified, false);
+  proposal.operation.delivery = {provider: "lark", message_id: "message", chat_id: "chat", app_id: "app",
+    binding_digest: "a".repeat(64), card_digest: "b".repeat(64), delivered_at: "2026-01-01T00:00:00Z"};
+  frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "confirmation" && frame.confirmationDeliveryVerified, true);
+  const original = structuredClone(proposal.operation);
+  proposal.status = "cancelled";
+  const plan = compileActionReviewPlan(proposal);
+  assert.equal(plan.interaction, "inactive");
+  assert.equal(plan.canApply, false);
+  assert.equal(plan.operationFrame?.kind === "result" && plan.operationFrame.resultKind, "cancelled");
+  assert.equal(plan.operationFrame?.kind === "result" && plan.operationFrame.resultDeliveryVerified, false);
+  assert.deepEqual(proposal.operation, original, "Projection must not synthesize an outcome or claim");
+  proposal.operation.lifecycle_state = "outcome_observed";
+  proposal.operation.outcome = {outcome: "cancelled_before_confirmation", projection_verified: true};
+  assert.equal(compileOperationReviewFrame(proposal)?.kind, "result");
+  assert.equal(compileActionReviewPlan(proposal).interaction, "inactive");
+});
+
+test("expiry hides stale confirmations without changing claimed operations or canonical outcomes", () => {
+  const proposal: Record<string, any> = operationProposal("awaiting_confirmation");
+  proposal.operation.expires_at = "2026-01-02T00:00:00Z";
+  proposal.operation.delivery = {provider: "lark", message_id: "message", chat_id: "chat", app_id: "app",
+    binding_digest: "a".repeat(64), card_digest: "b".repeat(64), delivered_at: "2026-01-01T00:00:00Z"};
+  const expiry = Date.parse(proposal.operation.expires_at);
+  const original = structuredClone(proposal);
+  assert.equal(compileOperationReviewFrame(proposal)?.kind, "confirmation",
+    "Timeless Lark reconstruction must leave delayed callbacks to canonical confirmed_at validation");
+  assert.equal(compileOperationReviewFrame(proposal, expiry)?.kind, "confirmation",
+    "The canonical callback boundary allows the exact expiry instant");
+  const expired = compileActionReviewPlan(proposal, expiry + 1);
+  assert.equal(expired.interaction, "inactive");
+  assert.equal(expired.canApply, false);
+  assert.equal(expired.reason, "operation_confirmation_expired");
+  assert.equal(expired.operationFrame?.kind, "inactive");
+  assert.deepEqual(proposal, original, "A display guard must not cancel or execute the operation");
+  for (const expiresAt of ["not-a-time", "2026-01-02T00:00:00"]) {
+    assert.equal(compileActionReviewPlan({...proposal, operation: {...proposal.operation, expires_at: expiresAt}}, expiry).reason,
+      "operation_expiry_unknown");
+  }
+  assert.equal(compileOperationReviewFrame({...proposal, status: "applying",
+    operation: {...proposal.operation, lifecycle_state: "claimed"}}, expiry + 1)?.kind, "pending");
+  assert.equal(compileOperationReviewFrame({...proposal, status: "cancelled"}, expiry + 1)?.kind, "result");
 });
 
 test("operation frame projects pending and verified result states", () => {
@@ -160,6 +210,11 @@ test("managed executor and source context use the same frame without turning app
   assert.equal(frame?.content.fields.at(-2)?.value, "worker · todo-worker");
   assert.equal(frame?.content.fields.at(-1)?.value, "codex-app · source-agent");
   assert.equal(JSON.stringify(frame).includes("private-source-thread"), false);
+  assert.equal(compileActionReviewPlan(proposal).canApply, false);
+  assert.equal(compileActionReviewPlan(proposal).reason, "operation_authorization_pending");
+  proposal.operation.host_start = {schema_version: "loopx_operation_host_start_v0", host_turn_id: "native-turn"};
+  frame = compileOperationReviewFrame(proposal);
+  assert.equal(frame?.kind === "pending" && frame.executionState, "managed_turn_started");
   assert.equal(compileActionReviewPlan(proposal).canApply, false);
   assert.equal(compileActionReviewPlan(proposal).reason, "operation_authorization_pending");
   proposal.operation.agent_handoff = {consumption_id: "managed-attempt"};

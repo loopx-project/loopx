@@ -337,8 +337,9 @@ def main() -> None:
         "visible-workspace",
     ), default_workspace
     assert default_workspace.is_absolute(), default_workspace
-    assert "/private/" not in str(default_workspace), default_workspace
-    assert "/tmp/" not in str(default_workspace), default_workspace
+    assert default_workspace == (
+        Path.home() / "loopx-auto-research" / "loopx-auto-research-demo-smoke" / "visible-workspace"
+    ), default_workspace
 
     with tempfile.TemporaryDirectory() as raw_temp_dir:
         temp_dir = Path(raw_temp_dir)

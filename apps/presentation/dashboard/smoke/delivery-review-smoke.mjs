@@ -64,4 +64,5 @@ for (const copy of Object.values(deliveryReviewCopy)) {
   assert.ok(markdown.includes(`${copy.guards}: ${copy.unavailable}`), "Unavailable decisions must not export as zero pending");
 }
 console.log("delivery review: identity, scope, relationships, partial coverage, filtering, export and negative contracts passed");
+await import("./goal-work-map-smoke.mjs");
 await import("./goal-acceptance-contract-smoke.mjs");

@@ -10,7 +10,8 @@
  * mirror `loopx/capabilities/reliability_diagnostics/envelope.py` exactly.
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { lstatSync } from 'node:fs'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -271,11 +272,20 @@ function parseRunIdentity(raw: string | undefined): ObserverRunIdentity | undefi
 }
 
 export function ledgerPath(config: ShadowObserverConfig): string {
-  return join(config.ledgerDir, `${config.goalId.replaceAll(':', '_')}.ndjson`)
+  const digest = createHash('sha256').update(config.goalId, 'utf8').digest('hex')
+  return join(config.ledgerDir, 'by-goal', `${digest}.ndjson`)
 }
 
-async function appendLedgerLines(path: string, lines: readonly string[]): Promise<void> {
+async function appendLedgerLines(config: ShadowObserverConfig, lines: readonly string[]): Promise<void> {
   if (lines.length === 0) return
+  const legacy = join(config.ledgerDir, `${config.goalId.replaceAll(':', '_')}.ndjson`)
+  if (lstatSync(legacy, { throwIfNoEntry: false })) {
+    // The flush boundary counts this failure without exposing a local path or stopping the worker.
+    const error = new Error('legacy diagnostic ledger requires offline reconciliation')
+    error.name = 'LegacyDiagnosticLedgerError'
+    throw error
+  }
+  const path = ledgerPath(config)
   await mkdir(dirname(path), { recursive: true })
   await appendFile(path, `${lines.join('\n')}\n`, 'utf8')
 }
@@ -401,7 +411,7 @@ export class ShadowObserver {
       runIdentity: { ...options.config.runIdentity },
     }
     this.now = options.now ?? Date.now
-    this.appendLines = options.appendLines ?? appendLedgerLines
+    this.appendLines = options.appendLines ?? ((_path, lines) => appendLedgerLines(this.config, lines))
     this.warn = options.warn ?? (() => {})
     this.observerId = observerId
   }

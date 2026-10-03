@@ -76,6 +76,16 @@ def _apply_selected_todo_guards(
         work_lane_contract=(None if route.replan_decision_allowed else route.payload_work_lane_contract),
         agent_scope_frontier=route.agent_scope_frontier,
     )
+    if (
+        selected_todo is None
+        and prepared.requested_action_todo_id is not None
+        and (prepared.action_selection_qualification or {}).get("state")
+        in {"deferred", "rejected"}
+    ):
+        # The typed selection owner refused this choice before workspace checks.
+        # A guard's legacy default fallback must not replace that refusal with
+        # a repair for a different, unselected Todo.
+        return route
     summary = prepared.agent_todo_summary or {}
     acceptance = summary.get("goal_acceptance_contract")
     if isinstance(acceptance, dict) and acceptance.get("enabled") is True:
@@ -147,6 +157,7 @@ def build_quota_paused_should_run_payload(
     codex_app_automation_id: Any = None,
     resolved_scheduler_context: SchedulerExecutionContextResolution,
     runtime_root: str | Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Project one canonical hard-pause contract with no lane contradiction.
 
@@ -224,6 +235,8 @@ def build_quota_paused_should_run_payload(
         payload=payload,
         agent_identity=agent_identity,
     )
+    if goal_ref is not None:
+        payload["goal_ref"] = dict(goal_ref)
     payload["automation_liveness"] = build_automation_liveness(payload)
     payload["interaction_contract"] = build_interaction_contract(
         payload,
@@ -271,6 +284,7 @@ def build_quota_should_run(
     receipt_bound_replan_guard_scoped: bool = False,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     resolved_scheduler_context = resolve_scheduler_execution_context(
@@ -318,6 +332,7 @@ def build_quota_should_run(
                 codex_app_automation_id=codex_app_automation_id,
                 resolved_scheduler_context=resolved_scheduler_context,
                 runtime_root=runtime_root,
+                goal_ref=goal_ref,
             )
         prepared = _prepare_quota_should_run_item(
             status_payload,
@@ -349,6 +364,7 @@ def build_quota_should_run(
             turn_instance_id=turn_instance_id,
             include_agent_todo_detail=include_agent_todo_detail,
             runtime_root=runtime_root,
+            goal_ref=goal_ref,
         )
     if health_item:
         return {

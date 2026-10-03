@@ -390,6 +390,23 @@ def main() -> None:
             assert code == 400, configure_invalid
             assert configure_invalid["error_code"] == "invalid_goal_channel_configure", configure_invalid
 
+            code, blocked_notice_missing = request_json(
+                f"{base_url}/api/chat/goal-channel/configure",
+                method="POST",
+                body={"goal_id": GOAL_ID, "auto_notify_blocked_notices": False},
+            )
+            assert code == 400, blocked_notice_missing
+            assert blocked_notice_missing["blocker"] == "channel_binding_missing", blocked_notice_missing
+
+            code, configure_conflict = request_json(
+                f"{base_url}/api/chat/goal-channel/configure",
+                method="POST",
+                body={"goal_id": GOAL_ID, "auto_notify_human_gates": True,
+                      "auto_notify_blocked_notices": True},
+            )
+            assert code == 400, configure_conflict
+            assert configure_conflict["error_code"] == "invalid_goal_channel_configure", configure_conflict
+
             registry_before_subagent_preview = registry.read_text(encoding="utf-8")
             code, invalid_domain = request_json(
                 f"{base_url}/api/chat/goal-subagents/dry-run",

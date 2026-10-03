@@ -1,250 +1,153 @@
 # Recovery, self-repair, and runtime boundaries
 
-The hard part of a long-running system is not "continue forever." It is deriving a legal next action after
-the session, Host, Agent, workspace, or external facts have changed. This chapter separates recovery,
-replan, self-repair, and terminal closure, then uses clear runtime responsibilities to prevent an
-Extension, Provider, or projection from crossing the authority boundary.
+The previous chapter explained how one turn leaves an acceptable result. Extend the timeline: sessions change, code advances, permission is revoked and external calls time out. Which work remains usable, which judgments must be repeated, and when should the route change or stop?
 
-## What you should learn
+Recovery reconstructs **current conditions for action**, not hidden reasoning. Historical transcripts may persist under Host rules and help explain context; they do not replace current authority, applicable acceptance or external state. Recovering a historical fact and authorizing another action remain separate questions.
 
-After this chapter, you should be able to:
+## Which operation is recovered after a lost response? {#receipt-recovery}
 
-- explain which facts to replay and which must be freshly inspected after interruption;
-- distinguish continuation, replan, self-repair, and retry;
-- recognize projection gaps, stale evidence, and workspace drift;
-- distinguish Agent, Provider, Capability, Kernel, and Extension;
-- decide when a Goal is terminal rather than only seeing every current Todo checked;
-- detect a broken public/private boundary.
+In this synthetic situation, T1's governed operation committed and persisted receipt R1, but the caller lost the response. A failed call does not prove the effect never happened.
 
-## Recover action conditions, not old thoughts
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant O as Command owner
+    participant P as Selected provider
+    C->>O: Submit original operation
+    O->>P: Governed commit
+    P->>P: Persist result and R1
+    Note over C,P: Commit response is lost
+    C->>O: Recover under original identity
+    O->>P: Read original receipt
+    alt Valid historical result
+        P-->>O: Return R1
+        O-->>C: Recover result without another commit
+    else Still unconfirmed
+        P-->>O: unavailable / unknown
+        O-->>C: Retain uncertainty and recovery responsibility
+    end
+```
 
-Assume Codex CLI closes after local tests pass and Codex App takes over the next day. The new session does
-not need a verbatim transcript. It does need to reconstruct:
+The first branch assumes R1 actually exists and is valid. An error without provider readback does not identify the branch. Even confirmed absence permits execution only under the current recovery contract, identity and authority, not merely because a local record is missing.
 
-- Goal, acceptance, and current per-Agent Vision;
-- open Todos, dependencies, claims, and continuation;
-- unresolved Gates and decision scopes;
-- commands, revisions, and freshness attached to evidence;
-- current worktree, Host capabilities, and write scope;
-- external handles, readbacks, and monitor due state;
-- current interaction contract and stop condition.
+After R1 is recovered, reread T3's current conditions. A commit for C1 cannot validate C2, and T1 settlement does not replace G1's publication decision.
 
-Some facts replay from durable project state. Others require a fresh inspection:
+## Historical recovery or a new execution? {#recovery-or-new-execution}
 
-| Replayable facts | Facts to inspect again |
-| --- | --- |
-| Goal identity, Todo lineage, Gate resolution | Current checkout and uncommitted diff |
-| Run and evidence references, old receipts | Current CI, PR, Issue, or cloud state |
-| Registered Agents and policy | Current Host capability and login state |
-| Previous scheduler proposal | Current time, monitor due state, and execution context |
+“Keep the original identity” and “obtain a new execution key” answer different questions.
 
-An old receipt proves that an action succeeded for bound input and revision. It does not prove the external
-world remains unchanged. An old claim does not prove the Agent is still running.
+| Situation | Fact to establish now | Identity handling | Next step and stopping condition |
+| --- | --- | --- | --- |
+| Response lost; original outcome unconfirmed | What happened to this exact operation? | Preserve operation/effect identity and arguments | Original owner reads back; no new key to hide uncertainty |
+| Original operation committed; its receipt is missing | How can the historical result be returned completely? | Recover or replay the original receipt | Check the result without recreating the effect |
+| Execution legally released or finished; new work is intended | Do current work, owner and inputs permit another execution? | Retain history; obtain a new proof through admission | Refuse unmet conditions; old receipts do not revive permission |
+| Input or requirements changed after validation | Which part does old evidence still support? | Retain history; validate against new inputs | Reassess affected judgments without inventing a global version |
 
-## Continuation, retry, replan, and self-repair
+The [lease regression test](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/tests/control_plane/test_canonical_lease_acquire.py) provides a concrete example: after renewal, replayed acquisition preserves the original receipt but returns the current lease; after release, reusing the retired acquire key is rejected. Historical explanation and current execution proof are different materials.
 
-These four actions solve different failures.
+Recovery is not an opportunity to change the original intent. When an interface requires exact replay, do not casually replace receiver, Todo, TTL or version. Resolve the original operation first, then express new intent through a new legal lifecycle action. Request-digest and replay requirements belong to each current contract.
 
-### Continuation
+## What do different revisions protect? {#revision-bases}
 
-Goal, frontier, and protocol semantics are materially unchanged. A new turn performs another bounded
-segment on the existing Todo. Even when a Host session can resume, current guards must still rerun.
-
-### Retry
-
-The action remains legal, but transport, timeout, or temporary environment failure prevented a reliable
-result. Retry needs an idempotency boundary, attempt identity, and readback so an already-successful
-effect is not executed again after its response was lost.
-
-### Replan
-
-The work semantics must change. Examples include:
-
-- Goal, acceptance, or per-Agent Vision drift;
-- an exhausted frontier while acceptance remains open;
-- a satisfied dependency whose old Todo needs a successor;
-- new evidence that invalidates the plan;
-- repeated surface activity without outcome progress;
-- a peer whose role scope no longer covers the next step.
-
-Replan must produce an observable delta: Todo, Vision, acceptance, successor, supersession, or
-no-follow-up. Writing "reassessed, continuing original plan" does not necessarily satisfy a replan
-obligation.
-
-### Self-Repair
-
-The target work may still be correct while the control plane is inconsistent:
-
-- an event source and status projection disagree;
-- a User Todo count exists without a concrete Gate payload;
-- a stale Next Action points to a completed Todo;
-- the wrong worktree remains configured as the delivery workspace;
-- a monitor lacks target, cadence, or bounded observation handle;
-- writeback and spend lineage is incomplete.
-
-Self-repair fixes state, projection, or boundary. It does not weaken a Gate or invent permission.
-
-### Dreaming vs replan boundary
-
-Both Replan and Dreaming change the imagination of the future, but only one is executable:
-
-- **Replan** is a machine-visible change on the current goal graph: add/remove Todos, change Gates,
-  write successors, update acceptance. It produces new facts that quota and frontier can directly read.
-- **Dreaming** is exploring future possibilities: a new branch direction, an alternative approach, an
-  unverified hypothesis. It can only produce proposals, not replace the current runnable frontier.
-
-The key distinction: an agent writes a set of draft Todos during dreaming, but does not write them into
-the current goal's frontier through a lifecycle command. They are not executable tasks at that point, and
-the next quota round will not select them. If an agent skips replan and lets a dreaming proposal
-impersonate executable tasks, quota will continue running on the wrong frontier.
-
-The correct flow is: dreaming produces a proposal -> operator or autonomous replan decides to accept ->
-accepted proposal is written into the goal graph via lifecycle command -> next quota round sees it.
-Replan writes into the goal graph; Dreaming writes into the proposal space. The two cannot substitute for
-each other.
-
-## Long-horizon convergence: a Turn is not the unit of progress
-
-Long-running work does not approach its Goal merely because it executes more Turns. A Turn may be a legal
-wait, or it may produce a large diff without adding evidence that can change the next decision. To judge
-convergence, separate four operating states:
-
-| State | Observable property | Correct action |
+| Identity or revision | Question answered | What it cannot replace |
 | --- | --- | --- |
-| Legal iteration | Input, revision, or evidence changed, making the next action distinguishable | Execute one new bounded Turn |
-| External wait | No current action exists, but recovery condition, target, and next due time are explicit | Monitor, backoff, and quiet |
-| Goal drift | A local metric or current Todo begins to replace Goal or Acceptance | Vision checkpoint, acceptance audit, and replan |
-| Local loop | The same action family repeats without new information, state delta, or failure discrimination | Stop repeating; diagnose, replan, or self-repair |
+| Artifact / commit revision | Which artifact was validated or delivered? | Provider commit revision or execution permission |
+| Provider revision | Can this storage snapshot still be committed? | Artifact revision or lease epoch |
+| Lease version | Which current lease record does this request use? | Another Todo's or provider's revision |
+| Lease epoch / execution key | Which execution holds current proof; was the older one retired? | Readback of an external effect |
+| Turn / operation identity | Which action, writeback or settlement is bound and recovered? | Admission for a new turn |
+| Evidence time and source | Where did the observation come from, and is it applicable? | Correct object and scope merely because it was just read |
 
-Repetition alone is not a loop. Processing a PR again after checks move from pending to failed is legal
-iteration. Observing an external training task at its due time is legal waiting. Work is spinning only when
-input facts, attributable evidence, and the next plan all remain materially unchanged while the same class
-of Turn continues to consume resources.
+No one integer represents all these dimensions. Separate reads also need not be one atomic snapshot. Retain each basis and source; report missing fields instead of supplying an invented `version=0`. See [state](state-substrate.md) and the [state-machine topic](core-state-machines.md).
 
-### Material evidence delta
+### What becomes stale when C1 changes to C2? {#changed-evidence}
 
-A Turn that deserves more resource consumption should advance at least one of these:
+Checks on C1 remain trustworthy history, but do not automatically validate C2. Identify what changed: code, validation declarations, dependencies, approval scope or the execution environment.
 
-- a new observation changes the current domain judgment;
-- new evidence supports or excludes a testable explanation;
-- a validated artifact satisfies an acceptance condition;
-- a successor, Gate, blocker, Vision, or no-follow-up changes the machine-visible frontier;
-- a Provider effect receives a receipt bound to proposal identity, revision, and readback;
-- the system proves that it can only wait and writes the target, cadence, and recovery condition.
+A formatting-only documentation edit need not repeat every domain experiment; an output-schema change requires reassessing dependent code, examples, acceptance and approval. Support impact judgment with the diff, current requirements and a validation plan, not the assertion that a change is small.
 
-More logs, rewritten summaries, a refresh of the same projection, another unchanged poll, or a test result
-that cannot bind to the current revision are not material progress. They may be diagnostic steps, but they
-must not impersonate Goal advancement.
+Whether G1 still covers C2 depends on the object and conditions of the original decision. Not every decision necessarily expires, and historical approval is not perpetual permission. Use existing planning and decision entrypoints to update applicability, revalidate affected work, and let current admission choose the next action.
 
-### Outcome Floor: preventing micro-actions from impersonating progress
+## Four continuation actions for four kinds of problem
 
-A multi-file diff can still be surface-only changes without genuinely advancing acceptance. LoopX uses two
-levels of granularity to distinguish "did work" from "advanced the goal":
+**Continuation:** the objective and route remain valid, and another legal segment begins. Even a resumable Host session must reread current guards rather than reuse an old selected Todo.
 
-**Delivery Scale**:
+**Retry / reconcile:** original intent remains valid, but the original operation must be confirmed or finished. Retry only under a verified idempotency/recovery boundary; prefer reconciliation or readback while external outcome is unknown. `unknown` is not another spelling of failure.
 
-| Value | Meaning |
-| --- | --- |
-| `test_only` | Only ran tests, no new artifact produced |
-| `single_surface` | Modified a single file or surface |
-| `multi_surface` | Crossed multiple files/modules |
-| `implementation` | Produced a verifiable functional implementation |
+**Replan:** the meaning of the work must change, for example after contradictory evidence, changed acceptance or an exhausted frontier with unmet objectives. Produce a result accepted by the current contract: Todo, Vision, successor or acceptance relationships, or a justified terminal result, not another copy of the plan.
 
-**Delivery Outcome**:
+**Self-repair:** the work may remain correct, but sources, projections, routing or receipt lineage have a gap. Locate the owner and repair that gap. Deleting Gates, weakening validators or clearing history is not repair.
 
-| Value | Meaning |
-| --- | --- |
-| `surface_only` | Artifact exists but did not advance acceptance |
-| `outcome_gap` | Advanced a sub-goal but did not close it |
-| `outcome_progress` | Advanced an acceptance of the primary goal |
-| `primary_goal_outcome` | Directly closed a primary acceptance |
+Dreaming proposes directions or hypotheses; it does not acquire execution authority. Accepted planning/decision and lifecycle writeback are required before proposals affect actual work. Domain results likewise enter through Capability/Provider contracts and do not own generic permission rules.
 
-Key rule: a `multi_surface` delivery can still be a `surface_only` outcome. After consecutive
-`surface_only` or no-progress deliveries, quota will require the next delivery to produce a genuine
-outcome or self-repair. This is not a penalty for "writing a lot," but a guard against substituting surface
-activity for goal advancement.
+## Material evidence delta: activity is not progress
 
-Relationship to material evidence delta: outcome is the semantic classification of evidence delta. A
-delivery that neither changes the machine-visible frontier nor advances acceptance has neither material
-delta nor outcome.
+Imagine a teaching case in which a day produces notes, unrelated tests and directory reorganization, but reduces none of the acceptance gaps. The artifacts may exist; that alone does not establish convergence. This is not a claim that current policy unconditionally permits infinite repetition.
+
+Material evidence delta concerns new evidence or state that changes the next judgment, not counts of turns, files or characters. Negative results can matter: rejecting a hypothesis, confirming a blocker or narrowing an unknown can change the route.
+
+Delivery Batch Scale describes change scope; Delivery Outcome describes its relation to the objective. `multi_surface` or `implementation` does not automatically complete a Goal. Interpret `surface_only`, `outcome_gap`, `outcome_progress` and `primary_goal_outcome` under their contract; an attractive label is not evidence.
+
+### Vision checkpoints and baselines
+
+Vision is a per-Agent execution route, not a scratchpad. Applicable material refresh must account for a patched route, supported unchanged result, retirement/supersession, or why the role does not require Vision.
+
+“Unchanged” needs a comparable baseline. Establish the route when none exists rather than describing never-checked as unchanged. For gaps such as `vision_checkpoint_missing`, return to the checkpoint owner and supply the actual relationship, not more aspirational prose. Current owners still determine precedence among replanning and repair; this explanation is not a global rule table for all Hosts.
 
 ### Six convergence invariants
 
-Review a long-running chain with six questions:
+These questions check completeness; they add no public fields or automatic acceptance algorithm:
 
-1. **Direction:** Can the current Todo still be traced to Vision, Goal, and Acceptance?
-2. **Authority:** Does the transition affect the correct object under the correct Agent, Gate, or Host
-   capability?
-3. **Evidence:** Is the observation fresh, and is evidence bound to revision, scope, and evaluator?
-4. **Delta:** Did this Turn change replayable facts, the frontier, or a wait condition?
-5. **Liveness:** If acceptance remains open and the frontier is empty, did the system create a wait, replan,
-   repair, or explicit stop?
-6. **Closure:** Does terminal state close Todos, Monitors, Gates, successors, receipts, and acceptance gaps?
+1. **Direction:** how does current work relate to the Goal or Acceptance and applicable Vision?
+2. **Authority:** is the correct actor currently eligible for the correct object and scope? Capability is not permission.
+3. **Evidence:** do observation, validation and decisions bind the correct inputs and sources and satisfy freshness requirements?
+4. **Delta:** what rereadable fact was added, or which legitimate wait was established?
+5. **Liveness:** does unfinished work have an action, executable observation, decision, repair or explicit stopping responsibility?
+6. **Terminal state:** were successors, waits, receipts and acceptance gaps handled under the applicable contract, rather than merely finding an empty list?
 
-These six keep Safety and Liveness in the same loop: Safety prevents an invalid transition; Liveness
-prevents a system from remaining cautiously stuck forever. A successor reconnects local completion to the
-Goal; Monitor backoff avoids hot polling while waiting; Replan changes a failed route; Self-Repair fixes
-control-plane gaps; and terminal audit prevents "all current Todos are checked" from becoming a false
-completion claim.
+Safety avoids incorrect progress; liveness avoids getting stranded without a next entrypoint. Neither guarantees arbitrary objectives will succeed. See [long-horizon convergence](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/) and [evidence and repair](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
 
-For the complete paired-Showcase replay, evidence-delta criteria, independent oracle, and convergence
-experiments, use
-[Long-horizon convergence](/loopx/docs/development/control-plane-course/topic-long-horizon-convergence/).
-For evidence, refresh, spend, and repair delta source paths, see
-[Control-Plane Course Lesson 8](/loopx/docs/development/control-plane-course/08-evidence-refresh-and-self-repair/).
-
-## Handle a projection gap in order
-
-When two surfaces disagree:
+## Which surface should be repaired when two disagree? {#projection-repair}
 
 ```text
-detect mismatch
-  -> identify authoritative source
-  -> classify source-write / projection / migration / freshness failure
-  -> repair through the owning protocol
-  -> recompute and validate
-  -> rerun quota
+Detect disagreement
+  → verify Goal, source, mode, time and truncation range
+  → identify the source owning that fact
+  → distinguish non-commit, source error, stale projection, read failure and migration differences
+  → repair through the appropriate owner
+  → read back and reassess dependent work
 ```
 
-If active-state Markdown marks a Todo complete while the event projection remains open:
+Legacy Markdown can still be source; a Todo under a selected canonical provider cannot fall back to old Markdown. If source committed but display is old, repair projection. If source itself is wrong, use its lifecycle. If reads fail, retain uncertainty. Manually making several pages agree does not restore correct state.
 
-1. check whether completion passed through a lifecycle command and formed an event;
-2. if only Markdown changed, normalize valid evidence into the canonical transition;
-3. if the event exists, repair the projection head or sequence;
-4. rerun status and quota;
-5. do not execute a dependent successor until the state is consistent.
+`refresh-state` is controlled writeback, not a universal diagnostic query. Separate inspection from mutation using the [field reference](appendix-reference.md#read-before-change). See the Workspace [pause case](workspace-v1.md#pause-readback) for comparing an operation receipt with a displayed status.
 
-Do not hand-edit Markdown, a dashboard fixture, and a status cache until they merely look consistent.
+## Stop, closure and compensation
 
-## Vision checkpoint and acceptance gaps
+An owner-stopped Goal, paused quota or exited Host does not prove completion. `terminal_no_followup` needs its frontier/acceptance conditions. Zero visible Todos is insufficient: output may be truncated, or Monitors, Gates, successors, handoff, replanning and result-return responsibilities may remain.
 
-[`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)
-requires an Agent that uses Vision to record one of these outcomes after material refresh:
+When requirements are satisfied, record the basis through the existing terminal entrypoint. Keep a successor for unfinished work or observation/blocker for unknown results. Verified negative results and coverage-backed no-follow-up can honestly end a route without inventing success.
 
-- Vision was patched;
-- Vision remains unchanged, with a reason;
-- Vision is satisfied and retired;
-- a successor supersedes it;
-- the current role does not require Vision.
+A wrong effect that already occurred needs compensation, not deleted history. The [rollback packet protocol](/loopx/docs/reference/protocols/rollback-packet-v0/) describes affected objects, origins, recovery choices, approval and validation; the packet is not execution permission. Revert, fix-forward, external cleanup and support requests have different prerequisites. Rolling back installation need not reverse state formats or remote effects.
 
-A missing required checkpoint can produce a `vision_checkpoint_missing` acceptance gap. The purpose is not
-to make an Agent write more visionary prose. It is to prove that local delivery did not move the Agent's
-lane away from the Goal.
+After compensation, recheck actual postconditions and identify what the acceptor still needs to confirm. Internal closeout, recipient receipt and overall acceptance remain separate; see [first delivery](05-connect-existing-project.md#first-delivery).
 
-Goal-level replan takes precedence over monitor quiet or agent-scope wait. Otherwise the system can remain
-quiet because no current Todo is runnable while acceptance still has an open gap.
+## Recovery costs and public boundaries
 
-### Vision unchanged honesty condition
+Recovery depends on readable original records, available provider readback and current permission. Missing prerequisites can require people or external support; changing identity does not make the problem disappear. Repeated projection repair is an engineering problem, not justified merely because the system can repair itself.
 
-Claiming "Vision unchanged" is not always safe. On the first material closeout, there is no baseline, so
-claiming unchanged is judged as `missing_required`: the system cannot distinguish "truly unchanged" from
-"never checked." Therefore the first round must write a vision patch; it cannot bypass with "unchanged."
+Evidence collection costs time and resources and should match the risk. Too little checking misses changes; excessive repetition can consume the delivery budget. Retain minimally sufficient evidence, not every thought forever.
 
-For subsequent rounds, claiming unchanged requires:
+Private registries, active state, leases, session handles, credentials and raw transcripts do not belong in public examples. Handoff carries necessary bounded references, freshness and legal retrieval routes, not all private material. Establish Git boundaries for `.loopx/`, `.loopx/goals/` and `.local/` according to actual use; ignore rules do not replace credential scans or inspection of already committed history.
+
+You should now be able to classify an interruption, identify preserved identity and freshly observed conditions, and name the recovery entrypoint and stopping condition. When the result remains unknown, return explicit recovery responsibility rather than “run it again and see.”
+
+A writeback may mark the vision unchanged only when all of the following hold:
 
 - a comparable baseline exists (the vision written in the previous round);
 - this round's delivery did not genuinely change any vision premise;
-- the writeback explicitly references the baseline revision and the "unchanged" reason.
+- the writeback gives the "unchanged" reason with `--vision-unchanged-reason`; LoopX binds the existing
+  vision as the baseline automatically, so no separate revision is passed.
 
 If the baseline is missing but the agent still claims unchanged, quota will produce a
 `vision_checkpoint_missing` gap. This is not a punishment, but a guard against the agent accumulating
@@ -368,7 +271,7 @@ The project-onboarding chapter requires these directories to stay outside Git:
 
 ```text
 .loopx/
-.codex/goals/
+.loopx/goals/
 .local/
 ```
 

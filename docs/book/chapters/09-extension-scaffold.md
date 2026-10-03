@@ -1,58 +1,41 @@
 # 创建 standalone Extension
 
-本章从 LoopX 官方 scaffold 创建 `loopx-text-stats`。官方 scaffold 提供完整可运行基线；本章
-给出需要收窄的 manifest、request/response 合同、核心函数与验证步骤，不依赖配套练习仓库。
+本章用一份完整的零权限教学包学习 request、response、验证和打包。[配套源码](https://github.com/loopx-project/loopx/tree/main/packages/loopx-text-stats)位于 `packages/loopx-text-stats/`，包含 manifest、Python package、两份 JSON Schema、示例请求和标准库测试。
 
-## 成功标准
+它不注册内置 Capability，不进入默认 catalog，也不读写 Goal。独立 package 拥有文本统计的输入与结果；安装、激活和受控调用继续由现有 Extension lifecycle 管理。
 
-完成后，你应该能观察到：
+## 先把完整示例运行起来
 
-- scaffold 是独立 Python package；
-- manifest 使用 `loopx_extension_manifest_v0`；
-- request 与 response 都有 versioned JSON Schema；
-- provider 只从 stdin 读取一个 JSON object，并向 stdout 写一个 JSON object；
-- doctor 无 side effect；
-- 不合法 request 在工作开始前 fail closed；
-- manifest 与 runtime 都声明零权限。
+下面从已核对的 LoopX checkout 根目录执行，把整个教学包复制到新目录。`copytree` 拒绝已有目标，避免覆盖先前练习。下一章继续沿用这个工作目录和环境。
 
-## 1. 生成官方 scaffold
+```bash
+python3 -c "import shutil; shutil.copytree('packages/loopx-text-stats', 'standalone-extension')"
+python3 -m venv .local/book-extension-venv
+. .local/book-extension-venv/bin/activate
+python3 -m pip install -e . -e ./standalone-extension
+python3 -m unittest discover -s standalone-extension/tests -v
+loopx-text-stats --doctor
+loopx-text-stats < standalone-extension/examples/request.json
+```
 
-从一个准备存放示例的工作目录运行：
+这条路径把当前 LoopX checkout 与 provider 装进同一隔离环境。若你选择使用已安装的 release，先核对版本，再只安装 provider；不要无意将源码与发布物混用。这里没有 `[test]` extra，测试使用标准库 unittest。
+
+这些命令完成 package 安装与直接调用，尚未写入 LoopX activation state。下一章再用独立 state file 激活一次。
+
+## 官方 scaffold 与完成态示例有什么区别
+
+学习从空白领域实现开始时，可另外生成起点：
 
 ```bash
 loopx extension init loopx-text-stats \
-  --destination standalone-extension \
-  --execute \
-  --format json
+  --destination text-stats-starter --execute --format json
 ```
 
-`extension init` 默认只预览；必须显式加 `--execute` 才写文件。目标目录必须不存在，即使空目录也会
-被拒绝。命令不会自动 build、install、register 或 enable。
+目标目录必须不存在。官方 scaffold 展示 message 回显；本书完成态把它改成 text 统计，并同步修改 decoder、schemas、示例与测试。生成源码不会自动 build、安装或激活。
 
-生成结构：
+两条路线分别适合“先看可运行结果”和“练习修改合同”。不要把只换了函数名的 scaffold 当成已经完成领域适配的 provider。
 
-```text
-standalone-extension/
-├── extension.toml
-├── pyproject.toml
-├── README.md
-├── examples/
-│   └── request.json
-├── schemas/
-│   ├── request.schema.json
-│   └── response.schema.json
-└── src/
-    └── loopx_text_stats/
-        ├── __init__.py
-        └── cli.py
-```
-
-这是 complete standalone path，不会猜测 `[[provides]]` 或 `[[implements]]` 所需的
-Capability authority。
-
-## 2. 读取 manifest
-
-scaffold 生成并经本章收窄后的 manifest：
+## Manifest 只声明需要的生命周期
 
 ```toml
 schema_version = "loopx_extension_manifest_v0"
@@ -69,160 +52,55 @@ required_permissions = []
 timeout_seconds = 30
 ```
 
-关键约束：
+`id` 标识 Extension，`version` 参与 revision，`requires_loopx_api` 声明兼容窗口。Console entrypoint 需在运行 LoopX 的环境可解析。`timeout_seconds` 由 managed runtime 使用，当前合同允许 1—120 秒。
 
-- `id` 是 lifecycle identity；
-- `version` 参与 revision 与升级；
-- `requires_loopx_api` 明确兼容窗口；
-- `protocol` 是 provider wire contract；
-- `entrypoint` 必须存在于 LoopX 所在 Python environment 的 `PATH`；
-- `doctor_args` 指向只读 readiness probe；
-- `permissions` 与 `required_permissions` 都为空；
-- timeout 由 managed runtime 固定，调用者不能任意覆盖。
+这个示例不声明 `provides` / `implements`，也没有权限需求，因此使用 standalone runner。需要受保护 effect 时，先找相应 Capability/domain contract；权限声明本身不产生授权，也不提供 OS sandbox。
 
-## 3. 定义 request contract
+## 用明确的度量定义结果
 
-示例 request：
+`characters` 是 Python Unicode code point 数，`words` 是空白分隔片段数，`lines` 遵循 `str.splitlines()`。所以“你好世界”的 words 是 1，组合字符可能包含多个 code point。这是示例的语义，不是通用自然语言分词。
+
+示例输入为：
 
 ```json
 {
   "schema_version": "loopx_text_stats_request_v0",
-  "text": "LoopX keeps project state explicit.\nExtensions keep delivery lifecycle explicit."
+  "text": "LoopX keeps work explicit.\nTests verify the result."
 }
 ```
 
-request schema 要求：
-
-- payload 必须是 object；
-- `schema_version` 必须精确匹配；
-- `text` 必须是包含非空白字符的 string；
-- `additionalProperties` 为 false。
-
-拒绝额外字段很重要。假如 caller 传入：
+成功 response 的 `result` 是：
 
 ```json
-{
-  "schema_version": "loopx_text_stats_request_v0",
-  "text": "hello",
-  "path": "/tmp/input.txt"
-}
+{"characters": 51, "non_whitespace_characters": 44, "words": 8, "lines": 2}
 ```
 
-provider 必须拒绝，而不是擅自把 `path` 理解为文件读取授权。schema 是 bounded request 的一部分。
+外层同时保留 `ok`、response schema、request schema 与 extension identity。完整输出结构见 `schemas/response.schema.json`；额外的 LoopX managed receipt 不是领域计算结果的一部分。
 
-## 4. 实现纯计算
+## Decoder 为什么还要自己校验
 
-示例的核心函数：
+请求要求 object、精确 schema、非空白 text，并拒绝额外字段。JSON Schema 用于描述 wire shape；decoder 实际执行字段约束，并检查编码、重复键、输入字节上限和 Python 空白语义。
 
-```python
-def analyze_text(text: str) -> dict[str, int]:
-    return {
-        "characters": len(text),
-        "non_whitespace_characters": sum(
-            1 for character in text if not character.isspace()
-        ),
-        "words": len(re.findall(r"\S+", text)),
-        "lines": len(text.splitlines()) or 1,
-    }
-```
+本例的输入上限是 65,536 字节，text 上限是 32,000 code point。这是教学包自己的限制，不代表 LoopX 全局默认值。
 
-它具有适合作为首个 standalone Extension 的性质：
+长整数暴露了另一条边界：Python 的 `json.loads` 可能因整数转换限制抛出 `ValueError`，即使数据还没超过字节上限。只捕获 `JSONDecodeError` 会让这个输入越过统一错误结果。
 
-- 同一输入得到同一输出；
-- 不访问环境变量；
-- 不读取文件；
-- 不访问网络；
-- 不写外部系统；
-- 不依赖 LoopX project state。
+实现先保留 `InvalidRequest` 的专门错误，再把其他解析 `ValueError` 与递归错误规范化为 `invalid_json`。重复字段仍返回 `duplicate_field`。不放宽解释器限制，也不把底层异常或请求原文写入 receipt。
 
-provider 在计算前完成结构验证，错误也通过 versioned response object 返回：
+## 哪些测试有实际价值
 
-```json
-{
-  "ok": false,
-  "schema_version": "loopx_text_stats_response_v0",
-  "extension_id": "loopx-text-stats",
-  "error": "extension input has unsupported fields ['path']"
-}
-```
+| 场景 | 期望 | 证明范围 |
+| --- | --- | --- |
+| 示例文本、Unicode、重复输入 | 固定度量与确定性输出 | 本 provider 的领域函数 |
+| 缺失/未知字段、错误类型/schema、重复键 | 固定错误码，无原文回显 | 输入合同与公开错误边界 |
+| 字节与文本长度边界 | 上限内接受，越界拒绝 | 示例选择的本地限制 |
+| 5,000 位整数 | 错误 JSON，stderr 无 traceback | Python 3.11+ 整数解析回归 |
+| doctor、CLI 输出 | doctor 不处理业务请求，run 输出一个对象 | 真实 provider 子进程入口 |
 
-不要把 traceback、环境变量或本机路径直接输出到 public receipt。
+源码与测试放在同一个配套目录。测试不调用模型、外部服务或 live Goal，也不证明 managed runtime 的进程回收、权限隔离或升级路径。下一章将这些生命周期步骤单独验证。
 
-## 5. 定义 response contract
+## 怎样扩展这个例子
 
-成功 response 的稳定 domain 部分：
+先定义新输入与可验证结果，再同时改 decoder、schemas、示例与测试。若增加外部状态或权限需求，应重新评估 placement，不能直接给 standalone manifest 加 permission 后继续沿用零权限调用假设。
 
-```json
-{
-  "ok": true,
-  "schema_version": "loopx_text_stats_response_v0",
-  "extension_id": "loopx-text-stats",
-  "request_schema_version": "loopx_text_stats_request_v0",
-  "result": {
-    "characters": 80,
-    "non_whitespace_characters": 71,
-    "words": 10,
-    "lines": 2
-  }
-}
-```
-
-response schema 使用 `oneOf` 区分成功与失败。测试应断言 domain contract，而不是绑定 LoopX CLI
-外层展示的每个字段，否则 minor release 的 receipt 扩展会导致无意义失败。
-
-## 6. 保持 doctor 无副作用
-
-starter 的 doctor：
-
-```python
-if args.doctor:
-    return 0
-```
-
-对于这个纯计算 provider，readiness 只需要证明 entrypoint 可启动和参数可解析。doctor 不应：
-
-- 创建文件；
-- 连接网络；
-- 写入凭据；
-- 修改 extension state；
-- 产生业务 effect；
-- 输出未经约束的大量日志。
-
-真实 Provider 可以做必要的只读依赖检查，但 readiness probe 仍应有界、可重复、无 effect。
-
-## 7. 安装 package 并运行 tests
-
-在同一个 Python environment 中：
-
-```bash
-cd standalone-extension
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e '.[test]'
-python3 -m pytest
-```
-
-同环境要求不是偶然限制。LoopX lifecycle 根据已安装 console entrypoint 验证 provider；如果 package
-装在另一个 venv，正确结果是 `entrypoint_missing`，而不是静默寻找任意源码路径。
-
-## 常见错误
-
-### 手写一个比 scaffold 更小的目录
-
-容易漏掉 schema、doctor、manifest compatibility 或 package entrypoint。先生成完整官方路径，再删改
-不需要的领域字段。
-
-### 让 provider 接受任意 kwargs
-
-这会破坏 bounded request，并可能意外扩大权限。request schema 和 provider validation 应同时
-fail closed。
-
-### 用 doctor 执行业务请求
-
-doctor 证明 readiness，不证明某个 effect 已获授权。业务调用必须通过 managed runtime 或
-Capability/domain command。
-
-### 为演示擅自增加 permission
-
-一旦有 permission，`extension run` 会拒绝直接调用。先确定真实 Capability 和 authority，再设计
-effectful provider，不要为了展示 manifest 字段制造假的权限合同。
+[英文 README](https://github.com/loopx-project/loopx/blob/main/packages/loopx-text-stats/README.md)与[中文 README](https://github.com/loopx-project/loopx/blob/main/packages/loopx-text-stats/README.zh-CN.md)提供同一套完整运行步骤。没有额外的配套仓库，也不需要从聊天中拼回缺失文件。

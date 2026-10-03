@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1220" viewBox="0 0 1600 1220"><title>通用长程能力，是 RSI 的先决条件</title><desc>LoopX公开历史按meta自举、通用长程系统、工作区与社区分期。非合并提交739、3870、2239，日均35.2、50.3、86.1，凌晨占比40.3%、36.1%、24.8%。按北京时间committer时间统计。开发活动并非AI自动化比例。</desc><rect width="1600" height="1220" fill="#fafafa"/><g font-family="PingFang SC,Noto Sans CJK SC,Helvetica Neue,Arial,sans-serif">
+<text x="72" y="64" font-size="23" fill="#0070f3" font-weight="600" >LOOPX  /  LONG-HORIZON × SELF-IMPROVEMENT</text>
+<text x="72" y="142" font-size="63" fill="#171717" font-weight="600" >通用长程能力，是 RSI 的先决条件</text>
+<text x="72" y="197" font-size="30" fill="#4d4d4d" font-weight="400" >用改善后的系统，继续改善系统。</text>
+<line x1="72" x2="1528" y1="229" y2="229" stroke="#ddd"/>
+<text x="72" y="338" font-size="104" fill="#171717" font-weight="600" >6,848</text>
+<text x="455" y="309" font-size="34" fill="#171717" font-weight="500" >个非合并提交</text>
+<text x="455" y="350" font-size="25" fill="#666" font-weight="400" >2026.05.31—10.01 · 公开 Git 历史</text>
+<text x="1102" y="294" font-size="31" fill="#171717" font-weight="500" >不是一轮演示</text>
+<text x="1102" y="340" font-size="28" fill="#4d4d4d" font-weight="400" >而是一段持续演进的历史</text>
+<rect x="72" y="385" width="470" height="282" rx="12" fill="#fff" stroke="#e0e0e0"/><text x="98" y="431" font-size="29" fill="#171717" font-weight="600" >前期 · meta 自举</text><text x="98" y="466" font-size="22" fill="#666" font-weight="400" >05.31—06.20 · 21 天</text><text x="98" y="553" font-size="76" fill="#171717" font-weight="600" >739</text><text x="332" y="548" font-size="23" fill="#4d4d4d" font-weight="400" >非合并提交</text><text x="98" y="600" font-size="27" fill="#0070f3" font-weight="500" >凌晨 298 个 · 40.3%</text><line x1="98" x2="516" y1="619" y2="619" stroke="#ebebeb"/><text x="98" y="648" font-size="24" fill="#4d4d4d" font-weight="400" >6.1 已创建自身 Meta Goal</text><rect x="565" y="385" width="470" height="282" rx="12" fill="#fff" stroke="#e0e0e0"/><text x="591" y="431" font-size="29" fill="#171717" font-weight="600" >中期 · 通用长程系统</text><text x="591" y="466" font-size="22" fill="#666" font-weight="400" >06.21—09.05 · 77 天</text><text x="591" y="553" font-size="76" fill="#171717" font-weight="600" >3,870</text><text x="825" y="548" font-size="23" fill="#4d4d4d" font-weight="400" >非合并提交</text><text x="591" y="600" font-size="27" fill="#0070f3" font-weight="500" >凌晨 1,399 个 · 36.1%</text><line x1="591" x2="1009" y1="619" y2="619" stroke="#ebebeb"/><text x="591" y="648" font-size="24" fill="#4d4d4d" font-weight="400" >多 Agent / 跨 runtime 持续演进</text><rect x="1058" y="385" width="470" height="282" rx="12" fill="#fff" stroke="#e0e0e0"/><text x="1084" y="431" font-size="29" fill="#171717" font-weight="600" >后期 · 工作区与社区</text><text x="1084" y="466" font-size="22" fill="#666" font-weight="400" >09.06—10.01 · 26 天</text><text x="1084" y="553" font-size="76" fill="#171717" font-weight="600" >2,239</text><text x="1318" y="548" font-size="23" fill="#4d4d4d" font-weight="400" >非合并提交</text><text x="1084" y="600" font-size="27" fill="#0070f3" font-weight="500" >凌晨 556 个 · 24.8%</text><line x1="1084" x2="1502" y1="619" y2="619" stroke="#ebebeb"/><text x="1084" y="648" font-size="24" fill="#4d4d4d" font-weight="400" >1.0 Personal Workspace</text>
+<text x="72" y="734" font-size="31" fill="#171717" font-weight="600" >日均提交节奏</text>
+<text x="72" y="773" font-size="23" fill="#666" font-weight="400" >非合并提交 / 自然日</text>
+<line x1="130" x2="800" y1="1025" y2="1025" stroke="#aaa"/>
+<line x1="130" x2="800" y1="907.5" y2="907.5" stroke="#e0e0e0" stroke-dasharray="5 5"/>
+<line x1="130" x2="800" y1="790" y2="790" stroke="#e0e0e0" stroke-dasharray="5 5"/>
+<text x="111" y="1033" font-size="20" fill="#666" font-weight="400" text-anchor="end">0</text><text x="111" y="915" font-size="20" fill="#666" font-weight="400" text-anchor="end">50</text><text x="111" y="798" font-size="20" fill="#666" font-weight="400" text-anchor="end">100</text>
+<rect x="190" y="942.302380952381" width="108" height="82.69761904761901" rx="6" fill="#b5b5b5"/><text x="244" y="924.302380952381" font-size="36" fill="#171717" font-weight="600" text-anchor="middle">35.2</text><text x="244" y="1068" font-size="24" fill="#4d4d4d" font-weight="400" text-anchor="middle">前期</text><rect x="420" y="906.8896103896104" width="108" height="118.11038961038957" rx="6" fill="#606060"/><text x="474" y="888.8896103896104" font-size="36" fill="#171717" font-weight="600" text-anchor="middle">50.3</text><text x="474" y="1068" font-size="24" fill="#4d4d4d" font-weight="400" text-anchor="middle">中期</text><rect x="650" y="822.6288461538461" width="108" height="202.3711538461539" rx="6" fill="#0070f3"/><text x="704" y="804.6288461538461" font-size="36" fill="#171717" font-weight="600" text-anchor="middle">86.1</text><text x="704" y="1068" font-size="24" fill="#4d4d4d" font-weight="400" text-anchor="middle">后期</text>
+<line x1="850" x2="850" y1="712" y2="1082" stroke="#e0e0e0"/>
+<text x="889" y="734" font-size="31" fill="#171717" font-weight="600" >递归发生在这里</text>
+<text x="889" y="776" font-size="24" fill="#666" font-weight="400" >下一轮，不再从同一个起点开始。</text>
+<rect x="889" y="822" width="166" height="115" rx="12" fill="#f2f2f2"/>
+<rect x="1096" y="822" width="196" height="115" rx="12" fill="#f2f2f2"/>
+<rect x="1333" y="822" width="195" height="115" rx="12" fill="#edf5ff" stroke="#cfe3fa"/>
+<text x="972" y="867" font-size="27" fill="#171717" font-weight="600" text-anchor="middle">真实工作</text><text x="972" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">目标与反馈</text>
+<text x="1194" y="867" font-size="27" fill="#171717" font-weight="600" text-anchor="middle">改进系统</text><text x="1194" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">验证与采用</text>
+<text x="1430" y="867" font-size="27" fill="#0070f3" font-weight="600" text-anchor="middle">下一轮工作</text><text x="1430" y="907" font-size="22" fill="#4d4d4d" font-weight="400" text-anchor="middle">继承有效改进</text>
+<text x="1075" y="887" font-size="27" fill="#4d4d4d" font-weight="400" text-anchor="middle">→</text><text x="1312" y="887" font-size="27" fill="#4d4d4d" font-weight="400" text-anchor="middle">→</text>
+<path d="M1430 951 V978 H972 V951" fill="none" stroke="#0070f3" stroke-width="2"/><path d="M966 959 L972 951 L978 959" fill="none" stroke="#0070f3" stroke-width="2"/>
+<text x="1204" y="1025" font-size="24" fill="#0070f3" font-weight="500" text-anchor="middle">有效改进，成为下一轮的环境</text>
+<text x="889" y="1073" font-size="22" fill="#666" font-weight="400" >概念示意 · 人在回路的系统级自迭代</text>
+<line x1="72" x2="1528" y1="1115" y2="1115" stroke="#ddd"/>
+<text x="72" y="1156" font-size="21" fill="#666" font-weight="400" >凌晨 = 北京时间 00:00–08:00 · Git committer 时间 · 排除 merge · 固定 main b9b758c</text>
+<text x="72" y="1190" font-size="21" fill="#666" font-weight="400" >项目开发活动包含社区贡献；提交数不是能力增益，也不识别 AI 自动化率。</text>
+</g></svg>

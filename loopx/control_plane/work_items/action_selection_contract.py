@@ -359,6 +359,7 @@ def action_selection_recovery_command(
     *, registry_path: str | None = None, runtime_root: str | None = None,
     goal_id: str, agent_id: str | None, turn_instance_id: str | None,
     scheduler_args: str, available_capabilities: Any = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> str:
     argv = ["loopx"]
     if registry_path:
@@ -370,6 +371,18 @@ def action_selection_recovery_command(
         argv.extend(["--agent-id", agent_id])
     if turn_instance_id:
         argv.extend(["--turn-instance-id", turn_instance_id])
+    if goal_ref is not None:
+        from ..goals.source_session_registry_state import exact_goal_ref
+
+        normalized_goal_ref = exact_goal_ref(
+            str(goal_ref.get("goal_id") or ""),
+            str(goal_ref.get("goal_instance_id") or ""),
+        )
+        if normalized_goal_ref["goal_id"] != goal_id:
+            raise ValueError("action selection GoalRef does not match goal_id")
+        argv.extend(
+            ["--goal-instance-id", normalized_goal_ref["goal_instance_id"]]
+        )
     for capability in runtime_capabilities_for_cli_projection(available_capabilities):
         argv.extend(["--available-capability", capability])
     return shlex.join(argv) + scheduler_args
@@ -387,6 +400,7 @@ def bind_action_selection_recovery_command(
     payload: dict[str, Any], *, registry_path: str, runtime_root: str,
     goal_id: str, agent_id: str | None, turn_instance_id: str | None,
     scheduler_args: str, available_capabilities: Any = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> None:
     """Bind the existing recovery projection to the invoking CLI's exact argv."""
     if not action_selection_needs_recovery(payload):
@@ -395,6 +409,7 @@ def bind_action_selection_recovery_command(
         registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
         agent_id=agent_id, turn_instance_id=turn_instance_id,
         scheduler_args=scheduler_args, available_capabilities=available_capabilities,
+        goal_ref=goal_ref,
     )
     interaction = payload["interaction_contract"]
     interaction["agent_channel"]["primary_action"] = command

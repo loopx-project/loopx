@@ -10,6 +10,7 @@ from typing import Any
 
 from .presentation.public_safety import redact_public_text, scan_public_boundary_text
 from .todos import list_goal_todos
+from .control_plane.effect_runtime import effect_runtime_result
 
 
 def _text(value: object, limit: int = 420) -> str:
@@ -17,9 +18,20 @@ def _text(value: object, limit: int = 420) -> str:
     return text if scan_public_boundary_text(text)["ok"] else "[sensitive text omitted]"
 
 
+def _safe_context(value: Any) -> Any:
+    if isinstance(value, str):
+        return _text(value, len(value))
+    if isinstance(value, list):
+        return [_safe_context(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _safe_context(item) for key, item in value.items()}
+    return value
+
+
 def read_manager_goal_details(
     registry_path: Path, runtime_root: Path, goal_id: str, *, owner_scope: bool,
     limit: int = 48, completed_todo_ids: set[str] | None = None, offset: int = 0,
+    todo_id: str | None = None,
 ) -> dict[str, Any]:
     """Use Core's canonical-first read; never parse a private project document."""
     observed_at = datetime.now(timezone.utc).isoformat()
@@ -27,26 +39,16 @@ def read_manager_goal_details(
         result = list_goal_todos(
             registry_path=registry_path, runtime_root_arg=str(runtime_root),
             goal_id=goal_id,
+            **({"todo_id": todo_id} if todo_id else {}),
         )
         if result.get("ok") is not True:
             raise ValueError("Todo authority unavailable or conflicting")
         records = result.get("todos", [])
-        active = [r for r in records if r.get("status") in {"open", "blocked", "deferred"}]
-        # Owner decisions first, then declared priority; do not invent urgency.
-        active.sort(key=lambda r: (r.get("role") != "user", str(r.get("priority") or "Z")))
-        rows = []
-        for record in active[offset:offset + limit]:
-            row = {
-                k: _text(record[k], 160)
-                for k in ("todo_id", "role", "status", "priority", "task_class",
-                          "claimed_by", "bound_agent", "blocks_agent", "unblocks_todo_id",
-                          "action_kind", "next_due_at", "expires_at")
-                if record.get(k) is not None
-            }
-            row["title"] = _text(record.get("title") or record.get("text"))
-            if owner_scope:
-                row["continuation"] = _text(record.get("note") or record.get("continuation_hint"), 280)
-            rows.append(row)
+        page = effect_runtime_result("todo.context.page", {
+            "records": records, "owner_scope": owner_scope, "offset": offset,
+            "limit": limit, "todo_id": todo_id,
+        }, large_local_snapshot=True)
+        rows = _safe_context(page["todos"])
         completed = [r for r in records if r.get("status") == "done"
                      and (completed_todo_ids is None or r.get("todo_id") in completed_todo_ids)]
         revision = "sha256:" + hashlib.sha256(
@@ -58,8 +60,7 @@ def read_manager_goal_details(
             "source_revision": revision,
             "observed_at": observed_at,
             "authority_revision": (result.get("authority_read") or {}).get("provider_revision"),
-            "coverage": {"active": len(active), "included": len(rows),
-                         "omitted": max(0, len(active) - len(rows))},
+            "coverage": page["coverage"],
             "todos": rows,
             "completed_todos": [
                 {"todo_id": _text(r.get("todo_id"), 160),
@@ -77,6 +78,7 @@ def read_manager_goal_details(
             "limitations": [
                 "These are currently declared Todo records, not proof of recent execution or renewed owner intent.",
                 "Run-history age does not invalidate this independent Todo read. Do not infer deadlines from priority or list order.",
+                "content_truncated marks an overview excerpt; read view=todos with goal_id and todo_id for the exact record. Resume conditions, lineage and decision scopes are recorded facts, not new authority or proof of readiness.",
             ],
         }
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):

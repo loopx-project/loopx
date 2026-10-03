@@ -135,6 +135,7 @@ def _read_goal(
     now: datetime,
     max_age_hours: float,
     include_goal_lifecycle: bool = False,
+    include_goal_attention: bool = False,
     shared_status: dict[str, Any] | None = None,
     source_versions_before: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
@@ -155,6 +156,8 @@ def _read_goal(
             "observed_at": now.isoformat(),
         },
     }
+    if include_goal_attention:
+        row["attention"] = {"status": "unavailable", "items": [], "reason": "goal_not_read"}
     if include_goal_lifecycle:
         # Every Goal this reader attempted answers the lifecycle question, so a
         # failed or ambiguous source is named here instead of surfacing as
@@ -176,6 +179,11 @@ def _read_goal(
                 include_public_boundary_scan=False,
             )
         )
+        if include_goal_attention:
+            from .capabilities.manager_context.goal_attention import read_goal_attention
+
+            initial_quota = build_quota_should_run(status, goal_id=goal_id, agent_id=agents[0]) if agents else {}
+            row["attention"] = read_goal_attention(registry_path, runtime_root, goal_id, initial_quota)
         row["source"]["revision"] = _digest(status)
         versions_after = _source_versions(goal, runtime_root)
         row["source"]["file_metadata_revisions"] = versions_after
@@ -214,7 +222,8 @@ def _read_goal(
         partial = not agents or len(agents) > 8
         source_ok = status.get("ok") is True
         for agent_id in agents[:8]:
-            quota = build_quota_should_run(status, goal_id=goal_id, agent_id=agent_id)
+            quota = (initial_quota if include_goal_attention and agent_id == agents[0]
+                     else build_quota_should_run(status, goal_id=goal_id, agent_id=agent_id))
             warnings: list[dict[str, Any]] = []
             todos = _classify_goal_todos(quota, goal_id=goal_id, warnings=warnings)
             row["warnings"].extend(w["reason_code"] for w in warnings)
@@ -315,12 +324,15 @@ def build_goal_portfolio(
     now: datetime | None = None,
     include_stopped: bool = True,
     include_goal_lifecycle: bool = False,
+    include_goal_attention: bool = False,
 ) -> dict[str, Any]:
     """Read only the requested registry scope; never derive inventory from chat."""
     if not 1 <= limit <= 128 or not 0 < max_age_hours <= 8760:
         raise ValueError(
             "limit must be 1..128 and max_age_hours must be positive and at most 8760"
         )
+    if type(include_goal_attention) is not bool:
+        raise ValueError("include_goal_attention must be a boolean")
     if type(include_goal_lifecycle) is not bool:
         raise ValueError("include_goal_lifecycle must be a boolean")
     now = now or datetime.now(timezone.utc)
@@ -414,6 +426,7 @@ def build_goal_portfolio(
                     now=now,
                     max_age_hours=max_age_hours,
                     include_goal_lifecycle=include_goal_lifecycle,
+                    include_goal_attention=include_goal_attention,
                     shared_status=shared_status,
                     source_versions_before=before.get(goal_id),
                 )

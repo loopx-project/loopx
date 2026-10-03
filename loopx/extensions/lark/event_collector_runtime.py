@@ -28,6 +28,7 @@ from .goal_channel_operation import (
     recover_goal_channel_simulation_claims,
 )
 from .private_json import write_private_json_atomic
+from .goal_channel_message_delivery import normalized_card_text
 
 APP_ID_PATTERN = re.compile(r"cli_[A-Za-z0-9_-]+")
 EVENT_READY_PREFIX = "[event] ready "
@@ -363,6 +364,41 @@ def _is_profile_self_message(
     return sender_type == "app" and sender_id == profile_app_id
 
 
+def _reply_source_content(message: Mapping[str, Any]) -> str:
+    """Extract visible provider text, never card callback/operation payloads."""
+    body = message.get("body")
+    raw = body.get("content") if isinstance(body, Mapping) else message.get("content")
+    if not isinstance(raw, str):
+        return ""
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if not isinstance(value, Mapping):
+        return raw
+    if isinstance(value.get("text"), str):
+        return value["text"]
+    if card := normalized_card_text(value):
+        return card
+    # A post may be a single localized body or a locale-keyed provider object.
+    post = value if "content" in value else next(iter(value.values()), None)
+    if not isinstance(post, Mapping) or not isinstance(post.get("content"), list):
+        return ""
+    lines = [str(post.get("title") or "")]
+    for row in post["content"]:
+        if not isinstance(row, list):
+            return ""
+        parts = []
+        for node in row:
+            if not isinstance(node, Mapping) or node.get("tag") not in {"text", "a"}:
+                return ""  # Unsupported media is a context gap, not raw JSON.
+            parts.append(str(node.get("text") or ""))
+            if node.get("tag") == "a":
+                parts.append(str(node.get("href") or ""))
+        lines.append("".join(parts))
+    return "\n".join(lines).strip()
+
+
 def enrich_lark_event_reply_context(
     event: Mapping[str, Any],
     *,
@@ -377,6 +413,8 @@ def enrich_lark_event_reply_context(
     """Verify whether an event structurally replies to this profile's bot."""
 
     enriched = dict(event)
+    enriched.pop("reply_context", None)
+    enriched.pop("thread_context", None)
     enriched["reply_context_verified"] = False
     enriched["reply_to_bot"] = False
     enriched["message_context_status"] = "message_context_unavailable"
@@ -411,21 +449,31 @@ def enrich_lark_event_reply_context(
     if current_sender_id:
         enriched["sender_id"] = current_sender_id
 
-    parent_id = str(current.get("parent_id") or "").strip()
-    root_id = str(current.get("root_id") or "").strip()
+    # The CLI's formatted mget can omit ancestry present in the authenticated
+    # event. Missing projection fields must not erase that exact event lineage.
+    parent_id = str(current.get("parent_id") or event.get("parent_id") or "").strip()
+    root_id = str(current.get("root_id") or event.get("root_id") or "").strip()
+    thread_id = str(current.get("thread_id") or "").strip()
+    if thread_id:
+        enriched["thread_id"] = thread_id
     if MESSAGE_ID_PATTERN.fullmatch(root_id):
         enriched["root_id"] = root_id
-    if not MESSAGE_ID_PATTERN.fullmatch(parent_id):
+    if _is_profile_self_message(current, profile_app_id=profile_app_id):
+        enriched["reply_context_verified"] = True
+        return enriched  # Self-message filtering needs no thread-history read.
+    source_id = parent_id if MESSAGE_ID_PATTERN.fullmatch(parent_id) else root_id
+    if not MESSAGE_ID_PATTERN.fullmatch(source_id):
         enriched["reply_context_verified"] = True
         enriched["message_context_status"] = "message_context_verified"
         return enriched
-    enriched["parent_id"] = parent_id
+    if MESSAGE_ID_PATTERN.fullmatch(parent_id):
+        enriched["parent_id"] = parent_id
 
     parent, parent_status = _read_message_with_status(
         runner=runner,
         command_prefix=command_prefix,
         profile=profile,
-        message_id=parent_id,
+        message_id=source_id,
         attempts=attempts,
         sleeper=sleeper,
     )
@@ -433,11 +481,49 @@ def enrich_lark_event_reply_context(
         enriched["message_context_status"] = parent_status
     if parent is None or str(parent.get("chat_id") or "") != configured_chat_id:
         return enriched
+    # Keep the actual provider parent, including posts/cards, for the shared
+    # typed context projection. This observation never changes turn admission.
+    if source_id == parent_id:
+        enriched["reply_context"] = {
+            "message_id": str(parent.get("message_id") or ""),
+            "conversation_id": configured_chat_id,
+            "content": _reply_source_content(parent),
+        }
+    # A root lookup already expands provider thread replies. Preserve typed
+    # observations, including the current-position anchor; TS owns selection,
+    # ordering, scope checks and display bounds. Never invent a direct parent.
+    if source_id == root_id and thread_id:
+        replies = parent.get("thread_replies")
+        if isinstance(replies, list):
+            rows = [parent, *(row for row in replies if isinstance(row, Mapping)
+                              and row.get("message_id") != root_id)]
+            observations = []
+            for row in rows:
+                position = str(row.get("thread_message_position", ""))
+                if not re.fullmatch(r"-?[0-9]{1,12}", position):
+                    continue
+                text = _reply_source_content(row)
+                sender_type, sender_id = _sender_identity(row)
+                observations.append({
+                    "message_id": row.get("message_id"),
+                    "conversation_id": row.get("chat_id"),
+                    "thread_id": row.get("thread_id"),
+                    "position": int(position), "content": text[:16000],
+                    "content_truncated": len(text) > 16000,
+                    "sender": {"id": sender_id[:200], "kind": sender_type[:80]},
+                    "created_at": str(row.get("create_time") or "")[:80],
+                })
+            if len(observations) <= 64:
+                enriched["thread_context"] = {
+                    "root_message_id": root_id, "conversation_id": configured_chat_id,
+                    "thread_id": thread_id, "messages": observations,
+                }
     parent_sender_type, parent_sender_id = _sender_identity(parent)
     enriched["reply_context_verified"] = True
     enriched["message_context_status"] = "message_context_verified"
     enriched["reply_to_bot"] = bool(
         current_sender_type == "user"
+        and source_id == parent_id
         and parent_sender_type == "app"
         and parent_sender_id == profile_app_id
     )
@@ -621,7 +707,10 @@ def _operation_transport_runner(
 def lark_event_requires_reply_context_lookup(
     event: Mapping[str, Any], *, bot_display_name: str
 ) -> bool:
-    """Require provider context unless the stream carries a typed Bot mention."""
+    """A parent-bearing mention still needs its provider source context."""
+
+    if MESSAGE_ID_PATTERN.fullmatch(str(event.get("parent_id") or "")):
+        return True
 
     provider_fields = {
         key: event[key] for key in ("mentioned", "mentions") if key in event
@@ -853,6 +942,12 @@ def run_lark_event_collector(
                             cli_bin=lark_cli_executable,
                             profile=str(config["profile"]),
                             runner=transport_runner,
+                            # Read the original operator owner at the event
+                            # boundary; removing a wake grant takes effect
+                            # without restarting a long-lived collector.
+                            managed_turn_wake=load_lark_event_collector_config(
+                                project=project, config_path=config_path
+                            )["operation_callbacks"]["managed_turn_wake"],
                         )
                         if receipt.get("ok") is not True:
                             raise RuntimeError(

@@ -21,3 +21,18 @@ def conversation_scope(session: dict[str, Any], *, origin: str | None = None) ->
         "channel_id": session.get("channel_id"), "goal_id": session.get("goal_id"),
         **({"origin": origin} if origin is not None else {}),
     })
+
+
+def conversation_reply_context(route: dict[str, Any]) -> dict[str, Any]:
+    return effect_runtime_result(
+        "collaboration.conversation.reply_context",
+        {
+            "message_id": route.get("message_id"),
+            "parent_id": route.get("parent_id"),
+            "conversation_id": route.get("source_conversation_id"),
+            "reply_context": route.get("reply_context"),
+            "root_id": route.get("root_id"),
+            "thread_id": route.get("thread_id"),
+            "thread_context": route.get("thread_context"),
+        },
+    )

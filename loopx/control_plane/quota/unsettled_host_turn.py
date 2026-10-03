@@ -28,6 +28,7 @@ from .error_codes import (
     CloseoutQueryUnavailableError,
     HeartbeatReceiptIdentityConflictError,
 )
+from .accounting_admission import quota_accounting_admission
 
 UNSETTLED_HOST_TURN_RECOVERY_SCHEMA_VERSION = "unsettled_host_turn_recovery_v0"
 
@@ -104,6 +105,8 @@ def _prior_closeout_preflight(
     goal_id: str,
     agent_id: str,
     current_turn_instance_id: str | None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str], dict[str, Any]] | None:
     """Ask the typed owner which prior Turn must still be closed out.
 
@@ -113,17 +116,42 @@ def _prior_closeout_preflight(
     """
 
     try:
-        result = effect_runtime_result(
-            PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
-            {
-                "schema_version": PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
-                "runtime_root": str(runtime_root.expanduser()),
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "exclude_turn_instance_id": current_turn_instance_id,
-            },
-            timeout=PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS,
-        )
+        with quota_accounting_admission(
+            runtime_root=runtime_root,
+            registry_path=registry_path,
+            goal_id=goal_id,
+            goal_ref=goal_ref,
+            operation="prior-host-turn-closeout-preflight",
+            lock_legacy_index=False,
+        ) as source_admission:
+            request_runtime_root = (
+                runtime_root.expanduser().resolve()
+                if source_admission is not None
+                else runtime_root.expanduser()
+            )
+            result = effect_runtime_result(
+                PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
+                {
+                    "schema_version": (
+                        PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA
+                    ),
+                    "runtime_root": str(request_runtime_root),
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "exclude_turn_instance_id": current_turn_instance_id,
+                    **(
+                        {"goal_ref": dict(goal_ref)}
+                        if goal_ref is not None
+                        else {}
+                    ),
+                    **(
+                        {"source_admission": dict(source_admission)}
+                        if source_admission is not None
+                        else {}
+                    ),
+                },
+                timeout=PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS,
+            )
     except EffectRuntimeResponseAmbiguous as exc:
         # This method only reads receipts. A lost query response is not a
         # possibly committed mutation, and must not send the operator hunting
@@ -171,6 +199,7 @@ def _unsettled_host_turn_recovery(
     goal_id: str,
     agent_id: str | None,
     current_turn_instance_id: str | None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id or not current_turn_instance_id:
         return None
@@ -179,6 +208,8 @@ def _unsettled_host_turn_recovery(
         goal_id=goal_id,
         agent_id=agent_id,
         current_turn_instance_id=current_turn_instance_id,
+        registry_path=registry_path,
+        goal_ref=goal_ref,
     )
     if preflight is None:
         return None
@@ -244,6 +275,7 @@ def apply_unsettled_host_turn_recovery_if_required(
     scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ),
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
@@ -253,6 +285,7 @@ def apply_unsettled_host_turn_recovery_if_required(
         goal_id=goal_id,
         agent_id=agent_id,
         current_turn_instance_id=current_turn_instance_id,
+        goal_ref=goal_ref,
     )
     if verdict is None:
         return False
@@ -266,6 +299,7 @@ def apply_receipt_bound_wait_recovery(
     goal_id: str, agent_id: str, todo_id: str, turn_instance_id: str,
     available_capabilities: list[str] | None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+    monitor_phase: str | None = None,
 ) -> bool:
     """Read full provider facts only when a replay lost its executable binding."""
     from ...todos import list_goal_todos
@@ -283,6 +317,7 @@ def apply_receipt_bound_wait_recovery(
         "schema_version": "loopx_quota_receipt_bound_wait_request_v0",
         "todos": items, "todo_id": todo_id, "agent_id": agent_id,
         "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
+        "monitor_phase": monitor_phase,
     })
     if verdict.get("status") == "none":
         return False

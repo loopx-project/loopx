@@ -9,7 +9,7 @@ External channels need an owner-configured grant in
 {"schema_version":"loopx_manager_context_policy_v1","sources":{
   "manager.external.example":{
     "sender_ids":["exact-provider-sender"],
-    "targets":[{"goal_id":"research","agent_id":"worker"}]
+    "targets":[{"goal_id":"research"}]
   }
 }}
 ```
@@ -17,22 +17,38 @@ External channels need an owner-configured grant in
 Use the actual connection channel and provider sender identity. Keep this file
 private (0600); do not commit it. Missing grants disable external delivery.
 For an existing channel with an authorized sender, use the local operator CLI
-to preview, grant, or revoke one registered recipient without editing the
+to preview, grant, or revoke a managed Goal without editing the
 policy file by hand:
 
 ```sh
-loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --agent-id worker
-loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --agent-id worker --execute
+loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research
+loopx manager-inbox grant-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --execute
 loopx manager-inbox revoke-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --agent-id worker --execute
+loopx manager-inbox revoke-delivery-target --channel-id manager.external.0123456789abcdef01234567 --goal-id research --execute
 ```
 
 Pass the same `--registry` and `--runtime-root` used by the manager connection.
 Without `--execute`, these commands only preview the target and count change.
-Grant requires an active registered Goal and Agent, an existing sender-bound
+Omitting `--agent-id` covers all current and future registered Agents in that
+Goal. Use this for the owner's managed scope; a newly registered Agent then needs
+no separate enrollment. Supplying `--agent-id` retains one-recipient enrollment
+or revocation. Individual revocation is stored in `blocked_targets`, overrides
+the Goal grant, and survives reapplying that Goal grant. Explicitly grant the
+Agent to restore it. Revoking a Goal removes both its broad and individual grants.
+Existing exact-recipient policies retain their scope until a trusted operator
+promotes them; evidence read scope alone never becomes delegation authority.
+
+Grant requires an active registered Goal (and a registered Agent when specified), an existing sender-bound
 channel, and membership in any explicit audience Goal read scope. The command
 does not create a sender grant, launch the Agent, or grant protected-operation
 authority. Revocation also works when the former Agent is no longer registered.
 Remove a source/target grant to revoke future delivery, including replay attempts.
+The shared TypeScript source-recipient owner resolves registration and exceptions
+for discovery, direct Chat handoff and later peer consultation. Provider adapters
+verify ingress and perform locked file IO. Missing, malformed or revoked grants
+do not record a request; stopped or unreadable Goals are excluded. This config
+slice has a CLI preview/apply/readback; the existing Chat uses its resulting
+catalog. Editing source grants in the packaged settings UI remains unqualified.
 Provider ingress receipts bind the current message digest, channel and sender;
 a model cannot create that provenance through its response.
 
@@ -60,6 +76,15 @@ Goal, without inheriting the steward's portfolio or runtime profile. See
 for the responsibility boundary, receiver readback and remaining execution work.
 A project conversation is not a registered coordinator; delivery does not launch
 one. Existing manager commands and stored receipts remain compatible.
+
+Inline original-request context accepts up to 32,000 Unicode characters and
+98,304 JSON-encoded UTF-8 bytes, replacing the former 20,000-character limit.
+The shared typed collaboration owner applies this to steward and project-Chat
+handoffs before persistence and delivery. The current request is never silently
+truncated; preceding-thread excerpts disclose their own omissions. The byte bound
+keeps source text plus the existing brief/identity/instructions within the inbox
+reader's 128,000-byte record boundary. Larger material needs an authorized scoped
+artifact reference; delivery still grants no execution or publication authority.
 
 ## Audience-authorized Goal summaries
 
@@ -290,6 +315,26 @@ conclude with the adopted/rejected planning decision; deferred or blocked work
 must explain the concrete condition and next action. Completion of this exchange
 is separate from completion of the receiving Goal.
 
+If a returned blocker or draft is followed by a materially changed fact, append
+a conclusion with a stable `--update-id`; do not replace the first conclusion or
+create another request merely to return its result:
+
+```sh
+loopx manager-inbox report --goal-id research --agent-id worker \
+  --request-id <id> --update-id review-complete \
+  --reply-text 'Review completed; the revised artifact is ready.'
+```
+
+Retry the same update with the same id and text. Each update has its own
+`result_key`, retains the original audience and authority checks, and arrives
+after verified delivery of the preceding result. Unknown delivery blocks later
+sends rather than allowing them to overtake it. Peer readers acknowledge the
+specific returned key with `acknowledge-return --result-key <key>` after reading
+it; consuming the first result does not consume later updates. MCP callers use
+the corresponding `return_result(update_id=...)` and
+`consume_peer_result(result_key=...)`. Full texts stay in immutable receipts;
+the typed publication planner receives identities and content digests.
+
 The Chat server hosts a cheap local receipt pump (no model calls and no Codex
 automation). It appends a deduplicated follow-up to the original transcript;
 the open frontend picks it up automatically. For Lark it reuses the current
@@ -362,8 +407,10 @@ When the intended recipient is an existing Codex host task, resolve that peer
 before substituting a temporary child. First inspect `agent-directory` for the
 named Agent and its candidate count. Use
 `loopx resolve-peer-route --goal-id allocation --agent-id reviewer` for an
-observed local route. If several historical bindings exist, supply the exact
-user-selected task link with `--thread-link codex://threads/<id>`; never choose
+observed local route. Archived history permits a unique readable route without
+a task link; missing or unknown alternatives preserve ambiguity. If the result
+is still ambiguous, supply the exact user-selected task link with
+`--thread-link codex://threads/<id>`; never choose
 the last binding by order or recency. Then record the request with
 `manager-inbox request ... --require-host-route --peer-thread-link
 codex://threads/<id>`. The result contains the same stable request id and a
@@ -399,6 +446,15 @@ only when the existing Git common-directory resolver proves that it belongs to
 the registered Goal; otherwise it uses the Goal workspace. A digest/readiness
 check is not proof that the Agent understood the material. Files above 4 MiB
 remain explicitly unchecked.
+
+For a request received from an external conversation, peer consultation uses
+the original source's current sender and recipient grants. Both the current
+requester and the peer, including intermediate recipients, must still be
+authorized for that source. Each further hop rechecks the original ingress and
+return route; a parent peer request is not an authorization bypass. A missing
+grant names the blocked recipient without recording a request. This replaces
+the previous blanket refusal of external-source peer forwarding, without
+granting execution, changing priorities or broadening the return audience.
 
 The peer independently `acknowledge`s and `report`s a conclusion through the
 same commands as a manager request. The original requester receives it in

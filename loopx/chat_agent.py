@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .presentation.codex_activity import CodexActivitySteps
 from .chat import (
     CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
     CHAT_REVIEW_CLOSE_TAG,
@@ -307,6 +308,7 @@ CONVERSATION_INTENT_RESOLUTION_INSTRUCTION = (
     "Use available authorized reads to verify facts that would change the decision; distinguish current authoritative evidence, old records, user claims and inference. "
     "Resolve the exact object and source; an identifier in another repository, an old waiting task or a closed-but-uncompleted object is not proof of the requested outcome. "
     "If current evidence shows the requested outcome is already satisfied, explain that result with its source and do not create work, delegate, propose a protected action or repeat the effect. "
+    "A saved source, read receipt or recorded proposal is not proof that the requested outcome works. Separate source duplication, applicable new information and independently verified completion; an unchanged source may still expose unfinished work, while changed bytes may add no useful information. "
     "A request for explanation, fact checking, comparison or judgment normally needs your analysis, not automatic assignment. "
     "When actual work remains, reuse qualified existing work and its responsible Agent before creating or delegating another request; preserve new corrections without treating them as duplicate intent. "
     "An exact matching Todo or previously assigned owner is not a prerequisite for requested work. Use the authorized directory's responsibilities and context to select a qualified recipient; distinguish that selection from proof of historical ownership. "
@@ -890,7 +892,7 @@ class CodexChatAgentSession:
     def steer(self, user_message: str, *, expected_turn_id: str) -> str:
         """Inject one user message into the exact active Codex Turn."""
 
-        text = " ".join(str(user_message or "").split())
+        text = str(user_message or "").strip()
         selected_turn_id = str(expected_turn_id or "").strip()
         if not text or not selected_turn_id:
             raise ValueError("steering requires a message and expected active turn id")
@@ -899,17 +901,9 @@ class CodexChatAgentSession:
             {
                 "threadId": self.thread_id,
                 "expectedTurnId": selected_turn_id,
-                "input": [
-                    {
-                        "type": "text",
-                        "text": _turn_prompt(
-                            text,
-                            context_summary=self.context_summary,
-                            execution_mode=self.execution_mode,
-                            runtime_profile=self.runtime_profile,
-                        ),
-                    }
-                ],
+                # The native Turn already has its task and policy. Replaying
+                # the start prompt would reframe this update as a new task.
+                "input": [{"type": "text", "text": text}],
             },
         )
         turn_id = _extract_id(result, "turn", "turnId")
@@ -987,6 +981,7 @@ class CodexChatAgentSession:
         parts: list[str] = []
         completed_structured_response: str | None = None
         display_filter = VisibleResponseStreamFilter(protected_paths=[self.work_dir])
+        steps = CodexActivitySteps(protected_paths=[self.work_dir])
         visible_delta_count = 0
         started_at = time.monotonic()
         last_activity_at = started_at
@@ -1041,14 +1036,26 @@ class CodexChatAgentSession:
                     "item/completed": "Agent 返回了处理状态",
                     "turn/completed": "Agent 回合已结束",
                 }.get(method)
+                item = params.get("item") if isinstance(params, dict) else None
+                step = None
+                if method == "item/completed":
+                    step = steps.completed(item)
+                elif method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"} and isinstance(params, dict):
+                    step = steps.reasoning_delta(
+                        params.get("itemId"), params.get("delta"),
+                        summary=method.endswith("summaryTextDelta"),
+                        index=params.get("summaryIndex", params.get("contentIndex")),
+                    )
+                    if step:
+                        phase = "Agent 正在思考"
                 if method == "item/started":
-                    item = params.get("item") if isinstance(params, dict) else None
                     item_type = (
                         str(item.get("type") or "") if isinstance(item, dict) else ""
                     )
+                    step = steps.started(item)
                     # Transport activity does not prove a Goal read or a
-                    # successful check. Project only the typed activity; do
-                    # not expose arbitrary item text, command or tool inputs.
+                    # successful check. The label stays typed; the step names
+                    # the command, tool or path through redacted fields only.
                     phase = {
                         "userMessage": "Agent 已收到消息",
                         "agentMessage": "Agent 正在生成回答",
@@ -1057,9 +1064,10 @@ class CodexChatAgentSession:
                         "mcpToolCall": "Agent 正在调用工具",
                         "dynamicToolCall": "Agent 正在调用工具",
                         "webSearch": "Agent 正在检索",
+                        "fileChange": "Agent 正在修改文件",
                     }.get(item_type, "Agent 正在处理")
                 if phase:
-                    on_event("agent.phase", {"label": phase, "method": method})
+                    on_event("agent.phase", {"label": phase, "method": method, **({"step": step} if step else {})})
             if method == "item/agentMessage/delta" and isinstance(params, dict):
                 delta = params.get("delta")
                 if isinstance(delta, str):

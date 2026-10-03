@@ -18,12 +18,47 @@ from .control_plane.effect_runtime import (
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
 )
-from .control_plane.runtime.public_safety import validate_public_safe_value
+from .control_plane.runtime.public_safety import (
+    public_safe_compact_text,
+    validate_public_safe_value,
+)
+from .control_plane.todos.contract import (
+    TODO_STATUS_OPEN,
+    TODO_TASK_CLASS_MONITOR,
+    normalize_todo_status,
+    todo_done_for_status,
+)
+from .control_plane.work_items.task_graph import build_goal_task_map
 from .feedback import validate_goal_id
 from .history import load_registry
 from .registry import registry_goals
 from .status import collect_status
 from .status_server import parse_goal_activation_filter
+from .todos import list_goal_todos
+
+
+def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
+    runtime_root = server.runtime_root_override
+    try:
+        listed = list_goal_todos(
+            registry_path=server.registry_path,
+            goal_id=goal_id,
+            runtime_root_arg=str(runtime_root) if runtime_root else None,
+        )
+    except (OSError, ValueError):
+        # An unreadable Todo source leaves the rest of the review usable.
+        return None
+    todos = [row for row in listed.get("todos") or [] if isinstance(row, dict)]
+    return build_goal_task_map(
+        goal_id=goal_id,
+        todos=todos,
+        source_truncated=int(listed.get("todo_count") or 0) > len(todos),
+        public_safe_compact_text=public_safe_compact_text,
+        normalize_todo_status=normalize_todo_status,
+        todo_done_for_status=todo_done_for_status,
+        todo_status_open=TODO_STATUS_OPEN,
+        monitor_task_class=TODO_TASK_CLASS_MONITOR,
+    )
 
 
 def _status_access_denied(error: BaseException) -> bool:
@@ -163,10 +198,15 @@ class ChatStatusRequestMixin:
                     "goal_id": goal_id,
                     "observed_at": datetime.now(timezone.utc).isoformat(),
                     "graph": item.get("task_graph_projection"),
+                    "goal_map": _goal_task_map(self.server, goal_id),
                     "acceptance": goal.get("acceptance_observation"),
                 }
                 validate_public_safe_value(projection)
-            protected_paths = [self.server.registry_path, *self.server.scan_roots]
+            protected_paths = [
+                self.server.registry_path,
+                *self.server.scan_roots,
+                self.server.runtime_root,
+            ]
             projection = json.loads(
                 redact_local_paths(
                     json.dumps(projection, ensure_ascii=False),

@@ -356,7 +356,7 @@ def manager_context_projection(
     return projection, retention
 
 
-def manager_message(text: str, materials: object) -> str:
+def manager_message(text: str, materials: object, *, reply_context: str = "") -> str:
     current = str(text or "").strip()
     context = materials if isinstance(materials, list) else []
     lines = [
@@ -364,6 +364,8 @@ def manager_message(text: str, materials: object) -> str:
         "对已有授权的意图委托使用 context_handoff，直接交给目标 Agent 自主判断并推进，"
         "不要添加确认或直接替它改优先级。"
     ]
+    if reply_context:
+        lines.extend(["", reply_context])
     if context:
         lines.extend(
             [

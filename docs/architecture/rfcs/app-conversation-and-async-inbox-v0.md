@@ -108,6 +108,19 @@ This is a proposed App presentation improvement, not installed readback or
 full GQ10 prioritization. Cross-project selection, at most two recommended
 priorities and actual scoped adoption remain in the existing P1 attention work.
 
+The shared conversation evidence lens must preserve declared resume conditions,
+successor relationships and decision scopes as structured facts. Overview text
+is bounded and carries `content_truncated`; an exact `view=todos`, `goal_id`,
+`todo_id` read recovers permitted text through the existing manager/Goal context
+tool. CLI/SSH export uses `goal-portfolio --manager-view todos --goal-id GOAL
+--todo-id TODO` and retains its external audience boundary. Neither a condition
+nor a completed referent grants execution or proves readiness. Large local
+catalogs use the existing private snapshot transport; conversation row limits
+remain unchanged. Real File/SQLite readback, source loss, revocation, oversized
+rows and the executor tool bridge qualify this evidence slice. They do not
+qualify model prioritization, packaged App adoption or the complete GQ09/GQ10
+journey; release evaluation must still prove those outcomes.
+
 ### Waiting is part of the conversation
 
 One shared TypeScript activity surface serves manager and Goal conversations,
@@ -141,6 +154,15 @@ receipt → observed work or actionable failure → readable answer in the same 
   reusing an earlier snapshot or inserting another local copy of the instruction.
   History keeps the initial user request and later instructions as distinct messages
   even while the initial request is still being reconciled with its stored identity.
+  The Codex provider sends the correction itself through native `turn/steer`,
+  retaining multiline text and the exact active Turn identity. Replaying the
+  initial task/policy envelope incorrectly declares the correction to be a new
+  standalone task and can displace the original deliverable. Initial Turn
+  admission, policy and response framing stay in their existing owners; queued
+  messages and resume context keep their caller-supplied scope. This transport
+  repair serves steward and Goal Chat alike in the existing Python provider
+  adapter under the TS migration boundary. HTTP/store/protocol regressions
+  prove the payload and replay behavior, not model adoption or a first result.
   Unavailable browser storage keeps current-page retry behavior but cannot
   promise reload recovery. This tab-local cache is not delivery authority.
   Acceptance means the executor received the instructions, not that it adopted
@@ -262,6 +284,17 @@ substitutes another instance; unavailable readback preserves the saved message.
 Production HTTP tests cover steward and Goal Chat with real disposable stores.
 This is readback qualification, not native executor or model-routing acceptance.
 
+Saved-answer readback retains the same distinction outside the timeline: the
+existing return phase labels a progress update or conclusion, and delivery
+verification remains visible beside it. Delivery alone never means completion.
+Navigation reuses the typed conversation-scope owner rather than a storage Goal:
+Goal answers return to that Goal, portfolio answers to Steward, and external
+answers offer **Open Steward**, without claiming to open the external audience.
+Packaged read-only validation uses the production HTTP/store and return
+projection with synthetic receiver results. This closes a saved-answer
+presentation gap; external-conversation selection, native adoption/correction
+and the two real collaboration cycles remain separate acceptance work.
+
 Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
 recovery, GoalRef and late-return changes. Shared TS refactors accompany the
 affected transaction; full migration, Lark visual parity, scale and promotional
@@ -321,6 +354,16 @@ not depend on `oc_`/`om_` identifiers or a bot reaction. Notification/attention,
 Todo/lease, model admission and artifact acceptance keep their existing owners.
 Dispatch events wake the existing driver within admission; polling repairs gaps.
 An inbox is not permission to start another automation.
+
+Returning a blocker or reviewable draft must not prevent later completion from
+reaching the same conversation. Preserve the initial immutable conclusion and
+append explicitly identified result updates through the shared TS publication
+owner. Retries retain one result identity; conflicting replacements fail closed.
+Chat/Lark sends wait for the preceding result's verified delivery, and peer
+consumption acknowledges only the result that was read. Qualify restart,
+duplicate retry, uncertain prior delivery and exact Goal-instance isolation in
+the packaged conversation. This is result continuity within R3/T1–T2, not a new
+work request, permission grant, task-completion claim or separate manager queue.
 
 The return-verification slice uses the existing TS classification owner for
 both adapter results and typed resolution failures. Exception text is diagnostic,
@@ -409,7 +452,7 @@ separate; a browser fixture cannot qualify a real attached host.
 | Scope | Navigate A→B→A, late response, old subscription terminal event: update the original source/session/Turn only. Full snapshots and delta streams have different merge rules |
 | Stream | Duplicate/late events and hydrate overlap preserve one logical answer. A new event does not force scrolling while the user reads history |
 | Correction/stop | During tool execution and at completion: actual receiver adopts the latest scope or reports queued/unsupported. Stop targets the original Turn, never its successor or all peers implicitly |
-| Result | Replacing the active session must not hide a result owed by an older session in the same conversation. Readback updates only its own session, preserves streamed text and retires old reads after verified return. Missing file retries read only; v1 review cannot certify v2; opening a report is not adoption. Lost return ACK reconciles before another send |
+| Result | Replacing the active session or navigating away must not hide later results or revisions. One delivered reply does not close observation. Quiet transcripts use the compact session index; changed transcripts and outstanding metadata refresh only their own context and preserve streamed text. Missing file retries read only; v1 review cannot certify v2; opening a report is not adoption. Lost return ACK reconciles before another send |
 | Attached | Native host offline, stale binding, unsupported steering, next-Turn-only adapter and restart: request remains visible; no guessed success or competing driver |
 | Managed | Runtime start failure, quota denial, missing login and stop/restart: effective profile and actual condition readable; no silent model/account substitution |
 | Authority | Revoked access or source change rejects stale effects; unrelated permitted branches continue. No private history enters a shared audience |
@@ -427,13 +470,19 @@ classification. Shared queue preparation now settles accepted start failures
 instead of leaving requests indefinitely queued. Neither change proves a whole
 managed or attached journey.
 
-The next qualified frontend slice retains late worker returns after active-session
-replacement. The existing Chat snapshot supplies session/message lineage to a
-shared TypeScript read model; only sessions still owing a conclusion or delivery
-verification remain alongside the active session. No model replay, execution
-driver, persisted schema or new inbox owner is introduced. Browser acceptance
-covers a replacement session, one lost old-session read, automatic return and
-cross-session isolation. Real host execution and receiver adoption retain their
+The shared TypeScript read model retains visited conversations after a first
+delivered reply and across navigation. The existing session index now includes
+an opaque `transcript_revision`, since appending a receiver result does not
+change execution `updated_at`. Python observes the stored transcript file;
+TypeScript selects changed reads and reconciles each result into its original
+context. Outstanding collaboration/delivery metadata still needs readback even
+without a new message. Quiet transcripts do not download their full histories
+repeatedly; failed reads retain their prior revision for retry. This additive
+read hint creates no persisted schema, lifecycle authority, model replay or
+inbox owner. Packaged acceptance uses the production HTTP/store with synthetic
+result writes: first result, later revision while another context is visible,
+one lost read, deduplication and current-conversation preservation. Installed
+native execution, receiver adoption and multi-result publication retain their
 separate acceptance requirements.
 
 Keep work in this order: qualify the installed App's existing-owner-to-original-
@@ -533,9 +582,14 @@ skips rather than presenting an unqualified profile as passing. The suite uses
 the production prompt/parser and fixed public contexts. Its frozen outcomes
 cover new work, existing owners, ambiguity, stopped/ungranted recipients, scope
 correction, current-Goal follow-ups, quotes, negation and ordinary questions in
-Chinese/English. Output conflicts, omitted envelopes and truncated generations
-fail rather than being counted as successful intent recognition. Report model,
-prompt/case hashes, request settings, token usage and repeat count. This layer
+Chinese/English. An empty answer fails for either provider. The API lane also
+checks raw envelope conflicts, omitted tags and truncated generations; the
+Codex lane consumes adapter protocol warnings, including missing tags, rather
+than certifying its readable fallback. Codex raw envelope integrity beyond the
+adapter's warnings remains unqualified. Both receive the same fixture context
+and normalized request. Report model, template and per-case effective prompt
+hashes, case hash, request settings, available token usage and repeat count.
+Offline provider fixtures exercise the CLI and report without paid calls. This layer
 qualifies model interpretation of supplied evidence, not live discovery, actual
 dispatch, stop enforcement or full GQ01/GQ02 completion. Packaged browser and
 real collaboration transport tests qualify those separate boundaries.
@@ -544,3 +598,27 @@ The same conversation surface preserves reading position during streaming: outpu
 follows only while the reader stays near the bottom, and a latest-message action
 restores following. Multiline drafts expand within a bounded composer; suggestions
 remain on overview/empty entry states rather than displacing an active conversation.
+
+### Image admission and current-conversation position
+
+An ordinary request such as “Look at this screenshot and draft a community
+thank-you” must reach the existing conversation with its image intact. The turn
+HTTP budget includes the base64 representation of the existing attachment
+allowance: at most four images, 5 MiB each and 12 MiB total. Text and metadata
+retain their separate 64,000-byte budget; other JSON endpoints retain their
+existing ceiling. Only a confirmed rejection before turn admission restores the
+draft and images for manual resend. An uncertain or accepted submission must not
+be presented as safe to replay.
+
+Operation cards belong at their creation point among messages. Updating or
+restoring an old operation must not append it after a new answer; undated history
+must not masquerade as fresh activity. The shared TypeScript conversation read
+model owns ordering, while the Python HTTP/attachment adapter owns wire admission.
+Existing confirmation and effect authority remain unchanged.
+
+Source qualification covers HTTP admission, durable session readback and a
+synthetic Codex protocol process, plus packaged desktop/narrow-screen image send,
+historical cards and rejected-draft recovery. These fixtures establish transport
+and interface behavior, not live model quality, public posting or installed-host
+acceptance. GQ06's material entry and GQ07–09's continuity remain subject to their
+full delivery and recovery acceptance.

@@ -13,6 +13,11 @@ from ...capabilities.issue_fix.reviewer_notification import (
     reviewer_notification_idempotency_key,
 )
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from .identity_shapes import (
+    LARK_CHAT_ID_PATTERN,
+    LARK_MESSAGE_ID_PATTERN,
+    LARK_OPEN_ID_PATTERN,
+)
 from .outbound import (
     LarkMention,
     build_lark_mention_prefix,
@@ -30,9 +35,6 @@ LARK_SEARCH_PERMISSION_PATTERN = re.compile(
     r"search:message|missing\s+scope[^\n]*(?:message|search)",
     re.IGNORECASE,
 )
-LARK_DESTINATION_PATTERN = re.compile(r"oc_[A-Za-z0-9_-]+")
-LARK_MEMBER_PATTERN = re.compile(r"ou_[A-Za-z0-9_-]+")
-LARK_MESSAGE_PATTERN = re.compile(r"om_[A-Za-z0-9_-]+")
 
 
 def _normalise_handle(value: Any) -> str | None:
@@ -43,7 +45,7 @@ def _normalise_handle(value: Any) -> str | None:
 def _find_message_id(value: Any) -> str | None:
     if isinstance(value, Mapping):
         candidate = value.get("message_id")
-        if isinstance(candidate, str) and LARK_MESSAGE_PATTERN.fullmatch(candidate):
+        if isinstance(candidate, str) and LARK_MESSAGE_ID_PATTERN.fullmatch(candidate):
             return candidate
         for nested in value.values():
             found = _find_message_id(nested)
@@ -99,7 +101,7 @@ def _lark_member_ids(value: Any) -> set[str]:
             for key, child in node.items():
                 if key in {"member_id", "open_id"} and isinstance(child, str):
                     member_id = child.strip()
-                    if LARK_MEMBER_PATTERN.fullmatch(member_id):
+                    if LARK_OPEN_ID_PATTERN.fullmatch(member_id):
                         member_ids.add(member_id)
                 else:
                     visit(child)
@@ -179,7 +181,7 @@ def lark_reviewer_notification_sink(
             external_write_authority_asserted=execute,
             blocker="dedicated_bot_identity_required",
         )
-    if not LARK_DESTINATION_PATTERN.fullmatch(destination_id):
+    if not LARK_CHAT_ID_PATTERN.fullmatch(destination_id):
         return build_reviewer_notification_sink_result(
             sink_kind=sink_kind,
             reviewer_handles=[],
@@ -207,7 +209,7 @@ def lark_reviewer_notification_sink(
             identity.get("display_name") or handle,
             limit=80,
         )
-        if not LARK_MEMBER_PATTERN.fullmatch(member_id):
+        if not LARK_OPEN_ID_PATTERN.fullmatch(member_id):
             return build_reviewer_notification_sink_result(
                 sink_kind=sink_kind,
                 reviewer_handles=[],

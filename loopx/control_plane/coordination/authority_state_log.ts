@@ -22,6 +22,7 @@ import {
   canonicalAuthorityJson,
   canonicalAuthorityObject,
   canonicalAuthoritySha256,
+  copyAuthorityJson,
   isAuthorityJsonObject,
 } from "./authority_store_codec.ts";
 
@@ -215,7 +216,11 @@ export class AuthorityStateReplay {
     this.#state = next;
   }
 
-  snapshot(): JsonObject { return structuredClone(this.#state); }
+  snapshot(): JsonObject {
+    // Copy every mutable JSON container; immutable strings need no new byte
+    // allocation for each historical row carrying the same large value.
+    return copyAuthorityJson(this.#state) as JsonObject;
+  }
 
   /** Immutable canonical text; storage readers may parse it into independent rows. */
   canonicalJson(): string { return this.#encode(this.#state); }

@@ -35,6 +35,14 @@ const TERMINAL_TURN_STATUSES = new Set<TurnStatus>([
   "timed_out",
   "failed",
 ]);
+
+/** A terminal Turn can never be dispatched again under its client identity.
+ *
+ * Callers deciding whether a persisted Turn is still recoverable share this
+ * owner instead of restating the terminal set beside it. */
+export function isTerminalTurnStatus(value: unknown): boolean {
+  return TERMINAL_TURN_STATUSES.has(value as TurnStatus);
+}
 const OPAQUE_ID = /^[A-Za-z0-9._-]{1,160}$/;
 const SHA256 = ENVELOPED_SHA256_PATTERN;
 const EMPTY_OBJECT_SHA256 = sha256("{}");
@@ -260,6 +268,19 @@ function decodeActiveTurn(value: unknown): ActiveTurnFacts | null {
   return {
     turnId: opaqueId(turn.turn_id, "active_turn.turn_id"),
     status: turnStatus(turn.status, "active_turn.status"),
+  };
+}
+
+/** Preparation and provider reads may outlive the runtime's interrupt wait.
+ * The persisted Turn and its current Session claim remain authoritative. */
+export function mayContinueChatTurn(input: JsonObject): { allowed: boolean } {
+  const session = decodeSession(input.session);
+  const turn = decodeActiveTurn(input.turn);
+  return {
+    allowed: session !== null && turn !== null
+      && session.status !== "closed"
+      && session.activeTurnId === turn.turnId
+      && (turn.status === "starting" || turn.status === "running"),
   };
 }
 

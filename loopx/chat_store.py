@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -1742,6 +1743,12 @@ class ChatSessionStore(ChatIngressStore):
 
     def public_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         session_mode = str(payload.get("session_mode") or CHAT_SESSION_MODE_MANAGED)
+        # A receiver can append a result without changing the execution state.
+        # Observe the transcript independently of updated_at, without reading it
+        # or exposing filesystem identity. This is a read hint, never authority.
+        revision = self._event_revision(
+            self._session_dir(payload["session_id"]) / "messages.jsonl"
+        )
         return {
             key: payload.get(key)
             for key in (
@@ -1749,6 +1756,10 @@ class ChatSessionStore(ChatIngressStore):
                 "active_turn_id", "last_error_code", "created_at", "updated_at", "last_activity_at",
             )
         } | {
+            "transcript_revision": (
+                hashlib.sha256(str(revision).encode("ascii")).hexdigest()
+                if revision is not None else None
+            ),
             "session_mode": session_mode,
             "executor_endpoint_id": str(
                 payload.get("executor_endpoint_id") or payload.get("agent_id") or ""

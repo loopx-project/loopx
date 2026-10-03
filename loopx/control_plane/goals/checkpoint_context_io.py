@@ -1,6 +1,7 @@
 """Source/receipt I/O only; checkpoint_read_context.ts owns decision semantics."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import ExitStack, contextmanager
 import hashlib
 import json
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
-from ...file_lock import exclusive_cross_runtime_file_lock, exclusive_run_index_lock, cross_runtime_lock_witness
+from ...file_lock import cross_runtime_lock_witness, exclusive_cross_runtime_file_lock
 from ...history import load_index, load_registry
 from ...paths import resolve_runtime_root
 from ...registry import atomic_write_json
@@ -16,6 +17,7 @@ from ...runtime import validate_goal_id_path_segment
 from ..coordination.legacy_writer_fence import legacy_coordination_todo_lock_path
 from ..coordination.shadow_management import shadow_maintenance_lock_target, require_shadow_primary_write_allowed
 from ..effect_runtime import effect_runtime_result, EffectRuntimeRejected
+from ..quota.accounting_admission import quota_accounting_admission
 from ..quota.settlement import SettlementIdentity, read_heartbeat_settlement
 from ..todos.active_state_todo_parser import parse_todo_source
 from ..todos.machine_region import find_todo_source_regions
@@ -89,6 +91,7 @@ def _source_guard(root: Path, goal_id: str, state_file: Path) -> Iterator[None]:
 
 def _local_source_facts(
     root: Path, registry_path: Path, state_file: Path, identity: SettlementIdentity,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     text = state_file.read_text(encoding="utf-8")
     metadata, body = split_state_frontmatter(text)
@@ -99,6 +102,15 @@ def _local_source_facts(
     active, archived, _ = parse_todo_source(text)
     todos = [*active["user"], *active["agent"], *archived]
     runs, _ = load_index(root / "goals" / identity.goal_id / "runs" / "index.jsonl")
+    runs = [
+        run
+        for run in runs
+        if (
+            run.get("goal_ref") == dict(goal_ref)
+            if goal_ref is not None
+            else "goal_ref" not in run
+        )
+    ]
     newest = [run for _, run in sorted(enumerate(runs),
         key=lambda pair: (str(pair[1].get("generated_at") or ""), pair[0]), reverse=True)]
     return {
@@ -109,12 +121,24 @@ def _local_source_facts(
     }
 
 
-def _source_facts(root: Path, registry_path: Path, state_file: Path, identity: SettlementIdentity) -> dict[str, Any]:
+def _source_facts(
+    root: Path,
+    registry_path: Path,
+    state_file: Path,
+    identity: SettlementIdentity,
+    goal_ref: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     # The typed owner derives Todo and complete acceptance from one head and
     # fails closed after cutover. Local parsed Markdown cannot override it.
     return _checkpoint_effect("goal.checkpoint_read_context.source", {
         "runtime_root": str(root.resolve()), "goal_id": identity.goal_id,
-        "facts": _local_source_facts(root, registry_path, state_file, identity),
+        "facts": _local_source_facts(
+            root,
+            registry_path,
+            state_file,
+            identity,
+            goal_ref,
+        ),
     })
 
 
@@ -123,6 +147,7 @@ def read_checkpoint_context(
     agent_id: str, todo_id: str | None, turn_instance_id: str,
     replan_obligation_id: str | None = None, project: Path | None = None,
     state_file: Path | None = None, dependency_todo_ids: list[str] | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Local import avoids a cycle with refresh-state's persistence adapter.
     from ...state_refresh import resolve_goal_state, registered_agents_for_goal
@@ -134,17 +159,28 @@ def read_checkpoint_context(
         project_override=project, state_file_override=state_file)
     if agent_id not in registered_agents_for_goal(goal):
         raise ValueError("checkpoint-context requires a registered Agent")
-    with exclusive_run_index_lock(root / "goals" / goal_id / "runs" / "index.jsonl", operation="checkpoint-context"):
+    with quota_accounting_admission(
+        runtime_root=root,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        goal_ref=goal_ref,
+        operation="checkpoint-context",
+        handoff_legacy_index=True,
+    ) as source_admission:
         require_complete_checkpoint_index(root / "goals" / goal_id / "runs" / "index.jsonl")
         readback = read_heartbeat_settlement(root, goal_id=goal_id, agent_id=agent_id,
-            todo_id=todo_id, turn_instance_id=turn_instance_id, replan_obligation_id=replan_obligation_id)
+            todo_id=todo_id, turn_instance_id=turn_instance_id,
+            replan_obligation_id=replan_obligation_id,
+            registry_path=registry_path, goal_ref=goal_ref,
+            source_admission=source_admission,
+            borrow_source_admission=source_admission is not None)
         if readback is None or readback.identity.value is None or readback.writeback_run is None:
             raise ValueError("checkpoint-context requires the original committed Turn writeback")
         identity = readback.identity.value
         with _source_guard(root, goal_id, path):
             result = _evaluate(phase="read", identity=identity.as_dict(), prior=readback.writeback_run,
                 read_context_id=uuid4().hex, dependency_todo_ids=dependency_todo_ids or [],
-                facts=_source_facts(root, registry_path, path, identity))
+                facts=_source_facts(root, registry_path, path, identity, goal_ref))
             receipt = result.pop("receipt")
             atomic_write_json(_receipt_path(root, identity), receipt)
     return {**result, "read_context_id": receipt["read_context_id"], "settlement_identity": identity.as_dict(),
@@ -158,6 +194,7 @@ def read_checkpoint_context(
 def checkpoint_commit_guard(
     *, runtime_root: Path, registry_path: Path, state_file: Path,
     identity: SettlementIdentity, read_context_id: str | None,
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Capture/preview under source locks. The native save repeats the check
     under the real provider fence; this preliminary check is not the commit."""
@@ -167,13 +204,21 @@ def checkpoint_commit_guard(
         except FileNotFoundError:
             receipt = None
         result = _evaluate(phase="check", identity=identity.as_dict(), read_context_id=read_context_id,
-            receipt=receipt, facts=_source_facts(runtime_root, registry_path, state_file, identity))
+            receipt=receipt, facts=_source_facts(
+                runtime_root,
+                registry_path,
+                state_file,
+                identity,
+                goal_ref,
+            ))
         yield result
 
 
 def commit_checkpoint_run(
     *, runtime_root: Path, registry_path: Path, state_file: Path, identity: SettlementIdentity,
     refresh_retry: dict[str, Any], record: dict[str, Any], index_record: dict[str, Any], markdown: str,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Handoff the held locks and parsed bytes to one native save operation."""
     root = runtime_root.resolve()
@@ -185,8 +230,20 @@ def commit_checkpoint_run(
         "locks": [cross_runtime_lock_witness(target) for target in targets],
         "state_sha256": hashlib.sha256(state_file.read_bytes()).hexdigest(),
         "index_sha256": hashlib.sha256(index.read_bytes()).hexdigest(),
-        "facts": _local_source_facts(root, registry_path, state_file, identity),
+        "facts": _local_source_facts(
+            root,
+            registry_path,
+            state_file,
+            identity,
+            goal_ref,
+        ),
         "refresh_retry": refresh_retry, "record": record, "index_record": index_record, "markdown": markdown,
+        **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
+        **(
+            {"source_admission": dict(source_admission)}
+            if source_admission is not None
+            else {}
+        ),
     })
     if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
         raise RuntimeError("invalid typed checkpoint commit result")

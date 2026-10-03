@@ -5,6 +5,7 @@
 | 状态 | 已接受 |
 | 替代 / 关闭 | 无 |
 | 日期 | 2026-08-08 |
+| 最近规范性修订 | 2026-10-01 |
 | 作者 | LoopX maintainers |
 | 范围 | 公开控制面文档、packet 合同、重构方向、测试策略 |
 
@@ -378,6 +379,32 @@ M7.2：用一个 typed plan/receipt algebra 替换核心 settlement truth。plan
 
 M7.3：在两个 M7.2 adapter 都消费经过验证的 plan/receipt 语义后，比较它们的执行所有权。2026-08-21 的 cutover qualification 发现，settlement identity、bind/short-circuit、replay seeding、next-action selection 与 commit reduction 仍在 adapter 间重复。因此重新打开 M7.3，引入一个 bounded TypeScript Effect runtime。Runtime 拥有共享 algebra 和第一个内部 effect——atomic Turn-journal checkpoint。它的 server 只是临时 Python-to-TypeScript transport；一个静态 typed handler registry 把粗粒度 transaction 路由给 domain owner。它不是通用组合框架，也不会把 model、user、host scheduler、credential 或第三方 authority 藏到万能 executor 后面。每条被替代的 Python 语义路径都必须在同一 cutover PR 删除。
 
+**2026-10-01 identity 边界切片：** `effect_program.ts` 统一解码可执行 Todo／replan
+身份，Turn settlement 与 journal 验证复用这一 owner。内部判别联合排除双 target
+与字段修改；可执行值排除 `unbound`。支持的 v0、scoped v1 和无 schema adapter
+输入保持 effect ID。非字符串 ID、不支持的声明版本与矛盾 binding metadata 在
+provider dispatch 或 receipt replay 前失败。Journal reader 删除独立的 v1 binding
+比较。证据复用 effect-program、settlement-parity、journal-effect 与 inspect-journal
+CLI 测试，包含真实 File 回读。此处只验收 identity 边界；跨域 crash／lease 恢复及
+完整 provider conformance 仍需单独验收。
+
+2026-10-01 的 Turn 恢复迁移把 provider 返回值、completion 结果与回读分类收进 TypeScript
+Turn owner。每次 reduction 只授权 prepare/execute、resolve、
+execute-prepared、checkpoint 或 abort-prepared 中的一步；确认 checkpoint
+已持久化后才能进入下一个 provider。非法 completion 或显式不匹配的 payload
+effect ref 在推进 journal 前被拦截。Unknown 保留 prepared；确认 absent 后才
+允许沿用同一 ref 执行。既有 failed-turn 显式重试 gate 保持不变。
+
+临时 request/reduction 合同升至 v1，v0 caller 在 provider 授权前被拒绝。
+升级或回滚时须让 Python interpreter 和 TypeScript reducer 一起变化。
+持久化 journal／receipt schema、effect identity、公开 CLI 参数及省略显式 ref
+的旧 provider payload 保持兼容。既有 Turn 局部 provider step／resolution
+词表迁入对应模块，内部 action union 扩展，不新增共享状态词表。
+首次两 provider 结算由三次 RPC 变成五次（preflight，加每步返回值准入及
+持久化确认）；完整重放仍为一次。这是 Python 仍负责 IO 时明确接受的正确性成本，
+不是延迟优化；PR 证据需比较相同 base/head 工作负载。验证范围见
+[有界恢复 checkpoint](composable-state-machines-recovery-verification-v0.zh-CN.md#turn-结算资格范围)。
+
 M7.4：只有在移除重复知识并切换真实生产 caller 时，才一次扩展一个 bounded 状态族。Todo、monitor、capability、scheduler 和 gate 状态机保留自己的 domain transition invariants。它们迁移后可以通过同一个 managed runtime 执行，但不能仅仅因为 packet 字段相似就移到一个通用状态协议后面。CLI 原生迁到 TypeScript 后，CLI-only 在进程内 import kernel；daemon 只在 App/多 client 共享 authority 时可选保留，而不是每个状态族一个必选 server。
 
 #3208 的 replan semantic-exit 修复明确不是候选：`refresh-state` 已经会重新推导当前 obligation 并记录 typed semantic ACK，实际缺陷是 goal-frontier 中一个额外的 settlement 条件在 acceptance gaps 仍存在时忽略了合法的 non-successor ACK。这是 domain-local reducer/ACK invariant，不是第二个 multi-step executor，应继续由 replan/goal-frontier owner 持有。只有第二个真实 runtime 场景（例如具有相同 plan/receipt lifecycle 的 quota/status read ACK）出现，并且能在两个 adapter 间删除重复编排时，才重新评估 Effect Program 迁移。
@@ -405,6 +432,45 @@ M7 只有在真实 vertical slice 满足 Product Outcome Contract、旧路径被
 
 - `bootstrap_command_pack` 应在 rendering 或 validation 前通过 `effect_program_from_ordered_steps` 读取 `ordered_steps`；
 - `turn_driver/executor` 应在提交 receipt 前通过 `interpret_turn_result_packet` 派生 result status 和 next phase。
+
+## 语义控制与执行归属
+
+LoopX 的语义控制面跨 Turn、Agent 与 runtime 保持工作含义：intent、ownership、
+dependency、authority、evidence 和 continuation。执行责任覆盖它实际拥有的 typed
+transaction 与 settlement step。Agent／capability 推理提出领域结果，kernel 核验
+绑定、准入和生命周期义务；领域 verifier 与用户仍判断成果内容。
+
+| 边界 | Owner | 可观察承诺 |
+| --- | --- | --- |
+| 领域判断 | Agent 与 capability | 带作用域证据的动作／结果提案 |
+| 控制决策 | 既有 typed domain kernel | 从显式 facts 得出的合法下一步与所需证明 |
+| 内部执行 | 所属 transaction／effect adapter | 持久状态转换与绑定 receipt |
+| 外部执行 | Host／provider | 实际 model／tool／environment effect 与事实回读 |
+| 展示 | Read-model owner | 带新鲜度边界的证据状态与可用动作 |
+
+共享 algebra 不转移执行权。Host continuation、sandbox snapshot、model/tool
+拦截和外部回滚需要各自受支持的 runtime 合同；effect plan 或 transcript 不证明
+这些能力。不新增通用 executor 或第二个 permission owner。
+
+## 决策回放、效果恢复与模拟
+
+| 操作 | 输入与承诺 | 边界 |
+| --- | --- | --- |
+| 纯决策回放 | 固定可信 facts、command 与规则版本，重现决策 | 不执行 effect、不恢复当前权限 |
+| 已提交效果恢复 | 相同逻辑身份与已验证持久 receipt，跳过已提交步骤并接续所属协议 | 不证明 unknown 外部效果没有发生 |
+| 假设模拟 | 显式替换 facts，用受控 interpreter 比较可能决策 | 不证明真实 provider 或模型会产生该结果 |
+
+在既有 receipt 边界记录版本、identity、顺序和相关 outcome。不能重跑模型后把新
+输出称为历史回放。Unknown、permission denial、cancellation、budget rejection
+和 committed success 保持各自恢复含义。取消不抹掉 in-flight 外部效果。Retry
+保留身份并遵守 provider 保证；不支持的 readback 仍是 unknown。
+
+Adapter conformance 比较可观察 effect 顺序、短路点、receipt、权限拒绝与恢复，
+不能只比较返回值。Identity／associativity 适用于同一有序程序的重新分组，不允许
+重排或投机并行。维持既有不建设万能 executor 的决定，直到真实共享权威边界能
+证明需要。跨域序列采用[组合验证](composable-state-machines-recovery-verification-v0.zh-CN.md)，
+受保护外部效果采用[provider acceptance](provider-effect-acceptance-v0.zh-CN.md)；
+两者都不意味着跨系统 exactly-once。
 
 ## 把状态机当作解释表
 

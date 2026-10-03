@@ -137,7 +137,11 @@ def assert_cli_readback(result: dict) -> None:
         ingest = run_cli("ingest", "--goal-id", FIXTURE_GOAL_ID, "--input", "-", runtime_root=runtime_root, stdin=ndjson)
         assert ingest["ok"] is True, ingest
         assert ingest["appended_record_count"] == len(result["ledger_records"]), ingest
-        assert ingest["ledger_ref"] == f"reliability_diagnostics/{FIXTURE_GOAL_ID}.ndjson"
+        # Independent SHA-256 vector for the exact "goal-dsh-fixture" identity.
+        assert ingest["ledger_ref"] == (
+            "reliability_diagnostics/by-goal/"
+            "a6cd5f6d145e6b683350da45838dfb904dcf881c8ebd3fcd0de86b12b8605d38.ndjson"
+        )
         assert str(runtime_root) not in json.dumps(ingest)
 
         receipt = run_cli("receipt", "--goal-id", FIXTURE_GOAL_ID, runtime_root=runtime_root)

@@ -199,6 +199,8 @@ def build_loopx_turn_transaction_plan(
     }
     if planned:
         plan["settlement_plan"] = settlement_plan.as_dict()
+        if goal_ref is not None:
+            plan["settlement_plan"]["goal_ref"] = dict(goal_ref)
     if normalized_instance_id is not None:
         plan["turn_instance_id"] = normalized_instance_id
     if goal_ref is not None:

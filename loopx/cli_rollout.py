@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from .history import load_registry
@@ -18,6 +19,7 @@ def append_cli_rollout_event(
     registry_path: Path,
     runtime_root_arg: str | None,
     event_kind: str,
+    goal_ref: Mapping[str, object] | None = None,
     agent_id: str | None = None,
     todo_id: str | None = None,
     case_id: str | None = None,
@@ -52,6 +54,7 @@ def append_cli_rollout_event(
         event = build_rollout_event(
             goal_id=goal_id,
             event_kind=event_kind,
+            goal_ref=goal_ref,
             agent_id=agent_id or str(payload.get("agent_id") or "").strip() or None,
             todo_id=todo_id or str(payload.get("todo_id") or "").strip() or None,
             case_id=case_id,

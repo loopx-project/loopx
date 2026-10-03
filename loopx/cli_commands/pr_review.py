@@ -113,6 +113,10 @@ def register_pr_review_command(
         help="Check a saved review result for verdict/evidence consistency; no GitHub writes.",
     )
     parser.add_argument(
+        "--check-approval-closeout", metavar="NUMBER@HEAD_OID",
+        help="Read effective blocking reviews after exact-head approval; no GitHub writes or merge authority.",
+    )
+    parser.add_argument(
         "--check-merge-readiness",
         metavar="NUMBER@HEAD_OID",
         help=(
@@ -260,6 +264,19 @@ def handle_pr_review_command(
                 raise ValueError("PR review Goal was not found: " + goal_id)
         review_configuration = resolve_configuration(goal, machine_configuration)
         wait_for_ci = review_configuration["wait_for_ci"]
+        if getattr(args, "check_approval_closeout", None):
+            from ..capabilities.pr_review_queue.approval_closeout import read_github_approval_closeout
+            if any((args.check_result, args.packet, args.check_merge_readiness, args.fixture,
+                    args.autonomous_observation, args.observation_state_file,
+                    args.previous_observation_json, args.handled_exact_head,
+                    args.projected_exact_head, args.since, args.fresh_audit_exact_head, target_exact_heads)):
+                raise ValueError("approval closeout cannot be combined with scan, fixture, result, or readiness options")
+            repository = args.repo or resolve_current_github_repository()
+            if not repository:
+                raise ValueError("approval closeout requires a GitHub repository")
+            payload = read_github_approval_closeout(repository=repository, exact_head=args.check_approval_closeout)
+            print_payload(payload, output_format(args), lambda value: json.dumps(value, indent=2))
+            return 1 if payload["status"] == "hold" else 0
         if goal_id:
             if runtime_root is None:
                 raise ValueError("--goal-id requires an available runtime root")

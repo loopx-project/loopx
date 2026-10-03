@@ -117,6 +117,28 @@ test("active lease owner or scope mismatch fails the reviewed migration", () => 
   }
 });
 
+test("migration preserves standalone lease scopes without equating requirements to its grant", () => {
+  for (const requiredScopes of [[], ["src/**"]]) {
+    const item = {...claimedTodo(1), required_write_scopes: requiredScopes};
+    const lease = {...activeLease("todo_01"), write_scopes: ["docs/**", "src/**"]};
+    const source = projection([item], [lease], "legacy");
+    const plan = planPromotionHandoffMigration(source, "goal-a", "hard_lease", agents, observedAt);
+    assert.equal(plan.ready, true, JSON.stringify(plan));
+    assert.deepEqual(plan.target_projection, {...source, handoff_mode: "hard_lease"});
+    assert.equal(plan.lease_dispositions[0]?.version, lease.version);
+    assert.equal(plan.lease_dispositions[0]?.lease_epoch, lease.lease_epoch);
+  }
+});
+
+test("expired but unreleased execution cannot lose its fence in a soft migration", () => {
+  const lease = {...activeLease("todo_01"), expires_at: observedAt.toISOString()};
+  const source = projection([claimedTodo(1)], [lease], "soft_claim");
+  const plan = planPromotionHandoffMigration(source, "goal-a", "preserve", agents, observedAt);
+  assert.equal(plan.ready, false);
+  assert.equal(plan.conflicts[0]?.reason_code, "active_lease_incompatible_with_soft_claim");
+  assert.deepEqual(source.leases, [lease]);
+});
+
 test("explicit migration fails before fencing when a live claim owner is unregistered", () => {
   const plan = planPromotionHandoffMigration(
     projection([claimedTodo(1, "agent-c")], [], "legacy"),

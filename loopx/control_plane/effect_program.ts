@@ -129,13 +129,18 @@ export interface SettlementIdentityInput {
   replan_obligation_id?: string | null;
 }
 
-export interface SettlementIdentity extends SettlementIdentityInput {
-  todo_id: string | null;
-  replan_obligation_id: string | null;
-  binding_kind: SettlementBindingKind;
-  binding_id: string;
+export type SettlementIdentity = Readonly<{
+  goal_id: string;
+  agent_id: string;
+  turn_instance_id: string;
   effect_id: string;
-}
+} & (
+  | { binding_kind: "todo"; binding_id: string; todo_id: string; replan_obligation_id: null }
+  | { binding_kind: "autonomous_replan"; binding_id: string; todo_id: null; replan_obligation_id: string }
+  | { binding_kind: "unbound"; binding_id: ""; todo_id: null; replan_obligation_id: null }
+)>;
+
+export type BoundSettlementIdentity = Exclude<SettlementIdentity, { binding_kind: "unbound" }>;
 
 export interface SettlementReceipt {
   step_kind: SettlementStepKind;
@@ -181,6 +186,7 @@ export interface SettlementStep {
 export interface SettlementPlan {
   identity: SettlementIdentity;
   steps: readonly SettlementStep[];
+  goal_ref?: JsonObject;
 }
 
 export type SettlementBindGate<Value = unknown> =
@@ -418,29 +424,38 @@ export function settlementIdentity(
       "settlement identity cannot bind both todo_id and replan_obligation_id",
     );
   }
-  const bindingKind: SettlementBindingKind = todoId
-    ? "todo"
-    : replanObligationId
-      ? "autonomous_replan"
-      : "unbound";
-  const bindingId = todoId ?? replanObligationId ?? "";
-  let effectId: string;
-  if (todoId) {
-    effectId = `${input.goal_id}:${input.agent_id}:${todoId}:${input.turn_instance_id}`;
-  } else if (replanObligationId) {
-    effectId = `${input.goal_id}:${input.agent_id}:autonomous_replan:${replanObligationId}:${input.turn_instance_id}`;
-  } else {
-    effectId = `${input.goal_id}:${input.agent_id}::${input.turn_instance_id}`;
-  }
-  return {
+  const common = {
     goal_id: input.goal_id,
     agent_id: input.agent_id,
-    todo_id: todoId,
     turn_instance_id: input.turn_instance_id,
-    replan_obligation_id: replanObligationId,
-    binding_kind: bindingKind,
-    binding_id: bindingId,
-    effect_id: effectId,
+  };
+  if (todoId) {
+    return {
+      ...common,
+      todo_id: todoId,
+      replan_obligation_id: null,
+      binding_kind: "todo",
+      binding_id: todoId,
+      effect_id: `${input.goal_id}:${input.agent_id}:${todoId}:${input.turn_instance_id}`,
+    };
+  }
+  if (replanObligationId) {
+    return {
+      ...common,
+      todo_id: null,
+      replan_obligation_id: replanObligationId,
+      binding_kind: "autonomous_replan",
+      binding_id: replanObligationId,
+      effect_id: `${input.goal_id}:${input.agent_id}:autonomous_replan:${replanObligationId}:${input.turn_instance_id}`,
+    };
+  }
+  return {
+    ...common,
+    todo_id: null,
+    replan_obligation_id: null,
+    binding_kind: "unbound",
+    binding_id: "",
+    effect_id: `${input.goal_id}:${input.agent_id}::${input.turn_instance_id}`,
   };
 }
 
@@ -626,7 +641,7 @@ export function settlementReceipt(
 
 export function settlementIdentityFromPlan(
   transactionPlanValue: unknown,
-): SettlementResult<SettlementIdentity> {
+): SettlementResult<BoundSettlementIdentity> {
   const transactionPlan = asObject(transactionPlanValue);
   const settlementPlanValue = transactionPlan.settlement_plan;
   if (
@@ -653,22 +668,26 @@ export function settlementIdentityFromPlan(
     });
   }
   const identityObject = identityValue as JsonObject;
+  const { goal_id: goalId, agent_id: agentId, turn_instance_id: turnInstanceId } = identityObject;
   if (
-    ["goal_id", "agent_id", "turn_instance_id"].some(
-      (field) => truthyString(identityObject[field]).trim().length === 0,
+    typeof goalId !== "string" || !goalId.trim() ||
+    typeof agentId !== "string" || !agentId.trim() ||
+    typeof turnInstanceId !== "string" || !turnInstanceId.trim() ||
+    ["todo_id", "replan_obligation_id"].some(
+      (field) => identityObject[field] != null && typeof identityObject[field] !== "string",
     )
   ) {
     return settlementFailed({
       kind: "invalid_identity",
       step_kind: "validation",
-      reason: "Turn settlement plan has an incomplete identity",
+      reason: "Turn settlement plan identity requires string identifiers",
     });
   }
   const todoId = truthyString(identityObject.todo_id).trim();
   const replanObligationId = truthyString(
     identityObject.replan_obligation_id,
   ).trim();
-  if (Boolean(todoId) === Boolean(replanObligationId)) {
+  if (todoId && replanObligationId) {
     return settlementFailed({
       kind: "invalid_identity",
       step_kind: "validation",
@@ -676,31 +695,56 @@ export function settlementIdentityFromPlan(
         "Turn settlement plan requires exactly one Todo or autonomous replan obligation binding",
     });
   }
-  let built: SettlementIdentity;
-  try {
-    built = settlementIdentity({
-      goal_id: pythonString(identityObject.goal_id),
-      agent_id: pythonString(identityObject.agent_id),
-      todo_id: todoId || null,
-      turn_instance_id: pythonString(identityObject.turn_instance_id),
-      replan_obligation_id: replanObligationId || null,
-    });
-  } catch (error) {
+  const built = settlementIdentity({
+    goal_id: goalId,
+    agent_id: agentId,
+    todo_id: todoId || null,
+    turn_instance_id: turnInstanceId,
+    replan_obligation_id: replanObligationId || null,
+  });
+  // Unbound identities remain useful for non-executable plans, never settlement.
+  if (built.binding_kind === "unbound") {
     return settlementFailed({
       kind: "invalid_identity",
       step_kind: "validation",
-      reason: error instanceof Error ? error.message : pythonString(error),
+      reason: "Turn settlement plan has no binding",
     });
   }
-  const effectId = truthyString(identityObject.effect_id).trim();
-  if (!effectId) {
+  const version = identityObject.schema_version;
+  if (
+    (version !== undefined && version !== SETTLEMENT_IDENTITY_SCHEMA_VERSION &&
+      version !== SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION) ||
+    (version === SETTLEMENT_IDENTITY_SCHEMA_VERSION && built.binding_kind !== "todo")
+  ) {
+    return settlementFailed({
+      kind: "invalid_identity",
+      step_kind: "validation",
+      reason: "Turn settlement plan identity schema is unsupported for its binding",
+    });
+  }
+  // Legacy Todo wire records omit these fields. If supplied, they must agree;
+  // scoped v1 records always declare both. Never normalize contradictory facts.
+  if (
+    ((version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION || identityObject.binding_kind !== undefined) &&
+      identityObject.binding_kind !== built.binding_kind) ||
+    ((version === SCOPED_SETTLEMENT_IDENTITY_SCHEMA_VERSION || identityObject.binding_id !== undefined) &&
+      identityObject.binding_id !== built.binding_id)
+  ) {
+    return settlementFailed({
+      kind: "invalid_identity",
+      step_kind: "validation",
+      reason: "Turn settlement plan binding does not match its identity",
+    });
+  }
+  const effectId = identityObject.effect_id;
+  if (typeof effectId !== "string" || !effectId.trim()) {
     return settlementFailed({
       kind: "invalid_identity",
       step_kind: "validation",
       reason: "Turn settlement plan has no effect id",
     });
   }
-  if (effectId !== built.effect_id) {
+  if (effectId.trim() !== built.effect_id) {
     return settlementFailed({
       kind: "invalid_identity",
       step_kind: "validation",

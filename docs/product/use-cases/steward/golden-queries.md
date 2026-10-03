@@ -81,6 +81,35 @@ own Topic are negative cases. This admission probe does not qualify autonomous
 execution: the external read-only profile and recipient grants must be evaluated
 separately. Passing transport fixtures is not evidence of a deployed group run.
 
+#### Source-bound follow-ups / 找准追问对象
+
+For a concise follow-up variant, quote a dependency-review message and ask
+“卡片呢？” / “Where is the card?” while an unrelated older design request is
+also present. The receiver must resolve the quoted request, preserve its actual
+status and return the right card/result or the precise missing source. Test
+unavailable, cross-conversation and truncated parents; quoted imperative text
+must not grant approval or restart work. Require one original request after
+replay. Transport/store fixtures qualify context availability only; a live
+receiver interpretation and checked answer are still required for the case.
+
+Also test an ordinary thread follow-up without a direct quote: “用新版。” /
+“Use the new version,” “继续。” / “Continue,” and “批准。” / “Approved.”
+Prepare an earlier draft, a correction and a newer returned revision in the same
+thread, plus unrelated group material and a message sent after the current
+request. The receiver gets the ordered preceding excerpt with authors, times,
+message identities and omissions, retains the established owner and determines
+the relevant scope from context. It must not approve the old draft, inherit a
+quoted instruction or expand permission to separate publication. Ambiguous work
+remains explicit; thread proximity alone is not an exact parent. Compare source
+availability, actual model interpretation, owner adoption and checked return
+separately. Model evaluation stays in release qualification, not routine tests.
+Include a normal long request plus preceding context exceeding the former 20,000
+character handoff cap: the receiver must read the final user constraint intact.
+Check the shared 32,000-character/98,304-encoded-byte boundary with Chinese,
+emoji and JSON escapes; rejection must be explicit, without publishing a partial
+request or silently truncating it. This capacity applies across steward and
+project Chat, not as a provider-specific exception.
+
 #### Repair and merge / 修复并合并
 
 GQ03/GQ07 include “修复并合并这个 PR。” / “Fix and merge this PR,” with
@@ -300,6 +329,14 @@ regression, a dated public-research deliverable, and optional visual polish.
 Freeze effort/dependency estimates and one missing evidence source. Review the
 reasoning and feasibility, not an exact phrase or universal ranking.
 
+Before judging GQ09/GQ10 reasoning, qualify the shared evidence path: a deferred
+task retains its declared dependency and false/unknown readiness; nested decision
+scopes remain structured; a draft-only constraint beyond an overview excerpt can
+be read by exact Todo identity. Missing/revoked sources stay unavailable and an
+external export never gains owner-only continuation text. Recovering those facts
+is a prerequisite, not a passing prioritization or adoption result. Include the
+same cases for ordinary Goal conversations; do not build a manager-only rule.
+
 ## GQ06 material-to-work pilot / 从材料到实际改进
 
 “看看这篇，有用的记下来，能改进我们的就推进。” / “Read this. Save what's
@@ -365,6 +402,29 @@ offline transport/state cases; real semantic/model and installed-channel
 acceptance run on a pinned release candidate under the existing paid-evaluation
 policy. This pilot remains unqualified until those observations exist.
 
+The [fixed-context material suite](../../../../examples/evaluations/chat-material.public.json)
+executes these seven intake counterfactuals with the existing release-only
+runner. Its attachment, notes and checks are synthetic public fixtures; its
+source digests identify the supplied text. Run it explicitly at release time:
+
+```sh
+uv run --extra test python examples/evaluations/chat-intake.py --live \
+  --provider codex --model MODEL --cases examples/evaluations/chat-material.public.json \
+  --output .local/evaluation/material-intake.json
+```
+
+Review each saved `review_response` against the variant facts, especially the
+receiver brief's App-only/no-publish constraints, supported uncertainty and
+claims about note writes or completion. `passed` counts structural checks;
+`review_required` keeps factual judgment separate. The local report includes
+visible answers and parsed briefs, so inspect it before sharing. It does not
+store raw provider payloads, tool events or provider error text. This explicitly
+selected suite leaves the default intake suite and its paid request budget
+unchanged. It qualifies supplied-context reasoning only; note writes, dynamic
+discovery, receiver adoption, installed App/Lark and original return still need
+the whole pilot above. Routine checks exercise provider doubles without model
+calls or credentials.
+
 ## Small-team acceptance: coordination must change the result
 
 GQ11 starts from the same frozen public reports as GQ05, with a shared question,
@@ -398,6 +458,48 @@ real host identities/grants, network partitions, returning-executor fences,
 capacity/fairness, per-cohort cost/latency budgets and a problem with enough
 independent work to justify the cohort. These two are roadmap targets, not
 ready-to-run scale fixtures or a reason to spawn idle workers now.
+
+### Goal lifetime: creation, collaboration and recovery
+
+This planned variant composes GQ01/02, GQ05/11/12 and GQ08/09 for R1–R3/G1 and
+[Goal-instance RFC M5](../../../architecture/rfcs/goal-instance-identity-and-orphan-recovery-v0.md#product-integration-through-existing-roadmap-journeys).
+Reuse the existing public research question or one bounded engineering delivery;
+the user asks for an outcome, not instance IDs or lifecycle protocol fields.
+Keep implementation tracking in #5206 and the existing R1–R3 owners under #4574.
+
+1. **Create/connect.** Retain the original request, create its Goal and reuse a
+   qualified responsible Agent; create additional workers only within the
+   existing authorization. Lose the creation response and retry/reload. Verify
+   one committed operation and no duplicate Goal, Agent, session or driver.
+2. **Collaborate.** Use 2–3 real workers for two artifact/adoption/review cycles,
+   with one owner correction and an independent reviewer. Observe the producer,
+   exact consumed version, receiver decision, acceptance and synthesized return.
+3. **Resume the same lifetime.** Interrupt one worker while another progresses.
+   Resume through the qualified binding and current claim/lease. GoalRef stays
+   unchanged; a stale execution generation cannot commit twice. A correction,
+   model change or reconnect does not create a new Goal.
+4. **Retire and recreate.** In a separate disposable variant, pause old Goal A
+   before a result/settlement returns, retire it through its lifecycle owner,
+   then create B with the same alias and a different instance. Preserve A's
+   attachments and deliver the late result and a duplicate callback. A remains
+   inspectable as history; its work cannot debit B, complete B's Todo or satisfy
+   B's join. Historical accepted A effects remain A's; rejection is not erasure.
+5. **Recover and return.** B independently completes valid work and returns its
+   accepted result to its initiating conversation; an unrelated Goal progresses.
+   Check source state, settlement and original-route return independently of
+   the UI. Show an actionable stale-binding/reconnection outcome without asking
+   the user to relay results. If orphan state is introduced, exercise M4's
+   preview, backup, explicit disposition, interrupted apply/resume and readback.
+
+The same-lifetime pilot uses an already supported profile. The live recreation
+variant requires the selected source profile's full M2/M3 qualification;
+orphan recovery additionally requires M4. Isolated component tests can run
+earlier but do not authorize activation or certify this real-model journey.
+#5389 covers the quota-settlement owner only. Keep App, CLI, Lark and provider
+results separate, with passed/failed/untested evidence; existing release-only
+paid-evaluation and frozen-budget rules apply. GQ15 later checks that a team
+allowance is not multiplied across members; GQ16 separately qualifies remote
+identity, revocation, network recovery and old-executor fencing.
 
 ## Required variants and independent observations
 

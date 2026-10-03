@@ -73,7 +73,7 @@ async function main() {
     await waitForHttp(appUrl);
     browser = await launchBrowser(chromium);
     for (const storageFailure of ["getter", "methods"]) {
-      const isolated = await browser.newPage({ viewport: { width: 1512, height: 982 } });
+      const isolated = await browser.newPage({ locale: "zh-CN", viewport: { width: 1512, height: 982 } });
       const errors = [];
       isolated.on("pageerror", (error) => errors.push(error.message));
       await isolated.addInitScript((failure) => {
@@ -112,7 +112,7 @@ async function main() {
       if (errors.length) throw new Error(`${storageFailure}: uncaught page errors: ${errors.join("; ")}`);
       await isolated.close();
     }
-    const page = await browser.newPage({ viewport: { width: 1512, height: 982 } });
+    const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 1512, height: 982 } });
     const state = {
       ensureGates: new Map(),
       ensureStartedByHost: new Map(),

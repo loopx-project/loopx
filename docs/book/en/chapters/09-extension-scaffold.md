@@ -1,60 +1,41 @@
 # Build a standalone Extension
 
-This chapter creates `loopx-text-stats` from the official LoopX scaffold. The official scaffold supplies
-the complete runnable baseline; this chapter provides the narrowed manifest, request and response
-contracts, core function, and validation steps without a separate exercise repository.
+Use a complete zero-permission teaching package to learn requests, responses, validation, and packaging. [Companion source](https://github.com/loopx-project/loopx/tree/main/packages/loopx-text-stats) in `packages/loopx-text-stats/` includes its manifest, Python package, two JSON Schemas, sample input, and standard-library tests.
 
-## Observable success
+It is not a built-in Capability or default catalog entry and does not read or write Goals. The package owns text input and results; the existing Extension lifecycle owns installation, activation, and managed calls.
 
-At the end:
+## Run the complete example first
 
-- the scaffold is an independent Python package;
-- the manifest uses `loopx_extension_manifest_v0`;
-- request and response each have a versioned JSON Schema;
-- the Provider reads one JSON object from stdin and writes one JSON object to stdout;
-- doctor has no side effect;
-- invalid input fails closed before computation;
-- both manifest and runtime declare zero permissions.
+From a reviewed LoopX checkout root, copy the entire package into a new directory. `copytree` refuses an existing destination. Keep this working directory and environment for the next chapter.
 
-## 1. Generate the official scaffold
+```bash
+python3 -c "import shutil; shutil.copytree('packages/loopx-text-stats', 'standalone-extension')"
+python3 -m venv .local/book-extension-venv
+. .local/book-extension-venv/bin/activate
+python3 -m pip install -e . -e ./standalone-extension
+python3 -m unittest discover -s standalone-extension/tests -v
+loopx-text-stats --doctor
+loopx-text-stats < standalone-extension/examples/request.json
+```
 
-From a workspace where you want to build the example:
+This installs the current LoopX checkout and provider into one isolated environment. To use an installed release instead, check its version and install only the provider there. Do not mix those routes accidentally. Tests use unittest, with no `[test]` extra.
+
+These commands install and directly invoke the package without writing LoopX activation state. Activate it once with an isolated state file in the next chapter.
+
+## How the official scaffold differs from the finished example
+
+To practice starting from the initial domain implementation, generate a separate starter:
 
 ```bash
 loopx extension init loopx-text-stats \
-  --destination standalone-extension \
-  --execute \
-  --format json
+  --destination text-stats-starter --execute --format json
 ```
 
-`extension init` previews by default. `--execute` is required to write files, and the destination must not
-already exist, even as an empty directory. The command does not build, install, register, or enable the
-package.
+The destination must not exist. The official scaffold echoes a message. This finished example changes it to text statistics and updates the decoder, schemas, example, and tests together. Generation does not build, install, or activate it.
 
-The generated path is:
+Choose the complete example to inspect working behavior or the starter to practice contract changes. Renaming a function alone does not complete domain adaptation.
 
-```text
-standalone-extension/
-├── extension.toml
-├── pyproject.toml
-├── README.md
-├── examples/
-│   └── request.json
-├── schemas/
-│   ├── request.schema.json
-│   └── response.schema.json
-└── src/
-    └── loopx_text_stats/
-        ├── __init__.py
-        └── cli.py
-```
-
-This is a complete standalone path. It does not invent the Capability authority required for
-`[[provides]]` or `[[implements]]`.
-
-## 2. Read the manifest as a contract
-
-After narrowing the generated scaffold to this example, the manifest is:
+## Declare only the required lifecycle
 
 ```toml
 schema_version = "loopx_extension_manifest_v0"
@@ -71,156 +52,55 @@ required_permissions = []
 timeout_seconds = 30
 ```
 
-The important constraints are:
+`id` identifies the Extension, `version` participates in revision, and `requires_loopx_api` declares compatibility. Its entrypoint must resolve in LoopX's environment. Managed runtime uses `timeout_seconds`; the current contract permits 1–120 seconds.
 
-- `id` is the lifecycle identity;
-- `version` participates in revision and upgrade;
-- `requires_loopx_api` declares the compatibility window;
-- `protocol` is the Provider wire contract;
-- `entrypoint` must exist on `PATH` in the Python environment running LoopX;
-- `doctor_args` names a read-only readiness probe;
-- both permission lists are empty;
-- the managed runtime fixes the timeout rather than accepting an arbitrary caller override.
+The example declares no `provides` / `implements` or permissions, so it uses the standalone runner. Protected effects need their Capability/domain contract. Declaring permissions grants no authority and provides no OS sandbox.
 
-## 3. Define a bounded request
+## Define what the measurements mean
 
-The example request is:
+`characters` counts Python Unicode code points, `words` counts whitespace chunks, and `lines` follows `str.splitlines()`. Thus “你好世界” has one word here, and combining characters may contain multiple code points. This is not language-specific tokenization.
+
+The example input is:
 
 ```json
 {
   "schema_version": "loopx_text_stats_request_v0",
-  "text": "LoopX keeps project state explicit.\nExtensions keep delivery lifecycle explicit."
+  "text": "LoopX keeps work explicit.\nTests verify the result."
 }
 ```
 
-The request schema requires:
-
-- an object payload;
-- an exact `schema_version`;
-- a `text` string containing a non-whitespace character;
-- `additionalProperties: false`.
-
-Rejecting unknown fields protects the permission boundary. If the caller sends:
+The successful response's `result` is:
 
 ```json
-{
-  "schema_version": "loopx_text_stats_request_v0",
-  "text": "hello",
-  "path": "/tmp/input.txt"
-}
+{"characters": 51, "non_whitespace_characters": 44, "words": 8, "lines": 2}
 ```
 
-the Provider must reject it. It must not reinterpret `path` as file-read authority.
+The envelope retains `ok`, response schema, request schema, and extension identity. See `schemas/response.schema.json` for the full shape. Any outer LoopX managed receipt is distinct from the domain result.
 
-## 4. Implement pure computation
+## Why the decoder also validates
 
-The example's core function is:
+Requests must be objects with the exact schema and non-whitespace text; extra fields are rejected. JSON Schema describes the wire shape. The decoder enforces fields and also checks encoding, duplicate keys, byte size, and Python whitespace semantics.
 
-```python
-def analyze_text(text: str) -> dict[str, int]:
-    return {
-        "characters": len(text),
-        "non_whitespace_characters": sum(
-            1 for character in text if not character.isspace()
-        ),
-        "words": len(re.findall(r"\S+", text)),
-        "lines": len(text.splitlines()) or 1,
-    }
-```
+The input ceiling is 65,536 bytes and text is limited to 32,000 code points. These are this example's limits, not global LoopX defaults.
 
-It is a good first standalone Extension because it is deterministic, reads no environment or files, uses
-no network, modifies no external system, and does not depend on LoopX project state.
+A long integer exposes another boundary: `json.loads` may raise `ValueError` under Python's integer conversion limit even below the byte ceiling. Catching only `JSONDecodeError` leaves that request outside the uniform error response.
 
-The Provider validates structure before computation and returns errors through a versioned response:
+The implementation preserves specific `InvalidRequest` errors, then maps other parsing `ValueError` and recursion failures to `invalid_json`. Duplicate keys retain `duplicate_field`. It neither relaxes interpreter limits nor returns raw requests or parser messages.
 
-```json
-{
-  "ok": false,
-  "schema_version": "loopx_text_stats_response_v0",
-  "extension_id": "loopx-text-stats",
-  "error": "extension input has unsupported fields ['path']"
-}
-```
+## Tests with a concrete purpose
 
-Do not expose tracebacks, environment variables, or local paths in public receipts.
+| Case | Expected result | Evidence boundary |
+| --- | --- | --- |
+| Example, Unicode, repeated input | Defined metrics and deterministic output | This provider's domain function |
+| Missing/unknown fields, wrong types/schema, duplicate keys | Fixed errors without raw-value echo | Input contract and public errors |
+| Byte and text boundaries | Accept within bounds, reject overflow | The example's local limits |
+| 5,000-digit integer | Error JSON with no traceback on stderr | Python 3.11+ integer parsing regression |
+| Doctor and CLI output | Doctor bypasses the business request; run emits one object | Real provider subprocess entrypoints |
 
-## 5. Define the response contract
+Source and tests ship together. Tests invoke no model, external service, or live Goal. They do not qualify managed process termination, permission isolation, or upgrades. The next chapter validates lifecycle separately.
 
-The stable domain response is:
+## Extend the example coherently
 
-```json
-{
-  "ok": true,
-  "schema_version": "loopx_text_stats_response_v0",
-  "extension_id": "loopx-text-stats",
-  "request_schema_version": "loopx_text_stats_request_v0",
-  "result": {
-    "characters": 80,
-    "non_whitespace_characters": 71,
-    "words": 10,
-    "lines": 2
-  }
-}
-```
+Define the new input and verifiable result, then update decoder, schemas, example, and tests together. Adding external state or permission needs requires reassessing placement; a permission field cannot preserve zero-permission runner assumptions.
 
-The response schema uses `oneOf` to separate success and failure. Tests should assert this domain contract,
-not every field in the outer LoopX CLI receipt. That allows additive receipt changes in a minor release
-without breaking a domain test.
-
-## 6. Keep doctor free of effects
-
-The starter doctor path is:
-
-```python
-if args.doctor:
-    return 0
-```
-
-For this pure Provider, readiness means the entrypoint starts and parses arguments. Doctor must not:
-
-- create files;
-- access the network;
-- write credentials;
-- change Extension state;
-- perform a business effect;
-- emit unbounded logs.
-
-A real Provider may perform bounded read-only dependency checks. Readiness still needs to be repeatable and
-effect-free.
-
-## 7. Install the package and run tests
-
-Use one Python environment for the Provider and LoopX:
-
-```bash
-cd standalone-extension
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e '.[test]'
-python3 -m pytest
-```
-
-LoopX validates the installed console entrypoint. If the package lives in another virtual environment,
-`entrypoint_missing` is the correct result; LoopX must not search arbitrary source directories.
-
-## Common mistakes
-
-### Hand-writing a smaller scaffold
-
-This often omits schema, doctor, compatibility, or the package entrypoint. Generate the complete official
-path first, then make minimal domain changes.
-
-### Accepting arbitrary keyword arguments
-
-This destroys the bounded request and can expand authority accidentally. The JSON Schema and Provider
-validation should both fail closed.
-
-### Running business work in doctor
-
-Doctor proves readiness. It does not authorize an effect. Business requests belong in the managed runtime
-or an authorized Capability/domain command.
-
-### Adding a permission for demonstration
-
-`extension run` rejects a permissioned Extension. Design the real Capability and authority before building
-an effectful Provider.
+The [English README](https://github.com/loopx-project/loopx/blob/main/packages/loopx-text-stats/README.md) and [Chinese README](https://github.com/loopx-project/loopx/blob/main/packages/loopx-text-stats/README.zh-CN.md) give the same complete steps. There is no separate exercise repository or missing file to reconstruct from conversation.

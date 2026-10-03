@@ -87,3 +87,39 @@ def test_rolling_counter_can_decrease_without_replaying_or_voiding_a_spend() -> 
     assert after["spend_event_count"] == 1
     assert append_only_runs[0]["classification"] == "quota_slot_spent"
     assert all(run["classification"] != "quota_slot_voided" for run in append_only_runs)
+
+
+def test_rolling_counter_isolated_by_exact_goal_instance() -> None:
+    goal_ref_a = {
+        "goal_id": GOAL_ID,
+        "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }
+    goal_ref_b = {
+        "goal_id": GOAL_ID,
+        "goal_instance_id": "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }
+    legacy = _spend("2026-01-01T00:10:00+00:00", "turn-legacy")
+    spend_a = {
+        **_spend("2026-01-01T00:20:00+00:00", "turn-a"),
+        "goal_ref": goal_ref_a,
+    }
+    spend_b = {
+        **_spend("2026-01-01T00:30:00+00:00", "turn-b"),
+        "goal_ref": goal_ref_b,
+    }
+
+    current = goal_quota_with_spend_ledger(
+        {**_goal(), "goal_instance_id": goal_ref_b["goal_instance_id"]},
+        [legacy, spend_a, spend_b],
+        now=datetime(2026, 1, 1, 0, 59, tzinfo=timezone.utc),
+    )
+    legacy_owner = goal_quota_with_spend_ledger(
+        _goal(),
+        [legacy, spend_a, spend_b],
+        now=datetime(2026, 1, 1, 0, 59, tzinfo=timezone.utc),
+    )
+
+    assert current["spent_slots"] == 1
+    assert current["spend_event_count"] == 1
+    assert legacy_owner["spent_slots"] == 1
+    assert legacy_owner["spend_event_count"] == 1

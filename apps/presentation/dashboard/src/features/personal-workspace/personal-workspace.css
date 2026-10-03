@@ -117,7 +117,7 @@
 .personal-goal-lifecycle:disabled { opacity: .45; cursor: wait; }
 .personal-goal-lifecycle.is-pending svg { animation: personal-goal-lifecycle-spin .8s linear infinite; }
 @keyframes personal-goal-lifecycle-spin { to { transform: rotate(360deg); } }
-.personal-goal-delete:hover { color: var(--pw-danger); }
+.personal-goal-delete:hover { color: var(--pw-red); }
 .personal-goal-link-copy { display: grid; min-width: 0; gap: 2px; }
 .personal-goal-link-copy strong, .personal-goal-link-copy small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* Two lines keep the distinguishing tail of similar Goal titles visible. */
@@ -270,7 +270,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-action-feedback button { display: grid; place-items: center; border: 0; background: transparent; color: inherit; cursor: pointer; }
 .personal-refresh-control { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .personal-refresh-control small { color: var(--pw-muted); font-size: 11px; white-space: nowrap; }
-.personal-refresh-control.is-error small { color: var(--pw-danger); }
+.personal-refresh-control.is-error small { color: var(--pw-red); }
 .personal-icon-button { display: inline-grid; flex: 0 0 36px; place-items: center; width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border: 1px solid var(--pw-line); border-radius: 10px; background: #fff; color: var(--pw-muted); cursor: pointer; }
 .personal-icon-button:hover { border-color: var(--pw-line-strong); color: var(--pw-text); }
 .personal-channel-scroll { overflow: auto; min-width: 0; min-height: 0; padding: 22px max(26px, calc((100% - 820px) / 2)); }
@@ -325,15 +325,16 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-home-lane.is-observing > header i { background: var(--pw-blue); }
 .personal-home-lane.is-scheduled > header i { background: #8b6bd8; }
 .personal-home-lane-list { display: grid; align-content: start; gap: 9px; }
-.personal-home-goal-card { display: grid; gap: 7px; width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--pw-line); border-radius: 12px; background: #fff; color: inherit; cursor: pointer; text-align: left; box-shadow: 0 1px 4px rgb(30 28 20 / 6%); transition: border-color .14s ease, transform .14s ease, box-shadow .14s ease; }
+.personal-home-goal-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--pw-line); border-radius: 12px; background: #fff; color: inherit; cursor: pointer; text-align: left; box-shadow: 0 1px 4px rgb(30 28 20 / 6%); transition: border-color .14s ease, transform .14s ease, box-shadow .14s ease; }
 .personal-home-goal-card:hover { border-color: var(--pw-line-strong); transform: translateY(-1px); box-shadow: 0 4px 12px rgb(30 28 20 / 8%); }
 .personal-home-goal-card:focus-visible { outline: 2px solid #7da2ff; outline-offset: 2px; }
 .personal-home-goal-meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--pw-muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-home-goal-card > p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--pw-muted); font-size: 11px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.personal-home-goal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 2px; }
-.personal-home-goal-card > footer .personal-goal-activity-chip { font-size: 11px; }
+.personal-home-goal-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding-top: 2px; }
+.personal-home-goal-card > footer .personal-goal-activity-chip { flex: 1 1 0; min-width: 0; font-size: 11px; }
+.personal-home-goal-card > footer .personal-goal-activity-chip > span:last-child { min-width: 0; }
 .personal-home-goal-card > footer > span:not(.personal-goal-activity-chip) { flex: none; padding: 2px 7px; border-radius: 99px; background: #f2f1ed; color: var(--pw-muted); font-size: 9.5px; }
-.personal-home-goal-card > footer small { overflow: hidden; color: var(--pw-faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.personal-home-goal-card > footer small { flex: none; overflow: hidden; color: var(--pw-faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .personal-home-history { border: 1px solid var(--pw-line); border-radius: 13px; background: rgb(255 255 255 / 60%); }
 .personal-home-history > summary { display: flex; align-items: center; gap: 9px; min-height: 44px; padding: 0 14px; cursor: pointer; list-style: none; }
 .personal-home-history > summary::-webkit-details-marker { display: none; }
@@ -397,6 +398,25 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-message-activity summary span { margin-left: 6px; font-variant-numeric: tabular-nums; }
 .personal-message-activity ol { margin: 0; padding: 0 0 4px 20px; list-style: decimal; }
 .personal-message-activity li { display: list-item; margin: 4px 0; overflow-wrap: anywhere; }
+.personal-turn-steps .personal-turn-steps-failed { margin-left: 8px; color: var(--pw-red); }
+.personal-turn-steps ol { display: grid; gap: 2px; padding: 0 0 4px; list-style: none; }
+.personal-turn-steps li.personal-turn-step { margin: 0; }
+.personal-turn-step-head, .personal-turn-step summary { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 3px 4px; border-radius: 4px; }
+.personal-turn-step summary { cursor: pointer; list-style: none; }
+.personal-turn-step summary::-webkit-details-marker { display: none; }
+.personal-turn-step summary:hover { background: var(--pw-bg); }
+.personal-turn-step summary:focus-visible { outline: 2px solid var(--pw-blue-ink); outline-offset: 1px; }
+.personal-turn-step summary::after { content: "›"; margin-left: auto; padding-left: 6px; color: var(--pw-faint); }
+.personal-turn-step details[open] > summary::after { transform: rotate(90deg); }
+.personal-turn-step-icon { flex: none; align-self: center; display: inline-flex; color: var(--pw-faint); }
+.personal-turn-step-verb { flex: none; color: var(--pw-text); }
+.personal-turn-step-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pw-muted); }
+.personal-turn-step-title.is-code { font: 11px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+.personal-turn-step-meta { flex: none; color: var(--pw-faint); font-variant-numeric: tabular-nums; }
+.personal-turn-step[data-state="failed"] .personal-turn-step-meta, .personal-turn-step[data-state="failed"] .personal-turn-step-icon { color: var(--pw-red); }
+.personal-turn-step[data-state="running"] .personal-turn-step-icon { color: var(--pw-blue-ink); }
+.personal-turn-step pre { max-height: 240px; margin: 2px 0 6px 23px; padding: 8px 10px; overflow: auto; border-left: 2px solid var(--pw-line); color: var(--pw-muted); font: 11px/1.55 "SF Mono", ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.personal-turn-step pre.is-prose { font: 12px/1.6 inherit; font-family: inherit; }
 .personal-message-work .personal-message-work-error { color: var(--pw-red); font-size: 12px; }
 .personal-return-delivery { display: inline-block; margin-top: 7px; color: var(--pw-muted); font-size: 11px; font-weight: 600; }
 .personal-return-delivery.is-delivered { color: var(--pw-green); }
@@ -832,17 +852,17 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 /* The operator credential is a write-only machine setting: the panel keeps the
    redacted readback and the two inputs on one hairline surface so an operator
    can compare "what is configured" with "what I am about to store". */
-.personal-operator-credential { display: grid; gap: 12px; margin: 16px 0 24px; padding: 16px; border: 1px solid var(--pw-border); border-radius: 10px; background: var(--pw-surface); }
+.personal-operator-credential { display: grid; gap: 12px; margin: 16px 0 24px; padding: 16px; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: var(--pw-card); }
 .personal-operator-credential > header { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; }
 .personal-operator-credential > header strong { display: block; font-size: 13px; }
 .personal-operator-credential > header p { margin: 4px 0 0; color: var(--pw-muted); font-size: 12px; line-height: 1.5; }
-.personal-operator-credential-status { color: var(--pw-muted); font-family: var(--pw-font-mono); font-size: 11px; }
+.personal-operator-credential-status { color: var(--pw-muted); font-family: var(--font-mono); font-size: 11px; }
 .personal-operator-credential-readback { display: grid; gap: 6px; margin: 0; font-size: 12px; }
 .personal-operator-credential-readback > div { display: grid; grid-template-columns: 140px 1fr; gap: 10px; }
 .personal-operator-credential-readback dt { color: var(--pw-muted); }
 .personal-operator-credential-readback dd { margin: 0; overflow-wrap: anywhere; }
 .personal-operator-credential label { display: grid; gap: 4px; font-size: 12px; }
-.personal-operator-credential input { padding: 7px 9px; border: 1px solid var(--pw-border); border-radius: 8px; background: var(--pw-canvas); color: inherit; font-size: 12px; }
+.personal-operator-credential input { padding: 7px 9px; border: 1px solid var(--pw-line-strong); border-radius: 8px; background: var(--pw-bg); color: inherit; font-size: 12px; }
 .personal-operator-credential input:disabled { opacity: 0.6; }
 .personal-capability-scope-note p { margin: 0; font-size: 12px; line-height: 1.55; }
 .personal-capability-scope-note strong { display: block; color: var(--pw-text); }
@@ -884,6 +904,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-capability-editor-status.is-read-only { background: #fff5e8; color: #9a5a10; }
 .personal-capability-linked-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; margin: 0 24px 20px; padding: 14px; border: 1px solid var(--pw-line); border-radius: 10px; background: var(--pw-bg); }
 .personal-capability-linked-setting > div { display: grid; gap: 4px; }
+.personal-capability-linked-controls { min-width: 0; justify-items: start; }
 .personal-capability-linked-setting strong { font-size: 12px; }
 .personal-capability-linked-setting .personal-notification-toggle { justify-self: end; min-height: 44px; }
 .personal-capability-linked-setting .personal-notification-error { grid-column: 1 / -1; }
@@ -1232,6 +1253,12 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-danger-action:hover { background: var(--pw-red-bg); }
 .personal-primary-action:disabled, .personal-secondary-action:disabled, .personal-danger-action:disabled { opacity: .46; cursor: default; box-shadow: none; }
 .personal-drawer-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.personal-decision-bar { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 8px; }
+.personal-decision-bar > button { margin: 0; }
+.personal-decision-chip { display: inline-flex; align-items: center; margin-top: 8px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--pw-line-strong); font-size: 11.5px; font-weight: 650; }
+.personal-decision-chip.is-approve { border-color: transparent; background: var(--pw-green-bg); color: var(--pw-green); }
+.personal-decision-chip.is-reject { border-color: transparent; background: var(--pw-red-bg); color: var(--pw-red); }
+.personal-proposal-state.is-applied > span { display: grid; gap: 2px; }
 .personal-correction-panel { margin-top: 12px; }
 .personal-correction-panel header { display: flex; justify-content: space-between; align-items: center; }
 .personal-correction-panel header span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
@@ -1812,9 +1839,6 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-proposal-state.is-error:has(small) { display: grid; gap: 4px; align-items: start; }
 .personal-proposal-state.is-error small { line-height: 1.5; word-break: break-all; }
 
-.personal-gate-cli-hint { display: grid; gap: 6px; margin-top: 10px; }
-.personal-gate-cli-hint code { display: block; padding: 8px 10px; border: 1px solid var(--pw-line); border-radius: 7px; background: var(--pw-bg, #f7f6f2); font-size: 11.5px; line-height: 1.5; user-select: all; word-break: break-all; }
-.personal-gate-cli-hint small { color: var(--pw-muted); line-height: 1.5; }
 
 .personal-notification-list { display: grid; gap: 0; margin: 12px 0 0; padding: 0; list-style: none; }
 .personal-notification-row { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--pw-line); }

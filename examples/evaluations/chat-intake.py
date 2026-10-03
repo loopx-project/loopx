@@ -23,6 +23,9 @@ from loopx.control_plane.operator_provider import operator_provider_environ
 def score(case, response):
     observed = "handoff" if response.get("context_handoff") else "draft" if response.get("goal_draft") else "answer"
     errors = []
+    message = response.get("message")
+    if not isinstance(message, str) or not message.strip():
+        errors.append("missing_answer")
     if observed != case["expected"]:
         errors.append(f"expected_{case['expected']}_got_{observed}")
     if response.get("proposals") or response.get("protected_action"):
@@ -42,7 +45,12 @@ def score(case, response):
     for ref in case.get("required_evidence_refs", []):
         if ref not in str(response.get("message") or ""):
             errors.append("missing_evidence_ref")
-    return {"id": case["id"], "passed": not errors, "observed": observed, "errors": errors}
+    # Keep the visible answer and parsed handoff for factual review. Never save
+    # raw provider payloads, tool events, credentials or provider error text.
+    # Structural success alone cannot establish the correctness of these claims.
+    review_response = {k: response[k] for k in ("message", "context_handoff", "goal_draft") if k in response}
+    return {"id": case["id"], "passed": not errors, "observed": observed, "errors": errors,
+            "review_response": review_response}
 
 
 def main():
@@ -70,8 +78,20 @@ def main():
 
     def run(case):
         started = time.monotonic()
-        prompt = _turn_prompt(case["request"], context_summary=json.dumps(case["context"], ensure_ascii=False))
+        # Match the real Codex adapter's input normalization for both providers.
+        message = " ".join(case["request"].split())
+        context = json.dumps(case["context"], ensure_ascii=False)
+        prompt = _turn_prompt(message, context_summary=context)
+        prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
         if args.provider == "codex":
+            protocol_warning = False
+
+            def observe(event, _payload):
+                nonlocal protocol_warning
+                # Keep only the fact; provider payloads can contain secrets.
+                if event == "protocol.warning":
+                    protocol_warning = True
+
             try:
                 with tempfile.TemporaryDirectory(prefix="loopx-public-intake-") as work:
                     with CodexChatAgentSession.start(
@@ -79,10 +99,15 @@ def main():
                         objective=json.dumps(case["context"], ensure_ascii=False), model=args.model,
                         reasoning_effort="high", hard_timeout_sec=180,
                     ) as session:
-                        row = score(case, session.send(case["request"]))
+                        session.context_summary = context
+                        row = score(case, session.send(message, on_event=observe))
+                        if protocol_warning:
+                            row["passed"] = False
+                            row["errors"].append("protocol_warning")
             except Exception as error:
                 row = {"id": case["id"], "passed": False, "errors": [type(error).__name__]}
             row["seconds"] = round(time.monotonic() - started, 2)
+            row["prompt_sha256"] = prompt_sha256
             print(json.dumps(row), flush=True)
             return row
         body = {"model": args.model, "messages": [{"role": "user", "content": prompt}],
@@ -111,6 +136,7 @@ def main():
             # Provider errors can contain secrets, URLs or echoed prompts. Store only type.
             row = {"id": case["id"], "passed": False, "errors": [type(error).__name__]}
         row["seconds"] = round(time.monotonic() - started, 2)
+        row["prompt_sha256"] = prompt_sha256
         print(json.dumps({k: row[k] for k in ("id", "passed", "errors")}), flush=True)
         return row
 
@@ -120,7 +146,8 @@ def main():
               "prompt_sha256": hashlib.sha256(_turn_prompt("").encode()).hexdigest(),
               "request_settings": {"reasoning_effort": "high", "runtime_profile": "restricted"} if args.provider == "codex" else {"temperature": 0, "max_tokens": 8192, "thinking": "provider_default"},
               "passed": sum(row["passed"] for row in rows), "total": len(rows), "results": rows,
-              "boundary": "Fixed public context with production prompt/parser; synthetic authoritative observations test intake, not real fact lookup. Scoring checks effects, recipients and evidence pointers; review factual conclusions separately. Codex uses the real restricted Chat adapter; operator-api also checks raw envelope integrity. No dynamic discovery, dispatch or work completion qualification."}
+              "review_required": True,
+              "boundary": "Fixed public context with production prompt/parser; synthetic authoritative observations test intake, not real fact lookup. Top-level prompt_sha256 identifies the template; each result hashes its effective prompt including context and normalized request. Scoring requires a nonempty answer and checks effects, recipients and evidence pointers; review factual conclusions separately. Codex uses the real restricted Chat adapter and fails on its protocol warnings; operator-api also checks raw envelope integrity. No dynamic discovery, dispatch or work completion qualification."}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     return 0 if report["passed"] == report["total"] else 1

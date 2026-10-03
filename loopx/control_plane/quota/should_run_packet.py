@@ -1204,7 +1204,11 @@ def _build_active_quota_payload(
     execution_obligation = _execution_obligation(
         should_run=route.should_run,
         effective_action=route.effective_action,
-        heartbeat_recommendation=route.heartbeat_recommendation,
+        heartbeat_recommendation=(
+            {**route.heartbeat_recommendation, "replan_obligation": prepared.replan_obligation}
+            if route.replan_decision_allowed
+            else route.heartbeat_recommendation
+        ),
         work_lane_contract=route.payload_work_lane_contract,
         external_evidence_observation=route.external_evidence_observation,
         user_gate_owns_frontier=_user_action_owns_empty_agent_lane(
@@ -1472,6 +1476,7 @@ def _build_quota_should_run_payload(
     turn_instance_id: str | None = None,
     include_agent_todo_detail: bool = False,
     runtime_root: str | Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     if prepared.receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED:
         payload = _build_settled_quota_payload(prepared, route)
@@ -1479,6 +1484,8 @@ def _build_quota_should_run_payload(
         payload = _build_active_quota_payload(
             prepared, route, include_agent_todo_detail=include_agent_todo_detail,
         )
+    if goal_ref is not None:
+        payload["goal_ref"] = dict(goal_ref)
     apply_settled_monitor_precedence(payload)
     cadence_root = _interaction_runtime_root(runtime_root, prepared.status_payload)
     if cadence_root:
@@ -1532,6 +1539,15 @@ def _build_quota_should_run_payload(
         interaction_contract=payload.get("interaction_contract"),
         scheduler_hint=payload.get("scheduler_hint"),
     )
+    if prepared.agent_scoped_user_todo_override:
+        # Admission is decided earlier; expose an action only from the final
+        # selected Todo and interaction authority, including cooldown changes.
+        kind = str(prepared.agent_scoped_user_todo_override["kind"])
+        payload[kind] = effect_runtime_result("quota.scoped_override.project", {
+            "override": payload[kind],
+            "selected_todo": payload.get("selected_todo"),
+            "interaction_contract": payload["interaction_contract"],
+        })
     return payload
 
 

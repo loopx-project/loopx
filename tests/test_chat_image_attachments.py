@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 
 from loopx.chat_server import normalize_chat_image_attachments
+from loopx.chat_attachments import CHAT_TURN_MAX_BODY_BYTES, validate_chat_turn_envelope
 
 
 PNG_BYTES = base64.b64decode(
@@ -70,3 +72,26 @@ def test_normalize_chat_image_attachment_limits_count() -> None:
     }
     with pytest.raises(ValueError, match="at most 4"):
         normalize_chat_image_attachments([attachment] * 5)
+
+
+def test_image_transport_budget_preserves_decoded_limits() -> None:
+    def image(megabytes: int, extra: int = 0) -> dict[str, object]:
+        data = b"x" * (megabytes * 1024 * 1024 + extra)
+        return {
+            "data_url": "data:image/png;base64,"
+            + base64.b64encode(data).decode("ascii"),
+            "size": len(data),
+        }
+
+    maximum = [image(5), image(5), image(2)]
+    body = {"message": "Inspect these images.", "attachments": maximum}
+    assert len(json.dumps(body).encode("utf-8")) <= CHAT_TURN_MAX_BODY_BYTES
+    validate_chat_turn_envelope(body)
+    assert (
+        sum(row["size"] for row in normalize_chat_image_attachments(maximum))
+        == 12 * 1024 * 1024
+    )
+    with pytest.raises(ValueError, match="5MB"):
+        normalize_chat_image_attachments([image(5, 1)])
+    with pytest.raises(ValueError, match="12MB"):
+        normalize_chat_image_attachments([image(5), image(5), image(2, 1)])

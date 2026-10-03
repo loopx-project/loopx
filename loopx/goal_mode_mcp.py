@@ -5,7 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -61,6 +61,19 @@ class GoalModeMCPControlPlane:
 
     def bound_agent_id(self) -> str | None:
         return self.state().get("agent_id")
+
+    def goal_ref(self) -> dict[str, str] | None:
+        value = self.state().get("goal_ref")
+        if not isinstance(value, Mapping):
+            return None
+        goal_id = value.get("goal_id")
+        goal_instance_id = value.get("goal_instance_id")
+        if not isinstance(goal_id, str) or not isinstance(goal_instance_id, str):
+            return None
+        return {
+            "goal_id": goal_id,
+            "goal_instance_id": goal_instance_id,
+        }
 
     def command_prefix(self) -> list[str]:
         executable = shutil.which("loopx")
@@ -252,6 +265,7 @@ class GoalModeMCPControlPlane:
             execution_mode=self.config.execution_mode,
             completion_args=tuple(args),
             no_follow_up=no_follow_up,
+            goal_ref=self.goal_ref(),
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason) as authored:
             return settle_host_todo_completion(authored, run_cli=self.run_cli)
@@ -274,6 +288,7 @@ class GoalModeMCPControlPlane:
             scheduler_owner=self.config.scheduler_owner, execution_mode=self.config.execution_mode,
             completion_args=(),
             checkpoint_read_context_id=read_context_id or None,
+            goal_ref=self.goal_ref(),
         )
         with host_vision_request(request, agent_vision, vision_unchanged_reason) as authored:
             return refresh_host_todo_vision(authored, run_cli=self.run_cli)

@@ -8,6 +8,54 @@ from loopx.control_plane.quota import should_run_packet
 from loopx.control_plane.quota.should_run import build_quota_should_run
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.presentation.renderers.quota_markdown import render_quota_should_run_markdown
+from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
+from loopx.control_plane.scheduler.arbitration import SchedulerDisposition, build_scheduler_arbitration
+
+
+@pytest.mark.parametrize("profile", ["codex_app_heartbeat", "trae_app", "ark_managed_agent_goal"])
+@pytest.mark.parametrize("observed_rrule", [None, "FREQ=MINUTELY;INTERVAL=3", "FREQ=MINUTELY;INTERVAL=60"])
+def test_settled_replay_preserves_schedule_without_new_host_effects(profile, observed_rrule):
+    status = quota_status_payload(
+        goal_id="settled-fixture", status="active", recommended_action="Advance successor",
+        agent_todo_items=[{"todo_id": "todo_successor", "index": 1, "text": "Advance successor",
+                          "role": "agent", "status": "open", "task_class": "advancement_task"}],
+    )
+    payload = build_quota_should_run(
+        status, goal_id="settled-fixture", receipt_bound_replay_phase=ReceiptBoundReplayPhase.SETTLED,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(profile),
+        codex_app_current_rrule=observed_rrule,
+    )
+    hint = payload["scheduler_hint"]
+    assert hint["action"] == "preserve_current_schedule"
+    assert hint["next_trigger"] == "fresh_turn_identity"
+    assert "reset_policy" not in hint
+    for key in ("app_automation", "codex_app"):
+        if key not in hint:
+            continue
+        host = hint[key]
+        assert host.get("host_action") == "none"
+        assert host.get("ack_required") is False
+        assert not {"recommended_rrule", "recommended_interval_minutes", "ack_hint", "failure_hint",
+                    "fallback_hint", "stateful_backoff"}.intersection(host)
+    assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert payload["interaction_contract"]["cli_channel"]["spend_after_validation"] is False
+    if profile == "ark_managed_agent_goal":
+        assert hint["goal_runtime_continuation"]["disposition"] == "continue_now"
+
+
+@pytest.mark.parametrize("channel,field", [("agent_channel", "must_attempt"),
+                                         ("agent_channel", "delivery_allowed"),
+                                         ("user_channel", "action_required")])
+def test_settled_contract_cannot_carry_open_execution(channel, field):
+    payload = build_quota_should_run(
+        quota_status_payload(goal_id="settled-fixture", status="active", recommended_action="Continue"),
+        goal_id="settled-fixture", receipt_bound_replay_phase=ReceiptBoundReplayPhase.SETTLED,
+    )
+    payload["interaction_contract"][channel][field] = True
+    result = build_scheduler_arbitration(payload)
+    assert result.disposition is SchedulerDisposition.CONSISTENCY_REPAIR
+    assert "interaction_contract.settled_conflicts_with_open_action" in result.errors
+
 
 
 @pytest.mark.parametrize("quota_state", ["eligible", "operator_gate", "waiting_external", "exhausted"])

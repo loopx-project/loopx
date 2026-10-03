@@ -431,6 +431,21 @@ function terminalFence(
   const explicitFence = request.lease_idempotency_key !== null ||
     request.lease_expected_version !== null;
   const delegated = authorityMode === "delegated_orchestration_override";
+  // User actions cannot claim execution leases. Closing an ordinary reminder
+  // by its exact registered bound actor is instead a provider-CAS lifecycle
+  // edit. Never bypass an active holder or an explicitly supplied fence, and
+  // never mint a gate lease, execution claim or broader decision authority.
+  if (request.command === "complete" && request.handoff_mode === "hard_lease" &&
+      request.todo.role === "user" && request.todo.task_class === "user_action" &&
+      request.todo.bound_agent !== null && request.todo.bound_agent === request.actor_agent_id &&
+      !delegated && !timeActive && !explicitFence &&
+      ownerIdentityEligible(request, request.actor_agent_id)) {
+    return result("apply", "terminal_fence_not_required", {
+      authority_mode: authorityMode, lease_fence: "not_required",
+      next_lease: lease?.present && lease.status !== "released"
+        ? {...lease, active: false, status: "released"} : null,
+    });
+  }
   // Deferred work cannot acquire a lease. Superseding a retired wait is a
   // terminal lifecycle edit, not execution, and the provider CAS retires any
   // expired lease lineage together with the Todo transition.

@@ -126,6 +126,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx machine-config --help",
                 "purpose": "Inspect typed machine policy, preview changes, and apply an exact plan revision.",
             },
+            {
+                "command": "loopx migrate-local-state --help",
+                "purpose": "Preview an explicit local-state path migration or receipt-bound rollback; stop writers before execution.",
+            },
             {"command": "loopx todo --help", "purpose": "Show todo lifecycle commands."},
             {
                 "command": "loopx task-lease --help",
@@ -326,6 +330,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx multi-agent", "purpose": "Launch visible role-scoped Codex TUI agents."},
             {"command": "loopx canary", "purpose": "Plan or run catalog-informed smoke profiles."},
+            {
+                "command": "loopx performance-diagnosis --help",
+                "purpose": "Plan an explicit local capture or inspect an existing profile without executing or uploading it.",
+            },
             {
                 "command": "loopx promotion-readiness",
                 "purpose": "Record release-scoped canary readiness evidence in the shared runtime ledger.",

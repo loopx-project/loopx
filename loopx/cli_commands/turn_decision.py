@@ -87,6 +87,7 @@ def _build_turn_decision(
     scheduler_execution_context: Mapping[str, Any],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> Callable[..., dict[str, Any]]:
     """Return the ``build_turn_decision`` every Turn owner resolves through.
 
@@ -117,6 +118,7 @@ def _build_turn_decision(
             ),
             requested_action_todo_id=requested_action_todo_id,
             turn_start_hook_dispatch=dict(turn_start_hook_dispatch or {}),
+            goal_ref=goal_ref,
             interaction_projection_hooks=(
                 periodic_report_pending_intent_interaction_hook(
                     registry_path=registry_path,
@@ -194,6 +196,7 @@ def build_fresh_turn_decision_owner(
     runtime_root: Path,
     runtime_root_arg: str | None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> FreshTurnDecisionOwner:
     """Read the live status and derive the shared decision inputs from it.
 
@@ -230,6 +233,7 @@ def build_fresh_turn_decision_owner(
             scheduler_execution_context=scheduler_execution_context,
             operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             turn_start_hook_dispatch=turn_start_hook_dispatch,
+            goal_ref=goal_ref,
         ),
         requested_todo_id=getattr(args, "todo_id", None),
     )

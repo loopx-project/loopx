@@ -1,4 +1,5 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import type { TurnStep } from "../../data/turn-steps";
 import type { CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
@@ -26,6 +27,12 @@ export type WorkspaceHomeLane =
   | "stopped";
 
 export type WorkspaceAgentTodo = {
+  cadence?: string | null;
+  nextDueAt?: string | null;
+  expiresAt?: string | null;
+  lastCheckedAt?: string | null;
+  targetKey?: string | null;
+  watchOnly?: boolean | null;
   completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
@@ -166,6 +173,8 @@ export type WorkspaceGoal = {
 
 export type WorkspaceAttention = {
   details?: AttentionDetails;
+  /** A run-level operator gate has no User Todo to record a decision on. */
+  decisionSource?: "todo" | "run_operator_gate";
   sourceId?: string;
   blocking: boolean;
   evidence?: string | null;
@@ -246,6 +255,8 @@ export type WorkspaceScheduleKind = "heartbeat" | "monitor";
 
 export type WorkspaceSchedule = {
   agentId?: string;
+  expiresAt?: string;
+  watchOnly?: boolean;
   executionHistory?: Array<{
     label: string;
     runId?: string;
@@ -317,8 +328,10 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
+  steps?: TurnStep[];
   collaboration?: CollaborationReadback;
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
@@ -373,6 +386,9 @@ export type WorkspaceGoalNotification = {
   configured: boolean;
   enabled: boolean;
   humanGateAutoNotifyEnabled: boolean;
+  stewardNoticeDelivery?: { pending_count: number; failed_count: number };
+  blockedNoticeAutoNotifyEnabled?: boolean;
+  blockedNoticeDelivery?: { deliveredCount: number; unverifiedCount: number; resolvedCount: number };
   lastNotifiedAt?: string | null;
   receiptCount: number;
   targetRef?: string | null;
@@ -500,17 +516,26 @@ export type PersonalWorkspaceCallbacks = {
     agentId: string,
     goalId: string | null,
     attachments?: WorkspaceImageAttachment[],
-  ) => void | WorkspaceActionPreviewRequest | Promise<void | WorkspaceActionPreviewRequest>;
+  ) => void | WorkspaceSendPreviews | Promise<void | WorkspaceSendPreviews>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
-  onSelectGoal?: (goalId: string | null) => void;
+  onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectView?: (view: WorkspaceGoalTab) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
-  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+  onToggleGoalAutoNotify?: (options: { autoNotify: boolean; goalId: string; kind?: "human_gate" | "blocked_notice" }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;
+};
+
+// What one send hands back for review: at most one decision the owner reviews
+// now (it opens the drawer) plus candidate cards left in the conversation, such
+// as an Agent's Todo proposals. One answer may carry both.
+export type WorkspaceSendPreviews = {
+  candidates?: WorkspaceActionPreviewRequest[];
+  decision?: WorkspaceActionPreviewRequest;
 };
 
 export type WorkspaceActionPreviewRequest = {

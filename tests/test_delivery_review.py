@@ -56,6 +56,7 @@ def workspace(tmp_path):
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path = registry
     server.runtime_root_override = str(runtime)
+    server.runtime_root = runtime
     server.scan_roots = []
     server.limit = 20
     server.selected_goal_id = None
@@ -83,7 +84,18 @@ def test_real_http_review_matches_cli_sources_without_canonical_writes(workspace
     before = (registry.read_bytes(), state.read_bytes())
     status, review = get(server)
     assert status == 200
-    assert set(review) == {"ok", "goal_id", "observed_at", "graph", "acceptance"}
+    assert set(review) == {"ok", "goal_id", "observed_at", "graph", "goal_map", "acceptance"}
+    goal_map = review["goal_map"]
+    titles = {node["refs"]["todo_ids"][0]: node for node in goal_map["nodes"]}
+    # The whole-Goal map is not limited to the bounded chain's two expanded gates.
+    assert set(titles) == {"todo_integrate", "todo_design", "todo_review", "todo_support", "todo_publish"}
+    assert [titles[t]["kind"] for t in ("todo_review", "todo_integrate")] == ["gate", "deliverable"]
+    assert titles["todo_design"]["state"] == "done" and titles["todo_design"]["depth"] == 0
+    assert titles["todo_integrate"]["depth"] == 1
+    node_todo = {node["node_id"]: tid for tid, node in titles.items()}
+    assert {(node_todo[e["from_node_id"]], node_todo[e["to_node_id"]], e["relation"]) for e in goal_map["edges"]} == {
+        ("todo_integrate", "todo_design", "continues"), ("todo_integrate", "todo_design", "depends_on")}
+    assert goal_map["limits"]["topology_complete"] is True
     canonical = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[], limit=20,
                                goal_id="release-demo", include_public_boundary_scan=False, include_task_graph=True)
     item = canonical["attention_queue"]["items"][0]
@@ -110,6 +122,15 @@ def test_review_is_cold_and_missing_observations_stay_unknown(workspace, monkeyp
     _, result = get(server)
     assert calls[-1]["include_task_graph"] is True
     assert result["graph"] is None and result["acceptance"] is None
+    assert result["goal_map"]["schema_version"] == "goal_task_map_v0"
+
+
+def test_unreadable_todo_source_keeps_review_and_marks_map_unavailable(workspace):
+    server, registry, _ = workspace
+    (registry.parent / "ACTIVE_GOAL_STATE.md").unlink()
+    status, result = get(server)
+    assert status == 200
+    assert result["goal_map"] is None
 
 
 @pytest.mark.parametrize("query, expected", [("", 400), ("?goal_id=", 400), ("?goal_id=missing", 404),

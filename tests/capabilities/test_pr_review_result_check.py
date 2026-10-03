@@ -40,6 +40,11 @@ def _review(*, area="product_runtime"):
         if "verdict_values" in requirement:
             row["verdict"] = requirement["verdict_values"][0]
         if key == "problem_context":
+            row["spec_basis"] = {
+                "decision": "no_spec",
+                "spec_source": "none",
+                "reason": "Synthetic formatter fixture has no written specification.",
+            }
             row["outcome_impact"] = {
                 dimension: {"decision": "not_applicable",
                             "reason": "Synthetic internal formatter fixture has no durable work or user journey.",
@@ -90,8 +95,137 @@ def _review(*, area="product_runtime"):
                     for field in fields
                 }
     result["verdict"] = "APPROVE"
-    result["review_body"] = (Path(__file__).parents[2] / "examples/fixtures/pr-review.body.md").read_text().replace("HEAD_OID", "a" * 40).replace("VERDICT", "APPROVE")
+    result["reviewer"] = {
+        "actor_kind": "model_agent",
+        "declaration_source": "self_reported",
+        "declared_model": "Example Model 1",
+        "declared_provider": "Example Provider",
+    }
+    body = (Path(__file__).parents[2] / "examples/fixtures/pr-review.body.md").read_text()
+    result["review_body"] = (
+        f"{REVIEWER_LINE}\n\n"
+        + body.replace("HEAD_OID", "a" * 40).replace("VERDICT", "APPROVE")
+    )
+    result["evidence"]["problem_context"].update(
+        affected_caller_or_operator="维护者需要阅读一份能单独理解的评审。",
+        before_after_scenario="此前仅有格式检查，解释可能留在内部证据中；现在正文展示场景和前后变化，减少反复询问。",
+        observable_outcome="此合成用例检查已声明解释与公开正文的一致性，不代表真实 PR 的验证结果。",
+        non_goals="检查的范围是正文可见性和一致性；理解是否正确仍由审查者判断。",
+    )
+    _publish_problem_explanation(result)
     return {"pull_requests": [item]}, result
+
+
+REVIEWER_LINE = "Reviewer: model_agent · Example Model 1 · Example Provider"
+
+
+def _publish_problem_explanation(result):
+    context = result["evidence"]["problem_context"]
+    fields = ["affected_caller_or_operator", "before_after_scenario",
+              "observable_outcome", "non_goals"]
+    if context["verdict"] == "justified_increment":
+        fields.append("remaining_gap")
+    body = result["review_body"]
+    start, end = body.index("## 动机"), body.index("## 改动思路")
+    explanation = "\n\n".join(context[field] for field in fields)
+    result["review_body"] = body[:start] + "## 动机\n\n" + explanation + "\n\n" + body[end:]
+
+
+def _reader_review():
+    packet, result = _review()
+    result["evidence"]["problem_context"].update(
+        affected_caller_or_operator="维护者在导出中断后重新执行同一条命令。",
+        before_after_scenario="以前响应丢失后，重试会重复导出数据；修复后读回上次结果，避免重复数据和人工清理。",
+        observable_outcome="本 PR 让原命令在重试时返回已经保存的导出结果，失败时给出可继续处理的错误。",
+        non_goals="本次范围是已有命令的重试，不增加自动调度；完成范围内修复不等于完成整个产品计划。",
+    )
+    _publish_problem_explanation(result)
+    return packet, result
+
+
+@pytest.mark.parametrize("field", ["affected_caller_or_operator", "before_after_scenario",
+                                  "observable_outcome", "non_goals"])
+@pytest.mark.parametrize("placement", ["evidence_only", "comment", "code", "later_section"])
+def test_problem_explanation_must_reach_visible_motivation(field, placement):
+    packet, result = _reader_review()
+    assert check_review_result(packet, result)["ok"]
+    text = result["evidence"]["problem_context"][field]
+    replacement = {"evidence_only": "", "comment": f"<!-- {text} -->",
+                   "code": f"```text\n{text}\n```", "later_section": ""}[placement]
+    result["review_body"] = result["review_body"].replace(text, replacement)
+    if placement == "later_section":
+        result["review_body"] += "\n\n" + text
+    checked = check_review_result(packet, result)
+    assert f"review_body:problem_explanation_not_published:{field}" in checked["errors"]
+    assert not checked["approval_consistent"]
+
+
+def test_markdown_emphasis_and_line_wrapping_preserve_published_explanation():
+    packet, result = _reader_review()
+    text = result["evidence"]["problem_context"]["before_after_scenario"]
+    result["review_body"] = result["review_body"].replace(text, "**" + text[:10] + "**\n" + text[10:])
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_reader_explanation_shape_does_not_certify_comprehension():
+    packet, result = _reader_review()
+    checked = check_review_result(packet, result)
+    assert checked["ok"]
+    assert not checked["evidence_truth_verified"]
+
+
+@pytest.mark.parametrize("value", [None, {}, ["hidden explanation"], " \n "])
+def test_reader_explanation_requires_public_prose(value):
+    packet, result = _reader_review()
+    result["evidence"]["problem_context"]["before_after_scenario"] = value
+    checked = check_review_result(packet, result)
+    assert "review_body:problem_explanation_not_text:before_after_scenario" in checked["errors"]
+
+
+def test_partial_delivery_must_publish_remaining_gap():
+    packet, result = _reader_review()
+    result["evidence"]["problem_context"].update(
+        verdict="justified_increment", remaining_gap="自动重试仍需已有调度任务接入。",
+        next_step="Existing task #43 owns scheduled retries.",
+        boundary_reason="The retry command can be independently verified and reverted.")
+    assert "review_body:problem_explanation_not_published:remaining_gap" in check_review_result(packet, result)["errors"]
+    _publish_problem_explanation(result)
+    assert check_review_result(packet, result)["ok"]
+
+
+def _mapped_spec_basis():
+    return {
+        "decision": "mapped",
+        "spec_source": "accepted_rfc",
+        "reason": "The change implements an accepted RFC section.",
+        "spec_ref": "docs/architecture/rfcs/example-v0.md#acceptance",
+        "spec_revision": "b" * 40,
+        "criteria": [
+            {
+                "criterion_id": "EX-1",
+                "requirement": "Readback reports the persisted value.",
+                "disposition": "implemented",
+                "symbol_or_path": "loopx/example.py::read_back",
+                "validation_ref": "tests/test_example.py::test_read_back",
+            },
+            {
+                "criterion_id": "EX-2",
+                "requirement": "Migration of old rows.",
+                "disposition": "deferred",
+                "reason": "Old rows are retired by the successor task.",
+                "successor_or_gap": "The linked migration task.",
+            },
+        ],
+    }
+
+
+def _publish_spec_references(result):
+    # The published body carries the immutable revision a reader on another host
+    # needs to open the same specification text, not only its moving path.
+    result["review_body"] += (
+        "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance"
+        " @ revision " + "b" * 40 + " — EX-1 implemented; EX-2 deferred.\n"
+    )
 
 
 def test_result_check_is_not_semantic_or_merge_authority():
@@ -471,6 +605,131 @@ def test_nonblocking_suggestion_does_not_force_rejection():
     assert check_review_result(packet, result)["approval_consistent"]
 
 
+def test_review_must_say_which_model_wrote_it_in_the_published_body():
+    packet, result = _review()
+    assert check_review_result(packet, result)["ok"]
+    result["review_body"] = result["review_body"].replace(REVIEWER_LINE + "\n\n", "")
+    assert "reviewer:body_line_missing_or_ambiguous" in check_review_result(packet, result)["errors"]
+    # A declaration hidden from readers is not a declaration.
+    result["review_body"] = f"<!-- {REVIEWER_LINE} -->\n\n" + result["review_body"]
+    assert "reviewer:body_line_missing_or_ambiguous" in check_review_result(packet, result)["errors"]
+
+
+def test_published_reviewer_line_must_match_the_declaration():
+    packet, result = _review()
+    result["reviewer"]["declared_model"] = "Another Model 2"
+    checked = check_review_result(packet, result)
+    assert not checked["ok"]
+    assert "reviewer:body_line_disagrees_with_declaration" in checked["errors"]
+
+
+@pytest.mark.parametrize("field, value, reason", [
+    ("actor_kind", "agent", "reviewer:invalid_actor_kind"),
+    ("declaration_source", "guessed", "reviewer:invalid_declaration_source"),
+    ("declared_model", "", "reviewer:missing_field:declared_model"),
+    ("declared_provider", "  ", "reviewer:missing_field:declared_provider"),
+    ("declared_model", "https://gateway.example/v1", "reviewer:not_a_product_family_name:declared_model"),
+    ("declared_provider", "ops@example", "reviewer:not_a_product_family_name:declared_provider"),
+])
+def test_reviewer_declaration_rejects_unknown_or_infrastructure_values(field, value, reason):
+    packet, result = _review()
+    result["reviewer"][field] = value
+    assert reason in check_review_result(packet, result)["errors"]
+
+
+def test_missing_reviewer_declaration_blocks_publication_of_any_verdict():
+    packet, result = _review()
+    del result["reviewer"]
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace(
+        "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    checked = check_review_result(packet, result)
+    assert "reviewer:missing_declaration" in checked["errors"]
+    assert not checked["ok"]
+
+
+def test_human_operator_needs_no_model_or_provider():
+    packet, result = _review()
+    result["reviewer"] = {"actor_kind": "human_operator", "declaration_source": "self_reported"}
+    result["review_body"] = result["review_body"].replace(REVIEWER_LINE, "Reviewer: human_operator")
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_mapped_spec_basis_binds_criteria_to_the_head_and_the_published_body():
+    packet, result = _review()
+    result["evidence"]["problem_context"]["spec_basis"] = _mapped_spec_basis()
+    unpublished = check_review_result(packet, result)
+    assert not unpublished["ok"]
+    assert "review_body:spec_reference_not_published:EX-1" in unpublished["errors"]
+    assert ("review_body:spec_reference_not_published:docs/architecture/rfcs/example-v0.md#acceptance"
+            in unpublished["errors"])
+    _publish_spec_references(result)
+    checked = check_review_result(packet, result)
+    assert checked["ok"] and checked["approval_consistent"]
+
+
+def test_unmet_specification_criterion_cannot_be_approved():
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis["criteria"][1] = {
+        "criterion_id": "EX-2",
+        "requirement": "Migration of old rows.",
+        "disposition": "not_met",
+        "observed_gap": "Old rows keep the previous shape.",
+        "minimum_repair": "Migrate old rows before readback.",
+    }
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    _publish_spec_references(result)
+    checked = check_review_result(packet, result)
+    assert "problem_context:spec_basis:unmet_criterion:EX-2" in checked["approval_blockers"]
+    assert "approval_contradicts_evidence" in checked["errors"]
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace(
+        "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    assert check_review_result(packet, result)["ok"]
+
+
+@pytest.mark.parametrize("mutation, blocker", [
+    ("unknown_disposition", "problem_context:spec_basis:invalid_disposition:EX-1"),
+    ("implemented_without_symbol", "problem_context:spec_basis:EX-1:missing_field:symbol_or_path"),
+    ("deferred_without_successor", "problem_context:spec_basis:EX-2:missing_field:successor_or_gap"),
+    ("duplicate_criterion", "problem_context:spec_basis:duplicate_criterion:EX-1"),
+    ("no_revision", "problem_context:spec_basis:missing_field:spec_revision"),
+    ("mapped_without_source", "problem_context:spec_basis:mapped_without_spec_source"),
+    ("unread_spec", "problem_context:spec_basis:blocking_decision"),
+    ("no_spec_with_source", "problem_context:spec_basis:no_spec_cannot_cite_a_source"),
+    ("missing", "problem_context:spec_basis:value_not_object"),
+])
+def test_spec_basis_cannot_approve_with_incomplete_or_contradictory_mapping(mutation, blocker):
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    if mutation == "unknown_disposition":
+        basis["criteria"][0]["disposition"] = "mostly_done"
+    elif mutation == "implemented_without_symbol":
+        del basis["criteria"][0]["symbol_or_path"]
+    elif mutation == "deferred_without_successor":
+        del basis["criteria"][1]["successor_or_gap"]
+    elif mutation == "duplicate_criterion":
+        basis["criteria"][1]["criterion_id"] = "EX-1"
+    elif mutation == "no_revision":
+        del basis["spec_revision"]
+    elif mutation == "mapped_without_source":
+        basis["spec_source"] = "none"
+    elif mutation == "unread_spec":
+        basis = {"decision": "not_yet_proven", "spec_source": "accepted_rfc",
+                 "reason": "The cited RFC revision could not be opened."}
+    elif mutation == "no_spec_with_source":
+        basis = {"decision": "no_spec", "spec_source": "accepted_rfc", "reason": "x"}
+    if mutation == "missing":
+        del result["evidence"]["problem_context"]["spec_basis"]
+    else:
+        result["evidence"]["problem_context"]["spec_basis"] = basis
+    _publish_spec_references(result)
+    checked = check_review_result(packet, result)
+    assert blocker in checked["approval_blockers"]
+    assert not checked["ok"]
+
+
 @pytest.mark.parametrize("revision", [None, 0, True, "1", 5, 999])
 def test_old_or_invalid_policy_cannot_certify_current_approval(revision):
     packet, result = _review()
@@ -668,6 +927,9 @@ def _delivery_review(*, area="product_runtime", verdict="goal_achieved"):
         observable_outcome="The real command reuses the committed receipt; regression fails on base.",
         verdict=verdict,
     )
+    if verdict == "justified_increment":
+        result["evidence"]["problem_context"]["remaining_gap"] = "Scheduled retries remain in the owning scheduler task."
+    _publish_problem_explanation(result)
     return packet, result
 
 
@@ -712,6 +974,7 @@ def test_qualified_increment_does_not_have_to_finish_the_parent_goal(area):
         next_step="Existing recovery task #43 consumes this writer; its owner retains scheduling.",
         boundary_reason="Durability is independently testable and revertible; coupling scheduler behavior would obscure this contract.",
     )
+    _publish_problem_explanation(result)
     assert check_review_result(packet, result)["approval_consistent"]
     for field in ("remaining_gap", "next_step", "boundary_reason"):
         incomplete = copy.deepcopy(result)
@@ -727,6 +990,7 @@ def test_completed_scoped_task_does_not_require_invented_followup():
         observable_outcome="The documented command succeeds on the supported release.",
         non_goals="No claim of implementing the broader product roadmap.",
     )
+    _publish_problem_explanation(result)
     assert check_review_result(packet, result)["approval_consistent"]
     assert not check_review_result(packet, result)["evidence_truth_verified"]
 
@@ -863,3 +1127,125 @@ def test_projected_compatibility_rules_cannot_mutate_the_checker():
     packet["agent_response_contract"] = {"review_execution_contract": contract}
     result["evidence"]["code_volume"]["compatibility_assessment"] = _compatibility(decision="simplify_now")
     assert not check_review_result(packet, result)["approval_consistent"]
+
+
+@pytest.mark.parametrize("identity", [True, False, ["EX-1"], {"id": "EX-1"}, 1, ""])
+def test_a_criterion_identity_must_be_published_text(identity):
+    """A criterion that cannot be named in the body is not a criterion.
+
+    Bools hash and are non-empty, and non-strings silently fall out of the
+    published-body check, so the type is validated where membership, duplicate
+    detection and publication all assume it — not left to a later set or dict
+    operation that would either pass or fail with a command-level error.
+    """
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis["criteria"][0]["criterion_id"] = identity
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    _publish_spec_references(result)
+    checked = check_review_result(packet, result)
+    assert "problem_context:spec_basis:invalid_criterion_id" in checked["approval_blockers"]
+    assert not checked["ok"]
+
+
+@pytest.mark.parametrize("field", ["spec_ref", "spec_revision"])
+@pytest.mark.parametrize("value", [True, {"path": "x"}, ["b" * 40], 1, "   "])
+def test_a_mapped_specification_reference_must_be_published_text(field, value):
+    """A reference the body cannot carry cannot pin the reviewed specification.
+
+    Non-string values pass the non-empty field check and then fall out of the
+    published-body comparison, so an approval would cite nothing a reader on
+    another host could open.
+    """
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis[field] = value
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    _publish_spec_references(result)
+    checked = check_review_result(packet, result)
+    assert f"problem_context:spec_basis:invalid_{field}" in checked["approval_blockers"]
+    assert not checked["ok"] and not checked["approval_consistent"]
+
+
+@pytest.mark.parametrize(("criterion_id", "spec_revision", "line", "unpublished"), [
+    # A criterion named only inside a longer criterion is not published.
+    ("EX-1", "b" * 40, "EX-10 implemented; EX-2 deferred.", "EX-1"),
+    # A short identity hidden inside the pinned commit id is not published.
+    ("bbb", "b" * 40, "EX-2 deferred.", "bbb"),
+])
+def test_a_specification_reference_must_appear_as_a_whole_token(
+    criterion_id, spec_revision, line, unpublished,
+):
+    """Another operator reads the body, so a substring of another word names nothing."""
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis["criteria"][0]["criterion_id"] = criterion_id
+    basis["spec_revision"] = spec_revision
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    result["review_body"] += (
+        "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance @ "
+        + spec_revision + " — " + line + "\n"
+    )
+    checked = check_review_result(packet, result)
+    assert f"review_body:spec_reference_not_published:{unpublished}" in checked["errors"]
+    assert not checked["ok"] and not checked["approval_consistent"]
+
+    result["review_body"] += f"{criterion_id} implemented.\n"
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_reviewer_line_must_name_each_declared_value_as_a_whole_token():
+    packet, result = _review()
+    result["reviewer"]["declared_provider"] = "AI"
+    result["review_body"] = result["review_body"].replace(
+        REVIEWER_LINE, "Reviewer: model_agent · Example Model 1 · OpenAI")
+    checked = check_review_result(packet, result)
+    assert "reviewer:body_line_disagrees_with_declaration" in checked["errors"]
+
+    result["review_body"] = result["review_body"].replace(
+        "· OpenAI", "· AI (self-reported family)")
+    assert check_review_result(packet, result)["ok"]
+
+
+@pytest.mark.parametrize("revision", ["main", "v1.2.0", "b" * 12, "B" * 39])
+def test_a_repository_specification_is_pinned_by_a_full_commit_id(revision):
+    """A branch, tag or abbreviated id cannot name the text the review judged."""
+    packet, result = _review()
+    basis = _mapped_spec_basis()
+    basis["spec_revision"] = revision
+    result["evidence"]["problem_context"]["spec_basis"] = basis
+    result["review_body"] += (
+        "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance @ "
+        + revision + " — EX-1 implemented; EX-2 deferred.\n"
+    )
+    checked = check_review_result(packet, result)
+    assert "problem_context:spec_basis:spec_revision_not_a_commit_id" in checked["approval_blockers"]
+    assert not checked["ok"]
+
+    # A linked task or review thread has no commit; its revision stays free text.
+    basis["spec_source"] = "linked_issue_or_task"
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_a_published_mapping_must_carry_its_immutable_revision():
+    """Another host can only open the same text if the body pins the revision.
+
+    The path moves with the branch, so publishing the path alone lets a reader
+    find a different document than the one the review judged against.
+    """
+    packet, result = _review()
+    result["evidence"]["problem_context"]["spec_basis"] = _mapped_spec_basis()
+    revision = "b" * 40
+    result["review_body"] += (
+        "\n\nSpec basis: docs/architecture/rfcs/example-v0.md#acceptance"
+        " — EX-1 implemented; EX-2 deferred.\n"
+    )
+    assert revision not in result["review_body"]
+    checked = check_review_result(packet, result)
+    # A body-level gap blocks publication rather than scoring the evidence.
+    assert f"review_body:spec_reference_not_published:{revision}" in checked["errors"]
+    assert not checked["ok"] and not checked["approval_consistent"]
+
+    # Publishing the same mapping with its revision closes the gap.
+    result["review_body"] += "Spec revision: " + revision + "\n"
+    assert check_review_result(packet, result)["ok"]

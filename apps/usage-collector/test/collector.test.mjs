@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { createServer } from "node:http";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { configure, configureContext, observe } from "../../../loopx/control_plane/runtime/usage_statistics.ts";
 
 import { MAX_BODY_BYTES, handle, purge, suppressSmall, validatePing } from "../src/collector.js";
 
@@ -22,6 +27,7 @@ function d1() {
   const raw = {
     all: (sql) => db.prepare(sql).all().map(plain),
     get: (sql) => plain(db.prepare(sql).get()),
+    query: (sql, params) => db.prepare(sql).all(params).map(plain),
   };
   return {
     raw,
@@ -131,6 +137,81 @@ test("purge drops rows past retention and orphaned installs", async () => {
 
 test("unknown paths are 404", async () => {
   assert.equal((await handle(new Request("https://collector.example/"), d1())).status, 404);
+});
+
+test("installation profiles replace exact days idempotently, reject private fields and never expose IDs publicly", async () => {
+  const db = d1();
+  const profile = { activity_day: "2026-10-01", version: "1.2.4", context: "maintainer",
+    revision: 1, cli: [{ feature: "memory", count: 2 }],
+    runtime: [{ measurement: "codex_turn", observed_minutes: 120 }], truncated: false };
+  const payload = { schema: "loopx_installation_usage_v1", install_id: id(1), profiles: [profile] };
+  const request = value => new Request("https://collector.example/v1/installation", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value),
+  });
+  for (let i = 0; i < 2; i++) assert.equal((await handle(request(payload), db, at("2026-10-02"))).status, 204);
+  assert.equal(db.raw.get("SELECT COUNT(*) AS n FROM installation_usage").n, 1);
+  assert.equal(JSON.parse(db.raw.get("SELECT cli FROM installation_usage").cli)[0].count, 2);
+  const newer = { ...profile, revision: 3, cli: [{ feature: "memory", count: 4 }] };
+  await handle(request({ ...payload, profiles: [newer] }), db, at("2026-10-02"));
+  await handle(request(payload), db, at("2026-10-02"));
+  assert.equal(JSON.parse(db.raw.get("SELECT cli FROM installation_usage").cli)[0].count, 4);
+  await handle(request({ ...payload, profiles: [{ ...newer, revision: 4, context: "personal" }] }), db, at("2026-10-02"));
+  assert.equal(db.raw.get("SELECT context FROM installation_usage").context, "maintainer", "historical context never relabeled");
+  assert.equal((await handle(request({ ...payload, prompt: "private" }), db, at("2026-10-02"))).status, 400);
+  assert.equal((await handle(request({ ...payload, profiles: [{ ...profile, activity_day: "2026-09-01" }] }), db, at("2026-10-02"))).status, 400);
+  assert.equal((await handle(new Request("https://collector.example/v1/installation"), db)).status, 405);
+  const stats = await (await handle(new Request("https://collector.example/v0/stats"), db, at("2026-10-02"))).json();
+  assert.equal(JSON.stringify(stats).includes(id(1)), false);
+  await purge(db, "2026-10-30");
+  assert.equal(db.raw.get("SELECT COUNT(*) AS n FROM installation_usage").n, 1, "30 activity days including today are retained");
+  await purge(db, "2026-10-31");
+  assert.equal(db.raw.get("SELECT COUNT(*) AS n FROM installation_usage").n, 0);
+});
+
+test("installation migration is additive and preserves the existing ping history", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE pings(day TEXT, install_id TEXT); INSERT INTO pings VALUES ('2026-09-30', 'legacy');");
+  const migration = readFileSync(new URL("../migrations/0005-installation-usage.sql", import.meta.url), "utf8");
+  db.exec(migration); db.exec(migration);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM pings").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM installation_usage").get().n, 0);
+});
+
+test("real client HTTP to SQLite preserves interval union and fixed operator query semantics", async t => {
+  const db = d1(), now = at("2026-10-01");
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const result = await handle(new Request("http://collector.example" + request.url, {
+      method: request.method, headers: request.headers, body: Buffer.concat(chunks),
+    }), db, now);
+    response.writeHead(result.status); response.end(await result.text());
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const root = await mkdtemp(join(tmpdir(), "loopx-real-collector-")), path = join(root, "usage.json");
+  t.after(async () => { server.closeAllConnections(); server.close(); await rm(root, { recursive: true, force: true }); });
+  const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:" + server.address().port + "/v1/ping" },
+    version: "1.2.4", python: "3.13", channel: "source", now };
+  await configureContext(path, ctx, "personal"); await configure(path, ctx, "enable");
+  const generation = JSON.parse(await readFile(path, "utf8")).generation;
+  const interval = { key: "a".repeat(64), measurement: "codex_turn", host: "codex_app",
+    start: now.getTime() - 60 * 60000, end: now.getTime() };
+  await observe(path, ctx, generation, { feature: "turn", count: 1, outcome: "ok", error: "none", duration: "lt_1s" }, undefined, interval);
+  const row = db.raw.get("SELECT * FROM installation_usage");
+  assert.equal(row.context, "personal");
+  assert.deepEqual(JSON.parse(row.runtime), [{ measurement: "codex_turn", observed_minutes: 60 }]);
+  // Real SQL consumer: independent mathematical oracle is one 60-minute interval, not Goal span.
+  const source = readFileSync(new URL("../queries/installation-usage.sql", import.meta.url), "utf8");
+  const queries = source.replace(/--[^\n]*/g, "").split(";").filter(sql => sql.trim());
+  const bindings = { from_day: "2026-10-01", through_day: "2026-10-02" };
+  for (const sql of queries) {
+    // Query uses named bind parameters; qualify against real SQLite.
+    assert.equal(db.raw.query(sql, bindings).length, 1);
+  }
+  const runtime = db.raw.all(
+    "SELECT SUM(json_extract(j.value, '$.observed_minutes')) AS minutes FROM installation_usage i, json_each(i.runtime) j",
+  );
+  assert.equal(runtime[0].minutes, 60);
 });
 
 

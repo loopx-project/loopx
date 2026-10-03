@@ -415,6 +415,11 @@ def test_external_queued_message_cannot_activate_local_owner_continuation(
         message="/goal start --tokens 1000 Analyze",
         origin="lark",
     )
+    # Production dispatch claims the exact queued Turn before starting it.
+    # Without that claim the execution fence correctly refuses this worker
+    # before it can evaluate whether the external command is authorized.
+    claimed = store.claim_next_queued_turn(session["session_id"])
+    assert claimed is not None and claimed["turn_id"] == turn["turn_id"]
     controller._run_turn(
         session_id=session["session_id"],
         turn_id=turn["turn_id"],
