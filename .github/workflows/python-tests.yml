@@ -419,7 +419,7 @@ jobs:
     needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
