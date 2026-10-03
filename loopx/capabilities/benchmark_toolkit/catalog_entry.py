@@ -403,6 +403,7 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "upsert_preregistered_or_running_row_when_a_run_starts",
             "classify_exact_runtime_observation_during_active_monitor_cycles",
             "require_runtime_continuity_before_terminal_closeout_write",
+            "qualify_each_agent_segment_receipt_before_using_its_result",
             "adjudicate_restricted_access_suspicion_after_solver_and_score_terminal",
             "upsert_terminal_score_countability_effort_and_insight_status",
             "release_case_slot_after_terminal_or_runner_invalid_transition",

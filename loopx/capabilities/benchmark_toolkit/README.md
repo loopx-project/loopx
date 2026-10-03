@@ -65,6 +65,27 @@ only public progress; they must not disclose verifier output or hidden evaluatio
 The runner remains responsible for invoking the next agent segment, measuring the
 shared total budget, preserving containment, and collecting evidence.
 
+Before accepting each segment's adapter receipt, bind it to a runner-generated
+nonce and the observed segment window:
+
+```bash
+loopx benchmark segment-receipt \
+  --expected-segment-nonce "$SEGMENT_NONCE" \
+  --receipt-segment-nonce "$RECEIPT_NONCE" \
+  --segment-started-at "$SEGMENT_STARTED_AT" \
+  --receipt-written-at "$RECEIPT_WRITTEN_AT" \
+  --segment-ended-at "$SEGMENT_ENDED_AT" \
+  --prior-receipt-nonce "$PRIOR_RECEIPT_NONCE" \
+  --require-qualified --format json
+```
+
+The runner must remove or rotate fixed-path transient artifacts before launch,
+pass the fresh nonce into the agent process, and retain prior segment nonces for
+replay detection. Missing, wrong-segment, outside-window, and replayed receipts
+fail closed; they must not be promoted into terminal evidence. The reducer records
+none of the nonces, timestamps, receipt content, paths, or run identity and grants
+no process, retry, score, or verifier authority.
+
 ## Source revision admission
 
 A long-running campaign can keep launching from an old installed checkout after

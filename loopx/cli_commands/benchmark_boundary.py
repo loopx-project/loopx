@@ -14,6 +14,7 @@ from ..capabilities.benchmark_toolkit import (
     BENCHMARK_INTEGRITY_QUALIFICATION_SCHEMA_VERSION,
     BENCHMARK_MODEL_ROUTE_RECEIPT_SCHEMA_VERSION,
     BENCHMARK_RUNTIME_CONTINUITY_SCHEMA_VERSION,
+    BENCHMARK_SEGMENT_RECEIPT_SCHEMA_VERSION,
     BENCHMARK_SOURCE_REVISION_FENCE_SCHEMA_VERSION,
     BENCHMARK_TREATMENT_CONTINUATION_RECEIPT_SCHEMA_VERSION,
     TRAE_BENCHMARK_EVIDENCE_SCHEMA_VERSION,
@@ -22,12 +23,15 @@ from ..capabilities.benchmark_toolkit import (
     BenchmarkRunnerOwnerState,
     BenchmarkRuntimeContinuityClassification,
     BenchmarkRuntimeContinuityTransition,
+    BenchmarkSegmentReceiptClassification,
+    BenchmarkSegmentReceiptTransition,
     BenchmarkSourceRevisionFenceError,
     build_benchmark_candidate_source_boundary,
     build_benchmark_four_arm_contract_from_spec,
     build_benchmark_integrity_qualification,
     build_benchmark_runtime_continuity,
     build_benchmark_runtime_observation,
+    build_benchmark_segment_receipt,
     build_benchmark_treatment_continuation_receipt,
     capture_traex_benchmark_evidence,
     compact_benchmark_four_arm_contract,
@@ -50,6 +54,7 @@ BENCHMARK_TOOLKIT_COMMANDS = {
     "four-arm-contract",
     "runtime-continuity",
     "runtime-observation",
+    "segment-receipt",
     "source-revision-fence",
     "traex-evidence",
     "treatment-continuation-receipt",
@@ -154,6 +159,16 @@ def _render_runtime_continuity(payload: dict[str, object]) -> str:
         f"- Classification: `{payload.get('classification')}`\n"
         f"- Qualified: `{payload.get('qualified')}`\n"
         f"- Closeout write allowed: `{payload.get('closeout_write_allowed')}`\n"
+        f"- Recommended transition: `{payload.get('recommended_transition')}`\n"
+    )
+
+
+def _render_segment_receipt(payload: dict[str, object]) -> str:
+    return (
+        "# Benchmark Segment Receipt\n\n"
+        f"- Classification: `{payload.get('classification')}`\n"
+        f"- Qualified: `{payload.get('qualified')}`\n"
+        f"- Segment result usable: `{payload.get('segment_result_usable')}`\n"
         f"- Recommended transition: `{payload.get('recommended_transition')}`\n"
     )
 
@@ -266,6 +281,21 @@ def register_benchmark_boundary_commands(
         required=True,
     )
     continuity_parser.add_argument("--require-qualified", action="store_true")
+
+    segment_parser = benchmark_subparsers.add_parser(
+        "segment-receipt",
+        help="Reject stale, replayed, or wrong-segment benchmark receipts.",
+    )
+    add_subcommand_format(segment_parser)
+    segment_parser.add_argument("--expected-segment-nonce", required=True)
+    segment_parser.add_argument("--receipt-segment-nonce", required=True)
+    segment_parser.add_argument("--segment-started-at", required=True)
+    segment_parser.add_argument("--receipt-written-at", required=True)
+    segment_parser.add_argument("--segment-ended-at", required=True)
+    segment_parser.add_argument(
+        "--prior-receipt-nonce", action="append", default=[]
+    )
+    segment_parser.add_argument("--require-qualified", action="store_true")
 
     integrity_parser = benchmark_subparsers.add_parser(
         "integrity-qualification",
@@ -393,6 +423,30 @@ def _invalid_runtime_continuity_input() -> dict[str, object]:
             "runtime_artifact_digest_recorded": False,
             "generation_digest_recorded": False,
             "event_payload_recorded": False,
+            "run_identity_recorded": False,
+            "path_recorded": False,
+        },
+        "write_performed": False,
+    }
+
+
+def _invalid_segment_receipt_input() -> dict[str, object]:
+    return {
+        "schema_version": BENCHMARK_SEGMENT_RECEIPT_SCHEMA_VERSION,
+        "classification": BenchmarkSegmentReceiptClassification.INPUT_INVALID.value,
+        "qualified": False,
+        "segment_result_usable": False,
+        "segment_identity_matches": False,
+        "receipt_within_segment_window": False,
+        "receipt_unique": False,
+        "prior_receipt_count": 0,
+        "recommended_transition": (
+            BenchmarkSegmentReceiptTransition.REPAIR_RECEIPT_EVIDENCE.value
+        ),
+        "public_boundary": {
+            "nonce_recorded": False,
+            "timestamps_recorded": False,
+            "receipt_content_recorded": False,
             "run_identity_recorded": False,
             "path_recorded": False,
         },
@@ -541,6 +595,21 @@ def handle_benchmark_boundary_command(
         except (TypeError, ValueError):
             payload = _invalid_runtime_continuity_input()
         print_payload(payload, output_format(args), _render_runtime_continuity)
+        return 1 if args.require_qualified and not payload.get("qualified") else 0
+
+    if args.benchmark_command == "segment-receipt":
+        try:
+            payload = build_benchmark_segment_receipt(
+                expected_segment_nonce=args.expected_segment_nonce,
+                receipt_segment_nonce=args.receipt_segment_nonce,
+                segment_started_at=args.segment_started_at,
+                receipt_written_at=args.receipt_written_at,
+                segment_ended_at=args.segment_ended_at,
+                prior_receipt_nonces=args.prior_receipt_nonce,
+            )
+        except (TypeError, ValueError):
+            payload = _invalid_segment_receipt_input()
+        print_payload(payload, output_format(args), _render_segment_receipt)
         return 1 if args.require_qualified and not payload.get("qualified") else 0
 
     if args.benchmark_command == "treatment-continuation-receipt":
