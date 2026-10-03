@@ -393,6 +393,12 @@ failure leaves the generated files untouched.
 
 ## Operator Experience And Observability
 
+- [Personal Follow-through v0](personal-follow-through-v0.md)
+  ([中文版](personal-follow-through-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal; existing Lark, Todo and report components only.
+  - **Current boundary:** Opt-in selected-source commitment tracking, reviewed Todo changes,
+    authorized preparation and owner-private desktop briefs require implementation and live qualification.
+
 - [Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md)
   - **Delivery on `main`:** Core slice implemented.
   - **Current boundary:** Codex usage capture, normalized aggregation, and

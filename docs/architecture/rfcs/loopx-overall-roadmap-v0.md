@@ -103,6 +103,8 @@ These directly determine whether a long-running team is usable. A directory or R
 | [Install](../../guides/installing-loopx.md), [newcomer path](../../guides/newcomer-command-path.md), [design](../../development/design.md), [user guide](../../guides/personal-workspace-user-guide.md) | S1/S5/S12 | First-value path, error recovery, supported platforms, accessibility and bilingual consistency; existing design/first-screen review for UI changes |
 | [Public adoption](../../product/public-adoption-loop.md), [scenario gaps](../../product/scenario-capability-gap-map.md), [SaaS assessment](../../product/roadmaps/saas-opportunity-assessment.md), [licensing](../../project/licensing.md), [governance](../../../.github/GOVERNANCE.md) | S12/S13 | Traceable public outcomes/failure feedback; independently qualify commercial hypotheses; existing license/credit/community-authority policies remain authoritative |
 
+Personal follow-through is a proposed bounded S1/S5/S6/S8/S9 application of these owners: [RFC](personal-follow-through-v0.md). It reuses Lark capture, canonical Todos, App return and periodic reporting; personal commitment interpretation and the installed private desktop journey remain unimplemented/unqualified. It closes no existing gate.
+
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 
 S streams describe ongoing ownership, G milestones qualify a product combination, and R cards specify the current core implementation slices. These are cross-references, not a runtime state machine. Progress is evidence-gated rather than date-promised. Changes in capacity or business priority update canonical Todos rather than assuming every stream starts simultaneously.

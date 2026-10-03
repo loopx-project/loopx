@@ -51,6 +51,7 @@
 | [RFC：Monorepo 内的发行物拆分（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Agent 判断与可选独立评估——以 Jev 为候选方案（v0）](optional-semantic-assistance-jev-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：个人事项持续跟进（v0）](personal-follow-through-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：结果后记忆效用归因 v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Provider 在效果接受点执行授权（v0）](provider-effect-acceptance-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | 已接受 | 无 | — |
