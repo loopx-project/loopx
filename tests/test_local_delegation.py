@@ -1,15 +1,18 @@
 """Production delegation/Turn/TS completion with an explicit fixture model host."""
 import json
+import os
 import asyncio
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import contextmanager
 from threading import Event, get_ident
 
 import pytest
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -47,8 +50,22 @@ print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'cla
 
 @pytest.fixture(params=["file", "sqlite"])
 def service(tmp_path, request, monkeypatch):
-    for name in ("TMPDIR", "TEMP", "TMP"):
-        monkeypatch.setenv(name, str(tmp_path))
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # Each case owns a private server. Do not accumulate five-minute idle
+    # runtimes across the delegation suite, including failed setup/test cases.
+    runtime_env = os.environ.copy()
+    def retire_runtime():
+        subprocess.run([
+            sys.executable, "-c",
+            "from pathlib import Path; import sys; "
+            "from loopx.control_plane.effect_runtime import _runtime_dir, restart_effect_runtime; "
+            "assert _runtime_dir().parent == Path(sys.argv[1]); "
+            "result = restart_effect_runtime(); "
+            "assert result['status'] in {'stopped', 'not_running'}, result",
+            str(tmp_path),
+        ], cwd=Path(__file__).resolve().parents[1], env=runtime_env,
+            capture_output=True, text=True, timeout=30, check=True)
+    request.addfinalizer(retire_runtime)
     root = tmp_path / "team"
     demo.prepare(root, provider=request.param)
     fixture(root)
@@ -69,6 +86,47 @@ def brief():
             "context": "Use the initial filing and preserve the period distinction.",
             "constraints": ["No external actions"], "inputs": [], "acceptance": ["Pinned task validation"],
             "return_requirement": "Return the independently checked artifact"}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, monkeypatch, provider):
+    """A warmed parent must use the same private Effect server as its CLI."""
+    from types import SimpleNamespace
+
+    from loopx.control_plane.effect_runtime import (
+        _runtime_dir, _serving_runtime_identity, restart_effect_runtime, effect_runtime_result,
+    )
+
+    cached, isolated = tmp_path / "cached", tmp_path / "isolated"
+    cached.mkdir()
+    isolated.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(cached))
+    finalizers = []
+    service.__wrapped__(isolated, SimpleNamespace(param=provider, addfinalizer=finalizers.append), monkeypatch)
+
+    assert _runtime_dir().parent == isolated
+    child = subprocess.check_output([
+        sys.executable, "-c",
+        "from loopx.control_plane.effect_runtime import _runtime_dir; print(_runtime_dir())",
+    ], text=True).strip()
+    assert Path(child) == _runtime_dir()
+    effect_runtime_result("runtime.ping", {})
+    assert _serving_runtime_identity() is not None
+    try:
+        # Teardown targets the captured route, even if another test changed
+        # the parent cache/environment. A neighboring runtime must survive.
+        with monkeypatch.context() as neighbor:
+            isolate_sqlite_runtime(cached, neighbor)
+            neighbor_pid = effect_runtime_result("runtime.ping", {})["pid"]
+            try:
+                for finalize in reversed(finalizers):
+                    finalize()
+                assert effect_runtime_result("runtime.ping", {})["pid"] == neighbor_pid
+            finally:
+                restart_effect_runtime()
+        assert _serving_runtime_identity() is None, "fixture must retire its private runtime before the next case"
+    finally:
+        restart_effect_runtime()
 
 
 @pytest.mark.parametrize("operation", ["--help", "x y", "x\ny", "x;echo", "x/../y"])
