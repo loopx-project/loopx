@@ -90,6 +90,7 @@ async function fixture(options: {
   progressObservation?: Record<string, unknown>;
   blockedRetry?: boolean | Record<string, unknown>;
   visionCheckpoint?: Record<string, unknown>;
+  autonomousReplanAck?: Record<string, unknown>;
   goalRef?: Record<string, string>;
   turnId?: string;
 } = {}) {
@@ -177,6 +178,7 @@ async function fixture(options: {
       settlement_identity: fixtureIdentity,
       ...ownerProjection,
       ...(options.visionCheckpoint ? {vision_checkpoint: options.visionCheckpoint} : {}),
+      ...(options.autonomousReplanAck ? {autonomous_replan_ack: options.autonomousReplanAck} : {}),
       ...(options.blockedRetry ? {blocked_retry: typeof options.blockedRetry === "object" ? options.blockedRetry : {
         schema_version: "quota_blocked_retry_v0",
         source: "todo",
@@ -647,6 +649,53 @@ test("accepted in-flight writeback closes only the exact Turn, not its Todo", as
         const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
         const events = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
         await writeFile(path, events.filter(event => event.event_kind !== entry.remove).map(event => JSON.stringify(event)).join("\n") + "\n");
+      }
+      const result = await readQuotaSettlement(request(root));
+      assert.equal(result.replay_phase, entry.expected);
+      assert.equal(result.completion_event, null);
+      assert.equal((result.terminal_closeout as any).payload.ok, false);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+});
+
+test("qualified path replan closes its Turn without a preselected obligation or Todo completion", async t => {
+  const accepted = {
+    schema_version: "autonomous_replan_ack_v0", recorded: true,
+    delta_contract: {schema_version: "repair_delta_contract_v0", delta_present: true},
+  };
+  const cases = [
+    {name: "qualified repair delta", ack: accepted, spend: true, expected: "settled"},
+    {name: "qualified semantic delta", ack: {...accepted, delta_contract: null,
+      semantic_delta: {schema_version: "replan_semantic_delta_v0", accepted: true}}, spend: true, expected: "settled"},
+    {name: "spend still required", ack: accepted, spend: false, expected: "settlement_pending"},
+    {name: "missing writeback receipt", ack: accepted, spend: true, remove: "refresh_state", expected: "open"},
+    {name: "missing spend receipt", ack: accepted, spend: true, remove: "quota_spend", expected: "settlement_pending"},
+    {name: "unrecorded", ack: {...accepted, recorded: false}, spend: true, expected: "open"},
+    {name: "truthy is not recorded", ack: {...accepted, recorded: "true"}, spend: true, expected: "open"},
+    {name: "wrong ACK schema", ack: {...accepted, schema_version: "other"}, spend: true, expected: "open"},
+    {name: "unqualified delta", ack: {...accepted, delta_contract: {schema_version: "repair_delta_contract_v0", delta_present: false}}, spend: true, expected: "open"},
+    {name: "unqualified semantic delta", ack: {...accepted, delta_contract: null,
+      semantic_delta: {schema_version: "replan_semantic_delta_v0", accepted: false}}, spend: true, expected: "open"},
+    {name: "wrong delta schema", ack: {...accepted, delta_contract: {schema_version: "other", delta_present: true}}, spend: true, expected: "open"},
+    ...["goal_id", "agent_id", "todo_id", "turn_instance_id"].map(field => ({
+      name: `wrong ${field}`, ack: accepted, spend: true, patch: {[field]: "other"}, expected: "open",
+    })),
+    {name: "wrong effect", ack: accepted, spend: true,
+      patch: {settlement_identity: {...identity, effect_id: "other"}}, expected: "open"},
+  ];
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const root = await fixture({writeback: true, spend: entry.spend, autonomousReplanAck: entry.ack});
+    try {
+      if ("remove" in entry) {
+        const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+        const rows = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        await writeFile(path, rows.filter(row => row.event_kind !== entry.remove).map(row => JSON.stringify(row)).join("\n") + "\n");
+      }
+      if ("patch" in entry) {
+        const path = join(root, "goals", goalId, "runs", "index.jsonl");
+        const rows = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+        rows[0] = {...rows[0], ...entry.patch};
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
       }
       const result = await readQuotaSettlement(request(root));
       assert.equal(result.replay_phase, entry.expected);

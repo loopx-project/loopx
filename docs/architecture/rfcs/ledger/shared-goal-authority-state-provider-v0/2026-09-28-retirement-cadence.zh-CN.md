@@ -80,13 +80,21 @@ owner、持久兼容义务、正反例证据及回退方式，和不可变基线
 | 已合并：[#5413](https://github.com/loopx-project/loopx/pull/5413)，head `2c99505c7` | provider 晋升与带备份的策略迁移解耦；禁止新 legacy 配置，允许恢复历史操作。保留原 CLI 恢复证据。没有自动迁移存量 legacy Goal，成功生成计划也不代表执行消费者已验收。 |
 | 已合并：[#5466](https://github.com/loopx-project/loopx/pull/5466)，merge `066b5bf26` | 原租约保持到最终验收；安装态消费者验收与合并分开记录。 |
 | 待审：[#5283](https://github.com/loopx-project/loopx/pull/5283)，`1012d37f3` | preflight 优化仍在评审；冷 CLI 资格失败行保留，功能投影等价不等于性能通过。合成故障不证明历史瞬态打开失败的根因。 |
-| 待审：[#5500](https://github.com/loopx-project/loopx/pull/5500)，`b367a37f2` | App 重试恢复原 canonical Goal 创建操作；这是创建／默认接入的前置修复，不退役存量所有权策略。 |
+| 已批准，待维护者合并：[#5500](https://github.com/loopx-project/loopx/pull/5500)，`a9e3d722c` | App 重试恢复原 canonical Goal 创建操作；这是创建／默认接入的前置修复，不退役存量所有权策略。 |
 | 按实际路径建立依赖 | [#5308](https://github.com/loopx-project/loopx/pull/5308) 要证明子进程停止后才报告已结算；[#5398](https://github.com/loopx-project/loopx/pull/5398) 保留 UI 历史和 inspector 完整事实。只对纳入试用的相关消费者建依赖，不将其说成 SQLite 引擎前置，也不能发布已知损坏的用户路径。 |
 
 上述开放 head 分别解决 preflight 与创建恢复，不代表固定“剩余 PR 数”。
 剩余实现包仍是 canonical 创建／默认接入、策略迁移与 legacy 策略删除、旧 writer／
 捕获退役。仅当调用方归属和回退边界一致时才合并成同一个 PR。验证可能暴露具体修复，
 不再制造固定“剩余 PR 数”，也不为维持这个数字重做已完成的工作。
+
+Goal 设置的策略迁移已复用 CLI 的同一 TS 备份迁移 owner：读取当前策略、预览
+归属／租约、执行，以及丢响应或同标签页刷新后恢复原操作。合成真实 File/SQLite
+HTTP 路径覆盖 metadata 保留、过期源、跨 Goal／摘要拒绝、过期但未释放的租约和
+损坏备份。打包 App 使用合成工作区目录与真实 SQLite authority，覆盖应用响应丢失、
+刷新重试及窄屏回读。这是源码验证，不代表安装采用或 legacy 执行退役；飞书策略
+编辑不在本批，既有飞书操作仍读 canonical 状态。下一步验收创建／升级调用方并
+逐 Goal 按授权采用，再按最后调用方删除活跃 legacy 分支。
 
 ### 有依赖顺序的交付包与出口
 
@@ -425,6 +433,16 @@ CLI 现在区分恢复响应不确定与已知失败，并返回只读的
 的历史完成回执，无需再次重放或扫描归档。回执缺失不代表后台仍在运行或已经失败。
 当前完整性仍走原有 audit，不改变 provider 激活或 D2／默认项门槛。下一项恢复成本
 工作仍是已测量的完整文件重写和解码路径，不再增加超时或另一套回执／状态格式。
+
+下一项已测量的 File 改动，在一个 checkpoint 窗口内复用 `AuthorityStateReplay`，
+不再为每条历史重建重放器、重新规范化未变化的完整状态。非可信 metadata 仍经
+共享 transaction decoder，每条原始 revision、回执和最终 head 都保留校验。
+存储格式、缓存预算、writer 和公开 API 不变。macOS arm64／Node 24.21.0 上，
+同一份隔离的 2,107 笔 File 历史每组运行三个全新进程，冷读中位数从 35.6 降至
+25.9 秒，约减少 27%；完整 head、revision、cursor 一致。两组连续采样未清空
+OS 缓存，未控制其他进程负载，不代表 p95、provider 对比或完整恢复时间。
+完整文件重写与剩余 revision 哈希成本仍归原有恢复任务；这不闭合 D2／默认项
+或旧 writer 退役验收。
 #4224 的 soak 已启动；其最终证据和对当前候选的适用性仍待核对。
 
 ### 委派完成阶段的原租约衔接

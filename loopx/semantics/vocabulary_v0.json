@@ -652,7 +652,7 @@
       "status": "canonical",
       "owners": {
         "python": "loopx/control_plane/coordination/authority_core.py::HandoffMode",
-        "typescript": "loopx/control_plane/coordination/handoff_mode_policy.ts::HANDOFF_MODES"
+        "typescript": "loopx/control_plane/coordination/handoff_mode_vocabulary.ts::HANDOFF_MODES"
       },
       "values": [
         "legacy",

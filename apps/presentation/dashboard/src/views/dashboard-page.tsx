@@ -1386,7 +1386,7 @@ function PersonalGoalHome({
   const streamControllers = useRef(new Map<string, AbortController>());
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
-  const recoveringTurnKeys = useRef(new Set<string>());
+  const recoveringTurnKeys = useRef(new Map<string, AbortController>());
   // A running Turn a 409 reported, keyed by context: its pending reply holds
   // the composer closed until the recovery effect adopts it or an
   // authoritative Session read finds no such Turn, so the handoff never leaves
@@ -1646,6 +1646,7 @@ function PersonalGoalHome({
     const contextKind = selectedGoal ? "goal" : "manager";
     let cancelled = false;
     let recoveryController: AbortController | null = null;
+    let retireRecoveryObservation: (() => void) | undefined;
     let latestDiscoveredSessionId: string | null = null;
     let sessionReadFailed = false;
     let handoffRetryTimer: number | undefined;
@@ -1705,7 +1706,8 @@ function PersonalGoalHome({
         if (!activeTurnId) return;
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
         if (recoveringTurnKeys.current.has(recoveryKey)) return;
-        recoveringTurnKeys.current.add(recoveryKey);
+        const observer = new AbortController();
+        recoveringTurnKeys.current.set(recoveryKey, observer);
         activeTurnIds.current.set(targetContextId, activeTurnId);
         recordRuntimeBinding(targetContextId, {
           agentId: selectedAgent.agentId,
@@ -1715,8 +1717,8 @@ function PersonalGoalHome({
           turnId: activeTurnId,
         });
         setSendingContextId(targetContextId);
-        recoveryController = new AbortController();
-        streamControllers.current.set(targetContextId, recoveryController);
+        recoveryController = observer;
+        streamControllers.current.set(targetContextId, observer);
         let streamedText = "";
         const handoff = turnHandoffs.current.get(targetContextId);
         if (handoff?.turnId === activeTurnId) turnHandoffs.current.delete(targetContextId);
@@ -1734,6 +1736,34 @@ function PersonalGoalHome({
             : `恢复的 ${selectedAgent.label} 会话`,
           text: "",
         });
+        const releaseObservation = () => {
+          if (recoveringTurnKeys.current.get(recoveryKey) === observer) {
+            recoveringTurnKeys.current.delete(recoveryKey);
+          }
+          // A late completion may still project its draft after navigation.
+          // It no longer owns the display or controls of a replacement observer.
+          if (streamControllers.current.get(targetContextId) !== observer) return;
+          streamControllers.current.delete(targetContextId);
+          if (activeTurnIds.current.get(targetContextId) === activeTurnId) {
+            activeTurnIds.current.delete(targetContextId);
+          }
+          if (!cancelled) recordRuntimeBinding(targetContextId, {
+            agentId: selectedAgent.agentId,
+            resumable: true,
+            sessionId: created.session_id,
+            status: "ready",
+          });
+          setSendingContextId((current) => current === targetContextId ? null : current);
+        };
+        retireRecoveryObservation = () => {
+          // Leaving retires the view immediately, even while durable proposal
+          // projection is waiting. It does not interrupt the worker or its draft.
+          setMessagesByContext((messages) => ({
+            ...messages,
+            [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== streamingMessageId || !message.pending),
+          }));
+          releaseObservation();
+        };
         try {
           const streamed = await resumeChatTurnStreaming(created.session_id, activeTurnId, {
             signal: recoveryController.signal,
@@ -1804,31 +1834,7 @@ function PersonalGoalHome({
             text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "无法恢复进行中的 Agent 回合。",
           });
         } finally {
-          // A cancelled recovery never settles its placeholder. Retire it, so
-          // it cannot stay pending beside the placeholder of the recovery that
-          // replaces it when the user returns to this conversation.
-          if (cancelled) {
-            setMessagesByContext((messages) => ({
-              ...messages,
-              [targetContextId]: (messages[targetContextId] ?? []).filter((message) => message.id !== streamingMessageId),
-            }));
-          }
-          recoveringTurnKeys.current.delete(recoveryKey);
-          if (activeTurnIds.current.get(targetContextId) === activeTurnId) {
-            activeTurnIds.current.delete(targetContextId);
-          }
-          recordRuntimeBinding(targetContextId, {
-            agentId: selectedAgent.agentId,
-            resumable: true,
-            sessionId: created.session_id,
-            status: "ready",
-          });
-          if (streamControllers.current.get(targetContextId) === recoveryController) {
-            streamControllers.current.delete(targetContextId);
-          }
-          if (!cancelled) {
-            setSendingContextId((current) => current === targetContextId ? null : current);
-          }
+          releaseObservation();
         }
       } catch (error) {
         if (cancelled) return;
@@ -1883,6 +1889,7 @@ function PersonalGoalHome({
     return () => {
       cancelled = true;
       recoveryController?.abort();
+      retireRecoveryObservation?.();
       window.clearTimeout(handoffRetryTimer);
     };
   }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);

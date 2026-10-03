@@ -15,7 +15,7 @@ from .contract import (
     normalize_todo_claimed_by,
     normalize_todo_excluded_agents,
 )
-from .todo_semantics import todo_item_task_class
+from .todo_semantics import todo_item_is_actionable_open, todo_item_task_class
 
 
 TODO_FRONTIER_REVISION_SCHEMA_VERSION = "todo_frontier_revision_v0"
@@ -69,6 +69,7 @@ def frontier_source_facts(
             "excluded": normalize_todo_excluded_agents(item.get("excluded_agents")),
             "updated": str(item.get("updated_at") or item.get("completed_at") or "").strip(),
             "advancement": todo_item_task_class(item) == TODO_TASK_CLASS_ADVANCEMENT,
+            "actionable": todo_item_is_actionable_open(item),
             "serialized": json.dumps(
                 {key: item[key] for key in FRONTIER_REVISION_FIELDS if item.get(key) is not None},
                 ensure_ascii=True, separators=(",", ":"), sort_keys=True,
