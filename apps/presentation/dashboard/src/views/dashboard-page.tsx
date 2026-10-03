@@ -98,7 +98,6 @@ import {
 import {
   goalHasExecutionSummary,
   normalizePersonalHomeModel,
-  type WorkspaceAgentTodo,
   type WorkspaceAgentOption,
   type WorkspaceAttention,
   type WorkspaceGoal,
