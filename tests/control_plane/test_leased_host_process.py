@@ -63,8 +63,8 @@ def canonical_execution(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
-@pytest.mark.parametrize("fault", ["rejected", "hung", "lost_reply"])
-def test_real_renewal_faults_keep_original_deadline_and_identity(canonical_execution, tmp_path, fault):
+@pytest.mark.parametrize("fault", ["rejected", "hung", "lost_reply", "late_reply"])
+def test_real_renewal_faults_keep_original_deadline_and_identity(canonical_execution, tmp_path, fault, record_property):
     context, command, selected = canonical_execution
     if fault == "rejected":
         context["renew_argv"] = [sys.executable, "-c", "import json;print(json.dumps({'ok':False}))"]
@@ -72,26 +72,53 @@ def test_real_renewal_faults_keep_original_deadline_and_identity(canonical_execu
         context["renew_argv"] = [sys.executable, "-c", "import time;time.sleep(60)"]
     else:
         marker = tmp_path / "lost-reply"
-        relay = """import subprocess,sys
+        trace = tmp_path / "lease-commands.jsonl"
+        relay = """import json,subprocess,sys,time
 from pathlib import Path
-marker=Path(sys.argv[1])
-result=subprocess.run(sys.argv[2:],capture_output=True,text=True,check=True)
-if marker.exists(): print(result.stdout,end='')
-else: marker.touch()
+marker,trace,phase=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3]
+hold_until=float(sys.argv[4])
+def record(event,**values):
+    with trace.open('a') as stream:
+        stream.write(json.dumps({'event':event,'phase':phase,'at':time.time(),**values})+'\\n')
+record('started',intent=sys.argv[5:])
+result=subprocess.run(sys.argv[5:],capture_output=True,text=True)
+try: reply=json.loads(result.stdout)
+except ValueError: reply={}
+record('returned',returncode=result.returncode,reply=reply)
+if phase=='renew' and hold_until:
+    time.sleep(max(0,hold_until-time.time())+2)
+if phase=='read' or marker.exists(): print(result.stdout,end='')
+else: marker.touch();record('reply_dropped')
+sys.exit(result.returncode)
 """
-        context["renew_argv"] = [sys.executable, "-c", relay, str(marker), *context["renew_argv"]]
+        held_deadline = (datetime.fromisoformat(context["lease"]["expires_at"].replace("Z", "+00:00")).timestamp()
+                         if fault == "late_reply" else 0)
+        for field, phase in (("renew_argv", "renew"), ("read_argv", "read")):
+            context[field] = [sys.executable, "-c", relay, str(marker), str(trace), phase,
+                              str(held_deadline), *context[field]]
     observed = run_host_process([sys.executable, "-c", "import time;time.sleep(35);print('finished')"],
         project=tmp_path, input_text="", timeout_seconds=45, delegated_lease=context)
+    evidence = {"original": context["lease"], "observed": observed,
+                "trace": trace.read_text() if fault in {"lost_reply", "late_reply"} and trace.exists() else ""}
+    # Keep the first observation in JUnit even if subsequent canonical readback
+    # fails or pytest removes its temporary directory. Only synthetic fixtures.
+    record_property("lease_supervision", json.dumps(evidence))
     current = command("task-lease", "inspect", *selected)
+    evidence["current"] = current
     assert current["lease"]["lease_epoch"] == context["lease"]["lease_epoch"]
     assert current["lease"]["idempotency_key"] == context["lease"]["idempotency_key"]
     if fault == "lost_reply":
-        assert observed["outcome"] == "exited" and observed["output_complete"] is True
+        assert observed["outcome"] == "exited" and observed["output_complete"] is True, evidence
         assert current["lease"]["version"] > context["lease"]["version"]
         assert "lease_failure" not in observed
     else:
         assert observed["outcome"] == "cancelled" and observed["output_complete"] is False
-        assert current["lease"]["version"] == context["lease"]["version"]
+        if fault == "late_reply":
+            # A committed renewal is not timely execution proof. The old
+            # deadline still stops the Host while its reply is unavailable.
+            assert current["lease"]["version"] > context["lease"]["version"], evidence
+        else:
+            assert current["lease"]["version"] == context["lease"]["version"], evidence
         assert observed["lease_failure"] == (
             {"reason": "renewal_rejected", "boundary": "renewal"} if fault == "rejected" else
             {"reason": "proved_deadline_elapsed", "boundary": "deadline"})
@@ -127,3 +154,51 @@ def test_released_initial_proof_explains_refusal_before_host_launch(canonical_ex
     assert observed["outcome"] == "cancelled" and observed["output_complete"] is False
     assert not marker.exists()
     assert observed["lease_failure"] == {"reason": "lease_inactive", "boundary": "initial_proof"}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX owned process-group qualification")
+def test_returned_host_uses_renewed_deadline_during_final_proof(canonical_execution, tmp_path, record_property):
+    """An in-flight renewal can finish after Host exit, before final readback."""
+    context, _, _ = canonical_execution
+    relay = """import json,os,subprocess,sys,time
+from pathlib import Path
+root,phase,old_expiry=Path(sys.argv[1]),sys.argv[2],float(sys.argv[3])
+if phase=='read':
+    count=root/'read-count'
+    number=int(count.read_text())+1 if count.exists() else 1
+    count.write_text(str(number))
+    if number==3:
+        (root/'final-proof-started').write_text(str(time.time()))
+        time.sleep(max(0,old_expiry+1-time.time()))
+result=subprocess.run(sys.argv[4:],capture_output=True,text=True,check=True)
+if phase=='renew':
+    (root/'renewed').write_text(result.stdout)
+    pid=int((root/'host-pid').read_text())
+    while True:
+        try: os.kill(pid,0)
+        except ProcessLookupError: break
+        time.sleep(0.01)
+    # The parent has reaped the actual Host; let its pending exit callbacks
+    # finish before delivering the renewal response and fresh proof.
+    time.sleep(0.2)
+print(result.stdout,end='')
+"""
+    expiry = datetime.fromisoformat(context["lease"]["expires_at"].replace("Z", "+00:00")).timestamp()
+    for field, phase in (("renew_argv", "renew"), ("read_argv", "read")):
+        context[field] = [sys.executable, "-c", relay, str(tmp_path), phase, str(expiry), *context[field]]
+    host = """import os,sys,time
+from pathlib import Path
+root=Path(sys.argv[1]);(root/'host-pid').write_text(str(os.getpid()))
+while not (root/'renewed').exists(): time.sleep(0.01)
+print('finished')
+"""
+    observed = run_host_process([sys.executable, "-c", host, str(tmp_path)], project=tmp_path,
+                               input_text="", timeout_seconds=45, delegated_lease=context)
+    renewal = json.loads((tmp_path / "renewed").read_text())
+    evidence = {"observed": observed, "renewal": renewal, "original": context["lease"]}
+    record_property("final_proof", json.dumps(evidence))
+    assert float((tmp_path / "final-proof-started").read_text()) < expiry, evidence
+    assert renewal["lease"]["version"] > context["lease"]["version"], evidence
+    assert time.time() > expiry
+    assert observed["outcome"] == "exited" and observed["output_complete"] is True, evidence
+    assert "lease_failure" not in observed

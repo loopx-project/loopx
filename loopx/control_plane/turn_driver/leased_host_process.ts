@@ -102,6 +102,9 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
     if (remaining <= 0) { lose("proved_deadline_elapsed", "deadline"); return; }
     // Stop at the last proved deadline even if renewal or its transport hangs.
     expiryTimer = setTimeout(() => lose("proved_deadline_elapsed", "deadline"), remaining);
+    // A returned Host still needs final proof under the latest proved expiry.
+    // Only periodic renewal ends at Host return; expiry supervision does not.
+    if (finished) return;
     renewalTimer = setTimeout(() => {
       pending = (async () => {
         const argv = [...context.renew_argv, "--expected-version", String(leaseVersion(lease)),
@@ -119,7 +122,7 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
           const observed = currentProof(await cli(context.read_argv));
           if (leaseVersion(observed) <= leaseVersion(lease)) throw new LeaseSupervisionFailure("renewal_not_advanced");
           lease = observed;
-          if (!finished) schedule();
+          schedule();
         } catch (error) { reject(error, "renewal"); }
       })();
     }, Math.max(1, Math.min(30_000, Math.floor(remaining / 2))));
