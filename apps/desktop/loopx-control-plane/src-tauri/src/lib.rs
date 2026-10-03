@@ -147,6 +147,21 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+// A new-window request comes from the trusted workspace, not a new privileged
+// WebView. Send only web destinations to the system browser; retain the main
+// window's origin restriction and never launch custom handlers or local files.
+fn open_web_destination(
+    url: &Url,
+    launch: impl FnOnce(&str) -> std::io::Result<()>,
+) -> tauri::webview::NewWindowResponse<tauri::Wry> {
+    if matches!(url.scheme(), "http" | "https") {
+        if let Err(error) = launch(url.as_str()) {
+            eprintln!("LoopX could not open web destination: {error}");
+        }
+    }
+    tauri::webview::NewWindowResponse::Deny
+}
+
 pub fn run() {
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
@@ -216,6 +231,9 @@ pub fn run() {
                 })
                 .on_navigation(move |url| {
                     url.scheme() == "tauri" || url.origin() == navigation_origin.origin()
+                })
+                .on_new_window(|url, _features| {
+                    open_web_destination(&url, |destination| open::that_detached(destination))
                 })
                 .build()?;
 
@@ -308,9 +326,46 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{NavigationRetry, WorkspaceHandoff};
+    use super::{open_web_destination, NavigationRetry, WorkspaceHandoff};
     use std::time::Instant;
     use tauri::Url;
+
+    #[test]
+    fn requested_web_destinations_open_once_without_creating_a_native_child() {
+        for destination in [
+            "https://example.org/form?lang=en&view=all",
+            "http://127.0.0.1:8767/chat/?reportSessionId=example",
+        ] {
+            let url: Url = destination.parse().unwrap();
+            let mut opened = Vec::new();
+            let response = open_web_destination(&url, |value| {
+                opened.push(value.to_string());
+                Ok(())
+            });
+            assert_eq!(opened, [url.as_str()]);
+            assert!(matches!(response, tauri::webview::NewWindowResponse::Deny));
+        }
+    }
+
+    #[test]
+    fn new_window_rejects_non_web_handlers_and_keeps_launcher_failures_contained() {
+        for destination in [
+            "file:///tmp/example.txt",
+            "javascript:alert(1)",
+            "data:text/html,example",
+            "mailto:someone@example.org",
+            "tauri://localhost/",
+        ] {
+            let response = open_web_destination(&destination.parse().unwrap(), |_| {
+                panic!("non-web destination must never reach a system handler")
+            });
+            assert!(matches!(response, tauri::webview::NewWindowResponse::Deny));
+        }
+        let response = open_web_destination(&"https://example.org/".parse().unwrap(), |_| {
+            Err(std::io::Error::other("browser unavailable"))
+        });
+        assert!(matches!(response, tauri::webview::NewWindowResponse::Deny));
+    }
 
     #[test]
     fn failed_workspace_load_retries_until_a_native_commit() {

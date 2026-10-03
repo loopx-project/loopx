@@ -19,6 +19,7 @@ tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
 command-group = "5.0.1"
+open = "5.4.4"
 serde_json = "1.0"
 tauri = { version = "2.11.1", features = [] }
 tauri-plugin-single-instance = "2.4.3"

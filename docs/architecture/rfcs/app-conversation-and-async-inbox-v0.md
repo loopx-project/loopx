@@ -313,8 +313,12 @@ Markdown link. Reuse the shared safe prose renderer for Steward, Goal Chat and
 artifacts. Preserve query strings and balanced path punctuation; separate CJK
 prose punctuation from bare destinations. Code stays literal, HTML stays inert,
 and email or unqualified domains are not inferred as destinations. Opening a
-link preserves the original conversation and does not rerun work. This is a
-presentation boundary, not evidence that an external artifact is adopted.
+link preserves the original conversation and does not rerun work. The native
+shell must handle these new-window requests too: open HTTP(S) destinations in
+the system browser while retaining the App's origin fence. Do not create a
+privileged child WebView or launch file/custom-protocol handlers. Browser-only
+anchor checks cannot qualify that native interaction. This is a presentation
+boundary, not evidence that an external artifact is adopted.
 
 Keep WIP on the first journey and demonstrated blockers. Reuse acceptance
 recovery, GoalRef and late-return changes. Shared TS refactors accompany the
