@@ -113,6 +113,20 @@ def test_chat_capabilities_expose_public_runtime_identity() -> None:
         server.server_close()
 
 
+def test_chat_keeps_its_startup_identity_after_package_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = {"schema_version": "loopx_runtime_identity_v1", "package_fingerprint": "sha256:original"}
+    monkeypatch.setattr("loopx.chat_server.release_runtime_identity", lambda: dict(current))
+    server, thread = _start_server()
+    try:
+        current["package_fingerprint"] = "sha256:replacement"
+        response = _request(server.server_address[1], method="GET", origin=None)
+        assert json.loads(response.read())["runtime_identity"]["package_fingerprint"] == "sha256:original"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_chat_json_rejects_foreign_cors_origin() -> None:
     server, thread = _start_server()
     try:

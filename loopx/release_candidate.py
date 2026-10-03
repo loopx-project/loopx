@@ -3,12 +3,14 @@ from __future__ import annotations
 import importlib
 from concurrent.futures import ThreadPoolExecutor
 import os
+import sys
 from importlib.metadata import PackageNotFoundError, distribution
 import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
 from .command_invocation import command_argv
+from .release_manifest import release_runtime_identity
 
 
 REPRESENTATIVE_CLI_IMPORTS = (
@@ -301,6 +303,8 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "mode": "deep" if deep else "standard",
         "scope": "installation_only",
+        "service_runtime_identity": release_runtime_identity(),
+        "python": {"executable": sys.executable},
         "checks": checks,
         "typescript_control_plane": runtime,
         "path": {"loopx": str(command) if command else None},
