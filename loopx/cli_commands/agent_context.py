@@ -203,7 +203,8 @@ def handle_agent_context(args, registry_path, runtime_root, print_payload, outpu
         )
     if native_activity is not None:
         payload["native_child_activity"] = native_activity
-        payload["host_receipts_scope"] = "turn_bound_coordinator_report"
+        payload["host_receipts_observed"] = native_activity["host_attested"]
+        payload["host_receipts_scope"] = "turn_bound_native_child_receipts"
     print_payload(payload, output_format(args), render_agent_context)
     return 0
 

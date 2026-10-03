@@ -468,8 +468,8 @@ type PersonalGoalItem = {
   hasRunObservation: boolean;
   nativeChildActivity?: {
     turn_instance_id: string;
-    observation: "unknown" | "coordinator_reported";
-    host_attested: false;
+    observation: "unknown" | "coordinator_reported" | "host_observed" | "mixed";
+    host_attested: boolean;
     launched_count: number;
     skipped_count: number;
     capacity_rejected_count: number;

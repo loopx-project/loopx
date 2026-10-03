@@ -1574,16 +1574,25 @@ def test_run_once_never_blindly_retries_output_budget_exhaustion(
     assert calls == {"host": 1, "writeback": 0, "spend": 0, "scheduler": 0}
 
 
+@pytest.mark.parametrize("native_children", [False, True])
 def test_run_once_resumes_session_observed_by_recoverable_failed_turn(
-    tmp_path: Path,
+    tmp_path: Path, native_children: bool,
 ) -> None:
     plan = _codex_plan()
+    if native_children:
+        plan["turn_envelope"]["agent_context"] = {"contributions": [
+            {"capability_id": "multi_subagent", "facts": {"max_children": 3}}]}
     calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
     session_actions: list[str] = []
     writeback, spend, scheduler = _callbacks(calls)
 
     def host(request: dict[str, object]) -> dict[str, object]:
         calls["host"] += 1
+        if native_children:
+            assert request["host_attempt"] == calls["host"]
+            assert request["host_attempt"] == _journal(tmp_path / "runtime")["host_attempt_count"]
+        else:
+            assert "host_attempt" not in request
         session = request["session"]
         assert isinstance(session, dict)
         session_actions.append(str(session["action"]))
@@ -1638,6 +1647,9 @@ def test_run_once_resumes_session_observed_by_recoverable_failed_turn(
     assert recovered["recovery"]["planned"] == inspected["recovery_decision"]
     assert recovered["status"] == "committed"
     assert session_actions == ["start_new", "resume"]
+    replay = run_loopx_turn_once(plan, **common)
+    assert replay["replayed"] is True
+    assert _journal(tmp_path / "runtime")["host_attempt_count"] == 2
     assert calls == {"host": 2, "writeback": 1, "spend": 1, "scheduler": 1}
 
 

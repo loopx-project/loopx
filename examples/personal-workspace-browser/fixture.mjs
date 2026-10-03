@@ -558,6 +558,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       });
     }
     const first = fixture.attention_queue?.items?.[0];
+    if (first && state.nativeChildActivity) {
+      first.project_asset ??= {owner: "codex", gate: "ready", next_action: first.recommended_action ?? "Review the fixture", stop_condition: "Fixture accepted"};
+      first.project_asset.native_child_activity = state.nativeChildActivity;
+    }
     if (first) {
       first.waiting_on = "user_or_controller";
       const gateDecided = state.decidedGateTodoIds.has("todo-browser-user-gate");

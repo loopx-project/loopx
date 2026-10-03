@@ -363,8 +363,8 @@ export const projectAssetTodoProjectionGapSchema = z.object({
 
 export const nativeChildActivitySchema = z.object({
   schema_version: z.literal("native_subagent_activity_v0"),
-  observation: z.enum(["unknown", "coordinator_reported"]),
-  host_attested: z.literal(false),
+  observation: z.enum(["unknown", "coordinator_reported", "host_observed", "mixed"]),
+  host_attested: z.boolean(),
   configured_limit: z.number().int().nonnegative(),
   launched_count: z.number().int().nonnegative(),
   skipped_count: z.number().int().nonnegative(),

@@ -37,6 +37,7 @@ from .codex_sessions import (
     _store_codex_cli_session,
     load_codex_cli_session,
 )
+from ...extensions.codex_native_child import native_child_observer
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
 
@@ -430,7 +431,22 @@ def run_codex_operation_host(
                         recovery_kind="resume_session",
                     ) from exc
 
-        return session.send(
+        child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage,
+            registry_path=goal_admission.registry_path if goal_admission is not None else None)
+
+        def observe_child(item: Mapping[str, Any]) -> None:
+            if child_observer is None:
+                return
+            def record_child() -> None:
+                child_observer.observe(item, session_id=session.thread_id,
+                                       invocation_id=session.current_turn_id)
+
+            if goal_admission is None:
+                record_child()
+            else:
+                goal_admission.accept_result(record_child)
+
+        result = session.send(
             _prompt(request)
             + "\nUse loopx_operation for context/pending/prepare/inspect/consume/report. "
             "Source conversations are not executor identity. context/pending/inspect do not require consumption. "
@@ -446,7 +462,9 @@ def run_codex_operation_host(
                if continuations else ""),
             output_schema=codex_cli_result_schema(request),
             on_event=on_event,
+            **({"on_native_item": observe_child} if child_observer is not None else {}),
         )
+        return result
     except CodexChatAgentError as exc:
         raise BuiltInHostError(
             "codex_operation_host_" + exc.error_code,

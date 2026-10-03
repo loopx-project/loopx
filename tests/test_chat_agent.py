@@ -610,3 +610,21 @@ def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(
     assert result["message"] == "Recovered."
     assert any(k == "agent.phase" and p["label"] == "Codex 正在重试" for k, p in events)
     assert sum(k == "answer.final" for k, p in events) == 1
+
+
+def test_native_child_callback_is_scoped_to_owned_thread_and_turn(monkeypatch, tmp_path):
+    session = chat_agent.CodexChatAgentSession(process=_FakeAppServerProcess(),
+        messages=queue.Queue(), thread_id="thread-fixture", work_dir=tmp_path)
+    item = {"type": "collabAgentToolCall", "id": "call-1", "tool": "spawnAgent"}
+    events = iter([
+        {"method": "item/completed", "params": {"threadId": "other", "turnId": "turn-fixture", "item": item}},
+        {"method": "item/completed", "params": {"threadId": "thread-fixture", "turnId": "old-turn", "item": item}},
+        {"method": "item/completed", "params": {"threadId": "thread-fixture", "turnId": "turn-fixture", "item": item}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Ready."}},
+        {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+    ])
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: next(events))
+    observed = []
+    session.send("Reply briefly.", on_native_item=observed.append)
+    assert observed == [item]

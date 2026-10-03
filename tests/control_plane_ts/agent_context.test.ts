@@ -310,3 +310,20 @@ test("durable native child report is bounded and does not claim host attestation
   assert.equal(facts.native_receipt_observation, "coordinator_reported");
   assert.ok(!JSON.stringify(packet).includes("private result"));
 });
+
+
+test("host receipt provenance survives projection without raw child content", () => {
+  for (const observation of ["host_observed", "mixed"]) {
+    const packet = evaluateSubagentContext({ phase: "after_delegate_result", scope,
+      orchestration: policy, observations: { native_child_activity: {
+        schema_version: "native_subagent_activity_v0", entrypoint_scope: "host_native_child_tools",
+        observation, host_attested: true, configured_limit: 3, launched_count: 1,
+        attempted_count: 1, parent_accepted_count: 1, raw_host_result: "private child result",
+      } } })!;
+    const facts = (packet.contributions as Record<string, any>[])[0].facts;
+    assert.equal(facts.native_child_activity.observation, observation);
+    assert.equal(facts.native_child_activity.host_attested, observation === "host_observed");
+    assert.equal(facts.native_child_activity.parent_accepted_count, 1);
+    assert.ok(!JSON.stringify(packet).includes("private child result"));
+  }
+});

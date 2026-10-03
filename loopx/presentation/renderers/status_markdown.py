@@ -1275,11 +1275,12 @@ def _append_project_asset_runtime_policy_markdown(
         if isinstance(project_asset.get("native_child_activity"), dict)
         else {}
     )
-    if native_child_activity.get("observation") == "coordinator_reported":
+    if native_child_activity.get("observation") in {"coordinator_reported", "host_observed", "mixed"}:
         lines.append(
             "    - native_child_activity: "
             f"turn={markdown_scalar(native_child_activity.get('turn_instance_id'))} "
-            "source=coordinator_reported host_attested=false "
+            f"source={native_child_activity.get('observation')} "
+            f"host_attested={str(native_child_activity.get('host_attested')).lower()} "
             f"configured_max={native_child_activity.get('configured_limit')} "
             f"starts={native_child_activity.get('launched_count')} "
             f"skips={native_child_activity.get('skipped_count')} "

@@ -109,14 +109,14 @@ function boundedNativeChildActivity(value: unknown): JsonObject | null {
   if (!source || source.schema_version !== "native_subagent_activity_v0"
     || source.entrypoint_scope !== "host_native_child_tools") return null;
   const observation = String(source.observation ?? "");
-  if (!["unknown", "coordinator_reported"].includes(observation)) return null;
+  if (!["unknown", "coordinator_reported", "host_observed", "mixed"].includes(observation)) return null;
   const count = (key: string) => Number.isInteger(source[key]) && Number(source[key]) >= 0
     ? Math.min(Number(source[key]), 10_000) : 0;
   const result: JsonObject = {
     schema_version: "native_subagent_activity_v0",
     entrypoint_scope: "host_native_child_tools",
     observation,
-    host_attested: false,
+    host_attested: observation === "host_observed",
     configured_limit_kind: "upper_bound",
     configured_limit: count("configured_limit"),
     attempted_count: count("attempted_count"),

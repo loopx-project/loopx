@@ -933,6 +933,7 @@ class CodexChatAgentSession:
         attachments: list[dict[str, Any]] | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         output_schema: dict[str, Any] | None = None,
+        on_native_item: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         text = " ".join(str(user_message or "").split())
         if not text:
@@ -1030,6 +1031,10 @@ class CodexChatAgentSession:
                 self.current_turn_id = turn_id
             method = str(message.get("method") or "")
             params = message.get("params")
+            if method == "item/completed" and isinstance(params, dict) and on_native_item:
+                native_item = params.get("item")
+                if isinstance(native_item, dict) and native_item.get("type") == "collabAgentToolCall":
+                    on_native_item(native_item)
             if on_event:
                 phase = {
                     "turn/started": "Agent 已开始处理",
