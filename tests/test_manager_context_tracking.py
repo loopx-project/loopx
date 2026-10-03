@@ -20,7 +20,8 @@ from loopx.capabilities.manager_context import (
     register_ingress,
     POLICY_SCHEMA,
 )
-from loopx.capabilities.manager_context.tracking import query, record_read, link
+from loopx.capabilities.manager_context.tracking import query, record_read
+from loopx.control_plane.collaboration.links import link
 from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
 from loopx.cli_commands.manager_inbox import handle_manager_inbox
 
@@ -156,7 +157,7 @@ def test_external_query_is_exact_audience_not_just_goal(fixture):
     "todo_work-item_123", "todo_abc", "todo_" + "a" * 64,
 ])
 def test_links_use_core_state_and_do_not_copy_progress(fixture, monkeypatch, tid):
-    import loopx.capabilities.manager_context.tracking as tracking
+    import loopx.control_plane.collaboration.links as tracking
 
     root, registry, session, turn, target = fixture
     rid = deliver(root, registry, session=session, turn=turn, request=target)[
@@ -197,7 +198,7 @@ def test_links_use_core_state_and_do_not_copy_progress(fixture, monkeypatch, tid
     " todo_abc", "todo_abc\n", "task_abc",
 ])
 def test_invalid_link_ids_fail_before_core_read_or_receipt(fixture, monkeypatch, tid):
-    import loopx.capabilities.manager_context.tracking as tracking
+    import loopx.control_plane.collaboration.links as tracking
 
     root, registry, session, turn, target = fixture
     rid = deliver(root, registry, session=session, turn=turn, request=target)["request_id"]
@@ -255,6 +256,13 @@ def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch,
         request={"goal_id": "goal-a", "agent_id": "agent-a"},
     )["request_id"]
     inbox = ("--goal-id", "goal-a", "--agent-id", "agent-a", "--request-id", rid)
+    # The receiver has existing work. Merely reading this request cannot adopt
+    # it or associate that work by title, presence, or common ownership.
+    first = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]
+    assert first["receiver_followthrough"]["assessment_required"] is True
+    assert first["receiver_followthrough"]["linked_todos"] == []
+    assert cli("manager-inbox", "status", *inbox)["rows"][0]["decision"]["status"] == "not_recorded"
+    cli("manager-inbox", "acknowledge", *inbox, "--decision", "adopt", "--reason", "Resume this existing work")
     linked = cli("manager-inbox", "link", *inbox, "--related-todo-id", tid)
     assert linked["todo_ids"] == [tid]
     path = _root(root) / "links" / (rid + ".json")
@@ -272,6 +280,13 @@ def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch,
         (tid, "Verified current work", "open")
     ]
     assert "Verified current work" not in path.read_text()
+    resumed = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]
+    follow = resumed["receiver_followthrough"]
+    assert follow["recorded_decision"] == "adopt" and follow["step"] == "review_request_work"
+    assert [(t["todo_id"], t["title"], t["status"]) for t in follow["linked_todos"]] == [
+        (tid, "Verified current work", "open")
+    ]
+    assert follow["answer_owed"] is True
     assert state.exists()
 
 
@@ -318,3 +333,48 @@ def test_pagination_and_conflicts_do_not_erase_gaps(fixture):
         ]
         == []
     )
+
+
+def test_receiver_keeps_unavailable_work_unknown_without_replaying_or_hiding_other_requests(fixture, monkeypatch):
+    from loopx.control_plane.collaboration.peers import read_inbox
+    import loopx.control_plane.collaboration.links as links
+
+    root, registry, session, turn, target = fixture
+    rid = deliver(root, registry, session=session, turn=turn, request=target)["request_id"]
+    other = deliver(root, registry, session=session,
+                    turn=dict(turn, client_turn_id="other-request"), request=target)["request_id"]
+    core = {"ok": True, "todos": [{"todo_id": "todo_current", "claimed_by": "worker",
+                                       "status": "open", "text": "Current work"}]}
+    reads = []
+    def core_read(**kwargs):
+        reads.append(kwargs["goal_id"])
+        return core
+    monkeypatch.setattr(links, "list_goal_todos", core_read)
+    acknowledge(root, "research", "worker", rid, "adopt", "Use current work")
+    link(root, registry, "research", "worker", rid, ["todo_current"], [])
+    path = _root(root) / "links" / (rid + ".json")
+    original = path.read_bytes()
+    core["todos"][0].update(claimed_by="peer", text="Other owner's private work")
+    reads.clear()
+    page = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
+    unavailable = page[rid]["receiver_followthrough"]
+    assert unavailable["step"] == "recover_evidence"
+    assert unavailable["linked_todos"][0]["status"] == "unknown"
+    assert "Other owner's private work" not in json.dumps(page)
+    assert page[other]["receiver_followthrough"]["step"] == "assess_request"
+    assert reads == ["research"]
+    assert path.read_bytes() == original
+    row = query(root, registry, goal_ids=["research"], owner_scope=True, request_id=rid)["rows"][0]
+    assert row["linked_todos"][0]["status"] == "unknown"
+    core["todos"][0].update(claimed_by="worker", text="api_key=synthetic-secret")
+    page = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
+    assert page[rid]["receiver_followthrough"]["linked_todos"][0]["title"] == "[sensitive text omitted]"
+    core["todos"][0]["text"] = "😀" * 2000
+    page = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
+    assert len(page[rid]["receiver_followthrough"]["linked_todos"][0]["title"]) < 430
+    path.write_text("{damaged")
+    page = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
+    assert page[rid]["receiver_followthrough"]["step"] == "recover_evidence"
+    assert page[rid]["warnings"] == ["links_unreadable_or_conflicting"]
+    assert page[other]["receiver_followthrough"]["step"] == "assess_request"
+    assert path.read_text() == "{damaged"

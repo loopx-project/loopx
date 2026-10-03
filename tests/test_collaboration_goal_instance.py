@@ -705,6 +705,8 @@ def test_long_lived_mcp_keeps_its_captured_instance_after_recreation(
     _recreate(registry)
 
     assert server.tools["read_context"]()["items"] == []
+    with pytest.raises(ValueError, match="historical_mutation_forbidden"):
+        server.tools["link_work"](receipt["request_id"], evidence_ids=["sha256:" + "a" * 64])
     with pytest.raises(ValueError, match="stale_goal_instance"):
         server.tools["request_peer"](
             "reviewer",

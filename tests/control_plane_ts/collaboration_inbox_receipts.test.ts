@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inspectCollaborationInboxReceipts } from "../../loopx/control_plane/collaboration/inbox_receipts.ts";
+import { inspectCollaborationInboxReceipts, projectReceiverFollowthrough } from "../../loopx/control_plane/collaboration/inbox_receipts.ts";
 
 const identity = { request_id: "a".repeat(64), goal_id: "delivery", agent_id: "receiver", source_id: "peer:request" };
 const decision = { request_id: identity.request_id, goal_id: identity.goal_id, agent_id: identity.agent_id, decision: "adopt" };
@@ -61,4 +61,30 @@ test("batches remain bounded and do not truncate Unicode reply limits", () => {
   assert.deepEqual(state({ decision: read(decision), conclusion: read({ ...conclusion, text: "😀".repeat(20001) }) }), [
     { kind: "receipt_unavailable", recorded_decision: "adopt", warnings: ["conclusion_unreadable_or_conflicting"] },
   ]);
+});
+
+test("receiver advice keeps assessment, linked work and return distinct", () => {
+  const project = (patch: object = {}) => projectReceiverFollowthrough({ observations: [{
+    kind: "pending", recorded_decision: null, linked_todos: [], evidence_unavailable: false, ...patch,
+  }] }).items as Array<Record<string, unknown>>;
+  assert.equal(project()[0].step, "assess_request");
+  assert.equal(project()[0].assessment_required, true);
+  // Adoption can be answered directly; it does not require creating a Todo.
+  assert.equal(project({ recorded_decision: "adopt", kind: "awaiting_conclusion" })[0].step, "review_request_work");
+  for (const status of ["open", "blocked", "deferred"]) {
+    assert.equal(project({ recorded_decision: "adopt", kind: "awaiting_conclusion",
+      linked_todos: [{ todo_id: "todo_delivery", status }] })[0].step, "review_request_work");
+  }
+  const done = project({ recorded_decision: "adopt", kind: "awaiting_conclusion",
+    linked_todos: [{ todo_id: "todo_delivery", status: "done" }] })[0];
+  assert.equal(done.step, "return_answer");
+  assert.equal(done.answer_owed, true);
+  assert.equal(done.request_completion, "not_established_by_receipts_or_todo_status");
+  for (const decision of ["defer", "reject", "no_change"]) {
+    assert.equal(project({ recorded_decision: decision, kind: "awaiting_conclusion" })[0].step, "return_answer");
+  }
+  assert.equal(project({ evidence_unavailable: true })[0].step, "recover_evidence");
+  assert.equal(project({ kind: "receipt_unavailable" })[0].step, "recover_evidence");
+  assert.throws(() => project({ recorded_decision: "in_progress" }), /unsupported/);
+  assert.throws(() => projectReceiverFollowthrough({ observations: Array(21).fill({}) }), /at most 20/);
 });

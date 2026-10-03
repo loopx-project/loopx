@@ -71,3 +71,9 @@ def scan_public_boundary_text(text: str) -> dict[str, object]:
         if pattern.search(text)
     ]
     return {"ok": not warnings, "warnings": warnings}
+
+
+def checked_public_text(value: object, limit: int = 420) -> str:
+    """Bound and redact a display excerpt; omit remaining sensitive material."""
+    text = redact_public_text(value, limit=limit)
+    return text if scan_public_boundary_text(text)["ok"] else "[sensitive text omitted]"

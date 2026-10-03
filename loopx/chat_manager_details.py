@@ -8,14 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .presentation.public_safety import redact_public_text, scan_public_boundary_text
+from .presentation.public_safety import checked_public_text as _text
 from .todos import list_goal_todos
 from .control_plane.effect_runtime import effect_runtime_result
-
-
-def _text(value: object, limit: int = 420) -> str:
-    text = redact_public_text(value, limit=limit)
-    return text if scan_public_boundary_text(text)["ok"] else "[sensitive text omitted]"
 
 
 def _safe_context(value: Any) -> Any:

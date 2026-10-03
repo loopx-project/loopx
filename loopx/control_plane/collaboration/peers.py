@@ -601,6 +601,9 @@ def read_inbox(
             result["peer_returns"] = peer_returns
         record_read(root, result["items"], scope=goal_scope)
 
+    from .links import receiver_followthrough
+
+    receiver_followthrough(root, registry, result["items"])
     # Input hashing can touch arbitrary workspace files and does not participate
     # in Goal lifetime admission.
     for item in result["items"]:
@@ -609,6 +612,10 @@ def read_inbox(
                 registry, goal_id, item["brief"], workspace=workspace
             )
     result["followthrough"] = (
+        "Use each request's receiver_followthrough to reconcile it with actual Core work. "
+        "Record an explicit assessment even when continuing other work; a read is not a decision. "
+        "For adopted work, resume the linked commitment or assess whether this can be answered directly; "
+        "do not manufacture a Todo for a short answer. "
         "Independently assess requests and actual input versions before accepting work. "
         "Use request_peer for help or independent review. Assess peer conclusions against "
         "actual artifacts, then consume_peer_result after using or rejecting the result. "

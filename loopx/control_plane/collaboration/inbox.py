@@ -192,9 +192,10 @@ def pending(
                 if lifecycle.get("kind") == "omit":
                     continue
             item = {**row, "inbox_state": state["kind"]}
+            item["recorded_decision"] = state["recorded_decision"]
             if state["recorded_decision"] is not None:
                 item["receiver_decision_recorded"] = True
-                item["next_action"] = "Return the original audience a conclusion with manager-inbox report; do not repeat the recorded decision or reprioritize unrelated work."
+                item["next_action"] = "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."
             if state["warnings"]:
                 item["warnings"] = state["warnings"]
                 item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."

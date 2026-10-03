@@ -241,7 +241,7 @@ import {
   normalizeManagerReturnDeliveryAttempt,
 } from "./collaboration/return_delivery.ts";
 import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
-import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
+import { inspectCollaborationInboxReceipts, projectReceiverFollowthrough } from "./collaboration/inbox_receipts.ts";
 import { planCollaborationResult, collaborationResultDeliveryReady } from "./collaboration/result_publication.ts";
 import { selectObservedPeerHostRoute } from "./collaboration/peer_route_selection.ts";
 
@@ -787,6 +787,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["collaboration.source_context.normalize", normalizeCollaborationSourceContext],
     ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
+    ["collaboration.inbox.receiver_followthrough", projectReceiverFollowthrough],
     ["collaboration.result.plan_publication", planCollaborationResult],
     ["collaboration.result.delivery_ready", collaborationResultDeliveryReady],
     ["collaboration.peer_host_route.select", selectObservedPeerHostRoute],

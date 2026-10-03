@@ -266,6 +266,23 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         )
 
     @server.tool()
+    def link_work(request_id: str, todo_ids: list[str] | None = None,
+                  evidence_ids: list[str] | None = None) -> dict:
+        """Link this request to your existing Core work or opaque evidence IDs.
+
+        This creates no Todo, claim or execution grant. read_context reads
+        current linked work; busy or completed unrelated work proves nothing
+        about this request. Short answers do not need a Todo link.
+        """
+        check_scope()
+        from .control_plane.collaboration.links import link
+
+        return link(
+            root, registry, goal_id, agent_id, request_id,
+            todo_ids or [], evidence_ids or [], caller_goal_ref=caller_goal_ref,
+        )
+
+    @server.tool()
     def request_peer(
         peer_agent_id: str,
         operation_id: str,
