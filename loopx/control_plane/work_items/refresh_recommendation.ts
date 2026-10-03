@@ -9,6 +9,9 @@ import {
   requireJsonObject,
   requireNonEmptyString,
 } from "../runtime_decode.ts";
+import {createHash} from "node:crypto";
+import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
+import {requireStringArray} from "../runtime_decode.ts";
 
 export const REFRESH_RECOMMENDATION_REQUEST_SCHEMA_VERSION =
   "refresh_recommendation_request_v0";
@@ -19,6 +22,7 @@ const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 
 type RecommendationSource =
   | "explicit_arg"
+  | "agent_lane_step"
   | "settlement_bound_todo"
   | "agent_lane_selected_todo"
   | "active_state_next_action"
@@ -42,6 +46,84 @@ interface RecommendationCandidate extends JsonObject {
   resume_ready?: boolean;
   selection_binding?: string;
   claim_required_before_work?: boolean;
+}
+
+function stable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, stable(item)]));
+  }
+  return value;
+}
+
+function digest(value: unknown): string {
+  return "sha256:" + createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+}
+
+/** Evolve the existing recommendation receipt, not a second task/route store.
+ * The caller supplies an already selected candidate and its authoritative task
+ * facts. A step cannot select work, grant a claim/lease or settle a replan. */
+export function resolveLaneRecommendation(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "lane recommendation");
+  const goalId = requireNonEmptyString(request.goal_id, "goal_id");
+  const actor = optionalNonEmptyString(request.agent_id, "agent_id");
+  const sourceRevision = requireNonEmptyString(request.source_revision, "source_revision");
+  if (!ENVELOPED_SHA256_PATTERN.test(sourceRevision)) {
+    throw new EffectRuntimeRequestError("source_revision must be a SHA-256 digest, not an intent authority revision");
+  }
+  const agents = [...new Set(requireStringArray(request.registered_agents, "registered_agents"))].sort();
+  const rawSelected = request.selected_todo == null ? null : requireJsonObject(request.selected_todo, "selected_todo");
+  const selected = candidate(rawSelected, "selected_todo");
+  const taskFacts = request.task_facts == null ? null : requireJsonObject(request.task_facts, "task_facts");
+  // `done` is a derived display flag: compact hot candidates may omit false.
+  // Status remains the lifecycle source, so full and compact reads must agree.
+  const taskBasis = digest(taskFacts === null ? null : {...taskFacts,
+    done: taskFacts.done === true || taskFacts.status === "done"});
+  const prior = request.prior_resolution == null ? null : requireJsonObject(request.prior_resolution, "prior_resolution");
+  // Only the actor's latest bound receipt participates. Never search older
+  // matching tasks: doing so would revive an abandoned experiment.
+  const priorRevision = prior?.recommended_action_source === "agent_lane_step" && prior.agent_id === actor
+    ? prior.step_revision : null;
+  const basis = digest([goalId, sourceRevision, agents, actor, taskBasis, priorRevision]);
+  const runnable = actor !== null && agents.includes(actor) && selected !== null &&
+    selected.task_class === "advancement_task" && candidateIsRunnable(selected, actor);
+  const projected: JsonObject | null = rawSelected === null ? null : {...rawSelected, next_action_basis: basis};
+  // Output decorations are always rebuilt, even if the input is a prior display.
+  if (projected) delete projected.next_step;
+  if (projected && runnable && prior?.schema_version === REFRESH_RECOMMENDATION_SCHEMA_VERSION &&
+      prior.recommended_action_source === "agent_lane_step" && prior.agent_id === actor &&
+      prior.goal_id === goalId && prior.todo_id === selected?.todo_id &&
+      prior.todo_basis === taskBasis && prior.source_revision === sourceRevision &&
+      typeof prior.recommended_action === "string" && prior.recommended_action.length <= 1200) {
+    projected.next_step = prior.recommended_action;
+  }
+  const context: JsonObject = {basis, selected_todo: projected};
+  if (request.write == null) return context;
+  const write = requireJsonObject(request.write, "lane recommendation write");
+  const text = requireNonEmptyString(write.text, "next_action").trim();
+  if (text.length > 1200) throw new EffectRuntimeRequestError("next_action exceeds 1200 characters");
+  const expected = optionalNonEmptyString(write.expected_basis, "next_action_basis");
+  if (expected && !ENVELOPED_SHA256_PATTERN.test(expected)) {
+    throw new EffectRuntimeRequestError("--next-action-basis must be a SHA-256 basis");
+  }
+  const reject = (code: string, error: string): JsonObject => ({...context,
+    admitted: false, error_code: code, error, reread_required: true});
+  if (!actor || !agents.includes(actor)) {
+    return reject("next_action_actor_unregistered", "Next Action requires a registered --agent-id");
+  }
+  if (expected && expected !== basis) {
+    return reject("next_action_basis_conflict", "Next Action task or lane read basis changed; reread status and rejudge before retrying");
+  }
+  if (!runnable || !taskFacts || taskFacts.todo_id !== selected?.todo_id) {
+    return reject("next_action_task_unavailable", "No selected eligible advancement Todo for this agent; update or select work through the existing Todo route");
+  }
+  const resolution: JsonObject = {
+    ...recommendation(text, "agent_lane_step", "agent_lane", "not_applicable", selected),
+    goal_id: goalId, agent_id: actor, todo_basis: taskBasis, source_revision: sourceRevision,
+    read_basis: basis, step_revision: digest([basis, text]),
+  };
+  return {...context, admitted: true, resolution};
 }
 
 export interface RefreshRecommendation extends JsonObject {

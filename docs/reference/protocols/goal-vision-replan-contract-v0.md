@@ -287,9 +287,12 @@ memory or owner reminders.
 ## Vision Checkpoint
 
 `refresh-state` always emits a per-agent `vision_checkpoint_v0`, and defaults
-to the `semantic_closeout` delivery boundary. A material delivery outcome or a
-durable `## Next Action` update at that boundary requires an explicit vision
-decision:
+to the `semantic_closeout` delivery boundary. A material delivery outcome at
+that boundary requires an explicit vision decision. A within-Todo recommendation
+step (`refresh-state --next-action`) is not a durable mainline change and does
+not, by itself, trigger a Vision checkpoint or settle a replan. Direction changes
+still use the existing Vision/`path_delta` owner. Historical durable prose-update
+receipts retain their checkpoint semantics:
 
 ```json
 {
@@ -322,8 +325,8 @@ loopx refresh-state \
 ```
 
 This boundary is valid only for the selected agent-bound or unclaimed open
-advancement Todo while it is still in flight. It rejects Todo completion, a
-durable Next Action update, autonomous replan writeback, and any outcome other
+advancement Todo while it is still in flight. It permits a bound within-Todo
+step, but rejects Todo completion, autonomous replan writeback, and any outcome other
 than `outcome_progress`. Its checkpoint has `decision=not_required`,
 `required=false`, and a typed
 `in_flight_continuation` trigger carrying the Todo id. The next quota decision

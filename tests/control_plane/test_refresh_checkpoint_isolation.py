@@ -172,7 +172,8 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
     assert first["vision_checkpoint"]["decision"] == "missing_required"
     original_record = Path(first["json_path"]).read_bytes()
     original_state = state_path.read_bytes()
-    assert b"Verify the scoped delivery evidence." in original_state
+    assert b"Verify the scoped delivery evidence." not in original_state
+    assert first["recommended_action_resolution"]["recommended_action_source"] == "agent_lane_step"
     stdout = first_stdout if hint_source == "first" else run(original, "markdown")
     if hint_source == "replay":
         assert "- recovery: `replay`" in stdout

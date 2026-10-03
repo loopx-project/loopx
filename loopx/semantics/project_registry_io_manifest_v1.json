@@ -743,7 +743,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#1",
-      "line": 596,
+      "line": 606,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -751,7 +751,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#2",
-      "line": 677,
+      "line": 687,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -2103,7 +2103,7 @@
     },
     {
       "site": "loopx/state_refresh.py::<module>.refresh_state_run::codec_read:load_registry#1",
-      "line": 862,
+      "line": 802,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

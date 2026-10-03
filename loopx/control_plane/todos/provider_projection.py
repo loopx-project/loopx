@@ -10,7 +10,6 @@ current head idempotently.
 
 from __future__ import annotations
 
-import json
 from enum import StrEnum
 from collections.abc import Mapping
 from pathlib import Path
@@ -30,6 +29,7 @@ from .machine_section_projection import (
 )
 from .completion_validation_store import load_completion_validation_declarations
 from .active_state_editing import atomic_write_state_text, verify_state_text_durable
+from .projection_document import recovered_todo_projection_skeleton
 
 
 TODO_PROJECTION_DELIVERY_SCHEMA = "loopx_todo_projection_delivery_v0"
@@ -131,14 +131,7 @@ def project_current_canonical_todos(
             except FileNotFoundError:
                 recovered_missing = True
                 missing_this_attempt = True
-                source = (
-                    f"---\ngoal_id: {json.dumps(goal_id, ensure_ascii=False)}\n---\n\n"
-                    "# Recovered Todo projection\n\n"
-                    "> Regenerated from canonical Todo authority. Non-Todo sections "
-                    "are not in this provider snapshot and were not recovered. "
-                    "This is a Todo projection, not a complete Goal-state restore.\n\n"
-                    "## Agent Todo\n"
-                )
+                source = recovered_todo_projection_skeleton(goal_id)
             projection = render_canonical_todo_sections(
                 source,
                 authority_read["todos"],

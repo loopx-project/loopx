@@ -270,3 +270,17 @@ def latest_replan_ack_feedback_from_status_payload(
         if isinstance(feedback, dict):
             return feedback
     return None
+
+
+def latest_lane_recommendation_from_status(
+    status_payload: dict[str, Any], *, goal_id: str, agent_id: str,
+) -> dict[str, Any] | None:
+    """Reuse the retained recommendation receipt beyond the recent-run window."""
+    present, context = _semantic_agent_context_for_goal(
+        status_payload, goal_id=goal_id, agent_id=agent_id)
+    if present:
+        row = context.get("latest_lane_step_run") if isinstance(context, dict) else None
+        resolution = row.get("recommended_action_resolution") if isinstance(row, dict) else None
+        return resolution if isinstance(resolution, dict) else None
+    from ...work_items.recommendation_source_io import latest_bound_recommendation
+    return latest_bound_recommendation(_latest_runs_for_goal(status_payload, goal_id=goal_id), agent_id)

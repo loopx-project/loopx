@@ -684,6 +684,8 @@ def attach_agent_lane_next_actions(
         except Exception:
             continue
         next_action = guard.get("agent_lane_next_action")
+        if isinstance(next_action, dict) and next_action.get("next_action_basis"):
+            item["next_action_basis"] = next_action["next_action_basis"]
         project_asset = item.get("project_asset")
         agent_member = _build_agent_member_projection(
             item,
