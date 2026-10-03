@@ -387,6 +387,20 @@ loopx manager-inbox request --goal-id allocation --agent-id builder \
   --brief-file review.json --parent-request-id <received-request-id>
 ```
 
+In App and Goal conversations, the existing read tools expose the same bounded
+local observation without shell access: search `view=agents`, then read
+`{"view":"agent_route","goal_id":"allocation","agent_id":"reviewer"}` through
+`loopx_manager_read` or the Goal-scoped `loopx_context_read`. Optional
+`thread_link` carries an exact user-selected task link when bindings remain
+ambiguous. Audience scope is checked before and after the observation. Remote
+sources return `remote_agent_route_not_supported`; they cannot fall back to a
+local host. Ordinary inventory reads do not perform host observation.
+
+The reader reuses the shared TypeScript route selector and read-only host
+adapter. A resolved locator still reports `host_delivery=not_attempted` and
+`authority=locator_only`: it does not prove executor availability, adoption,
+or grant permission to message, stop or replace an Agent.
+
 When the intended recipient is an existing Codex host task, resolve that peer
 before substituting a temporary child. First inspect `agent-directory` for the
 named Agent and its candidate count. Use

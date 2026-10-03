@@ -260,6 +260,18 @@ Freeze GQ02/GQ04/GQ08/GQ09 with these observable exits:
   replacement. Record source, packaged UI and real native execution separately
   as passed, failed, blocked or not run.
 
+The existing conversation reader now proposes a bounded GQ02 companion:
+`view=agent_route` observes one exact discovered Goal/Agent through the shared
+TypeScript selector and read-only host adapter. It can locate a unique readable
+binding after archived history without asking the user to copy a session link.
+Unknown or multiple readable bindings remain unresolved, and remote-source
+observation stays unavailable rather than inspecting the local host. The
+manager and ordinary Goal reader share this path; no manager-only lifecycle or
+new execution driver is introduced. Qualification uses a real isolated host
+store and leaves it unchanged. This removes a read-tool gap, not the remaining
+native dispatch, correction adoption, scoped Stop or original-route result exit.
+Installed behavior must be qualified after maintainer merge and promotion.
+
 Then qualify existing G1 with **“Get a small team to check the cash-flow numbers
 and resolve the disagreement.”** Two or three real workers consume versioned
 inputs, independently challenge a period/unit error, adopt the revision and
