@@ -413,6 +413,30 @@ model path; it does not establish long-running notification quality or a live
 Lark deployment. The isolated external transcript does not share a live owner
 session or claim full conversation continuity.
 
+**Worker-to-steward notification qualification.** Sending a worker's Bot message
+to a group, even with a real steward mention, does not establish a receiving
+event, intake or owner presentation. Missing live events and context-only history
+are distinct observations; diagnose the actual sender and recipient before
+blaming registration or assuming a provider-wide delivery guarantee. History
+retains bounded sender identity, message identity and time through the private
+inbox and conversation context. These are provenance, not owner authority, work
+adoption or a reason to replay an old instruction.
+
+The next Stage 2/R3 slice must carry a permitted worker's current canonical
+blocker or concrete owner request into the existing steward attention/intake
+owner, with its source Goal/Agent, revision, audience and return destination.
+An external Bot mention cannot be its only handoff. Reuse existing runtime,
+budget and effect receipts; keep eligibility and transition rules in TypeScript
+and provider I/O in adapters. Show the same current request in the App first,
+then qualify an independently authorized channel. Distinguish source creation,
+steward intake, presentation, owner decision, receiver adoption and original
+return in readback. Recheck resolved/superseded requests before presentation so
+an already received decision is not requested again. A missing transport or
+unavailable source remains an explicit recovery gap, not a fabricated absence of
+the responsible Agent. This is planned acceptance; preserving history identity
+does not qualify proactive intake, cross-host delivery or the full notification
+journey. See the [GQ09/GQ10 notification variant](../../product/use-cases/steward/golden-queries.md#worker-notifications--负责人主动找你).
+
 ## Command Contract
 
 Each effectful command returns a compact packet:

@@ -374,6 +374,37 @@ external export never gains owner-only continuation text. Recovering those facts
 is a prerequisite, not a passing prioritization or adoption result. Include the
 same cases for ordinary Goal conversations; do not build a manager-only rule.
 
+### Worker notifications / 负责人主动找你
+
+GQ09/GQ10 variant: **“有需要我决定的，就来这里说。”** / **“Ask me here when
+you need a decision.”** Prepare a synthetic public report worker with one
+concrete publication decision, its draft, existing authority and original
+conversation. Do not launch a real publication or create another notification
+system. The reliable source-to-steward handoff belongs to the P0 GQ09 path;
+portfolio-wide prioritization and semantic batching retain GQ10's P1 scope.
+
+Trace the actual worker source, steward intake, useful App presentation, owner
+decision, worker adoption and requested original-route result. A worker's
+successful group send or mention alone passes none of the receiving steps.
+History catch-up preserves sender kind/identity, message identity and time as
+context; it cannot relabel a Bot as the owner or promote old messages into new
+instructions. An authorized new owner request may ask about that context.
+
+Inject a missing live provider event while group history remains readable. The
+existing native attention/intake path must retain the current request and expose
+transport recovery, without asking the user to find the worker, impersonating
+the owner or claiming that an Agent is absent. Separately test missing/revoked
+source access, self-Bot echoes, duplicate delivery after restart and an ambiguous
+sender. Mark unavailable steps untested/failed, never passed through a read receipt.
+
+Resolve the decision in the worker's canonical source before presentation and
+confirm no new approval prompt, duplicate task or publication is produced.
+Then introduce a genuinely changed request: preserve its current object, evidence
+and consequence, present it once and verify adoption of the owner's reply.
+Qualify the installed App first; an authorized Lark audience and a connected
+remote Goal each need their own real delivery/recovery evidence. This variant is
+an evaluation target, not a claim that proactive notifications currently work.
+
 ## GQ06 material-to-work pilot / 从材料到实际改进
 
 “看看这篇，有用的记下来，能改进我们的就推进。” / “Read this. Save what's

@@ -295,6 +295,13 @@ def _event_from_payload(
         if not SENDER_TYPE_PATTERN.fullmatch(sender_type):
             return None
         event["sender_type"] = sender_type
+    sender_id = payload.get("sender_id")
+    if sender_id not in (None, ""):
+        # Opaque provider provenance, not an owner or execution grant. Keep the
+        # exact bounded identity through persistence and later private reads.
+        if not isinstance(sender_id, str) or not EVENT_ID_PATTERN.fullmatch(sender_id):
+            return None
+        event["sender_id"] = sender_id
     if "route_key" in payload:
         route_key = str(payload.get("route_key") or "").strip()
         if not ROUTE_KEY_PATTERN.fullmatch(route_key):

@@ -422,6 +422,8 @@ def test_manager_captures_unaddressed_context_without_granting_turn_authority(
             "message_id": "om_context_only",
             "create_time": _fixture_time(61),
             "content": "先把这个背景放在这里",
+            "sender_type": "user",
+            "sender_id": "ou_owner_fixture",
         }
     ]
     assert inspect_lark_event_inbox(

@@ -656,7 +656,14 @@ retain material-delta admission, existing-budget wake, semantic synthesis,
 presented/read/recovery receipts and independently authorized sink delivery.
 Qualify one no-channel blocker/fallback/owner-decision/recovery journey through
 the original packaged conversation before claiming smart automatic notices.
-
+Include the [worker notification variant](../../product/use-cases/steward/golden-queries.md#worker-notifications--负责人主动找你):
+source-created facts must reach steward intake and the user's current conversation
+without relying solely on a provider Bot mention. History provenance retention is
+a bounded adapter repair; it does not establish proactive intake or receiver
+adoption. Reuse the existing Stage 2/R3 owner for source revisions, audience,
+budget, delivery/recovery and resolved-request suppression. App presentation is
+the first acceptance surface; connected-host and Lark delivery are separately
+qualified rather than inferred from a successful group send.
 
 - **Owner:** manager RFC M2/M3; migrate existing `manager_context` request/tracking/return into one typed collaboration transaction, incorporating the #4094 adapter.
 - **Delivery:** preserve purpose, decisions, constraints, evidence references and expected return. Receivers independently adopt/defer/reject/replan. Accepted work, committed result and delivered answer are separate facts; existing outbox provides automatic return.
