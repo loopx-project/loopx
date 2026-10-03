@@ -317,7 +317,9 @@ link preserves the original conversation and does not rerun work. The native
 shell must handle these new-window requests too: open HTTP(S) destinations in
 the system browser while retaining the App's origin fence. Do not create a
 privileged child WebView or launch file/custom-protocol handlers. Browser-only
-anchor checks cannot qualify that native interaction. Asynchronous provider
+anchor checks cannot qualify that native interaction. macOS navigation policy
+can precede the new-window delegate: denied external web navigation must still
+reach the browser, while the App keeps its original origin. Asynchronous provider
 setup opens its actual verification URL in the native host; only a browser
 retains a synchronous placeholder for its popup blocker. This is a presentation
 boundary, not evidence that an external artifact is adopted.
