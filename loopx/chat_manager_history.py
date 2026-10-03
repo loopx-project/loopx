@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .presentation.public_safety import checked_public_text as _text
+from .chat_manager_details import _text
 from .control_plane.runtime.run_context_retention import goal_semantic_history_from_runs
 from .control_plane.work_items.delivery_outcome import PROGRESS_DELIVERY_OUTCOMES
 from .history import STATUS_NEUTRAL_CLASSIFICATIONS, load_index

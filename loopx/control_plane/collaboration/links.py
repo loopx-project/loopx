@@ -7,7 +7,7 @@ reuse inbox request and exact Goal-instance admission, never Todo authority.
 from __future__ import annotations
 
 from ...todos import list_goal_todos
-from ...presentation.public_safety import checked_public_text
+from ..runtime.public_safety import public_safe_compact_text
 from ..todos.contract import TODO_ID_PATTERN
 from ..effect_runtime import effect_runtime_result
 from ..content_digest import ENVELOPED_SHA256_PATTERN
@@ -42,7 +42,7 @@ def read_linked_work(root, registry_path, item, todos_cache):
         linked.append({
             "todo_id": tid,
             "status": todo.get("status") if belongs else "unknown",
-            "title": checked_public_text(todo.get("text") or todo.get("title")) if belongs else None,
+            "title": public_safe_compact_text(todo.get("text") or todo.get("title"), limit=420) if belongs else None,
             "source": "core_todo_current_read" if belongs else "core_todo_unavailable_or_owner_changed",
         })
     return {

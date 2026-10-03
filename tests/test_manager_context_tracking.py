@@ -368,7 +368,7 @@ def test_receiver_keeps_unavailable_work_unknown_without_replaying_or_hiding_oth
     assert row["linked_todos"][0]["status"] == "unknown"
     core["todos"][0].update(claimed_by="worker", text="api_key=synthetic-secret")
     page = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
-    assert page[rid]["receiver_followthrough"]["linked_todos"][0]["title"] == "[sensitive text omitted]"
+    assert page[rid]["receiver_followthrough"]["linked_todos"][0]["title"] is None
     core["todos"][0]["text"] = "😀" * 2000
     page = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
     assert len(page[rid]["receiver_followthrough"]["linked_todos"][0]["title"]) < 430
