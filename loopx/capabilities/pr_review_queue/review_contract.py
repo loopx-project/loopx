@@ -8,7 +8,7 @@ from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 from .approval_closeout import approval_closeout_contract
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 16
+REVIEW_POLICY_REVISION = 17
 
 # Reuse the existing evidence fields for publication, rather than inventing a
 # second problem assessment or treating a jargon denylist as comprehension.
@@ -49,7 +49,7 @@ VALIDATION_FAILURE_ATTRIBUTION = {
     ],
     "external_fields": ["independent_evidence", "retry_or_recovery_owner"],
     "rule": (
-        "Classify every required failed or skipped validation before choosing a review verdict. "
+        "Classify every currently required failed or skipped validation before choosing a review verdict. "
         "A pre-existing failure is non-blocking for review only when the same check on an "
         "immutable base and exact head has the same normalized failing identity and detail, "
         "the PR does not alter that failure's causal path, and the changed invariant has "
@@ -59,6 +59,23 @@ VALIDATION_FAILURE_ATTRIBUTION = {
         "pr_regression or unresolved and request changes. Report unrelated red checks and "
         "their recovery separately from the PR verdict: APPROVE may be correct while merge "
         "readiness remains on hold. Never relax a hard limit or required check to make it green."
+    ),
+    "evidence_scope": (
+        "The validation matrix assesses the exact reviewed head, not the union of all historical "
+        "test failures. Retain relevant earlier runs, revisions, commands and failure signatures "
+        "in the existing result/evidence text; explain which current evidence supersedes them "
+        "and why it covers the originally exposed invariant and conditions. An unexplained "
+        "historical cause alone does not require REQUEST_CHANGES when independent current "
+        "evidence is sufficient. Do not invent a causal explanation or claim the old failure "
+        "was fixed. A later green run alone does not resolve intermittency: consider the whole "
+        "bounded run set, concurrency, environment and coverage; do not select only successes, "
+        "remove assertions or loosen limits. Mark a still-material instability or coverage gap "
+        "failed or unverified, even if the latest command passed. Name the affected invariant, "
+        "present evidence gap and smallest discriminating check in the existing finding fields. "
+        "Full historical root-cause attribution is required only where it is necessary to "
+        "resolve that current risk or an explicit accepted contract requires it. Preserve "
+        "unresolved risks and separate merge gates; history is neither an automatic veto nor "
+        "permission to dismiss an existing review."
     ),
 }
 
@@ -1242,7 +1259,9 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "pre-existing failure or external infrastructure, and the PR's changed "
                 "invariant is covered. Record the separate merge-readiness hold; do not ask "
                 "this PR to repair unrelated code or budgets. Unattributed, introduced, or "
-                "worsened failures still block approval."
+                "worsened current failures still block approval. Apply validation_matrix's "
+                "evidence_scope to earlier observations; historical root-cause completeness "
+                "is not an independent approval gate."
             ),
             "open_pr_unjustified_delivery": (
                 "REQUEST_CHANGES when problem_context is off_goal, fragmented or "

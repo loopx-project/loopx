@@ -125,6 +125,9 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
     ]
     assert "same normalized failing identity" in attribution["rule"]
     assert "merge readiness remains on hold" in attribution["rule"]
+    assert "not the union of all historical" in attribution["evidence_scope"]
+    assert "A later green run alone does not resolve intermittency" in attribution["evidence_scope"]
+    assert "explicit accepted contract" in attribution["evidence_scope"]
     assert "APPROVE when a required red check" in contract["verdict_policy"][
         "unrelated_validation_failure"
     ]

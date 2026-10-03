@@ -268,6 +268,58 @@ def test_unrelated_baseline_red_check_does_not_force_request_changes():
     assert "request_changes_without_blocker" in check_review_result(packet, result)["errors"]
 
 
+@pytest.mark.parametrize("current_status", ["passed", "failed", "unverified", "skipped"])
+def test_public_cli_judges_current_coverage_without_erasing_history(
+    tmp_path, monkeypatch, capsys, current_status,
+):
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
+    packet, result = _review()
+    row = next(item for item in result["evidence"]["validation_matrix"]["items"]
+               if item["case_id"] == "material_negative_or_failure")
+    row.update(
+        status=current_status,
+        command_or_check="pytest tests/test_delegation_effect_stop_receipt.py",
+        result=(
+            "Historical run at base bbbbbbb: request timed out; root cause unknown. "
+            "Current review evidence: " + (
+                "independent isolated runs and loaded concurrent runs at the exact head "
+                "cover lost replies, stale ownership and descendant drain; every planned "
+                "run passed with unchanged assertions and deadlines. This covers the "
+                "exposed invariant without claiming the old timeout's cause was fixed."
+                if current_status == "passed" else
+                "one rerun passed, but the full bounded run set does not establish "
+                "descendant drain under concurrent load."
+            )
+        ),
+        skip_or_failure_reason="none" if current_status == "passed" else
+            "Current drain invariant is not established; prior history does not waive it.",
+    )
+    # The public entrypoint validates declarations, not the truth of this sealed
+    # scenario. No new historical-failure classification or waiver is supplied.
+    packet_path, result_path = tmp_path / "packet.json", tmp_path / "result.json"
+    packet_path.write_text(json.dumps(packet))
+    result_path.write_text(json.dumps(result))
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    monkeypatch.setattr(
+        "loopx.cli_commands.pr_review.resolve_current_github_repository",
+        lambda: pytest.fail("result check must not discover GitHub"),
+    )
+    exit_code = main(["--format", "json", "pr-review", "--check-result",
+                      str(result_path), "--packet", str(packet_path)])
+    checked = json.loads(capsys.readouterr().out)
+    assert exit_code == (0 if current_status == "passed" else 1)
+    assert checked["approval_consistent"] is (current_status == "passed")
+    assert not checked["evidence_truth_verified"]
+    assert not checked["external_writes_performed"]
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+    if current_status == "passed":
+        result["verdict"] = "REQUEST_CHANGES"
+        result["review_body"] = result["review_body"].replace(
+            "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+        assert "request_changes_without_blocker" in check_review_result(packet, result)["errors"]
+
+
 def test_required_red_check_needs_causal_attribution_and_unchanged_failure():
     packet, result, row = _required_red_review()
     checked = check_review_result(packet, result)
