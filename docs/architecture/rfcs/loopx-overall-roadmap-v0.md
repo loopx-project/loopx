@@ -672,7 +672,11 @@ the additional bridge cost on its first request. The PR records exact-head
 parity, real MCP, cancellation and paired timing evidence separately. Discovering
 projection candidates does not select a machine default: two existing stores
 are checked against their declared source registry, and multiple matching mirrors
-remain ambiguous. No machine state is migrated. The historical whole-suite budget
+remain ambiguous. No machine state is migrated. Workspace observations reuse a
+freshly resolved Git root only within that observation, removing duplicate root
+subprocesses; origin, HEAD and layout reads remain fresh on every call. This Host
+IO reduction is not qualification of the remaining cold-start or provider cost.
+The historical whole-suite budget
 failure is retained. The current bounded slice uses the
 [caller-path qualification](../../reference/local-delegation.md#preview-performance-qualification--预检性能验收):
 separate functional-runner timeouts from warm/sequence savings and bounded cold
@@ -686,7 +690,9 @@ Agent/Todo 分区、源码和环境失效、启动及请求期限、输出上限
 本切片；执行、恢复和写入保留原传输。仅长驻 MCP 服务启用热预检复用；Goal Chat
 HTTP 与独立 CLI 保留原有的一次性子进程，MCP 首次请求仍支付额外桥接冷成本。
 确切头上的结果等价、真实 MCP、取消与配对计时分别记录在 PR。投影候选发现不选择机器默认源：两个现有目录按声明的源注册表
-核对，多重匹配仍判歧义，不迁移机器状态。旧全套预算失败保留；当前有界切片按
+核对，多重匹配仍判歧义，不迁移机器状态。工作区观测只在单次观测内复用刚解析的
+Git 根目录，减少重复子进程；origin、HEAD 与布局仍逐次新读。这项 Host IO 减少
+不代表剩余冷启动或 provider 耗时已验收。旧全套预算失败保留；当前有界切片按
 上述调用路径标准，分开功能 runner 超时、热调用／含冷启动序列的净节省及有界
 冷启动成本。新标准须重新验证，不改判旧结果；真实调用方采用和 R2 持续运行
 验收仍开放，不声称安装、G1/G3 晋级或金融最小闭环完成。

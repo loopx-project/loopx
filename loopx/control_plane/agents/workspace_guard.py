@@ -62,10 +62,8 @@ def _git_worktree_root(path: Path) -> Path | None:
         return None
 
 
-def _git_common_dir(path: Path) -> Path | None:
-    root = _git_worktree_root(path)
-    if root is None:
-        return None
+def _git_common_dir(root: Path) -> Path | None:
+    """Read from the root resolved in this observation, never a cached root."""
     output = _git_command_output(root, "rev-parse", "--git-common-dir")
     if not output:
         return None
@@ -78,10 +76,8 @@ def _git_common_dir(path: Path) -> Path | None:
         return None
 
 
-def _git_dir(path: Path) -> Path | None:
-    root = _git_worktree_root(path)
-    if root is None:
-        return None
+def _git_dir(root: Path) -> Path | None:
+    """Read from the root resolved in this observation, never a cached root."""
     output = _git_command_output(root, "rev-parse", "--git-dir")
     if not output:
         return None
@@ -145,8 +141,11 @@ def capture_delivery_workspace(
             workspace_kind="local_goal_workspace",
             peer_independent_worktree_required=False,
         )
-    current_common = _git_common_dir(path)
-    current_git_dir = _git_dir(path)
+    # Resolve the root once per observation; keep layout, origin and HEAD reads
+    # fresh. Re-querying the same root inside both layout helpers adds two
+    # subprocess waits without making this multi-command snapshot atomic.
+    current_common = _git_common_dir(current_root)
+    current_git_dir = _git_dir(current_root)
     task_repository = _git_repository_identity(path)
     workspace_revision = _git_command_output(path, "rev-parse", "HEAD")
     if (
@@ -343,8 +342,8 @@ def build_agent_workspace_guard(
     if task_repository:
         repository_source = "selected_todo.task_repository"
         current_root = _git_worktree_root(current_path)
-        current_common = _git_common_dir(current_path) if current_root else None
-        current_git_dir = _git_dir(current_path) if current_root else None
+        current_common = _git_common_dir(current_root) if current_root else None
+        current_git_dir = _git_dir(current_root) if current_root else None
         current_repository = (
             _git_repository_identity(current_path) if current_root else None
         )
@@ -371,7 +370,7 @@ def build_agent_workspace_guard(
             canonical_root = _git_worktree_root(repo_path) or repo_path
             current_root = _git_worktree_root(current_path)
             canonical_common = _git_common_dir(canonical_root)
-            current_common = _git_common_dir(current_path) if current_root else None
+            current_common = _git_common_dir(current_root) if current_root else None
             if current_root is None:
                 current_workspace = "not_git_worktree"
             elif (
