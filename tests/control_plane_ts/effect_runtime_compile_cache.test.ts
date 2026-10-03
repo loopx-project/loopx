@@ -27,7 +27,10 @@ function fixture(t: TestContext) {
   delete environment.NODE_COMPILE_CACHE;
   delete environment.NODE_DISABLE_COMPILE_CACHE;
   delete environment.NODE_COMPILE_CACHE_PORTABLE;
-  delete environment.NODE_V8_COVERAGE;
+  // Node propagates a parent's coverage directory when this key is absent.
+  // Explicitly isolate only these cache-qualification children; the coverage
+  // negative case below still supplies its own directory and must stay off.
+  environment.NODE_V8_COVERAGE = "";
   function run(overrides: Record<string, string> = {}, info = join(root, "runtime.json")) {
     const result = spawnSync(process.execPath, ["--no-warnings", "--experimental-strip-types",
       "--import", pathToFileURL(preload).href, script, "--info", info], {
