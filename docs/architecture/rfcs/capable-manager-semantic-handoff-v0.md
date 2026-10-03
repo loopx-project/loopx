@@ -192,6 +192,22 @@ Resolve a request from authenticated principal, origin/audience, resource scope 
 
 For a trusted owner-private manager, grant the normal host-agent tool profile that the owner configured. For a shared/untrusted audience, run a restricted context with enforceable resource/tool limits. A broad private process followed only by output filtering is **not** sufficient isolation. A verified owner message in a group may trigger private work with a separately scoped return, when a standing policy permits it; other participants do not inherit that policy.
 
+**Owner-managed authority is inherited, not reduced by the chat surface.** An
+authenticated owner may designate a steward conversation, including a group,
+to manage all of their Agents with their standing authority. Within that managed
+scope, the steward can inspect work and evidence, plan, delegate and exercise
+already-authorized effects; being a group is not itself a reason to hide Todo
+titles/status or ask for permission again. Descendants inherit a verifiable
+reference to that owner grant, with any explicit attenuation or revocation,
+rather than a new grant invented at each message. Future managed Agents inherit
+the same scope. Ordinary ownership, claim/lease and host/provider enforcement
+remain the effect boundary; inherited authority does not fabricate execution.
+Unmanaged resources and unauthenticated participants remain outside the grant.
+The current read adapter reuses the exact audience's existing evidence-Goal
+grant for linked Core details. The shipped managed-Goal context grant below is
+a bounded step; full planning/effect inheritance still needs its typed grant
+chain, installed receiver adoption and original-route acceptance.
+
 Use managed Goal scope for an authenticated owner's context-delegation grant:
 all current and future registered Agents within those Goals inherit it. Avoid
 requiring separate enrollment every time a worker joins. Retain exact-recipient

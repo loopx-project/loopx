@@ -51,7 +51,9 @@ delivery enrollment. Keep prompt pages bounded, disclose coverage and allow
 drill-down. Offline/unbound/unknown states stay visible; stopped work is available
 through history/search and is not assigned new work. Discovery, evidence access,
 delegation and execution readiness are evaluated separately. An external group's
-metadata/evidence scope remains its own; private-owner access is not group access.
+metadata/evidence scope follows its verified standing grant, including inherited
+owner authority for an explicitly owner-managed steward group; other groups do
+not acquire that scope from copied messages.
 These layers are delivery priorities, not a rule that every channel and variant
 must finish before work on the next layer can start. GQ17 repeats the ordinary
 parallel-work intent at larger fixture sizes; basic parallel work is already P0
@@ -76,6 +78,15 @@ reuse an explicitly linked existing task when needed, inspect current facts,
 post the authorized checked reply and return its link to the original request.
 A short answer requires no invented Todo. A deferral names its actual condition
 and continuation; a monitor responsibility or worker activity is not a task result.
+
+Include an owner-authorized steward-group variant with inherited managed-Agent
+authority. Existing read grants expose linked Todo titles/status just as in the
+owner view; the receiver integrates accepted work into its own plan rather than
+treating a group or peer handoff as inherently powerless. The same request from
+an ungranted audience retains receipt references without private Core details.
+Revocation takes effect on the next read. No copied permission string substitutes
+for the existing grant, and no accepted request automatically creates a task or
+changes its priority.
 
 Mutate a linked Todo after assessment and require fresh readback. Reject a
 foreign owner's link; retain damaged/missing evidence as unknown without replaying

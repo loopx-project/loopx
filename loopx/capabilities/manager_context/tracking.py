@@ -5,7 +5,7 @@ Receipts describe transport/consumption, never a second mutable work status.
 
 from __future__ import annotations
 
-from . import _read, _root
+from . import _read, _root, evidence_goal_scope
 from ...control_plane.collaboration.inbox import (
     _entry as _entry,
     _now as _now,
@@ -107,10 +107,12 @@ def query(
         key=lambda row: (row.get("delivered_at") or "", row["request_id"]), reverse=True
     )
     projected, todos_cache = [], {}
+    core_read_goals = set(evidence_goal_scope(root, channel_id) or []) if not owner_scope else set()
     for row in rows[offset : offset + limit]:
         read, read_error = _receipt(root, "reads", row)
         decision, decision_error = _receipt(root, "decisions", row)
-        work = read_linked_work(root, registry_path, row, todos_cache, include_core_details=owner_scope)
+        work = read_linked_work(root, registry_path, row, todos_cache,
+                                include_core_details=owner_scope or row["goal_id"] in core_read_goals)
         warnings = [x for x in (read_error, decision_error) if x] + work["warnings"]
         item = {
             key: row[key]

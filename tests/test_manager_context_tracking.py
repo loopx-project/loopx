@@ -232,6 +232,16 @@ def test_external_handoff_keeps_links_without_reading_receiver_private_work(fixt
     owner = query(root, registry, goal_ids=["research"], owner_scope=True)["rows"][0]
     assert owner["linked_todos"][0]["title"] == "Confidential acquisition decision"
     assert owner["linked_todos"][0]["status"] == "blocked"
+    policy = _read(_root(root) / "policy.json")
+    policy["sources"][channel]["evidence_goal_ids"] = ["research"]
+    _write(_root(root) / "policy.json", policy)
+    # An owner-authorized group inherits its existing Core read grant. Being
+    # external must not hide facts that its operator already authorized.
+    granted = query(root, registry, goal_ids=["research"], owner_scope=False,
+                    channel_id=channel)["rows"][0]
+    assert granted["linked_todos"] == owner["linked_todos"]
+    policy["sources"][channel]["evidence_goal_ids"] = []
+    _write(_root(root) / "policy.json", policy)
     monkeypatch.setattr(links, "list_goal_todos", lambda **_: pytest.fail("external audience read private Core"))
     external = query(root, registry, goal_ids=["research"], owner_scope=False,
                      channel_id=channel)["rows"][0]
