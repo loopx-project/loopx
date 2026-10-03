@@ -288,6 +288,12 @@ def _runtime_fingerprint_for_snapshot(
 ) -> str:
     digest = hashlib.sha256()
     source_root = Path(root)
+    # Lazy imports and Python bridges resolve from this physical release. Equal
+    # bytes in another checkout must not reuse a loader whose release may retire.
+    # Resolved aliases still share one owner; source bytes remain fully checked.
+    digest.update(b"loopx_effect_runtime_source_instance_v1\0")
+    digest.update(os.fsencode(os.path.normcase(root)))
+    digest.update(b"\0")
     paths = (source_root / relative for relative, *_metadata in snapshot)
     # Reads may finish out of order; hash the same relative names and original
     # bytes in snapshot order. No disk cache or skipped freshness check.

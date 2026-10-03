@@ -441,6 +441,60 @@ def test_coordination_runtime_shadow_bootstrap_crosses_python_typescript_boundar
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
+@pytest.mark.parametrize("compile_cache", ["enabled", "disabled"])
+def test_identical_release_does_not_reuse_a_retired_lazy_loader(
+    tmp_path: Path, monkeypatch, compile_cache: str,
+) -> None:
+    """Copied releases have identical bytes, but different live module locations."""
+    source_root = effect_runtime._control_plane_root()
+    roots = [tmp_path / name / "control_plane" for name in ("release # a", "release % b")]
+    for relative in effect_runtime._runtime_source_files(source_root):
+        for root in roots:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root / relative, target)
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+    for name in ("NODE_COMPILE_CACHE", "NODE_DISABLE_COMPILE_CACHE", "NODE_V8_COVERAGE"):
+        monkeypatch.delenv(name, raising=False)
+    if compile_cache == "disabled":
+        monkeypatch.setenv("NODE_DISABLE_COMPILE_CACHE", "1")
+    original_info = None
+    monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: roots[0])
+    try:
+        original_fingerprint = effect_runtime._runtime_fingerprint()
+        original = effect_runtime.effect_runtime_result("runtime.ping", {})
+        original_info = effect_runtime._read_info(
+            effect_runtime._runtime_info_path(original_fingerprint),
+            fingerprint=original_fingerprint,
+        )
+        assert original_info is not None
+        # Simulate a cleaned installer candidate while its resident runtime lives.
+        # No business owner has been loaded by the transport-only ping.
+        shutil.rmtree(roots[0])
+        monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: roots[1])
+        replacement = effect_runtime.effect_runtime_result("runtime.ping", {})
+        upgraded = effect_runtime.effect_runtime_result("coordination.authority_archive.manage", {
+            "schema_version": "loopx_authority_archive_admin_request_v0",
+            "action": "upgrade", "runtime_roots": [str(tmp_path / "authority")], "execute": True,
+        })
+        assert upgraded["status"] == "upgraded"
+        assert upgraded["results"] == []
+        assert upgraded["authority_changed"] is False
+        assert not (tmp_path / "authority").exists()
+        assert replacement["pid"] != original["pid"]
+        assert effect_runtime._runtime_fingerprint() != original_fingerprint
+        assert effect_runtime.effect_runtime_result("runtime.ping", {}) == replacement
+    finally:
+        if original_info is not None:
+            effect_runtime._request_with_info(
+                original_info, request_id="stop-retired-release", method="runtime.shutdown",
+                params={}, timeout=5,
+            )
+        effect_runtime.restart_effect_runtime()
+
+
 def test_runtime_decode_change_rotates_identity_and_starts_replacement(
     tmp_path: Path,
     monkeypatch,

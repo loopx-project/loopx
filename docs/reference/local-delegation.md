@@ -274,12 +274,25 @@ fallback. A successful `runtime.ping` proves transport readiness, not execution
 or qualification of every registered method. First-use module cost is included
 in the real caller measurement below, not hidden in a startup-only timer.
 
+Runtime identity also binds the resolved physical source root, not only equal
+source bytes. A copied installer candidate or checkout starts its own loader;
+retiring another copy cannot strand a deferred import or Python bridge in a
+transport that still answers `ping`. Calls within the same resolved source root
+continue to reuse the resident runtime, and every source file remains checked.
+The root is hashed into the existing identity, not published as a new user
+setting or authorization requirement.
+
 中文：共享 TS Effect dispatcher 只在选中已注册方法时加载业务 owner；保留解析后的
 handler，不缓存请求参数、权限读取或结果。完整源码指纹仍负责升级失效，方法表、
 认证、source transfer、准入及结算 owner 不变。错误边界有明确变化：未选模块不可用
 不再阻止传输启动，实际选中该模块时仍拒绝，不静默回退。`runtime.ping` 成功只证明
 传输就绪，不证明全部方法可执行或已验收。首次模块加载计入下方真实调用方测量，
 不能只用启动计时将成本移走后声称提速。
+
+运行时身份也绑定解析后的物理源码目录，而非只比较源码字节。复制出的安装候选或
+工作树使用自己的 loader，避免另一副本被清理后，仍能 `ping` 的传输在延迟导入或
+Python bridge 阶段失效。同一解析目录内仍复用常驻运行时，全部源码文件仍参与校验。
+目录只哈希进既有身份，不新增用户设置或授权要求。
 
 ### Preview performance qualification / 预检性能验收
 
