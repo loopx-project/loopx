@@ -119,7 +119,8 @@ def test_real_cli_export_reaches_owner_beyond_old_caps_without_a_live_provider(t
 
 
 @pytest.mark.parametrize("tool", [TOOL_NAME, "loopx_context_read"])
-def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_path, monkeypatch, tool):
+@pytest.mark.parametrize("source_failure", ["missing", "malformed", "invalid_inventory"])
+def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_path, monkeypatch, tool, source_failure):
     import sqlite3
 
     registry, reader, records = setup(tmp_path, owner=False)
@@ -148,6 +149,21 @@ def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_
     assert records == [result]
     assert before == [p.read_bytes() for p in (registry, db, rollout)]
     assert not (tmp_path / "manager-context").exists()
+    if source_failure == "missing":
+        registry.unlink()
+    else:
+        registry.write_text("{" if source_failure == "malformed" else '{"goals": null}')
+    unavailable = reader.read(tool, {"view": "agent_route", "goal_id": "research", "agent_id": "worker-34"})
+    assert unavailable["ok"] is False and unavailable["unknown"] is True
+    assert unavailable["status"] == "unavailable"
+    assert unavailable["reason"] == "agent_inventory_unavailable"
+    assert unavailable["candidate_count"] is None and unavailable["selected_route"] is None
+    assert unavailable["host_delivery"] == "not_attempted" and unavailable["authority"] == "locator_only"
+    assert reader.read(tool, {"view": "agents"})["unknown"] is True
+    registry.write_bytes(before[0])
+    recovered = reader.read(tool, {"view": "agent_route", "goal_id": "research", "agent_id": "worker-34"})
+    assert recovered["status"] == "resolved" and recovered["selected_route"] == result["selected_route"]
+    assert before == [p.read_bytes() for p in (registry, db, rollout)]
     with sqlite3.connect(db) as connection:
         connection.execute("UPDATE threads SET archived=0 WHERE id='old'")
     ambiguous = reader.read(tool, {"view": "agent_route", "goal_id": "research", "agent_id": "worker-34"})

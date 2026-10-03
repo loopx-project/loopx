@@ -395,6 +395,10 @@ local observation without shell access: search `view=agents`, then read
 ambiguous. Audience scope is checked before and after the observation. Remote
 sources return `remote_agent_route_not_supported`; they cannot fall back to a
 local host. Ordinary inventory reads do not perform host observation.
+Missing, unreadable or malformed registration sources remain
+`agent_inventory_unavailable` with `unknown=true`, including source loss during
+host observation. Restore the same source and retry; only a complete source can
+establish `peer_not_registered`. Read failure grants no identity or effect authority.
 
 The reader reuses the shared TypeScript route selector and read-only host
 adapter. A resolved locator still reports `host_delivery=not_attempted` and

@@ -54,6 +54,31 @@ def _observer(state: HostThreadState):
     }
 
 
+def test_registry_loss_during_host_observation_is_unknown_and_recovers(tmp_path):
+    registry = _registry(tmp_path, [_binding("current")])
+    before = registry.read_bytes()
+
+    def observe(ids):
+        registry.unlink()
+        return {item: HostThreadActivity(state=HostThreadState.IDLE) for item in ids}
+
+    unavailable = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                         observers={"codex-app": observe})
+    assert unavailable["ok"] is False and unavailable["unknown"] is True
+    assert unavailable["reason"] == "agent_inventory_unavailable"
+    assert unavailable["candidate_count"] is None and unavailable["candidates"] == []
+    assert unavailable["selected_route"] is None and "host_observation" not in unavailable
+    registry.write_bytes(before)
+    recovered = resolve_peer_host_route(registry, goal_id="goal", agent_id="reviewer",
+                                       observers=_observer(HostThreadState.IDLE))
+    assert recovered["status"] == "resolved"
+    assert recovered["selected_route"]["thread_id"] == "current"
+    absent = resolve_peer_host_route(registry, goal_id="goal", agent_id="absent",
+                                    observers=_observer(HostThreadState.IDLE))
+    assert absent["status"] == "not_authorized" and absent["reason"] == "peer_not_registered"
+    assert registry.read_bytes() == before
+
+
 @pytest.mark.parametrize("current", [HostThreadState.IDLE, HostThreadState.TURN_OPEN])
 def test_archived_history_does_not_require_the_owner_to_find_a_task_link(tmp_path, current):
     bindings = [_binding(f"old-{i}") for i in range(4)] + [_binding("current")]
