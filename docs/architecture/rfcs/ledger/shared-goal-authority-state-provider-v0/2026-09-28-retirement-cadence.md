@@ -91,7 +91,7 @@ retirement of the `legacy` handoff policy.
 | Merged: [#5413](https://github.com/loopx-project/loopx/pull/5413), head `2c99505c7` | Separate provider promotion from backed-up policy migration; reject fresh legacy configuration but recover historical operations. Retain the original CLI recovery evidence. Existing legacy Goals are not automatically migrated; a successful plan does not qualify their execution consumers. |
 | Merged: [#5466](https://github.com/loopx-project/loopx/pull/5466), merge `066b5bf26` | Preserve the original lease through final acceptance. Installed consumer qualification remains distinct from merge. |
 | Review: [#5283](https://github.com/loopx-project/loopx/pull/5283), `1012d37f3` | Preflight optimization remains under review. Retain failed cold-CLI qualification rows; functional projection parity alone does not establish a performance pass. Do not declare the historical transient open failure explained by a synthetic failure. |
-| Review: [#5500](https://github.com/loopx-project/loopx/pull/5500), `b367a37f2` | Recover the original canonical Goal creation operation through App retries. This creation/default-adoption prerequisite does not retire existing ownership policies. |
+| Approved, awaiting maintainer merge: [#5500](https://github.com/loopx-project/loopx/pull/5500), `a9e3d722c` | Recover the original canonical Goal creation operation through App retries. This creation/default-adoption prerequisite does not retire existing ownership policies. |
 | Affected-lane dependencies | [#5308](https://github.com/loopx-project/loopx/pull/5308) must prove child stop before settled acknowledgement; [#5398](https://github.com/loopx-project/loopx/pull/5398) preserves complete UI history/inspector facts. Scope these to consumers actually included in the trial. They are not SQLite-engine prerequisites or permission to ship a known broken journey. |
 
 The remaining open heads above concern preflight and creation recovery, not a
@@ -100,6 +100,18 @@ policy migration plus legacy-policy retirement, and old-writer/capture retiremen
 They may combine only when caller ownership and rollback are coherent. Validation
 can expose concrete repairs; do not manufacture a fixed remaining-PR total or
 restart completed work to maintain one.
+
+The Goal-settings policy-migration slice now uses the same backed-up TS owner
+as the CLI: read current policy, preview claims/leases, apply, and recover the
+original operation after a lost response or same-tab reload. Synthetic real
+File/SQLite HTTP journeys cover metadata preservation, stale source, cross-Goal
+and digest rejection, expired unreleased leases and corrupt backups. The packaged
+App journey uses a real SQLite authority behind a synthetic workspace directory,
+including dropped apply response, reload/retry and narrow-screen readback. This is
+source validation, not installed adoption or legacy execution retirement. Lark
+policy editing remains outside this slice; existing Lark actions read canonical
+state. Next: qualified creation/upgrade callers and authorized Goal adoption,
+then delete live legacy branches at their last callers.
 
 ### Ordered delivery packages and exits
 

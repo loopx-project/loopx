@@ -1,3 +1,4 @@
+import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps";
 import { z } from "zod";
@@ -2278,4 +2279,43 @@ export async function usageStatistics(enabled?: boolean): Promise<UsageStatistic
 export async function acknowledgeUsageNotice(notice: UsageStatistics["notice"]): Promise<UsageStatistics> {
   return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
     { method: "POST", body: JSON.stringify({ notice }) }));
+}
+
+
+export const goalOwnershipSchema = z.object({
+  ok: z.literal(true), goal_id: z.string(), canonical: z.boolean(),
+  current_mode: z.enum(HANDOFF_MODES).nullable(), provider_revision: z.string().nullable(),
+});
+export const ownershipPreviewSchema = z.object({
+  ok: z.boolean(), goal_id: z.string(), status: z.string(),
+  preview_id: z.string().regex(/^[a-f0-9]{32}$/),
+  plan_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  previous_mode: z.enum(HANDOFF_MODES).optional(), handoff_mode: z.enum(EXECUTION_HANDOFF_MODES).optional(),
+  preserved_claim_count: z.number().int().nonnegative().optional(),
+  retained_lease_count: z.number().int().nonnegative(), conflict_count: z.number().int().nonnegative(),
+  conflicts: z.array(z.object({ todo_id: z.string().optional(), reason_code: z.string().optional() })),
+  backup_verified: z.boolean(), execution_authority_granted: z.literal(false),
+  reason_code: z.string().optional(), current: goalOwnershipSchema.nullable().optional(),
+});
+export type GoalOwnership = z.infer<typeof goalOwnershipSchema>;
+export type OwnershipPreview = z.infer<typeof ownershipPreviewSchema>;
+export type ExecutionOwnershipMode = typeof EXECUTION_HANDOFF_MODES[number];
+
+export async function fetchGoalOwnership(goalId: string) {
+  return goalOwnershipSchema.parse(await requestJson<unknown>(`/api/chat/goal-ownership?${new URLSearchParams({goal_id: goalId})}`));
+}
+export async function updateGoalOwnership(body: { goal_id: string; mode: ExecutionOwnershipMode } | {
+  goal_id: string; preview_id: string; plan_sha256: string;
+}) {
+  const action = "mode" in body ? "preview" : "apply";
+  try {
+    return ownershipPreviewSchema.parse(await requestJson<unknown>(`/api/chat/goal-ownership/${action}`, {
+      method: "POST", body: JSON.stringify(body),
+    }));
+  } catch (error) {
+    if (error instanceof ChatApiError && error.payload.http_status === 409 && error.payload.status === "failed") {
+      return ownershipPreviewSchema.parse(error.payload);
+    }
+    throw error;
+  }
 }

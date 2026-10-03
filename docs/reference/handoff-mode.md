@@ -95,9 +95,28 @@ recovery. Changing policy back uses a **new** reviewed migration and backup,
 not an old archive that would discard subsequent writes. Archive restoration
 is a separate, isolated disaster-recovery operation.
 
-This is an explicit operator CLI action. Frontend and Lark have no policy
-migration editor; their ordinary Todo/lease actions read the same canonical
-state. The capability editor does not own this policy. Migration does not
+The App exposes this same explicit operation in **Goal settings → Task ownership**.
+Choose Collaborative claims (`soft_claim`) or Exclusive execution leases
+(`hard_lease`), preview preserved assignments/leases, then choose **Back up and
+apply**. Preview does not change policy or grant execution. Rejections show
+conflict counts and affected Todo identifiers; settle the owning executions
+before making a new plan. Unpromoted Goals must first use the promotion workflow.
+
+The App stores the opaque preview handle in browser session storage before
+enabling Apply; the server owns the immutable plan and verified backup. After a
+lost response or page reload in the same tab, retry the saved preview. Do not
+create a new operation to guess whether the first succeeded. A confirmed original
+receipt and the separately fetched current policy are distinct: later valid
+changes remain authoritative. **Read current policy** retries a failed readback;
+**Discard preview and start again** explicitly abandons the browser carrier,
+without deleting the server plan or backup. Clearing browser storage loses this
+carrier; retain server plans/backups for operator recovery through the CLI.
+Disabling browser storage leaves readback available but prevents applying an
+unretained preview.
+
+CLI and App share registry validation and the same TS migration owner. Lark
+ordinary Todo/lease actions consume that canonical state; policy migration has
+no Lark editor in this stage. The capability editor does not own this policy. Migration does not
 qualify provider defaults, D1–D3, or PostgreSQL deployment. Complete Host lease
 lifecycles and migration of remaining legacy Goals precede legacy execution and
 last-caller Python retirement; historical import/receipt readers stay at their
@@ -132,8 +151,19 @@ Todo 的必需 scope 是任务要求，不等于本轮 lease 的完整范围；�
 丢响应后重试同一计划恢复原结果；缺失／损坏备份会拒绝恢复。反向切换使用新计划和
 新备份，不恢复会丢掉后续工作数据的旧快照。
 
-该管理动作仅由 CLI 写入，前端／飞书普通操作继续消费同一 canonical 状态，无需
-新建 capability 设置项。此批不关闭 provider 默认与 D1–D3；先完成 Host 生命周期、
+App 在 **Goal 设置 → 任务所有权** 复用同一操作：选择协作认领或独占执行租约，
+预览保留的归属／租约，再点“备份并应用”。预览不改策略、不授予执行权；冲突展示
+数量和相关 Todo，须结清对应执行后重新计划。尚未晋升的 Goal 先完成晋升。
+
+浏览器先保存不透明的预览标识才允许应用；服务端保存不可变计划和备份。丢响应或
+同一标签页刷新后重试原预览，不能新建操作猜测旧结果。“原操作已确认”与“当前策略”
+分别展示，后续合法变更不被旧回执覆盖。可单独重新读取当前策略；显式放弃预览只
+清除浏览器载体，不删除服务端计划／备份。清空浏览器存储会丢失该载体，需保留服务端
+计划和备份供 CLI 恢复；禁止浏览器存储时仍可读取，但不能应用无法保存的预览。
+
+CLI 与 App 共用注册信息校验和 TS 迁移 owner；飞书普通操作消费相同 canonical 状态，
+本阶段没有飞书策略编辑器，也不新建 capability 设置项。此批不关闭 provider 默认与
+D1–D3；先完成 Host 生命周期、
 逐 Goal 备份迁移，再删除 legacy 执行分支和无调用方的 Python 业务逻辑。旧格式解析
 只保留在迁移／历史回执恢复边界。
 

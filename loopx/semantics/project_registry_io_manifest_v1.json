@@ -678,14 +678,6 @@
       "classification": "codec_api"
     },
     {
-      "site": "loopx/cli_commands/handoff_mode.py::<module>.handle_handoff_mode_command::codec_read:load_registry#1",
-      "line": 145,
-      "column": 28,
-      "kind": "codec_read",
-      "api": "load_registry",
-      "classification": "codec_api"
-    },
-    {
       "site": "loopx/cli_commands/history.py::<module>.handle_history_command::codec_read:load_registry#1",
       "line": 85,
       "column": 24,
@@ -1633,6 +1625,14 @@
       "site": "loopx/control_plane/todos/path_resolution.py::<module>.resolve_todo_state_path::codec_read:load_registry#1",
       "line": 19,
       "column": 16,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/control_plane/todos/provider_handoff_mode.py::<module>.migrate_registered_handoff_mode::codec_read:load_registry#1",
+      "line": 84,
+      "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"
