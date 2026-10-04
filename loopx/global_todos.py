@@ -4,6 +4,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .control_plane.projection_envelope_facts import (
+    render_projection_envelope_markdown,
+    seal_projection_envelope,
+    source_fact,
+)
 from .control_plane.runtime.time import now_utc_iso
 from .control_plane.todos.decision_scope import todo_gate_relations
 from .control_plane.todos.user_gate import open_user_gate_todo_items
@@ -58,7 +63,12 @@ def _request() -> dict[str, Any]:
     }
 
 
-def build_global_todos_error(error: object) -> dict[str, Any]:
+def build_global_todos_error(
+    error: object,
+    *,
+    status_payload: dict[str, Any] | None = None,
+    status_read_at: str | None = None,
+) -> dict[str, Any]:
     return {
         "ok": False,
         "schema_version": SCHEMA_VERSION,
@@ -68,6 +78,11 @@ def build_global_todos_error(error: object) -> dict[str, Any]:
         "omissions": [
             "Raw/private failure details and local paths were intentionally omitted."
         ],
+        "projection_envelope": _todos_envelope(
+            status_payload or {}, status_read_at=status_read_at,
+            quota_read_at=None, quota_evaluated=0, quota_unavailable=0,
+            goal_scan_omitted=0, shown_count=0, available_count=0,
+        ),
         "boundary": public_safe_boundary(),
     }
 
@@ -382,6 +397,78 @@ def _queue_goal_ids(
     return unique_goal_ids[:scan_limit], available_count
 
 
+def _todos_envelope(
+    status_payload: dict[str, Any],
+    *,
+    status_read_at: str | None,
+    quota_read_at: str | None,
+    quota_evaluated: int,
+    quota_unavailable: int,
+    goal_scan_omitted: int,
+    shown_count: int,
+    available_count: int,
+) -> dict[str, Any]:
+    global_registry = as_dict(status_payload.get("global_registry"))
+    status_envelope = as_dict(status_payload.get("projection_envelope"))
+    global_source = next(
+        (row for row in as_list(status_envelope.get("sources"))
+         if isinstance(row, dict) and row.get("source_id") == "global_registry"),
+        {},
+    )
+    available = global_registry.get("available") is True
+    count = global_registry.get("global_goal_count")
+    expected = count if available and isinstance(count, int) and not isinstance(count, bool) else None
+    excluded = int(global_registry.get("current_registry_excluded_goal_count") or 0) if available else 0
+    omitted = []
+    if excluded:
+        omitted.append({
+            "reason": "outside_current_registry", "count": excluded,
+            "refs": [str(ref) for ref in as_list(global_registry.get("current_registry_excluded_goal_ids"))[:8]],
+        })
+    if goal_scan_omitted:
+        omitted.append({"reason": "attention_goals_not_scanned", "count": goal_scan_omitted})
+    if status_payload and status_payload.get("ok") is not True:
+        omitted.append({"reason": "status_unavailable", "count": 1})
+    queue = status_payload.get("attention_queue")
+    queue_read = isinstance(queue, dict) and isinstance(queue.get("items"), list)
+    return seal_projection_envelope(
+        projection="global_todos",
+        observed_at=now_utc_iso(),
+        sources=[
+            source_fact(
+                "global_registry",
+                read_status=(
+                    str(global_source.get("read_status") or "read") if available
+                    else str(global_registry.get("read_status") or ("missing" if status_read_at else "not_read"))
+                ),
+                last_read_at=global_source.get("last_read_at") or (status_read_at if available else None),
+                item_count=expected,
+            ),
+            source_fact(
+                "goal_quota",
+                read_status="read" if quota_read_at else "not_read",
+                last_read_at=quota_read_at,
+                item_count=quota_evaluated,
+                unreadable_count=quota_unavailable,
+            ),
+            source_fact(
+                "attention_queue",
+                read_status="read" if queue_read else "not_read",
+                last_read_at=status_read_at if queue_read else None,
+                item_count=len(queue["items"]) if queue_read else None,
+            ),
+            *([] if status_envelope else [source_fact("status", read_status="not_read")]),
+        ],
+        coverage={
+            "scope": "global", "expected_count": expected,
+            "included_count": max(0, expected - excluded - goal_scan_omitted) if expected is not None else 0,
+            "omitted": omitted,
+            "shown_count": shown_count, "available_count": available_count,
+        },
+        upstream=[status_envelope] if status_envelope else [],
+    )
+
+
 def _groups(todos: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     return {
         "runnable": [todo for todo in todos if todo.get("readiness") == "runnable"],
@@ -409,8 +496,12 @@ def build_global_todos(
         scan_roots=scan_roots,
         limit=scan_limit,
     )
+    status_read_at = now_utc_iso()
     if status_payload.get("ok") is not True:
-        return build_global_todos_error("Global status source unavailable.")
+        return build_global_todos_error(
+            "Global status source unavailable.",
+            status_payload=status_payload, status_read_at=status_read_at,
+        )
 
     goal_ids, available_goal_count = _queue_goal_ids(
         status_payload,
@@ -418,6 +509,8 @@ def build_global_todos(
     )
     warnings: list[dict[str, Any]] = []
     classified: list[dict[str, Any]] = []
+    quota_read_at = now_utc_iso()
+    quota_unavailable = 0
     for goal_id in goal_ids:
         quota_payload = _quota_for_goal(
             status_payload,
@@ -425,6 +518,7 @@ def build_global_todos(
             agent_id=agent_id,
             warnings=warnings,
         )
+        quota_unavailable += int(quota_payload is None)
         if quota_payload is None or not _quota_matches_agent(
             quota_payload,
             agent_id=agent_id,
@@ -466,12 +560,19 @@ def build_global_todos(
             "source_surfaces": SOURCE_SURFACES,
             "truncated": matched_count > returned_count,
             "goal_scan_limit": scan_limit,
-            "goal_scan_truncated": available_goal_count > scan_limit,
+            "goal_scan_truncated": available_goal_count > len(goal_ids),
         },
         "groups": retained_groups,
         "todos": retained,
         "source_warnings": warnings[:SOURCE_WARNING_LIMIT],
         "source_warnings_truncated": warning_count > SOURCE_WARNING_LIMIT,
+        "projection_envelope": _todos_envelope(
+            status_payload, status_read_at=status_read_at,
+            quota_read_at=quota_read_at, quota_evaluated=len(goal_ids),
+            quota_unavailable=quota_unavailable,
+            goal_scan_omitted=max(0, available_goal_count - len(goal_ids)),
+            shown_count=returned_count, available_count=matched_count,
+        ),
         "omissions": [
             (
                 "Raw logs, raw transcripts, connector payloads, credential values, "
@@ -503,6 +604,7 @@ def render_global_todos_markdown(payload: dict[str, Any]) -> str:
             "",
             "- ok: `False`",
             f"- error: {_redact_text(payload.get('error'))}",
+            *render_projection_envelope_markdown(payload.get("projection_envelope")),
         ]
         omissions = [
             _redact_text(item)
@@ -524,6 +626,7 @@ def render_global_todos_markdown(payload: dict[str, Any]) -> str:
         f"- returned: `{summary.get('returned_todo_count')}`",
         f"- truncated: `{bool(summary.get('truncated'))}`",
         f"- goal_scan_truncated: `{bool(summary.get('goal_scan_truncated'))}`",
+        *render_projection_envelope_markdown(payload.get("projection_envelope")),
         "",
         "Review is an overlapping work-kind facet of the readiness groups.",
     ]
