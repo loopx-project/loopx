@@ -35,9 +35,18 @@ owner submitting a directory entry.
   establish production availability, failover, or multi-owner operation.
   The separate metadata-runtime promotion gate
   [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) remains open.
+  Its seed-routing helper [PR #4724](https://github.com/loopx-project/loopx/pull/4724)
+  is merged, while the companion ladder
+  [PR #4726](https://github.com/loopx-project/loopx/pull/4726) remains open;
+  the helper merge alone does not close that promotion gate.
   **Status: qualification tooling merged, with separate acceptance still open**.
   This is concrete integration work beyond the README relationship below,
-  not proof that NoKV runs LoopX in production. Checked September 30, 2026.
+  not proof that NoKV runs LoopX in production. NoKV's
+  [current README evidence boundary](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md#evidence-and-qualification)
+  separately marks full-surface native CLI and installed Python wheel acceptance
+  against real services as not qualified. The historical single-node stack
+  result does not establish those current, broader acceptances.
+  Checked October 4, 2026.
 - **GoTry** (Danceiny) — uses LoopX goals, Codex task bindings and heartbeats
   for multiple development lanes. [Issue #18](https://github.com/Danceiny/gotry/issues/18)
   records setup; [PR #187](https://github.com/Danceiny/gotry/pull/187), merged,
@@ -124,8 +133,13 @@ accepted design documents are distinct from depending on the LoopX runtime.
   Goal/Todo state and execution gates; the Bot supplies the worker, model
   and tools. The author reports real CLI tests with a model substitute;
   real-model end-to-end acceptance and Docker build validation remain open.
+  The proposal's [pinned packaging](https://github.com/volcengine/OpenViking/blob/406827d73594fda9def251912be64bf06b013773/pyproject.toml)
+  places `loopx==1.0.5` in the optional `longtask` extra;
+  [current main packaging](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/pyproject.toml)
+  does not declare that extra. These are proposal and main snapshots,
+  not an instruction to install an unreleased extra.
   **Status: runtime integration proposed, not merged or released**.
-  Checked September 30, 2026.
+  Checked October 4, 2026.
 - **Opensiro VSM harness index** — merged
   [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) records
   a feasibility stop for a frozen LoopX comparison; a subsequent
@@ -199,10 +213,10 @@ accepted design documents are distinct from depending on the LoopX runtime.
 - **NAVER fe-news** — the [September 2026 newsletter](https://github.com/naver/fe-news/blob/master/issues/2026-09.md)
   explains LoopX and its installation path in Korean. **Status: editorial coverage**,
   not a NAVER deployment claim.
-- **OpenViking / NoKV** — [OpenViking's README](https://github.com/volcengine/OpenViking/blob/main/README.md)
-  lists LoopX; [NoKV's README](https://github.com/NoKV-Lab/NoKV/blob/main/README.md)
+- **OpenViking / NoKV** — [OpenViking's README](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/README.md)
+  lists LoopX; [NoKV's README](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md)
   names an active open-source collaboration. **Status: public project relationships**;
-  these listings alone do not establish a runtime dependency.
+  these listings alone do not establish a runtime dependency. Checked October 4, 2026.
 - **loopx-book / loopx-book-labs** (cocolord) — a bilingual, protocol-first
   [developer book](https://github.com/cocolord/loopx-book) and
   [runnable labs](https://github.com/cocolord/loopx-book-labs) cover onboarding,
@@ -260,3 +274,7 @@ accepted design documents are distinct from depending on the LoopX runtime.
   GitHub-Michelin and the michaelx1993/foolzzz fork family. Current issue/PR
   states, later comments and pinned source files were checked; this update
   adds no confirmed runtime adopter and does not revalidate the rest of the table.
+- Scoped update: **2026-10-04**, rechecking OpenViking and NoKV against current
+  public PR/issue states and pinned source files. This distinguishes proposal
+  packaging, historical qualification tooling and current acceptance limits;
+  no live integration was reproduced and other entries were not revalidated.

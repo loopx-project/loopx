@@ -27,8 +27,15 @@
   检查通过；工具明确不证明生产可用性、故障转移或多 owner 运行。
   独立的 metadata-runtime 升级验收门禁
   [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) 仍开放。
+  其中 seed routing helper [PR #4724](https://github.com/loopx-project/loopx/pull/4724)
+  已合并，配套 ladder [PR #4726](https://github.com/loopx-project/loopx/pull/4726)
+  仍开放；helper 合并本身不关闭该升级门禁。
   **状态：资格验证工具已合并，独立验收尚未关闭**。这比下文 README 中的合作声明
-  多了具体集成产物，不代表 NoKV 在生产中运行 LoopX。核对日期：2026-09-30。
+  多了具体集成产物，不代表 NoKV 在生产中运行 LoopX。NoKV 的
+  [当前 README 证据边界](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md#evidence-and-qualification)
+  另将完整原生 CLI 和已安装 Python wheel 对真实服务的验收标为尚未资格化。
+  历史单节点测试环境的结果不证明这些当前、更广范围的验收成立。
+  核对日期：2026-10-04。
 - **GoTry**（Danceiny）——用 LoopX goals、Codex 任务绑定和心跳管理多条开发路线。
   [issue #18](https://github.com/Danceiny/gotry/issues/18) 记录接入，已合并的
   [PR #187](https://github.com/Danceiny/gotry/pull/187) 记录交付验证。
@@ -107,8 +114,13 @@
   [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) 提议增加可选、
   默认关闭的 LoopX 后台长任务。LoopX 管 Goal/Todo 状态与执行门禁，Bot 提供
   worker、模型与工具。作者报告以模型替身完成真实 CLI 测试；真实模型端到端
-  验收和 Docker 构建仍未完成。**状态：运行时集成提案，尚未合并或发布**。
-  核对日期：2026-09-30。
+  验收和 Docker 构建仍未完成。
+  提案的[固定版本打包配置](https://github.com/volcengine/OpenViking/blob/406827d73594fda9def251912be64bf06b013773/pyproject.toml)
+  将 `loopx==1.0.5` 放在可选 `longtask` extra 中；
+  [当前 main 打包配置](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/pyproject.toml)
+  未声明该 extra。这是提案与 main 的快照对照，不是安装未发布 extra 的指引。
+  **状态：运行时集成提案，尚未合并或发布**。
+  核对日期：2026-10-04。
 - **Opensiro VSM harness index**——已合并的
   [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) 记录固定
   LoopX 对比实验的可辨识性阻塞；后续
@@ -172,9 +184,10 @@
   引用固定版本并保留实验性证据边界。**状态：教学材料**，不是读者采用统计。
 - **NAVER fe-news**——[2026 年 9 月通讯](https://github.com/naver/fe-news/blob/master/issues/2026-09.md)
   用韩文介绍 LoopX 及安装路径。**状态：编辑内容收录**，不代表 NAVER 部署声明。
-- **OpenViking / NoKV**——[OpenViking README](https://github.com/volcengine/OpenViking/blob/main/README.md)
-  列出 LoopX；[NoKV README](https://github.com/NoKV-Lab/NoKV/blob/main/README.md)
+- **OpenViking / NoKV**——[OpenViking README](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/README.md)
+  列出 LoopX；[NoKV README](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md)
   将其列为活跃开源合作。**状态：公开项目关系**；这些条目本身不证明运行时依赖。
+  核对日期：2026-10-04。
 - **loopx-book / loopx-book-labs**（cocolord）——双语、协议优先的
   [开发者书](https://github.com/cocolord/loopx-book)与
   [可运行实验](https://github.com/cocolord/loopx-book-labs)，覆盖项目接入、Issue 到 PR
@@ -222,3 +235,6 @@
 - 局部更新：**2026-10-03**，覆盖 MilkSU、ai-skills、General Loop、GitHub-Michelin
   及 michaelx1993/foolzzz fork 家族。核对了当前 Issue/PR 状态、后续评论和固定版本
   的源文件；本轮未新增可确认的运行时采用者，也不代表其余条目重新验真。
+- 局部更新：**2026-10-04**，按当前公开 PR/Issue 状态和固定版本源文件复核
+  OpenViking、NoKV，区分提案打包配置、历史资格验证工具和当前验收限制。
+  未复现真实集成，其余条目未重新验真。
