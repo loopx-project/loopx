@@ -35,6 +35,19 @@ type CapabilityMutationState = Readonly<{
   preview: GoalConfigurationPreview | null;
 }>;
 
+function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>) {
+  const writable = projectEditableCapabilityConfiguration(selected.configuration_editor, draft, selected.default);
+  if (selected.capability_id === "pull_request_review"
+    && !Object.hasOwn(selected.current ?? {}, "wait_for_ci") && !Object.hasOwn(selected.current ?? {}, "review_order")) {
+    const effective = selected.effective_configuration?.configuration;
+    if (effective && writable.wait_for_ci === effective.wait_for_ci && writable.review_order === effective.review_order) {
+      delete writable.wait_for_ci;
+      delete writable.review_order;
+    }
+  }
+  return writable;
+}
+
 function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
   goalId: string;
   onApplied: () => void;
@@ -61,7 +74,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
       busy: null,
       draft: projectEditableCapabilityConfiguration(
         selected?.configuration_editor ?? { fields: [] },
-        selected?.current
+        (selected?.capability_id === "pull_request_review" ? selected.effective_configuration?.configuration : selected?.current)
         ?? selected?.effective_configuration?.configuration
         ?? selected?.default,
         selected?.default,
@@ -77,7 +90,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "preview", partialWrite: null }));
     setError(null);
     try {
-      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration);
+      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration));
       setMutation((current) => ({ ...current, preview: nextPreview }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
@@ -91,11 +104,7 @@ function useCapabilityMutation({ goalId, onApplied, selected, t }: Readonly<{
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
-      const writableDraft = projectEditableCapabilityConfiguration(
-        selected.configuration_editor,
-        mutation.draft,
-        selected.default,
-      );
+      const writableDraft = goalWriteDraft(selected, mutation.draft);
       const result = await applyGoalConfiguration(
         goalId,
         selected.capability_id,

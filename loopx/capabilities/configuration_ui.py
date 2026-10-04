@@ -367,14 +367,14 @@ def capability_configuration_editor(
             "fields": [
                 _field("wait_for_ci", "Wait for CI", "boolean", description="When disabled, use local validation without querying or waiting for CI. This grants no merge authority."),
                 _field(
-                    "review_priority",
-                    "Review priority",
+                    "review_order",
+                    "Review direction",
                     "select",
-                    options=("other-developers-first", "owner-first"),
+                    options=("forward", "reverse"),
                     required=True,
                     description=(
-                        "Default ranks actionable PRs whose author differs from the "
-                        "authenticated reviewer before the reviewer's own PRs."
+                        "Forward ranks other authors first, oldest first within tiers. "
+                        "Reverse inverts the whole actionable queue before the batch limit."
                     ),
                 ),
             ],

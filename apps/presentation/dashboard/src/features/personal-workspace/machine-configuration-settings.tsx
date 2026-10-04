@@ -51,6 +51,9 @@ function completeMachineConfiguration(
     ...configurationObject(current),
     ...draft,
   };
+  if (capability.capability_id === "pull_request_review" && Object.hasOwn(draft, "review_order")) {
+    delete complete.review_priority;
+  }
   // The guided steward editor owns the v1 selection-policy fields. Opening an
   // installed v0 preference in that form is an explicit migration preview;
   // JSON mode can still submit the legacy shape unchanged when needed.
