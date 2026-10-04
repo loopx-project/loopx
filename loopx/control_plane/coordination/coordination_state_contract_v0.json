@@ -171,6 +171,7 @@
   },
   "legacy_writer_fence_protocol": {
     "fence_schema": "loopx_legacy_coordination_writer_fence_v0",
+    "creation_fence_schema": "loopx_new_goal_writer_fence_v0",
     "engage_request_schema": "loopx_legacy_coordination_writer_fence_engage_request_v0",
     "result_schema": "loopx_legacy_coordination_writer_fence_result_v0",
     "write_check_request_schema": "loopx_legacy_coordination_write_check_request_v0",
