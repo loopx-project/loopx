@@ -9,7 +9,7 @@ export interface HostProcessRequest {
   argv: string[];
   cwd: string;
   input: string;
-  timeout_ms: number;
+  timeout_ms: number | null;
   drain_timeout_ms: number;
   stdout_limit_bytes: number | null;
 }
@@ -36,7 +36,7 @@ export function decodeHostProcessRequest(value: unknown): HostProcessRequest {
   if (Object.keys(v).length !== fields.length || fields.some(k => !Object.hasOwn(v, k)) ||
       !Array.isArray(v.argv) || !v.argv.length || !v.argv[0] || v.argv.some(x => typeof x !== "string" || x.includes("\0")) ||
       typeof v.cwd !== "string" || !v.cwd || v.cwd.includes("\0") || typeof v.input !== "string" ||
-      typeof v.timeout_ms !== "number" || !Number.isFinite(v.timeout_ms) || v.timeout_ms <= 0 || v.timeout_ms > 2147483647 ||
+      (v.timeout_ms !== null && (typeof v.timeout_ms !== "number" || !Number.isFinite(v.timeout_ms) || v.timeout_ms <= 0 || v.timeout_ms > 2147483647)) ||
       typeof v.drain_timeout_ms !== "number" || !Number.isFinite(v.drain_timeout_ms) || v.drain_timeout_ms < 0 || v.drain_timeout_ms > 30000 ||
       (v.stdout_limit_bytes !== null && (typeof v.stdout_limit_bytes !== "number" ||
         !Number.isSafeInteger(v.stdout_limit_bytes) || v.stdout_limit_bytes < 1))) throw new TypeError("invalid Host request fields");
@@ -100,7 +100,7 @@ export async function runHostProcess(request: HostProcessRequest,
   };
   const abort = () => stop("cancelled");
   signal?.addEventListener("abort", abort, {once: true});
-  const deadline = setTimeout(() => stop("timeout"), request.timeout_ms);
+  const deadline = request.timeout_ms === null ? undefined : setTimeout(() => stop("timeout"), request.timeout_ms);
   let drainTimer: ReturnType<typeof setTimeout> | undefined;
   const exited = new Promise<void>(resolve => {
     child.once("error", () => { outcome = "spawn_failed"; resolve(); });
@@ -160,7 +160,7 @@ export async function runHostProcess(request: HostProcessRequest,
     await clean();
     return {...base, outcome, output_complete: complete};
   } finally {
-    clearTimeout(deadline);
+    if (deadline) clearTimeout(deadline);
     if (drainTimer) clearTimeout(drainTimer);
     signal?.removeEventListener("abort", abort);
     child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();

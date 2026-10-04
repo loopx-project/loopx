@@ -333,6 +333,7 @@ def build_pull_request_review_queue_observation(
     projected_exact_heads: Sequence[str] = (),
     authenticated_developer_login: str | None = None,
     review_priority: object = DEFAULT_REVIEW_PRIORITY,
+    review_order: str | None = None,
 ) -> dict[str, Any]:
     """Build one read-only observation and at most one exact-head candidate."""
 
@@ -433,10 +434,11 @@ def build_pull_request_review_queue_observation(
             "projected_candidate_exact_heads": projected_sorted,
             "projected_candidate_count": len(projected_sorted),
             "candidate_projection_ack_semantics": PROJECTION_ACK_SEMANTICS,
-            "selection_policy": _selection_policy_text(normalized_priority),
+            "selection_policy": f"first unhandled/unprojected actionable head in the configured {review_order} queue" if review_order is not None else _selection_policy_text(normalized_priority),
             "scheduling_policy": build_scheduling_policy(
                 authenticated_developer_login=authenticated_developer_login,
                 review_priority=normalized_priority,
+                review_order=review_order,
             ),
             "write_authority_granted": False,
             "external_write_performed": False,
@@ -459,6 +461,8 @@ def build_pull_request_review_queue_observation(
             item, review_priority=normalized_priority
         )
     )
+    from .order import order_queue
+    normalized_ranked_items = order_queue(normalized_ranked_items, review_order)
     ranked_items = [
         {**item, "rank": rank}
         for rank, item in enumerate(normalized_ranked_items, start=1)
@@ -507,6 +511,7 @@ def build_pull_request_review_queue_observation(
         {
             "repository": normalized_repository,
             "review_priority": normalized_priority.value,
+            **({"review_order": review_order} if review_order is not None else {}),
             "items": queue_items,
         }
     )
@@ -533,13 +538,13 @@ def build_pull_request_review_queue_observation(
     candidate = None
     candidate_selection_reason = None
     for item in ranked_items:
-        if (
+        if review_order is None and ((
             normalized_priority is PullRequestReviewPriority.OWNER_FIRST
             and item.get("author_owned") is not True
         ) or (
             normalized_priority is PullRequestReviewPriority.OTHER_DEVELOPERS_FIRST
             and item.get("author_owned") is True
-        ):
+        )):
             continue
         exact_head_key = _exact_head_key(item.get("number"), item.get("head_oid"))
         if exact_head_key in handled_set or exact_head_key in projected_set:
@@ -547,6 +552,7 @@ def build_pull_request_review_queue_observation(
         candidate = _candidate_packet(item, repository=normalized_repository)
         if candidate is not None:
             candidate_selection_reason = (
+                "configured_queue_order" if review_order is not None else
                 "authenticated_developer_owned_first"
                 if normalized_priority is PullRequestReviewPriority.OWNER_FIRST
                 else "other_developer_owned_first"
@@ -641,10 +647,11 @@ def build_pull_request_review_queue_observation(
         "projected_candidate_exact_heads": projected_sorted,
         "projected_candidate_count": len(projected_sorted),
         "candidate_projection_ack_semantics": PROJECTION_ACK_SEMANTICS,
-        "selection_policy": _selection_policy_text(normalized_priority),
+        "selection_policy": f"first unhandled/unprojected actionable head in the configured {review_order} queue" if review_order is not None else _selection_policy_text(normalized_priority),
         "scheduling_policy": build_scheduling_policy(
             authenticated_developer_login=authenticated_developer_login,
             review_priority=normalized_priority,
+            review_order=review_order,
         ),
         "write_authority_granted": False,
         "external_write_performed": False,

@@ -217,7 +217,7 @@ def _goal_capability_options(
         "peer_task_coordination": {"coordinator_agent_id"},
         "explore_graph": {"enabled"},
         "explore_harness": {"mode", "enabled", "profile"},
-        "pull_request_review": {"wait_for_ci", "review_priority"},
+        "pull_request_review": {"wait_for_ci", "review_order", "agent_orders", "review_priority"},
         "change_quality_qualification": {"enabled", "safe_fix", "strict_receipt"},
         "progress_review": {"mode", "signal", "drift_threshold", "contract_revision"},
         "local_authority_shadow": {"enabled"},

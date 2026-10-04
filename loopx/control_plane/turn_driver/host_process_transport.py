@@ -216,7 +216,7 @@ def run_host_process(
     *,
     project: Path,
     input_text: str,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     stdout_limit_bytes: int | None = None,
     drain_timeout_seconds: float = 2,
     on_stdout: Callable[[str], None] | None = None,
@@ -236,7 +236,7 @@ def run_host_process(
         "argv": command,
         "cwd": str(project),
         "input": input_text,
-        "timeout_ms": max(1.0, timeout_seconds) * 1000,
+        "timeout_ms": None if timeout_seconds is None else max(1.0, timeout_seconds) * 1000,
         "drain_timeout_ms": drain_timeout_seconds * 1000,
         "stdout_limit_bytes": stdout_limit_bytes,
     }

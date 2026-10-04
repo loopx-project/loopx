@@ -37,6 +37,8 @@ from .registry_admin_lifecycle import (
     register_registry_lifecycle_commands,
 )
 from .registry_admin_peer import render_register_agent_markdown
+
+
 from .registry_admin_thread_resolution import (
     REGISTRY_THREAD_RESOLUTION_COMMANDS,
     handle_registry_thread_resolution_command,
@@ -48,6 +50,13 @@ from .registry_authority import (
     register_registry_authority_commands,
 )
 from .support_control_registry import explicit_global_registry
+
+def _pr_review_agent_order_pair(value: str) -> tuple[str, str | None]:
+    agent, separator, direction = value.partition("=")
+    if not separator or not agent or direction not in {"forward", "reverse", "inherit"}:
+        raise ValueError("--pr-review-agent-order requires AGENT=forward|reverse|inherit")
+    return agent, None if direction == "inherit" else direction
+
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -448,7 +457,11 @@ def handle_registry_admin_command(
                 self_repair_enabled=args.self_repair_enabled,
                 self_repair_health=args.self_repair_health,
                 self_repair_waiting_projection=args.self_repair_waiting_projection,
-                pull_request_review_configuration=({"wait_for_ci": args.pr_review_wait_for_ci} if args.pr_review_wait_for_ci is not None else None),
+                pull_request_review_configuration=({
+                    **({"wait_for_ci": args.pr_review_wait_for_ci} if args.pr_review_wait_for_ci is not None else {}),
+                    **({"review_order": getattr(args, "pr_review_order", None)} if getattr(args, "pr_review_order", None) is not None else {}),
+                } or None),
+                pull_request_review_agent_orders=(dict(_pr_review_agent_order_pair(value) for value in getattr(args, "pr_review_agent_order", [])) or None),
                 clear_pull_request_review_configuration=args.clear_pr_review_configuration,
                 change_quality_enabled=args.change_quality_enabled,
                 change_quality_safe_fix=args.change_quality_safe_fix,

@@ -1015,6 +1015,7 @@ def build_pr_review_packet(
     fresh_audit_exact_heads: Sequence[str] = (),
     target_exact_heads: Sequence[str] = (),
     review_priority: object = DEFAULT_REVIEW_PRIORITY,
+    review_order: str | None = None,
     wait_for_ci: bool = True,
     readiness_observations: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, Any]:
@@ -1048,6 +1049,8 @@ def build_pr_review_packet(
             item, review_priority=normalized_priority
         )
     )
+    from .capabilities.pr_review_queue.order import order_queue
+    normalized_all = order_queue(normalized_all, review_order)
     packet_limit = len(requested_targets) if requested_targets else max(1, limit)
     unmerged_all = [item for item in normalized_all if str(item.get("state") or "").upper() != "MERGED"]
     merged_all = [item for item in normalized_all if str(item.get("state") or "").upper() == "MERGED"]
@@ -1211,7 +1214,7 @@ def build_pr_review_packet(
         "request": {
             "schema_version": "loopx_pr_review_command_request_v0",
             "command": COMMAND,
-            "cli_command": "loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open|merged|all] [--review-priority other-developers-first|owner-first] [--since ISO]",
+            "cli_command": "loopx pr-review [--goal-id GOAL --agent-id AGENT] [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open|merged|all] [--review-order forward|reverse] [--since ISO]",
             "repository": repository,
             "limit": max(1, limit),
             "state_filter": normalized_state_filter,
@@ -1261,6 +1264,7 @@ def build_pr_review_packet(
         "scheduling_policy": build_scheduling_policy(
             authenticated_developer_login=reviewer_login,
             review_priority=normalized_priority,
+            review_order=review_order,
         ),
         "review_sequence": review_sequence,
         "review_groups": review_groups,
@@ -1306,7 +1310,7 @@ def _review_why_now(item: dict[str, Any]) -> str:
             return "The current exact head has a complete approval; qualify merge readiness."
         return "The current exact head already has a complete standalone conclusion."
     if item.get("author_owned"):
-        return "Authenticated-developer-owned PR is in the first actionable scheduling tier."
+        return "Authenticated-developer-owned PR awaits an independent exact-head review."
     if item.get("community_feedback_ready"):
         return "A community contributor pushed a new exact head after an independent request-changes review."
     if (

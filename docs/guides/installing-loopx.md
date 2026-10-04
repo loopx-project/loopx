@@ -41,6 +41,20 @@ runtime with `loopx doctor --restart-runtime` after the new Node is on `PATH`.
 SQLite remains opt-in and checks the actual embedded SQLite version before
 opening authority state.
 
+A managed runtime that cannot publish its startup locator returns the existing
+safe filesystem/lock diagnostic code, such as `mutation_lock_timeout`,
+`io_is_directory`, or Windows `io_permission_denied` for an occupied locator
+directory, instead of only an exit status. The message does not echo
+locator paths, tokens or Node stack traces. Inspect the named local ownership
+or filesystem problem before retrying; the diagnostic neither removes a live
+owner's lock nor repairs a foreign locator. It does not identify every possible
+startup crash: an exit without a typed envelope remains `runtime_exited_before_ready`.
+
+中文：启动 locator 发布失败会返回既有文件系统/锁诊断码，不回显路径、token 或
+Node 堆栈。先核对本机对应的占用或文件系统问题；诊断不会删除活进程持有的锁、
+修复未知 locator，也不证明所有启动退出都已归因。没有 typed envelope 的退出仍
+保留 `runtime_exited_before_ready`。
+
 The CI and release lanes use Node.js 24 LTS. Node.js 26 remains a non-blocking
 forward-compatibility probe and is not a supported-version promise. After the
 Node.js 22 maintenance window ends, a separate policy change will raise the

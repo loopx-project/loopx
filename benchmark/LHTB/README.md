@@ -179,7 +179,7 @@ Defaults leave cleanup room between nested layers:
 | Harbor agent limit | 5400 s |
 | LoopX scheduler process | 5080 s |
 | One wake command | 4800 s |
-| One Codex exec | 4700 s |
+| One Codex exec | Remaining total phase budget, minus cleanup reserve |
 
 The scheduler can perform multiple shorter wakes within 5080 seconds. A single
 long Codex wake can consume most of that budget, which is expected; Harbor's

@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "smoke:todo-ownership": "vite build --ssr smoke/todo-ownership-smoke.mjs --outDir node_modules/.cache/todo-ownership --emptyOutDir && node node_modules/.cache/todo-ownership/todo-ownership-smoke.js",
     "smoke:workspace-progressive-loader": "node smoke/workspace-progressive-status-smoke.mjs",
     "smoke:workspace-progressive": "node ../../../examples/workspace-progressive-loading-browser-smoke.mjs",
     "build": "tsc --noEmit && vite build && npm run build:chat",

@@ -129,8 +129,9 @@ def test_goal_role_is_not_permission_to_take_over_another_binding(changes):
         validate_goal_chat({**session, **changes}, [])
 
 
+@pytest.mark.parametrize("hard_deadline", [None, 900])
 def test_multiple_native_turns_and_stale_goal_notification_are_reconciled(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, hard_deadline
 ):
     host = Host(
         tmp_path,
@@ -147,6 +148,7 @@ def test_multiple_native_turns_and_stale_goal_notification_are_reconciled(
             end("two"),
         ],
     )
+    host.session.hard_timeout_sec = hard_deadline
     events = []
     response = host.driver.run(
         parse_native_goal_command("/goal start --tokens 10000 Analyze revisions"),

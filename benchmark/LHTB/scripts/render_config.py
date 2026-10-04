@@ -28,7 +28,7 @@ def main() -> int:
     parser.add_argument("--task-entry", choices=TASK_ENTRIES, default="seeded-todo")
     parser.add_argument("--planning-timeout", type=float, default=300)
     parser.add_argument("--validation-command-json", default="[]")
-    parser.add_argument("--turn-timeout", type=float, default=4700)
+    parser.add_argument("--turn-timeout", type=float, default=None)
     parser.add_argument("--scheduler-timeout", type=int, default=5080)
     args = parser.parse_args()
 

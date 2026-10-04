@@ -248,7 +248,8 @@ class CodexGoalDriver:
             self.session.close()
 
     def _observe(self, emit: Callable[[str, dict[str, Any]], None]) -> dict[str, Any]:
-        deadline = time.monotonic() + self.session.hard_timeout_sec
+        deadline = (None if self.session.hard_timeout_sec is None
+                    else time.monotonic() + self.session.hard_timeout_sec)
         parts: list[str] = []
         completed_messages: list[str] = []
         display = VisibleResponseStreamFilter(protected_paths=[self.session.work_dir])
@@ -276,12 +277,14 @@ class CodexGoalDriver:
                 if parts:
                     completed_messages.append(parse_agent_response("".join(parts), protected_paths=[self.session.work_dir])["message"])
                 return self._response(goal, messages=completed_messages)
-            if time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 raise self.session._timeout_error(
                     "hard_timeout",
                     "Native Goal reached the Chat time limit; resume it in this conversation.",
                 )
-            event = self.session._next_event(deadline=deadline)
+            event = self.session._next_event(
+                deadline=deadline if deadline is not None else time.monotonic() + self.session.idle_timeout_sec
+            )
             if self.session._check_server_gate(event):
                 continue
             if _event_thread_id(event) not in {"", self.session.thread_id}:
