@@ -31,12 +31,14 @@ New canonical acquisitions freeze the canonical Todo's normalized
 `task_repository` as `lease.write_repository`. There is no caller repository
 override and no inference from the CLI working directory. Within one Goal,
 overlapping relative paths conflict unless **both** execution grants have known,
-different repository identities, or the explicit code-edit worktree mode below proves sibling checkout isolation. Host/path case aliases remain overlapping.
+different repository identities, or the caller uses the verified cooperative
+code-edit mode below. Host/path case aliases remain overlapping.
 The existing complete-head scan, owner eligibility, TTL, generations, CAS and
 receipt identities are unchanged; an empty scope set still does not conflict.
 
 Old grants without `write_repository` (or with null) remain unknown and
-conservatively overlap any repository. Reading or renewing them does not
+conservatively overlap any repository for ordinary exclusive acquisition.
+Reading or renewing them does not
 backfill a namespace from today's Todo. Fresh acquisition after legal retirement
 can freeze the current Todo identity. Malformed frozen identities fail closed.
 Renewal, transfer and release preserve the frozen value and historical receipts.
@@ -64,17 +66,22 @@ loopx --registry registry.json task-lease acquire \
   --write-scope 'src/**' --write-worktree "$PWD"
 ```
 
-The TypeScript entrypoint verifies the Git root, origin against the Todo's
-repository, machine identity and filesystem identity. Two grants in distinct
-sibling worktrees on the same machine may overlap: acquisition returns
+The TypeScript entrypoint verifies the caller's Git root, origin against the
+Todo's repository, machine identity and filesystem identity. This selects
+cooperative code editing: overlapping relative file scopes return
 `integration_overlap_advisories` identifying the other Todo and paths, so their
-owners can coordinate and validate the combined changes before merge. This is
+owners can coordinate and validate the combined changes before merge. The
+other grant may describe a different checkout or omit workspace identity; an
+unknown legacy grant no longer blocks the verified code editor. The advisory
+does not attest the other editor's isolation or rewrite its grant. This is
 cooperative code-edit coordination, not a filesystem access-control mechanism.
 It does not authorize changing shared runtime data, Git administration, remote
 branches, or merging. Use ordinary exclusive leases for those operations.
 
-Same-worktree aliases, the same Todo, other machines or clones, and grants
-without a verified workspace retain existing exclusion. Repository mismatch,
+Known same-checkout aliases and the same Todo retain existing exclusion, even
+if retained repository metadata differs for that physical checkout.
+Requests without a verified caller workspace retain ordinary exclusive scope
+checks, including against unknown legacy grants. Repository mismatch,
 redirected paths and a non-worktree root fail closed. Verified machine discovery
 currently supports macOS and Linux; other hosts retain ordinary leases. No
 workspace path or machine identifier is stored directly: only opaque digests
@@ -82,18 +89,25 @@ and the existing public repository identity enter the private authority record.
 
 Renewal preserves this identity. Acquire retries must use the same worktree,
 scopes and execution key; an alias resolving to the same worktree is valid.
-To change directories or return to ordinary exclusion, release the current
-lease with its version and acquire a new execution key. Existing leases are
-never retroactively reclassified; their holders can release and reacquire
-explicitly. No automatic migration or grant expansion occurs.
+To change directories or return to ordinary exclusion, release your current
+lease with its version and acquire a new execution key without
+`--write-worktree`. Other holders need not release their grants to admit an
+isolated code editor. Existing records and historical receipts are retained;
+no foreign ownership, shared-runtime permission or merge authority changes.
+
+**Behavior change:** worktree mode no longer requires both holders to have
+verified sibling-worktree identities. File overlap is an integration advisory
+unless the retained identity positively identifies the same physical checkout.
+The Todo lease still fences the execution instance, exact retries, renewal and
+lifecycle writes; code-file exclusivity is not that instance fence.
 
 ## 仓库相对路径的冲突边界
 
 新的 canonical 租约从权威 Todo 的 `task_repository` 冻结
 `lease.write_repository`，不接受调用者覆盖，也不从 CLI 当前目录猜测。同一 Goal
-内，只有双方都是已知且不同的仓库，才隔离同名相对路径；大小写别名仍互斥。
+内，普通独占模式只有双方都是已知且不同的仓库，才隔离同名相对路径；大小写别名仍互斥。
 完整 head 扫描、owner 资格、TTL、generation、CAS 与回执身份保持原规则，空 scope
-仍不产生写冲突。旧记录缺少该字段或为 null 时保持未知、保守互斥，读回和续租不
+仍不产生写冲突。旧记录缺少该字段或为 null 时保持未知，普通独占模式保守互斥，读回和续租不
 回填；合法退役后的新执行才冻结当前仓库。损坏身份拒绝执行，续租、转交和释放
 保留冻结值与原历史回执。当前执行证明、领取重放与 inspect 拒绝已知仓库漂移
 （`lease_repository_divergence`）；清理仍凭精确 owner/key/version，不能借 metadata
@@ -102,6 +116,22 @@ explicitly. No automatic migration or grant expansion occurs.
 JSON 与 Markdown 读回同一仓库字段或未知状态。这只是 Goal 内逻辑仓库互斥，
 不识别物理目录、软链接别名，也不是跨 Goal 锁；不新增配置、promotion 或自动
 委派。CLI 与 native provider 检查已覆盖该边界，完整前端/Lark 协作旅程仍需单独交付。
+
+### 独立 worktree 的协作代码编辑
+
+在独立 Git worktree 根目录使用上方 `--write-worktree "$PWD"`。TS 入口验证
+调用者的仓库、物理目录和主机身份；代码文件的 scope 重叠只返回
+`integration_overlap_advisories`，供集成、评审与合并时协调。对方旧 lease
+缺少 worktree 身份也不阻塞，且不会被改写或被推断成已隔离。已确认同一物理
+checkout 的冲突、同一 Todo 的执行归属仍拒绝；软链接、Git 管理目录和仓库不匹配
+仍在入口拒绝。
+
+这是 worktree 模式的行为变更：文件范围从跨 checkout 的执行锁改为集成提示，
+不再要求双方都先释放、重新绑定 worktree。Todo 实例 lease、CAS、TTL、重放、
+续租及生命周期写入仍按原规则保护。共享运行状态、远端分支和合并权限不由
+此模式授予；未提供经验证的调用者 worktree 时，普通独占规则保持不变。
+如需恢复普通独占，按读回版本释放自己的 lease，再用新的执行 key、不带
+`--write-worktree` 重新取得；无需修改其他角色的 lease。
 
 ## Operate the current lease
 
