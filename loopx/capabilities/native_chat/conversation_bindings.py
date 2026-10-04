@@ -42,7 +42,12 @@ class ChatConversationBindings:
         return result
 
     def configure(self, *, transport_ref: str, project_ref: str,
-                  executor_endpoint_id: str, context_kind: str = "project") -> dict[str, Any]:
+                  executor_endpoint_id: str, context_kind: str = "project",
+                  project_grant: str | None = None) -> dict[str, Any]:
+        if project_grant is None:
+            project_grant = self.projects.workspace_grant if context_kind == "project" and executor_endpoint_id == "codex" else "workspace_read"
+        if project_grant not in {"workspace_read", "workspace_write"} or (context_kind != "project" and project_grant != "workspace_read"):
+            raise ValueError("workspace write authorization is only available for project Chat")
         observation = self.observe(transport_ref)
         candidate = {
             "schema_version": "loopx_chat_conversation_binding_v0",
@@ -50,13 +55,13 @@ class ChatConversationBindings:
             "provider_ref": observation["provider_ref"], "operator_ref": observation["operator_ref"],
             "context_kind": context_kind, "project_ref": project_ref,
             "executor_endpoint_id": executor_endpoint_id,
-            "grant": "workspace_read" if context_kind == "project" else "portfolio_read", "enabled": True,
+            "grant": project_grant if context_kind == "project" else "portfolio_read", "enabled": True,
             **({"goal_ids": []} if context_kind == "steward" else {}),
         }
         with exclusive_file_lock(self.path, operation="configure_chat_conversation_binding"):
             current = self.read()
             previous = next((row for row in current["bindings"] if row["transport_ref"] == transport_ref), None)
-            if previous and all(previous.get(key) == candidate.get(key) for key in ["context_kind", "project_ref", "executor_endpoint_id", "provider_ref", "operator_ref"]):
+            if previous and all(previous.get(key) == candidate.get(key) for key in ["context_kind", "project_ref", "executor_endpoint_id", "provider_ref", "operator_ref", "grant"]):
                 if previous.get("agent_targets"):
                     candidate["agent_targets"] = previous["agent_targets"]
             if (context_kind == "steward" and previous and all(previous.get(key) == candidate.get(key)

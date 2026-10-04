@@ -316,6 +316,8 @@ def _status_text(snapshot: dict[str, Any], *, help_requested: bool) -> str:
     text += ("\n\n/agents 授权 Agent · /project 返回项目 · /help 用法" if attached else
              "\n\n/stop 停止当前聊天 · /new 新会话 · /help 用法")
     if help_requested:
+        if not steward and not attached and snapshot.get("grant") == "workspace_write":
+            text += "\n按项目规则和 skills 执行当前指令；读写授权不会创建 Goal 或提高原宿主权限。"
         text += ("\n\n/status 查看当前状态；/help 查看用法。"
                  "\n/agents 查看本 App 已授权的 Agent；使用列表中的完整 /agent 命令选择，/project 返回项目对话。")
         if not attached:

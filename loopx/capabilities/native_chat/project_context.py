@@ -21,9 +21,22 @@ PROJECT_CONVERSATION_OBJECTIVE = (
     "Do not create an implicit Goal or borrow the global manager identity."
 )
 
+PROJECT_WORK_OBJECTIVE = (
+    "Carry out the owner's explicit requests in the selected workspace, preserving "
+    "this Session's context. The explicit workspace write grant permits bounded "
+    "file edits and project workflows. Read and follow the workspace AGENTS.md "
+    "and applicable project skills. Use existing typed owners for durable state; "
+    "do not bypass material authority, intake, ranking or readback gates. The grant "
+    "does not create a LoopX Goal, scheduling, delegation or portfolio access. "
+    "Do not create an implicit Goal or borrow the global manager identity."
+)
+
 
 class ChatProjectContexts:
-    def __init__(self, roots: list[Path]) -> None:
+    def __init__(self, roots: list[Path], *, workspace_grant: str = "workspace_write") -> None:
+        if workspace_grant not in {"workspace_read", "workspace_write"}:
+            raise ValueError("unsupported project workspace grant")
+        self.workspace_grant = workspace_grant
         # Remember the owner's spelling as well as its initial canonical target.
         # A later symlink retarget must not redirect an accepted Session.
         self.roots = [(root.expanduser().absolute(), root.expanduser().resolve()) for root in roots]
@@ -37,7 +50,7 @@ class ChatProjectContexts:
             ref = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()[:24]
             contexts[ref] = {"kind": "project_workspace", "project_ref": ref,
                              "workspace_path": str(canonical), "audience": "local_owner",
-                             "grant": "workspace_read"}
+                             "grant": self.workspace_grant}
         return list(contexts.values())
 
     def resolve(self, project_ref: str, *, session_context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -72,7 +85,7 @@ class ChatProjectContexts:
         if session.get("channel_id") != selected["channel_id"]:
             raise ValueError("project conversation channel mismatch")
         return {"project": Path(selected["context"]["workspace_path"]),
-                "objective": PROJECT_CONVERSATION_OBJECTIVE,
+                "objective": PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE,
                 "title": Path(selected["context"]["workspace_path"]).name}
 
     def open_bound(self, binding_id: str, source: dict[str, Any], *, executor: str, channel_id: str | None) -> dict[str, Any]:

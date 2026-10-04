@@ -87,7 +87,8 @@ function validateAgentTargetObservation(target: JsonObject, value: unknown, work
 function binding(value: unknown): JsonObject {
   const row = requireJsonObject(value, "conversation binding");
   if (row.schema_version !== BINDING_SCHEMA || !["project", "steward"].includes(String(row.context_kind))
-      || row.grant !== (row.context_kind === "project" ? "workspace_read" : "portfolio_read") || row.enabled !== true) {
+      || (row.context_kind === "project" ? !["workspace_read", "workspace_write"].includes(String(row.grant)) : row.grant !== "portfolio_read")
+      || (row.grant === "workspace_write" && row.executor_endpoint_id !== "codex") || row.enabled !== true) {
     throw new EffectRuntimeRequestError("unsupported conversation binding");
   }
   const targets = row.agent_targets === undefined ? [] : row.agent_targets;
@@ -155,8 +156,9 @@ export function planConversationBinding(params: JsonObject): JsonObject {
   if (params.operation === "configure") {
     const candidate = binding(params.binding);
     observed(candidate, params.observation);
-    if (!Array.isArray(params.available_projects)
-        || !params.available_projects.map(normalizeProjectContext).some(row => row.project_ref === candidate.project_ref)) {
+    const project = Array.isArray(params.available_projects)
+      ? params.available_projects.map(normalizeProjectContext).find(row => row.project_ref === candidate.project_ref) : undefined;
+    if (!project || (candidate.grant === "workspace_write" && project.grant !== "workspace_write")) {
       throw new EffectRuntimeRequestError("workspace grant is unavailable");
     }
     const previous = current.bindings.find(row => row.transport_ref === candidate.transport_ref);
@@ -228,8 +230,11 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
   if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
   const projects = params.available_projects.map(normalizeProjectContext).filter(project => project.project_ref === row.project_ref);
   if (projects.length !== 1) throw new EffectRuntimeRequestError("workspace grant is unavailable or ambiguous");
+  if (row.grant === "workspace_write" && projects[0].grant !== "workspace_write") {
+    throw new EffectRuntimeRequestError("workspace write grant is no longer available");
+  }
   const context = {...projects[0], audience: "bound_owner", binding_id: id, source_ref: source,
-    provider_ref: row.provider_ref, operator_ref: row.operator_ref,
+    provider_ref: row.provider_ref, operator_ref: row.operator_ref, grant: row.grant,
     ...(row.context_kind === "steward" ? {kind: "bound_steward", grant: "portfolio_read", goal_ids: row.goal_ids} : {})};
   if (params.session_context !== undefined) {
     const saved = requireJsonObject(params.session_context, "bound Session context");
