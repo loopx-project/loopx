@@ -329,6 +329,10 @@ def _dispatch_quota_turn_start_hooks(
         )
         dispatch = extend_cadence_turn_start_dispatch(dispatch, registry_path=registry_path,
             runtime_root=root, goal_id=args.goal_id, agent_id=args.agent_id)
+    if args.agent_id:
+        from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
+        dispatch = extend_explore(dispatch, registry_path=registry_path, runtime_root=root,
+            goal_id=args.goal_id, agent_id=args.agent_id)
     local_private_state_mutated = any(
         isinstance(result, Mapping)
         and result.get("local_private_state_mutated") is True

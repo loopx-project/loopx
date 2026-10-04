@@ -213,12 +213,16 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         help="Clear allowed child-agent domains.",
     )
     configure_goal_parser.add_argument(
+        "--explore-mode", choices=("off", "evidence", "planning"),
+        help="Explore Harness: off, evidence only, or evidence with read-only planning. Does not grant spawn authority.",
+    )
+    configure_goal_parser.add_argument(
         "--explore-graph-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
             "Enable or disable automatic Explore Graph projection at material "
-            "refresh boundaries. This is independent from Explore Harness planning."
+            "refresh boundaries. Legacy alias for the Explore Harness evidence layer."
         ),
     )
     configure_goal_parser.add_argument(

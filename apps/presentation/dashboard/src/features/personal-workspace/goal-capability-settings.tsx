@@ -299,7 +299,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
           {editorMode === "guided" ? <section className="personal-capability-field-summary">
             <CapabilityConfigurationFields
               disabled={Boolean(busy)}
-              copy={localizedCapabilityFieldCopy(locale)}
+              copy={localizedCapabilityFieldCopy(locale, localizedSelected.capability_id)}
               editor={localizedSelected.configuration_editor}
               onChange={changeDraft}
               value={draft}
