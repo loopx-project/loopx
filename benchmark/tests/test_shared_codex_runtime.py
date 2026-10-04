@@ -419,7 +419,8 @@ def test_staged_snapshot_keeps_observed_commit_when_branch_moves(tmp_path, monke
             git("commit", "-m", "successor")
         return result
 
-    monkeypatch.setattr(harbor.subprocess, "run", moving_head)
+    from benchmark.runtime import source as source_runtime
+    monkeypatch.setattr(source_runtime.subprocess, "run", moving_head)
     uploaded = []
 
     class Environment:
