@@ -32,7 +32,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Composable State Machines and Recovery Verification (v0)](composable-state-machines-recovery-verification-v0.md) | Accepted | none | — |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
 | [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
-| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | — |
+| [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | [1 entry](ledger/external-evidence-research-capability-v0/) |
 | [RFC: Frontier Science Research Program v0](frontier-science-research-program-v0.md) | Accepted | none | — |
 | [RFC: Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.md) | Accepted | none | — |
 | [RFC: Goal Channel Collaboration v0](goal-channel-collaboration-v0.md) | Accepted | none | — |

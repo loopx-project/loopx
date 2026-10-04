@@ -102,28 +102,7 @@ inventory-only row for the same provider id.
 - retirement waits for downstream coverage of every admitted source;
 - CLI and effect-runtime TypeScript tests pass from the source checkout.
 
-## Delivery checkpoint (2026-10-02)
-
-The public GitHub method now completes a bounded real journey: anonymous pinned
-file reads, exact-plan receipt validation, a separate parent decision, projection
-into the existing deepresearch source ledger, actual lineage readback and retirement.
-Optional source refs and literal search terms are bound into the request/plan digest;
-legacy requests retain their existing identity. The provider is bundled in extensions
-under `method:public-github`; capability and ledger owners remain unchanged.
-
-Passed: real public-provider/source CLI journey; negative cases for private or stale
-readiness, malformed/unpinned sources, plan/admission mutation, partial/empty/failed
-reads, independent admission and coverage, wrong-question projection, budget failure
-and idempotent replay; packaged desktop/mobile conversation readback and reload;
-existing Lark Markdown presentation. Source bodies are not persisted. The shared
-Markdown readback uses existing answer/report and Lark transports; no frontend
-configuration or parallel evidence authority is needed.
-
-Commands are in the [versioned capability guide](../../../loopx/capabilities/external_research/README.md#public-github-method--公开-github-方法).
-Live Lark delivery, authenticated connector execution and broader semantic research
-quality remain untested; this checkpoint does not promote those providers or close
-S6/S8. Failed or partial results preserve original-source fallback, and neither a
-successful read nor a parent admission certifies evidence completeness.
+- Checkpoint moved to the execution ledger: [Public GitHub method delivery checkpoint (2026-10-02)](ledger/external-evidence-research-capability-v0/2026-10-02-public-github-method-delivery.md).
 
 ## Non-goals
 
@@ -133,3 +112,7 @@ successful read nor a parent admission certifies evidence completeness.
 - automatic evidence admission;
 - trading, publishing, or other downstream effect authority;
 - treating registration or usage counters as proof of evidence quality.
+
+## Appendix A: Execution ledger
+
+Dated delivery records live in the [per-entry ledger](ledger/external-evidence-research-capability-v0/).
