@@ -18,7 +18,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const harness = gate.enabled === true;
   const projection = requireJsonObject(params.projection, "projection");
   const plan = requireJsonObject(params.plan, "plan");
-  const nodes = rows(projection.nodes);
+  // The canonical graph retains creation order; this bounded view needs update order.
+  const nodes = rows(projection.nodes).sort((a, b) =>
+    String(b.last_updated_at ?? "").localeCompare(String(a.last_updated_at ?? "")));
   const findings = rows(projection.findings);
   const branches = rows(plan.selected_branches);
   const command = (...args: string[]) => [...route, "explore", ...args, "--goal-id", goal];
@@ -26,7 +28,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
     graph: graph ? {
       counts: projection.counts ?? {},
-      recent_nodes: nodes.slice(-3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
+      recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
       recent_findings: findings.slice(0, 3).map(row => compact(row, ["finding_id", "node_id", "title", "status"])),
       omitted_nodes: Math.max(0, nodes.length - 3),
       summary_command: command("summary"),

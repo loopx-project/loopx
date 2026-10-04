@@ -275,3 +275,55 @@ def test_real_quota_packet_exposes_replayable_read_without_admitting_unhealthy_g
     result = json.loads(read.stdout)
     assert result["graph_enabled"] is True
     assert result["harness"] is None
+
+
+@pytest.mark.parametrize("authorized", [True, False])
+def test_disabled_activation_preserves_caller_authorization_observation(tmp_path, authorized):
+    from loopx.capabilities.explore.activation import sync_explore_graph_after_material_refresh
+
+    path = registry(tmp_path)
+
+    def unexpected(**kwargs):
+        pytest.fail("disabled activation invoked a sink")
+
+    result = sync_explore_graph_after_material_refresh(
+        registry_path=path, goal_id="research", syncer=unexpected,
+        external_sink_delivery_authorized=authorized,
+    )
+    assert result["status"] == "disabled"
+    assert result["external_sink_delivery_authorized"] is authorized
+    assert result["delivery_postcondition"]["required"] is False
+
+
+def test_real_cli_recent_context_includes_revisited_old_node(tmp_path):
+    import subprocess
+    import sys
+
+    path = registry(tmp_path, graph=True)
+    root = tmp_path / "runtime"
+    log = explore_result_log_path(root, "research")
+    for i in range(5):
+        append_explore_result_event(log, build_explore_node_event(
+            goal_id="research", title=f"Route {i}", node_id=f"route-{i}",
+            status="exploring", recorded_at=f"2026-01-0{i + 1}T00:00:00Z",
+        ))
+    append_explore_result_event(log, build_explore_node_event(
+        goal_id="research", title="Route 0", node_id="route-0", status="blocked",
+        blocked_reason="Required observation is unavailable",
+        recorded_at="2026-02-01T00:00:00Z",
+    ))
+    before = log.read_bytes()
+    prefix = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(path),
+              "--runtime-root", str(root), "explore"]
+    result = subprocess.run(prefix + ["turn-context", "--goal-id", "research", "--agent-id", "worker"],
+                            capture_output=True, text=True, check=True)
+    graph = json.loads(result.stdout)["graph"]
+    assert [row["node_id"] for row in graph["recent_nodes"]] == ["route-0", "route-4", "route-3"]
+    assert graph["recent_nodes"][0]["blocked_reason"] == "Required observation is unavailable"
+    assert graph["omitted_nodes"] == 2
+    summary = subprocess.run(prefix + ["summary", "--goal-id", "research"],
+                             capture_output=True, text=True, check=True)
+    canonical = json.loads(summary.stdout)
+    assert canonical["ok"] is True
+    assert [row["node_id"] for row in canonical["nodes"]] == [f"route-{i}" for i in range(5)]
+    assert log.read_bytes() == before

@@ -91,9 +91,6 @@ def sync_explore_graph_after_material_refresh(
     policy = compact_explore_graph_policy(
         (goal or {}).get("explore_graph"), ((goal or {}).get("spawn_policy") or {}).get("explore_harness")
     )
-    external_sink_delivery_authorized = external_sink_delivery_authorized and (
-        ((goal or {}).get("explore_graph") or {}).get("enabled") is True
-    )
     base = {
         "ok": True,
         "schema_version": EXPLORE_GRAPH_ACTIVATION_SCHEMA_VERSION,
@@ -127,6 +124,14 @@ def sync_explore_graph_after_material_refresh(
                 external_sink_delivery_authorized=external_sink_delivery_authorized,
             ),
         }
+
+    # Disabled activation preserves the caller's authorization observation without
+    # reading or publishing anything. An enabled legacy Harness does not grant a
+    # sink permission merely by supplying its local evidence graph.
+    external_sink_delivery_authorized = external_sink_delivery_authorized and (
+        ((goal or {}).get("explore_graph") or {}).get("enabled") is True
+    )
+    base["external_sink_delivery_authorized"] = external_sink_delivery_authorized
 
     if syncer is None:
         status = "projection_sink_provider_unavailable"
