@@ -103,7 +103,7 @@ These directly determine whether a long-running team is usable. A directory or R
 | [Install](../../guides/installing-loopx.md), [newcomer path](../../guides/newcomer-command-path.md), [design](../../development/design.md), [user guide](../../guides/personal-workspace-user-guide.md) | S1/S5/S12 | First-value path, error recovery, supported platforms, accessibility and bilingual consistency; existing design/first-screen review for UI changes |
 | [Public adoption](../../product/public-adoption-loop.md), [scenario gaps](../../product/scenario-capability-gap-map.md), [SaaS assessment](../../product/roadmaps/saas-opportunity-assessment.md), [licensing](../../project/licensing.md), [governance](../../../.github/GOVERNANCE.md) | S12/S13 | Traceable public outcomes/failure feedback; independently qualify commercial hypotheses; existing license/credit/community-authority policies remain authoritative |
 
-Personal follow-through is a proposed bounded S1/S5/S6/S8/S9 application of these owners: [RFC](personal-follow-through-v0.md). It reuses Lark capture, canonical Todos, App return and periodic reporting; personal commitment interpretation and the installed private desktop journey remain unimplemented/unqualified. It closes no existing gate.
+[Lark personal follow-through](../../product/use-cases/office-operations/personal-follow-through.md) applies the [manager RFC](capable-manager-semantic-handoff-v0.md) to S1/S5/S6/S8/S9. Common grants, continuation and return use manager acceptance; the profile retains source interpretation and evaluation. The independent proposal is consolidated; the installed private desktop journey remains unqualified and closes no existing gate.
 
 ## 3. Portfolio Milestones, Resource Ordering and Completion
 

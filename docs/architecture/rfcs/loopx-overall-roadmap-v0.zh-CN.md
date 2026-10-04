@@ -90,7 +90,7 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | [Install](../../guides/installing-loopx.md)、[newcomer path](../../guides/newcomer-command-path.md)、[design](../../development/design.md)、[user guide](../../guides/personal-workspace-user-guide.md) | S1/S5/S12 | 首次价值路径、错误修复、支持平台、可访问性和双语一致性；UI 变化使用既有 design 和 first-screen review |
 | [Public adoption](../../product/public-adoption-loop.md)、[scenario gaps](../../product/scenario-capability-gap-map.md)、[SaaS assessment](../../product/roadmaps/saas-opportunity-assessment.zh-CN.md)、[licensing](../../project/licensing.md)、[governance](../../../.github/GOVERNANCE.md) | S12/S13 | 公开成果与失败反馈可追溯；商业假设独立验收，license/贡献者归属/社区权限按既有政策，不由总纲改写 |
 
-[个人事项持续跟进 RFC](personal-follow-through-v0.zh-CN.md) 是上述 owner 在 S1/S5/S6/S8/S9 的有界应用提案，复用飞书采集、规范 Todo、App 返回和周期报告。个人承诺理解及安装版私有桌面流程仍待实现/验收，不关闭已有门槛。
+[飞书个人事项跟进 profile](../../product/use-cases/office-operations/personal-follow-through.zh-CN.md) 是[管家 RFC](capable-manager-semantic-handoff-v0.zh-CN.md)在 S1/S5/S6/S8/S9 的有界应用。通用授权、持续跟进和返回沿用管家既有验收；场景文档保留来源理解与评测。原独立提案已归并，安装版私有桌面流程仍待验收，不关闭已有门槛。
 
 ## 3. 组合里程碑、资源次序与完成定义
 

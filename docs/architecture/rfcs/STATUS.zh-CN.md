@@ -25,7 +25,7 @@
 | [App 会话与可复用的异步工作投递](app-conversation-and-async-inbox-v0.zh-CN.md) | 已接受 | none | — |
 | [RFC：自动执行准入（v0）](automatic-execution-admission-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | 已接受 | none | — |
-| [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/capable-manager-semantic-handoff-v0/) |
+| [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md) | [2 条](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
 | [显式 Todo 接续：阶段 A](cross-session-memory-substrate-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX 桌面执行前端 v0](desktop-execution-frontends-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -51,7 +51,6 @@
 | [RFC：Monorepo 内的发行物拆分（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Agent 判断与可选独立评估——以 Jev 为候选方案（v0）](optional-semantic-assistance-jev-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：个人事项持续跟进（v0）](personal-follow-through-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：结果后记忆效用归因 v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Provider 在效果接受点执行授权（v0）](provider-effect-acceptance-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -63,9 +62,11 @@
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | 已接受 | none | — |
 | [RFC：LoopX 控制面 TypeScript 渐进迁移方向 v0](typescript-control-plane-migration-v0.zh-CN.md) | 已接受 | 无 | [14 条](ledger/typescript-control-plane-migration-v0/) |
 
-## 已被替代 (0)
+## 已被替代 (1)
 
-_无_
+| RFC | 头部状态 | 替代 / 关闭 | Ledger |
+| --- | --- | --- | --- |
+| [RFC：个人事项持续跟进（v0）](personal-follow-through-v0.zh-CN.md) | 已被替代 | 无; superseded by [Capable Agent Manager and Semantic Work Handoff](capable-manager-semantic-handoff-v0.md) | [1 条](ledger/personal-follow-through-v0/) |
 
 ## 已退役（Retired 或 Rejected） (0)
 
