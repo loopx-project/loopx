@@ -32,16 +32,11 @@ def main(argv=None):
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
-    parser.add_argument("--turn-timeout", type=int,
-                        help="Per-model-call budget for heartbeat workers (default: 4700s)")
     parser.add_argument("--eval-interval", type=int, default=300)
     parser.add_argument("--submission-cooldown", type=int, default=120)
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
     args = parser.parse_args(argv)
-    if args.turn_timeout is not None:
-        if not args.worker.startswith("heartbeat-") or args.turn_timeout <= 0:
-            parser.error("--turn-timeout requires a heartbeat worker and a positive number of seconds")
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
@@ -80,10 +75,8 @@ def main(argv=None):
             "HTTPS_PROXY": args.api_proxy_url, "HTTP_PROXY": args.api_proxy_url,
             "NO_PROXY": f"localhost,127.0.0.1,{urlsplit(args.judge_url).hostname}",
         }
-    worker_options = {} if args.turn_timeout is None else {"turn_timeout_seconds": args.turn_timeout}
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
-                         timeout_seconds=args.timeout, blind_prompt=blind_prompt,
-                         **worker_options)
+                         timeout_seconds=args.timeout, blind_prompt=blind_prompt)
     if args.api_proxy_url:
         agent.default_api_base_url = args.api_proxy_url
     logger = logging.getLogger("edgebench-runtime")
@@ -100,7 +93,6 @@ def main(argv=None):
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
-        "turn_timeout_seconds": agent.turn_timeout if args.worker.startswith("heartbeat-") else None,
         "status": "starting", "score_countable": False,
     }
     receipt_path = trial / "runtime-receipt.json"

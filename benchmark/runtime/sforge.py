@@ -80,7 +80,6 @@ class SForgeWorker(CodexAgent):
 
     def __init__(self, config, *, profile: str, cwd: str,
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-                 turn_timeout_seconds: int = 4700,
                  blind_prompt: str | None = None):
         super().__init__(config)
         if profile not in PROFILES:
@@ -95,7 +94,9 @@ class SForgeWorker(CodexAgent):
         self.blind_prompt = blind_prompt
         self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
-        self.turn_timeout = min(turn_timeout_seconds, timeout_seconds - 160)
+        # Let one call use the trial budget. The shared worker recomputes the
+        # remaining deadline on every continuation, retaining cleanup time.
+        self.turn_timeout = timeout_seconds - 160
         self.runtime = None
         self.prepared = False
         # A single Codex call and a native Goal must not acquire an outer loop.

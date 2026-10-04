@@ -60,13 +60,13 @@ every 300 seconds, and the submission cooldown is 120 seconds. `--timeout`,
 qualification runs. The shared Harbor defaults are unchanged. Native task
 internet policy is retained. Each attempt requires a new output directory.
 
-Heartbeat workers also accept `--turn-timeout SECONDS` (default 4700), independent
-of the total trial timeout. For bounded resume qualification, for example, use
-`--timeout 1800 --turn-timeout 600` to leave room for another model call and the
-existing startup/settlement reserve. The effective per-call budget is recorded;
-each wake still respects the remaining total deadline. A second scheduler wake
-alone does not prove resume: verify another actual model invocation with the
-same session identity. Other worker profiles reject this option.
+Heartbeat and native Goal workers have no independent per-call time limit.
+The shared worker uses the remaining trial budget, retaining 160 seconds for
+startup/cleanup; natural completion determines continuation boundaries. A second
+scheduler wake alone does not prove resume: verify another actual model
+invocation with the same session identity. Native Goal owns its continuation
+without an outer resume loop. Explicit total timeouts can support diagnostics,
+but short probes are not a prerequisite for running the intended protocol.
 
 The default `--feedback native` preserves native evaluator feedback.
 `--feedback blind` requires a non-game task with native internet isolation and
