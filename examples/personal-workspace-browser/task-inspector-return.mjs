@@ -49,6 +49,16 @@ export const taskInspectorReturnScenario = {
         await drawer.waitFor({ state: "hidden" });
         await page.waitForFunction(() => document.activeElement?.classList.contains("personal-task-card-actions") || document.activeElement?.parentElement?.classList.contains("personal-task-card-actions"));
         assert.equal(await more.evaluate(element => document.activeElement === element), true, "The actions opener retains its own keyboard context");
+
+        const longOpener = page.locator(".personal-task-card", { hasText: "Idless long Todo" }).locator(":scope > button");
+        assert.ok((await longOpener.innerText()).length < 150, "The card keeps its bounded preview");
+        await longOpener.click();
+        await drawer.waitFor();
+        assert.match(await drawer.locator(".personal-task-inspector-summary h3").innerText(), /keeps one card$/, "Opening a Task must retain its original requirements beyond the card preview");
+        await page.keyboard.press("Escape");
+        await drawer.waitFor({ state: "hidden" });
+        await page.waitForFunction(() => document.activeElement?.closest(".personal-task-card")?.textContent.includes("Idless long Todo"));
+        assert.equal(await longOpener.evaluate(element => document.activeElement === element), true);
         assert.equal(api.turnRequests.length, 0, "Inspecting Tasks never starts model work");
         assert.equal(api.actionApplies.length, 0, "Focus recovery never changes Todo authority");
         assert.equal(context.errors.length, 0, context.errors.join(" | "));
@@ -57,6 +67,6 @@ export const taskInspectorReturnScenario = {
         coverageEntries.push(...await context.close());
       }
     }
-    return { coverageEntries, note: "Pointer-opened Task and actions restore their exact opener after Escape/close, and Enter reopens the same task on desktop/390px with reduced motion; no authority or model write." };
+    return { coverageEntries, note: "Task details preserve the full source beyond bounded cards; pointer/Escape/Enter/close/More return to the exact opener on desktop/390px with reduced motion; no authority or model write." };
   },
 };

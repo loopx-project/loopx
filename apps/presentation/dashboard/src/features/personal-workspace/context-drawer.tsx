@@ -654,7 +654,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
-              <h3>{selection.item.text}</h3>
+              <h3>{selection.item.requestText ?? selection.item.text}</h3>
             </section>
             <section aria-label={t("drawer.taskInfo")} className="personal-task-inspector-fields">
               <h4>{t("drawer.taskInfo")}</h4>
