@@ -57,14 +57,27 @@
   内嵌 LoopX runtime 并注册 CLI 入口。
   **状态：已观察到源码与打包集成**；未验证部署和持续运行。
 - **Hufu**（Blicae8917）——已合并的
-  [PR #70](https://github.com/Blicae8917/hufu/pull/70) 增加显式启用的 LoopX v0.5.2
-  RunOnce Consumer。真实 transport 和 Host 调用由部署 Provider 提供；状态投影
-  [issue #76](https://github.com/Blicae8917/hufu/issues/76) 仍开放。
-  **状态：限定范围的集成已合并，配套工作尚未完成**。
+  [PR #70](https://github.com/Blicae8917/hufu/pull/70) 于 2026-08-23 增加显式启用的
+  LoopX v0.5.2 RunOnce Consumer。核对的 main 快照已
+  [导出 Consumer 及其 ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts)；
+  [兼容记录](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/docs/COMPATIBILITY.md)
+  保留 v0.5.2 精确基线，不内置 LoopX 依赖。真实 transport 和 Host 调用由部署
+  Provider 提供。[issue #76](https://github.com/Blicae8917/hufu/issues/76) 报告了
+  owner-local 试点的 RunOnce committed/replay 回执，但通用状态投影仍不完整，
+  issue 仍开放。**状态：限定范围集成已合并、本地试点由作者报告、配套投影开放**。
+  本清单未独立复现该试点，不据此声明当前版本兼容或持续部署。
+  核对日期：2026-10-04。
 - **benjamin-plugins**（Yidada）——已合并的
-  [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1) 增加调用官方 LoopX 内核的
-  Codex 插件。作者报告源码 checkout 上的 CLI 契约 smoke 通过；PyPI 安装未验证，
-  后台调度仍归宿主。**状态：插件已合并**。
+  [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1) 于 2026-09-05 增加调用
+  官方 LoopX 内核的 Codex 插件。核对的 main
+  [marketplace 条目](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/.agents/plugins/marketplace.json)
+  仍注册该插件；[来源记录](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/SOURCE.md)
+  将 CLI 资格固定到 LoopX 0.5.4 源码 checkout。PR 报告一个独立模型 status 场景，
+  其余场景仅通过结构校验。
+  [preflight 实现](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/skills/loopx/scripts/preflight.py)
+  只查找可执行文件和读取 registry 形状，不执行 LoopX，明确保留 runtime 和 driver
+  未验证。**状态：插件已合并，源码 checkout 验证由作者报告**。PyPI 安装、真实后台
+  执行和当前版本兼容未验证，调度仍归宿主。核对日期：2026-10-04。
 - **Adaptive-Agent-Orchestration-Protocol**（YuemingHub）——已合并的
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41)
   将 LoopX 注册为可选执行连续性 Provider。
@@ -236,5 +249,5 @@
   及 michaelx1993/foolzzz fork 家族。核对了当前 Issue/PR 状态、后续评论和固定版本
   的源文件；本轮未新增可确认的运行时采用者，也不代表其余条目重新验真。
 - 局部更新：**2026-10-04**，按当前公开 PR/Issue 状态和固定版本源文件复核
-  OpenViking、NoKV，区分提案打包配置、历史资格验证工具和当前验收限制。
-  未复现真实集成，其余条目未重新验真。
+  OpenViking、NoKV、Hufu 和 benjamin-plugins，区分提案打包配置、历史工具、作者
+  报告的试点、插件注册和当前验收限制。未独立复现真实集成，其余条目未重新验真。

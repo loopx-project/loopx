@@ -71,15 +71,29 @@ owner submitting a directory entry.
   **Status: source and packaging integration observed**; deployment and
   sustained runtime use were not verified.
 - **Hufu** (Blicae8917) — [PR #70](https://github.com/Blicae8917/hufu/pull/70),
-  merged, adds an opt-in LoopX v0.5.2 RunOnce Consumer. The deployment provider
-  supplies the real transport and Host invocation; [issue #76](https://github.com/Blicae8917/hufu/issues/76)
-  remains open for status projection. **Status: bounded integration merged,
-  companion work remains**.
+  merged August 23, 2026, adds an opt-in LoopX v0.5.2 RunOnce Consumer.
+  The checked main snapshot [exports the consumer and its ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts);
+  its [compatibility record](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/docs/COMPATIBILITY.md)
+  retains the exact v0.5.2 baseline and no bundled LoopX dependency.
+  The deployment provider supplies real transport and Host invocation.
+  [Issue #76](https://github.com/Blicae8917/hufu/issues/76) reports an owner-local
+  pilot with committed/replayed RunOnce receipts, while general status projection
+  remains incomplete; the issue is still open. **Status: bounded integration
+  merged, local pilot reported, companion projection open**. That report was not
+  independently reproduced and does not establish current-version compatibility
+  or sustained deployment. Checked October 4, 2026.
 - **benjamin-plugins** (Yidada) — [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1),
-  merged, adds a Codex plugin calling the official LoopX kernel. The author
-  reports a source-checkout CLI contract smoke; PyPI installation was not
-  verified and background scheduling remains host-owned.
-  **Status: plugin merged**.
+  merged September 5, 2026, adds a Codex plugin calling the official LoopX kernel.
+  The checked main [marketplace entry](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/.agents/plugins/marketplace.json)
+  still registers the plugin. Its [source record](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/SOURCE.md)
+  pins CLI qualification to a LoopX 0.5.4 checkout; the PR reports one independent
+  model status scenario, with other scenarios structurally checked only.
+  The [preflight implementation](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/skills/loopx/scripts/preflight.py)
+  locates an executable and reads registry shape without executing LoopX;
+  it explicitly leaves runtime and driver verification false.
+  **Status: plugin merged, source-checkout validation reported**. PyPI installation,
+  actual background execution and current-version compatibility were not verified;
+  scheduling remains host-owned. Checked October 4, 2026.
 - **Adaptive-Agent-Orchestration-Protocol** (YuemingHub) —
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41),
   merged, registers LoopX as an optional execution-continuity provider.
@@ -274,7 +288,8 @@ accepted design documents are distinct from depending on the LoopX runtime.
   GitHub-Michelin and the michaelx1993/foolzzz fork family. Current issue/PR
   states, later comments and pinned source files were checked; this update
   adds no confirmed runtime adopter and does not revalidate the rest of the table.
-- Scoped update: **2026-10-04**, rechecking OpenViking and NoKV against current
-  public PR/issue states and pinned source files. This distinguishes proposal
-  packaging, historical qualification tooling and current acceptance limits;
-  no live integration was reproduced and other entries were not revalidated.
+- Scoped update: **2026-10-04**, rechecking OpenViking, NoKV, Hufu and
+  benjamin-plugins against current public PR/issue states and pinned source files.
+  This distinguishes proposal packaging, historical tooling, author-reported
+  pilots, plugin registration and current acceptance limits. No live integration
+  was independently reproduced and other entries were not revalidated.
