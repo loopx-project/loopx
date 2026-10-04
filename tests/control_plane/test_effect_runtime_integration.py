@@ -844,7 +844,13 @@ def test_runtime_ready_budget_starts_after_start_lock_acquisition(
 
 @pytest.mark.parametrize(
     ("failure", "expected_code"),
-    [("directory", "io_is_directory"), ("live_lock", "mutation_lock_timeout")],
+    [
+        # Windows rejects replacement of an occupied directory with EPERM/EACCES;
+        # preserve that platform's shared permission diagnostic rather than
+        # requiring the Unix EISDIR classification.
+        ("directory", "io_permission_denied" if os.name == "nt" else "io_is_directory"),
+        ("live_lock", "mutation_lock_timeout"),
+    ],
 )
 def test_locator_publication_failure_surfaces_safe_typed_startup_diagnostic(
     tmp_path: Path,

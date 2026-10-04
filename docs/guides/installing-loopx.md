@@ -42,8 +42,9 @@ SQLite remains opt-in and checks the actual embedded SQLite version before
 opening authority state.
 
 A managed runtime that cannot publish its startup locator returns the existing
-safe filesystem/lock diagnostic code, such as `mutation_lock_timeout` or
-`io_is_directory`, instead of only an exit status. The message does not echo
+safe filesystem/lock diagnostic code, such as `mutation_lock_timeout`,
+`io_is_directory`, or Windows `io_permission_denied` for an occupied locator
+directory, instead of only an exit status. The message does not echo
 locator paths, tokens or Node stack traces. Inspect the named local ownership
 or filesystem problem before retrying; the diagnostic neither removes a live
 owner's lock nor repairs a foreign locator. It does not identify every possible

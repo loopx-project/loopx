@@ -20,7 +20,8 @@ close GQ01 execution/return or R2 small-team acceptance.
 runtime now reports locator publication failures through its existing typed
 startup envelope and shared filesystem/lock error codes. Real directory-conflict
 and live-lock fixtures verify the launcher receives a safe code and preserves
-the foreign locator/live owner. This closes the reproduced missing diagnostic,
+the foreign locator/live owner, including the Windows permission classification
+for directory replacement. This closes the reproduced missing diagnostic,
 not all unexpected-exit recovery failures or Linux qualification. Source/release
 promotion remains separate. See the [installation boundary](../../guides/installing-loopx.md).
 中文：真实目录冲突/活锁 fixture 验证安全启动诊断与原占用保留；只修复已复现的
