@@ -100,6 +100,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/collaboration/semantic_request.ts",
   "control_plane/coordination/authority_archive_read.ts",
   "control_plane/coordination/authority_source.ts",
+  "control_plane/coordination/legacy_writer_fence.ts",
   "control_plane/coordination/local_authority_migration.ts",
   "control_plane/coordination/local_authority_shadow.ts",
   "control_plane/coordination/local_authority_shadow_outbox.ts",
