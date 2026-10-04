@@ -889,6 +889,12 @@ export const typedActionsScenario = {
       await page.locator(".personal-goal-link", { hasText: "Progress Projection" }).click();
       await page.getByRole("heading", { name: "Progress Projection" }).waitFor({ state: "visible" });
       await page.locator(".personal-task-card").getByText("Current Todo", {exact: true}).waitFor();
+      const unclaimedCard = page.locator(".personal-task-card", {hasText: "Current Todo"});
+      await unclaimedCard.getByText("未分配", {exact: true}).waitFor();
+      await unclaimedCard.getByText("Current Todo", {exact: true}).click();
+      const unclaimedOwner = page.getByRole("dialog", {name: "Todo 详情"}).locator("dl > div", {has: page.getByText("Owner", {exact: true})});
+      await unclaimedOwner.getByText("未分配", {exact: true}).waitFor();
+      await page.getByRole("button", {name: /关闭详情/}).click();
       if ((await page.locator(".personal-channel-title").innerText()).includes("Current Todo")) throw new Error("Header repeated the task already shown in the workspace");
       const progressColumn = page.locator(".personal-object-list", { hasText: "待执行 / 进行中" });
       if ((await progressColumn.locator(".personal-task-card").count()) !== 5) throw new Error("Id-less long Todo was duplicated across compact and full projections");
