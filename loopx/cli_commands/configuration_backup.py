@@ -5,7 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from ..configuration_backup import capture_configuration_backup, restore_configuration_backup, verify_configuration_backup
+from ..configuration.backup import capture_configuration_backup, restore_configuration_backup, verify_configuration_backup
 from ..history import load_registry
 from ..paths import resolve_runtime_root
 

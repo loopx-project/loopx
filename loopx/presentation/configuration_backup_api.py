@@ -1,6 +1,6 @@
 """Owner-local configuration download and isolated recovery; never activation."""
-from .configuration_backup import capture_configuration_backup, restore_configuration_backup, verify_configuration_backup
-from .control_plane.effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
+from ..configuration.backup import capture_configuration_backup, restore_configuration_backup, verify_configuration_backup
+from ..control_plane.effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
 
 CONFIGURATION_BACKUP_PATH = "/api/chat/configuration-backup"
 

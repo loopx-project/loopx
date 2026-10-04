@@ -5,17 +5,35 @@ import sys
 import tarfile
 import threading
 import http.client
+import importlib
+import warnings
 from pathlib import Path
 import venv
 
 import pytest
 
-from loopx.configuration_backup import capture_configuration_backup, restore_configuration_backup
+from loopx.configuration.backup import capture_configuration_backup, restore_configuration_backup
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
 from loopx.capabilities.machine_configuration.store import read_machine_configuration
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+
+def test_legacy_configuration_backup_imports_warn_and_reexport():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        legacy = importlib.import_module("loopx.configuration_backup")
+    assert legacy.capture_configuration_backup is capture_configuration_backup
+    assert any(item.category is DeprecationWarning for item in caught)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        legacy_api = importlib.import_module("loopx.chat_configuration_backup_api")
+    from loopx.presentation.configuration_backup_api import ConfigurationBackupRequestMixin
+
+    assert legacy_api.ConfigurationBackupRequestMixin is ConfigurationBackupRequestMixin
+    assert any(item.category is DeprecationWarning for item in caught)
 
 
 @pytest.fixture

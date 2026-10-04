@@ -974,7 +974,7 @@
       "classification": "codec_api"
     },
     {
-      "site": "loopx/configuration_backup.py::<module>.capture_configuration_backup::codec_read:load_registry#1",
+      "site": "loopx/configuration/backup.py::<module>.capture_configuration_backup::codec_read:load_registry#1",
       "line": 15,
       "column": 16,
       "kind": "codec_read",
@@ -982,7 +982,7 @@
       "classification": "codec_api"
     },
     {
-      "site": "loopx/configuration_backup.py::<module>.capture_configuration_backup::codec_read:load_registry#2",
+      "site": "loopx/configuration/backup.py::<module>.capture_configuration_backup::codec_read:load_registry#2",
       "line": 23,
       "column": 52,
       "kind": "codec_read",

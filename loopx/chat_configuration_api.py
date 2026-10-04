@@ -8,7 +8,7 @@ from . import chat_goal_configuration_api as goal_api
 from . import chat_machine_configuration_api as machine_api
 from . import chat_operator_provider_api as operator_api
 from . import chat_automation_cadence_api as cadence_api
-from . import chat_configuration_backup_api as backup_api
+from .presentation import configuration_backup_api as backup_api
 
 
 class ChatConfigurationRequestMixin(

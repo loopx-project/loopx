@@ -2,11 +2,11 @@
 from pathlib import Path
 from typing import Any
 
-from .capabilities.machine_configuration.store import read_stored_machine_configuration
-from .control_plane.effect_runtime import effect_runtime_result
-from .control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
-from .history import load_registry
-from .registry import registry_goals
+from ..capabilities.machine_configuration.store import read_stored_machine_configuration
+from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+from ..history import load_registry
+from ..registry import registry_goals
 
 
 def capture_configuration_backup(
