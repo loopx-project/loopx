@@ -16,16 +16,8 @@ creation path; see the [absorption map](app-conversation-and-async-inbox-v0.md#c
 Its separate workspace/executor is not adopted. This entry improvement does not
 close GQ01 execution/return or R2 small-team acceptance.
 
-**S2/S12 startup diagnostic checkpoint (2026-10-04).** The managed Effect
-runtime now reports locator publication failures through its existing typed
-startup envelope and shared filesystem/lock error codes. Real directory-conflict
-and live-lock fixtures verify the launcher receives a safe code and preserves
-the foreign locator/live owner, including the Windows permission classification
-for directory replacement. This closes the reproduced missing diagnostic,
-not all unexpected-exit recovery failures or Linux qualification. Source/release
-promotion remains separate. See the [installation boundary](../../guides/installing-loopx.md).
-中文：真实目录冲突/活锁 fixture 验证安全启动诊断与原占用保留；只修复已复现的
-诊断缺口，未将未知恢复退出或 Linux CI 宣称通过。
+**S2/S12 startup diagnostic checkpoint (2026-10-04)** moved to
+[`ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.md`](ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.md).
 
 ## 1. Overall Objective and Product Routes
 
@@ -943,3 +935,11 @@ uv run --extra test python -m pytest -q tests/test_turn_managed_executor_binding
 These 177 tests are not a full repository run or live cloud/model, packaged-browser, Lark or PostgreSQL qualification. The #4552 browser fixture and live source-read record in the selection RFC are historical evidence, not rerun here, and do not qualify team execution. F1–F4 reproduction steps are fixed in the findings table; implementation should add the corresponding independent semantic regressions to existing tests, not commit temporary diagnostic scripts or private run logs.
 
 Update the current assessment, card boundaries and qualifying evidence in place. Move long historical ledgers to companions and keep domain RFC status synchronized. If domain state/authority/migration contracts conflict, stop affected implementation and repair the documents rather than overriding accepted authority through this roadmap. Merging this document accepts a discoverable, claimable design route; it does not complete R1–R7 or pass implementation and promotion gates.
+
+## Appendix A: Execution ledger
+
+Dated checkpoints for this RFC are files under
+[`ledger/loopx-overall-roadmap-v0/`](ledger/loopx-overall-roadmap-v0/), one dated
+entry per change, named and paired per [the ledger convention](ledger/README.md).
+An entry states what the change measured, what it changed, and what it did not
+establish; this body keeps only a pointer to it.
