@@ -111,7 +111,7 @@
     },
     {
       "site": "loopx/bootstrap.py::<module>.bootstrap_project::codec_transaction:project_registry_transaction#1",
-      "line": 533,
+      "line": 544,
       "column": 14,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",

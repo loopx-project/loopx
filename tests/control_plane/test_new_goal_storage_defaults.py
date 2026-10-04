@@ -93,6 +93,76 @@ def test_opted_in_creation_has_complete_canonical_authority_and_frozen_policy(en
     assert reconnect["storage_selection"]["handoff_mode"] == mode
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("mode", ["soft_claim", "hard_lease"])
+@pytest.mark.parametrize("compatibility_source", ["missing", "unreadable"])
+def test_completed_cli_creation_replays_without_compatibility_source(environment, provider, mode, compatibility_source):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, bootstrap, _, project, runtime = environment
+    configure(provider, mode=mode)
+    created = bootstrap()
+    registry = project / ".loopx/registry.json"
+    added = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", "todo", "add", "--goal-id", "first",
+        "--role", "agent", "--text", "Preserve a later native Todo"], capture_output=True, text=True, timeout=60)
+    assert added.returncode == 0, added.stdout + added.stderr
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="first", include_leases=True)
+    assert len(before["todos"]) == 1
+    state = Path(created["state_file"])
+    if compatibility_source == "missing":
+        state.unlink()
+    else:
+        state.write_bytes(b"\xff")
+    configure("file" if provider == "sqlite" else "sqlite", mode="hard_lease" if mode == "soft_claim" else "soft_claim")
+    restart_effect_runtime()
+    recovered = bootstrap()
+    selection = recovered["storage_selection"]
+    assert selection["creation_operation_id"] == created["storage_selection"]["creation_operation_id"]
+    assert selection["provider_revision"] == created["storage_selection"]["provider_revision"]
+    assert selection["handoff_mode"] == mode
+    assert selection["provider"] == provider
+    assert selection["legacy_fallback_used"] is False
+    assert recovered["state_action"] == "kept-existing"
+    assert next(action for action in recovered["actions"] if action["path"] == str(state))["action"] == "kept-existing"
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="first", include_leases=True) == before
+    assert not state.exists() if compatibility_source == "missing" else state.read_bytes() == b"\xff"
+    assert bootstrap("first", "--dry-run")["state_action"] == "kept-existing"
+    rejected = bootstrap("first", "--force", expected_code=1)
+    assert "cannot rebuild" in rejected["error"]
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="first", include_leases=True) == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("failure", ["missing_authority", "changed_operation", "changed_source"])
+def test_cli_creation_recovery_cannot_recreate_or_adopt_authority(environment, provider, failure):
+    configure, bootstrap, _, project, runtime = environment
+    configure(provider, mode="hard_lease")
+    created = bootstrap()
+    restart_effect_runtime()
+    state = Path(created["state_file"])
+    state.unlink()
+    digest = hashlib.sha256(b"first").hexdigest()
+    authority = runtime / "authority" / f"{provider}-v0" / (
+        f"authority-{digest}.sqlite" if provider == "sqlite" else f"authority-store-{digest[:16]}.json")
+    before = authority.read_bytes()
+    if failure == "missing_authority":
+        authority.rename(authority.with_suffix(".unavailable"))
+    elif failure == "changed_operation":
+        registry = project / ".loopx/registry.json"
+        data = json.loads(registry.read_text())
+        data["goals"][0]["creation_operation_id"] = "another-creation-operation"
+        registry.write_text(json.dumps(data))
+    wrong_source = project / "another-source.md"
+    rejected = bootstrap("first", *( ["--state-file", str(wrong_source)] if failure == "changed_source" else []), expected_code=1)
+    assert rejected["ok"] is False
+    expected_error = {"missing_authority": "restore", "changed_operation": "different operation", "changed_source": "not bound"}[failure]
+    assert expected_error in rejected["error"], rejected
+    assert not authority.exists() if failure == "missing_authority" else authority.read_bytes() == before
+    assert not state.exists()
+    assert not wrong_source.exists()
+
+
 def test_pending_creation_uses_frozen_intent_after_machine_default_changes(environment):
     configure, bootstrap, marker, project, _ = environment
     # Independently model the durable boundary: registry/state published, selector absent.

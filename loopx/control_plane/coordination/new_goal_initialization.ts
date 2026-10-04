@@ -4,8 +4,9 @@
 import {readFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
+import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthorityBytes, canonicalAuthoritySha256, requireAuthorityStoreId} from "./authority_store_codec.ts";
-import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot, selectLocalAuthorityTarget} from "./local_authority_provider.ts";
+import {LocalAuthorityProviderOpenError, openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot, selectLocalAuthorityTarget} from "./local_authority_provider.ts";
 import {engageLegacyCoordinationWriterFenceUnderLocks, completeNewGoalWriterFenceUnderLocks, loadLegacyCoordinationWriterFence, NEW_GOAL_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, withShadowMaintenanceLock} from "./shadow_management.ts";
 import {verifyShadowSourceSnapshot, withShadowSourceLocks, type ShadowRequest} from "./runtime_shadow.ts";
@@ -41,15 +42,15 @@ export async function initializeNewGoalAuthority(raw: JsonObject): Promise<JsonO
         !canonicalAuthorityBytes(registered.coordination?.storage_target).equals(canonicalAuthorityBytes(target)) ||
         typeof registered.repo !== "string" || typeof registered.state_file !== "string" ||
         resolve(registered.repo, registered.state_file) !== resolve(String(snapshot.state_path))) {
-      throw new Error("Canonical creation is not bound to the registered original operation, source and target");
+      throw new EffectRuntimeRequestError("Canonical creation is not bound to the registered original operation, source and target");
     }
   };
   await validateRegistration();
   const priorFence = await loadLegacyCoordinationWriterFence(root, goalId);
-  if (priorFence.status === "failed") throw new Error(priorFence.reason);
+  if (priorFence.status === "failed") throw new EffectRuntimeConflictError(priorFence.reason);
   if (capturedSource && priorFence.status === "missing" && ((request.projection.todos as unknown[])?.length !== 0 ||
       (request.projection.leases as unknown[])?.length !== 0 || (snapshot.lease_inventory as unknown[])?.length !== 0)) {
-    throw new Error("Canonical creation requires an empty source without lease history; use reviewed migration");
+    throw new EffectRuntimeRequestError("Canonical creation requires an empty source without lease history; use reviewed migration");
   }
 
   // Selection retains the established provider/lineage checks. It cannot replace
@@ -58,20 +59,25 @@ export async function initializeNewGoalAuthority(raw: JsonObject): Promise<JsonO
   return await withShadowMaintenanceLock(root, goalId, () => withShadowSourceLocks(request, async () => {
     await validateRegistration();
     const managed = await readShadowManagementState(root, goalId);
-    if (managed?.status === "active") throw new Error("Existing shadow capture requires reviewed migration");
-    const opened = await openLocalAuthorityStoreHandle(root, goalId);
+    if (managed?.status === "active") throw new EffectRuntimeConflictError("Existing shadow capture requires reviewed migration");
+    const opened = await openLocalAuthorityStoreHandle(root, goalId).catch((error: unknown) => {
+      if (error instanceof LocalAuthorityProviderOpenError) {
+        throw new EffectRuntimeConflictError(`${error.message}; restore the complete authority backup, never recreate it`);
+      }
+      throw error;
+    });
     const head = await opened.store.loadAuthority();
     const persisted = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (persisted.status === "failed") throw new Error(persisted.reason);
+    if (persisted.status === "failed") throw new EffectRuntimeConflictError(persisted.reason);
     if (persisted.status === "loaded" && !canonicalAuthorityBytes({...persisted.fence, creation_completed: false}).equals(canonicalAuthorityBytes(fence))) {
-      throw new Error("Canonical creation writer fence belongs to a different operation");
+      throw new EffectRuntimeConflictError("Canonical creation writer fence belongs to a different operation");
     }
     let readback = await readPromotionReceipt(opened.store, identity);
     if (!readback.matched) {
       if (persisted.status === "loaded" && persisted.fence.creation_completed === true) {
-        throw new Error("Completed canonical creation authority is unavailable; restore its complete backup, never recreate it");
+        throw new EffectRuntimeConflictError("Completed canonical creation authority is unavailable; restore its complete backup, never recreate it");
       }
-      if (head.status !== "missing") throw new Error(`Canonical creation cannot replace authority: ${readback.reason_code}`);
+      if (head.status !== "missing") throw new EffectRuntimeConflictError(`Canonical creation cannot replace authority: ${readback.reason_code}`);
       if (!capturedSource) return {source_capture_required: true};
       // A creation intent is never a migration waiver. Validate the complete
       // real source and inventory under its locks; nonempty sources fail closed.
@@ -79,17 +85,17 @@ export async function initializeNewGoalAuthority(raw: JsonObject): Promise<JsonO
       if ((request.projection.todos as unknown[])?.length !== 0 ||
           (request.projection.leases as unknown[])?.length !== 0 ||
           (snapshot.lease_inventory as unknown[])?.length !== 0) {
-        throw new Error("Canonical creation requires an empty source without lease history; use reviewed migration");
+        throw new EffectRuntimeRequestError("Canonical creation requires an empty source without lease history; use reviewed migration");
       }
       const fenced = await engageLegacyCoordinationWriterFenceUnderLocks(root, goalId, String(snapshot.state_path), fence);
-      if (fenced.status !== "applied" && fenced.status !== "replayed") throw new Error("Canonical creation writer fence could not be verified");
+      if (fenced.status !== "applied" && fenced.status !== "replayed") throw new EffectRuntimeConflictError("Canonical creation writer fence could not be verified");
       const committed = await commitPromotionAndReadBack(opened.store, identity, projection,
         {...identity.receipt, schema_version: "loopx_new_goal_authority_creation_event_v0"});
       readback = committed.readback;
-      if (!readback.matched) throw new Error(`Canonical creation interrupted; retry its original operation: ${readback.reason_code}`);
+      if (!readback.matched) throw new EffectRuntimeConflictError(`Canonical creation interrupted; retry its original operation: ${readback.reason_code}`);
     }
     if (persisted.status === "missing" && head.status === "loaded") {
-      throw new Error("Canonical creation receipt exists but its writer fence is missing; restore the complete authority backup");
+      throw new EffectRuntimeConflictError("Canonical creation receipt exists but its writer fence is missing; restore the complete authority backup");
     }
     await completeNewGoalWriterFenceUnderLocks(root, goalId, fence);
     return {ok: true, provider: opened.provider, status: head.status === "missing" ? "created" : "replayed",
