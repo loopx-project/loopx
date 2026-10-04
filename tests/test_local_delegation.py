@@ -391,6 +391,13 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     (root / "release").touch()
     result = wait(reconnected)
     assert result["status"] == "accepted", result
+    validation = result["validation"]
+    assert validation["source"] == "goal_acceptance"
+    # The fixture rule pins the validator, oracle module and source material.
+    assert validation["check_count"] == 1 and validation["pinned_file_count"] == 3
+    assert len(validation["basis_sha256"]) == 64
+    assert set(validation) == {"source", "check_count", "pinned_file_count", "basis_sha256"}
+    assert reconnected.read("analysis-1")["validation"] == validation
     assert (root / "analyst" / "initial" / "host-invocations").read_text() == "1"
     assert not (root / "analyst" / "initial" / "DELEGATION.json").exists()
     assert demo.canonical_tasks(root)["todo_analyst-initial"]["done"]

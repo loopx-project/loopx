@@ -34,6 +34,9 @@ try {
   const evidence = dialog.getByRole("region", {name: "执行证据"});
   const original = () => evidence.getByLabel("证据内容: report.json");
   await original().waitFor();
+  // Older readbacks remain readable without invented provenance.
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await evidence.getByText("此运行时未提供验收依据标识。", {exact: true}).waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   const verificationGap = evidence.getByText("当前读回未提供独立验收者与指定版本回执。", {exact: true});
   await verificationGap.waitFor({timeout: 3000});
