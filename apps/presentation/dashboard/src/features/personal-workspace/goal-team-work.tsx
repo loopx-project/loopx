@@ -53,7 +53,10 @@ function StateIcon({state}: {state: DelegationState | PulseBucket | CheckTone}) 
 
 /** On-demand observations share the caller/config pin of this Goal conversation. */
 export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {sessionId: string; members: Member[]; zh: boolean; canMessage: boolean; ingress: LoopXModeSnapshot["ingress"]}) {
-  const [selected, setSelected] = useState<string | null>(null);
+  // Navigation retains references only. Each visit remounts the evidence reader
+  // and rechecks current authority and acceptance, including on the way back.
+  const [evidencePath, setEvidencePath] = useState<string[]>([]);
+  const selected = evidencePath.at(-1) ?? null;
   const backButton = useRef<HTMLButtonElement | null>(null);
   const lastSelection = useRef<string | null>(null);
   const selectedTrigger = useRef<HTMLButtonElement | null>(null);
@@ -73,7 +76,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   }, [sessionId, memberKey]);
   async function read(cursor?: string) {
     const current = ++generation.current;
-    setBusy(true); setError(""); setPage(null); setSelected(null);
+    setBusy(true); setError(""); setPage(null); setEvidencePath([]);
     try {
       const result = await fetchLoopXTeamWork(sessionId, cursor);
       if (current === generation.current) setPage(result);
@@ -119,8 +122,14 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   const unverified = Object.values(checks).filter(check => check.state === "runtime_unverified").length;
   const blocked = checked - ready - unverified;
   if (selected) return <div className="goal-team-work">
-    <button ref={backButton} type="button" onClick={() => setSelected(null)}>{zh ? "返回执行列表" : "Back to executions"}</button>
-    <GoalTeamEvidence key={`${sessionId}:${selected}`} sessionId={sessionId} operationId={selected} zh={zh} canMessage={canMessage} ingress={ingress} onInspect={setSelected}/>
+    <div className="goal-team-work-actions">
+      <button ref={backButton} type="button" onClick={() => setEvidencePath(path => path.slice(0, -1))}>
+        {evidencePath.length > 1 ? (zh ? "返回上一份证据" : "Back to previous evidence") : (zh ? "返回执行列表" : "Back to executions")}
+      </button>
+      {evidencePath.length > 1 ? <button type="button" onClick={() => setEvidencePath([])}>{zh ? "返回执行列表" : "Back to executions"}</button> : null}
+    </div>
+    <GoalTeamEvidence key={`${sessionId}:${selected}`} sessionId={sessionId} operationId={selected} zh={zh} canMessage={canMessage} ingress={ingress}
+      onInspect={operationId => {if (operationId !== selected) setEvidencePath(path => [...path, operationId]);}}/>
   </div>;
 
   const items = page?.items ?? [];
@@ -146,7 +155,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
         <code>{row.operation_id ?? row.record_id}</code>{row.todo_id ? <code>{row.todo_id}</code> : null}
       </details> : null}
       {row.operation_id ? <button ref={row.operation_id === lastSelection.current ? selectedTrigger : undefined} type="button" onClick={() => {
-        lastSelection.current = row.operation_id; setSelected(row.operation_id);
+        lastSelection.current = row.operation_id; setEvidencePath([row.operation_id!]);
       }}>{zh ? "查看证据与反馈" : "Evidence and feedback"}</button> : null}
     </li>;
   }
