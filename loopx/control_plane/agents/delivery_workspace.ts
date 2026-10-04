@@ -49,7 +49,7 @@ export interface DeliveryWorkspaceSnapshot extends JsonObject {
   peer_independent_worktree_required: boolean;
 }
 
-type DeliveryWorkspaceOperation = "build" | "normalize";
+type DeliveryWorkspaceOperation = "build" | "normalize" | "isolation";
 
 const GIT_IDENTITY_PATTERN =
   /^git:[a-z0-9.-]+(?::[0-9]{1,5})?\/[A-Za-z0-9._~+/-]+$/i;
@@ -60,7 +60,7 @@ const GIT_REVISION_DIGEST_PATTERN = /^[0-9a-f]{64}$/i;
 function operation(value: unknown): DeliveryWorkspaceOperation {
   return requireStringLiteral(
     value,
-    ["build", "normalize"] as const,
+    ["build", "normalize", "isolation"] as const,
     "delivery workspace operation",
     "delivery workspace operation is unsupported",
   );
@@ -249,6 +249,34 @@ export function normalizeDeliveryWorkspaceSnapshot(
 export function evaluateDeliveryWorkspace(value: unknown): JsonObject {
   const request = requestObject(value);
   const selectedOperation = operation(request.operation);
+  if (selectedOperation === "isolation") {
+    const workspace = normalizeDeliveryWorkspaceSnapshot(request.workspace);
+    const multiAgent = requireBoolean(request.multi_agent_goal, "multi_agent_goal");
+    const explicit = request.explicit_peer_worktree_requirement == null
+      ? null
+      : requireBoolean(request.explicit_peer_worktree_requirement, "explicit_peer_worktree_requirement");
+    const repository = optionalNonEmptyString(request.task_repository, "task_repository");
+    if (repository !== null && canonicalGitIdentity(repository, "task_repository") === null) {
+      throw new EffectRuntimeRequestError("task_repository must identify a Git repository");
+    }
+    // A local Goal receipt proves the registered non-Git workspace. It is a
+    // delivery, so keep independent Todo acceptance; do not relabel it as
+    // non-delivery just because there is no Git worktree to isolate.
+    const required = multiAgent && explicit !== false && (
+      explicit === true || repository !== null || workspace?.identity_kind !== "local_goal"
+    );
+    return {
+      schema_version: DELIVERY_WORKSPACE_RESULT_SCHEMA,
+      peer_independent_worktree_required: required,
+      workspace: workspace === null || (
+        repository !== null && workspace.task_repository !== canonicalGitIdentity(repository, "task_repository")
+      ) ? null : snapshot(
+        workspace.workspace_identity, workspace.identity_kind,
+        workspace.workspace_revision_digest ?? null, workspace.repository_source,
+        workspace.workspace_kind, required,
+      ),
+    };
+  }
   return {
     schema_version: DELIVERY_WORKSPACE_RESULT_SCHEMA,
     workspace: selectedOperation === "build"

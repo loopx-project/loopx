@@ -227,9 +227,9 @@ def request(
         }
 
 
-def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
-    """Re-offer results until the requester explicitly acknowledges consumption."""
+def _collect_returns(root, goal_id, agent_id, *, scope=None):
     items = []
+    deliveries = []
     folder = (
         _root(root)
         / "peer-operations"
@@ -328,32 +328,49 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
             )
             if len(items) > 20:
                 break
-            if mark_read:
-                state = path.with_name(path.stem + ".delivery.json")
-                with _request_lock(
-                    root,
-                    row["request_id"],
-                    scope,
-                    path.with_suffix(".lock"),
-                ):
-                    if not state.exists():
-                        _write(
-                            state,
-                            {
-                                "status": "delivered",
-                                **({"result_key": path.stem} if "result_key" in reply else {}),
-                                "delivered_at": _now(),
-                                "kind": "requester_cli_read",
-                                **(
-                                    {"goal_ref": row["goal_ref"]}
-                                    if "goal_ref" in row
-                                    else {}
-                                ),
-                            },
-                        )
+            deliveries.append((path, row, reply))
         if len(items) > 20:
             break
-    return {"items": items[:20], "has_more": len(items) > 20}
+    return {"items": items[:20], "has_more": len(items) > 20}, deliveries
+
+
+def _record_return_reads(root, deliveries, *, scope=None):
+    for path, row, reply in deliveries:
+        state = path.with_name(path.stem + ".delivery.json")
+        with _request_lock(
+            root,
+            row["request_id"],
+            scope,
+            path.with_suffix(".lock"),
+        ):
+            if not state.exists():
+                _write(
+                    state,
+                    {
+                        "status": "delivered",
+                        **({"result_key": path.stem} if "result_key" in reply else {}),
+                        "delivered_at": _now(),
+                        "kind": "requester_cli_read",
+                        **(
+                            {"goal_ref": row["goal_ref"]}
+                            if "goal_ref" in row
+                            else {}
+                        ),
+                    },
+                )
+
+
+def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
+    """Re-offer results until the requester explicitly acknowledges consumption."""
+    result, deliveries = _collect_returns(
+        root,
+        goal_id,
+        agent_id,
+        scope=scope,
+    )
+    if mark_read:
+        _record_return_reads(root, deliveries, scope=scope)
+    return result
 
 
 def consume_return(
@@ -493,16 +510,15 @@ def _request_id(value):
     return value
 
 
-def input_readiness(
+def _input_readiness_for_goal(
     registry,
     goal_id,
+    goal,
     brief,
     *,
     workspace=None,
     configured_workspace: bool = False,
 ):
-    """Check local input versions, without fetching or claiming agent comprehension."""
-    goal = _goal(registry, goal_id)
     goal_workspace = Path(goal["repo"]).resolve()
     selected = goal_workspace
     if workspace is not None and Path(workspace).resolve() != goal_workspace:
@@ -562,6 +578,25 @@ def input_readiness(
     return result
 
 
+def input_readiness(
+    registry,
+    goal_id,
+    brief,
+    *,
+    workspace=None,
+    configured_workspace: bool = False,
+):
+    """Check local input versions, without fetching or claiming agent comprehension."""
+    return _input_readiness_for_goal(
+        registry,
+        goal_id,
+        _goal(registry, goal_id),
+        brief,
+        workspace=workspace,
+        configured_workspace=configured_workspace,
+    )
+
+
 def read_inbox(
     root,
     registry,
@@ -590,16 +625,20 @@ def read_inbox(
             operation_cursor=operation_cursor,
             scope=goal_scope,
         )
-        peer_returns = returns(
+        peer_returns, return_deliveries = _collect_returns(
             root,
             goal_id,
             agent_id,
-            mark_read=True,
             scope=goal_scope,
         )
         if peer_returns["items"]:
             result["peer_returns"] = peer_returns
-        record_read(root, result["items"], scope=goal_scope)
+        else:
+            result.pop("peer_returns", None)
+        observed_goal = dict(goal_scope.goal)
+        observed_goal_ref = (
+            dict(goal_scope.caller_goal_ref or {}) if goal_scope.exact else None
+        )
 
     from .links import receiver_followthrough
 
@@ -608,9 +647,29 @@ def read_inbox(
     # in Goal lifetime admission.
     for item in result["items"]:
         if item.get("brief"):
-            item["input_readiness"] = input_readiness(
-                registry, goal_id, item["brief"], workspace=workspace
+            item["input_readiness"] = _input_readiness_for_goal(
+                registry,
+                goal_id,
+                observed_goal,
+                item["brief"],
+                workspace=workspace,
             )
+    if result["items"] or return_deliveries:
+        with collaboration_goal_scope(
+            registry,
+            goal_id=goal_id,
+            agents=(agent_id,),
+            caller_goal_ref=observed_goal_ref,
+        ) as goal_scope:
+            if result["items"]:
+                record_read(root, result["items"], scope=goal_scope)
+            else:
+                decide_collaboration_lifecycle(
+                    goal_scope,
+                    operation="read_record",
+                    record=return_deliveries[0][1],
+                )
+            _record_return_reads(root, return_deliveries, scope=goal_scope)
     result["followthrough"] = (
         "Use each request's receiver_followthrough to reconcile it with actual Core work. "
         "Record an explicit assessment even when continuing other work; a read is not a decision. "

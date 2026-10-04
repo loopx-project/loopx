@@ -404,6 +404,84 @@ protected-operation policy remain authoritative for permission. Supervisors,
 dashboards, and scheduler projections may recommend intervention but cannot
 silently convert a proposal into authority.
 
+### 7.5 Long-running work and decision checkpoints (proposed refinement)
+
+This 2026-10-04 refinement is a proposal for M3/M5, not shipped adaptive
+scheduling. It separates an **experiment boundary**, a **model decision
+checkpoint**, and an **accountable Turn boundary**. One experiment can span
+several Turns; every admitted accountable Turn still validates, writes back,
+and settles its own identity. Waiting for the experiment does not defer an
+owed debit, keep a Turn open indefinitely, or make earlier work free.
+
+The nearest owning capability/provider must define, before launch:
+
+- the question, candidate revision, comparison and bounded postcondition;
+- the authorized job identity, resource/time limits and recovery owner;
+- which observable result can change the next decision, and how to validate
+  that result; a training checkpoint, evaluation or build is meaningful only
+  under this declared contract;
+- the last consumed result revision, next observation time/deadline and
+  stop/cancel behavior; elapsed time and log growth alone are not evidence.
+
+These are capability/provider data. The kernel consumes identity, readiness,
+freshness and existing effect/settlement facts; it does not interpret epochs,
+benchmark scores, proof counts or process log prose. No generic job scheduler,
+worker launcher or new built-in capability is needed for this proposal.
+
+The proposed handoff is:
+
+| Phase | Owner and required behavior |
+|---|---|
+| Start bounded work | A normal selected Todo/Turn admits the effect. The provider persists job/candidate identity and an operational receipt. Settle that Turn truthfully: accepted launch proves launch, not the final experiment outcome. |
+| Observe while waiting | The existing host/runtime or capability observer checks the exact job without a reasoning-model call. Reuse one due monitor or existing observation channel; do not create a Todo per poll. Record observer CPU/IO cost even when no agent slot is spent. |
+| Return a decision checkpoint | The provider validates a new result against the declared postcondition, binds its revision/artifact digest and emits a compact observation. Failure, cancellation and deadline expiry must also produce actionable observations. |
+| Admit a decision | The existing scheduler/Turn path rechecks Goal lifetime, ownership, quota, capabilities and authority. A ready observation is input, not execution permission. Other runnable work can proceed while this experiment waits. |
+| Consume and continue | In the accountable consuming Turn, commit result adoption and the next step through the normal writeback before acknowledging consumption. Replayed/duplicate delivery recovers that receipt without duplicating launch or adoption. Settlement replay is idempotent for the same Turn identity; a newly admitted recovery Turn still settles normally. |
+
+Current Todo resume conditions include `monitor_changed` and `resume_at`; an
+implementation should use the existing typed monitor generation and timeout
+fallback where sufficient. **The missing integration is the provider-result
+binding and material-generation update**, not a new arbitrary `job_done` token.
+Only a validated decision checkpoint may advance that generation. The monitor
+must name the exact job/result source and bound Todo; unrelated log changes
+cannot release it. A safety observation deadline catches a lost notification
+or crashed process; it is not a periodic request to reinterpret unchanged work.
+Unsupported hosts retain current execution and show unavailable readiness,
+rather than silently claiming model-wake suppression.
+
+Identity must survive host/Agent restart: Goal lifetime, owning Agent/Todo,
+provider/run id, attempt or job generation, candidate revision, result revision
+and evidence/artifact refs. Keep raw logs and native job handles with the
+provider; expose only bounded authorized references. A PID alone is not a
+recoverable identity. Provider absence or an ambiguous external effect remains
+unknown under existing recovery rules; it cannot justify an automatic relaunch.
+The consumed cursor advances only with validated durable adoption, so a crash
+after result delivery re-offers the result. Stopped/revoked Goals and expired
+claims fence late results; replacement attempts cannot consume old results.
+
+Persist the incumbent artifact reference and its qualifying result separately
+from the running candidate. The provider updates it only after a comparable
+valid result satisfies its declared constraints. Recovery verifies reference
+availability and content before reuse; a missing candidate artifact does not
+silently replace the incumbent or authorize another launch.
+
+The first experiment is a **shadow observation** over one real capability
+runtime: report unchanged polls, decision checkpoints, result-to-decision
+latency, native outcome and total model/observer cost. Then qualify opt-in
+model-admission suppression only for that supported provider/host combination.
+Do not change the generic heartbeat prompt or all scheduler defaults. Turning
+the policy off restores fixed admission while retaining job/evidence history;
+it neither kills work implicitly nor changes acceptance or accounting.
+
+Acceptance requires real controlled process execution and recovery, not just
+serialized events: duplicate and out-of-order results, changed candidates,
+restart, missed notification, deadline, cancellation, unknown effect, competing
+claim and owner stop. A packaged frontend journey must show the bound work,
+waiting reason, last/next observation, result and stale/unavailable recovery
+through existing task/capability surfaces. CLI readback alone is a partial
+slice. Scientific usefulness follows the independent qualification in
+[research decisions](research-exploration-control-plane-v0.md#115-evidence-conditioned-experiment-decisions-proposed-refinement).
+
 ## 8. Measurement Model
 
 The first implementation should measure before it controls.
@@ -652,6 +730,8 @@ policy framework.
   transitions;
 - validate recommendations against independent acceptance rules;
 - retain Todo and replan as the only execution authorities.
+- qualify the proposed §7.5 provider checkpoint/monitor binding in shadow;
+  distinguish model decisions from experiment completion and Turn settlement.
 
 ### M4: Authority-stride shadow recommendations
 
@@ -665,6 +745,8 @@ policy framework.
 - retain hard ceilings and rollback;
 - compare repeated results against the pinned fixed profile;
 - publish limitations and failure modes with any claimed improvement.
+- for long-running work, qualify §7.5 lost-result recovery and default-off
+  parity before suppressing model admission; observer cost remains measured.
 
 ## 13. Validation Criteria
 

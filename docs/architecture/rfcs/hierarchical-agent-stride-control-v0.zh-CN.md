@@ -364,6 +364,75 @@ Goal 与 vision state 继续拥有 acceptance 权限。User gate 与 protected-o
 policy 继续拥有 permission 权限。Supervisor、dashboard 与 scheduler projection
 可以建议干预，但不能静默把 proposal 变成 authority。
 
+### 7.5 长作业与决策 checkpoint（修订提案）
+
+这项 2026-10-04 修订属于 M3/M5 提案，不代表 adaptive scheduling 已交付。
+需要分开**实验边界**、**模型决策 checkpoint**和**可记账 Turn 边界**。
+一个实验可以跨多个 Turn；每个已获准且需要记账的 Turn 仍以自己的 identity
+完成 validation、writeback 和 settlement。等待实验不会延后欠付 debit、让
+Turn 无限保持打开，或把此前工作变成免费。
+
+最近的 capability/provider owner 应在启动前声明：
+
+- 问题、candidate revision、比较对象和有界 postcondition；
+- 已授权的 job identity、资源/时间上限和 recovery owner；
+- 什么可观察结果会影响下一决策，以及如何验证；训练 checkpoint、评测或
+  构建只有在这份已声明的合同下才有决策意义；
+- 已消费 result revision、下次观测时间/deadline、stop/cancel 行为；仅经过
+  一段时间或日志增长不是证据。
+
+这些是 capability/provider 数据。Kernel 消费 identity、readiness、freshness
+及现有 effect/settlement 事实，不解释 epoch、benchmark 分数、证明数量或进程
+日志 prose。本提案不需要新增通用 job scheduler、worker launcher 或 built-in
+capability。
+
+拟议 handoff 如下：
+
+| 阶段 | Owner 与必需行为 |
+|---|---|
+| 启动有界作业 | 普通已选 Todo/Turn 准入 effect。Provider 持久化 job/candidate identity 与 operational receipt。该 Turn 如实结算：启动成功只证明启动，不证明实验最终结果。 |
+| 等待中的观测 | 现有 host/runtime 或 capability observer 无需 reasoning-model 调用即可检查精确 job。复用一个 due monitor 或已有 observation channel，不为每次 poll 创建 Todo。即使不消费 agent slot，也记录 observer CPU/IO 成本。 |
+| 返回决策 checkpoint | Provider 按已声明的 postcondition 验证新结果，绑定 revision/artifact digest 并返回紧凑 observation。失败、取消和 deadline 到期同样必须形成可操作 observation。 |
+| 准入决策 | 现有 scheduler/Turn 路径重新检查 Goal lifetime、ownership、quota、capability 与 authority。Ready observation 是输入，不是执行许可。等待此实验时仍可推进其他 runnable 工作。 |
+| 消费并继续 | 在负责消费的可记账 Turn 中，通过普通 writeback 提交 result adoption 与下一步骤，再确认消费。重放/重复交付恢复原 receipt，不重复 launch 或 adoption。同一 Turn identity 的结算重放幂等；新获准 recovery Turn 仍正常结算。 |
+
+当前 Todo resume condition 已有 `monitor_changed` 与 `resume_at`。若足够，
+实现应复用 typed monitor generation 与 timeout fallback。
+**缺失的是 provider-result binding 和 material-generation 更新集成**，不是
+新增任意 `job_done` token。只有通过验证的决策 checkpoint 才能推进 generation。
+Monitor 必须绑定精确 job/result source 与 Todo；无关日志变化不能释放等待。
+Safety observation deadline 用来发现丢失通知或崩溃进程，不是周期性要求模型
+重新解释未变工作。不支持的 host 保持现有执行并显示 readiness unavailable，
+不能暗称已抑制模型唤醒。
+
+Identity 必须跨 host/Agent restart 保留：Goal lifetime、owning Agent/Todo、
+provider/run id、attempt 或 job generation、candidate revision、result revision
+与 evidence/artifact ref。Raw log/native job handle 留在 provider，仅投影有界
+且授权的引用。单个 PID 不是可恢复 identity。Provider 缺失或外部 effect 状态
+不明确时，按现有 recovery 规则保留 unknown，不能据此自动 relaunch。只有
+validated durable adoption 才推进 consumed cursor，因此交付后崩溃会重新提供
+结果。Stopped/revoked Goal 和过期 claim 拦截 late result；替换 attempt 不能
+消费旧结果。
+
+Incumbent artifact reference 及其 qualifying result 与当前运行 candidate 分开
+持久化。Provider 仅在可比有效结果满足已声明 constraint 后更新 incumbent。
+Recovery 在复用前验证引用可用性与内容；candidate artifact 缺失不能静默
+替换 incumbent，也不授权再次 launch。
+
+先在一个真实 capability runtime 做 **shadow observation**：报告 unchanged poll、
+decision checkpoint、result-to-decision latency、原生结果和模型/observer 总成本。
+随后仅对该 provider/host 组合资格验证 opt-in model-admission suppression。
+不改变通用 heartbeat prompt 或所有 scheduler 默认行为。关闭策略恢复 fixed
+admission，保留 job/evidence history，不隐式杀作业，不改变 acceptance 或 accounting。
+
+验收必须覆盖真实受控进程执行与 recovery，不只是 event 序列化：重复与乱序
+结果、candidate 改变、restart、丢失通知、deadline、取消、unknown effect、竞争
+claim 和 owner stop。Packaged frontend 旅程通过已有 task/capability surface 显示
+绑定工作、等待原因、上次/下次观测、结果及 stale/unavailable 恢复；仅 CLI
+readback 属于 partial slice。科学效用遵循
+[研究决策](research-exploration-control-plane-v0.zh-CN.md#115-由证据驱动的实验决策修订提案)
+的独立资格验证。
+
 ## 8. 测量模型
 
 第一版实现应先测量，再控制。
@@ -597,6 +666,9 @@ executor、scheduler 或 generic policy framework。
 - 用独立 acceptance rule 验证建议；
 - Todo 与 replan 仍是唯一 execution authority。
 
+- 在 shadow 中验证 §7.5 的 provider checkpoint/monitor binding，区分模型
+  决策、实验完成与 Turn settlement。
+
 ### M4：Authority-stride shadow recommendation
 
 - 区分 report 与 authority-changing intervention；
@@ -609,6 +681,9 @@ executor、scheduler 或 generic policy framework。
 - 保留 hard ceiling 与 rollback；
 - 对 pinned fixed profile 做 repeated comparison；
 - 任何 improvement claim 都同时公开 limitation 与 failure mode。
+
+- 长作业抑制 model admission 前，验证 §7.5 的 lost-result recovery 与
+  default-off parity；observer 成本继续纳入测量。
 
 ## 13. 验证标准
 

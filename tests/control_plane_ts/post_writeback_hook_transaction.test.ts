@@ -1273,6 +1273,36 @@ test("finalize rejects a transaction id from different source facts", async () =
   );
 });
 
+test("committed receipt ids separate same-clock phases and recover the original intent", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-hook-receipt-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const ordinarySource = {...source(), receipt_id: "completion-ordinary", state_version: "completion-ordinary"};
+  const ordinary = await evaluatePostWritebackHookTransaction(request(root, {source: ordinarySource}));
+  const ordinaryPlan = (ordinary.provider_plan as Record<string, unknown>[])[0];
+  await evaluatePostWritebackHookTransaction(request(root, {
+    phase: "finalize", source: ordinarySource, transaction_id: ordinary.transaction_id,
+    provider_outcomes: [returnedOutcome(ordinaryPlan, notApplicableResult(ordinaryPlan))],
+  }));
+  const closeoutSource = {...ordinarySource, receipt_id: "completion-closeout", state_version: "completion-closeout"};
+  const closeout = await evaluatePostWritebackHookTransaction(request(root, {source: closeoutSource}));
+  const closeoutPlan = (closeout.provider_plan as Record<string, unknown>[])[0];
+  assert.notEqual(closeoutPlan.dispatch_id, ordinaryPlan.dispatch_id);
+  const recorded = await evaluatePostWritebackHookTransaction(request(root, {
+    phase: "finalize", source: closeoutSource, transaction_id: closeout.transaction_id,
+    provider_outcomes: [returnedOutcome(closeoutPlan)],
+  }));
+  const recordedDispatch = recorded.dispatch as Record<string, unknown>;
+  assert.equal(recordedDispatch.intent_count, 1);
+  // Later read-model clock changes cannot redefine a committed receipt.
+  const replay = await evaluatePostWritebackHookTransaction(request(root, {
+    source: {...closeoutSource, committed_at: "2026-09-03T12:00:00Z"},
+  }));
+  assert.deepEqual(replay.provider_plan, []);
+  const replayDispatch = replay.dispatch as Record<string, unknown>;
+  assert.deepEqual(replayDispatch.intents, recordedDispatch.intents);
+  assert.deepEqual(replayDispatch.replayed_hooks, ["periodic_report.stage_completion"]);
+});
+
 test("transaction request rejects unknown top-level fields", async () => {
   await assert.rejects(
     evaluatePostWritebackHookTransaction(

@@ -142,6 +142,7 @@ def dispatch_committed_cli_post_writeback_hooks(
     committed_at: str,
     hooks: Sequence[PostWritebackHookRegistration],
     projection_builder: PostWritebackProjectionBuilder | None,
+    receipt_id: str | None = None,
 ) -> dict[str, Any]:
     """Bridge one committed CLI mutation into the TS-owned hook lifecycle.
 
@@ -216,6 +217,7 @@ def dispatch_committed_cli_post_writeback_hooks(
                     "effect_id": str(identity.get("effect_id") or ""),
                 },
                 "state_version": state_version,
+                **({"receipt_id": receipt_id} if receipt_id is not None else {}),
                 "committed_at": committed_at,
                 "projection": projection,
             },
