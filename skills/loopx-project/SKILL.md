@@ -1,6 +1,6 @@
 ---
 name: loopx-project
-description: Use for LoopX project lifecycle work: connect or configure a project/Goal, repair project-local state or stale dashboard status, sync registry entries, or diagnose CLI/PATH/status/history routing. Ordinary task execution and routine refresh-state settlement already directed by a current interaction_contract do not require this skill. For registering durable project materials, prefer loopx-doc-registry.
+description: "Use for LoopX project lifecycle work: connect or configure a project/Goal, repair project-local state or stale dashboard status, sync registry entries, or diagnose CLI/PATH/status/history routing. Ordinary task execution and routine refresh-state settlement already directed by a current interaction_contract do not require this skill. For registering durable project materials, prefer loopx-doc-registry."
 ---
 
 # LoopX Project Workflow

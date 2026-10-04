@@ -1,6 +1,6 @@
 ---
 name: loopx-benchmark
-description: Use when acting as the operator or post-run analyst of a LoopX-managed benchmark experiment through benchmark-toolkit: select or launch runs, maintain experiment-board rows, qualify integrity, or analyze matched comparisons and case insights. Solving an assigned benchmark task under an existing runner does not by itself select this skill. Excludes casual benchmark discussion and ordinary software microbenchmarks.
+description: "Use when acting as the operator or post-run analyst of a LoopX-managed benchmark experiment through benchmark-toolkit: select or launch runs, maintain experiment-board rows, qualify integrity, or analyze matched comparisons and case insights. Solving an assigned benchmark task under an existing runner does not by itself select this skill. Excludes casual benchmark discussion and ordinary software microbenchmarks."
 ---
 
 # LoopX Benchmark Workflow
