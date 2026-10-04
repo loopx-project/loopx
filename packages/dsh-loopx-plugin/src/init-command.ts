@@ -28,6 +28,16 @@ export const inject = ['commands']
 const HOST_SURFACE = 'deepseek-harness-native'
 const WORKFLOW_SCHEMA = 'loopx_workflow_skill_install_v0'
 const INIT_SOURCE_ID = 'dsh-loopx-plugin/init-command'
+// DSH 0.2 requires each producer to register its own message source. This
+// distinguishes initialization notices from user intent and continuation.
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'loopx-initialization': {
+      readonly kind: 'loopx-initialization'
+      readonly plugin: typeof INIT_SOURCE_ID
+    }
+  }
+}
 const MAX_FOLLOWUP_TEXT_CHARS = 800
 const PYTHON_VERSION_PROBE = 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'
 const PIP_VERSION_ARGS = Object.freeze(['-m', 'pip', '--version'])
@@ -481,7 +491,7 @@ function followupMessage(text: string): UserMessage {
     id: randomUUID() as UserMessage['id'],
     role: 'user' as const,
     content,
-    source: Object.freeze({ kind: 'plugin' as const, plugin: INIT_SOURCE_ID }),
+    source: Object.freeze({ kind: 'loopx-initialization' as const, plugin: INIT_SOURCE_ID }),
   })
 }
 

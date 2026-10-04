@@ -786,7 +786,7 @@ describe('/loopx-init followups', () => {
     expect(calls.filter(args => args.includes('--install'))).toHaveLength(1)
     expect(harness.messages).toHaveLength(2)
     for (const message of harness.messages) {
-      expect(message.source).toEqual({ kind: 'plugin', plugin: initSource })
+      expect(message.source).toEqual({ kind: 'loopx-initialization', plugin: initSource })
       expect(message.source).not.toEqual({
         kind: 'plugin',
         plugin: 'dsh-loopx-plugin/driver',

@@ -54,7 +54,7 @@ try {
   // shim represents only host version reporting, never a successful runtime.
   const unsupported = join(temp, 'unsupported-dsh')
   const marker = join(temp, 'unexpected-profile-operation')
-  await writeFile(unsupported, `#!/bin/sh\nif [ "$1" = '--version' ]; then\n  printf '%s\\n' '0.2.0-rc.2'\nelse\n  touch "$LOOPX_INSTALLER_SMOKE_MARKER"\n  exit 1\nfi\n`)
+  await writeFile(unsupported, `#!/bin/sh\nif [ "$1" = '--version' ]; then\n  printf '%s\\n' '0.2.1-alpha.1'\nelse\n  touch "$LOOPX_INSTALLER_SMOKE_MARKER"\n  exit 1\nfi\n`)
   await chmod(unsupported, 0o755)
   const rejected = run('bash', [join(packageRoot, 'install.sh')], {
     ...env, DSH_BIN: unsupported, LOOPX_INSTALLER_SMOKE_MARKER: marker,
