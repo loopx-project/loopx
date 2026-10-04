@@ -77,7 +77,7 @@ transport。现有 usage-settings HTTP 交互验证共享机器设置。没有�
 
 ## Claim argument recovery / Claim 参数恢复
 
-`todo claim` grammar errors now include `error_code=todo_claim_invalid_arguments`
+Parsed `todo claim` usage errors now include `error_code=todo_claim_invalid_arguments`
 and one `recovery` object. Its `cli_args` is an argv array with the original
 registry/runtime, Goal/Todo, supplied actor/executor, project/state path,
 preview, operation identity and lease/CAS values. Review `remove_flags`, then
@@ -86,6 +86,8 @@ Retry from the original working directory when supplied paths are relative.
 A missing executor is never inferred from the actor. The command can still
 fail admission, registration, ownership, source-mode or lease validation.
 This is recovery guidance, not an authority grant or automatic retry.
+Unknown flags, invalid flag values and parser-required global inputs retain
+their existing argparse diagnostics before this handler is reached.
 
 For example, a claim with an actor but no `--claimed-by`, plus an unsupported
 `--turn-instance-id`, reports both in the same packet. The retry excludes the
@@ -103,12 +105,13 @@ Successful commands retain their output. Invalid claim option combinations now
 use the claim-specific validator before shared checks, so their first human
 diagnostic can differ; existing claim-specific and Turn diagnostics remain.
 
-`todo claim` 语法错误现在返回上述 error code 和一个 `recovery`：`cli_args` 用 argv
+已解析的 `todo claim` 用法错误现在返回上述 error code 和一个 `recovery`：`cli_args` 用 argv
 数组保留原路由、Goal/Todo、已提供的 actor/executor、project/state、preview、
 operation 身份和 lease/CAS。先检查 `remove_flags`，再为每个 `requires_flags`
 补入显式值后重试；路径为相对路径时，沿用原调用的工作目录。不会从 actor 猜执行者。
 修复语法后仍可能被注册、所有权、source mode 或 lease 校验拒绝。这是恢复指引，
 不授予权限，也不自动执行。
+未知 flag、非法 flag 值和缺 parser 必填输入仍先走既有 argparse 诊断。
 缺 `--claimed-by` 又误带 Turn 参数时，一次 packet 同时列出两处；修复不另建 Turn
 或重新读取 quota。CAS=0 保留，缺 lease key 时必须填写；legacy 上的 canonical 参数
 继续按模式拒绝，不静默删除或 promote。语法／展示沿用 Python CLI adapter，
