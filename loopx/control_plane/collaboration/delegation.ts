@@ -81,7 +81,7 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   return binding;
 }
 
-type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected";
+type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected" | "stopped";
 
 function boundedReason(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
@@ -279,8 +279,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   };
 }
 const transitions: Record<Observation, readonly Observation[]> = {
-  prepared: ["running", "rejected"], running: ["turn_returned", "rejected"],
-  turn_returned: ["accepted", "rejected"], accepted: [], rejected: [],
+  prepared: ["running", "rejected", "stopped"], running: ["turn_returned", "rejected", "stopped"],
+  turn_returned: ["accepted", "rejected", "stopped"], accepted: [], rejected: [], stopped: [],
 };
 
 /** Page only the caller's existing journal. A cursor is not a fleet snapshot. */
@@ -344,6 +344,92 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
     return {status: to, wake_intent: delegationWakeIntent(params)};
   }
   return {status: to};
+}
+
+type StopPhase = "requested" | "acknowledged" | "settled" | "unknown";
+const openStopPhases: readonly StopPhase[] = ["requested", "acknowledged"];
+/** What the Host transport read back about everything the operation's Turn launched. */
+type HostProcessDrain = "not_launched" | "drained" | "draining" | "unattributable";
+const hostProcessDrains: readonly HostProcessDrain[] = ["not_launched", "drained", "draining", "unattributable"];
+/** What canonical authority proved about the hard lease the stopped execution may hold.
+ *
+ * `unchecked` until the stop resolves it, which happens only once the execution
+ * is proven gone; it never means that no lease was owed. `not_owed` is proven
+ * by canonical authority for the execution's own identity, not by its record.
+ */
+type StopLease = "unchecked" | "not_owed" | "released" | "release_unproven" | "obligation_unproven";
+const stopLeases: readonly StopLease[] = ["unchecked", "not_owed", "released", "release_unproven", "obligation_unproven"];
+/** The next step for the host: resolve the lease from canonical authority, or record a receipt phase. */
+type DelegationStopStep =
+  | {action: "resolve_lease"}
+  | {action: "record"; phase: StopPhase; terminal: boolean; reason: string};
+
+function stopRecord(phase: StopPhase, reason: string): DelegationStopStep {
+  return {action: "record", phase, terminal: !openStopPhases.includes(phase), reason};
+}
+
+/** Advance one stop request from host release facts; a receipt is never inferred from time.
+ *
+ * The stopped execution is gone once the operation lock is free, the member's
+ * Turn lane was released by the stopped worker's process group, and the Host
+ * transport reads everything the Turn launched as drained or never launched.
+ * A worker and its lane can let go while the Host supervisor is still
+ * terminating the Host, so their release proves nothing about the Host. The
+ * host reads the lane from its holder record and never takes it, so a
+ * legitimate Turn is not refused, and a holder it cannot attribute is not
+ * released.
+ *
+ * Only then may the host resolve the execution's hard lease: its release hands
+ * the member's Todo on, so it waits for the execution, and a receipt never
+ * becomes terminal before that lease is resolved. ``settled`` needs the
+ * acknowledgement of a process that held the operation lock, the execution
+ * gone and the lease released or proven not owed. Everything released without
+ * an acknowledgement means the named holder vanished before recording what it
+ * observed, which is ``unknown`` rather than a fake settlement; with a Host
+ * that cannot be attributed nothing more can be learned, so it is ``unknown``
+ * without touching the lease. An acknowledged stop whose Host cannot be
+ * attributed stays open for a later read with the same identity. A grace
+ * timeout on its own moves nothing: a worker still holding a lock still runs.
+ */
+export function decideDelegationStop(params: JsonObject): DelegationStopStep {
+  const phase = params.phase as StopPhase;
+  requireThat(openStopPhases.includes(phase), "delegation stop decision requires an open stop phase");
+  requireThat(typeof params.acknowledged === "boolean", "delegation stop acknowledgement fact required");
+  requireThat(typeof params.operation_lock_free === "boolean" && typeof params.worker_lane_released === "boolean",
+    "delegation stop release facts required");
+  requireThat(hostProcessDrains.includes(params.host_process as HostProcessDrain),
+    "delegation stop host process drain fact required");
+  requireThat(stopLeases.includes(params.lease as StopLease), "delegation stop lease fact required");
+  requireThat(params.timed_out === undefined || typeof params.timed_out === "boolean",
+    "delegation stop timeout fact must be boolean");
+  requireThat(phase !== "acknowledged" || params.acknowledged === true,
+    "an acknowledged stop cannot lose its acknowledgement");
+  const operationFree = params.operation_lock_free === true;
+  const host = params.host_process as HostProcessDrain;
+  const lease = params.lease as StopLease;
+  const executionPending = !operationFree ? "operation_lock_still_held"
+    : params.worker_lane_released !== true ? "worker_lane_release_unproven"
+    : host === "draining" ? "host_process_still_running"
+    : host === "unattributable" ? "host_process_drain_unproven"
+    : null;
+  requireThat(executionPending === null || lease === "unchecked",
+    "a delegation stop resolves its lease only after its execution is proven gone");
+  const leaseStep = (open: StopPhase, terminal: StopPhase, reason: string): DelegationStopStep =>
+    lease === "unchecked" ? {action: "resolve_lease"}
+      : lease === "release_unproven" ? stopRecord(open, "required_lease_release_unproven")
+      : lease === "obligation_unproven" ? stopRecord(open, "lease_obligation_unproven")
+      : stopRecord(terminal, reason);
+  if (params.acknowledged === true) {
+    return executionPending === null
+      ? leaseStep("acknowledged", "settled", "acknowledged_worker_and_host_released")
+      : stopRecord("acknowledged", executionPending);
+  }
+  if (executionPending === null) return leaseStep("requested", "unknown", "holder_gone_without_acknowledgement");
+  if (executionPending === "host_process_drain_unproven") {
+    return stopRecord("unknown", "holder_gone_without_acknowledgement");
+  }
+  return stopRecord("requested", operationFree ? executionPending
+    : params.timed_out === true ? "holder_still_running_after_grace" : "awaiting_acknowledgement");
 }
 
 /** Whether an accepted result may produce a wake intent at all.

@@ -1404,6 +1404,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-channel-actions { min-width: 0; }
   .personal-agent-select { max-width: 132px; min-width: 0; }
   .personal-channel-actions > .personal-icon-button { display: none; }
+  /* Scope and executor pickers cannot share the title row on a phone. */
+  .personal-channel-header:has(.personal-scope-select) .personal-channel-actions { grid-row: auto; grid-column: 1 / -1; order: 3; }
+  .personal-channel-header:has(.personal-scope-select) .personal-agent-select { flex: 1 1 0; max-width: none; }
   .personal-goal-tabs { grid-column: 1 / -1; order: 4; margin-left: 0; overflow-x: auto; align-self: auto; }
   .personal-channel-scroll, .personal-composer-wrap { padding-left: 14px; padding-right: 14px; }
   .personal-channel-scroll[data-active-goal-view="tasks"]:has(.personal-task-board) { overflow-y: auto; }

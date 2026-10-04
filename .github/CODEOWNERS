@@ -2,83 +2,84 @@
 # .github/GOVERNANCE.md ("Maintainer And Review Roster", "Review Service Levels").
 #
 # GitHub applies the LAST matching pattern, so this file runs from broad to
-# narrow: fallback, module map, subsystem routes, then lead-owned governance
-# paths, which must win. When a line lists several owners, approval from any
-# one of them satisfies code-owner review.
+# narrow: fallback, module map, subsystem routes, then governance paths.
+# @loopx-agent shares every route; narrower rules must retain that owner.
+# When a line lists several owners, approval from any one of them satisfies
+# code-owner review.
 #
 # Only accounts with repository write access and an accepted, publicly recorded
 # scope are listed. First-review contacts, pending invitations and read-only
 # contributors are routed through GOVERNANCE.md, not through this file.
 
 # Fallback for paths no module line claims, such as a new top-level directory.
-* @huangruiteng
+* @huangruiteng @loopx-agent
 
 # --- Module map --------------------------------------------------------------
 # Every top-level module has an explicit line so ownership is visible per
 # module. A subsystem appointment narrows a path in the next section.
 
 # Control-plane kernel: authority, state, quota, todos, leases, TS transactions.
-/loopx/control_plane/ @huangruiteng
-/loopx/semantics/ @huangruiteng
-/loopx/*.py @huangruiteng
+/loopx/control_plane/ @huangruiteng @loopx-agent
+/loopx/semantics/ @huangruiteng @loopx-agent
+/loopx/*.py @huangruiteng @loopx-agent
 
 # CLI surface.
-/loopx/cli_commands/ @huangruiteng
+/loopx/cli_commands/ @huangruiteng @loopx-agent
 
 # Capabilities, extensions, domain packs and experiments.
-/loopx/capabilities/ @huangruiteng
-/loopx/extensions/ @huangruiteng
-/loopx/domain_packs/ @huangruiteng
-/loopx/experiments/ @huangruiteng
+/loopx/capabilities/ @huangruiteng @loopx-agent
+/loopx/extensions/ @huangruiteng @loopx-agent
+/loopx/domain_packs/ @huangruiteng @loopx-agent
+/loopx/experiments/ @huangruiteng @loopx-agent
 
 # Host goal-mode adapters (Claude, DSH, OpenCode, Pi, ...).
-/loopx/*_goal_mode/ @huangruiteng
+/loopx/*_goal_mode/ @huangruiteng @loopx-agent
 
 # Presentation: Python projections, dashboard, site and desktop shell.
-/loopx/presentation/ @huangruiteng
-/apps/presentation/ @huangruiteng
-/apps/desktop/ @huangruiteng
+/loopx/presentation/ @huangruiteng @loopx-agent
+/apps/presentation/ @huangruiteng @loopx-agent
+/apps/desktop/ @huangruiteng @loopx-agent
 
 # Canary metrics, benchmarks and regression corpora.
-/loopx/canary/ @huangruiteng
-/benchmark/ @huangruiteng
-/regression/ @huangruiteng
+/loopx/canary/ @huangruiteng @loopx-agent
+/benchmark/ @huangruiteng @loopx-agent
+/regression/ @huangruiteng @loopx-agent
 
 # Optional provider packages.
-/packages/ @huangruiteng
+/packages/ @huangruiteng @loopx-agent
 
 # Agent skills, man pages, docs, examples, tests, scripts and demos.
-/skills/ @huangruiteng
-/man/ @huangruiteng
-/docs/ @huangruiteng
-/examples/ @huangruiteng
-/tests/ @huangruiteng
-/scripts/ @huangruiteng
-/demo/ @huangruiteng
-/deprecate/ @huangruiteng
+/skills/ @huangruiteng @loopx-agent
+/man/ @huangruiteng @loopx-agent
+/docs/ @huangruiteng @loopx-agent
+/examples/ @huangruiteng @loopx-agent
+/tests/ @huangruiteng @loopx-agent
+/scripts/ @huangruiteng @loopx-agent
+/demo/ @huangruiteng @loopx-agent
+/deprecate/ @huangruiteng @loopx-agent
 
 # --- Subsystem routes --------------------------------------------------------
 
 # Frontend source and chat bundle delivery (built assets are not tracked).
-/apps/presentation/dashboard/ @huangruiteng @maxliux5
-/loopx/presentation/chat_bundle.py @huangruiteng @maxliux5
-/scripts/chat_bundle* @huangruiteng @maxliux5
+/apps/presentation/dashboard/ @huangruiteng @maxliux5 @loopx-agent
+/loopx/presentation/chat_bundle.py @huangruiteng @maxliux5 @loopx-agent
+/scripts/chat_bundle* @huangruiteng @maxliux5 @loopx-agent
 
 # Lark integration (subsystem maintainer: @steven-kid).
-/loopx/extensions/lark/ @huangruiteng @steven-kid
-/loopx/cli_commands/lark_*.py @huangruiteng @steven-kid
-/docs/integrations/lark-*.md @huangruiteng @steven-kid
-/docs/reference/protocols/lark-*.md @huangruiteng @steven-kid
-/examples/lark-* @huangruiteng @steven-kid
-/examples/lark_extension_test_support.py @huangruiteng @steven-kid
-/examples/control_plane/lark-* @huangruiteng @steven-kid
-/tests/extensions/test_lark_*.py @huangruiteng @steven-kid
+/loopx/extensions/lark/ @huangruiteng @steven-kid @loopx-agent
+/loopx/cli_commands/lark_*.py @huangruiteng @steven-kid @loopx-agent
+/docs/integrations/lark-*.md @huangruiteng @steven-kid @loopx-agent
+/docs/reference/protocols/lark-*.md @huangruiteng @steven-kid @loopx-agent
+/examples/lark-* @huangruiteng @steven-kid @loopx-agent
+/examples/lark_extension_test_support.py @huangruiteng @steven-kid @loopx-agent
+/examples/control_plane/lark-* @huangruiteng @steven-kid @loopx-agent
+/tests/extensions/test_lark_*.py @huangruiteng @steven-kid @loopx-agent
 
-# --- Lead-owned governance, CI and release policy (must stay last) -----------
-/.github/ @huangruiteng
-/scripts/ci/ @huangruiteng
-/AGENTS.md @huangruiteng
-/CONTRIBUTING.md @huangruiteng
-/docs/product/release-*.md @huangruiteng
-/docs/development/contributor-tasks.md @huangruiteng
-/docs/project/technical-directions*.md @huangruiteng
+# --- Governance, CI and release policy (must stay last) ---------------------
+/.github/ @huangruiteng @loopx-agent
+/scripts/ci/ @huangruiteng @loopx-agent
+/AGENTS.md @huangruiteng @loopx-agent
+/CONTRIBUTING.md @huangruiteng @loopx-agent
+/docs/product/release-*.md @huangruiteng @loopx-agent
+/docs/development/contributor-tasks.md @huangruiteng @loopx-agent
+/docs/project/technical-directions*.md @huangruiteng @loopx-agent

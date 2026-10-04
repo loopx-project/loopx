@@ -57,8 +57,8 @@ This contract intentionally does not add:
 - a tool gateway or agent profile runtime.
 
 State changes still go through existing LoopX lifecycle commands such as
-`loopx todo ...`, `loopx refresh-state ...`, `loopx quota ...`, evidence-log
-writeback, and future APIs that preserve the same event-ledger semantics.
+`loopx todo ...`, `loopx refresh-state ...`, `loopx quota ...`, and future APIs
+that preserve the same event-ledger semantics. Replan context is a read model.
 
 ## Shape
 

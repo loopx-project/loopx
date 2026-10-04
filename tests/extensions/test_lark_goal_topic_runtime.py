@@ -2064,11 +2064,11 @@ def test_profile_poll_routes_provider_event_through_existing_reply_path(
     assert state["consume_args"][:3] == ["fake-lark", "--profile", "mew"]
     assert "event" in state["consume_args"]
     projection = state["consume_args"][state["consume_args"].index("--jq") + 1]
-    assert "message_id:(.message_id // .id)" in projection
+    assert "message_id:(.message_id // .message.message_id // .event.message.message_id // .id)" in projection
     assert "root_id:(.root_id // .message.root_id" in projection
     assert "parent_id:(.parent_id // .reply_to" in projection
     assert "thread_id" in projection
-    assert "sender_id:(.sender_id // .sender.id // .sender.sender_id" in projection
+    assert ".event.sender.sender_id.open_id?" in projection
     assert state["reply_text"] == "当前运行的是 LoopX 开发版。"
 
 
@@ -3567,3 +3567,24 @@ def test_quoted_reply_reaches_real_chat_store_and_protocol_turn(
     finally:
         for session in store.list_sessions():
             controller.close_session(session["session_id"])
+
+
+def test_message_event_projection_preserves_flat_cli_and_raw_provider_provenance():
+    import shutil
+    from loopx.extensions.lark.goal_topic_runtime import _EVENT_PROJECTION
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq runtime is unavailable")
+    expected = {"event_id": "event_fixture", "message_id": "om_fixture", "sender_id": "ou_fixture",
+        "sender_type": "user", "chat_id": "oc_fixture", "chat_type": "p2p", "message_type": "text"}
+    flat = {**expected, "content": "plain rendered text", "create_time": "123"}
+    nested = {"header": {"event_id": expected["event_id"]}, "event": {
+        "sender": {"sender_id": {"open_id": expected["sender_id"]}, "sender_type": "user"},
+        "message": {key: value for key, value in flat.items() if key not in {"event_id", "sender_id", "sender_type"}}}}
+    for payload in [flat, nested]:
+        completed = subprocess.run([jq, "-c", _EVENT_PROJECTION], input=json.dumps(payload), text=True,
+                                   capture_output=True, check=True)
+        row = json.loads(completed.stdout)
+        for key, value in expected.items():
+            assert row[key] == value
+        assert row["content"] == "plain rendered text"

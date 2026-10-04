@@ -3,12 +3,43 @@ from __future__ import annotations
 import io
 import json
 import queue
+import threading
+import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import loopx.chat_agent as chat_agent
 import loopx.chat_providers as chat_providers
 import loopx.chat_runtime as chat_runtime
 import pytest
+
+
+def test_silent_event_reader_releases_dispatch_fence_for_control_receipt(tmp_path, monkeypatch):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="synthetic-thread", work_dir=tmp_path)
+    arrived, errors = [], []
+
+    def events():
+        try:
+            arrived.append(session._next_event(deadline=time.monotonic() + 3))
+        except Exception as exc:
+            errors.append(exc)
+
+    # The response arrives without an agent event, just like a silent native
+    # Goal stop/read. It must reach its waiter before the event stream ends.
+    monkeypatch.setattr(session, "_write", lambda packet: session.messages.put(
+        {"id": packet["id"], "result": {"goal": {"status": "active"}}}))
+    reader = threading.Thread(target=events)
+    reader.start()
+    try:
+        time.sleep(.05)
+        started = time.monotonic()
+        assert session._request("thread/goal/get", {"threadId": session.thread_id})["goal"]["status"] == "active"
+        assert time.monotonic() - started < 1
+    finally:
+        session.messages.put({"method": "turn/completed", "params": {"turnId": "original"}})
+        reader.join(timeout=4)
+    assert not errors and arrived == [{"method": "turn/completed", "params": {"turnId": "original"}}]
 
 
 class _FakeAppServerProcess:

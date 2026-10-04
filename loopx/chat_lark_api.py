@@ -633,6 +633,29 @@ class LarkChatRequestMixin:
             # setting -- not a stored connection field or a request field --
             # decides which endpoint this connection runs on and which Session
             # it binds. The connection write below records the resolution.
+            private = getattr(getattr(getattr(self.server, "runtime_controller", None), "project_contexts", None), "conversation_bindings", None)
+            selected_profiles = [app_ref] if app_ref else [str(row.get("app_ref") or "") for row in body.get("agent_bindings", [])]
+            provider_runner = self._lark_runner()
+            if private is not None:
+                from .extensions.lark.conversation_identity import identity_ref
+                configured = private.read()["bindings"]
+                # Only active private bindings require the collision check.
+                if configured:
+                    cached_auth = {}
+                    original_runner = provider_runner
+                    def provider_runner(args, cwd, timeout):
+                        key = tuple(args)
+                        if tuple(args[-4:]) != ("auth", "status", "--verify", "--json"):
+                            return original_runner(args, cwd, timeout)
+                        if key not in cached_auth:
+                            cached_auth[key] = original_runner(args, cwd, timeout)
+                        return cached_auth[key]
+                for profile in selected_profiles if configured else []:
+                    if any(row["transport_ref"] == profile for row in configured):
+                        raise ValueError("this App owns a private listener; disconnect it first")
+                    identity = _app_identity_for_private_guard(profile, provider_runner, cli_bin)
+                    if identity and any(row["provider_ref"] == identity_ref(identity) for row in configured):
+                        raise ValueError("this App alias owns a private listener; disconnect it first")
             executor_endpoint_id = (
                 manager_executor_endpoint_default(
                     machine_defaults=steward_machine_defaults(
@@ -733,7 +756,7 @@ class LarkChatRequestMixin:
                     getattr(self.server, "runtime_controller", None)
                 ),
                 "execute": body.get("execute") is True,
-                "runner": self._lark_runner(),
+                "runner": provider_runner,
                 "cli_bin": cli_bin,
             }
             if app_refs_by_agent is not None:
@@ -806,3 +829,16 @@ class LarkChatRequestMixin:
             return
         self._refresh_lark_goal_topic_runtime()
         self._send_json(packet)
+
+
+def _app_identity_for_private_guard(profile: str, runner: Any, cli_bin: str) -> str:
+    from .extensions.lark.goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
+    result = call(runner, lark_args(cli_bin=cli_bin, profile=profile, tail=["auth", "status", "--verify", "--json"]))
+    payload = json_payload(result)
+    app_id = str(payload.get("appId") or "")
+    identities = payload.get("identities")
+    bot = identities.get("bot") if isinstance(identities, Mapping) else None
+    if (result.get("returncode") != 0 or not APP_ID_PATTERN.fullmatch(app_id)
+            or not isinstance(bot, Mapping) or bot.get("available") is not True or bot.get("verified") is not True):
+        raise ValueError("the App identity could not be verified")
+    return app_id

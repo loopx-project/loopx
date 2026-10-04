@@ -20,7 +20,7 @@ from ..control_plane.agents.supervisor_events import (
     render_supervisor_event_markdown,
     supervisor_event_log_path,
 )
-from ..control_plane.runtime.agent_scoped_evidence_log import (
+from ..control_plane.runtime.agent_evidence_history import (
     build_agent_scoped_evidence_log,
     goal_history_runs,
 )

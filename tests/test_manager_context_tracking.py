@@ -98,7 +98,7 @@ def test_external_query_is_exact_audience_not_just_goal(fixture):
             _root(root) / "policy.json",
             {
                 "schema_version": POLICY_SCHEMA,
-                "sources": {channel: {"sender_ids": ["owner"], "targets": [target]}},
+                "sources": {channel: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}},
             },
         )
         register_ingress(
@@ -217,7 +217,7 @@ def test_external_handoff_keeps_links_without_reading_receiver_private_work(fixt
     incoming = dict(turn, origin="lark")
     _write(_root(root) / "policy.json", {
         "schema_version": POLICY_SCHEMA,
-        "sources": {channel: {"sender_ids": ["owner"], "targets": [target]}},
+        "sources": {channel: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}},
     })
     register_ingress(root, session_id=external["session_id"],
                      client_turn_id=turn["client_turn_id"], channel=channel,

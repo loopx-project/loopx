@@ -278,7 +278,10 @@ def execute_turn_run_once(
                 state_file=None,
                 classification=str(result["classification"]),
                 recommended_action=str(result["recommended_action"]),
-                next_action=str(result["next_action"]),
+                # A host's next_action is follow-up guidance, not refresh-state's
+                # explicit within-task step edit (which requires a runnable Todo).
+                # Keep both host texts in the durable host_result, including for
+                # completion/repair, without decorating a completed or blocked task.
                 delivery_batch_scale=str(result["delivery_batch_scale"]),
                 delivery_outcome=str(result["delivery_outcome"]),
                 delivery_workspace_path=delivery_workspace_path,

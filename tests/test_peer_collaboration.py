@@ -146,7 +146,7 @@ def external_scenario(scenario):
     _write(policy_path, {
         "schema_version": POLICY_SCHEMA,
         "sources": {session["channel_id"]: {
-            "sender_ids": ["fixture-owner"],
+            "local_delivery_scope": "selected", "sender_ids": ["fixture-owner"],
             "targets": [{"goal_id": "delivery", "agent_id": agent}
                         for agent in ("builder", "reviewer")],
         }},
@@ -164,13 +164,16 @@ def external_scenario(scenario):
     return root, registry, brief, store, session, turn, receipt["request_id"]
 
 
-@pytest.mark.parametrize("whole_goal", [False, True])
-def test_granted_external_peer_request_returns_through_original_conversation(external_scenario, whole_goal):
+@pytest.mark.parametrize("scope", ["selected_agent", "selected_goal", "all_registered"])
+def test_granted_external_peer_request_returns_through_original_conversation(external_scenario, scope):
     root, registry, brief, store, session, turn, parent = external_scenario
-    if whole_goal:
+    if scope != "selected_agent":
         policy_path = _root(root) / "policy.json"
         policy = json.loads(policy_path.read_text())
         policy["sources"][session["channel_id"]]["targets"] = [{"goal_id": "delivery"}]
+        if scope == "all_registered":
+            del policy["sources"][session["channel_id"]]["local_delivery_scope"]
+            del policy["sources"][session["channel_id"]]["targets"]
         _write(policy_path, policy)
     path = root / "external-review.json"
     path.write_text(json.dumps(brief))
@@ -784,3 +787,20 @@ def test_peer_binary_artifact_preserves_crlf_and_ctrl_z_digest(scenario):
     assert readiness["status"] == "available"
     assert readiness["observed_sha256"] == readiness["expected_sha256"] == digest
     assert readiness["content_supplied"] is False
+
+
+def test_default_local_forwarding_keeps_revocations_after_original_delivery(external_scenario):
+    root, registry, brief, _store, session, _turn, parent = external_scenario
+    policy_path = _root(root) / "policy.json"
+    policy = json.loads(policy_path.read_text())
+    source = policy["sources"][session["channel_id"]]
+    source.pop("local_delivery_scope")
+    source.pop("targets")
+    _write(policy_path, policy)
+    first = request(root, registry, "delivery", "builder", "analyst", "default-hop", brief, parent)
+    assert first["request_id"]
+    # The source's current exceptions also protect later hops, not only Chat.
+    policy["sources"][session["channel_id"]]["blocked_targets"] = [{"goal_id": "delivery", "agent_id": "reviewer"}]
+    _write(policy_path, policy)
+    with pytest.raises(ValueError, match="reviewer is not authorized"):
+        request(root, registry, "delivery", "analyst", "reviewer", "blocked-hop", brief, first["request_id"])

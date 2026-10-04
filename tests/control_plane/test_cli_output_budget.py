@@ -466,21 +466,6 @@ def _surface_commands(
         + ["todo", "list", "--goal-id", GOAL_ID, "--agent-id", AGENT_IDS[0]],
         "history_limited": common
         + ["history", "--goal-id", GOAL_ID, "--limit", "5"],
-        "evidence_log_thin": common
-        + [
-            "evidence-log",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--limit",
-            "5",
-            "--history-limit",
-            "10",
-            "--rollout-limit",
-            "20",
-            "--thin",
-        ],
     }
 
 
@@ -775,7 +760,6 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_thin",
         "todo_list",
         "history_limited",
-        "evidence_log_thin",
     }
     manifest = public_manifest()
     assert set(CLI_OUTPUT_BUDGET_BY_ID) == expected
@@ -1444,7 +1428,17 @@ def _assert_collection_growth_and_bootstrap_duplication(
             - small[spec.surface_id]["json"]["chars"]
         )
         fixed_semantic_growth = spec.max_json_fixed_semantic_growth_chars
-        if fixed_semantic_growth:
+        if fixed_semantic_growth and spec.surface_id == "quota_should_run":
+            context = crowded[spec.surface_id]["json"]["payload"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+            assert len(context["coverage_ledger"]) <= 24
+            assert context["from_full_index"] is True
+            assert len(context["evidence"]) == SCENARIOS[1].run_count
+            assert all("--evidence-ref" in row["read_action"] for row in context["evidence"])
+        elif fixed_semantic_growth and spec.surface_id == "diagnose":
+            context = crowded[spec.surface_id]["json"]["payload"]["selected"]["projection_warnings"]["autonomous_replan_obligation"]["replan_context"]
+            assert 0 < len(context["evidence"]) <= 24
+        elif fixed_semantic_growth:
             assert spec.surface_id == "loopx_turn_plan"
             small_packet = small[spec.surface_id]["json"]["payload"][
                 "turn_envelope"

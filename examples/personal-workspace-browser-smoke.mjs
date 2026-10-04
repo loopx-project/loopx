@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
+import {configurationBackupScenario} from "./personal-workspace-browser/configuration-backup.mjs";
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
 // Isolated browser acceptance scenarios for the personal Agent workspace.
@@ -76,6 +77,7 @@ scenarioCatalog.push(performanceDiagnosisScenario);
 scenarioCatalog.push(blockedNoticeSettingsScenario);
 scenarioCatalog.push(nativeChildActivityScenario);
 scenarioCatalog.push(externalEvidenceReadbackScenario);
+scenarioCatalog.push(configurationBackupScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)

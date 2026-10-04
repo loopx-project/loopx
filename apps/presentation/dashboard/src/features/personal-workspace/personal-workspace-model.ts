@@ -1,6 +1,6 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { TurnStep } from "../../data/turn-steps";
-import type { CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
+import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -82,6 +82,16 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     validationRevisionActor: todo.completion_validation_revision_history.at(-1)?.actor_agent_id ?? null,
   };
 }
+
+/** Host-granted workspaces that can scope the steward conversation without a Goal. */
+export type WorkspaceConversationDirectory = {
+  /** null until the host's workspace grants have been read. */
+  projects: ChatProject[] | null;
+  readFailed: boolean;
+  selectedRef: string | null;
+  /** null returns the conversation to the steward scope. */
+  onSelect: (projectRef: string | null) => void;
+};
 
 export type WorkspaceTodo = WorkspaceAgentTodo & {
   goalId: string;
@@ -514,7 +524,7 @@ export type PersonalWorkspaceCallbacks = {
   onSendMessage?: (
     message: string,
     agentId: string,
-    goalId: string | null,
+    contextId: string,
     attachments?: WorkspaceImageAttachment[],
   ) => void | WorkspaceSendPreviews | Promise<void | WorkspaceSendPreviews>;
   onPrepareLoopX?: (agentId: string, goalId: string) => Promise<string>;

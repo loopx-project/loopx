@@ -140,16 +140,21 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Quota Should Run",
         max_chars={
             "small": {"json": 20_000, "markdown": 6_700},
-            "crowded": {"json": 30_000, "markdown": 7_800},
+            "crowded": {"json": 34_000, "markdown": 7_800},
             "multi_agent": {"json": 23_000, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 520, "markdown": 72},
-            "crowded": {"json": 750, "markdown": 78},
+            "crowded": {"json": 830, "markdown": 78},
             "multi_agent": {"json": 650, "markdown": 75},
         },
         scale_axis="todo_count",
         max_json_growth_chars_per_unit=300,
+        # Required replan carries dense decision evidence from the full index.
+        # The unchanged fixture grows 26,844 -> 33,523 chars / 718 -> 806 lines;
+        # ordinary and multi-agent non-replan guards remain byte-identical.
+        # This fixed decision packet must not relax per-Todo growth or other routes.
+        max_json_fixed_semantic_growth_chars=6_000,
     ),
     CliOutputBudgetSpec(
         surface_id="loopx_turn_plan",
@@ -230,16 +235,19 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Diagnosis Packet",
         max_chars={
             "small": {"json": 21_000, "markdown": 4_300},
-            "crowded": {"json": 34_000, "markdown": 4_500},
+            "crowded": {"json": 44_000, "markdown": 4_500},
             "multi_agent": {"json": 21_000, "markdown": 4_300},
         },
         max_lines={
             "small": {"json": 470, "markdown": 72},
-            "crowded": {"json": 720, "markdown": 72},
+            "crowded": {"json": 850, "markdown": 72},
             "multi_agent": {"json": 480, "markdown": 72},
         },
         scale_axis="todo_count",
         max_json_growth_chars_per_unit=520,
+        # The existing selected + Goal-array diagnostic contract includes the
+        # required-replan context twice. Keep that cold-path caller contract.
+        max_json_fixed_semantic_growth_chars=7_000,
     ),
     CliOutputBudgetSpec(
         surface_id="review_packet_handoff_only",
@@ -343,28 +351,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         scale_axis="returned_run_count",
         max_json_growth_chars_per_unit=1_600,
     ),
-    CliOutputBudgetSpec(
-        surface_id="evidence_log_thin",
-        command="evidence-log --thin --limit 5",
-        owner="agent-scoped evidence ledger",
-        consumer_action="read bounded public-safe evidence for replan",
-        qualification_policy="explicit_limit_cold_path",
-        cold_path="referenced run-history and rollout-event artifacts",
-        semantic_json_keys=("ledger", "truncated", "other_agent_frontier"),
-        markdown_anchor="# LoopX Evidence Log",
-        max_chars={
-            "small": {"json": 2_900, "markdown": 800},
-            "crowded": {"json": 3_500, "markdown": 1_100},
-            "multi_agent": {"json": 4_300, "markdown": 1_200},
-        },
-        max_lines={
-            "small": {"json": 100, "markdown": 26},
-            "crowded": {"json": 120, "markdown": 30},
-            "multi_agent": {"json": 140, "markdown": 34},
-        },
-        scale_axis="returned_evidence_count",
-        max_json_growth_chars_per_unit=800,
-    ),
+
 )
 
 
@@ -717,12 +704,7 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         surface_id=None,
         rationale="explicit operator preview, stop, and resume command family",
     ),
-    CliOutputCommandClassification(
-        command_id="evidence-log",
-        qualification="qualified_default",
-        surface_id="evidence_log_thin",
-        rationale="bounded evidence read before replan or handoff",
-    ),
+
     CliOutputCommandClassification(
         command_id="agent-capabilities",
         qualification="explicit_cold_path_exception",

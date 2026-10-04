@@ -191,7 +191,7 @@ loopx --format json todo list --goal-id &lt;goal-id&gt; --role agent --agent-id 
 loopx --format json task-lease inspect --goal-id &lt;goal-id&gt; --todo-id &lt;todo-id&gt;
 
 # Bounded evidence timeline visible to the current agent
-loopx --format json evidence-log --goal-id &lt;goal-id&gt; --agent-id &lt;agent-id&gt; --thin --limit 20</code></pre>
+loopx --format json history --goal-id &lt;goal-id&gt; --agent-id &lt;agent-id&gt; --limit 20</code></pre>
       <p>Write operations use lifecycle entry points exposed by the current Todo, Gate, claim or lease, and runtime contract—not by editing a display column or constructing status prose. Read current command help and the returned action contract to learn required parameters, whether an execution identity is needed, and whether work can continue.</p>
       <p>The CLI and local frontend expose operations and read models at different levels. Lark has corresponding messages, goal channels, and a Base board adapter, but that does not establish full equivalence across every field and action. The <a href="https://github.com/huangruiteng/loopx/blob/a96c9aa91c9d92454efcd7937483bac76e35fd4a/docs/integrations/lark-kanban-control-plane-adapter.md">Lark Kanban adapter</a> still identifies itself as a prototype contract: synchronization and triggers require configuration, and an external board does not create another task identity system.</p>
     </section>

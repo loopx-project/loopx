@@ -27,6 +27,7 @@ from .control_plane.work_items.delivery_outcome import (
 from .control_plane.agents.workspace_guard import (
     capture_delivery_workspace,
 )
+from .control_plane.agents.delivery_workspace import qualify_delivery_workspace_isolation
 from .control_plane.quota.refresh_external_delivery import (
     finish_external_delivery_refresh, refresh_recovery_payload,
 )
@@ -77,14 +78,16 @@ from .control_plane.runtime.shared_runtime_refresh_projection import (
     build_shared_runtime_projection,
     write_shared_runtime_projection,
 )
+from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.work_items.recommendation_source_io import (
+    load_recommendation_source_goal, recommendation_source_guard, recommendation_source_context,
+)
 from .control_plane.runtime.runtime_projection_route import (
     compact_runtime_projection_route,
     resolve_runtime_projection_route,
 )
 from .feedback import validate_local_control_text, validate_public_safe_text
-from .file_lock import exclusive_file_lock, exclusive_cross_runtime_file_lock
-from .control_plane.coordination.runtime_shadow_writer_adapter import require_prose_state_write_allowed
-from .control_plane.todos.active_state_editing import atomic_write_state_text
+from .file_lock import exclusive_file_lock
 from .global_registry import sync_project_registry_to_global
 from .history import (
     load_index,
@@ -109,7 +112,6 @@ from .state_projection import (
     state_projection_gap_warning,
 )
 from .control_plane.todos.contract import (
-    normalize_todo_claimed_by,
     normalize_todo_replan_obligation_id,
 )
 from .control_plane.todos.completion_validation_accountability import (
@@ -125,7 +127,6 @@ AGENT_LANE_PROGRESS_SCOPE = "agent_lane"
 PROGRESS_SCOPE_CHOICES = (GOAL_PROGRESS_SCOPE, AGENT_LANE_PROGRESS_SCOPE)
 BULLET_PREFIX_RE = re.compile(r"^(?:[-*]\s+|\d+[.)]\s+)")
 CHECKBOX_PREFIX_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+")
-ACTIVE_STATE_NEXT_ACTION_UPDATE_SCHEMA_VERSION = "active_state_next_action_update_v0"
 REPAIR_NOOP_SCHEMA_VERSION = "repair_noop_v0"
 
 
@@ -195,20 +196,7 @@ def normalize_next_action_text(value: str) -> str:
 
 
 def registered_agents_for_goal(registry_goal: dict[str, Any] | None) -> list[str]:
-    coordination = (
-        registry_goal.get("coordination")
-        if registry_goal and isinstance(registry_goal.get("coordination"), dict)
-        else {}
-    )
-    registered_raw = coordination.get("registered_agents") if isinstance(coordination, dict) else []
-    registered_values = registered_raw if isinstance(registered_raw, list) else []
-    registered_agents: list[str] = []
-    for value in registered_values:
-        candidate = value.get("id") if isinstance(value, dict) else value
-        normalized = normalize_todo_claimed_by(candidate)
-        if normalized:
-            registered_agents.append(normalized)
-    return registered_agents
+    return registered_agent_ids_for_goal(registry_goal)
 
 
 def normalize_progress_scope(value: str | None) -> str:
@@ -221,56 +209,6 @@ def normalize_progress_scope(value: str | None) -> str:
             "--progress-scope must be one of: " + ", ".join(PROGRESS_SCOPE_CHOICES)
         )
     return normalized
-
-
-def next_action_section_bounds(lines: list[str]) -> tuple[int, int] | None:
-    for index, line in enumerate(lines):
-        if line.strip() != "## Next Action":
-            continue
-        end = len(lines)
-        for next_index in range(index + 1, len(lines)):
-            if lines[next_index].startswith("## "):
-                end = next_index
-                break
-        return index, end
-    return None
-
-
-def next_action_insert_anchor(lines: list[str]) -> int:
-    preferred = {
-        "## Recent User Feedback",
-        "## Progress Ledger",
-        "## Operating Lessons",
-        "## Completed Work Archive",
-    }
-    for index, line in enumerate(lines):
-        if line.strip() in preferred:
-            return index
-    return len(lines)
-
-
-def replace_next_action_section(
-    state_text: str,
-    *,
-    next_action: str,
-    updated_at: str,
-) -> tuple[str, bool]:
-    lines = state_text.splitlines()
-    section = ["## Next Action", "", f"- {next_action}", ""]
-    bounds = next_action_section_bounds(lines)
-    if bounds:
-        start, end = bounds
-        updated_lines = [*lines[:start], *section, *lines[end:]]
-    else:
-        anchor = next_action_insert_anchor(lines)
-        insert = list(section)
-        if anchor > 0 and lines[anchor - 1].strip():
-            insert.insert(0, "")
-        updated_lines = [*lines[:anchor], *insert, *lines[anchor:]]
-    section_text = "\n".join(updated_lines).rstrip() + "\n"
-    if section_text.rstrip("\n") == state_text.rstrip("\n"):
-        return state_text, False
-    return replace_updated_at(section_text, updated_at), True
 
 
 def clean_action_line(line: str) -> str:
@@ -537,7 +475,7 @@ def _build_state_refresh_output_projections(
         field: record.get(field)
         for field in (
             "agent_vision", "vision_checkpoint", "recommended_action",
-            "recommended_action_source", "active_state_next_action_update",
+            "recommended_action_source",
             "generated_at", "health_check",
         )
     })
@@ -762,6 +700,7 @@ def refresh_state_run(
     classification: str,
     recommended_action: str | None,
     next_action: str | None = None,
+    next_action_basis: str | None = None,
     delivery_batch_scale: str | None = None,
     delivery_outcome: str | None = None,
     delivery_boundary: str | None = None,
@@ -791,6 +730,8 @@ def refresh_state_run(
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
     safe_goal_id = validate_goal_id_path_segment(goal_id)
+    if next_action_basis and not next_action:
+        raise ValueError("--next-action-basis requires --next-action")
     if checkpoint_read_context_id and not turn_instance_id:
         raise ValueError("--checkpoint-read-context requires the original Turn identity")
     validate_public_safe_text("classification", classification)
@@ -907,6 +848,7 @@ def refresh_state_run(
                     "workspace_requested": delivery_workspace_path is not None,
                     "mutation": {
                         "next_action": next_action,
+                        **({"next_action_basis": next_action_basis} if next_action_basis else {}),
                         "autonomous_replan_recorded": autonomous_replan_recorded,
                         "repair_delta_kinds": repair_delta_kinds,
                         "usage_measurement": usage_measurement,
@@ -970,20 +912,27 @@ def refresh_state_run(
             if sync_global and route_status in {"resolved", "single_runtime"}
             else None
         )
+        next_action_source_registry = registry_path.resolve()
+        state_registry = registry
+        if next_action:
+            next_action_source_registry, source_goal = load_recommendation_source_goal(registry_path, safe_goal_id)
+            state_registry = {**registry, "goals": [source_goal] if source_goal is not None else []}
         registry_goal, resolved_project, resolved_state_file = resolve_goal_state(
-            registry=registry,
+            registry=state_registry,
             goal_id=safe_goal_id,
             project_override=project,
             state_file_override=state_file,
         )
         planning_source = load_refresh_planning_source(
-            runtime_root, safe_goal_id, resolved_state_file, require_display=bool(next_action)
+            runtime_root, safe_goal_id, resolved_state_file, require_display=False
         )
         state_text, planning_events, todo_fields = (
             planning_source.state_text, planning_source.events, planning_source.todo_fields,
         )
         expected_write_state_text = state_text
         normalized_next_action = normalize_next_action_text(next_action) if next_action else None
+        if normalized_next_action and registry_goal is None:
+            raise ValueError("--next-action requires a registry Goal; register its state route first")
         registered_agents = registered_agents_for_goal(registry_goal)
         known_agents = {agent for agent in registered_agents if agent}
         multi_agent_goal = len(known_agents) > 1
@@ -994,10 +943,6 @@ def refresh_state_run(
         )
         explicit_peer_worktree_requirement = workspace_guard_policy.get(
             "peer_independent_worktree_required"
-        )
-        peer_independent_worktree_required = multi_agent_goal and (
-            explicit_peer_worktree_requirement is None
-            or explicit_peer_worktree_requirement is True
         )
         if normalized_agent_id and known_agents and normalized_agent_id not in known_agents:
             raise ValueError(
@@ -1014,11 +959,6 @@ def refresh_state_run(
         if normalized_progress_scope == AGENT_LANE_PROGRESS_SCOPE:
             if not normalized_agent_id:
                 raise ValueError("--progress-scope agent_lane requires --agent-id")
-            if normalized_next_action:
-                raise ValueError(
-                    "agent-lane refresh-state cannot update the durable active-state Next Action; "
-                    "rerun without --next-action or use --progress-scope goal from a registered peer"
-                )
         if normalized_progress_scope == GOAL_PROGRESS_SCOPE:
             if normalized_agent_lane:
                 raise ValueError("--agent-lane requires --progress-scope agent_lane")
@@ -1058,31 +998,17 @@ def refresh_state_run(
                 require_path_delta_for_durable_change=autonomous_replan_recorded,
             )
         generated_at = now_local()
-        active_state_next_action_update: dict[str, Any] | None = None
-        if normalized_next_action:
-            with exclusive_cross_runtime_file_lock(resolved_state_file):
-                locked_state_text = resolved_state_file.read_text(encoding="utf-8")
-                expected_write_state_text = locked_state_text
-                updated_state_text, state_updated = replace_next_action_section(
-                    locked_state_text,
-                    next_action=normalized_next_action,
-                    updated_at=generated_at,
-                )
-                active_state_next_action_update = {
-                    "schema_version": ACTIVE_STATE_NEXT_ACTION_UPDATE_SCHEMA_VERSION,
-                    "source": "refresh_state",
-                    "next_action": normalized_next_action,
-                    "updated": bool(state_updated and not dry_run),
-                    "would_update": bool(state_updated),
-                    "dry_run": bool(dry_run),
-                    "updated_at": generated_at if state_updated else None,
-                }
-                state_text = updated_state_text if state_updated else locked_state_text
-
+        # Next Action is now an actor/Todo-bound recommendation in the existing
+        # run journal. It never rewrites narrative or a Todo projection.
+        recommendation_context = recommendation_source_context(
+            registry_goal, state_text, source_registry=next_action_source_registry, todo_fields=todo_fields
+        ) if registry_goal is not None else None
         recommendation_resolution = resolve_refresh_recommendation(
             state_text,
             todo_fields=todo_fields,
             explicit_action=recommended_action,
+            next_step=normalized_next_action, next_step_basis=next_action_basis,
+            source_context=recommendation_context, runs=newest_first_runs,
             agent_id=normalized_agent_id or None,
             settlement_identity=(
                 settlement_identity.as_dict() if settlement_identity is not None else None
@@ -1108,7 +1034,7 @@ def refresh_state_run(
             todo_fields=todo_fields,
             autonomous_replan_recorded=autonomous_replan_recorded,
             requested_delta_kinds=normalized_repair_delta_kinds,
-            active_state_next_action_update=active_state_next_action_update,
+            active_state_next_action_update=None,
             agent_vision=agent_vision,
             existing_agent_vision=existing_agent_vision,
             agent_id=normalized_agent_id,
@@ -1202,7 +1128,7 @@ def refresh_state_run(
             existing_agent_vision=existing_agent_vision,
             vision_unchanged_reason=vision_unchanged_reason,
             delivery_outcome=normalized_delivery_outcome,
-            active_state_next_action_update=active_state_next_action_update,
+            active_state_next_action_update=None,
             delivery_boundary=normalized_delivery_boundary,
             todo_id=(settlement_identity.todo_id if settlement_identity else None),
             completion_todo_id=completion_todo_id,
@@ -1231,7 +1157,7 @@ def refresh_state_run(
         ):
             delivery_workspace = capture_delivery_workspace(
                 current_path=delivery_workspace_path,
-                peer_independent_worktree_required=peer_independent_worktree_required,
+                peer_independent_worktree_required=False,
                 local_goal_id=safe_goal_id,
                 local_project_root=resolved_project,
                 repository_source=(
@@ -1239,6 +1165,24 @@ def refresh_state_run(
                     if delivery_workspace_path is not None
                     else None
                 ),
+            )
+            selected_contract = {}
+            if settlement_identity is not None and settlement_identity.todo_id:
+                workspace_todo_fields = todo_fields
+                if workspace_todo_fields is None:
+                    workspace_todo_fields = parse_active_state_todos(
+                        state_text, goal=registry_goal, state_path=resolved_state_file,
+                        preferred_todo_ids={settlement_identity.todo_id},
+                        rollout_events=planning_events, item_limit=None,
+                    )
+                selected_contract = next((
+                    item for item in workspace_todo_fields.get("agent_todos", {}).get("items", [])
+                    if item.get("todo_id") == settlement_identity.todo_id
+                ), {})
+            delivery_workspace, peer_independent_worktree_required = qualify_delivery_workspace_isolation(
+                delivery_workspace, multi_agent_goal=multi_agent_goal,
+                explicit_peer_worktree_requirement=explicit_peer_worktree_requirement,
+                task_repository=selected_contract.get("task_repository"),
             )
             if (
                 peer_independent_worktree_required
@@ -1253,10 +1197,11 @@ def refresh_state_run(
                     "git worktree that produced it, or name that worktree with "
                     "--delivery-workspace-path"
                 )
-            if delivery_workspace_path is not None and delivery_workspace is None:
+            if delivery_workspace is None:
                 raise ValueError(
-                    "--delivery-workspace-path must identify the registered local goal "
-                    "workspace or a git checkout with a credential-free origin repository"
+                    "delivery workspace could not be verified; run from the registered "
+                    "local Goal workspace or the selected repository worktree, or name "
+                    "that workspace with --delivery-workspace-path"
                 )
         if checkpoint_supplement:
             # The supplemental row must not reattribute the original delivery to
@@ -1271,24 +1216,6 @@ def refresh_state_run(
                 "progress_observation"
             )
             classification = prior_writeback_run["classification"]
-        if (
-            active_state_next_action_update
-            and active_state_next_action_update.get("would_update")
-            and not dry_run
-        ):
-            with exclusive_cross_runtime_file_lock(resolved_state_file):
-                current_state_text = resolved_state_file.read_text(encoding="utf-8")
-                if current_state_text != expected_write_state_text:
-                    raise ValueError(
-                        "active goal state changed while refresh-state was qualifying "
-                        "its semantic writeback; retry from the current state"
-                    )
-                require_prose_state_write_allowed(
-                    registry_path=registry_path, runtime_root=runtime_root,
-                    goal_id=safe_goal_id, state_path=resolved_state_file,
-                    original_text=current_state_text, planned_text=state_text,
-                )
-                atomic_write_state_text(resolved_state_file, state_text)
         record = build_state_refresh_record(
             goal_id=safe_goal_id,
             state_file=resolved_state_file,
@@ -1357,8 +1284,6 @@ def refresh_state_run(
             record["autonomous_replan_ack"]["semantic_delta"] = (
                 replan_semantic_delta
             )
-        if active_state_next_action_update:
-            record["active_state_next_action_update"] = active_state_next_action_update
         compact_route = compact_runtime_projection_route(runtime_projection_route)
         compact_route["projection_enabled"] = bool(sync_global)
         compact_route["projection_marker_field"] = "shared_runtime_projection"
@@ -1387,6 +1312,23 @@ def refresh_state_run(
         # spans ledger-basis read + row append so concurrent refreshes cannot fund
         # two deltas from one stale basis; the appended row advances the basis.
         with ExitStack() as usage_booking_guard:
+            if normalized_next_action:
+                current_goal, current_text = usage_booking_guard.enter_context(
+                    recommendation_source_guard(registry_path, resolved_state_file, safe_goal_id,
+                        source_registry=next_action_source_registry))
+                if current_goal is None:
+                    raise ValueError("Next Action source Goal disappeared; reread status")
+                current_planning = load_refresh_planning_source(
+                    runtime_root, safe_goal_id, resolved_state_file, require_display=False)
+                resolve_refresh_recommendation(current_text,
+                    todo_fields=current_planning.todo_fields, agent_id=normalized_agent_id or None,
+                    settlement_identity=settlement_identity.as_dict() if settlement_identity else None,
+                    registry_goal=current_goal, state_path=resolved_state_file,
+                    rollout_events=current_planning.events, next_step=normalized_next_action,
+                    next_step_basis=recommendation_resolution["read_basis"],
+                    source_context=recommendation_source_context(current_goal, current_text,
+                        source_registry=next_action_source_registry, todo_fields=current_planning.todo_fields),
+                    runs=newest_first_runs)
             if checkpoint_supplement:
                 assert settlement_identity is not None
                 context = usage_booking_guard.enter_context(checkpoint_commit_guard(
@@ -1420,18 +1362,11 @@ def refresh_state_run(
                 payload["usage"] = dict(record["usage"])
             if dry_run:
                 expected_write_scopes = ["runtime_history"]
-                if active_state_next_action_update and active_state_next_action_update.get("would_update"):
-                    expected_write_scopes.insert(0, "active_state")
                 if sync_global and route_status in {"resolved", "single_runtime"}:
                     expected_write_scopes.append("global_registry")
                 if shared_runtime_root:
                     expected_write_scopes.append("shared_runtime_projection")
                 patch_parts = [f"append refresh-state run classification={classification}"]
-                if active_state_next_action_update:
-                    if active_state_next_action_update.get("would_update"):
-                        patch_parts.append("preview active-state Next Action update")
-                    else:
-                        patch_parts.append("preserve active-state Next Action")
                 if sync_global and route_status in {"resolved", "single_runtime"}:
                     patch_parts.append("sync public-safe registry projection")
                 elif sync_global:

@@ -482,6 +482,37 @@ for (const native of [false, true]) {
   });
 }
 
+// Reconstruct the exact released manifest from the frozen pre-revision
+// fixture and its registered additions, independently of today's field list.
+const preReceiptFields = [...previousReleaseFields];
+preReceiptFields.splice(preReceiptFields.indexOf("completion_turn_key") + 1, 0, "completion_result");
+for (const native of [false, true]) {
+  test(`pre-receipt ${native ? "domain" : "canonical"} head remains readable and upgrades on commit`, () => {
+    const fields = preReceiptFields.filter(field =>
+      !native || !historicalFields.projection_metadata_fields.includes(field));
+    const todo = {schema_version: native ? TODO_DOMAIN_ITEM_SCHEMA : "todo_item_v0",
+      todo_id: "todo_receipt", role: "agent", status: "done", done: true,
+      text: "Retain the committed completion", archive_state: "active",
+      ...(native ? {} : {source_section: "Agent Todo"})};
+    const head = {goal_id: "receipt-goal", todos: [todo], leases: [], todo_read_model: {
+      schema_version: native ? TODO_DOMAIN_READ_RECORD_SCHEMA : TODO_CANONICAL_READ_RECORD_SCHEMA,
+      todo_count: 1, records_sha256: canonicalAuthoritySha256([todo]), contract_fields: fields}};
+    const before = structuredClone(head);
+    validateCoordinationTodoReadModel(head, head.goal_id);
+    assert.deepEqual(head, before);
+    const updated = {...todo, completion_receipt_id: `tcw_${"a".repeat(64)}`};
+    assert.throws(() => validateCoordinationTodoReadModel({...head, todos: [updated],
+      todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256([updated])}}, head.goal_id),
+      /exceeds its historical field contract/);
+    const commit = prepareCoordinationProjectionCommit({goal_id: head.goal_id,
+      operation_id: "receipt-upgrade", expected_provider_revision: "file:old", projection: head,
+      mutations: [{kind: "todo_upsert", todo: updated}]});
+    validateCoordinationTodoReadModel(commit.next_projection, head.goal_id);
+    assert.equal(((commit.next_projection.todo_read_model as JsonObject).contract_fields as string[])
+      .includes("completion_receipt_id"), true);
+  });
+}
+
 for (const native of [false, true]) {
   test(`read-model order uses unique Unicode identities without weakening ${native ? "domain" : "canonical"} content validation`, () => {
     // U+E000 precedes U+10000 in persisted Unicode code-point order, but not

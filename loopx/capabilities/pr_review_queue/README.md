@@ -1102,7 +1102,31 @@ the immutable base and exact head, or an independently evidenced external
 outage, is not a reason to request code changes on an unrelated PR when its
 changed invariant has separate passing coverage. Record the red check and its
 owner; approval does not make a blocked merge ready. A new, worsened or
-unattributed failure remains a review blocker. Disabling CI waiting
+unattributed current failure remains a review blocker. Policy revision 18 scopes
+the matrix to the reviewed head. Keep relevant older failures in existing
+result/evidence text with their source and explain why current independent
+evidence covers the exposed invariant and conditions. An unknown historical
+cause alone is not a veto, nor does current passing evidence prove that cause
+was fixed. A selected green rerun cannot dismiss material intermittency or a
+missing negative case: record the current gap as failed/unverified and name
+the smallest discriminating check. An explicit accepted contract may still
+require causal attribution. No new result schema, review-dismissal authority or
+merge exception is introduced.
+
+CI completion is a separate merge decision. With `wait_for_ci=true`, observe
+available CI and retain the configured merge gate, but do not require every
+remote job to finish or succeed before approving independently verified code.
+`repository_required_checks` records decisive repository validation for the
+review; each matrix row's `required` flag means review evidence, not GitHub
+branch protection. Record merely pending remote jobs as diagnostic rows with
+`required=false` when current independent coverage establishes their relevant
+invariants. If a queued job is the only decisive coverage, leave that invariant
+required and unverified. Pending CI alone never justifies `REQUEST_CHANGES`;
+missing relevant evidence, current regressions and material instability still
+do. An earned approval may coexist with `ready=false`, and changing the CI
+waiting configuration requires the existing owner's authorization.
+
+Disabling CI waiting
 also removes CI requests and waiting instructions; legacy supplied summaries
 are diagnostic only. It grants no publication, merge, or admin-bypass authority.
 

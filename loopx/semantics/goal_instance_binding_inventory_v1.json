@@ -48,7 +48,7 @@
         "loopx/control_plane/goals/source_session_turn_effects.py::prepare_source_turn_effect",
         "loopx/control_plane/goals/source_session_turn_effects.py::release_source_turn_effect",
         "loopx/control_plane/goals/source_session_turn_effects.py::write_source_turn_effect_gate_locked",
-        "loopx/control_plane/turn_driver/codex_cli.py::codex_cli_session_binding",
+        "loopx/control_plane/turn_driver/codex_sessions.py::codex_cli_session_binding",
         "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan",
         "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.hold_tail",
         "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.release_tail"

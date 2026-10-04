@@ -1487,10 +1487,14 @@ def _build_interaction_cli_channel(
         if isinstance(payload.get("selected_todo"), Mapping)
         else {}
     )
-    if spend_after_selection and selected_todo.get("task_repository"):
+    if spend_after_selection and selected_todo.get("todo_id"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
-            "refresh": "delivery_workspace; otherwise --delivery-workspace-path",
+            "refresh": (
+                "delivery_workspace; otherwise --delivery-workspace-path"
+                if selected_todo.get("task_repository")
+                else "registered local Goal workspace; Git peer delivery requires an independent worktree"
+            ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",
         }

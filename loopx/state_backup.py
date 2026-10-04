@@ -371,6 +371,7 @@ def build_state_backup_plan(
     include_automations: bool = True,
     include_skills: bool = True,
     include_registry_projects: bool = True,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     resolved_project = _resolved(Path(project))
     resolved_runtime_root = _resolved(Path(runtime_root).expanduser() if runtime_root else select_default_runtime_root())
@@ -398,6 +399,9 @@ def build_state_backup_plan(
         "backup_id": resolved_backup_id,
         "project": str(resolved_project),
         "runtime_root": str(resolved_runtime_root),
+        "configuration_source_registry": str(registry_path or (
+            resolved_runtime_root / "registry.global.json" if include_registry_projects
+            else resolved_project / ".loopx/registry.json")),
         "registry_discovery": registry_discovery,
         "codex_home": str(_codex_home()),
         "output_dir": str(resolved_output_dir),
@@ -516,6 +520,16 @@ def execute_state_backup_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 source = Path(str(item.get("source_path") or "")).expanduser()
                 archive_name = str(item.get("archive_path") or source.name)
                 _add_path_to_tar(tar, source, archive_name, exclude_roots, staging, snapshots)
+            from .configuration_backup import capture_configuration_backup, verify_configuration_backup
+            configuration = capture_configuration_backup(
+                registry_path=Path(payload["configuration_source_registry"]),
+                runtime_root=Path(payload["runtime_root"]),
+            )
+            configuration_bytes = json.dumps(configuration, ensure_ascii=False, indent=2).encode("utf-8")
+            info = tarfile.TarInfo("configuration-backup.json")
+            info.size, info.mode = len(configuration_bytes), 0o600
+            tar.addfile(info, io.BytesIO(configuration_bytes))
+            updated["execution"]["configuration_backup"] = verify_configuration_backup(configuration)
             updated["execution"]["sqlite_snapshots"] = [entry[1] for entry in snapshots.values()]
             manifest_bytes = json.dumps(updated, ensure_ascii=False, indent=2).encode("utf-8")
             info = tarfile.TarInfo("manifest.json")

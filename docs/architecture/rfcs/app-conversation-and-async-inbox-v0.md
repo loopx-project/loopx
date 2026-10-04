@@ -10,6 +10,186 @@
 - Evaluation: [steward golden queries](../../product/use-cases/steward/golden-queries.md).
 - Language: [Chinese semantic mirror](app-conversation-and-async-inbox-v0.zh-CN.md).
 
+## Ordinary workspace conversations: bounded implementation checkpoint
+
+The Core Chat entry can now open an ordinary workspace Session independently
+of a Goal or the steward's portfolio. In the App, a workspace is a scope of the
+steward conversation: its Scope picker lists the host's granted workspaces, and
+choosing one continues that workspace's own Session through the same composer,
+history, streaming, stop and image path as every other conversation. The scope
+never appears on the steward overview or the Goal list, and returning to the
+steward scope restores the steward Session. The shared typed context owner
+checks the exact workspace reference and current grant; missing roots, retargeted
+symlinks and changed grants fail closed. No Goal is synthesized, no portfolio
+context is injected, and the workspace grant cannot authorize peer delegation.
+
+This extends the existing conversation-scope owner with `project_workspace` and
+an exact host-observation contract, rather than introducing provider-local Session
+authority. Python owns filesystem observations and the existing durable Chat store;
+the TypeScript owner decides context identity and scope. Native Codex resume retains
+the original upstream thread and workspace. HTTP/protocol fixtures qualify that
+continuity and denial behavior; they do not establish real model adoption.
+
+The App grant is workspace reading for the local owner. The App scope alone does
+not qualify Lark private-message admission, installed or mobile journeys, or
+authorize edits. A revoked grant keeps the history readable and blocks new
+messages until the host grants it again. The independent Lark checkpoint below
+qualifies its source implementation separately.
+
+The source implementation also has an explicit owner-only Lark private-message
+binding. Settings → Lark selects an independently verified non-default App,
+a current host workspace and executor. Core owns the App-scoped owner/source
+identity, Session context and revocation; the provider stores no separate
+conversation authority. One machine/App lease covers both profile aliases and
+existing group listeners. Replies recheck the original source under that App;
+they do not require group-member scopes for private messages.
+
+Text admission persists the canonical Core Turn without waiting for its terminal
+answer. The existing bounded Session queue keeps follow-ups in FIFO order; another
+App can continue independently. Explicit `/status`, `/stop` and `/new` use the
+shared request owner, and a replay retains the original Session/Turn target.
+A lost admission correlation cannot move a request to a newer Session. Admission
+feedback and final delivery use separate durable provider intents; an ambiguous
+write is read back without blind resend. Unsupported media receives an explicit
+notice. This grant remains workspace reading, without a Goal, portfolio or peer
+execution authority.
+
+The packaged settings journey, source revocation/recovery, duplicate events,
+native queue/stop and two-App isolation have synthetic-provider regression and
+browser coverage. A native Codex source canary separately qualifies distinct
+upstream threads with independently observed real App identities. Neither is a
+live Lark/model/mobile result. Installed service qualification, phone journeys,
+registered Agent selection, real incremental/media/permission interactions and
+broader long-running coordination remain open acceptance. Runtime and
+permission-boundary changes require maintainer review before promotion.
+
+The private setup UI composes within Settings → Lark; the App workspace scope
+remains the sole ordinary local conversation entry. Legacy group profiles without
+a stored App identity retain their original profile-hash consumer lease. Requests
+without private bindings do not add provider authentication; configured aliases
+reuse one request-scoped verified identity observation. Lark HTTP composition
+resides in the extension, while the typed binding owner remains provider-neutral.
+
+Synthetic product previews: [desktop](../../assets/personal-workspace/private-project-conversations.png),
+[narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
+[revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
+
+## Bound steward private Chat: explicit new commissions
+
+Settings → Lark can now select a steward role independently of ordinary project
+Chat. The existing typed conversation binding owns its App, verified owner,
+source, workspace and bounded portfolio. A verified empty scope is distinct from
+an unavailable authorization; it contains no inherited Goals and does not certify
+global inventory coverage. Ordinary Chat still has no Goal or manager identity.
+
+Only an explicit `/delegate --tokens N objective` prepares a `goal.create`
+preview. Confirmation must arrive from that exact owner/App/source within fifteen
+minutes. The immutable preview shows the read-only boundary, total native token
+allowance and absence of automatic scheduling. Existing canonical Chat actions
+create the Goal and return their receipt; Core adopts only that exact new creation
+in the configured workspace. Existing Goal and single-workspace fallbacks cannot
+redirect it. Neither normal conversation nor model prose creates a commission.
+
+The existing service worker advances the durable Core request without blocking
+inbound admission. Codex native Goal continuation performs the read-only work;
+its result returns through the original private-source delivery journal.
+`/stop-commission` freezes the execution target at admission, while an explicit
+`/resume-commission ... --tokens N` retains the original Session, native thread,
+objective and cumulative usage. Native completion is host execution evidence,
+not canonical Goal/Todo acceptance. An allowance includes previous usage and
+context; an in-flight request can exceed it. No default heartbeat is enabled.
+
+Portfolio extension refreshes scoped evidence/tools in the same steward thread.
+After creation commits, the existing request journal saves its exact resource
+receipt before attempting portfolio adoption. An adoption or readback failure
+keeps that operation queued for recovery. Recovery rechecks the original
+binding and canonical receipt, adopts the same resources, and returns their
+result without creating another Goal or model thread. Notification cannot
+settle an operation whose adoption is pending. Fault journeys cover adoption
+failure, lost adoption readback, an interrupted creation-owner call and revoked
+binding; they qualify provider/Core IO recovery, not a full host restart.
+App, owner, source and workspace identity remain frozen and rechecked. A silent
+native event reader cannot block the control RPC receipt needed to pause work.
+The provider-specific setup companion belongs to the Lark extension; the
+conversation, request, scope and creation semantics remain in their typed owners.
+
+Regression journeys cover independently verified empty versus missing scope,
+wrong App/source confirmation, expiry, creation/adoption, native result return,
+stop, duplicate events and same-thread recovery. A local actual Codex source
+canary separately exercised a budget-limited synthetic commission and resumed it
+in the same native thread to return verified fixture findings. It did not prove
+real Lark inbound or phone acceptance. Multi-Agent coordination, actual media /
+permission interactions, installed login recovery and mobile journeys remain
+open; runtime/authority promotion still requires maintainer review.
+
+Synthetic product previews: [empty steward and project assistant](../../assets/personal-workspace/private-steward-empty.png),
+[narrow](../../assets/personal-workspace/private-steward-empty-narrow.png).
+
+## Private Chat status and help: scoped observations
+
+`/status` and `/help` use the existing typed bound-request owner to report the
+authorized role, workspace, executor endpoint, native Session/active Turn and
+durable queued-Turn count. Steward status counts only that binding's freshly
+authorized commissions. An executor endpoint is not a selected registered Agent;
+native execution ending is not Goal acceptance or proof of result delivery.
+
+The Core request persists a timestamped observation before provider delivery.
+Duplicate events retain that snapshot instead of switching to a newer Session.
+A selected Agent target keeps its exact bound Session: observation reads that
+Session even when it is failed or closed, and never falls back to a newer
+conversation.
+Missing execution evidence and unknown states stay explicitly unavailable.
+These commands open no Session, invoke no model and create no Goal. `/help`
+shows role-specific commands and the existing Settings → Lark entry for workspace,
+executor and revocation, including the text-only attachment boundary.
+
+Regression coverage uses the production native filesystem store, durable queue,
+bound request and provider admission/reconciliation paths with a synthetic
+provider and protocol executor. It qualifies queue/stop/readback and duplicate
+delivery, not live provider, mobile or installed-service acceptance of this delta.
+The explicit attached-target selection checkpoint below is source-qualified; broader coordination and live acceptance remain open.
+
+## Explicit registered Agent selection: original attached host
+
+Settings → Lark can grant a project App access to an exact existing registered
+Agent's attached Session in that authorized workspace. The typed binding owner
+checks Goal, Agent, Session, executor, Goal lifetime and exact host identity,
+with an independently verified App/owner and revision-fenced publication. Up to
+sixteen explicit target grants fit in one App binding. Executor names alone do
+not select a registered Agent. This creates no Agent or Goal and imports no
+host history, prior bindings or portfolio.
+
+In private Chat, `/agents` lists only currently usable grants. Copy its complete
+`/agent <target-ref>` command to select one; subsequent text enters the original
+canonical Session queue for that existing host to claim and complete.
+`/project` returns to the original ordinary project Session. Accepted messages
+and their replies retain their original target and App/source even after that
+switch or a crash. No model adapter is started or resumed for an attached target.
+The host must already consume its [native attached broker](../../integrations/attached-agent-session-broker.md).
+
+The queue stores its frozen audience and exact target. Host claim revalidates
+the local grant, current registration, workspace, lifetime and host under the
+grant/queue fences. Revocation prevents pending claims and private result
+return; a previously claimed execution still belongs to its host. Session and
+host audience stamps prohibit assigning the same ongoing host conversation to
+another App, including after grant revocation. Inbound and outbound provider
+checks independently verify that App's owner/source. Granting message delivery
+preserves the original host's permissions and claim/completion authority.
+
+`/status` names the actual registered recipient and durable queue. The current
+attached broker has no push interrupt or new-session capability: `/stop` and
+`/new` return an explicit unavailable response and preserve the original host.
+Handle those actions at that host, or use `/project` for ordinary Chat. Settings
+can revoke a target or disconnect the App; stale roots/grants remain unavailable.
+An empty candidate list does not bootstrap roles or fabricate a Goal.
+
+Synthetic provider/native-store journeys qualify selection, follow-up, original
+result return, replay/recovery, revoked pending claims, exact registration and
+cross-App/host refusal. Source type checks and packaged Settings build qualify
+the companion. Live attached-host automation, mobile acceptance, incremental
+media/permission interactions and broader steward coordination remain open.
+This source delta requires maintainer review before installed promotion.
+
 ## Decision: make the App the place where work conversations continue
 
 Users should be able to say “接着做，结果给我” / “Keep going and bring me the result”
@@ -27,6 +207,26 @@ owners keep their authority. Conversation membership creates no permission.
 Five questions organize the experience: is my request still here; who is actually
 working; did my correction or stop take effect; where is the checked result; and
 how do I come back after failure without starting the work again?
+
+### Realtime Bot entry and recipient purpose
+
+A native Bot replacement is another entry to this conversation lifecycle. Its
+realtime connection is independent of periodic Goal work. Entry and recipient
+purpose are separate: ordinary project chat, direct conversation with an existing
+Agent, and the persistent steward share mechanics but have different objectives
+and grants. The [steward operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract)
+orders transport isolation, ordinary DM/role choice, progress/media/permissions
+and installed replacement qualification under S5.
+
+Ordinary project chat needs a shared Core conversation context whose workspace,
+executor and audience are explicitly authorized, without a user-created Goal or
+an automatic global-steward objective. This is a remaining entry requirement,
+not a new shipped Session schema. Lark must not implement it by creating hidden
+Goals, copying another host's sessions, or introducing an independent executor.
+Explicit recipient selection uses permitted stable references; labels do not
+confer grants. Switching the selected recipient affects future input, while
+accepted work and returns retain their original Session, source and audience.
+Stop targets the exact current request rather than every Agent behind a Bot.
 
 ### Managed and attached are different execution relationships
 

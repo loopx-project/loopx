@@ -66,6 +66,7 @@ export const SHADOW_OUTBOX_MANIFEST_SCHEMA = "loopx_shadow_outbox_manifest_v1";
 export const SHADOW_EXACT_OUTBOX_MANIFEST_SCHEMA = "loopx_shadow_outbox_manifest_v2";
 
 export const LEGACY_COORDINATION_WRITER_FENCE_SCHEMA = "loopx_legacy_coordination_writer_fence_v0";
+export const NEW_GOAL_WRITER_FENCE_SCHEMA = "loopx_new_goal_writer_fence_v0";
 export const LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA = "loopx_legacy_coordination_writer_fence_engage_request_v0";
 export const LEGACY_COORDINATION_WRITER_FENCE_RESULT_SCHEMA = "loopx_legacy_coordination_writer_fence_result_v0";
 export const LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA = "loopx_legacy_coordination_write_check_request_v0";
@@ -170,6 +171,7 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
       "successor_todo_ids",
       "completion_continuation",
       "completion_recovery",
+      "completion_receipt_id",
       "replan_obligation_id",
       "target_key",
       "cadence",
@@ -304,6 +306,7 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
   },
   "legacy_writer_fence_protocol": {
     "fence_schema": LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
+    "creation_fence_schema": NEW_GOAL_WRITER_FENCE_SCHEMA,
     "engage_request_schema": LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA,
     "result_schema": LEGACY_COORDINATION_WRITER_FENCE_RESULT_SCHEMA,
     "write_check_request_schema": LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,

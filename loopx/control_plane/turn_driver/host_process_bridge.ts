@@ -25,11 +25,12 @@ process.stdin.on("data", (chunk: Buffer) => {
       const lease = raw.delegated_lease;
       delete raw.delegated_lease;
       const request = decodeHostProcessRequest(raw);
-      if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal));
+      // The owned process group is reported before either path can run unaccounted.
+      if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal, undefined, {spawned: emit}));
       else {
         // Ordinary Hosts do not load canonical lease/provider modules.
         const {decodeDelegatedHostLease, runLeasedHostProcess} = await import("./leased_host_process.ts");
-        await emit(await runLeasedHostProcess(request, decodeDelegatedHostLease(lease), emit, owner.signal));
+        await emit(await runLeasedHostProcess(request, decodeDelegatedHostLease(lease), emit, owner.signal, emit));
       }
     }
     catch { process.exitCode = 1; }

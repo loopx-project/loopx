@@ -11,6 +11,11 @@ from ..coordination.local_authority import (
 )
 
 from .succession_warning import public_todo_summary
+from ...agent_registry import registered_agent_ids_for_goal
+from ..work_items.recommendation_source_io import (
+    load_recommendation_source_goal, recommendation_source_context,
+    project_agent_next_actions, recommendation_runs,
+)
 
 def _redacted_status_todo_fields(fields: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(fields)
@@ -50,11 +55,12 @@ def active_state_todo_fields(
     goal: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    registry_path: Path | None = None,
     todo_snapshot: CanonicalTodoSnapshot | None = None,
+    include_agent_next_actions: bool = False,
     rollout_events: Sequence[Mapping[str, Any]] | None = None,
     resolve_goal_local_path: Callable[..., Path | None],
     active_state_next_action_entries: Callable[..., list[str]],
-    active_next_action_todo_ids: Callable[[str], set[str]],
     load_rollout_events: Callable[..., list[dict[str, Any]]],
     rollout_event_log_path: Callable[[Path, str], Path],
     max_todo_index_rollout_events_per_goal: int,
@@ -67,6 +73,19 @@ def active_state_todo_fields(
 ) -> dict[str, Any]:
     todo_field_redactor = redacted_status_todo_fields or _redacted_status_todo_fields
     goal_id = str(goal.get("id") or "").strip()
+    source_registry = None
+    admission_goal: dict[str, Any] | None = goal
+    if registry_path is not None and goal_id:
+        try:
+            source_registry, source_goal = load_recommendation_source_goal(registry_path, goal_id)
+        except (OSError, ValueError):
+            # Status remains a read model when its source is unavailable. It
+            # must not mint a write basis from a stale shared roster.
+            admission_goal = None
+        else:
+            admission_goal = source_goal
+            if source_goal is not None:
+                goal = {**goal, **source_goal}
     # Inspect authority before the display file. A missing/stale projection is
     # not an empty Todo collection, and an unavailable provider must fail closed.
     canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
@@ -91,9 +110,8 @@ def active_state_todo_fields(
             raise
         state_text = ""
     next_action_entries = active_state_next_action_entries(state_text, limit=3)
-    preferred_todo_ids: set[str] = set()
-    for entry in next_action_entries:
-        preferred_todo_ids.update(active_next_action_todo_ids(entry))
+    from .next_action_runtime import bound_next_action_todo_ids
+    preferred_todo_ids = bound_next_action_todo_ids(state_text)
     events = (
         [dict(event) for event in rollout_events]
         if rollout_events is not None
@@ -130,6 +148,24 @@ def active_state_todo_fields(
     if next_action_entries:
         fields["active_state_next_action"] = next_action_entries[0]
         fields["active_state_next_action_entries"] = next_action_entries
+    if goal_id and admission_goal is not None:
+        source = recommendation_source_context(admission_goal, state_text,
+            source_registry=source_registry, todo_fields=fields if canonical is not None else None)
+        fields["recommendation_context"] = source
+        sole_agent = len(registered_agent_ids_for_goal(admission_goal)) == 1
+        # Default multi-agent status needs source facts, not an RPC and full
+        # journal scan per peer. Detail and sole-agent readback request routes.
+        if include_agent_next_actions or sole_agent:
+            # Binding uses full task facts, never a bounded display page.
+            route_fields = fields if canonical is not None else parse_active_state_todos(
+                state_text, goal=goal, state_path=state_path, rollout_events=events, item_limit=None,
+            )
+            runs = recommendation_runs(runtime_root, goal_id) if runtime_root else []
+            routes = project_agent_next_actions(goal, route_fields, source=source, runs=runs)
+            if sole_agent and routes:
+                fields["next_action_basis"] = routes[0]["next_action_basis"]
+            if include_agent_next_actions and routes:
+                fields["agent_next_actions"] = routes
     warning = backlog_hygiene_warning(
         state_text,
         agent_todos=fields.get("agent_todos") if isinstance(fields.get("agent_todos"), dict) else None,

@@ -1,10 +1,10 @@
 # RFC：强能力 Agent 管家与语义工作交接（v0）
 
 - **RFC 状态：** 已接受
-- **替代 / 关闭：** 无
+- **替代 / 关闭：** [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md)
 - **交付成熟度：** Partial；私人运行 profile、团队计划确认与 Todo 物化已交付，完整 M1–M4 未验收。
 - **作者 / 责任人：** LoopX 维护者、管家工程负责人
-- **创建 / 最近规范修订：** 2026-09-13 / 2026-09-15
+- **创建 / 最近规范修订：** 2026-09-13 / 2026-10-04
 - **实现基线：** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **语言镜像：** [English](capable-manager-semantic-handoff-v0.md)
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[管家连续性](../../reference/protocols/manager-evidence-and-continuity-v0.md)、[Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md)、[桌面入口](desktop-execution-frontends-v0.zh-CN.md)、[共享权威](shared-goal-authority-state-provider-v0.zh-CN.md)、[共享目标对齐/修订](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md)、[TS 迁移](typescript-control-plane-migration-v0.zh-CN.md)
@@ -471,6 +471,17 @@ Lark adapter 经不可变收件箱传递观察，Chat 和接收方交办使用�
 
 并行工作不意味着执行资源隔离。共享浏览器屏幕或可变工作区，复用 runtime 的串行化/lease；它与 Core 工作归属分开。不同屏幕、Agent 名称和会话页签不是权限边界。runtime 缺乏所需协调时，串行执行受影响操作并显示等待；无关取证仍可推进。M1 汇报真实资源行为，不预设共享云电脑架构。
 
+### 5.11.1 飞书个人事项跟进 profile
+
+[飞书个人事项跟进](../../product/use-cases/office-operations/personal-follow-through.zh-CN.md)
+是本管家契约的有界应用。个人承诺识别、来源覆盖、截止时间依据与注意力成本评测
+保留在场景文档；通用生命周期、持续授权、准备、恢复与返回由本 RFC 及其引用的
+类型化 owner 负责。该 profile 明确映射到 A3/A5–A10/A13–A15/A20 和既有
+M1–M4，取代原独立个人 M1–M3。复用规范 User/Agent Todo、既有提议与产物引用，
+不新增平行状态、调度或审批层。主动触发沿用已有 schedule/event 路径和真实授权。
+profile 的 TypeScript/Node 要求保持有界，不要求无关全仓迁移。场景 CLI、模拟
+测试或本次文档归并不关闭任何验收；真实来源及安装版完整流程仍需单独证明。
+
 ### 5.12 与目标对齐、共享权威、TS 内核衔接
 
 **先判断改变的性质，再选择 writer。** 咨询可无 Todo 返回证据。意图内的路线纠正，走接收方已有 Vision/Replan/Todo 路径。按对齐契约需要 amendment 的共享依赖/工作图变化，走其 proposal/admission 路径；改变共享目标、验收、非目标、权限、停止条件，不能因为管家发话就降格为本 Agent 的路线编辑。Stage 2 准入的 `canonical_effect` 是 `none`。相应受控 commit class 尚未实现并验收时，保留提案、报告准确执行缺口，继续无关的已授权工作。不自造管家 commit endpoint、同伴投票或额外常规人工确认。每种 amendment class 都需要各自已验收的 policy/verifier/commit 路径。首个 Stage 3 `GoalAmendmentAuthority` 切片只授权保持 intent 的 `shared_work_graph`，不能提交 acceptance、non-goal、permission、objective 或 stop-condition 变更。某个 class 单独验收后，才复用该 class 的 commit owner、精确基线 CAS 和回执；各 Agent rebase 或收到规定的在途工作处置。
@@ -631,6 +642,31 @@ M0 盘点真实字段和 producer；以下是迁移验收底线，不代表已�
 健康本地服务初始目标为两秒内给入口回执，独立于模型耗时；这是待测 SLO，不承诺两秒模型回答。长工作给有用延迟说明，不发周期噪音。并发和单轮调查成本复用 runtime/Goal 配置，管家不能吃光 worker 资源。忙碌 worker 保留已接受工作，排队和下一唤醒可见。
 
 使用现有服务恢复和 receipt pump，不为每类请求创建管家业务 automation。配置/故障通过已有 CLI、capability settings、管家对话展示。诊断区分模型失败、工具/策略拒绝、状态冲突、接收方不可达、格式/传输失败。
+
+**实时 IM 入口（S1/S5/S10）：** 分开验收长连接收信、持久准入、host 执行和可见回报。
+一个回答阻塞时，另一个请求或纠正仍须得到有界、真实的准入反馈；Core 已支持 queue/steering
+不能替代 Lark consumer 的验证。持续 Session、临时进度、精确权限决策和明确的媒体可用性
+复用已有 Chat/Turn/operation owner，不另建 bridge 账本或 scheduler。
+bundled provider 的[就绪指南](../../../loopx/extensions/lark/docs/realtime-conversation-readiness.md)
+记录有界跨会话处理和仍待完成的替代验收；私聊开通、普通非 Goal 对话、流式回显与媒体输入，
+须等固定版本的已安装旅程通过后才能宣称就绪。
+
+**产品边界：** Bot 是实时会话入口，不是另一个管家。普通项目对话和与选定既有 Agent
+直接交流，无需团队拆解或新增 Goal/Todo；需要长期承诺、协调和验收时，管家是显式接收者。
+共享认证入口、Session/Turn、执行/进度/附件、operation 决策与恢复；接收者职责、受众、
+会话记录和工作区授权保持独立。不能为了获得可用 executor，就让渠道继承全局管家目标或
+portfolio 可见性。共享改动归[对话入口 RFC](app-conversation-and-async-inbox-v0.zh-CN.md)，
+不另建 Bot 执行或审批权威。跨主机替换受租户控制的 App 时，使用重新授权的新 App；
+凭据、来源会话和权限绑定不作为装机备份迁移。
+
+按 M1/M3 和已有 S5 旅程交付，不新增平行里程碑，不把周期 heartbeat 当实时传输：
+
+| 次序 | 用户可感知出口 | 既有 owner 与验收 |
+| --- | --- | --- |
+| 先做 | 同一 Bot 的慢角色不拖住其它会话，同会话追问保持顺序 | Lark 传输有界 worker/缓冲、执行前绑定复核、reply/ACK 回读和停止/drain 证据；Core 保留 Session 准入与预算 |
+| 接着 | 首次私聊与显式角色选择接续正确会话，忙碌工作及时报告持久准入或拒绝 | Chat Session/Turn 与 typed ingress 拥有连续性、受众及 queue/steering；普通对话无需用户先造 Goal Topic，角色名本身不授予权限 |
+| 再做 | 每个宣称支持的 host 都能显示进度、接收图/文件和处理权限答复 | 既有 event/attachment/operation owner；有界临时卡片、明确不支持的媒体、认证后的精确 operation 回调，以及只重试投递的恢复 |
+| 切换门槛 | 安装态 provider/host 旅程经得住重连、重复事件、取消和投递不可用 | 固定版本，跑实际入口和回读；验收后才退役旧 bridge，每个 App 保持唯一 consumer，不复制凭据或 session |
 
 ## 11. 规范性里程碑
 

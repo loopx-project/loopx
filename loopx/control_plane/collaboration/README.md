@@ -44,9 +44,12 @@ ingress and policy reader lives in `source_grant_observation.py`; the Chat
 capability retains its public `authority` API and supplies its own instruction.
 This removes a dependency from shared coordination to a product adapter without
 introducing a second policy writer or migrating existing records. The typed
-`source_grants.ts` owner resolves exact recipients and managed Goal targets;
-Goal grants include future registered Agents while explicit recipient exclusions
-remain effective. The existing operator configuration path delegates changes to
+`source_grants.ts` owner resolves exact recipients and managed Goal targets.
+Authorized sender-bound sources default to all currently registered local
+recipients, across Goals and future registrations. Explicit `selected` scope
+retains enrollment; exact and whole-Goal exclusions override the default, including
+parent forwarding and replay. Provider observations contain only this host's
+active registrations; neither scope admits remote execution. The existing operator configuration path delegates changes to
 that same owner. Read grants and executor permissions do not imply delegation.
 
 `inbox.py` adapts the existing private file stores; typed request validation stays

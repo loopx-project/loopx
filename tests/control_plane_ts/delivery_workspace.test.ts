@@ -118,3 +118,38 @@ test("workspace normalization is immutable and fails closed on contradictions", 
     /peer_independent_worktree_required must be a boolean/,
   );
 });
+
+test("peer isolation preserves local delivery and repository/owner boundaries", () => {
+  const local = {
+    schema_version: "delivery_workspace_v1", workspace_identity: "loopx:research",
+    identity_kind: "local_goal", task_repository: null,
+    repository_source: "goal_id_fallback", workspace_kind: "local_goal_workspace",
+    peer_independent_worktree_required: false,
+  };
+  const git = {
+    ...local, workspace_identity: "git:github.com/example/project",
+    identity_kind: "git_repository", task_repository: "git:github.com/example/project",
+    workspace_kind: "canonical_checkout",
+  };
+  for (const [workspace, explicit, repository, required, accepted] of [
+    [local, null, null, false, true],
+    [local, true, null, true, false],
+    [local, null, "git:github.com/example/project", true, false],
+    [null, null, null, true, false],
+    [git, null, null, true, true],
+    [git, false, null, false, true],
+    [git, null, "git:github.com/example/other", true, false],
+  ] as const) {
+    const result = evaluateDeliveryWorkspace({
+      schema_version: DELIVERY_WORKSPACE_REQUEST_SCHEMA, operation: "isolation",
+      workspace, multi_agent_goal: true, explicit_peer_worktree_requirement: explicit,
+      task_repository: repository,
+    });
+    assert.equal(result.peer_independent_worktree_required, required);
+    assert.equal(result.workspace !== null, accepted);
+    if (result.workspace) {
+      assert.equal((result.workspace as Record<string, unknown>).peer_independent_worktree_required, required);
+    }
+  }
+  assert.equal(local.peer_independent_worktree_required, false);
+});

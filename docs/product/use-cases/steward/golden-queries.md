@@ -76,6 +76,16 @@ an ordinary public issue and a qualified receiver already doing unrelated review
 Delivery and read must not pass the test. Require an independent assessment,
 reuse an explicitly linked existing task when needed, inspect current facts,
 post the authorized checked reply and return its link to the original request.
+A configured, sender-bound source delivers to all registered active local
+Agents by default, across Goals and later registrations, without recipient
+enrollment. Exercise direct delivery and a receiver's subsequent peer handoff
+through the same current source rule. Revoke one Agent and one Goal: the next
+attempt must be denied, and restoring the Goal must preserve the Agent exception.
+Exercise both revocation orders, including an Agent revoked while its Goal is disabled.
+An explicit selected scope retains enrollment; an unknown sender, stopped Goal
+or remote binding never gains authority from the local default. Delivery remains
+separate from evidence access, task acceptance and execution.
+
 A short answer requires no invented Todo. A deferral names its actual condition
 and continuation; a monitor responsibility or worker activity is not a task result.
 

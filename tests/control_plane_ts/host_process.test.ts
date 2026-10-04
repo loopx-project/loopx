@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {existsSync} from "node:fs";
 import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
@@ -62,9 +63,27 @@ for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const)
         ${mode === "leader_exit" || mode === "closed_pipes" ? "process.exit(0)" : "setInterval(()=>{},1000)"}
       }},5)`;
     const controller = new AbortController();
+    let expire: (() => void) | undefined;
+    let ready = false;
+    if (mode === "timeout") {
+      // Control only the supervisor deadline, not real process IO or cleanup.
+      // This case proves drain of a known-ready descendant. A separate real
+      // 500ms case below covers expiry before readiness, without assuming IO.
+      const timer = globalThis.setTimeout;
+      t.mock.method(globalThis, "setTimeout", (callback: () => void, ms: number) => {
+        if (ms !== 500) return timer(callback, ms);
+        expire = callback;
+        return timer(() => { controller.abort(); }, 3000); // fixture readiness watchdog
+      });
+    }
     const result = await runHostProcess(request(script, {timeout_ms: mode === "timeout" ? 500 : 3000}), async item => {
-      if (mode === "abort" && item.text.includes("ready")) controller.abort();
+      if (item.text.includes("ready")) {
+        ready = true;
+        if (mode === "abort") controller.abort();
+        if (mode === "timeout") { assert.ok(expire); expire(); }
+      }
     }, controller.signal);
+    assert.equal(ready, true, "descendant readiness was not established");
     assert.equal(result.outcome, mode === "abort" ? "cancelled" : mode === "timeout" ? "timeout" : "exited");
     assert.equal(result.cleanup_scope, "process_group"); assert.equal(result.group_signal_sent, true);
     const counter = await readFile(marker, "utf8"); await delay(100);
@@ -72,6 +91,21 @@ for (const mode of ["timeout", "abort", "leader_exit", "closed_pipes"] as const)
     if (mode === "leader_exit") assert.equal(result.output_complete, false);
   });
 }
+
+test("real timeout before readiness prevents later Host effects", {skip: process.platform === "win32"}, async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-host-pre-ready-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const marker = join(root, "late-effect");
+  const result = await runHostProcess(request(
+    `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'unexpected'),900)`,
+    {timeout_ms: 500}), async () => {});
+  assert.equal(result.outcome, "timeout");
+  assert.equal(result.cleanup_scope, "process_group");
+  assert.equal(result.group_signal_sent, true);
+  assert.equal(existsSync(marker), false);
+  await delay(900);
+  assert.equal(existsSync(marker), false, "Host performed an effect after timeout returned");
+});
 
 test("output consumer failure cancels execution rather than leaving an orphan", async () => {
   const result = await runHostProcess(request(`setInterval(()=>process.stdout.write('tick\\n'),10)`),
@@ -113,4 +147,27 @@ test("closed pipes do not turn asynchronous KILL delivery into completed cleanup
   const counter = await readFile(marker, "utf8");
   await delay(100);
   assert.equal(await readFile(marker, "utf8"), counter);
+});
+
+test("the spawned Host group is reported once before input, and an unrecorded group never runs", {skip: process.platform === "win32"}, async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-host-spawned-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const seen: unknown[] = [];
+  let stdout = "";
+  const result = await runHostProcess(request(`process.stdout.write(String(process.pid)+' '+String(require('child_process').execSync('ps -o pgid= -p '+process.pid)).trim())`),
+    async item => { stdout += item.text; }, undefined, undefined, {spawned: async item => { seen.push(item); }});
+  const [pid, pgid] = stdout.split(" ").map(Number);
+  assert.equal(result.outcome, "exited");
+  assert.deepEqual(seen, [{kind: "spawned", pid, process_group: pid}]); assert.equal(pgid, pid);
+  // A caller that cannot record the owned group runs nothing unaccounted for, and
+  // the armed host proves it really started, so this is not an unspawned process.
+  const script = (marker: string) => `require('fs').writeFileSync(${JSON.stringify(marker)},'')
+    process.stdin.on('data',()=>{});setInterval(()=>{},1000)`;
+  const recorded = join(root, "recorded");
+  const refused = await runHostProcess(request(script(recorded)), async () => {}, undefined, undefined, {spawned: async () => {
+    const until = Date.now() + 2000;
+    while (!existsSync(recorded) && Date.now() < until) await delay(5);
+    assert.ok(existsSync(recorded), "the Host never started");
+    throw new Error("record unavailable"); }});
+  assert.equal(refused.outcome, "cancelled"); assert.equal(refused.output_complete, false);
 });

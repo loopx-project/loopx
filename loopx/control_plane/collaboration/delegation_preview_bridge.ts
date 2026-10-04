@@ -29,7 +29,10 @@ const stop = (reason: StopReason = "cancelled") => {
   if (lifetime) clearTimeout(lifetime);
   if (pending) clearTimeout(pending.timer);
 };
-const armIdle = () => { idle = setTimeout(() => stop("idle"), IDLE_MS); };
+const armIdle = () => {
+  // A result delivery may resume after cancellation has cleared the timers.
+  if (!stopped) idle = setTimeout(() => stop("idle"), IDLE_MS);
+};
 
 async function accept(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid preview frame");
@@ -60,7 +63,7 @@ async function accept(value: unknown) {
         if (response.id >= MAX_REQUESTS) stop("retired");
         else if (!pending) armIdle();
       }
-    }, owner.signal, undefined, input => { write = input; });
+    }, owner.signal, undefined, {openInput: input => { write = input; }});
     void running.then(async result => {
       const originalPending = pending;
       stop(result.outcome);

@@ -1,6 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { optionalNonEmptyString, requireJsonObject } from "../runtime_decode.ts";
+import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 
 const PROGRESS_OUTCOMES = [
@@ -117,6 +117,9 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       : "The original Turn has a revalidated canonical successor transition. Finish its writeback before any quota debit; do not repeat planning or execute the successor.";
     return {obligation: {
       ...(original ?? {}), required: true, obligation_id: selected,
+      // The validated receipt belongs to this lane. After writeback the live
+      // trigger may disappear; do not assign its remaining settlement to a peer.
+      ...(request.agent_id ? {agent_id: requireNonEmptyString(request.agent_id, "agent_id")} : {}),
       selection_binding: "heartbeat_receipt", recommended_action: reason,
       resolution_mode: "receipt_bound_replan_settlement", todo_actions: [], guidance_actions: [reason],
       settlement_action_packet: {

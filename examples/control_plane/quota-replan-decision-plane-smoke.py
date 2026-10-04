@@ -25,9 +25,6 @@ from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
 from loopx.control_plane.todos.quota_summary import (  # noqa: E402
     select_quota_todo_summary,
 )
-from loopx.control_plane.runtime.agent_scoped_evidence_log import (  # noqa: E402
-    build_agent_scoped_evidence_log_command,
-)
 from loopx.control_plane.work_items.autonomous_replan_obligation import (  # noqa: E402
     ensure_replan_novelty_policy,
 )
@@ -54,7 +51,7 @@ GLOBAL_REPLAN_OBLIGATION = {
     "triggers": [{"kind": "periodic_review_due", "source": "fixture"}],
     "replan_novelty_policy": {
         "schema_version": "replan_novelty_policy_v0",
-        "evidence_source": "agent_scoped_evidence_log",
+        "evidence_source": "compact_run_history",
         "writeback": "repair_delta",
     },
     "stop_condition": "stop after one bounded replan slice writes back a concrete frontier delta",
@@ -270,10 +267,11 @@ def status_payload(
                 "agent_id": SIDE_AGENT,
                 "status": "completed",
                 "recorded_at": acked_at,
-                "command": build_agent_scoped_evidence_log_command(
-                    goal_id=GOAL_ID,
-                    agent_id=SIDE_AGENT,
-                    required_read_id=obligation_id or None,
+                # Frozen persisted command from the retired interface, not executed.
+                "command": (
+                    f"loopx --format json evidence-log --goal-id {GOAL_ID}"
+                    f" --agent-id {SIDE_AGENT} --thin --limit 24"
+                    + (f" --required-read-id {obligation_id}" if obligation_id else "")
                 ),
                 "read_window": {"mode": "thin", "limit": 24},
                 **(
@@ -642,11 +640,11 @@ def assert_replan_beats_monitor_quiet_skip() -> None:
     ]
     assert (
         novelty_policy.get("evidence_source") or novelty_policy.get("evidence")
-    ) == "agent_scoped_evidence_log", guard
+    ) == "compact_run_history", guard
     assert novelty_policy["delivery"] == "host_projected", guard
     assert novelty_policy["writeback"] == "typed_semantic_delta", guard
     replan_context = guard["autonomous_replan_obligation"]["replan_context"]
-    assert replan_context["evidence_source"] == "agent_scoped_evidence_log", guard
+    assert replan_context["evidence_source"] == "compact_run_history", guard
     assert replan_context["delivery_receipt"]["status"] == "delivered", guard
     action_packet = guard["replan_action_packet"]
     assert action_packet["obligation_id"] == guard["autonomous_replan_obligation"]["obligation_id"], guard
@@ -1604,12 +1602,14 @@ def assert_unrelated_runs_do_not_promote_legacy_ack_into_semantic_closure() -> N
             latest_runs=[
                 {
                     "classification": "state_refreshed",
+                    "generated_at": "2026-07-04T00:01:00Z",
                     "agent_id": PRIMARY_AGENT,
                     "progress_scope": "agent_lane",
                     "recommended_action": "Primary lane refreshed unrelated state.",
                 },
                 {
                     "classification": "quota_monitor_poll",
+                    "generated_at": "2026-07-04T00:02:00Z",
                     "agent_id": SIDE_AGENT,
                     "recommended_action": "Fixture monitor stayed unchanged.",
                     "monitor_target": {
@@ -1622,6 +1622,7 @@ def assert_unrelated_runs_do_not_promote_legacy_ack_into_semantic_closure() -> N
                 },
                 {
                     "classification": "monitor_poll_autonomous_replan_recorded_v0",
+                    "generated_at": "2026-07-04T00:03:00Z",
                     "agent_id": SIDE_AGENT,
                     "progress_scope": "agent_lane",
                     "autonomous_replan_ack": {
@@ -1658,6 +1659,7 @@ def assert_non_frontier_replan_ack_does_not_clear_monitor_replan() -> None:
                 latest_runs=[
                     {
                         "classification": "monitor_poll_autonomous_replan_recorded_v0",
+                        "generated_at": "2026-07-04T00:00:00Z",
                         "agent_id": SIDE_AGENT,
                         "progress_scope": "agent_lane",
                         "autonomous_replan_ack": {

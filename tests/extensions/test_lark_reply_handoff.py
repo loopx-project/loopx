@@ -59,7 +59,7 @@ def test_short_reply_handoff_preserves_source_and_returns_once(
         )
         _write(_root(tmp_path) / "policy.json", {
             "schema_version": POLICY_SCHEMA,
-            "sources": {session["channel_id"]: {"sender_ids": ["owner"], "targets": [target]}},
+            "sources": {session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}},
         })
         parent_text = "Public cash-flow draft: separate cash payments from finance leases."
         quoted = {"message_id": "om_parent", "conversation_id": "room", "content": parent_text}

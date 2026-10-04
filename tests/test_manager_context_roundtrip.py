@@ -69,7 +69,7 @@ def flow(tmp_path):
                     "schema_version": POLICY_SCHEMA,
                     "sources": {
                         session["channel_id"]: {
-                            "sender_ids": ["owner"],
+                            "local_delivery_scope": "selected", "sender_ids": ["owner"],
                             "targets": [target],
                         }
                     },

@@ -41,6 +41,18 @@ Frozen failures/missing evidence remain visible. T4 deletes proven redundant
 owners alongside implementation, without waiting for R6 or all Python to vanish.
 This replaces stale current-count estimates, not historical execution evidence.
 
+**Fresh creation opt-in (2026-10-04, proposed).** The existing
+[device setting and CLI/App creation owner](../../reference/local-authority-provider-selection.md#new-goal-authority-machine-setting)
+can freeze a File/SQLite target and `soft_claim`/`hard_lease` policy, initialize
+empty canonical authority and recover the original creation receipt. Isolated
+real-provider CLI/HTTP and packaged settings checks cover original-operation
+retry, writer fencing, lost completed authority and rejected policy recovery.
+Completed retries no longer parse the Python Markdown source; unfinished fresh
+creation still captures it only when the typed owner requests it. Default-off
+and released v0 behavior remain; live legacy writers retain callers. This is a
+bounded L9 prerequisite, not installed upgrade, whole-Goal recovery, D2, cohort
+admission or release-default acceptance. Those existing exits remain open.
+
 File retained-state storage now reuses the existing TS checkpoint/delta codec,
 stacked on #5063's verified read cache and RPC budgets. Original revisions,
 receipts and full historical projections survive the physical format upgrade.
@@ -49,6 +61,7 @@ format migration; legacy decoding exists only in the migration owner. File and
 SQLite reuse logical archives for cross-provider isolated recovery.
 This adds no provider/default promotion and retires no Python business owner.
 [Automatic backup/migration, cold costs and qualification limits](../../reference/file-authority-state-log.md).
+[Configuration checkpoints](../../reference/configuration-backup.md) additionally preserve machine defaults and source-owned Goal settings. Their isolated recovery does not adopt a live provider, restore Host bindings or close D1–D3; live configuration adoption and reviewed cutover remain with the existing owners.
 
 **Ownership simplification stage (2026-10-01).** R5/T4 separate storage
 promotion from policy migration. Fresh CLI promotion preserves policy; normal

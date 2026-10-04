@@ -59,64 +59,132 @@ contract; PostgreSQL's real-server qualification remains a separate gate.
 
 See [reviewed promotion and recovery](reviewed-coordination-promotion.md) for the explicit saved-plan CLI journey.
 
-## New Goal storage target (machine setting)
+## New Goal authority (machine setting)
 
-The **New Goal storage target** setting fixes a File or SQLite target at
-creation. It is not live inheritance, automatic promotion, or an existing-Goal
-migration. Until separately reviewed promotion, the existing legacy source is
-still authoritative. After promotion the selected provider serves canonical
-Todo/lease state; Run artifacts and other independently owned stores are not
-moved by this preference.
+**Settings → Capability Center → Device defaults → New Goal authority** selects
+File or SQLite independently of the execution policy. Enable **Create canonical
+authority** to initialize future empty Goals directly with `soft_claim` or
+`hard_lease`. Agents inherit the Goal policy; this grants no tool, repository,
+scheduler, account or network permission and does not migrate existing data.
 
-Use **Settings → Capability Center → Device defaults → New Goal storage target**
-or the revision-checked CLI:
+Canonical creation is default-off. An absent namespace, the released v0 shape,
+or v1 with `canonical_creation=false` retains the post-promotion target behavior.
+Opening v0 in the guided editor previews a v1 envelope upgrade with creation
+still disabled. The CLI continues to accept v0.
+
+Save this namespace document as `goal-storage.json`:
+
+```json
+{
+  "schema_version": "loopx_goal_storage_defaults_v1",
+  "new_goal_provider": "sqlite",
+  "canonical_creation": true,
+  "new_goal_handoff_mode": "hard_lease"
+}
+```
+
+Preview, apply the exact reviewed revision, then inspect and create:
 
 ```sh
-# goal-storage.json:
-# {"schema_version":"loopx_goal_storage_defaults_v0","new_goal_provider":"sqlite"}
 loopx machine-config preview --namespace goal_storage --config-json goal-storage.json
 loopx machine-config apply --namespace goal_storage --config-json goal-storage.json \
   --expected-plan-revision PLAN_REVISION --execute
 loopx machine-config inspect
 loopx bootstrap --project ./new-project --goal-id new-project --dry-run
+loopx bootstrap --project ./new-project --goal-id new-project
+loopx todo list --goal-id new-project
 ```
 
-The preview reports `storage_target`; creation reports `storage_selection` with
-`promotion_performed=false`. CLI and App creation share the same bootstrap
-owner. Creation stores its intent before provider initialization, so retry after
-interruption uses the same target even if the machine preference changed.
-If App creation fails during initialization, use **Retry original operation**
-on that creation card. It resumes the recorded target before adding initial
-Todos or starting a Turn. A persistent initialization failure remains an error;
-the presence of a registry entry alone is not successful creation. Recovery must
-match the original App operation and its validated workspace. Registration
-records `creation_operation_id` atomically with the Goal; a competing creation
-of the same id, even in the same workspace, is rejected before initialization
-or initial Todos. The create-only check is repeated under the registry lock.
-Older incomplete cards without this binding require inspection of the existing
-Goal and its canonical bootstrap/recovery path; they cannot adopt it by id.
-Already-applied cards continue to return their original receipt.
-Reconnecting an existing Goal, including an implicit File Goal, does not adopt
-a newer machine default. Importing existing Markdown does not count as a new
-empty Goal. Explicit provider selection never falls back on failure.
+Creation reports `storage_selection.authority_initialized=true`, its original
+operation and provider receipt, and `legacy_writer_fenced=true`. Complete Todo
+reads report canonical `source_authority` and `legacy_fallback_used=false`.
+Saving a preference or publishing a registry entry alone is not successful
+creation. Run artifacts and independently owned stores do not move.
 
-Without this namespace, existing behavior remains unchanged. To stop applying
-the preference to future Goals, preview `loopx machine-config remove
---namespace goal_storage`, then use its returned plan revision with `--execute`.
-Configuration rollback also affects future creation only. Neither operation
-switches existing storage or removes data. A File target keeps implicit File
-routing until a committed authority exists; it does not create a dangling
-identity-bound selector for an empty File document.
+CLI and App reuse one typed creation owner. The registry atomically freezes the
+original operation and target before initialization. The owner verifies the
+registered source, complete empty Todo/lease inventory and current bytes under
+the existing writer locks. It engages a creation fence, commits the native
+projection and original receipt, and durably records completion before success.
+Fresh creation has no shadow qualification and never fabricates capture events.
+Nonempty or captured sources require reviewed migration.
 
-For already-promoted Goals use the [reviewed File/SQLite cutover](file-authority-state-log.md#reviewed-filesqlite-cutover):
-stop writers, settle leases, review the saved plan, retain verified backups,
-then migrate. Reverse migration must preserve newer writes. New-Goal defaults
-and current-provider selection are separate facts. This opt-in setting does
-not change the release default or complete D2/D3 qualification.
+After interruption, rerun the same CLI bootstrap, or use **Retry original
+operation** on the App card. Changed device defaults cannot retarget that
+operation. Recovery must match its operation and workspace; a competing creator
+cannot adopt it. The original receipt survives later native writes, so replay
+cannot erase Todos or repeat their creation. An unavailable selected provider
+fails visibly without Markdown fallback. Lost completed authority requires full
+backup recovery and cannot be treated as empty creation. Generic forced
+bootstrap cannot rebuild an opted-in Goal.
 
-### 新 Goal 的目标存储
+<details>
+<summary>Settings and recovery views / 设置与恢复界面</summary>
 
-这是创建时固定的目标，审核晋升后才接管 canonical Todo/lease；不是“所有数据
-已经存入 SQLite”。更改默认值只影响此后创建的空 Goal，既有 Goal、重新连接或
-导入已有 Markdown 均不自动切换。创建中断后重试沿用已记录的选择。关闭或回滚
-设置不迁回数据；已有 Goal 需停止写入、结算租约，走独立的备份和审核迁移流程。
+Synthetic workspace data; the settings use a real isolated backend. The first
+view is the released v0 editor; the remaining views show the proposed v1 path.
+
+Before: the provider setting only chooses the post-promotion target.
+
+![Released target-only editor](images/new-goal-authority/before.png)
+
+After: provider, explicit canonical opt-in and execution policy, with applied
+configuration readback.
+
+![Canonical creation settings and readback](images/new-goal-authority/after.png)
+
+An unsupported `legacy` policy is rejected before apply; the previous valid
+configuration remains. Correcting the policy allows preview and apply again.
+
+![Invalid policy rejected](images/new-goal-authority/invalid-policy.png)
+
+The same device settings at a narrow viewport:
+
+![Narrow device settings](images/new-goal-authority/mobile.png)
+
+</details>
+
+To disable future canonical creation, preview and apply the same v1 document
+with `canonical_creation=false`. To remove the whole preference:
+
+```sh
+loopx machine-config remove --namespace goal_storage
+loopx machine-config remove --namespace goal_storage \
+  --expected-plan-revision PLAN_REVISION --execute
+loopx machine-config inspect
+```
+
+Use the removal preview's revision. Rollback also affects future creation only;
+neither operation switches existing storage, removes its fence or reopens its
+old writer. Reconnection and import keep their recorded route. Existing Markdown
+Goals use [reviewed promotion and recovery](reviewed-coordination-promotion.md);
+already-canonical Goals use the [reviewed File/SQLite cutover](file-authority-state-log.md#reviewed-filesqlite-cutover).
+Retain verified backups, stop writers, settle leases and preserve newer writes
+on reverse migration. Supported historical backup/format/receipt readers remain.
+
+This opt-in path does not close full existing-Goal upgrade, D2 sustained
+qualification or the release-default decision. Trial admission and release
+default admission remain separate; the existing RFC acceptance is unchanged.
+
+### 新 Goal 的权威存储
+
+在“设置 → 能力中心 → 此设备默认 → 新 Goal 的权威存储”中，分别选择 File/SQLite
+和 `soft_claim`/`hard_lease`，并显式启用 canonical 创建。默认关闭；旧 v0 或关闭
+状态仍只固定晋升后的目标。表单以关闭状态预览 v1 升级，CLI 继续接受旧格式。
+Agent 继承 Goal 策略；此设置不授予工具、仓库、账户或网络权限。
+
+CLI 使用上面的完整 JSON 和 preview/apply/inspect/bootstrap 命令；App 用现有
+表单预览、应用并读回。成功须含 `authority_initialized=true`、原创建回执和已
+读回的写入 fence；Todo list 须显示 canonical provider。保存偏好或出现 registry
+记录本身不算成功，也不代表 Run 等独立存储已经迁移。
+
+失败时重新执行原 bootstrap，或在 App 创建卡上“重试原操作”。目标和身份已固定，
+后续默认值不能改写它。旧写入先被 fence；原生提交和回执核对后才持久记录完成。
+已有 Todo、租约历史或 capture 的源须走独立审核迁移，不伪造 shadow 资格。完成
+后的存储丢失须恢复完整备份，不能重新创建空库；通用 force 不能重建。原回执在
+后续写入后仍可读回，重试不得丢失或重复 Todo。
+
+关闭或按上面的 remove 预览/执行命令删除偏好，只影响之后新建；不会迁回已有数据、
+删除 fence 或重新开放旧 writer。既有 Goal 升级仍需备份、停止写入、结算租约和
+审核计划；反向迁移须保留新增写入。受支持的旧备份、格式和原回执恢复能力保留。
+此路径不代表完整升级、D2 长期资格或发布默认已通过。

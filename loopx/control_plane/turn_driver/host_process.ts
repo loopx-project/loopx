@@ -23,6 +23,9 @@ export interface HostProcessResult {
   group_signal_sent: boolean;
 }
 export type HostProcessOutput = {kind: "stdout" | "stderr"; text: string};
+/** The group this owner will clean up, reported once the Host is spawned.
+ * ``process_group`` is null where cleanup is tree best effort (Windows). */
+export type HostProcessSpawned = {kind: "spawned"; pid: number; process_group: number | null};
 export const HOST_PROCESS_TERMINATE_GRACE_MS = 300;
 
 /** Restrict transport size separately from the caller's public result budget. */
@@ -47,10 +50,16 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
 }
 
+/** Optional caller hooks: record the spawned group, or keep stdin open for framed input. */
+export type HostProcessHooks = {
+  spawned?: (item: HostProcessSpawned) => Promise<void>;
+  openInput?: (write: (text: string) => Promise<void>) => void;
+};
+
 export async function runHostProcess(request: HostProcessRequest,
   output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
   terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS,
-  openInput?: (write: (text: string) => Promise<void>) => void): Promise<HostProcessResult> {
+  {spawned, openInput}: HostProcessHooks = {}): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
@@ -125,6 +134,12 @@ export async function runHostProcess(request: HostProcessRequest,
   };
   const reads = Promise.all([read("stdout"), read("stderr")]);
   child.stdin.on("error", () => {}); // A Host may close stdin before consuming it.
+  if (child.pid && spawned) {
+    // A caller that cannot record the owned group cancels rather than run unaccounted.
+    try { await spawned({kind: "spawned", pid: child.pid,
+      process_group: process.platform === "win32" ? null : child.pid}); }
+    catch { complete = false; stop("cancelled"); }
+  }
   if (openInput) {
     // The private preflight transport retains stdin between read-only requests.
     // It owns framing/backpressure, not child lifetime or process-group cleanup.

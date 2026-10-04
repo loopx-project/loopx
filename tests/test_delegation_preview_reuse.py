@@ -282,7 +282,12 @@ def test_real_source_edit_reloads_python_module_and_environment(tmp_path):
 def test_concurrent_services_preserve_registry_runtime_and_workspace_partition(service, tmp_path, request, monkeypatch):
     root, first = service
     second_root, second = delegation_service.__wrapped__(
-        tmp_path / "second", SimpleNamespace(param=request.node.callspec.params["delegation_service"]), monkeypatch
+        tmp_path / "second",
+        SimpleNamespace(
+            param=request.node.callspec.params["delegation_service"],
+            addfinalizer=request.addfinalizer,
+        ),
+        monkeypatch
     )
     second = reusable_service(second)
     expected = [runner.inspect("analysis") for runner in (first, second)]
@@ -423,21 +428,35 @@ def test_backpressured_supervisor_input_uses_original_parent_deadline(tmp_path, 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX retirement cleanup fence")
 @pytest.mark.parametrize("retirement", ["idle", "lifetime", "broken_pipe"])
-def test_unaccepted_request_recovers_only_after_owned_retirement(tmp_path, monkeypatch, retirement):
+@pytest.mark.parametrize("startup_delay", [0, 0.35], ids=["ready", "slow-worker"])
+def test_unaccepted_request_recovers_only_after_owned_retirement(
+    tmp_path, monkeypatch, retirement, startup_delay,
+):
     from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
 
     marker = tmp_path / "retiring"
     worker = (
         "import json,sys,signal\nfrom pathlib import Path\n"
         f"signal.signal(signal.SIGTERM,lambda *_:Path({str(marker)!r}).touch())\n"
+        f"import time;time.sleep({startup_delay!r})\n"
         "for line in sys.stdin:\n"
         " r=json.loads(line);print(json.dumps({'kind':'preview','id':r['id'],"
         "'returncode':0,'value':{'read_only':True}}),flush=True)"
     )
-    # Shorten only the production retirement clock. The real Host's 300ms
-    # cleanup grace, framed IO, request deadline and process group stay intact.
+    # Advance only the chosen production retirement clock after the first
+    # result. A 200ms lifetime from spawn can retire a slow worker before that
+    # result and tests a different path. Keep the real Host's 300ms cleanup
+    # grace, framed IO, request deadline and process group unchanged.
     timer = 300000 if retirement == "lifetime" else 30000
-    preload = "const original=globalThis.setTimeout;globalThis.setTimeout=(f,ms,...a)=>original(f,ms===" + str(timer) + "?200:ms,...a)"
+    preload = (
+        "const schedule=globalThis.setTimeout,cancel=globalThis.clearTimeout;"
+        "const clocks=new Map();"
+        "globalThis.setTimeout=(f,ms,...a)=>{const h=schedule(f,ms,...a);"
+        f"if(ms==={timer})clocks.set(h,()=>f(...a));return h;}};"
+        "globalThis.clearTimeout=h=>{clocks.delete(h);return cancel(h);};"
+        "process.once('SIGUSR2',()=>{const due=[...clocks];clocks.clear();"
+        "for(const [h,fire] of due){cancel(h);fire();}});"
+    )
     environment = {**_pinned_release_environment(), "NODE_OPTIONS": "--import=data:text/javascript," + quote(preload, safe="")}
     transport = DelegationPreviewTransport()
     options = dict(command=[sys.executable, "-c", worker], workspace=tmp_path,
@@ -448,6 +467,7 @@ def test_unaccepted_request_recovers_only_after_owned_retirement(tmp_path, monke
     try:
         assert transport.preview(**options) == {"read_only": True}
         original = transport._process
+        os.kill(original.pid, signal.SIGUSR2)
         until = time.monotonic() + 5
         while not marker.exists():
             assert time.monotonic() < until, "retirement did not start"
@@ -497,3 +517,36 @@ def test_invalid_retirement_fence_cannot_replay_a_request(tmp_path, monkeypatch,
                           argv=("inspect",), timeout=5)
     assert len(calls) == 2, "invalid fence must not start a second worker"
     assert transport._process is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX supervisor cancellation")
+def test_stop_during_preview_delivery_does_not_rearm_idle_retirement(tmp_path):
+    """A result callback resumed after stop must not keep the supervisor alive."""
+    from loopx.control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+    worker = ("import json,sys\nfor line in sys.stdin:\n"
+              " r=json.loads(line);print(json.dumps({'kind':'preview','id':r['id'],"
+              "'returncode':0,'value':{'read_only':True}}),flush=True)")
+    # Invoke the real signal handler during emit(), before the result callback
+    # resumes and tries to arm idle retirement. Only the event ordering is forced;
+    # Host execution, cancellation, process cleanup and readback remain real.
+    preload = ("const write=process.stdout.write.bind(process.stdout);"
+               "process.stdout.write=(chunk,...args)=>{"
+               "if(String(chunk).includes('\"kind\":\"preview\"'))process.emit('SIGTERM');"
+               "return write(chunk,...args)}")
+    environment = {**_pinned_release_environment(),
+                   "NODE_OPTIONS": "--import=data:text/javascript," + quote(preload, safe="")}
+    transport = DelegationPreviewTransport()
+    try:
+        assert transport.preview(command=[sys.executable, "-c", worker], workspace=tmp_path,
+                                 release=tmp_path, environment=environment,
+                                 registry=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+                                 goal_id="fixture", agent_id="lead", todo_id="todo_fixture",
+                                 argv=("inspect",), timeout=5) == {"read_only": True}
+        process = transport._process
+        assert process is not None
+        transport.close()
+        assert process.poll() == 0
+        assert transport._process is None
+    finally:
+        transport.close()

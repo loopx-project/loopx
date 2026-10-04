@@ -196,8 +196,8 @@ def next_action_projection_warning(
             "explicitly preserving the active-state Next Action"
         )
         warning["recommended_action"] = (
-            "run the agent-lane action without mutating active-state Next Action; "
-            "only the primary/goal route should write a new durable Next Action"
+            "continue the agent's selected Todo; refresh-state --next-action records "
+            "a bound task step without replacing shared compatibility prose"
         )
     else:
         warning["reason"] = (
@@ -205,9 +205,8 @@ def next_action_projection_warning(
             "Next Action"
         )
         warning["recommended_action"] = (
-            "if the latest run action is the intended durable route, write it back "
-            "explicitly with refresh-state --next-action; otherwise keep treating "
-            "the run recommendation and active-state Next Action as separate signals"
+            "read the selected Todo route; only a matching bound recommendation "
+            "is a current task step. Historical prose is not execution authority"
         )
     lane_value = (
         agent_lane_next_action.get("text")

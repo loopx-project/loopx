@@ -807,6 +807,7 @@ def build_quota_plan(
             "agent_todos",
             "active_state_next_action",
             "active_state_next_action_entries",
+            "recommendation_context",
             "standing_decision_authority",
             "long_task_cadence_hint",
             "stale_latest_run_warning",

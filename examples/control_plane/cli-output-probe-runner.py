@@ -126,6 +126,7 @@ def _receipt_row(
             if isinstance(payload, dict)
             else []
         ),
+        "next_action_basis_count": semantics.next_action_basis_count(payload),
     }
 
 

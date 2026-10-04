@@ -54,6 +54,22 @@
       "classification": "codec_api"
     },
     {
+      "site": "loopx/attached_session.py::<module>._claim_attached_turn_under_grant::codec_read:load_registry#1",
+      "line": 740,
+      "column": 42,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/attached_session.py::<module>._enqueue_attached_agent_turn_under_grant::codec_read:load_registry#1",
+      "line": 669,
+      "column": 46,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
       "site": "loopx/attached_session.py::<module>._strict_registry::codec_read:load_project_registry#1",
       "line": 143,
       "column": 16,
@@ -111,7 +127,7 @@
     },
     {
       "site": "loopx/bootstrap.py::<module>.bootstrap_project::codec_transaction:project_registry_transaction#1",
-      "line": 527,
+      "line": 544,
       "column": 14,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",
@@ -119,7 +135,7 @@
     },
     {
       "site": "loopx/bootstrap.py::<module>.read_json_if_exists::codec_read:load_project_registry#1",
-      "line": 84,
+      "line": 86,
       "column": 15,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -251,6 +267,14 @@
       "column": 22,
       "kind": "codec_read",
       "api": "load_project_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/capabilities/native_chat/conversation_bindings.py::<module>.ChatConversationBindings.agent_observation::codec_read:load_registry#1",
+      "line": 141,
+      "column": 20,
+      "kind": "codec_read",
+      "api": "load_registry",
       "classification": "codec_api"
     },
     {
@@ -431,7 +455,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.ChatRequestHandler._goal_channel_extension_ready::codec_read:load_registry#1",
-      "line": 978,
+      "line": 998,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -439,7 +463,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.ChatRequestHandler._registry_and_goal::codec_read:load_registry#1",
-      "line": 518,
+      "line": 525,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -447,7 +471,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.serve_chat::codec_read:load_registry#1",
-      "line": 1525,
+      "line": 1557,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -455,7 +479,7 @@
     },
     {
       "site": "loopx/chat_server.py::<module>.serve_chat._wake_goal_context::codec_read:load_registry#1",
-      "line": 1613,
+      "line": 1662,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -495,7 +519,7 @@
     },
     {
       "site": "loopx/cli.py::<module>.main::codec_read:load_project_registry#1",
-      "line": 820,
+      "line": 817,
       "column": 17,
       "kind": "codec_read",
       "api": "load_project_registry",
@@ -590,6 +614,14 @@
       "classification": "codec_api"
     },
     {
+      "site": "loopx/cli_commands/configuration_backup.py::<module>.handle_configuration_backup::codec_read:load_registry#1",
+      "line": 39,
+      "column": 44,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
       "site": "loopx/cli_commands/coordination_shadow.py::<module>.handle_coordination_shadow_command::codec_read:load_project_registry#1",
       "line": 219,
       "column": 20,
@@ -616,22 +648,6 @@
     {
       "site": "loopx/cli_commands/dreaming.py::<module>.handle_dreaming_command::codec_read:load_registry#1",
       "line": 100,
-      "column": 24,
-      "kind": "codec_read",
-      "api": "load_registry",
-      "classification": "codec_api"
-    },
-    {
-      "site": "loopx/cli_commands/evidence_log.py::<module>.handle_evidence_log_command::codec_read:load_registry#1",
-      "line": 190,
-      "column": 20,
-      "kind": "codec_read",
-      "api": "load_registry",
-      "classification": "codec_api"
-    },
-    {
-      "site": "loopx/cli_commands/evidence_log.py::<module>.handle_evidence_log_command::codec_read:load_registry#2",
-      "line": 246,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -671,7 +687,7 @@
     },
     {
       "site": "loopx/cli_commands/history.py::<module>.handle_history_command::codec_read:load_registry#1",
-      "line": 85,
+      "line": 93,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -679,7 +695,7 @@
     },
     {
       "site": "loopx/cli_commands/history.py::<module>.handle_history_command::codec_read:load_registry#2",
-      "line": 120,
+      "line": 113,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -687,7 +703,7 @@
     },
     {
       "site": "loopx/cli_commands/history.py::<module>.handle_history_command::codec_read:load_registry#3",
-      "line": 146,
+      "line": 148,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -695,7 +711,7 @@
     },
     {
       "site": "loopx/cli_commands/history.py::<module>.handle_history_command::codec_read:load_registry#4",
-      "line": 190,
+      "line": 174,
       "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
@@ -703,7 +719,15 @@
     },
     {
       "site": "loopx/cli_commands/history.py::<module>.handle_history_command::codec_read:load_registry#5",
-      "line": 208,
+      "line": 218,
+      "column": 24,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/cli_commands/history.py::<module>.handle_history_command::codec_read:load_registry#6",
+      "line": 236,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -727,7 +751,7 @@
     },
     {
       "site": "loopx/cli_commands/post_writeback.py::<module>.dispatch_committed_cli_post_writeback_hooks::codec_read:load_registry#1",
-      "line": 158,
+      "line": 159,
       "column": 13,
       "kind": "codec_read",
       "api": "load_registry",
@@ -743,7 +767,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#1",
-      "line": 596,
+      "line": 606,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -751,7 +775,7 @@
     },
     {
       "site": "loopx/cli_commands/project_lifecycle_refresh_state.py::<module>.handle_refresh_state_command::codec_read:load_registry#2",
-      "line": 677,
+      "line": 687,
       "column": 17,
       "kind": "codec_read",
       "api": "load_registry",
@@ -927,7 +951,7 @@
     },
     {
       "site": "loopx/cli_commands/todo.py::<module>.handle_todo_command::codec_read:load_registry#7",
-      "line": 778,
+      "line": 779,
       "column": 38,
       "kind": "codec_read",
       "api": "load_registry",
@@ -945,6 +969,22 @@
       "site": "loopx/cli_rollout.py::<module>.append_cli_rollout_event::codec_read:load_registry#1",
       "line": 52,
       "column": 24,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/configuration_backup.py::<module>.capture_configuration_backup::codec_read:load_registry#1",
+      "line": 15,
+      "column": 16,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/configuration_backup.py::<module>.capture_configuration_backup::codec_read:load_registry#2",
+      "line": 23,
+      "column": 52,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"
@@ -1919,7 +1959,7 @@
     },
     {
       "site": "loopx/history.py::<module>.collect_history::codec_read:load_registry#1",
-      "line": 342,
+      "line": 343,
       "column": 20,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1927,7 +1967,7 @@
     },
     {
       "site": "loopx/history.py::<module>.inspect_index_duplicates::codec_read:load_registry#1",
-      "line": 598,
+      "line": 605,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1935,7 +1975,7 @@
     },
     {
       "site": "loopx/history.py::<module>.rebuild_index_artifact_collisions::codec_read:load_registry#1",
-      "line": 812,
+      "line": 819,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1943,7 +1983,7 @@
     },
     {
       "site": "loopx/history.py::<module>.repair_index_duplicates::codec_read:load_registry#1",
-      "line": 702,
+      "line": 709,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1963,6 +2003,14 @@
       "column": 15,
       "kind": "codec_read",
       "api": "load_project_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/kunluncode_goal_mode/control_plane.py::<module>.LoopXControlPlane.evidence_since::codec_read:load_registry#1",
+      "line": 153,
+      "column": 24,
+      "kind": "codec_read",
+      "api": "load_registry",
       "classification": "codec_api"
     },
     {
@@ -2103,7 +2151,7 @@
     },
     {
       "site": "loopx/state_refresh.py::<module>.refresh_state_run::codec_read:load_registry#1",
-      "line": 862,
+      "line": 803,
       "column": 16,
       "kind": "codec_read",
       "api": "load_registry",

@@ -923,13 +923,12 @@ def test_native_control_plane_scopes_recovery_and_writeback_to_todo(
         runner=capture,
     )
 
-    control.evidence_since("2026-08-18T00:00:00Z", todo_id="todo-native-1")
     control.record_verified_delivery(
         mode="goal-pro", todo_id="todo-native-1"
     )
     control.spend(todo_id="todo-native-1")
 
-    assert len(commands) == 3
+    assert len(commands) == 2
     for command in commands:
         todo_index = command.index("--todo-id")
         assert command[todo_index + 1] == "todo-native-1"
@@ -955,7 +954,7 @@ class _FakeControlPlane:
         self.calls.append("evidence_since")
         if self.evidence_error:
             raise KunlunNativeGoalRuntimeError("evidence ledger unavailable")
-        return {"ok": True, "ledger": list(self.ledger)}
+        return {"ok": True, "schema_version": "agent_scoped_evidence_log_v0", "ledger": list(self.ledger)}
 
     def record_verified_delivery(
         self, *, mode: str, todo_id: str

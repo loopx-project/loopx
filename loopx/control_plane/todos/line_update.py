@@ -442,6 +442,7 @@ def apply_todo_update_to_lines(
         "completion_recovery": normalize_todo_completion_recovery(
             effective_metadata.get("completion_recovery")
         ),
+        "completion_receipt_id": effective_metadata.get("completion_receipt_id"),
         "resume_when": normalize_todo_resume_when(
             effective_metadata.get("resume_when")
         ),
