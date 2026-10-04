@@ -16,6 +16,16 @@ creation path; see the [absorption map](app-conversation-and-async-inbox-v0.md#c
 Its separate workspace/executor is not adopted. This entry improvement does not
 close GQ01 execution/return or R2 small-team acceptance.
 
+**S2/S12 startup diagnostic checkpoint (2026-10-04).** The managed Effect
+runtime now reports locator publication failures through its existing typed
+startup envelope and shared filesystem/lock error codes. Real directory-conflict
+and live-lock fixtures verify the launcher receives a safe code and preserves
+the foreign locator/live owner. This closes the reproduced missing diagnostic,
+not all unexpected-exit recovery failures or Linux qualification. Source/release
+promotion remains separate. See the [installation boundary](../../guides/installing-loopx.md).
+中文：真实目录冲突/活锁 fixture 验证安全启动诊断与原占用保留；只修复已复现的
+诊断缺口，未将未知恢复退出或 Linux CI 宣称通过。
+
 ## 1. Overall Objective and Product Routes
 
 LoopX aims to let people express, revise and accept complex goals through a local frontend or Lark, while a persistent steward coordinates long-running LoopX Agents with independent work commitments across local managed and cloud runtimes. Single-Agent long-horizon reliability is the foundation. Multi-Agent collaboration, handoff, recovery and convergence on shared goals are core capabilities. Hundred-Agent scale is a separate system qualification.
