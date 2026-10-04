@@ -28,6 +28,12 @@ const env = { ...process.env, DSH_HOME: join(temp, 'home'), DSH_AGENTS_HOME: joi
 const installedManifest = join(env.DSH_HOME, 'profiles', 'web', 'node_modules', manifest.name, 'package.json')
 let registry
 const requested = new Set()
+const distTags = { latest: manifest.version }
+const searchObjects = [
+  { package: { name: 'unrelated', keywords: ['dsh-plugin'], links: { repository: 'https://github.com/example/unrelated' } } },
+  { package: { name: 'loopx-cli', keywords: ['cli'], links: { repository: manifest.repository.url } } },
+  { package: { name: manifest.name, keywords: manifest.keywords, links: { repository: manifest.repository.url } } },
+]
 const metadata = {
   ...manifest,
   dist: { integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}` },
@@ -38,16 +44,12 @@ const server = createServer((request, response) => {
   if (url.pathname === `/${manifest.name}`) {
     response.setHeader('Content-Type', 'application/json')
     response.end(JSON.stringify({ name: manifest.name,
-      'dist-tags': { latest: manifest.version }, versions: { [manifest.version]: metadata } }))
+      'dist-tags': distTags, versions: { [manifest.version]: metadata } }))
   } else if (url.pathname === '/artifact.tgz') {
     response.end(bytes)
   } else if (url.pathname === '/-/v1/search') {
     response.setHeader('Content-Type', 'application/json')
-    response.end(JSON.stringify({ objects: [
-      { package: { name: 'unrelated', keywords: ['dsh-plugin'], links: { repository: 'https://github.com/example/unrelated' } } },
-      { package: { name: 'loopx-cli', keywords: ['cli'], links: { repository: manifest.repository.url } } },
-      { package: { name: manifest.name, keywords: manifest.keywords, links: { repository: manifest.repository.url } } },
-    ] }))
+    response.end(JSON.stringify({ objects: searchObjects }))
   } else {
     // DSH still resolves its own real host dependencies through the registry.
     // Their metadata is not simulated by this package-distribution test.
@@ -84,7 +86,7 @@ try {
   requested.clear()
   // Install the unversioned name, exactly as repository discovery does.
   await runDsh(['plugin', '--profile', 'web', 'add', manifest.name,
-    '--registry', registry, '--ignore-scripts', '--prefer-offline'])
+    '--registry', registry, '--cache-dir', join(temp, 'cache'), '--ignore-scripts', '--prefer-offline'])
   const installed = JSON.parse(await readFile(installedManifest, 'utf8'))
   assert.equal(installed.name, manifest.name)
   assert.equal(installed.version, manifest.version)
@@ -96,15 +98,30 @@ try {
     assert(dump.includes(`id: ${id}`) && dump.includes(`name: ${entry}`), `missing installed ${id}`)
   }
   assert(!dump.includes('loopx-repository'), 'marketplace installation selected the monorepo root')
-  assert(requested.has(`/${manifest.name}`) && requested.has('/artifact.tgz'), 'DSH did not use the registry artifact')
-  // A mismatched release/tag must fail readback, even though metadata exists.
+  assert(requested.has(`/${manifest.name}`), 'DSH did not resolve the isolated registry metadata')
+  // Content-addressed package caches are valid. Prove the loaded bundles match
+  // this build instead of requiring a redundant network tarball download.
+  for (const entry of Object.values(manifest.exports)) {
+    if (typeof entry.default !== 'string' || !entry.default.endsWith('.js')) continue
+    assert((await readFile(join(dirname(installedManifest), entry.default)))
+      .equals(await readFile(join(packageRoot, entry.default))), `installed ${entry.default} differs from the build`)
+  }
+  // Existing publication metadata cannot hide a wrong tag or discovery target.
+  distTags.latest = '0.0.0'
+  await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
+    '--tarball', tarball, '--registry', registry]), /latest must name the qualified release/u)
+  distTags.latest = manifest.version
+  searchObjects.unshift({ package: { name: 'other-plugin', keywords: ['dsh-plugin'], links: { repository: manifest.repository.url } } })
+  await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
+    '--tarball', tarball, '--registry', registry]), /repository search does not yet select this plugin/u)
+  searchObjects.shift()
   metadata.dist.integrity = 'sha512-unqualified'
   await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
     '--tarball', tarball, '--registry', registry]), /registry integrity differs/u)
   await runDsh(['plugin', '--profile', 'web', 'remove', manifest.name])
   const removed = await runDsh(['--profile', 'web', '--dump-config'])
   assert(!removed.includes('name: dsh-loopx-plugin'), 'removal retained a plugin row')
-  process.stdout.write('dsh-loopx registry smoke passed (real package-name install, exact artifact, all rows, negative integrity, removal)\n')
+  process.stdout.write('dsh-loopx registry smoke passed (real package-name install, exact bundles, all rows, negative tag/discovery/integrity, removal)\n')
 } finally {
   server.closeAllConnections()
   await new Promise(resolveClose => server.close(resolveClose))
