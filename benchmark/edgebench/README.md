@@ -72,9 +72,21 @@ The default `--feedback native` preserves native evaluator feedback.
 `--feedback blind` requires a non-game task with native internet isolation and
 an explicit API-only proxy IP/port. Its host firewall omits the judge route;
 native registration sets the agent submission allowance to zero, task environments
-omit judge credentials, and the submission command and feedback prompt are
-removed. The task query and deliverable paths remain. Host auto-evaluation is
-unchanged, and neither its schedule nor results enter the blind prompt.
+omit judge credentials, and the submission command is removed. Its prompt keeps
+the task query, deliverable paths, incremental iteration, runnable files,
+best-version objective and no penalty for failed attempts. Local validation
+replaces official feedback instructions; submission limits and host evaluation
+details are omitted. Host auto-evaluation is unchanged, and neither its existence,
+schedule nor results enter the blind prompt. `agent_prompt.md` records the actual
+overridden prompt, including for native Goal and heartbeat workers.
+
+This provider-specific prompt variant lives with the Python SForge adapter; it
+does not change LoopX goal authority or the official native wrapper. Earlier
+blind trials used a minimal task-only wrapper and are a different protocol:
+restart with a new attempt id rather than splicing their curves. Report actual
+runtime separately from the time limit, and distinguish the agent's final
+artifact from the evaluator-selected historical best. Prompt parity does not
+establish feedback isolation or matched experimental validity by itself.
 Qualify actual denied judge reads/submissions and successful host evaluation
 before admitting blind trial results; a prompt or unit test alone is insufficient.
 Configuration receipts prove requested startup settings; actual session model,

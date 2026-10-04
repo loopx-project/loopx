@@ -172,6 +172,9 @@ class SForgeWorker(CodexAgent):
                 prompt = Path(directory) / "task.md"
                 prompt.write_text(self.blind_prompt)
                 asyncio.run(self.environment.upload_file(prompt, prompt_path))
+            # Native run_agent saved the pre-override wrapper. Keep its visible
+            # prompt artifact aligned with what all five workers actually read.
+            (self.log_dir / "agent_prompt.md").write_text(self.blind_prompt)
             self.prompt_installed = True
         if self.profile in {"official", "single"}:
             return super().format_run_cmd(prompt_path, model=model, cwd=cwd,

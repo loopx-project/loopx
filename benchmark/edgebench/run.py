@@ -21,6 +21,7 @@ from sforge.harness.task_spec import make_task_spec
 from benchmark.runtime.sforge import DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
+from benchmark.edgebench.prompts import blind_task_prompt
 
 
 def _observe_run(call):
@@ -93,12 +94,7 @@ def main(argv=None):
         if (proxy.hostname, proxy.port) == (judge.hostname, judge_port):
             raise ValueError("Blind API and judge endpoints must be distinct")
         blind_endpoint = (proxy.hostname, proxy.port)
-        paths = ", ".join(f"`{path}`" for path in task.submit_paths)
-        blind_prompt = (task.work.agent_query + "\n\n"
-            "External evaluation and evaluation feedback are unavailable. "
-            "Use local checks to improve the solution and write final deliverables "
-            f"to these paths: {paths}.\n"
-            "Internet access is unavailable; use pre-installed dependencies.\n")
+        blind_prompt = blind_task_prompt(task.work.agent_query, task.submit_paths)
     config = SForgeConfig(
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
