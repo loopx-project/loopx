@@ -27,6 +27,7 @@ from .control_plane.work_items.delivery_outcome import (
 from .control_plane.agents.workspace_guard import (
     capture_delivery_workspace,
 )
+from .control_plane.agents.delivery_workspace import qualify_delivery_workspace_isolation
 from .control_plane.quota.refresh_external_delivery import (
     finish_external_delivery_refresh, refresh_recovery_payload,
 )
@@ -943,10 +944,6 @@ def refresh_state_run(
         explicit_peer_worktree_requirement = workspace_guard_policy.get(
             "peer_independent_worktree_required"
         )
-        peer_independent_worktree_required = multi_agent_goal and (
-            explicit_peer_worktree_requirement is None
-            or explicit_peer_worktree_requirement is True
-        )
         if normalized_agent_id and known_agents and normalized_agent_id not in known_agents:
             raise ValueError(
                 f"agent_id {normalized_agent_id!r} is not registered for goal {safe_goal_id!r}"
@@ -1160,7 +1157,7 @@ def refresh_state_run(
         ):
             delivery_workspace = capture_delivery_workspace(
                 current_path=delivery_workspace_path,
-                peer_independent_worktree_required=peer_independent_worktree_required,
+                peer_independent_worktree_required=False,
                 local_goal_id=safe_goal_id,
                 local_project_root=resolved_project,
                 repository_source=(
@@ -1168,6 +1165,15 @@ def refresh_state_run(
                     if delivery_workspace_path is not None
                     else None
                 ),
+            )
+            selected_contract = next((
+                item for item in (todo_fields or {}).get("agent_todos", {}).get("items", [])
+                if item.get("todo_id") == settlement_identity.todo_id
+            ), {})
+            delivery_workspace, peer_independent_worktree_required = qualify_delivery_workspace_isolation(
+                delivery_workspace, multi_agent_goal=multi_agent_goal,
+                explicit_peer_worktree_requirement=explicit_peer_worktree_requirement,
+                task_repository=selected_contract.get("task_repository"),
             )
             if (
                 peer_independent_worktree_required
@@ -1182,10 +1188,11 @@ def refresh_state_run(
                     "git worktree that produced it, or name that worktree with "
                     "--delivery-workspace-path"
                 )
-            if delivery_workspace_path is not None and delivery_workspace is None:
+            if delivery_workspace is None:
                 raise ValueError(
-                    "--delivery-workspace-path must identify the registered local goal "
-                    "workspace or a git checkout with a credential-free origin repository"
+                    "delivery workspace could not be verified; run from the registered "
+                    "local Goal workspace or the selected repository worktree, or name "
+                    "that workspace with --delivery-workspace-path"
                 )
         if checkpoint_supplement:
             # The supplemental row must not reattribute the original delivery to

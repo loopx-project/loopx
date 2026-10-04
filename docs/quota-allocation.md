@@ -1465,13 +1465,20 @@ Post-turn accounting protocol:
   `--delivery-workspace-path <delivery-worktree>`; the path is validated locally
   and omitted from persisted history. Do not point this option at the canonical
   checkout for peer work.
-- delivery attribution is not synonymous with Git. A registered single-agent
-  goal whose project has no Git origin records a path-free `local_goal`
+- delivery attribution is not synonymous with Git. A registered non-Git
+  project records a path-free `local_goal`
   workspace identity (`loopx:<goal-id>`) when refresh runs inside that
   registered project root. This lets validated non-repository work settle
-  without inventing a repository. It does not weaken peer isolation: a peer
-  repository write still requires an `independent_git_worktree`, and a local
-  goal workspace is rejected when that requirement is active.
+  without inventing a repository, including peer research and material work.
+  The existing Todo claim/lease and completion validator still apply; local
+  delivery is not `same_agent_non_delivery`. A Git peer delivery still requires
+  an `independent_git_worktree`. An explicit Git task repository or an explicit
+  owner isolation requirement rejects a local Goal receipt. An outside-root
+  workspace cannot produce that local receipt.
+- `todo complete --evidence <pointer>` can record a validated local artifact.
+  `--result-file` additionally requires approved Goal acceptance criteria bound
+  to that Todo. A standalone Todo validator does not establish Goal acceptance;
+  an unsupported result binding is rejected before executing the validator.
 - autonomous replans follow the same accountable-outcome rule: spend after a
   concrete successor, blocker, or `outcome_progress`/`primary_goal_outcome`
   writeback, but do not spend for a `surface_only` watch-lane continuation or
