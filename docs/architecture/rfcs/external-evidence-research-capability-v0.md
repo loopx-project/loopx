@@ -107,6 +107,15 @@ inventory-only row for the same provider id.
 The public GitHub method now completes a bounded real journey: anonymous pinned
 file reads, exact-plan receipt validation, a separate parent decision, projection
 into the existing deepresearch source ledger, actual lineage readback and retirement.
+New external-evidence ledger rows preserve the normalized receipt's `accessed_at`
+and `publication_date` (including unknown publication). Their separate `recorded_at`
+marks ledger insertion; inserting or replaying a capture does not establish a fresh
+source read. Exact receipt replay does not rewrite existing rows, including legacy
+rows. Ordinary `deepresearch add-source` retains its existing local read clock.
+This is clock preservation, not provider execution or publication attestation;
+canonical TypeScript receipt/admission validation remains the authority. The existing
+CLI and shared readback consume the same receipt; this persistence change does not
+qualify provider mounting or a packaged frontend/Lark journey.
 Optional source refs and literal search terms are bound into the request/plan digest;
 legacy requests retain their existing identity. The provider is bundled in extensions
 under `method:public-github`; capability and ledger owners remain unchanged.

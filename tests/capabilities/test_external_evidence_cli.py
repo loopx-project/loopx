@@ -430,3 +430,117 @@ def test_source_cli_rejects_duplicate_admission_and_accepts_corrected_input(
         assert retirement["status"] == "retire_ready"
     finally:
         restart_effect_runtime()
+
+
+@pytest.mark.parametrize("publication_date", [None, "2026-09-20"])
+def test_source_cli_preserves_receipt_clocks_and_idempotent_ledger(
+    tmp_path: Path, monkeypatch, publication_date: str | None,
+) -> None:
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    project = tmp_path / "research"
+    project.mkdir()
+
+    def run(*args: str):
+        result = subprocess.run(
+            [sys.executable, "-m", "loopx.entrypoint", "--runtime-root",
+             str(tmp_path / "runtime"), "--registry", str(tmp_path / "registry.json"),
+             "--format", "json", *args],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True,
+            text=True, encoding="utf-8", check=False, timeout=30,
+        )
+        return result.returncode, json.loads(result.stdout)
+
+    def save(name: str, payload: dict) -> str:
+        path = tmp_path / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    try:
+        objective = "Inspect captured source clocks"
+        code, started = run("deepresearch", "start", "--project", str(project),
+                            "--question", objective, "--max-sources", "1")
+        assert code == 0, started
+        ledger = Path(started["state_path"])
+        providers = save("providers.json", {"providers": [{
+            "provider_id": "host:external-research", "provider_kind": "method",
+            "protocol": "external_evidence_research_v0", "declared": True,
+            "installed": True, "enabled": True, "ready": True,
+        }]})
+        code, plan = run("external-evidence", "plan", "--objective", objective,
+                         "--user-activity", "Review a capture", "--decision", "Adopt source",
+                         "--evidence-kind", "original_source", "--provider-inventory-json", providers)
+        assert code == 0, plan
+        plan_path = save("plan.json", plan)
+        source_ref = "https://example.com/captured"
+        accessed_at = "2026-09-21T10:12:13.123456Z"
+        receipt = {
+            "schema_version": "loopx_external_evidence_receipt_v0",
+            "plan_id": plan["plan_id"], "request_id": plan["request"]["request_id"],
+            "provider_id": "host:external-research", "provider_kind": "method",
+            "status": "succeeded", "summary": "A preserved capture",
+            "completed_at": "2026-09-22T00:00:00Z", "sources": [{
+                "source_ref": source_ref, "source_family": "public-fixture",
+                "basis": "observed", "finding": "The captured source supports the question.",
+                "accessed_at": accessed_at, "publication_date": publication_date,
+                "content_digest": "sha256:" + "b" * 64,
+            }],
+        }
+        receipt_path = save("receipt.json", receipt)
+        code, admission = run("external-evidence", "admit", "--plan-json", plan_path,
+                              "--receipt-json", receipt_path, "--decision", "admit",
+                              "--reason", "Reviewed capture", "--admit-source", source_ref)
+        assert code == 0, admission
+        args = ("external-evidence", "readback", "--plan-json", plan_path,
+                "--receipt-json", receipt_path, "--admission-json", save("admission.json", admission),
+                "--project", str(project))
+        before = ledger.read_bytes()
+        code, pending = run(*args)
+        assert code == 0 and pending["downstream_source_refs"] == []
+        assert ledger.read_bytes() == before  # Read-only never inserts a source.
+
+        # Changing a source clock invalidates the parent admission, not just a display field.
+        receipt["sources"][0]["accessed_at"] = "2026-09-23T00:00:00Z"
+        save("receipt.json", receipt)
+        code, rejected = run(*args, "--execute")
+        assert code == 1 and rejected["status"] == "invalid_request"
+        assert ledger.read_bytes() == before
+        receipt["sources"][0]["accessed_at"] = accessed_at
+        save("receipt.json", receipt)
+
+        code, applied = run(*args, "--execute")
+        assert code == 0 and applied["downstream_source_refs"] == [source_ref]
+        assert applied["retirement"]["retire_ready"] is True
+        state = json.loads(ledger.read_text())
+        row = state["sources"][0]
+        assert row["accessed_at"] == accessed_at
+        assert row["publication_date"] == publication_date  # Unknown stays unknown.
+        assert row["recorded_at"] != accessed_at
+        assert row["external_evidence"]["admission_id"] == admission["admission_id"]
+        committed = ledger.read_bytes()
+        code, replayed = run(*args, "--execute")
+        assert code == 0 and replayed["downstream_source_refs"] == [source_ref]
+        assert ledger.read_bytes() == committed  # Replaying does not refresh either clock.
+
+        # Existing rows remain immutable: replay is not an implicit clock migration.
+        row.pop("recorded_at")
+        row.pop("publication_date")
+        row["accessed_at"] = "2026-09-22T02:00:00Z"
+        ledger.write_text(json.dumps(state), encoding="utf-8")
+        legacy = ledger.read_bytes()
+        code, replayed = run(*args, "--execute")
+        assert code == 0 and ledger.read_bytes() == legacy
+
+        direct = tmp_path / "direct"
+        direct.mkdir()
+        code, started = run("deepresearch", "start", "--project", str(direct),
+                            "--question", "Review a direct source")
+        assert code == 0, started
+        code, added = run("deepresearch", "add-source", "--project", str(direct),
+                          "--url-or-path", source_ref, "--tool", "local_read",
+                          "--claims-json", '[{"text":"A direct observation","stance":"neutral"}]')
+        assert code == 0, added
+        direct_row = json.loads(Path(started["state_path"]).read_text())["sources"][0]
+        assert direct_row["accessed_at"]
+        assert "recorded_at" not in direct_row and "publication_date" not in direct_row
+    finally:
+        restart_effect_runtime()
