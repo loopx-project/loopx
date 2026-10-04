@@ -733,6 +733,10 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <h4>{t("drawer.evidence")}</h4>
               <MarkdownText text={selection.item.evidence} />
             </section> : null}
+            {selection.item.note ? <details className="personal-detail-card" aria-label={t("drawer.notes")}>
+              <summary>{t("drawer.notes")}</summary>
+              <MarkdownText text={selection.item.note} />
+            </details> : null}
             {selection.item.done ? <div className="personal-task-completed-note"><Check size={16} /><span><strong>{t("drawer.taskCompletedTitle")}</strong><small>{t("drawer.taskCompletedNote")}</small></span></div> : null}
           </>
         ) : null}

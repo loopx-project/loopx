@@ -3,6 +3,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GoalTasksView } from "../src/features/personal-workspace/goal-tasks-view.tsx";
 import { CompletedTaskLane } from "../src/features/personal-workspace/completed-task-lane.tsx";
+import { todoItemSchema } from "../src/data/status.ts";
+import { workspaceAgentTodoFromItem } from "../src/features/personal-workspace/personal-workspace-model.ts";
 import { ContextDrawer } from "../src/features/personal-workspace/context-drawer.tsx";
 import { WorkspaceI18nProvider } from "../src/features/personal-workspace/i18n.tsx";
 
@@ -15,6 +17,28 @@ try {
     const render = (component, props) => renderToStaticMarkup(createElement(
       WorkspaceI18nProvider, null, createElement(component, props),
     ));
+    const notesLabel = locale === "en" ? "Notes" : "备注";
+    const evidenceLabel = locale === "en" ? "Evidence" : "证据";
+    const longNote = "Preserve separate notes. ".repeat(800) + "NOTE_END_SENTINEL";
+    for (const fields of [{}, {note: null, evidence: null}, {note: "", evidence: ""},
+      {note: longNote}, {evidence: "RECORDED_EVIDENCE"}, {note: longNote, evidence: "RECORDED_EVIDENCE"}]) {
+      for (const done of [false, true]) {
+        const source = todoItemSchema.parse({todo_id: "metadata-todo", text: "Read source metadata", done,
+          status: done ? "done" : "open", ...fields});
+        const todo = workspaceAgentTodoFromItem(source, "fallback-id");
+        assert.equal(todo.note, fields.note ?? null, "Notes remain an independent source field");
+        assert.equal(todo.evidence, fields.evidence ?? null, "An absent evidence field cannot be inferred from notes");
+        const drawer = render(ContextDrawer, {agents: [], callbacks: {}, onClose() {}, selection: {
+          kind: "todo", item: {...todo, goalId: "test-goal", goalTitle: "Test Goal"},
+        }});
+        assert.equal(drawer.includes(`<summary>${notesLabel}</summary>`), Boolean(fields.note));
+        assert.equal(drawer.includes(`aria-label="${evidenceLabel}"`), Boolean(fields.evidence));
+        assert.equal(drawer.includes("NOTE_END_SENTINEL"), Boolean(fields.note), "Both active and completed inspectors preserve the end of long notes");
+        assert.equal(drawer.includes("RECORDED_EVIDENCE"), Boolean(fields.evidence));
+        assert.equal(source.note, fields.note, "Reading never mutates canonical notes");
+        assert.equal(source.evidence, fields.evidence, "Reading never mutates canonical evidence");
+      }
+    }
     for (const claim of [undefined, null, "actual-worker"]) {
       const todo = {todoId: "test-todo", text: "Read claim identity", done: false, status: "open", claimedBy: claim};
       const goal = {goalId: "test-goal", title: "Test Goal", agentId: "goal-default", agentLabel: "Goal default worker", agentTodos: [todo], state: "已安排", agentSentence: "", nextSentence: ""};
