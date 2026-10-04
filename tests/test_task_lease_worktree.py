@@ -39,7 +39,7 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
         "schema_version": "todo_item_v0", "todo_id": f"todo_worktree_{key}", "role": "agent", "status": "open", "done": False,
         "text": "Isolated code editing", "archive_state": "active", "source_section": "Agent Todo", "index": i,
         "task_class": "advancement_task", "claimed_by": owner, "task_repository": "git:github.com/example/project",
-    } for i, (key, owner) in enumerate([("a", "agent-a"), ("b", "agent-b"), ("c", "agent-b"), ("d", "agent-b")], 1)])
+    } for i, (key, owner) in enumerate([("a", "agent-a"), ("b", "agent-b"), ("c", "agent-b"), ("d", "agent-b"), ("e", "agent-b")], 1)])
     initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
     state.unlink()
 
@@ -75,18 +75,22 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     (a / "src" / "redirect").unlink()
     # An unrelated ignored link must not prevent a narrow code-edit lease.
     (a / "outside").symlink_to(project, target_is_directory=True)
+    legacy = acquire("d", None)
+    assert "write_workspace" not in legacy["lease"]
     monkeypatch.chdir(a)
     first = acquire("a", Path("."))
     assert first["source_authority"] == provider + "_v0"
     assert "write_workspace" in first["lease"]
+    assert first["integration_overlap_advisories"][0]["todo_id"] == "todo_worktree_d"
+    assert cli("inspect", "d")["lease"] == legacy["lease"]
     assert str(tmp_path) not in json.dumps(first["lease"])
     conflict = acquire("c", alias, expected=1)
     assert conflict["error_code"] == "write_scope_conflict"
     assert conflict["conflicts"][0]["owner"] == "agent-a"
     assert "--write-worktree" in conflict["recommended_action"]
-    assert acquire("d", None, expected=1)["error_code"] == "write_scope_conflict"
+    assert acquire("e", None, expected=1)["error_code"] == "write_scope_conflict"
     second = acquire("b", Path("../b"))
-    assert second["integration_overlap_advisories"][0]["todo_id"] == "todo_worktree_a"
+    assert {row["todo_id"] for row in second["integration_overlap_advisories"]} == {"todo_worktree_a", "todo_worktree_d"}
     assert second["lease"]["write_workspace"] != first["lease"]["write_workspace"]
     replay = acquire("a", alias)
     assert replay["original_receipt"] == first["original_receipt"]
@@ -99,4 +103,5 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     assert cli("inspect", "a")["lease"] == renewal["lease"]
     released = cli("release", "a", "--owner", "agent-a", "--idempotency-key", "edit-a", "--expected-version", "2")
     assert released["released"]
+    assert cli("inspect", "d")["lease"] == legacy["lease"]
     assert not state.exists()

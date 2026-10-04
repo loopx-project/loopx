@@ -38,12 +38,11 @@ export function sameLeaseWorkspace(left: unknown, right: unknown): boolean {
     a.common_directory === b.common_directory && a.worktree === b.worktree && a.repository === b.repository;
 }
 
-/** Only positively observed sibling worktrees can turn overlap into an advisory. */
-export function independentLeaseWorktrees(left: unknown, right: unknown): boolean {
+/** A known physical checkout collision still rejects cooperative code editing. */
+export function sameLeaseCheckout(left: unknown, right: unknown): boolean {
   const a = leaseWorkspace(left), b = leaseWorkspace(right);
   return a !== null && b !== null && a.host === b.host &&
-    a.repository.toLowerCase() === b.repository.toLowerCase() &&
-    a.common_directory === b.common_directory && a.worktree !== b.worktree;
+    a.worktree === b.worktree;
 }
 
 export async function observeLeaseWorktree(path: string, overlaps: (path: string) => boolean): Promise<LeaseWorkspace> {
