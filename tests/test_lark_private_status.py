@@ -178,3 +178,19 @@ def test_unavailable_execution_evidence_is_not_presented_as_ready(unknown):
         "active_turn_observation_available": unknown != "missing"}
     text = _status_text(snapshot, help_requested=False)
     assert "暂不可" in text and "可以继续对话" not in text
+
+
+def test_explicit_write_status_matches_binding_without_opening_a_model_session(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        runtime.project_contexts.workspace_grant = "workspace_write"
+        transport.bindings.configure(transport_ref="notes-app", project_ref=runtime.project_contexts.available()[0]["project_ref"],
+            executor_endpoint_id="codex", project_grant="workspace_write")
+        transport.admit("notes-app", provider.event("notes-app", "write-status", "/help"))
+        assert transport.reconcile() == 1
+        assert "当前工作区可读写" in provider.writes[-1][1]
+        assert "只读授权" not in provider.writes[-1][1]
+        assert "项目规则和 skills" in provider.writes[-1][1]
+        assert store.list_sessions() == []
+    finally:
+        runtime.close()
