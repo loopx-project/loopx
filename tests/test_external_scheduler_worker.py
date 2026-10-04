@@ -159,6 +159,39 @@ def _args(
     )
 
 
+@pytest.mark.parametrize("stop_code,expected", [(None, 75), (75, 0), (76, 75)])
+def test_wake_terminal_code_requires_explicit_matching_opt_in(tmp_path, stop_code, expected):
+    cli = tmp_path / "quota"
+    _write_executable(cli, f"#!{sys.executable}\nprint({json.dumps(_hint_payload(should_run=True))!r})\n")
+    args = _args(fake_cli=cli, state_file=tmp_path / "state.json",
+                 wake_cmd=shlex.join([sys.executable, "-c", "raise SystemExit(75)"]),
+                 wake_timeout_seconds=5)
+    args.wake_stop_exit_code = stop_code
+    assert worker.run_worker(args) == expected
+
+
+@pytest.mark.parametrize("failure_kind", ["timeout", "output_limit"])
+def test_wake_terminal_code_does_not_mask_transport_failure(tmp_path, monkeypatch, failure_kind):
+    from loopx.extensions.process_runtime import CappedProcessResult
+
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    monkeypatch.setattr(worker, "_run_wake", lambda *a, **kw: CappedProcessResult(
+        returncode=75, stdout=b"", failure_kind=failure_kind,
+    ))
+    args = _args(fake_cli=tmp_path / "unused", state_file=tmp_path / "state.json", wake_cmd="unused")
+    args.wake_stop_exit_code = 75
+    assert worker.run_worker(args) == 2
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["last_wake_failure_kind"] == failure_kind
+
+
+@pytest.mark.parametrize("code", ["0", "-1", "256"])
+def test_wake_terminal_code_rejects_invalid_codes(code):
+    with pytest.raises(SystemExit) as error:
+        worker.main(["--goal-id", "goal", "--agent-id", "agent", "--wake-stop-exit-code", code])
+    assert error.value.code == 2
+
+
 def test_default_invocation_persists_backoff_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
