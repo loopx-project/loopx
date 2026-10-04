@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from loopx_codex_provider_routing.operator import rollback, run, snapshot
-from loopx_codex_provider_routing.operator_catalog import AppCatalog
+from loopx_codex_provider_routing.operator_catalog import AppCatalog, release_suffix
 from loopx_codex_provider_routing.operator_runtime import (
     CPAOperator,
     sha256,
@@ -158,6 +158,42 @@ class OperatorTests(unittest.TestCase):
         for alias in (*native_only, "gpt-5.6-sol", "gpt-6-astra"):
             self.assertNotIn(f'alias: "{alias}"', compatibility)
         self.assertIn("disable-cooling: false", config)
+
+    def test_ark_rows_follow_the_configured_generation(self):
+        """One configured id yields one row, labelled by product generation.
+
+        The Ark rows are the only DeepSeek surface that names an upstream
+        endpoint id, so they must be adopted from the operator's configuration
+        rather than from a literal here; otherwise moving to a newer generation
+        -- DeepSeek-V4.1-Flash -- would need a source change.
+        """
+
+        generation = "deepseek-v4-1-flash-ga-261001"
+        configured = AppCatalog(
+            CPAOperator(OperatorSettings({**self.data, "ark_model": generation}))
+        )
+        self.assertIn(generation, configured.SELECTORS)
+        self.assertNotIn(self.data["ark_model"], configured.SELECTORS)
+        self.assertEqual(
+            configured.SELECTORS[generation], "Ark · DeepSeek V4.1 Flash (261001)"
+        )
+        # The two historical aliases keep resolving, and the ids that need no
+        # release suffix read as their own id.
+        self.assertEqual(
+            configured.SELECTORS["ark/deepseek-v4-flash"], "Ark · DeepSeek V4.1 Flash"
+        )
+        self.assertEqual(
+            configured.SELECTORS["deepseek-v4-flash"],
+            "Ark · DeepSeek V4.1 Flash (legacy id)",
+        )
+        self.assertEqual(release_suffix("deepseek-flash"), "deepseek-flash")
+
+    def test_runtime_config_renders_the_same_generation_label(self):
+        # A row that reads as one generation in the App catalog and another in
+        # the CPA config would make two surfaces disagree about what runs.
+        config = self.runtime.runtime_config("fixture-key", management_secret="fixture")
+        self.assertIn('display-name: "Ark · DeepSeek V4.1 Flash"', config)
+        self.assertIn('alias: "deepseek-v4-flash"', config)
 
     def test_cooldown_reset_is_scoped_and_not_a_health_claim(self):
         self.seed()
