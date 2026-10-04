@@ -1230,8 +1230,12 @@ class ChatSessionStore(ChatIngressStore):
                             raise ValueError(
                                 "active Turn Goal instance admission is invalid"
                             )
-                        if admission_validator is not None:
-                            admission_validator(active)
+                        # A committed claim is replayed to the exact host that
+                        # already owns it: the matching host claim id and the
+                        # Goal lifetime fence above are the authority. Fresh
+                        # audience eligibility is checked only when a queued
+                        # Turn is first admitted, so a revoked grant cannot
+                        # strand an execution the original host already owns.
                         return active
                     return None
                 for turn in self._settle_expired_queued_turns(

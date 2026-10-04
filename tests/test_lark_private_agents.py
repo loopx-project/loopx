@@ -113,6 +113,40 @@ def test_revoked_agent_queue_cannot_be_claimed_and_session_audience_cannot_be_re
         runtime.close()
 
 
+def test_committed_host_claim_replays_after_audience_revocation(ordinary):  # noqa: F811
+    """A lost claim response must stay recoverable by the exact owning host."""
+
+    store, runtime, provider, transport, bid, sid, grant = target(ordinary)
+    try:
+        send(provider, transport, "select", f"/agent {grant['target_ref']}")
+        send(provider, transport, "ask", "committed private question")
+        row = next(row for row in transport.core.pending() if row["message"] == "committed private question")
+        committed = claim(store, runtime, sid, "stable-claim")
+        assert committed["claimed"] and committed["turn"]["turn_id"] == row["turn_id"]
+        assert committed["turn"]["claim_id"] == "stable-claim"
+        bindings = transport.bindings
+        bindings.change_agent_target(binding_id=bid, expected_revision=bindings.read()["revision"], target_ref=grant["target_ref"])
+        # A different claim id still cannot take over the committed Turn.
+        assert not claim(store, runtime, sid, "other-claim")["claimed"]
+        # The host that lost its response re-reads the same committed receipt.
+        replayed = claim(store, runtime, sid, "stable-claim")
+        assert replayed["claimed"] and replayed["turn"]["turn_id"] == row["turn_id"]
+        assert replayed["turn"]["claim_id"] == "stable-claim"
+        active = store.load_turn(sid, row["turn_id"])
+        assert active["status"] == "running"
+        assert active["host_claim_id"] == "stable-claim"
+        assert len(store.list_sessions()) == 1
+        complete_attached_agent_turn(store=store, registry_path=runtime.registry_path, session_id=sid,
+            turn_id=row["turn_id"], host_surface=HOST_SURFACE, host_session_id=HOST_SESSION_ID,
+            claim_id="stable-claim", completion_id="stable-completion", response={"message": "Recovered answer"})
+        assert store.load_turn(sid, row["turn_id"])["status"] == "completed"
+        transport.reconcile()
+        # Revocation still withholds the private result from the original App.
+        assert not any("Recovered answer" in text for _, text in provider.writes)
+    finally:
+        runtime.close()
+
+
 def test_prepared_agent_request_recovers_same_turn_after_recipient_switch(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport, _, sid, grant = target(ordinary)
     try:
