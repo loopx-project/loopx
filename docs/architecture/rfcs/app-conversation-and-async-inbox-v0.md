@@ -125,6 +125,27 @@ open; runtime/authority promotion still requires maintainer review.
 Synthetic product previews: [empty steward and project assistant](../../assets/personal-workspace/private-steward-empty.png),
 [narrow](../../assets/personal-workspace/private-steward-empty-narrow.png).
 
+## Private Chat status and help: scoped observations
+
+`/status` and `/help` use the existing typed bound-request owner to report the
+authorized role, workspace, executor endpoint, native Session/active Turn and
+durable queued-Turn count. Steward status counts only that binding's freshly
+authorized commissions. An executor endpoint is not a selected registered Agent;
+native execution ending is not Goal acceptance or proof of result delivery.
+
+The Core request persists a timestamped observation before provider delivery.
+Duplicate events retain that snapshot instead of switching to a newer Session.
+Missing execution evidence and unknown states stay explicitly unavailable.
+These commands open no Session, invoke no model and create no Goal. `/help`
+shows role-specific commands and the existing Settings → Lark entry for workspace,
+executor and revocation, including the text-only attachment boundary.
+
+Regression coverage uses the production native filesystem store, durable queue,
+bound request and provider admission/reconciliation paths with a synthetic
+provider and protocol executor. It qualifies queue/stop/readback and duplicate
+delivery, not live provider, mobile or installed-service acceptance of this delta.
+Registered Agent selection and broader coordination remain open.
+
 ## Decision: make the App the place where work conversations continue
 
 Users should be able to say “接着做，结果给我” / “Keep going and bring me the result”

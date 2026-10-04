@@ -92,6 +92,22 @@ RPC 回执。Lark 专属设置 companion 归 extension；会话、请求、范�
 合成产品预览：[空管家与项目助手](../../assets/personal-workspace/private-steward-empty.png)、
 [窄视口](../../assets/personal-workspace/private-steward-empty-narrow.png)。
 
+## 私聊状态与帮助：授权范围内的观测
+
+`/status` 与 `/help` 复用既有 typed bound-request owner，展示已授权角色、工作区、
+executor endpoint、原生 Session/active Turn 与已持久排队数量。管家只统计此 binding
+当前获授权的新委托。executor endpoint 不代表已经选择注册 Agent；原生执行结束
+不代表 Goal 验收，也不证明结果已经投递。
+
+Core request 在 provider 投递前保存带时间的观测。重复事件保留原快照，不切换到
+较新的 Session；执行证据缺失和未知状态明确显示不可判定。这两个命令不会打开
+Session、调用模型或创建 Goal。`/help` 按角色列出命令、既有设置 → Lark 的工作区、
+执行器与解绑入口，以及目前仅支持文字的附件边界。
+
+回归使用生产原生文件 store、持久队列、bound request 与 provider 受理/投递路径，
+provider 和协议执行器为合成 fixture。它验证排队、停止、读回和重复投递，不证明
+本增量的真实 provider、手机或正式安装验收。注册 Agent 选择及更广协调仍开放。
+
 ## 决策：让 App 成为工作会话持续进行的地方
 
 用户应能在 LoopX 中说“接着做，结果给我” / “Keep going and bring me the result”，

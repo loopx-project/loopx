@@ -149,7 +149,7 @@ class LarkPrivateConversations:
                         return {"status": "invalid_text"}
                 if not text.strip():
                     return {"status": "empty_text"}
-            command = {"/status": "status", "/new": "new", "/stop": "stop"}.get(text.strip())
+            command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(text.strip())
             if binding["context_kind"] == "steward":
                 for prefix, selected_command in [("/delegate", "commission"), ("/委托", "commission"),
                                                   ("/confirm", "confirm_commission"), ("/cancel", "cancel_commission"),
@@ -241,7 +241,8 @@ class LarkPrivateConversations:
                             self._deliver(path, record, "admission", native["response"])
                             continue
                         record.update(status=native["status"], response=native.get("response"),
-                                      commission_resources=native.get("commission_resources"))
+                                      commission_resources=native.get("commission_resources"),
+                                      status_snapshot=native.get("status_snapshot"))
                     if record["status"] == "accepted":
                         # Receipt follows persistent Core admission and is
                         # independent of terminal execution and reply delivery.
@@ -254,6 +255,8 @@ class LarkPrivateConversations:
                             "本次执行失败或已过期，原会话已保留；请发送 /status 后再决定是否重试。")
                     else:
                         response = _command_text(str(record.get("response_code") or "")) or str(record.get("response") or "")
+                        if record.get("status_snapshot"):
+                            response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
                     if self._deliver(path, record, "terminal", response):
                         resources = record.get("commission_resources") or {}
                         if resources.get("session_id") and resources.get("turn_id"):
@@ -287,3 +290,34 @@ def _command_text(code: str) -> str:
         "no_session": "尚无会话；发送文字即可开始。", "active_session": "正在执行；后续文字会进入同一会话队列。",
         "ready_session": "会话已就绪，可继续发送文字。", "new_session": "已关闭此前会话；下一条文字将开启新会话。",
         "stop_requested": "已请求停止这条消息对应的执行。", "no_active_turn": "当前没有正在执行的消息。"}.get(code, "")
+
+
+def _status_text(snapshot: dict[str, Any], *, help_requested: bool) -> str:
+    """Localize Core facts; never infer an Agent, grant or model completion."""
+    steward = snapshot["context_kind"] == "steward"
+    phases = {"queued": "已受理等待执行", "starting": "正在启动", "running": "正在执行",
+        "completing": "正在收尾", "interrupting": "正在停止", "completed": "原生执行结束",
+        "interrupted": "已停止", "timed_out": "执行超时", "failed": "执行失败"}
+    if snapshot["session_status"] is None:
+        state = "尚无会话；发送文字即可开始。"
+    elif not snapshot["active_turn_observation_available"]:
+        state = "执行证据暂不可读；请在本机检查原会话。"
+    elif snapshot["active_turn_status"]:
+        state = phases.get(snapshot["active_turn_status"], "执行状态暂不可判定；请在本机检查原会话。")
+    else:
+        state = {"failed": "会话恢复失败；请在本机检查原会话。",
+            "resume_failed": "会话恢复失败；请在本机检查原会话。", "stale": "会话需要恢复。",
+            "starting": "会话正在启动。", "resuming": "会话正在恢复。",
+            "ready": "会话可继续。", "closed": "会话已关闭。"}.get(
+                snapshot["session_status"], "会话状态暂不可判定；请在本机检查原会话。")
+    text = (f"状态快照（{snapshot['observed_at']}）\n角色：{'长期管家' if steward else '普通项目对话'}"
+        f"\n工作区：{snapshot['workspace_path']}\n执行器：{snapshot['executor_endpoint_id']}"
+        f"\n{state}\n已持久排队：{snapshot['queued_count']} 条。")
+    text += (f"\n已授权新委托：{snapshot['authorized_commission_count']}；执行结束不代表委托验收。" if steward else
+        "\n当前仅有工作区只读授权；没有自动选用注册 Agent 或创建 Goal。")
+    text += "\n/status 查看状态；/stop 停止当前聊天执行；/new 关闭当前聊天并开启下次新会话；/help 查看用法。"
+    if help_requested:
+        text += "\n工作区、执行器与解绑：本机 Chat → 设置 → Lark。变更或解绑会重新核验授权；已受理工作不会迁移到新会话。图片/文件目前未交给模型，请改用文字。"
+        if steward:
+            text += "\n新委托：/delegate --tokens N 具体目标；读完预览后从原私聊发送完整 /confirm。/cancel 取消预览；/stop-commission 和 /resume-commission 使用原回执中的完整命令。"
+    return text

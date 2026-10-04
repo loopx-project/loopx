@@ -118,3 +118,60 @@ test("native commands retain their recorded target across a new Session and rede
   assert.throws(() => planBoundConversationRequest({request: {...request, command: "grant"}, current_session: current}),
     /unsupported/);
 });
+
+test("status and help project only the verified binding without opening a Session", () => {
+  const context = resolveBoundConversation({current: planConversationBinding(request).state,
+    binding_id: row.binding_id, source_ref: "e".repeat(24), sender_ref: row.operator_ref,
+    private_human_message: true, observation, available_projects: [project]}).context;
+  const input = {binding: row, context, current_session: null, queued_count: 0, active_turn: null,
+    observed_at: "2026-01-01T10:00:00Z", request: {request_ref: "f".repeat(24), command: "status"}};
+  const plan = planBoundConversationRequest(input);
+  assert.equal(plan.operation, "reply");
+  assert.equal(plan.session_id, null);
+  assert.equal(plan.response_code, "no_session");
+  assert.deepEqual(plan.status_snapshot, {schema_version: "loopx_chat_bound_status_v0",
+    observed_at: input.observed_at, context_kind: "project", workspace_path: project.workspace_path,
+    executor_endpoint_id: "codex", grant: "workspace_read", authorized_commission_count: 0,
+    session_status: null, active_turn_status: null, active_turn_observation_available: true, queued_count: 0});
+  assert.equal(planBoundConversationRequest({...input, request: {...input.request, command: "help"}}).response_code,
+    "conversation_help");
+  for (const bad of [{...input, binding: {...row, provider_ref: "a".repeat(24)}},
+    {...input, queued_count: -1}, {...input, queued_count: .5}, {...input, queued_count: 1},
+    {...input, observed_at: "unknown"}]) assert.throws(() => planBoundConversationRequest(bad));
+});
+
+test("status reads the canonical queue and exact active Turn, retaining unavailable evidence", () => {
+  const selected = resolveBoundConversation({current: planConversationBinding(request).state,
+    binding_id: row.binding_id, source_ref: "e".repeat(24), sender_ref: row.operator_ref,
+    private_human_message: true, observation, available_projects: [project]});
+  const session = {session_id: "original", channel_id: selected.channel_id, goal_id: null,
+    project_context: selected.context, status: "busy", active_turn_id: "original-turn"};
+  const turn = {session_id: session.session_id, turn_id: session.active_turn_id, status: "running"};
+  const input = {binding: row, context: selected.context, current_session: session, queued_count: 2,
+    active_turn: turn, observed_at: "2026-01-01T10:00:00Z",
+    request: {request_ref: "f".repeat(24), command: "status"}};
+  const snapshot = planBoundConversationRequest(input).status_snapshot as Record<string, unknown>;
+  assert.equal(snapshot.queued_count, 2);
+  assert.equal(snapshot.active_turn_status, "running");
+  assert.equal((planBoundConversationRequest({...input, active_turn: null}).status_snapshot as Record<string, unknown>)
+    .active_turn_observation_available, false);
+  for (const bad of [{...input, current_session: {...session, channel_id: "another-owner"}},
+    {...input, active_turn: {...turn, session_id: "another-session"}},
+    {...input, active_turn: {...turn, turn_id: "later-turn"}},
+    {...input, active_turn: {...turn, status: {pretend: "completed"}}}]) {
+    assert.throws(() => planBoundConversationRequest(bad));
+  }
+});
+
+test("steward status counts its fresh grant, not a global portfolio or old Session scope", () => {
+  const steward = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: ["fresh-goal"]};
+  const context = {...project, kind: "bound_steward", audience: "bound_owner", grant: "portfolio_read",
+    goal_ids: ["fresh-goal"], binding_id: row.binding_id, source_ref: "e".repeat(24),
+    provider_ref: row.provider_ref, operator_ref: row.operator_ref};
+  const plan = planBoundConversationRequest({binding: steward, context, queued_count: 0, active_turn: null,
+    observed_at: "2026-01-01T10:00:00Z", request: {request_ref: "f".repeat(24), command: "help"},
+    current_session: {session_id: "steward", channel_id: `manager.external.native.${row.binding_id}.${context.source_ref}`,
+      goal_id: "loopx-manager", steward_context: {...context, goal_ids: []}, status: "ready", active_turn_id: null}});
+  assert.equal((plan.status_snapshot as Record<string, unknown>).authorized_commission_count, 1);
+  assert.equal(JSON.stringify(plan).includes("fresh-goal"), false);
+});

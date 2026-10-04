@@ -27,7 +27,7 @@ class ChatExternalConversations:
         import re
         if not re.fullmatch(r"[a-f0-9]{24}", request_ref):
             raise ValueError("invalid external request reference")
-        if command not in {None, "status", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
+        if command not in {None, "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
             raise ValueError("unsupported external conversation command")
         selected = self.bindings.resolve(binding_id=binding_id, **source)
         path = self.root / f"{request_ref}.json"
@@ -64,8 +64,15 @@ class ChatExternalConversations:
                 _atomic_write_json(path, row)
                 return row
         from ...control_plane.effect_runtime import effect_runtime_result
+        observations = {}
+        if row["command"] in {"status", "help"}:
+            active_id = current.get("active_turn_id") if current else None
+            observations = {"context": selected["context"],
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "queued_count": len(controller.store.queued_turns(current["session_id"])) if current else 0,
+                "active_turn": controller.store.load_turn(current["session_id"], active_id) if active_id else None}
         plan = effect_runtime_result("collaboration.conversation.request", {
-            "request": row, "current_session": current, "binding": selected["binding"]})
+            "request": row, "current_session": current, "binding": selected["binding"], **observations})
         operation = plan["operation"]
         if operation == "steward_action":
             parsed = self.bindings._core("collaboration.steward.command", {"command": row["command"], "message": row["message"]})
@@ -86,6 +93,8 @@ class ChatExternalConversations:
                        response="已持久受理此管家操作；正在核验原生操作与回执。")
         elif operation == "reply":
             row.update(status="command_completed", session_id=plan["session_id"], response_code=plan["response_code"])
+            if "status_snapshot" in plan:
+                row["status_snapshot"] = plan["status_snapshot"]
         elif operation in {"new", "stop"}:
             row.update(target_recorded=True, session_id=plan["session_id"], turn_id=plan["turn_id"])
             _atomic_write_json(path, row)

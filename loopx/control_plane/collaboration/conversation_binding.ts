@@ -151,7 +151,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
   const row = requireJsonObject(params.request, "external request");
   const request = ref(row.request_ref, "external request identity");
   const command = row.command;
-  if (![null, "status", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(command as null | string)) {
+  if (![null, "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(command as null | string)) {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
   const current = params.current_session === null ? null : requireJsonObject(params.current_session, "current Session");
@@ -163,16 +163,65 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     if (selected.context_kind !== "steward") throw new EffectRuntimeRequestError("explicit commissions require a selected steward");
     return {operation: "steward_action", session_id: session, turn_id: null};
   }
-  if (command === "status" || command === "unsupported") {
+  if (command === "status" || command === "help") {
     return {operation: "reply", session_id: session, turn_id: null,
-      response_code: command === "unsupported" ? "unsupported_attachment" : !current ? "no_session"
-        : current.active_turn_id ? "active_session" : "ready_session"};
+      response_code: command === "help" ? "conversation_help" : !current ? "no_session"
+        : current.active_turn_id ? "active_session" : "ready_session",
+      status_snapshot: boundConversationStatus(params, current)};
+  }
+  if (command === "unsupported") {
+    return {operation: "reply", session_id: session, turn_id: null,
+      response_code: "unsupported_attachment"};
   }
   if (command === "stop" || command === "new") {
     return {operation: command, session_id: session, turn_id: turn,
       response_code: command === "new" ? "new_session" : turn ? "stop_requested" : "no_active_turn"};
   }
   return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
+}
+
+/** A labelled observation of the same authorized context and canonical queue.
+ * It neither creates a Session nor certifies execution or result delivery.
+ * The external request persists this snapshot so duplicate delivery cannot
+ * silently substitute a later Session or another binding's current state.
+ */
+function boundConversationStatus(params: JsonObject, current: JsonObject | null): JsonObject {
+  const selected = binding(params.binding);
+  const steward = selected.context_kind === "steward";
+  const context = steward ? normalizeStewardContext(params.context) : normalizeProjectContext(params.context);
+  for (const key of ["binding_id", "project_ref", "provider_ref", "operator_ref"]) {
+    if (context[key] !== selected[key]) throw new EffectRuntimeRequestError("status context belongs to another binding");
+  }
+  const source = ref(context.source_ref, "status source identity");
+  const channel = steward ? `manager.external.native.${selected.binding_id}.${source}`
+    : `project.external.${selected.binding_id}.${source}`;
+  if (current) {
+    const saved = steward ? normalizeStewardContext(current.steward_context) : normalizeProjectContext(current.project_context);
+    if (current.channel_id !== channel || current.goal_id !== (steward ? "loopx-manager" : null)
+        || JSON.stringify({...saved, goal_ids: []}) !== JSON.stringify({...context, goal_ids: []})) {
+      throw new EffectRuntimeRequestError("status Session context changed");
+    }
+  }
+  if (!Number.isSafeInteger(params.queued_count) || Number(params.queued_count) < 0
+      || (!current && params.queued_count !== 0)) throw new EffectRuntimeRequestError("invalid canonical queue observation");
+  const instant = requireNonEmptyString(params.observed_at, "status observation time");
+  if (instant.length > 64 || !Number.isFinite(Date.parse(instant))) throw new EffectRuntimeRequestError("invalid status observation time");
+  const turn = params.active_turn === null ? null : requireJsonObject(params.active_turn, "observed active Turn");
+  if (turn && (!current || turn.session_id !== current.session_id || turn.turn_id !== current.active_turn_id)) {
+    throw new EffectRuntimeRequestError("status Turn belongs to another Session");
+  }
+  for (const item of [current, turn]) {
+    if (item && (typeof item.status !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(item.status))) {
+      throw new EffectRuntimeRequestError("invalid canonical status observation");
+    }
+  }
+  return {schema_version: "loopx_chat_bound_status_v0", observed_at: instant,
+    context_kind: selected.context_kind, workspace_path: context.workspace_path,
+    executor_endpoint_id: selected.executor_endpoint_id, grant: selected.grant,
+    authorized_commission_count: steward ? (selected.goal_ids as string[]).length : 0,
+    session_status: current?.status ?? null, active_turn_status: turn?.status ?? null,
+    active_turn_observation_available: !current?.active_turn_id || turn !== null,
+    queued_count: params.queued_count};
 }
 
 /** Explicit text grammar selects one existing typed Goal operation. Normal
