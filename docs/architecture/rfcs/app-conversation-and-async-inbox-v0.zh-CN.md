@@ -10,6 +10,26 @@
 - 评估：[steward 黄金查询](../../product/use-cases/steward/golden-queries.md)。
 - 语言：[英文语义镜像](app-conversation-and-async-inbox-v0.md)。
 
+## 普通工作区会话：有界实现检查点
+
+Core Chat 可以独立于 Goal 和管家 portfolio 打开普通工作区 Session。在 App 中，
+工作区是管家对话的一个范围：“范围”选择器列出宿主授权的工作区，选中后继续该
+工作区自己的 Session，输入框、历史、流式输出、停止和图片与其他对话共用同一路径。
+范围不会出现在管家总览或 Goal 列表中；切回管家范围即恢复管家 Session。
+共享 typed context owner 核验确切工作区引用和当前 grant；目录缺失、symlink
+重定向或 grant 变化时拒绝继续。不会合成 Goal、注入 portfolio，也不凭工作区
+grant 授权 peer delegation。
+
+本次扩展现有 conversation-scope owner 的 `project_workspace` 分类及宿主观测合同，
+不增加 provider 自有 Session authority。Python 负责文件系统观测和既有 durable Chat
+store，TypeScript 负责上下文身份及范围。原生 Codex 恢复保留原 upstream thread
+和工作区；HTTP/协议 fixture 验证连续性与拒绝行为，不证明真实模型采用了上下文。
+
+首个 grant 仅面向本机 owner 的工作区读取。Lark 受众授权、普通私聊选择、独立于
+terminal delivery 的 durable 入站 admission，以及安装/手机验收仍是本 RFC 的未完成项。
+App 范围入口不代表这些旅程已通过，也不授权修改文件；grant 撤销后历史仍可读，
+新消息在宿主重新授权前被阻止。
+
 ## 决策：让 App 成为工作会话持续进行的地方
 
 用户应能在 LoopX 中说“接着做，结果给我” / “Keep going and bring me the result”，

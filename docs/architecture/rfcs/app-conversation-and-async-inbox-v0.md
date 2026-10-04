@@ -10,6 +10,32 @@
 - Evaluation: [steward golden queries](../../product/use-cases/steward/golden-queries.md).
 - Language: [Chinese semantic mirror](app-conversation-and-async-inbox-v0.zh-CN.md).
 
+## Ordinary workspace conversations: bounded implementation checkpoint
+
+The Core Chat entry can now open an ordinary workspace Session independently
+of a Goal or the steward's portfolio. In the App, a workspace is a scope of the
+steward conversation: its Scope picker lists the host's granted workspaces, and
+choosing one continues that workspace's own Session through the same composer,
+history, streaming, stop and image path as every other conversation. The scope
+never appears on the steward overview or the Goal list, and returning to the
+steward scope restores the steward Session. The shared typed context owner
+checks the exact workspace reference and current grant; missing roots, retargeted
+symlinks and changed grants fail closed. No Goal is synthesized, no portfolio
+context is injected, and the workspace grant cannot authorize peer delegation.
+
+This extends the existing conversation-scope owner with `project_workspace` and
+an exact host-observation contract, rather than introducing provider-local Session
+authority. Python owns filesystem observations and the existing durable Chat store;
+the TypeScript owner decides context identity and scope. Native Codex resume retains
+the original upstream thread and workspace. HTTP/protocol fixtures qualify that
+continuity and denial behavior; they do not establish real model adoption.
+
+The initial grant is workspace reading for the local owner. Lark audience grants,
+ordinary private-message selection, durable inbound admission independent of
+terminal delivery, and installed/mobile acceptance remain open work in this RFC.
+The App scope does not qualify those journeys or authorize edits; a revoked grant
+keeps the history readable and blocks new messages until the host grants it again.
+
 ## Decision: make the App the place where work conversations continue
 
 Users should be able to say “接着做，结果给我” / “Keep going and bring me the result”

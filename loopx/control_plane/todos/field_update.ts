@@ -118,8 +118,12 @@ function completionUpdates(block: JsonObject, intent: JsonObject, targetStatus: 
   if (present(intent.completion_metadata_updates_override)) {
     const updates = requireJsonObject(intent.completion_metadata_updates_override, "completion metadata override");
     if (Object.entries(updates).some(([key, value]) =>
-      !["completion_continuation", "completion_recovery"].includes(key) || typeof value !== "string")) {
+      !["completion_continuation", "completion_recovery", "completion_receipt_id"].includes(key) || typeof value !== "string")) {
       throw new EffectRuntimeRequestError("TypeScript Todo completion metadata updates shape mismatch");
+    }
+    if (updates.completion_receipt_id !== undefined &&
+        !/^tcw_[0-9a-f]{64}$/u.test(String(updates.completion_receipt_id))) {
+      throw new EffectRuntimeRequestError("completion_receipt_id is invalid");
     }
     return {...updates};
   }

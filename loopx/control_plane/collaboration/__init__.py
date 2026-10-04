@@ -19,6 +19,7 @@ def conversation_trigger(mode: str | None = None, **evidence: bool) -> dict[str,
 def conversation_scope(session: dict[str, Any], *, origin: str | None = None) -> dict[str, Any]:
     return effect_runtime_result("collaboration.conversation.scope", {
         "channel_id": session.get("channel_id"), "goal_id": session.get("goal_id"),
+        "project_context": session.get("project_context"),
         **({"origin": origin} if origin is not None else {}),
     })
 

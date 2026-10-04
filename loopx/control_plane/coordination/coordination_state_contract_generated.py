@@ -58,6 +58,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                  'successor_todo_ids',
                                  'completion_continuation',
                                  'completion_recovery',
+                                 'completion_receipt_id',
                                  'replan_obligation_id',
                                  'target_key',
                                  'cadence',

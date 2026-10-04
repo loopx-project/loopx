@@ -767,6 +767,7 @@ def handle_todo_command(
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()
+        receipt_id = payload.get("completion_receipt_id")
         if committed_at:
             # Capability evidence comes only from a Turn journal the TS
             # journal owner validated against this completion's full
@@ -789,7 +790,8 @@ def handle_todo_command(
                     goal_id=args.goal_id,
                     event_kind="todo_complete",
                     identity=identity,
-                    state_version=committed_at,
+                    state_version=receipt_id or committed_at,
+                    receipt_id=receipt_id,
                     committed_at=committed_at,
                     hooks=post_writeback_hooks,
                     projection_builder=post_writeback_projection_builder,

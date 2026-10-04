@@ -65,6 +65,7 @@
     "test:conversation-returns": "node --experimental-strip-types src/data/conversation-returns.test.mjs",
     "smoke:conversation-history": "vite build --ssr smoke/conversation-history-smoke.ts --outDir node_modules/.cache/loopx-conversation-history --emptyOutDir && node node_modules/.cache/loopx-conversation-history/conversation-history-smoke.js",
     "smoke:conversation-returns-packaged": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/conversation-return-browser-smoke.mjs",
+    "smoke:workspace-scope-packaged": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/workspace-scope-browser-smoke.mjs",
     "smoke:recent-completions": "tsc --ignoreConfig --target ES2022 --module CommonJS --moduleResolution Node --ignoreDeprecations 6.0 --resolveJsonModule --esModuleInterop --jsx react-jsx --skipLibCheck --strict --types node --outDir /tmp/loopx-recent-completions-smoke smoke/recent-completions-smoke.ts && NODE_PATH=\"$PWD/node_modules\" node /tmp/loopx-recent-completions-smoke/apps/presentation/dashboard/smoke/recent-completions-smoke.js"
   },
   "dependencies": {

@@ -27,8 +27,15 @@
   检查通过；工具明确不证明生产可用性、故障转移或多 owner 运行。
   独立的 metadata-runtime 升级验收门禁
   [issue #511](https://github.com/NoKV-Lab/NoKV/issues/511) 仍开放。
+  其中 seed routing helper [PR #4724](https://github.com/loopx-project/loopx/pull/4724)
+  已合并，配套 ladder [PR #4726](https://github.com/loopx-project/loopx/pull/4726)
+  仍开放；helper 合并本身不关闭该升级门禁。
   **状态：资格验证工具已合并，独立验收尚未关闭**。这比下文 README 中的合作声明
-  多了具体集成产物，不代表 NoKV 在生产中运行 LoopX。核对日期：2026-09-30。
+  多了具体集成产物，不代表 NoKV 在生产中运行 LoopX。NoKV 的
+  [当前 README 证据边界](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md#evidence-and-qualification)
+  另将完整原生 CLI 和已安装 Python wheel 对真实服务的验收标为尚未资格化。
+  历史单节点测试环境的结果不证明这些当前、更广范围的验收成立。
+  核对日期：2026-10-04。
 - **GoTry**（Danceiny）——用 LoopX goals、Codex 任务绑定和心跳管理多条开发路线。
   [issue #18](https://github.com/Danceiny/gotry/issues/18) 记录接入，已合并的
   [PR #187](https://github.com/Danceiny/gotry/pull/187) 记录交付验证。
@@ -50,14 +57,27 @@
   内嵌 LoopX runtime 并注册 CLI 入口。
   **状态：已观察到源码与打包集成**；未验证部署和持续运行。
 - **Hufu**（Blicae8917）——已合并的
-  [PR #70](https://github.com/Blicae8917/hufu/pull/70) 增加显式启用的 LoopX v0.5.2
-  RunOnce Consumer。真实 transport 和 Host 调用由部署 Provider 提供；状态投影
-  [issue #76](https://github.com/Blicae8917/hufu/issues/76) 仍开放。
-  **状态：限定范围的集成已合并，配套工作尚未完成**。
+  [PR #70](https://github.com/Blicae8917/hufu/pull/70) 于 2026-08-23 增加显式启用的
+  LoopX v0.5.2 RunOnce Consumer。核对的 main 快照已
+  [导出 Consumer 及其 ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts)；
+  [兼容记录](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/docs/COMPATIBILITY.md)
+  保留 v0.5.2 精确基线，不内置 LoopX 依赖。真实 transport 和 Host 调用由部署
+  Provider 提供。[issue #76](https://github.com/Blicae8917/hufu/issues/76) 报告了
+  owner-local 试点的 RunOnce committed/replay 回执，但通用状态投影仍不完整，
+  issue 仍开放。**状态：限定范围集成已合并、本地试点由作者报告、配套投影开放**。
+  本清单未独立复现该试点，不据此声明当前版本兼容或持续部署。
+  核对日期：2026-10-04。
 - **benjamin-plugins**（Yidada）——已合并的
-  [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1) 增加调用官方 LoopX 内核的
-  Codex 插件。作者报告源码 checkout 上的 CLI 契约 smoke 通过；PyPI 安装未验证，
-  后台调度仍归宿主。**状态：插件已合并**。
+  [PR #1](https://github.com/Yidada/benjamin-plugins/pull/1) 于 2026-09-05 增加调用
+  官方 LoopX 内核的 Codex 插件。核对的 main
+  [marketplace 条目](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/.agents/plugins/marketplace.json)
+  仍注册该插件；[来源记录](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/SOURCE.md)
+  将 CLI 资格固定到 LoopX 0.5.4 源码 checkout。PR 报告一个独立模型 status 场景，
+  其余场景仅通过结构校验。
+  [preflight 实现](https://github.com/Yidada/benjamin-plugins/blob/2baf35b4dcc64190e8012daf39054d83c46e6f22/plugins/loopx/skills/loopx/scripts/preflight.py)
+  只查找可执行文件和读取 registry 形状，不执行 LoopX，明确保留 runtime 和 driver
+  未验证。**状态：插件已合并，源码 checkout 验证由作者报告**。PyPI 安装、真实后台
+  执行和当前版本兼容未验证，调度仍归宿主。核对日期：2026-10-04。
 - **Adaptive-Agent-Orchestration-Protocol**（YuemingHub）——已合并的
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41)
   将 LoopX 注册为可选执行连续性 Provider。
@@ -107,8 +127,13 @@
   [PR #5223](https://github.com/volcengine/OpenViking/pull/5223) 提议增加可选、
   默认关闭的 LoopX 后台长任务。LoopX 管 Goal/Todo 状态与执行门禁，Bot 提供
   worker、模型与工具。作者报告以模型替身完成真实 CLI 测试；真实模型端到端
-  验收和 Docker 构建仍未完成。**状态：运行时集成提案，尚未合并或发布**。
-  核对日期：2026-09-30。
+  验收和 Docker 构建仍未完成。
+  提案的[固定版本打包配置](https://github.com/volcengine/OpenViking/blob/406827d73594fda9def251912be64bf06b013773/pyproject.toml)
+  将 `loopx==1.0.5` 放在可选 `longtask` extra 中；
+  [当前 main 打包配置](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/pyproject.toml)
+  未声明该 extra。这是提案与 main 的快照对照，不是安装未发布 extra 的指引。
+  **状态：运行时集成提案，尚未合并或发布**。
+  核对日期：2026-10-04。
 - **Opensiro VSM harness index**——已合并的
   [PR #607](https://github.com/opensiro/vsm-harness-index/pull/607) 记录固定
   LoopX 对比实验的可辨识性阻塞；后续
@@ -172,9 +197,10 @@
   引用固定版本并保留实验性证据边界。**状态：教学材料**，不是读者采用统计。
 - **NAVER fe-news**——[2026 年 9 月通讯](https://github.com/naver/fe-news/blob/master/issues/2026-09.md)
   用韩文介绍 LoopX 及安装路径。**状态：编辑内容收录**，不代表 NAVER 部署声明。
-- **OpenViking / NoKV**——[OpenViking README](https://github.com/volcengine/OpenViking/blob/main/README.md)
-  列出 LoopX；[NoKV README](https://github.com/NoKV-Lab/NoKV/blob/main/README.md)
+- **OpenViking / NoKV**——[OpenViking README](https://github.com/volcengine/OpenViking/blob/9d9bc85e1f6a15afa7f23b0d7bf114a7c61cad14/README.md)
+  列出 LoopX；[NoKV README](https://github.com/NoKV-Lab/NoKV/blob/b8d59c4ff30f2cdfcd8eb4a70cc6d3ec8ab9c420/README.md)
   将其列为活跃开源合作。**状态：公开项目关系**；这些条目本身不证明运行时依赖。
+  核对日期：2026-10-04。
 - **loopx-book / loopx-book-labs**（cocolord）——双语、协议优先的
   [开发者书](https://github.com/cocolord/loopx-book)与
   [可运行实验](https://github.com/cocolord/loopx-book-labs)，覆盖项目接入、Issue 到 PR
@@ -222,3 +248,6 @@
 - 局部更新：**2026-10-03**，覆盖 MilkSU、ai-skills、General Loop、GitHub-Michelin
   及 michaelx1993/foolzzz fork 家族。核对了当前 Issue/PR 状态、后续评论和固定版本
   的源文件；本轮未新增可确认的运行时采用者，也不代表其余条目重新验真。
+- 局部更新：**2026-10-04**，按当前公开 PR/Issue 状态和固定版本源文件复核
+  OpenViking、NoKV、Hufu 和 benjamin-plugins，区分提案打包配置、历史工具、作者
+  报告的试点、插件注册和当前验收限制。未独立复现真实集成，其余条目未重新验真。

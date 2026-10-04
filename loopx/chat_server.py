@@ -20,6 +20,7 @@ from .chat import (
     redact_local_paths,
 )
 from .chat_agent import CodexChatAgentError
+from .capabilities.native_chat.project_context import ChatProjectContexts
 from .chat_attachments import (
     CHAT_JSON_MAX_BYTES,
     CHAT_TURN_MAX_BODY_BYTES,
@@ -522,6 +523,8 @@ class ChatRequestHandler(
         return registry, goal
 
     def _session_context(self, session: dict[str, object]) -> dict[str, object]:
+        if session.get("project_context") is not None:
+            return self.server.runtime_controller.project_contexts.session_context(session)
         if is_manager_channel(session.get("channel_id")):
             return {"project": manager_workspace(self.server.chat_store.root, str(session["channel_id"])),
                     "objective": MANAGER_AGENT_OBJECTIVE, "title": "LoopX global manager"}
@@ -558,7 +561,7 @@ class ChatRequestHandler(
     def _create_session(self) -> None:
         try:
             body = self._read_json()
-            unknown = set(body) - {"goal_id", "agent_id", "mode", "context_kind"}
+            unknown = set(body) - {"goal_id", "agent_id", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
             goal_id = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
@@ -569,11 +572,21 @@ class ChatRequestHandler(
             requested_endpoint = _compact_text(body.get("agent_id"), limit=80)
             mode = _compact_text(body.get("mode"), limit=40) or "resume_latest"
             context_kind = _compact_text(body.get("context_kind"), limit=40) or "goal"
-            if context_kind not in {"goal", "manager"}:
-                raise ValueError("context_kind must be goal or manager")
+            if context_kind not in {"goal", "manager", "project"}:
+                raise ValueError("context_kind must be goal, manager or project")
+            project_ref = _compact_text(body.get("project_ref"), limit=80)
+            if context_kind != "project" and project_ref:
+                raise ValueError("project_ref requires an ordinary project conversation")
             if context_kind == "manager":
                 goal_id = MANAGER_AGENT_GOAL_ID
                 context = self._session_context({"channel_id": "manager"})
+            elif context_kind == "project":
+                if body.get("goal_id") is not None and body.get("goal_id") != "":
+                    raise ValueError("ordinary project conversations cannot carry a Goal")
+                goal_id = None
+                selected = self.server.runtime_controller.project_contexts.resolve(project_ref)
+                context = self._session_context({"goal_id": None, "channel_id": selected["channel_id"],
+                                                 "project_context": selected["context"]})
             else:
                 registry, goal = self._registry_and_goal(goal_id)
                 context = _goal_public_context(registry, goal)
@@ -596,6 +609,7 @@ class ChatRequestHandler(
                 objective=runtime_objective,
                 mode=mode,
                 requested_endpoint=requested_endpoint,
+                **({"project_ref": project_ref} if context_kind == "project" else {}),
             )
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, gate=exc.gate, error_code=exc.error_code)
@@ -1340,6 +1354,13 @@ class ChatRequestHandler(
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/chat/projects":
+            self._send_json({"ok": True, "projects": [
+                {"project_ref": context["project_ref"], "title": Path(context["workspace_path"]).name,
+                 "grant": context["grant"]}
+                for context in self.server.runtime_controller.project_contexts.available()
+            ]})
+            return
         if path == "/healthz":
             self._send_json({"ok": True})
             return
@@ -1563,6 +1584,7 @@ def serve_chat(
     server.runtime_controller = ChatRuntimeController(
         store=server.chat_store,
         registry_path=resolved_registry_path,
+        project_contexts=ChatProjectContexts(resolved_scan_roots),
         manager_scope_resolver=lambda session: authorized_manager_goal_ids(
             build_lark_goal_topic_runtime_snapshot(
                 registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,

@@ -531,7 +531,10 @@ def terminal_canonical_todo_if_promoted(
         "idempotent_replay": idempotent_replay,
         "state_file": str(state_file) if state_file is not None else None,
         "project": str(project) if project is not None else None,
-        "updated_at": payload.get("completed_at") if payload.get("changed") else None,
+        # A receipt replay must also recover an uncheckpointed optional hook.
+        "updated_at": payload.get("completed_at") if command == "complete" else (
+            payload.get("completed_at") if payload.get("changed") else None
+        ),
         "next_todos": payload.get("generated_successors") or [],
         "mutation_authority": terminal_decision,
         "task_lease_fence": terminal_decision,

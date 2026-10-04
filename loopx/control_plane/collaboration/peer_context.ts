@@ -9,7 +9,7 @@ import { resolveConversationScope } from "./conversation_scope.ts";
  */
 export function requirePeerContextAccess(params: JsonObject): JsonObject {
   const scope = resolveConversationScope(requireJsonObject(params.conversation, "source conversation"));
-  if (scope.private_conversation) return { allowed: true };
+  if (scope.kind === "owner_goal" || scope.kind === "owner_portfolio") return { allowed: true };
   if (scope.kind !== "external_audience") {
     throw new EffectRuntimeRequestError("original source conversation unavailable for peer context forwarding");
   }

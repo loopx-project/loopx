@@ -576,6 +576,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.goal_draft", lazyHandler(() => import("./collaboration/goal_draft.ts"), ({admitGoalDraft}) => (params) => ({draft: admitGoalDraft(params)}))],
     ["collaboration.conversation.trigger", lazyHandler(() => import("./collaboration/conversation_trigger.ts"), ({resolveConversationTrigger}) => resolveConversationTrigger)],
     ["collaboration.conversation.scope", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({resolveConversationScope}) => resolveConversationScope)],
+    ["collaboration.project.context", lazyHandler(() => import("./collaboration/project_conversation.ts"), ({resolveProjectConversation}) => resolveProjectConversation)],
     ["collaboration.peer.context_access", lazyHandler(() => import("./collaboration/peer_context.ts"), ({requirePeerContextAccess}) => requirePeerContextAccess)],
     ["collaboration.source.recipients", lazyHandler(() => import("./collaboration/source_grants.ts"), ({resolveSourceRecipients}) => resolveSourceRecipients)],
     ["collaboration.source.configure_recipient", lazyHandler(() => import("./collaboration/source_grants.ts"), ({configureSourceRecipient}) => configureSourceRecipient)],
