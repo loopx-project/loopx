@@ -945,11 +945,13 @@ Linked evidence has a stepwise back action and a separate exit to the execution 
 
 A lost downstream result or revoked adoption leaves the freshly verified original/response/revision readable and marks adoption unavailable. Select **Verify linked work** again after recovery; adoption returns only when the current receipt and exact consumer identity, input and output agree. A lost core version still clears the correction trace.
 
+Expand **Current validation basis** in the existing evidence reader to inspect the source, definition digest, check count and file-pin count from this read. The additive `validation` object on `delegate read` contains `source`, `basis_sha256`, `check_count` and `pinned_file_count`; its source reuses `goal_acceptance` or `todo_validation`. The digest binds the current canonical requirements and selected validation effects. It does not export their commands, paths or labels, and it is neither a stored success receipt nor verifier identity. A read still reruns the original checks and requires the exact stored output versions. Rule-file drift or validation failure withdraws the report and basis; restoration needs an explicit recheck. Older runtimes remain readable with the basis identity marked unavailable.
+
 A revision can have current task acceptance and valid requester adoption while independent-verifier evidence is missing. These are distinct facts. The correction path explicitly says **Independent verification · evidence not provided**; neither `responds_to`, a reviewer's name nor a successful validator is an exact-version independent-verifier receipt.
 
 The following views use the packaged frontend with an isolated production SQLite/HTTP/CLI fixture. They contain synthetic data and do not qualify a live-model correction or the installed native App. The desktop view exposes the missing verifier beside valid adoption; the mobile view shows the same gap in the scrollable correction path. The stale view shows acceptance withdrawn after changed output:
 
-![Packaged correction evidence: independent verification missing beside current adoption](../assets/personal-workspace/team-evidence-desktop.png)
+![Packaged correction evidence: current validation basis and the independent-verifier gap](../assets/personal-workspace/team-evidence-desktop.png)
 
 ![390px correction evidence with the missing-verifier state](../assets/personal-workspace/team-evidence-mobile.png)
 
@@ -957,7 +959,7 @@ The following views use the packaged frontend with an isolated production SQLite
 
 ![Downstream loss preserves the current correction and marks adoption unavailable](../assets/personal-workspace/team-adoption-unavailable.png)
 
-中文：返回执行列表现在单次重读当前页，保留分页与键盘焦点；产物变化撤回验收，列表失联清除旧行，可刷新恢复，不启动额外工作。任务接受有效和请求方采用有效，仍不能证明独立验收者验证了准确版本。纠偏路径对此明确留缺口。后续结果失联或采用撤回不会抹去当前仍有效的纠偏证据；原地重新核验可恢复准确版本的采用，核心来源失效则仍清除路径。图中均为隔离 production SQLite/HTTP/CLI 与打包前端的合成数据，不作为真实模型纠偏或已安装 Native App 验收。
+中文：证据详情可展开“本次验收依据”，查看当前规则来源、定义摘要、检查与文件固定项数；不暴露命令、路径或私有标签，也不代表独立验收者。规则文件变化或验收失败清除产物与依据，恢复后显式重读；旧运行时明确标为依据未提供。返回执行列表现在单次重读当前页，保留分页与键盘焦点；产物变化撤回验收，列表失联清除旧行，可刷新恢复，不启动额外工作。任务接受有效和请求方采用有效，仍不能证明独立验收者验证了准确版本。纠偏路径对此明确留缺口。后续结果失联或采用撤回不会抹去当前仍有效的纠偏证据；原地重新核验可恢复准确版本的采用，核心来源失效则仍清除路径。图中均为隔离 production SQLite/HTTP/CLI 与打包前端的合成数据，不作为真实模型纠偏或已安装 Native App 验收。
 
 ## Use the same bindings through MCP
 
