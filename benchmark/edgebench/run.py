@@ -55,7 +55,8 @@ def main(argv=None):
         if task.internet or task.game_mode or not proxy.hostname or not proxy.port:
             raise ValueError("Blind feedback requires a non-game isolated task and explicit API-only proxy")
         ipaddress.ip_address(proxy.hostname)  # No ambiguous DNS/network identity.
-        if (proxy.hostname, proxy.port) == (judge.hostname, judge.port):
+        judge_port = judge.port or (443 if judge.scheme == "https" else 80)
+        if (proxy.hostname, proxy.port) == (judge.hostname, judge_port):
             raise ValueError("Blind API and judge endpoints must be distinct")
         blind_endpoint = (proxy.hostname, proxy.port)
         paths = ", ".join(f"`{path}`" for path in task.submit_paths)

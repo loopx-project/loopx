@@ -181,3 +181,6 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
         "HTTPS_PROXY": "http://api-proxy:9090", "SFORGE_PATCH_DIR": "/task"}
     with pytest.raises(RuntimeError, match="admitted API-only endpoint"):
         backend.create_network_isolation(None, [judge], None)
+    alias = AllowedEndpoint(ip="172.17.0.1", port=9090, hostname="judge-alias")
+    with pytest.raises(RuntimeError, match="distinct from the judge"):
+        backend.create_network_isolation(None, [alias, api], None)

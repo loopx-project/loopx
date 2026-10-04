@@ -50,8 +50,10 @@ class RecordingDockerBackend(DockerBackend):
             # either IPv4 or IPv6 policy, even if a task learns its address.
             endpoints = [endpoint for endpoint in endpoints
                          if (endpoint.ip, endpoint.port) == self.blind_api_endpoint]
-            if not endpoints:
-                raise RuntimeError("Blind feedback requires the admitted API-only endpoint")
+            if len(endpoints) != 1:
+                raise RuntimeError(
+                    "Blind feedback requires one admitted API-only endpoint distinct from the judge"
+                )
         endpoints = [*endpoints, *[
             AllowedEndpoint(ip=ip, port=443, hostname="auth.openai.com")
             for ip in self.auth_ips
