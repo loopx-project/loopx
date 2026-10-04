@@ -8,6 +8,7 @@ import {
   todoApplyResultMatchesRequest,
   todoPreviewMatchesRequest,
   type AgentResponse,
+  type ChatProject,
   type CollaborationReadback,
   type LoopXModeSettings,
   type TodoApplyResult,
@@ -641,16 +642,42 @@ export async function recordProjectionExchange(options: {
   );
 }
 
+/** The App's conversation targets; each owns exactly one Core Chat channel. */
+export type ConversationContext =
+  | { kind: "manager" }
+  | { kind: "goal"; goalId: string }
+  | { kind: "project"; projectRef: string };
+
+// Goal ids are single path segments, so a key containing "/" never names a Goal.
+const PROJECT_CONVERSATION_KEY_PREFIX = "project/";
+
+export function conversationContextKey(context: ConversationContext): string {
+  if (context.kind === "manager") return "manager";
+  return context.kind === "goal" ? context.goalId : `${PROJECT_CONVERSATION_KEY_PREFIX}${context.projectRef}`;
+}
+
+export function conversationContextOfKey(key: string): ConversationContext {
+  if (key === "manager") return { kind: "manager" };
+  if (key.startsWith(PROJECT_CONVERSATION_KEY_PREFIX)) {
+    return { kind: "project", projectRef: key.slice(PROJECT_CONVERSATION_KEY_PREFIX.length) };
+  }
+  return { kind: "goal", goalId: key };
+}
+
+export function conversationChannelId(context: ConversationContext): string {
+  if (context.kind === "manager") return "manager";
+  return context.kind === "goal" ? `goal.${context.goalId}` : `project.${context.projectRef}`;
+}
+
 export async function createChatSession(
-  goalId: string,
+  context: ConversationContext,
   agentId?: string,
   mode: "resume_latest" | "new" = "resume_latest",
-  contextKind: "goal" | "manager" = "goal",
   signal?: AbortSignal,
 ) {
   return requestJson<{
     agent_id: string;
-    goal_id: string;
+    goal_id: string | null;
     ok: true;
     resumed: boolean;
     session_id: string;
@@ -660,7 +687,10 @@ export async function createChatSession(
     // An omitted ``agent_id`` means "no explicit executor pick": the channel
     // owner resolves its own default. Sending this client's own default would
     // silently re-point the steward channel away from its configured executor.
-    body: JSON.stringify({ goal_id: goalId, agent_id: agentId, mode, context_kind: contextKind }),
+    // A project Session carries only the host-issued reference, never a Goal.
+    body: JSON.stringify(context.kind === "project"
+      ? { context_kind: "project", project_ref: context.projectRef, agent_id: agentId, mode }
+      : { goal_id: context.kind === "goal" ? context.goalId : "", agent_id: agentId, mode, context_kind: context.kind }),
   });
 }
 
@@ -693,16 +723,10 @@ export type ChatSessionSummary = {
   manager_runtime?: ManagerRuntimeSessionReadback | null;
 };
 
-export type ChatProject = {project_ref: string; title: string; grant: "workspace_read"};
+export type { ChatProject };
 
 export async function fetchChatProjects(signal?: AbortSignal) {
   return requestJson<{ok: true; projects: ChatProject[]}>("/api/chat/projects", {signal});
-}
-
-export async function createProjectChatSession(projectRef: string, mode: "new" | "resume_latest" = "resume_latest") {
-  return requestJson<{ok: true; session_id: string; resumed: boolean; session: ChatSessionSummary}>("/api/chat/sessions", {
-    method: "POST", body: JSON.stringify({context_kind: "project", project_ref: projectRef, mode}),
-  });
 }
 
 /** ``chat_store`` Session modes; an omitted mode is a managed runtime Session. */

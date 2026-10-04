@@ -3,6 +3,7 @@ import { withTurnActivity, type TurnStep } from "../data/turn-steps";
 import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
 import { readConversationReturns } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
+import { useChatProjects } from "../data/use-chat-projects";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -41,7 +42,11 @@ import {
   applyGoalSubagentConfiguration,
   applyTypedAction,
   closeChatSession,
+  conversationChannelId,
+  conversationContextKey,
+  conversationContextOfKey,
   createChatSession,
+  type ConversationContext,
   updateLoopXMode,
   type LoopXModeSettings,
   fetchChatCapabilities,
@@ -1208,6 +1213,7 @@ function PersonalGoalHome({
   onGoalActivationStateChange,
   onGoalDeleted,
   onSelectGoal,
+  onSelectWorkspace,
   onReconcileStatus,
   onRefresh,
   onRetryGoalArchive,
@@ -1215,6 +1221,7 @@ function PersonalGoalHome({
   progress,
   rows,
   selectedGoalId,
+  selectedWorkspaceRef,
   statusSourceControl,
   theme,
   toggleTheme,
@@ -1226,6 +1233,8 @@ function PersonalGoalHome({
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
   onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
+  onSelectWorkspace: (projectRef: string | null) => void;
+  selectedWorkspaceRef: string | null;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   onRefresh: (scope?: WorkspaceReadScope) => void | Promise<void>;
   onRetryGoalArchive: () => void | Promise<void>;
@@ -1287,14 +1296,19 @@ function PersonalGoalHome({
       },
     };
   }, [payload, rows, progress, goalSubagentConfigurationEnabled, t]);
-  const selectedGoal = model.goals.find((goal) => goal.goalId === selectedGoalId) ?? null;
+  // A workspace conversation has no Goal, so no Goal projection may apply to it.
+  const selectedGoal = selectedWorkspaceRef ? null : model.goals.find((goal) => goal.goalId === selectedGoalId) ?? null;
+  const workspaceProjects = useChatProjects(readOnly);
+  const conversationContext: ConversationContext = selectedWorkspaceRef
+    ? { kind: "project", projectRef: selectedWorkspaceRef }
+    : selectedGoal ? { kind: "goal", goalId: selectedGoal.goalId } : { kind: "manager" };
   const selectedPayload = progress?.snapshots[selectedGoalId] ?? payload;
   const [periodicReport, setPeriodicReport] = useState<PeriodicReportProjection | null>(null);
   const [periodicReportError, setPeriodicReportError] = useState<string | null>(null);
   const [periodicReportLoading, setPeriodicReportLoading] = useState(false);
   const sessionDiscoveryKey = model.goals.some((goal) => goal.activationState === "active" && goal.loadState === "loading")
     ? "loading" : model.goals.map((goal) => `${goal.goalId}:${goal.agentId}`).join("|");
-  const contextId = selectedGoal?.goalId ?? "manager";
+  const contextId = conversationContextKey(conversationContext);
   const managerSummary = model.goals.some((goal) => goal.activationState === "active" && goal.loadState)
     ? "Goal 状态正在逐个更新，当前统计尚不完整。"
     : (model.systemHealth ? !model.systemHealth.ok : !payload.ok)
@@ -1325,9 +1339,10 @@ function PersonalGoalHome({
         label: "Codex",
         statusLabel: "正在检测",
       }];
+  // The status projection answers about Goals; a workspace conversation needs an executor.
   const agentOptions = [
     ...discoveredAgents,
-    {
+    ...(conversationContext.kind === "project" ? [] : [{
       agentId: "status-only",
       available: true,
       capability: t("header.statusOnlyDescription"),
@@ -1339,7 +1354,7 @@ function PersonalGoalHome({
       streaming: false,
       toolCalls: false,
       trustScope: "read_only",
-    },
+    }]),
   ];
   const defaultAgentId = discoveredAgents.find((agent) => agent.label === "Codex" && agent.available)?.agentId
     ?? discoveredAgents.find((agent) => agent.available)?.agentId
@@ -1403,9 +1418,9 @@ function PersonalGoalHome({
   const managerQuickPrompts = ["我现在该做什么？", "哪些 Goal 在等我？", "Agent 在做什么？"];
   const contextMessages = messagesByContext[contextId] ?? [];
   const conversationHistory = useConversationHistory({
-    agentId: selectedGoal ? selectedAgent.agentId : undefined,
+    agentId: conversationContext.kind === "manager" ? undefined : selectedAgent.agentId,
     currentAgentId: selectedAgent.agentId,
-    channelId: selectedGoal ? `goal.${selectedGoal.goalId}` : "manager",
+    channelId: conversationChannelId(conversationContext),
     goalId: selectedGoal?.goalId,
     enabled: !readOnly && selectedAgent.available,
   });
@@ -1643,7 +1658,7 @@ function PersonalGoalHome({
     const readHistory = conversationHistory.history;
     const targetContextId = contextId;
     const sessionKey = `${targetContextId}:${selectedAgent.agentId}`;
-    const contextKind = selectedGoal ? "goal" : "manager";
+    const targetContext = conversationContextOfKey(targetContextId);
     let cancelled = false;
     let recoveryController: AbortController | null = null;
     let retireRecoveryObservation: (() => void) | undefined;
@@ -1673,20 +1688,13 @@ function PersonalGoalHome({
           });
           return;
         }
-        const sessionGoalId = contextKind === "manager" ? "" : selectedGoal?.goalId ?? "";
-        if (contextKind === "goal" && !sessionGoalId) return;
         // The steward channel owns its executor default; only a pick the owner
         // actually made for this context is sent.
         const sessionEndpoint =
-          contextKind === "manager" ? selectedAgents[targetContextId] : selectedAgent.agentId;
-        const created = await createChatSession(
-          sessionGoalId,
-          sessionEndpoint,
-          "resume_latest",
-          contextKind,
-        );
+          targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedAgent.agentId;
+        const created = await createChatSession(targetContext, sessionEndpoint, "resume_latest");
         if (cancelled) return;
-        if (contextKind === "manager" && created.session.manager_runtime) {
+        if (targetContext.kind === "manager" && created.session.manager_runtime) {
           setManagerRuntime(created.session.manager_runtime);
         }
         recordSessionAdmission(created.session);
@@ -2174,7 +2182,7 @@ function PersonalGoalHome({
     const key = `${goalId}:${agentId}`;
     const existing = sessionIds.current.get(key);
     if (existing) return existing;
-    const session = await createChatSession(goalId, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", "goal", signal);
+    const session = await createChatSession({ kind: "goal", goalId }, agentId, newSessionRequired.current.has(key) ? "new" : "resume_latest", signal);
     recordSessionAdmission(session.session);
     sessionIds.current.set(key, session.session_id);
     newSessionRequired.current.delete(key);
@@ -2182,17 +2190,16 @@ function PersonalGoalHome({
     return session.session_id;
   }
 
-  async function sendManagerQuestion(rawQuestion: string, route?: { agentId?: string; goalId?: string | null; attachments?: WorkspaceImageAttachment[]; loopxMode?: {operation: "start" | "resume"; settings?: LoopXModeSettings} }) {
+  async function sendManagerQuestion(rawQuestion: string, route?: { agentId?: string; contextId?: string; attachments?: WorkspaceImageAttachment[]; loopxMode?: {operation: "start" | "resume"; settings?: LoopXModeSettings} }) {
     const question = rawQuestion.trim();
     if (!question) {
       return;
     }
-    const targetContextId = route && "goalId" in route
-      ? route.goalId ?? "manager"
-      : contextId;
-    const targetGoal = targetContextId === "manager"
-      ? null
-      : model.goals.find((goal) => goal.goalId === targetContextId) ?? null;
+    const targetContextId = route?.contextId ?? contextId;
+    const targetContext = conversationContextOfKey(targetContextId);
+    const targetGoal = targetContext.kind === "goal"
+      ? model.goals.find((goal) => goal.goalId === targetContext.goalId) ?? null
+      : null;
     const selectedRoute = route?.agentId
       ? selectAvailableChatAgent(agentOptions, route.agentId, defaultAgentId)
       : selectedAgent;
@@ -2219,7 +2226,8 @@ function PersonalGoalHome({
     setManagerInput("");
     setSendingContextId(targetContextId);
 
-    if (selectedRoute.agentId === "status-only" || (!targetGoal && targetContextId !== "manager")) {
+    if ((selectedRoute.agentId === "status-only" && targetContext.kind !== "project")
+      || (targetContext.kind === "goal" && !targetGoal)) {
       const answer = personalManagerSnapshot(targetQuestionModel);
       const usesStatusOnlyRoute = selectedRoute.agentId === "status-only";
       const answerMessageId = appendManagerAssistantMessage(targetContextId, {
@@ -2261,18 +2269,14 @@ function PersonalGoalHome({
     let handedOff = false;
     let streamedText = "";
     try {
-      let sessionId = targetContextId === "manager" ? sessionIds.current.get(sessionKey) : await prepareGoalConversation(targetContextId, selectedRoute.agentId, preparationController.signal);
+      let sessionId = targetContext.kind === "goal"
+        ? await prepareGoalConversation(targetContext.goalId, selectedRoute.agentId, preparationController.signal)
+        : sessionIds.current.get(sessionKey);
       if (!sessionId) {
         const mode = newSessionRequired.current.has(sessionKey) ? "new" : "resume_latest";
         const sessionEndpoint =
-          targetContextId === "manager" ? selectedAgents[targetContextId] : selectedRoute.agentId;
-        const session = await createChatSession(
-          targetContextId === "manager" ? "" : targetGoal!.goalId,
-          sessionEndpoint,
-          mode,
-          targetContextId === "manager" ? "manager" : "goal",
-          preparationController.signal,
-        );
+          targetContext.kind === "manager" ? selectedAgents[targetContextId] : selectedRoute.agentId;
+        const session = await createChatSession(targetContext, sessionEndpoint, mode, preparationController.signal);
         if (targetContextId === "manager" && session.session.manager_runtime) {
           setManagerRuntime(session.session.manager_runtime);
         }
@@ -2373,7 +2377,7 @@ function PersonalGoalHome({
           lines: ["请进入要修改的 Goal，预览并确认具体变更。"],
         });
       }
-      const decision = targetContextId !== "manager" && response.protected_action
+      const decision = targetContext.kind === "goal" && response.protected_action
         ? semanticProtectedActionPreview(targetContextId, question, response.protected_action) ?? undefined
         : undefined;
       const candidates = targetGoal
@@ -2636,7 +2640,7 @@ function PersonalGoalHome({
         };
 
   const workspaceTimeline: WorkspaceTimelineItem[] = [
-    ...(!selectedGoal && runtimeBindings.manager?.status === "resume_failed" ? [{
+    ...(conversationContext.kind === "manager" && runtimeBindings.manager?.status === "resume_failed" ? [{
       id: "run:manager:resume-failed",
       kind: "run" as const,
       run: {
@@ -2812,6 +2816,7 @@ function PersonalGoalHome({
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
       <PersonalWorkspacePage
         typedActionsRevision={typedActionsRevision}
+        workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace }}
         agents={agentOptions.map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,
@@ -3057,9 +3062,9 @@ function PersonalGoalHome({
           onSelectAgent: chooseAgent,
           onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
           onSelectView,
-          onSendMessage: async (message, agentId, goalId, attachments) => sendManagerQuestion(message, { agentId, goalId, attachments }),
+          onSendMessage: async (message, agentId, targetContextId, attachments) => sendManagerQuestion(message, { agentId, contextId: targetContextId, attachments }),
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
-          onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, goalId, loopxMode: {operation, settings}}); },
+          onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: goalId, loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,
         }}
         goalArchiveLoadState={goalArchiveLoadState}
@@ -3529,9 +3534,14 @@ export function DashboardPage() {
       search: (current) => ({
         ...current,
         goalId,
+        workspace: undefined,
         view: view === "chat" ? "conversation" : view,
       }),
     });
+  }
+
+  function selectWorkspace(projectRef: string | null) {
+    void navigate({ search: (current) => ({ ...current, goalId: "", workspace: projectRef ?? undefined, view: "conversation" }) });
   }
 
   if (statusRequestActive) {
@@ -3570,6 +3580,7 @@ export function DashboardPage() {
         ) } : current);
       }}
       onSelectGoal={selectGoal}
+      onSelectWorkspace={selectWorkspace}
       onReconcileStatus={(options) => loadFromUrl(
         source.kind === "url" ? source.label : (statusUrl || defaultGlobalStatusUrl),
         { background: true, invalidateGoalIds: options?.invalidateGoalIds, readScope: "missing" },
@@ -3580,6 +3591,7 @@ export function DashboardPage() {
       progress={progress}
       rows={goalRows}
       selectedGoalId={search.goalId}
+      selectedWorkspaceRef={search.workspace ?? null}
       statusSourceControl={statusSourceControl}
       theme={theme}
       toggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
