@@ -96,11 +96,20 @@ owner submitting a directory entry.
   scheduling remains host-owned. Checked October 4, 2026.
 - **Adaptive-Agent-Orchestration-Protocol** (YuemingHub) —
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41),
-  merged, registers LoopX as an optional execution-continuity provider.
-  [Issue #42's pilot report](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5249833699)
-  reports a bounded Linux CLI recovery/gate test; [later readback](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
-  does not establish ongoing adoption. **Status: protocol integration and
-  non-production pilot**, not default production adoption.
+  merged August 11, 2026, registers LoopX as an optional execution-continuity
+  provider. The [pinned pilot report](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/docs/LOOPX_PILOT_EVIDENCE.md)
+  reports Linux direct-CLI/custom-runner tests against LoopX v0.4.3: fresh-process
+  recovery, validation and human gates, bounded handoff, accounting and rollback.
+  The linked [consumer Actions run](https://github.com/YuemingHub/mingos-foundation/actions/runs/31465474613)
+  succeeded at the recorded consumer head; this does not independently reproduce
+  every reported assertion. The [August 14 follow-up](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
+  explicitly leaves LoopX unadopted, rather than promoting the pilot to ongoing
+  adoption. AAOP is now archived; its [retirement record](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/RETIREMENT.md),
+  effective September 25, 2026, retains frozen research and releases without
+  ongoing compatibility or support promises. **Status: historical optional
+  integration and bounded pilot in a retired project**. Current LoopX compatibility,
+  Windows/WSL and production host/session restart behavior remain unqualified;
+  AAOP's retirement is not a demonstrated failure of LoopX. Checked October 5, 2026.
 
 ## 2. Mechanism Borrowing
 
@@ -288,8 +297,9 @@ accepted design documents are distinct from depending on the LoopX runtime.
   GitHub-Michelin and the michaelx1993/foolzzz fork family. Current issue/PR
   states, later comments and pinned source files were checked; this update
   adds no confirmed runtime adopter and does not revalidate the rest of the table.
-- Scoped update: **2026-10-04**, rechecking OpenViking, NoKV, Hufu and
+- Scoped update: **2026-10-04–05**, rechecking OpenViking, NoKV, Hufu and
   benjamin-plugins against current public PR/issue states and pinned source files.
-  This distinguishes proposal packaging, historical tooling, author-reported
-  pilots, plugin registration and current acceptance limits. No live integration
-  was independently reproduced and other entries were not revalidated.
+  AAOP's historical pilot and current retirement were reconciled on October 5.
+  This distinguishes proposal packaging, historical tooling and pilots, plugin
+  registration and current acceptance limits. No live integration was
+  independently reproduced and other entries were not revalidated.

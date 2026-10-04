@@ -80,11 +80,19 @@
   执行和当前版本兼容未验证，调度仍归宿主。核对日期：2026-10-04。
 - **Adaptive-Agent-Orchestration-Protocol**（YuemingHub）——已合并的
   [PR #41](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/pull/41)
-  将 LoopX 注册为可选执行连续性 Provider。
-  [issue #42 的试点报告](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5249833699)
-  记录了限定范围的 Linux CLI 恢复与门禁测试；
-  [后续回读](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
-  未证明持续采用。**状态：协议集成与非生产试点**，不代表默认生产采用。
+  于 2026-08-11 将 LoopX 注册为可选执行连续性 Provider。
+  [固定版本的试点报告](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/docs/LOOPX_PILOT_EVIDENCE.md)
+  记录了针对 LoopX v0.4.3 的 Linux direct-CLI/custom-runner 测试：新进程恢复、
+  验证与人工门禁、有界交接、记账及回滚。
+  [消费者 Actions](https://github.com/YuemingHub/mingos-foundation/actions/runs/31465474613)
+  在报告所记的消费者 head 上成功，但不构成对全部报告断言的独立复现。
+  [8 月 14 日后续回读](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/issues/42#issuecomment-5287847666)
+  明确保留 LoopX 未采用，未将试点提升为持续采用。AAOP 仓库现已归档；
+  [退役记录](https://github.com/YuemingHub/Adaptive-Agent-Orchestration-Protocol/blob/baa3f7805cc391ada34feb50707a2c1d3c151b54/RETIREMENT.md)
+  自 2026-09-25 生效，保留冻结的研究和历史发布，不承诺持续兼容或支持。
+  **状态：已退役项目中的历史可选集成与有界试点**。当前 LoopX 兼容、Windows/WSL
+  和生产宿主/会话重启仍未资格化；AAOP 退役不构成 LoopX 失败的实证。
+  核对日期：2026-10-05。
 
 ## 2. 机制借鉴
 
@@ -248,6 +256,7 @@
 - 局部更新：**2026-10-03**，覆盖 MilkSU、ai-skills、General Loop、GitHub-Michelin
   及 michaelx1993/foolzzz fork 家族。核对了当前 Issue/PR 状态、后续评论和固定版本
   的源文件；本轮未新增可确认的运行时采用者，也不代表其余条目重新验真。
-- 局部更新：**2026-10-04**，按当前公开 PR/Issue 状态和固定版本源文件复核
-  OpenViking、NoKV、Hufu 和 benjamin-plugins，区分提案打包配置、历史工具、作者
-  报告的试点、插件注册和当前验收限制。未独立复现真实集成，其余条目未重新验真。
+- 局部更新：**2026-10-04–05**，按当前公开 PR/Issue 状态和固定版本源文件复核
+  OpenViking、NoKV、Hufu 和 benjamin-plugins；10 月 5 日对齐 AAOP 的历史试点
+  与当前退役状态。区分提案打包配置、历史工具和试点、插件注册及当前验收限制。
+  未独立复现真实集成，其余条目未重新验真。
