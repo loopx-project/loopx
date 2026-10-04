@@ -3,8 +3,11 @@ import { todoRequestContent } from "../../../../../../loopx/control_plane/presen
 
 /** A display of existing Todo facts, never a gate or dependency evaluator. */
 export type AttentionDetails = {
-  interaction: "decision" | "unknown";
+  /** Mirrors the User Todo task_class; anything else stays "unknown". */
+  interaction: "decision" | "user_action" | "unknown";
   lifecycle: "open" | "closed" | "deferred" | "superseded" | "unknown" | "unavailable";
+  /** False when the row was projected without a stable todo_id to write against. */
+  todoIdentified: boolean;
   requestText?: string | null;
   reason: string | null;
   evidence: string | null;
@@ -25,11 +28,13 @@ export function attentionDetails(todo: Record<string, unknown>): AttentionDetail
   const supersededBy = text(todo.superseded_by);
   // Do not infer a request for authorization from wording, blocking, or scope kind.
   return {
-    interaction: todo.task_class === "user_gate" ? "decision" : "unknown",
+    interaction: todo.task_class === "user_gate" ? "decision"
+      : todo.task_class === "user_action" ? "user_action" : "unknown",
     lifecycle: supersededBy ? "superseded"
       : todo.status === "deferred" ? "deferred"
         : todo.done === true || ["done", "completed", "closed", "archived"].includes(String(todo.status)) ? "closed"
           : todo.status === "open" || todo.status === "blocked" ? "open" : "unknown",
+    todoIdentified: text(todo.todo_id) !== null,
     requestText: text(todo.text),
     reason: text(todo.note),
     evidence: text(todo.evidence),
@@ -83,4 +88,20 @@ export function canReviewAttention(item: WorkspaceAttention): boolean {
 export function canDecideAttention(item: WorkspaceAttention): boolean {
   return canReviewAttention(item) && item.details?.interaction === "decision"
     && item.decisionSource !== "run_operator_gate";
+}
+
+/** Complete, defer, or cancel the User action Todo itself; never an approval.
+ * Requires the stable todo_id the typed Todo owner writes against. */
+export function canHandleUserAction(item: WorkspaceAttention): boolean {
+  return canReviewAttention(item) && item.details?.interaction === "user_action"
+    && item.details.todoIdentified && item.decisionSource !== "run_operator_gate";
+}
+
+/** Tomorrow's local 09:00 as a timezone-aware resume_at condition. */
+export function nextMorningResumeWhen(now: Date): string {
+  const target = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
+  const pad = (value: number) => String(Math.abs(value)).padStart(2, "0");
+  const offset = -target.getTimezoneOffset();
+  const zone = `${offset >= 0 ? "+" : "-"}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}`;
+  return `resume_at:${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T09:00:00${zone}`;
 }
