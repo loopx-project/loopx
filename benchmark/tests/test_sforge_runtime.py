@@ -2,6 +2,7 @@ import subprocess
 import tarfile
 import io
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -106,6 +107,56 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     monkeypatch.delenv("CODEX_AUTH_JSON_PATH", raising=False)
     with pytest.raises(ValueError, match="credential"):
         SForgeWorker(config, profile="single", cwd="/task")
+
+
+@pytest.mark.parametrize("worker,seconds", [
+    ("official", 600), ("single", 600), ("native-goal", 600),
+    ("heartbeat-resume", 0), ("heartbeat-explore", -1),
+])
+def test_turn_budget_rejects_inapplicable_or_invalid_requests_before_trial_creation(tmp_path, worker, seconds):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import main
+    with pytest.raises(SystemExit) as error:
+        main(["--task", "fixture", "--tasks-dir", str(tmp_path),
+              "--log-dir", str(tmp_path / "logs"), "--run-id", "attempt",
+              "--worker", worker, "--model", "fixture", "--effort", "xhigh",
+              "--judge-url", "http://judge:8080", "--turn-timeout", str(seconds)])
+    assert error.value.code == 2
+    assert not (tmp_path / "logs").exists()
+
+
+@pytest.mark.parametrize("requested,effective", [(None, 1640), (600, 600), (2000, 1640)])
+def test_cli_turn_budget_reaches_worker_and_receipt_without_extending_trial(tmp_path, monkeypatch, requested, effective):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench import run
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
+    monkeypatch.setattr(run, "source_pins", lambda *args: ("product", "runner"))
+    (tmp_path / "fixture.json").write_text("{}")
+    task = SimpleNamespace(cwd="/task", work_image_key="work", judge_image_key="judge", internet=False)
+    monkeypatch.setattr(run, "load_benchmark", lambda *args: None)
+    monkeypatch.setattr(run, "make_task_spec", lambda *args: task)
+    monkeypatch.setattr(run, "RecordingDockerBackend",
+                        lambda **kwargs: SimpleNamespace(image_exists=lambda image: True))
+    def execute(**kwargs):
+        assert kwargs["agent"].turn_timeout == effective
+        assert kwargs["agent"].timeout_seconds == kwargs["timeout"] == 1800
+        assert kwargs["eval_interval"] == 300
+        return SimpleNamespace(timed_out=False, runtime_seconds=0, best_score=0, total_rounds=0)
+    monkeypatch.setattr(run, "run_agent", execute)
+    argv = ["--task", "fixture", "--tasks-dir", str(tmp_path),
+            "--log-dir", str(tmp_path / "logs"), "--run-id", "attempt",
+            "--worker", "heartbeat-resume", "--model", "fixture", "--effort", "xhigh",
+            "--judge-url", "http://judge:8080", "--timeout", "1800"]
+    if requested is not None:
+        argv += ["--turn-timeout", str(requested)]
+    assert run.main(argv) == 1  # No real solver was launched by this wiring test.
+    receipt = json.loads((tmp_path / "logs/runs/attempt/fixture/runtime-receipt.json").read_text())
+    assert receipt["turn_timeout_seconds"] == effective
+    assert receipt["timeout_seconds"] == 1800
 
 
 def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path, monkeypatch):
