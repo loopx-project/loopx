@@ -52,10 +52,30 @@ function originalHead() {
 test("terminal continuation observations preserve work while changed requirements invalidate it", () => {
   const work = todo("todo_first");
   const completed = {...work, status: "done", done: true, no_followup: true,
-    completion_continuation: "no_followup", note: "Bounded task completed"};
+    completion_continuation: "no_followup", completion_receipt_id: `tcw_${"a".repeat(64)}`,
+    note: "Bounded task completed"};
   assert.equal(goalAcceptanceTodoDigest(completed), goalAcceptanceTodoDigest(work));
   assert.notEqual(goalAcceptanceTodoDigest({...completed, text: "Deliver different work"}), goalAcceptanceTodoDigest(work));
   assert.notEqual(goalAcceptanceTodoDigest({...completed, completion_validation_required: true}), goalAcceptanceTodoDigest(work));
+});
+test("owner bindings confirmed with a completion checkpoint retain their declared work", () => {
+  const receipt = `tcw_${"a".repeat(64)}`;
+  const work = todo("todo_first", {status: "done", done: true, completion_receipt_id: receipt});
+  const contract = normalizeGoalAcceptanceDocument({...document(),
+    bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]});
+  // This is the persisted pre-fix work shape, independently of the new digest.
+  const legacyDigest = canonicalAuthoritySha256({todo_id: "todo_first", role: "agent",
+    text: "Implement todo_first", task_class: "advancement_task", action_kind: "implement",
+    completion_receipt_id: receipt});
+  const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+    digest: canonicalAuthoritySha256(contract), document: contract, verification: null,
+    bindings: [{todo_id: "todo_first", todo_semantic_digest: legacyDigest,
+      revision: 1, criterion_ids: ["prerequisite"], confirmed_by: "owner"}]};
+  const guard = (target: JsonObject) => acceptanceWorkGuard(
+    authorityProjectionFixture(goal, [target], [], "native", {goal_acceptance: state}), goal, "todo_first");
+  assert.equal(guard(work)?.state, "ready");
+  for (const patch of [{text: "Different work"}, {required_capabilities: ["shell"]},
+    {required_write_scopes: ["src"]}]) assert.equal(guard({...work, ...patch})?.state, "stale");
 });
 test("validator revisions and successor links preserve an existing acceptance binding", () => {
   const original = todo("todo_first", {completion_validation_required: true,

@@ -188,7 +188,7 @@ const NON_WORK_FIELDS = new Set([
   "schema_version", "source_section", "index", "title", "priority", "status", "done", "archive_state",
   "claimed_by", "created_by", "last_actor_agent_id", "updated_at", "completed_at", "completion_turn_key",
   "completion_validation_sha256", "completion_recovery", "completion_continuation", "no_followup", "decision_outcome",
-  "completion_result",
+  "completion_result", "completion_receipt_id",
   "decision_scope_outcomes", "note", "evidence", "reason", "handoff_note", "resume_ready",
   "resume_monitor_generation", "last_checked_at", "result_hash", "consecutive_no_change",
   "material_change", "material_change_generation", "monitor_effect_id",
@@ -196,13 +196,21 @@ const NON_WORK_FIELDS = new Set([
 export function goalAcceptanceTodoDigest(todo: JsonObject): string {
   return canonicalAuthoritySha256(Object.fromEntries(Object.entries(todo).filter(([key]) => !NON_WORK_FIELDS.has(key))));
 }
+function acceptanceDigestMatches(todo: JsonObject, boundDigest: string): boolean {
+  if (goalAcceptanceTodoDigest(todo) === boundDigest) return true;
+  // Before completion checkpoints were classified as observations, an owner
+  // could confirm work that already contained one. Preserve that exact binding.
+  return Object.hasOwn(todo, "completion_receipt_id") &&
+    canonicalAuthoritySha256(Object.fromEntries(Object.entries(todo).filter(([key]) =>
+      !NON_WORK_FIELDS.has(key) || key === "completion_receipt_id"))) === boundDigest;
+}
 /** Existing owner bindings persist the v0 digest, including fields later used
  * for validator revision bookkeeping and successor links. Keep that digest
  * format so previously ready bindings stay ready. When it differs, check only
  * historical states that the current append-only metadata can reconstruct;
  * changing the Todo's work declaration still requires owner confirmation. */
 function acceptanceBindingMatches(todo: JsonObject, boundDigest: string): boolean {
-  if (goalAcceptanceTodoDigest(todo) === boundDigest) return true;
+  if (acceptanceDigestMatches(todo, boundDigest)) return true;
 
   // Adding a wait condition changes when existing work can resume, not which
   // owner-confirmed Goal criterion it serves. Only the absent -> present case
@@ -244,7 +252,7 @@ function acceptanceBindingMatches(todo: JsonObject, boundDigest: string): boolea
       successorVariants.push(withoutSuccessors);
     }
     for (const successorVariant of successorVariants) {
-      if (successorVariant !== todo && goalAcceptanceTodoDigest(successorVariant) === boundDigest) return true;
+      if (successorVariant !== todo && acceptanceDigestMatches(successorVariant, boundDigest)) return true;
       for (const priorRevision of revisionPrefixes) {
         const previous: JsonObject = {...successorVariant, completion_validation_revision: priorRevision,
           completion_validation_revision_history: history.slice(0, priorRevision)};
@@ -253,14 +261,14 @@ function acceptanceBindingMatches(todo: JsonObject, boundDigest: string): boolea
           delete previous.completion_validation_revision;
           delete previous.completion_validation_revision_history;
           Object.assign(previous, history[0].previous_validation_authority);
-          if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+          if (acceptanceDigestMatches(previous, boundDigest)) return true;
           continue;
         }
-        if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+        if (acceptanceDigestMatches(previous, boundDigest)) return true;
         if (priorRevision === 0) {
           delete previous.completion_validation_revision;
           delete previous.completion_validation_revision_history;
-          if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+          if (acceptanceDigestMatches(previous, boundDigest)) return true;
         }
       }
     }
