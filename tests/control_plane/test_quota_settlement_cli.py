@@ -6042,9 +6042,29 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
     assert resumed_turn["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
 
 
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_read_only_settlement_omits_non_causal_delivery_workspace(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    # The two legal completion phases may commit within one clock tick. Keep
+    # the real CLI, authority and hook journal; freeze only their commit clock.
+    run = subprocess.run
+
+    def frozen_completion_clock(argv, *args, **kwargs):
+        if isinstance(argv, list) and argv[1:3] == ["-m", "loopx.cli"]:
+            program = (
+                "import loopx.todos; "
+                "import loopx.control_plane.todos.provider_terminal_lifecycle as native; "
+                "clock=lambda:'2026-09-02T12:00:00+00:00'; "
+                "loopx.todos.now_local=clock; native.now_local=clock; "
+                "from loopx.cli import main; raise SystemExit(main())"
+            )
+            argv = [argv[0], "-c", program, *argv[3:]]
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", frozen_completion_clock)
     project, runtime, registry_path = _write_fixture(tmp_path)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["control_plane"] = {
@@ -6067,6 +6087,26 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         ),
         encoding="utf-8",
     )
+    if provider != "legacy":
+        from canonical_authority_fixture import (
+            initialize_canonical_authority,
+            isolate_sqlite_runtime,
+        )
+        from loopx.control_plane.coordination.runtime_shadow import (
+            build_todo_runtime_shadow_projection,
+        )
+
+        if provider == "sqlite":
+            isolate_sqlite_runtime(tmp_path, monkeypatch)
+        todos = parse_active_state_todos(state_path.read_text(), item_limit=None)
+        initialize_canonical_authority(
+            runtime, GOAL_ID,
+            build_todo_runtime_shadow_projection(
+                goal_id=GOAL_ID, todos=todos["agent_todos"]["items"],
+                handoff_mode="soft_claim",
+            ),
+            state_path=state_path, provider=provider,
+        )
     binding = (
         "--agent-id",
         AGENT_ID,
@@ -6232,6 +6272,8 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     assert complete["changed"] is True
     assert complete["completion_continuation"] == "no_followup"
     assert complete["completion_recovery"] == "same_turn_terminal_closeout"
+    assert ordinary["updated_at"] == complete["updated_at"]
+    assert ordinary["completion_receipt_id"] != complete["completion_receipt_id"]
     assert complete["post_writeback_hooks"]["intent_count"] == 1
     trigger_intent = complete["post_writeback_hooks"]["intents"][0]
     assert trigger_intent["intent_kind"] == "periodic_report.trigger_evaluation"
@@ -6247,6 +6289,25 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         "terminal_closeout",
     ]
     assert "no_followup=true" in state_path.read_text(encoding="utf-8")
+
+    # Model primary commit surviving a crash before the optional checkpoint.
+    # Only this disposable fixture's sidecar is removed; the Todo, original
+    # completion receipt, Turn journal and single quota debit remain intact.
+    sidecars = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
+    terminal_sidecars = [
+        path for path in sidecars.glob("*.json")
+        if json.loads(path.read_text())["source_receipt_id"]
+        == trigger_intent["source_receipt_id"]
+    ]
+    assert len(terminal_sidecars) == 1
+    terminal_sidecars[0].unlink()
+    recovered_rc, recovered = _run_cli(registry_path, runtime, *terminal_args)
+    assert recovered_rc == 0, recovered
+    assert recovered["changed"] is False
+    assert recovered["completion_receipt_id"] == complete["completion_receipt_id"]
+    assert recovered["post_writeback_hooks"]["invoked_count"] == 1
+    assert recovered["post_writeback_hooks"]["intents"] == [trigger_intent]
+    assert _spend_run_count(runtime) == 1
 
     event_log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
     completion_events = [
@@ -6276,6 +6337,7 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
     assert complete_replay_rc == 0, complete_replay
     assert complete_replay["idempotent_replay"] is True
     assert complete_replay["changed"] is False
+    assert complete_replay["completion_receipt_id"] == complete["completion_receipt_id"]
     assert complete_replay["post_writeback_hooks"]["invoked_count"] == 0
     assert complete_replay["post_writeback_hooks"]["replayed_hooks"] == [
         "periodic_report.runtime_trigger"
