@@ -38,7 +38,7 @@ REASONING_EFFORT="${REASONING_EFFORT:-max}"
 CONCURRENCY="${CONCURRENCY:-4}"
 AGENT_TIMEOUT_SEC="${AGENT_TIMEOUT_SEC:-5400}"
 LOOPX_SCHEDULER_TIMEOUT_SEC="${LOOPX_SCHEDULER_TIMEOUT_SEC:-5080}"
-LOOPX_CODEX_TURN_TIMEOUT_SEC="${LOOPX_CODEX_TURN_TIMEOUT_SEC:-4700}"
+LOOPX_CODEX_TURN_TIMEOUT_SEC="${LOOPX_CODEX_TURN_TIMEOUT_SEC:-}"
 LHTB_MAX_RETRIES="${LHTB_MAX_RETRIES:-2}"
 RUNNER_RESTARTS="${RUNNER_RESTARTS:-2}"
 LHTB_MODELONLY_NETWORK="${LHTB_MODELONLY_NETWORK:-lhtb-modelonly}"
@@ -121,6 +121,10 @@ job_name="lhtb-${LOOPX_EXECUTION_MODE}-${LOOPX_TASK_ENTRY}-${LOOPX_ITERATION_CON
 generated_config="$CODE_DIR/.generated/${job_name}.yaml"
 jobs_dir="$CODE_DIR/runs"
 
+turn_timeout_args=()
+if [[ -n "$LOOPX_CODEX_TURN_TIMEOUT_SEC" ]]; then
+  turn_timeout_args=(--turn-timeout "$LOOPX_CODEX_TURN_TIMEOUT_SEC")
+fi
 "$VENV/bin/python" "$CODE_DIR/scripts/render_config.py" \
   --template "$CODE_DIR/configs/heartbeat-generic-cli.yaml" \
   --output "$generated_config" \
@@ -135,7 +139,7 @@ jobs_dir="$CODE_DIR/runs"
   --planning-timeout "$LOOPX_PLANNING_TIMEOUT_SEC" \
   --iteration-context "$LOOPX_ITERATION_CONTEXT" \
   --validation-command-json "$LOOPX_VALIDATION_COMMAND_JSON" \
-  --turn-timeout "$LOOPX_CODEX_TURN_TIMEOUT_SEC" \
+  "${turn_timeout_args[@]}" \
   --scheduler-timeout "$LOOPX_SCHEDULER_TIMEOUT_SEC" \
   "${task_args[@]}"
 

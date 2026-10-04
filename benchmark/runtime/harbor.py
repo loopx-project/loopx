@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -53,7 +52,7 @@ class BenchmarkCodex(CodexOffline):
         iteration_context="fresh",
         codex_sandbox="danger-full-access",
         validation_command=None,
-        turn_timeout_sec=4700,
+        turn_timeout_sec=None,
         scheduler_timeout_sec=5080,
         replan_after_todos=3,
         task_entry="seeded-todo",
@@ -66,7 +65,7 @@ class BenchmarkCodex(CodexOffline):
             execution_mode,
             iteration_context,
             codex_sandbox,
-            float(turn_timeout_sec),
+            float(scheduler_timeout_sec) - 160 if turn_timeout_sec is None else float(turn_timeout_sec),
             validation_command if validation_command is not None else (),
             task_entry,
         )
@@ -90,40 +89,34 @@ class BenchmarkCodex(CodexOffline):
         return "benchmark-codex"
 
     async def _stage_source(self, environment: BaseEnvironment, source: Path) -> str:
-        if Path(__file__).resolve() != source / "benchmark/runtime/harbor.py":
-            raise RuntimeError("Harbor must import the adapter from LOOPX_SRC_DIR")
-        dirty = subprocess.run(
-            ["git", "-C", str(source), "diff", "HEAD", "--quiet"],
-            check=False,
+        from .source import archive_source, source_pins
+
+        runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(source))).resolve()
+        if Path(__file__).resolve() != runner / "benchmark/runtime/harbor.py":
+            raise RuntimeError("Import the adapter from the pinned runner checkout")
+        head, runner_head = source_pins(
+            source, runner, os.environ.get("LOOPX_EXPECTED_COMMIT"),
+            os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"),
         )
-        if dirty.returncode:
-            raise RuntimeError("Commit tracked source changes before staging a trial")
-        head = subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        expected = os.environ.get("LOOPX_EXPECTED_COMMIT", head)
-        if head != expected:
-            raise RuntimeError("LoopX source does not match LOOPX_EXPECTED_COMMIT")
-        # Never upload the checkout, local experiment outputs or trajectories.
+        self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"
-            command = ["git", "-C", str(source), "archive", "--format=tar", head]
-            if not self.execution.uses_loopx:
-                command += [
-                    "benchmark/runtime",
-                    "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
-                ]
-            with archive.open("wb") as output:
-                subprocess.run(command, stdout=output, check=True, timeout=120)
+            paths = () if self.execution.uses_loopx else (
+                "benchmark/runtime", "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+            )
+            archive_source(source, head, archive, paths)
             await environment.upload_file(archive, f"{_ROOT}/source.tar")
-        await self.exec_as_root(
-            environment,
-            command=f"tar -xf {_ROOT}/source.tar -C {_SRC} && rm {_ROOT}/source.tar",
-            timeout_sec=180,
-        )
+            await self.exec_as_root(environment, command=(
+                f"tar -xf {_ROOT}/source.tar -C {_SRC} && rm {_ROOT}/source.tar"
+            ), timeout_sec=180)
+            if runner != source:
+                # Only research runtime code is overlaid; LoopX product code
+                # and its installer remain exactly at the product revision.
+                archive_source(runner, runner_head, archive, ("benchmark/runtime",))
+                await environment.upload_file(archive, f"{_ROOT}/runner.tar")
+                await self.exec_as_root(environment, command=(
+                    f"tar -xf {_ROOT}/runner.tar -C {_SRC} && rm {_ROOT}/runner.tar"
+                ), timeout_sec=180)
         return head
 
     def _profile_env(self) -> dict[str, str]:
@@ -178,6 +171,9 @@ class BenchmarkCodex(CodexOffline):
                 f"chmod 0644 {_BASH_ENV}; "
                 f"find {_SRC} -maxdepth 2 \\( -name '*.egg-info' -o "
                 f"-name '*.dist-info' \\) -exec rm -rf {{}} +; "
+                # The formal source installer builds generated frontend assets
+                # as the environment user; the archive is extracted by root.
+                f"chown -R {shlex.quote(str(environment.default_user or 'root'))} {_SRC}; "
                 f"chmod -R a+rX {_SRC} {_PYTHON} {_NODE}; "
                 f"chmod -R a+rwX {_PROFILE} {_CONTROL} {_CODEX_HOME} {_WAKE_LOG_DIR}"
             ),
@@ -205,6 +201,12 @@ class BenchmarkCodex(CodexOffline):
             if "error" in (install.stderr or "").lower():
                 self.logger.debug("LoopX installer stderr: %s", install.stderr[-1000:])
 
+            # Ownership is needed only for the trusted build. Restore the
+            # staged source boundary before any solver/worker starts.
+            await self.exec_as_root(
+                environment, command=f"chown -R root {_SRC}", timeout_sec=180,
+            )
+
             doctor = await self.exec_as_agent(
                 environment,
                 command=f"{_CLI} --format json doctor --agent-type codex-cli",
@@ -220,6 +222,7 @@ class BenchmarkCodex(CodexOffline):
 
         receipt = {
             "loopx_commit": actual_commit,
+            "runner_commit": self._runner_commit,
             "runtime_profile": "generic_cli",
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
@@ -622,35 +625,12 @@ class BenchmarkCodex(CodexOffline):
             # its execution window plus the existing 150-second settlement reserve.
             host_timeout = min(self.execution.timeout_seconds, remaining - 160)
             env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
-            if self.execution.mode in {"heartbeat", "turn"}:
-                command = [
-                    f"{_PYTHON}/bin/python3",
-                    f"{_SRC}/scripts/external_scheduler_worker.py",
-                    "--cli-bin",
-                    _CLI,
-                    "--registry",
-                    _REGISTRY,
-                    "--runtime-root",
-                    _LOOPX_RUNTIME,
-                    "--runtime-profile",
-                    "generic_cli",
-                    "--goal-id",
-                    _GOAL_ID,
-                    "--agent-id",
-                    _AGENT_ID,
-                    "--state-file",
-                    _SCHEDULER_STATE,
-                    "--wake-cmd",
-                    "exec " + shlex.join(wake_command),
-                    "--wake-timeout-seconds",
-                    str(host_timeout + 150),
-                    "--quota-timeout-seconds",
-                    "30",
-                    "--error-backoff-seconds",
-                    "15",
-                ]
-            else:
-                command = wake_command
+            from .scheduler import worker_command
+
+            command = worker_command(
+                env, python=f"{_PYTHON}/bin/python3", source=_SRC,
+                state_file=_SCHEDULER_STATE, host_timeout=host_timeout,
+            )
             phase_log = f"/logs/agent/worker-phase-{self._phase_number:03d}.log"
             shell = (
                 "set +e; "

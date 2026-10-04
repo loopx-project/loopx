@@ -20,15 +20,37 @@ observation to this same command. It reuses the existing GitHub scan and
 normalized review queue; it does not introduce a second crawler or a new write
 authority.
 
-The capability is also registered with the standard machine configuration
-surface. Open Dashboard → machine settings (or use `loopx machine-config
-describe`) and edit the `Pull-request review` capability. The select field is
-stored under the typed `pull_request_review` namespace and is read by
-`loopx pr-review` whenever `--review-priority` is omitted. Preview/apply is
-revision-locked and readback-verified like every other machine capability;
-removing the namespace returns to the default `other-developers-first` mode.
-This setting changes queue order only and never grants review, comment, Todo,
-push, or merge authority.
+Configure direction in Dashboard → capability center → device defaults or a
+selected Goal → **Pull-request review**. Goal settings list every registered
+Agent, each with **Inherit Goal / Forward / Reverse**. Preview, apply and readback
+use the existing revision-locked configuration writer. Agent direction is
+stored in the Goal's `pull_request_review.agent_orders`; it is not host prose.
+An unset Agent inherits the complete Goal override, then the live machine
+namespace, then the capability default `forward`. Setting only Agent directions
+keeps the global direction and CI policy inherited from the live machine; it
+does not create a global Goal override.
+
+```sh
+loopx configure-goal --goal-id GOAL --pr-review-order forward \
+  --pr-review-agent-order reviewer-a=forward \
+  --pr-review-agent-order reviewer-b=reverse --execute
+loopx configure-goal --goal-id GOAL
+loopx pr-review --goal-id GOAL --agent-id reviewer-b --repo owner/repo --format json
+```
+
+The last command needs no direction flag. A verified current Codex thread
+binding also supplies the Agent when `--agent-id` is omitted. Conflicting or
+unregistered identities fail before scanning. An unbound caller can omit the
+Agent to read the Goal default; it does not impersonate a registered lane.
+`request.review_order`, `request.review_order_source` and `request.agent_id`
+show the effective choice. Explicit `--review-order` wins over Agent, Goal and
+machine settings. `--pr-review-agent-order reviewer-b=inherit` clears only that
+Agent's override; `--clear-pr-review-configuration` clears the complete Goal
+review override. Removing the machine namespace restores `forward`.
+
+These settings change scheduling only. They grant no GitHub review/comment,
+Todo, push, merge, cross-Agent write or scheduler authority, and do not alter
+review depth or the configured CI policy.
 
 The capability also owns the review-depth contract. The shared
 `agent_response_contract.review_execution_contract` defines required evidence,
@@ -37,6 +59,17 @@ compact `review_plan` that binds those rules to one exact head and marks
 code-symbol and negative-walkthrough applicability. Inventory-only rows expose
 no executable review artifacts. Host skills route and publish this packet; they
 must not maintain a second explanation checklist.
+
+Request intake precedes generic queue selection. The capability's
+`decision_procedure.establish_goal` receives current-session requests from other
+agents within an already authorized review assignment. Agent/thread provenance
+is distinct from GitHub account ownership: shared accounts do not make all PRs
+the receiving agent's own work. Current user priorities select a bounded batch
+through the existing repeatable `--target-exact-head` entrypoint. Each row still
+owns its action eligibility and exact-head idempotency. Incoming claims do not
+prove tests or transfer publication, dismissal, merge or messaging authority;
+those judgments stay separate. This is review workflow guidance, not a new
+admission gate, inbox store or cross-thread transport.
 
 Compatibility review replaces the old free-text justification inside
 `code_volume` with `compatibility_assessment`. Reviewers identify actual callers,
@@ -141,7 +174,7 @@ workflow or the merge-focused `loopx-pr-merge` skill.
 
 | Command | CLI reference | Intent |
 | --- | --- | --- |
-| `/loopx-pr-review` | `loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open\|merged\|all] [--review-priority other-developers-first\|owner-first] [--since ISO] [--fresh-audit-exact-head NUMBER@HEAD_OID]` | Review a small explicit batch with repeatable `--target-exact-head`, or list a lifecycle queue when no target is supplied. Both paths provide concrete main-regression analysis and the five-block review contract. The default queue prioritizes non-owner developer PRs; `owner-first` opts into owner priority. `--fresh-audit-exact-head` separately forces new evidence for an unchanged concluded head. |
+| `/loopx-pr-review` | `loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open\|merged\|all] [--review-order forward\|reverse] [--since ISO] [--fresh-audit-exact-head NUMBER@HEAD_OID]` | Review a small explicit batch with repeatable `--target-exact-head`, or list a lifecycle queue when no target is supplied. Both paths provide concrete main-regression analysis and the five-block review contract. Forward visits other authors first; reverse inverts the entire actionable queue. Saved Agent settings apply automatically. `--fresh-audit-exact-head` separately forces new evidence for an unchanged concluded head. |
 | pre-merge readback | `loopx pr-review --goal-id GOAL --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. The Goal-scoped command records a compact public-safe readiness observation; this read grants no merge authority. |
 
 The slash command must run the CLI first. Agentloop must not reconstruct the
@@ -284,31 +317,30 @@ states:
 The repository-scoped fingerprint contains only compact public PR metadata.
 Persisted `items` carry the PR number, fingerprint, exact head, decision, and
 next action; they never carry review bodies.
-`pull_request_review_scheduling_policy_v1` owns the stable queue order. The
-`--review-priority` switch selects the actionable ordering:
+`pull_request_review_scheduling_policy_v1` owns the stable queue order:
 
-- `other-developers-first` (the default) reviews actionable PRs whose author
-  differs from `request.reviewer_login` before the authenticated developer's
-  own PRs;
-- `owner-first` restores the authenticated developer's own PRs before other
-  developers' PRs.
+1. Forward visits other-author feedback and aged backlog first, then remaining
+   other-author work, then the authenticated reviewer's own actionable heads.
+   Ties use review-ready time, creation time, then PR number ascending.
+2. Reverse inverts that **complete actionable forward queue**, including author
+   tiers, timestamps and PR-number ties, **before** applying the batch limit.
+3. Concluded, draft, merged and closed inventory retains its forward order and
+   stays non-executable. Exact-head acknowledgments retain their meaning.
 
-The capability does not infer organization membership or trust from GitHub
-metadata; “other developer” is strictly an author-identity comparison. The
-selected mode is carried in `request.review_priority`,
-`scheduling_policy.review_priority`, and autonomous observations, so changing
-the switch is an explicit queue transition rather than hidden local state.
+Packet order and autonomous candidate selection use the same typed direction
+owner. A direction change is a material queue transition. With a direction
+selected, the first unhandled/unprojected actionable head wins; no independent
+author filter or fast-feedback preemption can replace that order.
 
-Within either mode, the queue order is:
-
-1. the mode-selected actionable author group;
-2. the other actionable author group, with community response heads pushed
-   after an independent `REQUEST_CHANGES` review and community exact heads
-   waiting at least 24 hours;
-3. remaining actionable work in current-head `review_ready_at`, creation-time,
-   and PR-number order;
-4. current heads that already have a conclusion, followed by merged, draft,
-   and closed rows.
+Compatibility: stored v0 `review_priority` and the deprecated
+`--review-priority` flag remain readable: `other-developers-first` maps to
+`forward`, `owner-first` to `reverse`. New writes use `review_order`.
+This deliberately changes legacy owner-first time ordering to newest-first;
+previously it changed only author tiers. Both fields/flags together are rejected.
+The legacy Python API without `review_order` retains its historical scheduling
+behavior; the native CLI uses direction consistently for packets and observation.
+No-config CLI packets preserve forward ordering; autonomous own-only approval
+transitions now follow that same queue instead of an independent preemption.
 
 Community feedback and aged backlog share one age-fair tier. On a material
 transition, at most one newly pushed community response head may take a bounded
@@ -1070,12 +1102,9 @@ A first implementation is acceptable when:
   long answer;
 - live packets expose and recheck `headRefOid` so a review verdict is bound to
   the remote revision actually inspected;
-- autonomous packets honor `request.review_priority`: the default ranks
-  non-owner developer actionable work first, while `owner-first` restores
-  authenticated-developer-owned priority. Community response and 24-hour
-  backlog retain their age ordering within the selected mode; response
-  preemption is bound to one slot and check-only activity does not change
-  readiness priority;
+- autonomous packets honor `request.review_order` and saved Agent overrides;
+  reverse inverts the complete actionable queue before limiting, while inactive
+  inventory and handled/projected exact-head acknowledgments stay non-executable;
 - `scheduling_policy` is preserved as packet authority; Todo/monitor prose and
   one-off author filters cannot replace it;
 - `--observation-state-file` atomically carries observation and handled cursors

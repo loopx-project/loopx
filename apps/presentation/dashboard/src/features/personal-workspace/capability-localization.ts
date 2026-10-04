@@ -70,7 +70,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
     pull_request_review: {
       displayName: "Pull-request review",
-      description: "Ranks the public GitHub PR review queue with a machine-level default; it never grants GitHub, Todo, push, or merge authority.",
+      description: "Sets forward/reverse PR review directions with machine, Goal and Agent settings; it never grants GitHub, Todo, push, or merge authority.",
     },
     reward_memory: {
       displayName: "Reward Memory experiment",
@@ -166,7 +166,8 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     profile: { label: "Planner profile", description: "Select one registered Explore Harness profile." },
     profile_preset: { label: "Report profile", description: "Capability-owned report profile, such as weekly-progress." },
     wait_for_ci: { label: "Wait for CI", description: "Disable to use local validation without querying or waiting for CI. Merge authority is unchanged." },
-    review_priority: { label: "Review priority", description: "Choose whether other developers' PRs or the authenticated reviewer's own PRs are ranked first." },
+    review_order: { label: "Review direction", description: "Forward visits other authors first and oldest first. Reverse inverts the whole actionable queue." },
+    agent_orders: { label: "Agent review directions", description: "Use the Goal default or choose a direction for each registered Agent." },
     route_ref: { label: "Goal Channel route", description: "Public route alias only; credentials and provider identifiers stay outside this form." },
     safe_fix: { label: "Allow one bounded safe-fix pass" },
     strict_receipt: { label: "Require an exact-diff receipt" },
@@ -195,7 +196,8 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     profile: { label: "规划 Profile", description: "选择一个已注册的 Explore Harness profile。" },
     profile_preset: { label: "报告 Profile", description: "由该能力管理的报告 profile，例如 weekly-progress。" },
     wait_for_ci: { label: "等待 CI", description: "关闭后使用本地验证，不查询或等待 CI；不改变合并权限。" },
-    review_priority: { label: "审阅优先级", description: "选择先排其他开发者的 PR，还是先排当前已认证审阅者自己的 PR。" },
+    review_order: { label: "审阅方向", description: "正向先审其他作者，同层先审较早就绪的 PR；反向将整个可执行队列倒序。" },
+    agent_orders: { label: "Agent 审阅方向", description: "每个注册 Agent 可继承 Goal，或单独选择正向、反向。" },
     route_ref: { label: "Goal Channel 路由", description: "只填写公开 route alias；凭据与 Provider 标识不会进入此表单。" },
     safe_fix: { label: "允许一次有界安全修复" },
     strict_receipt: { label: "要求精确 diff 回执" },

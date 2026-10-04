@@ -842,6 +842,65 @@ def test_runtime_ready_budget_starts_after_start_lock_acquisition(
     assert clock["monotonic"] == 1.5
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        # Windows rejects replacement of an occupied directory with EPERM/EACCES;
+        # preserve that platform's shared permission diagnostic rather than
+        # requiring the Unix EISDIR classification.
+        ("directory", "io_permission_denied" if os.name == "nt" else "io_is_directory"),
+        ("live_lock", "mutation_lock_timeout"),
+    ],
+)
+def test_locator_publication_failure_surfaces_safe_typed_startup_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+    failure: str,
+    expected_code: str,
+) -> None:
+    marker = "private-locator-fixture"
+    runtime_dir = tmp_path / marker
+    runtime_dir.mkdir(mode=0o700)
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    lock_path = Path(f"{info_path}.ts-effect.lock")
+    lock_owner = {"pid": os.getpid(), "token": "private-lock-token-fixture"}
+    if failure == "directory":
+        info_path.mkdir()
+    else:
+        lock_path.write_text(json.dumps(lock_owner), encoding="utf-8")
+
+    captures: list[bytes] = []
+    read_stderr = effect_runtime._read_startup_stderr
+
+    def capture(stream):
+        raw = read_stderr(stream)
+        captures.append(raw)
+        return raw
+
+    monkeypatch.setattr(effect_runtime, "_read_startup_stderr", capture)
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as raised:
+        effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+
+    assert raised.value.diagnostic_code == expected_code
+    assert "could not publish its startup locator" in str(raised.value)
+    assert len(captures) == 1
+    envelope = json.loads(captures[0])
+    assert envelope == {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION,
+        "code": expected_code,
+        "message": str(raised.value),
+    }
+    assert marker not in captures[0].decode()
+    assert lock_owner["token"] not in captures[0].decode()
+    assert not list(runtime_dir.glob("start-*.lock"))
+    if failure == "directory":
+        assert info_path.is_dir(), "startup diagnostics must not repair a foreign locator"
+    else:
+        assert not info_path.exists(), "a failed publisher must not claim readiness"
+        assert json.loads(lock_path.read_text()) == lock_owner
+
+
 def test_early_runtime_exit_surfaces_stable_startup_diagnostic(
     tmp_path: Path,
     monkeypatch,
