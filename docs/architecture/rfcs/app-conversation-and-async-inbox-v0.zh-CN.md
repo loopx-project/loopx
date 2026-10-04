@@ -12,8 +12,10 @@
 
 ## 普通工作区会话：有界实现检查点
 
-Core Chat 可以独立于 Goal 和管家打开普通工作区 Session。设置 → 项目对话
-选择宿主明确提供的工作区，发送只读请求、恢复原生线程、新建或关闭当前会话。
+Core Chat 可以独立于 Goal 和管家 portfolio 打开普通工作区 Session。在 App 中，
+工作区是管家对话的一个范围：“范围”选择器列出宿主授权的工作区，选中后继续该
+工作区自己的 Session，输入框、历史、流式输出、停止和图片与其他对话共用同一路径。
+范围不会出现在管家总览或 Goal 列表中；切回管家范围即恢复管家 Session。
 共享 typed context owner 核验确切工作区引用和当前 grant；目录缺失、symlink
 重定向或 grant 变化时拒绝继续。不会合成 Goal、注入 portfolio，也不凭工作区
 grant 授权 peer delegation。
@@ -25,7 +27,8 @@ store，TypeScript 负责上下文身份及范围。原生 Codex 恢复保留原
 
 首个 grant 仅面向本机 owner 的工作区读取。Lark 受众授权、普通私聊选择、独立于
 terminal delivery 的 durable 入站 admission，以及安装/手机验收仍是本 RFC 的未完成项。
-新的设置入口不代表这些旅程已通过，也不授权修改文件。
+App 范围入口不代表这些旅程已通过，也不授权修改文件；grant 撤销后历史仍可读，
+新消息在宿主重新授权前被阻止。
 
 ## 决策：让 App 成为工作会话持续进行的地方
 

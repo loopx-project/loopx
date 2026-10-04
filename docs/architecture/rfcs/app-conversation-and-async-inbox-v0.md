@@ -13,9 +13,12 @@
 ## Ordinary workspace conversations: bounded implementation checkpoint
 
 The Core Chat entry can now open an ordinary workspace Session independently
-of a Goal or steward. Settings → Project conversation selects an explicitly
-configured host workspace, sends a read-only request, resumes its native thread,
-opens a new Session or closes the selected one. The shared typed context owner
+of a Goal or the steward's portfolio. In the App, a workspace is a scope of the
+steward conversation: its Scope picker lists the host's granted workspaces, and
+choosing one continues that workspace's own Session through the same composer,
+history, streaming, stop and image path as every other conversation. The scope
+never appears on the steward overview or the Goal list, and returning to the
+steward scope restores the steward Session. The shared typed context owner
 checks the exact workspace reference and current grant; missing roots, retargeted
 symlinks and changed grants fail closed. No Goal is synthesized, no portfolio
 context is injected, and the workspace grant cannot authorize peer delegation.
@@ -30,7 +33,8 @@ continuity and denial behavior; they do not establish real model adoption.
 The initial grant is workspace reading for the local owner. Lark audience grants,
 ordinary private-message selection, durable inbound admission independent of
 terminal delivery, and installed/mobile acceptance remain open work in this RFC.
-The new settings companion does not qualify those journeys or authorize edits.
+The App scope does not qualify those journeys or authorize edits; a revoked grant
+keeps the history readable and blocks new messages until the host grants it again.
 
 ## Decision: make the App the place where work conversations continue
 
