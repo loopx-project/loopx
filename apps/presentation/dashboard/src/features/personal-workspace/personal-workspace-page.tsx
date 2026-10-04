@@ -1448,6 +1448,9 @@ export function PersonalWorkspacePage({
           }
           void reconcileStatus(proposal.goalId ? [proposal.goalId] : undefined);
         }
+        if (proposal.actionKind === "todo.update") {
+          void reconcileStatus(proposal.goalId ? [proposal.goalId] : undefined);
+        }
         return;
       }
       const result = await applyTypedAction(proposal.previewId);
@@ -1487,7 +1490,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
         callbacks.onGoalDeleted?.(applied.goalId);
       }
-      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve") {
+      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update") {
         void reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
       }
     } catch (error) {

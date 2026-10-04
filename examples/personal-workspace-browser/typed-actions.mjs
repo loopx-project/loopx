@@ -1791,7 +1791,16 @@ export const typedActionsScenario = {
       await page.getByText("确认执行").waitFor({state: "visible"});
       const priorityEdit = api.actionPreviews.findLast(preview => preview.action_kind === "todo.update" && preview.normalized_parameters.priority === "P4");
       if (!priorityEdit || priorityEdit.normalized_parameters.text !== undefined) throw new Error("Priority edit must be structured, without a text rewrite");
-      await page.getByRole("button", {name: "关闭", exact: true}).click();
+      const readsBeforePriorityApply = api.statusRequestCount;
+      const writesBeforePriorityApply = api.durableWriteCount;
+      await page.getByRole("button", {name: "确认并应用", exact: true}).click();
+      await page.getByText("操作已完成，结果状态已通过读回验证。", {exact: true}).waitFor();
+      await page.waitForTimeout(2_000);
+      if (api.statusRequestCount <= readsBeforePriorityApply) throw new Error("Verified Todo update left the workspace status unread");
+      if (api.durableWriteCount !== writesBeforePriorityApply + 1) throw new Error("Todo status reconciliation repeated the confirmed write");
+      // Applied receipts retain their Goal navigation; close the drawer itself
+      // so the next operation still begins from the existing task card.
+      await page.getByRole("button", {name: /关闭详情/}).click();
       await taskRow.click();
       taskManagement = page.locator("details.personal-task-management");
       await taskManagement.locator("summary").click();
