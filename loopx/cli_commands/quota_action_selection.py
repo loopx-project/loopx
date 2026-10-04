@@ -68,7 +68,10 @@ def _requested_quota_action_todo_id(
     args: argparse.Namespace,
 ) -> str | None:
     if not (
-        bool(args.codex_app)
+        # Hosts may supply their own Turn identity without guided-start support.
+        # Forward their explicit selection to the same typed admission owner.
+        bool(getattr(args, "turn_instance_id", None))
+        or bool(args.codex_app)
         or bool(getattr(args, "trae_app", False))
         or args.runtime_profile
         in {profile.value for profile in GUIDED_START_TURN_RUNTIME_PROFILES}
