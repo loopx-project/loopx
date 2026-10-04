@@ -2,7 +2,6 @@ import subprocess
 import tarfile
 import io
 import json
-from types import SimpleNamespace
 
 import pytest
 
