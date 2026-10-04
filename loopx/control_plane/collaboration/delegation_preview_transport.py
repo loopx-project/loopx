@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import selectors
 import subprocess
 import time
 import weakref
@@ -163,8 +164,34 @@ class DelegationPreviewTransport:
     def _send(self, value: dict, deadline: float, timeout: float) -> None:
         assert self._process is not None and self._process.stdin is not None
         stream = self._process.stdin
-        result: Queue = Queue(maxsize=1)
         data = (json.dumps(value) + "\n").encode("utf-8")
+
+        if os.name == "posix":
+            # A blocking write in another thread can retain the pipe after
+            # close(), or finish a frame after the caller's deadline. This
+            # transport exclusively owns stdin; keep its writes nonblocking
+            # so the original owner can observe EOF during timeout cleanup.
+            descriptor = stream.fileno()
+            os.set_blocking(descriptor, False)
+            remaining = memoryview(data)
+            with selectors.DefaultSelector() as writable:
+                writable.register(descriptor, selectors.EVENT_WRITE)
+                while remaining:
+                    budget = deadline - time.monotonic()
+                    if budget <= 0 or not writable.select(budget):
+                        raise subprocess.TimeoutExpired(["delegation-preview"], timeout)
+                    try:
+                        written = os.write(descriptor, remaining)
+                    except BlockingIOError:
+                        continue
+                    if written <= 0:
+                        raise OSError("preview input closed")
+                    remaining = remaining[written:]
+            return
+
+        # Keep the existing Windows pipe writer path. Host cleanup remains
+        # owned by the same supervisor on every platform.
+        result: Queue = Queue(maxsize=1)
 
         def write() -> None:
             try:
