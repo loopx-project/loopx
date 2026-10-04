@@ -10,6 +10,23 @@ from loopx.heartbeat_prompt import (
 )
 
 
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+@pytest.mark.parametrize("agents", [["agent-a"], ["agent-a", "agent-b"]])
+def test_peer_prompt_defers_workspace_and_lease_requirements_to_current_contract(mode, agents):
+    # Registration count alone cannot describe repository or task admission.
+    # The task body must not create a second, unconditional workspace policy.
+    payload = build_heartbeat_prompt(
+        goal_id="workspace-guidance", agent_id="agent-a", registered_agents=agents,
+        runtime_profile="codex_app_heartbeat", **{mode: True},
+    )
+    body = payload["task_body"]
+    assert "quota claim/lease and workspace contract plus repo" in body
+    assert "use an independent worktree for repository writes" not in body
+    assert "independent repo worktree" not in body
+    if mode != "full":
+        assert payload["interface_budget"]["within_budget"] is True
+
+
 def test_thin_agent_input_excludes_generator_and_embedded_command_duplicates() -> None:
     generated = build_heartbeat_prompt(
         goal_id="heartbeat-agent-input",

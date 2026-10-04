@@ -582,8 +582,7 @@ def main() -> int:
         "Equal peer `codex-product-capability` (peer_v1)",
         "Agent-facing CLI output budgets, deterministic control-plane qualification, "
         "model-behavior shadow evaluation, and release outcome baseline correctness",
-        "Claim/lease first",
-        "independent repo worktree",
+        "Follow quota claim/lease and workspace contract plus repo rules",
         "todo continuation",
         "no cross-agent authority",
         "no scope in todo metadata",
@@ -615,7 +614,7 @@ def main() -> int:
         "Agent identity and scope",
         "model: peer_v1",
         "equal peer agent",
-        "independent worktree",
+        "current quota claim/lease and workspace contract plus repository rules",
         "Task-scoped coordination",
         "agent_id `codex-side-bypass`",
         "control-plane coordination and todo claim ergonomics",
@@ -630,7 +629,7 @@ def main() -> int:
     assert "single primary agent" not in primary_task, primary_task
     thin_scoped_task = normalized(str(thin_scoped_payload["task_body"]))
     assert "(peer_v1)" in thin_scoped_task, thin_scoped_task
-    assert "independent repo worktree" in thin_scoped_task, thin_scoped_task
+    assert "quota claim/lease and workspace contract plus repo rules" in thin_scoped_task, thin_scoped_task
     assert "primary_agent" not in thin_scoped_task, thin_scoped_task
     assert "--active-state" not in registry_default_payload["expanded_prompt_command"], registry_default_payload
     assert brief_payload["brief"] is True, brief_payload
