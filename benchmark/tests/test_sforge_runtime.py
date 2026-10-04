@@ -1,5 +1,7 @@
 import subprocess
 import tarfile
+import io
+import json
 
 import pytest
 
@@ -104,3 +106,78 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     monkeypatch.delenv("CODEX_AUTH_JSON_PATH", raising=False)
     with pytest.raises(ValueError, match="credential"):
         SForgeWorker(config, profile="single", cwd="/task")
+
+
+def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.log_dir = tmp_path / "artifacts"
+    copied, cleaned = [], []
+    def archive(handle, remote):
+        copied.append(str(remote))
+        payload = io.BytesIO()
+        with tarfile.open(fileobj=payload, mode="w") as bundle:
+            member = tarfile.TarInfo("session.jsonl")
+            member.size = 2
+            bundle.addfile(member, io.BytesIO(b"{}"))
+        return payload.getvalue()
+    monkeypatch.setattr(backend, "copy_from_container", archive)
+    monkeypatch.setattr(DockerBackend, "cleanup_container",
+                        lambda self, handle, logger: cleaned.append(handle))
+    backend.cleanup_container("fixture-container")
+    assert "/home/agent/.codex/sessions" in copied
+    assert "/opt/loopx-benchmark/codex-home/sessions" in copied
+    assert "/home/agent/.codex" not in copied
+    assert "/opt/loopx-benchmark/codex-home" not in copied
+    assert all("auth.json" not in path for path in copied)
+    assert cleaned == ["fixture-container"]
+    assert all(row["collected"] for row in json.loads(
+        (backend.log_dir / "artifact-collection.json").read_text()))
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_setup_proxy_is_cleared_before_worker_execution(tmp_path, monkeypatch, fail):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    monkeypatch.setenv("LOOPX_INSTALL_HTTPS_PROXY", "http://setup-proxy.invalid:8080")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                          profile="heartbeat-resume", cwd="/task")
+    def install(*args):
+        assert worker.environment.setup_env["HTTPS_PROXY"] == "http://setup-proxy.invalid:8080"
+        if fail:
+            raise RuntimeError("installation failed")
+    monkeypatch.setattr(worker, "_install_worker", install)
+    if fail:
+        with pytest.raises(RuntimeError, match="installation failed"):
+            worker.install_stop_hook(None, None, tmp_path, None)
+    else:
+        worker.install_stop_hook(None, None, tmp_path, None)
+    assert worker.environment.setup_env == {}
+
+
+def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend, AllowedEndpoint
+    backend = object.__new__(RecordingDockerBackend)
+    backend.auth_ips = []
+    backend.blind_api_endpoint = None
+    judge = AllowedEndpoint(ip="172.17.0.1", port=8080, hostname="judge")
+    api = AllowedEndpoint(ip="172.17.0.1", port=9090, hostname="api-proxy")
+    monkeypatch.setattr(DockerBackend, "create_network_isolation",
+                        lambda self, handle, allowed_endpoints, logger: allowed_endpoints)
+    env = {"SFORGE_TOKEN": "fixture", "SFORGE_JUDGE_URL": "http://judge:8080",
+           "HTTPS_PROXY": "http://api-proxy:9090", "SFORGE_PATCH_DIR": "/task"}
+    assert backend._agent_environment(env) is env
+    assert backend.create_network_isolation(None, [judge, api], None) == [judge, api]
+    backend.blind_api_endpoint = ("172.17.0.1", 9090)
+    assert backend.create_network_isolation(None, [judge, api], None) == [api]
+    assert backend._agent_environment(env) == {
+        "HTTPS_PROXY": "http://api-proxy:9090", "SFORGE_PATCH_DIR": "/task"}
+    with pytest.raises(RuntimeError, match="admitted API-only endpoint"):
+        backend.create_network_isolation(None, [judge], None)

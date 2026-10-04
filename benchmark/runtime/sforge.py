@@ -33,13 +33,17 @@ class SForgeEnvironment:
 
     default_user = "agent"
 
-    def __init__(self, backend, handle):
+    def __init__(self, backend, handle, *, setup_proxy=None):
         self.backend, self.handle = backend, handle
+        self.setup_env = ({key: setup_proxy for key in
+                           ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+                          if setup_proxy else {})
 
     async def exec(self, command, *, user=None, env=None, cwd=None, timeout_sec=None):
         result = self.backend.exec_run_with_exit_code(
             self.handle, ["/bin/bash", "-c", command], timeout=timeout_sec or 300,
-            user=user or self.default_user, workdir=cwd, environment=env,
+            user=user or self.default_user, workdir=cwd,
+            environment={**self.setup_env, **(env or {})},
         )
         if result.timed_out:
             raise TimeoutError("SForge transport command exceeded its deadline")
@@ -76,7 +80,8 @@ class SForgeWorker(CodexAgent):
 
     def __init__(self, config, *, profile: str, cwd: str,
                  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-                 turn_timeout_seconds: int = 4700):
+                 turn_timeout_seconds: int = 4700,
+                 blind_prompt: str | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -87,6 +92,8 @@ class SForgeWorker(CodexAgent):
         if not os.environ.get("CODEX_AUTH_JSON_PATH"):
             raise ValueError("Set CODEX_AUTH_JSON_PATH to the trial credential source")
         self.profile, self.cwd = profile, cwd
+        self.blind_prompt = blind_prompt
+        self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
         self.turn_timeout = min(turn_timeout_seconds, timeout_seconds - 160)
         self.runtime = None
@@ -96,7 +103,17 @@ class SForgeWorker(CodexAgent):
                            "shared-scheduler" if profile.startswith("heartbeat-") else None)
 
     def install_stop_hook(self, backend, handle, log_dir, logger):
-        self.environment = SForgeEnvironment(backend, handle)
+        self.environment = SForgeEnvironment(
+            backend, handle, setup_proxy=os.environ.get("LOOPX_INSTALL_HTTPS_PROXY"),
+        )
+        try:
+            self._install_worker(backend, handle, log_dir, logger)
+        finally:
+            # Setup may build pinned frontend assets before native isolation.
+            # Solver execution must never inherit this setup-only proxy.
+            self.environment.setup_env = {}
+
+    def _install_worker(self, backend, handle, log_dir, logger):
         self.log_dir = log_dir
         effort = {"max": "xhigh"}.get(self._config.agent_effort, self._config.agent_effort)
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
@@ -134,6 +151,10 @@ class SForgeWorker(CodexAgent):
                 scheduler_timeout_sec=self.timeout_seconds,
             )
             asyncio.run(self.runtime.install(self.environment))
+        if self.blind_prompt is not None:
+            result = backend.exec_run(handle, ["rm", "-f", "/usr/local/bin/sforge-submit"], user="root")
+            if result.exit_code:
+                raise RuntimeError("Could not remove unavailable submission entrypoint")
         (log_dir / "worker-profile.json").write_text(json.dumps({
             "profile": self.profile, "model": self._config.agent_model,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
@@ -141,9 +162,16 @@ class SForgeWorker(CodexAgent):
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
+            "feedback": "blind" if self.blind_prompt is not None else "native",
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):
+        if self.blind_prompt is not None and not self.prompt_installed:
+            with tempfile.TemporaryDirectory(prefix="benchmark-prompt-") as directory:
+                prompt = Path(directory) / "task.md"
+                prompt.write_text(self.blind_prompt)
+                asyncio.run(self.environment.upload_file(prompt, prompt_path))
+            self.prompt_installed = True
         if self.profile in {"official", "single"}:
             return super().format_run_cmd(prompt_path, model=model, cwd=cwd,
                                           internet=internet, resume=resume)

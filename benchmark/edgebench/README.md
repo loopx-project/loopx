@@ -33,6 +33,10 @@ The relay rejects other hosts and ports and never decrypts TLS. Check both an
 allowed TLS handshake and a denied external destination before admission;
 stop the relay process after the campaign. Do not expose an unrestricted host
 proxy to isolated tasks. This transport does not grant general internet access.
+`LOOPX_INSTALL_HTTPS_PROXY` may separately provide the trusted install phase's
+proxy when the pinned source installer needs to build frontend assets. It is
+passed only to setup subprocesses and cleared before solver execution and native
+network isolation. It is never placed in the container's persistent environment.
 
 When the product must run from main while the adapter is under development, set
 `LOOPX_SRC_DIR` / `LOOPX_EXPECTED_COMMIT` to the clean product checkout and
@@ -56,8 +60,15 @@ every 300 seconds, and the submission cooldown is 120 seconds. `--timeout`,
 qualification runs. The shared Harbor defaults are unchanged. Native task
 internet policy is retained. Each attempt requires a new output directory.
 
-This entrypoint currently exposes native evaluator feedback. The blind-feedback
-ablation requires a separately qualified provider boundary before admission.
+The default `--feedback native` preserves native evaluator feedback.
+`--feedback blind` requires a non-game task with native internet isolation and
+an explicit API-only proxy IP/port. Its host firewall omits the judge route;
+native registration sets the agent submission allowance to zero, task environments
+omit judge credentials, and the submission command and feedback prompt are
+removed. The task query and deliverable paths remain. Host auto-evaluation is
+unchanged, and neither its schedule nor results enter the blind prompt.
+Qualify actual denied judge reads/submissions and successful host evaluation
+before admitting blind trial results; a prompt or unit test alone is insufficient.
 Configuration receipts prove requested startup settings; actual session model,
 resume continuity, capability use, evaluator completion and integrity need
 runtime/post-run qualification before any score is countable. Raw trial outputs

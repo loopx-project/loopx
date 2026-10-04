@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import logging
+import ipaddress
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,6 +28,7 @@ def main(argv=None):
     parser.add_argument("--log-dir", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--worker", choices=PROFILES, required=True)
+    parser.add_argument("--feedback", choices=("native", "blind"), default="native")
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
@@ -45,6 +47,23 @@ def main(argv=None):
                        os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
+    blind_endpoint = None
+    blind_prompt = None
+    if args.feedback == "blind":
+        proxy = urlsplit(args.api_proxy_url or "")
+        judge = urlsplit(args.judge_url)
+        if task.internet or task.game_mode or not proxy.hostname or not proxy.port:
+            raise ValueError("Blind feedback requires a non-game isolated task and explicit API-only proxy")
+        ipaddress.ip_address(proxy.hostname)  # No ambiguous DNS/network identity.
+        if (proxy.hostname, proxy.port) == (judge.hostname, judge.port):
+            raise ValueError("Blind API and judge endpoints must be distinct")
+        blind_endpoint = (proxy.hostname, proxy.port)
+        paths = ", ".join(f"`{path}`" for path in task.submit_paths)
+        blind_prompt = (task.work.agent_query + "\n\n"
+            "External evaluation and evaluation feedback are unavailable. "
+            "Use local checks to improve the solution and write final deliverables "
+            f"to these paths: {paths}.\n"
+            "Internet access is unavailable; use pre-installed dependencies.\n")
     config = SForgeConfig(
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
@@ -55,12 +74,14 @@ def main(argv=None):
             "HTTPS_PROXY": args.api_proxy_url, "HTTP_PROXY": args.api_proxy_url,
             "NO_PROXY": f"localhost,127.0.0.1,{urlsplit(args.judge_url).hostname}",
         }
-    agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd, timeout_seconds=args.timeout)
+    agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
+                         timeout_seconds=args.timeout, blind_prompt=blind_prompt)
     if args.api_proxy_url:
         agent.default_api_base_url = args.api_proxy_url
     logger = logging.getLogger("edgebench-runtime")
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
-                                     oauth_proxy=bool(args.api_proxy_url))
+                                     oauth_proxy=bool(args.api_proxy_url),
+                                     blind_api_endpoint=blind_endpoint)
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
             raise RuntimeError(f"Missing native image: {image}")
@@ -69,7 +90,7 @@ def main(argv=None):
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
-        "feedback": "native", "internet": task.internet,
+        "feedback": args.feedback, "internet": task.internet,
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
     }
@@ -82,6 +103,7 @@ def main(argv=None):
             judge_url=args.judge_url, eval_interval=args.eval_interval,
             submission_cooldown=args.submission_cooldown, internet=task.internet,
             disable_stop_hook=False, disable_auto_resume=agent.resume_cmd is None,
+            max_submissions=0 if args.feedback == "blind" else None,
         )
     except Exception as error:
         receipt.update(status="runner_failed", error_kind=type(error).__name__)
