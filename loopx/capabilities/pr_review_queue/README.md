@@ -60,6 +60,17 @@ code-symbol and negative-walkthrough applicability. Inventory-only rows expose
 no executable review artifacts. Host skills route and publish this packet; they
 must not maintain a second explanation checklist.
 
+Request intake precedes generic queue selection. The capability's
+`decision_procedure.establish_goal` receives current-session requests from other
+agents within an already authorized review assignment. Agent/thread provenance
+is distinct from GitHub account ownership: shared accounts do not make all PRs
+the receiving agent's own work. Current user priorities select a bounded batch
+through the existing repeatable `--target-exact-head` entrypoint. Each row still
+owns its action eligibility and exact-head idempotency. Incoming claims do not
+prove tests or transfer publication, dismissal, merge or messaging authority;
+those judgments stay separate. This is review workflow guidance, not a new
+admission gate, inbox store or cross-thread transport.
+
 Compatibility review replaces the old free-text justification inside
 `code_volume` with `compatibility_assessment`. Reviewers identify actual callers,
 their deployment boundary, the separately persisted contract, a simpler
