@@ -16,6 +16,7 @@ export function PrivateConversationPanel() {
   const [app, setApp] = useState("");
   const [project, setProject] = useState("");
   const [executor, setExecutor] = useState("");
+  const [role, setRole] = useState<"project" | "steward">("project");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -54,10 +55,11 @@ export function PrivateConversationPanel() {
     finally {setBusy(false);}
   }
   return <section className="personal-detail-card personal-private-conversation" aria-label={zh ? "本人飞书私聊" : "Owner private Chat"}>
-    <h3>{zh ? "本人私聊 · 项目对话" : "Owner private Chat · Project conversation"}</h3>
-    <p>{zh ? "每个 App 单独核验登录本人，只读讨论所选工作区。普通私聊不会创建 Goal。" : "Verify the logged-in owner independently for each App. Discuss the selected workspace with a read grant; ordinary private Chat creates no Goal."}</p>
+    <h3>{zh ? "本人私聊 · 项目助手与管家" : "Owner private Chat · Project assistant and steward"}</h3>
+    <p>{zh ? "每个 App 单独核验本人。项目助手只读讨论工作区，不创建隐藏 Goal。管家从空 portfolio 开始，只管理在此入口明确确认的新委托。" : "Verify the owner independently for each App. Project Chat discusses the workspace without hidden Goals. A steward starts with an empty portfolio and manages only new commissions explicitly confirmed here."}</p>
     {rows.map(row => <article key={row.binding_id}>
       <strong>{row.app_ref} · {row.context_available ? row.project_title : (zh ? "工作区不可用" : "Workspace unavailable")}</strong>
+      <p>{row.context_kind === "steward" ? (zh ? `LoopX 管家 · ${row.goal_count === 0 ? "暂无已授权的新委托；没有继承旧目标。" : `${row.goal_count} 个已确认的新委托`}` : `LoopX steward · ${row.goal_count} new confirmed commissions; no inherited Goals.`) : (zh ? "普通项目助手 · 只读对话" : "Project assistant · Read-only Chat")}</p>
       <p>{row.executor_endpoint_id} · {zh ? "监听状态" : "Listener"}: {listenerLabel(row.listener_status)}</p>
       <p>{zh ? `待处理或回复：${row.pending_count}` : `Pending execution or reply: ${row.pending_count}`}</p>
       {row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
@@ -69,6 +71,9 @@ export function PrivateConversationPanel() {
       <option value="">{zh ? "选择已验证 App" : "Select a verified App"}</option>
       {apps.map(app => <option key={app.app_ref} value={app.app_ref}>{app.label} · {app.app_ref}</option>)}
     </select></label>
+    <label>{zh ? "角色" : "Role"}<select aria-label={zh ? "私聊角色" : "Private Chat role"} value={role} disabled={busy} onChange={event => setRole(event.target.value as "project" | "steward")}>
+      <option value="project">{zh ? "普通项目助手" : "Project assistant"}</option><option value="steward">{zh ? "LoopX 管家（新委托）" : "LoopX steward (new commissions)"}</option>
+    </select></label>
     <label>{zh ? "工作区" : "Workspace"}<select aria-label={zh ? "私聊工作区" : "Private Chat workspace"} value={project} disabled={busy} onChange={event => setProject(event.target.value)}>
       <option value="">{zh ? "选择授权工作区" : "Select an authorized workspace"}</option>
       {projects.map(project => <option key={project.project_ref} value={project.project_ref}>{project.title}</option>)}
@@ -76,10 +81,11 @@ export function PrivateConversationPanel() {
     <label>{zh ? "执行器" : "Executor"}<select aria-label={zh ? "私聊执行器" : "Private Chat executor"} value={executor} disabled={busy} onChange={event => setExecutor(event.target.value)}>
       {executors.map(executor => <option key={executor} value={executor}>{executor}</option>)}
     </select></label>
-    <div className="personal-detail-actions"><button disabled={busy || !app || !project || !executor} onClick={() => void act(() => connectPrivateConversation(app, project, executor))} type="button">
+    <div className="personal-detail-actions"><button disabled={busy || !app || !project || !executor} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role))} type="button">
       {busy ? (zh ? "正在核验" : "Verifying") : (zh ? "连接本人私聊" : "Connect owner private Chat")}</button>
       <button disabled={busy} onClick={() => void act(refresh)} type="button">{zh ? "刷新状态" : "Refresh status"}</button></div>
-    <p>{zh ? "从手机发送文字开始；后续消息进入原会话队列。/status 查看状态，/stop 停止当前执行，/new 开启新会话。图片、文件会明确提示暂不支持。" : "Send text from your phone to begin; follow-ups queue in the same Session. /status checks state, /stop stops the current Turn, /new starts a new conversation. Images and files receive an explicit unsupported response."}</p>
+    <p>{zh ? "从手机发送文字开始；后续消息进入原会话队列。/status 查看聊天状态，/stop 停止当前聊天执行，/new 开启新会话。图片、文件会明确提示暂不支持。" : "Send text from your phone to begin; follow-ups queue in the same Session. /status checks Chat state, /stop stops the current Chat Turn, /new starts a new conversation. Images and files receive an explicit unsupported response."}</p>
+    <p>{zh ? "管家新委托：/delegate --tokens N 具体目标。先读预览，再用原私聊的完整 /confirm 命令确认；15 分钟过期。原生执行保持只读，总 token 上限可能被运行中的请求超过；没有默认定时调度。回执提供 /stop-commission 停止和 /resume-commission 恢复命令；恢复保留原线程及累计用量。" : "Steward commission: /delegate --tokens N objective. Read the preview, then use its full /confirm command in the original private Chat within 15 minutes. Native execution remains read-only; in-flight requests can exceed the total token allowance. No default schedule. Receipts provide /stop-commission and /resume-commission commands; recovery retains the original thread and cumulative usage."}</p>
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }

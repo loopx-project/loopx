@@ -20,21 +20,22 @@ class PrivateConversationRequestMixin:
             {"binding_id": row["binding_id"], "app_ref": row["transport_ref"], "context_kind": row["context_kind"],
              "project_ref": row["project_ref"], "context_available": row["project_ref"] in titles, "project_title": titles.get(row["project_ref"], "Unavailable workspace"),
              "executor_endpoint_id": row["executor_endpoint_id"], "grant": row["grant"],
+             "goal_count": len(row.get("goal_ids", [])),
              "listener_status": health.get(row["transport_ref"], {}).get("status", "starting"),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]]})
 
     def _private_conversation_connect(self) -> None:
-        from ...extensions.lark.goal_topic_runtime import _active_profile_configs
+        from .goal_topic_runtime import _active_profile_configs
         from ...chat_lark_api import build_lark_goal_topic_runtime_snapshot
         try:
             body = self._read_json()
-            if set(body) != {"app_ref", "project_ref", "executor_endpoint_id"}:
+            if set(body) - {"context_kind"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
                 raise ValueError("select an App, authorized workspace and executor")
             profile = str(body["app_ref"])
             existing = _active_profile_configs(build_lark_goal_topic_runtime_snapshot(
                 registry_path=self.server.registry_path, runtime_root_override=self.server.runtime_root_override))
-            from ...extensions.lark.conversation_identity import identity_ref
+            from .conversation_identity import identity_ref
             observed = self.server.runtime_controller.project_contexts.conversation_bindings.observe(profile)
             from ...chat_lark_api import _app_identity_for_private_guard
             group_apps = [str(config.get("bot_app_id") or _app_identity_for_private_guard(
@@ -46,7 +47,8 @@ class PrivateConversationRequestMixin:
             if not any(row["agent_id"] == endpoint and row["available"] for row in self.server.runtime_controller.capabilities()):
                 raise ValueError("the selected executor is unavailable")
             self.server.runtime_controller.project_contexts.conversation_bindings.configure(
-                transport_ref=profile, project_ref=str(body["project_ref"]), executor_endpoint_id=endpoint)
+                transport_ref=profile, project_ref=str(body["project_ref"]), executor_endpoint_id=endpoint,
+                context_kind=str(body.get("context_kind", "project")))
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
             self._send_error(str(exc), status=400)

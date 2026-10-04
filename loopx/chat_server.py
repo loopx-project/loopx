@@ -1595,11 +1595,13 @@ def serve_chat(
         store=server.chat_store,
         registry_path=resolved_registry_path,
         project_contexts=ChatProjectContexts(resolved_scan_roots),
-        manager_scope_resolver=lambda session: authorized_manager_goal_ids(
+        manager_scope_resolver=lambda session: (
+            server.runtime_controller.project_contexts.conversation_bindings.steward_scope(session)
+            if isinstance(session.get("steward_context"), dict) else authorized_manager_goal_ids(
             build_lark_goal_topic_runtime_snapshot(
                 registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
             ), session, runtime_root=runtime_root,
-        ),
+        )),
         codex_bin=codex_bin,
         claude_bin=claude_bin,
         kiro_cli_bin=kiro_cli_bin,
@@ -1629,6 +1631,7 @@ def serve_chat(
         runtime_controller=server.runtime_controller,
         workspace_roots=resolved_scan_roots,
     )
+    private_transport.core.actions = server.action_service
     # An admitted steward team preview is projected into the typed action store,
     # because that store is what the product surfaces list: the chat action
     # service owns it, so the channel hands the preview to that owner instead of

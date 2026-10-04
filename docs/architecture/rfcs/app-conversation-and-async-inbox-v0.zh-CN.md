@@ -42,7 +42,7 @@ provider 读回确认回复；发生没有 receipt 的不确定写入时不盲�
 后续消息持久排队、exact stop，以及重启后原会话恢复和已确认回复不重复发送。
 这些是合成 provider/协议验收；真实原生 Codex 另行验证独立线程与上下文隔离。
 真实 Lark 收发、安装候选、手机旅程、注册 Agent 选择、媒体/增量/权限回调，以及
-新管家的明确长期委托仍未验收。当前私聊绑定仅支持普通只读项目会话。
+更广的长期协调仍未验收。这一普通项目绑定保持只读，新增管家入口见下一检查点。
 
 私聊配置复用设置 → Lark；App 范围仍是本机普通对话的唯一入口。未存储 App 身份
 的旧群聊 profile 保留原 profile-hash 监听锁键。没有私聊绑定时不增加鉴权；有绑定
@@ -52,6 +52,45 @@ extension，typed binding owner 继续保持 provider-neutral。
 ![合成私聊工作区设置](../../assets/personal-workspace/private-project-conversations.png)
 ![窄屏私聊设置](../../assets/personal-workspace/private-project-conversations-narrow.png)
 ![工作区撤权读回](../../assets/personal-workspace/private-project-workspace-revoked.png)
+
+## 本人私聊管家：明确的新委托
+
+设置 → Lark 可为独立 App 选择管家角色。既有 typed conversation binding
+固定 App、独立核验的本人、来源、工作区和有界 portfolio。已核验的空范围与授权
+不可用分开：新管家没有继承旧 Goal；空范围也不证明全局 inventory 覆盖完整。
+普通项目聊天仍没有 Goal 或管家身份。
+
+只有显式 `/delegate --tokens N 具体目标` 会准备既有 `goal.create` 预览。
+确认必须在十五分钟内从原本人、App 和私聊来源进入。预览固定只读边界、原生总
+token 上限和不启用默认调度的事实。既有 canonical Chat action 创建 Goal 并返回
+回执，Core 仅把该确切新创建加入此管家范围。已有 Goal 或单一工作区 fallback
+不能重定向委托；普通聊天和模型文字不能创建委托。
+
+既有服务 worker 推进已持久受理的 Core 操作，入站不等终态。只读工作由 Codex
+原生 Goal continuation 执行，结果经原私聊 delivery journal 返回。
+`/stop-commission` 在受理时固定确切执行目标；显式
+`/resume-commission ... --tokens N` 保留原 Session、原生线程、目标和累计用量。
+原生完成是宿主执行证据，不是 canonical Goal/Todo 验收。总上限包含历史用量与
+上下文，运行中的请求可能超过上限；没有默认 heartbeat。
+
+新委托扩展 portfolio 时，在原管家线程刷新有界证据和工具。创建提交后，既有
+请求日志先保存确切资源回执，再尝试加入管家范围。加入或读回失败时，操作保持
+排队以供恢复。恢复重新核验原 binding 与 canonical 回执，采用同一批资源并
+返回结果，不再创建 Goal 或模型线程。范围加入仍待恢复时，通知回执不能结算
+该操作。故障旅程覆盖加入失败、加入后读回丢失、创建 owner 调用中断及 binding
+撤权；验证的是 provider/Core IO 恢复，不是完整宿主重启。App、本人、来源和
+工作区仍固定并重新核验。原生事件读取在没有输出时，也不能卡住停止所需的控制
+RPC 回执。Lark 专属设置 companion 归 extension；会话、请求、范围和创建语义
+仍由现有 typed owner 持有。
+
+回归覆盖独立空态与无授权、另一 App/来源确认拒绝、过期、创建与 scope adoption、
+原生结果返回、停止、重复事件和同线程恢复。本地真实 Codex 源码 canary 另验证
+合成委托遇到额度限制后，沿用原生线程恢复并返回可核验的 fixture 结果。
+这不证明真实飞书入站或手机验收。多 Agent 协调、真实媒体/权限交互、正式安装与
+登录恢复、手机旅程仍开放；runtime/authority 发布继续等待维护者审核。
+
+合成产品预览：[空管家与项目助手](../../assets/personal-workspace/private-steward-empty.png)、
+[窄视口](../../assets/personal-workspace/private-steward-empty-narrow.png)。
 
 ## 决策：让 App 成为工作会话持续进行的地方
 

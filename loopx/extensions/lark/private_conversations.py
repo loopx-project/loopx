@@ -150,11 +150,22 @@ class LarkPrivateConversations:
                 if not text.strip():
                     return {"status": "empty_text"}
             command = {"/status": "status", "/new": "new", "/stop": "stop"}.get(text.strip())
+            if binding["context_kind"] == "steward":
+                for prefix, selected_command in [("/delegate", "commission"), ("/委托", "commission"),
+                                                  ("/confirm", "confirm_commission"), ("/cancel", "cancel_commission"),
+                                                  ("/stop-commission", "stop_commission"), ("/resume-commission", "resume_commission")]:
+                    if text.strip() == prefix or text.strip().startswith(prefix + " "):
+                        command = selected_command
+                        break
             if message_type != "text":
                 command = "unsupported"
             try:
                 admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                     request_ref=request, message=text, command=command)
+            except ValueError:
+                record.update(status="rejected", response="操作格式不正确；新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。")
+                _atomic_write_json(path, record)
+                return {"status": "command_rejected"}
             except RuntimeError as exc:
                 if str(exc) != "session_queue_full":
                     raise
@@ -224,6 +235,13 @@ class LarkPrivateConversations:
                     continue
                 try:
                     self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+                    if record["status"] in {"command_queued", "command_completed", "commission_running"}:
+                        native = self.core.read_request(record["request_ref"])
+                        if native["status"] == "command_queued":
+                            self._deliver(path, record, "admission", native["response"])
+                            continue
+                        record.update(status=native["status"], response=native.get("response"),
+                                      commission_resources=native.get("commission_resources"))
                     if record["status"] == "accepted":
                         # Receipt follows persistent Core admission and is
                         # independent of terminal execution and reply delivery.
@@ -237,6 +255,20 @@ class LarkPrivateConversations:
                     else:
                         response = _command_text(str(record.get("response_code") or "")) or str(record.get("response") or "")
                     if self._deliver(path, record, "terminal", response):
+                        resources = record.get("commission_resources") or {}
+                        if resources.get("session_id") and resources.get("turn_id"):
+                            first_turn = self.core.controller.store.load_turn(resources["session_id"], resources["turn_id"])
+                            if not first_turn or first_turn["status"] not in {"completed", "failed", "interrupted", "expired"}:
+                                record["status"] = "commission_running"
+                                _atomic_write_json(path, record)
+                                continue
+                            result_text = str((first_turn.get("response") or {}).get("message") or "")
+                            result_text = "委托执行结果：\n" + result_text if first_turn["status"] == "completed" else "委托首轮执行未完成；原 Goal 和回执已保留，请查看状态后决定恢复。"
+                            proposal_id = native.get("proposal_id")
+                            if proposal_id:
+                                result_text += f"\n如需恢复暂停或额度受限的原执行：/resume-commission {proposal_id} --tokens N（N 为包含历史用量的总上限，须大于已用量；不会重开线程）。"
+                            if not self._deliver(path, record, "commission_result", result_text):
+                                continue
                         config = self._inbox(record)
                         acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config,
                             message_ids=[record["event"]["message_id"]], execute=True)

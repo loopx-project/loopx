@@ -40,17 +40,23 @@ class ChatConversationBindings:
         return result
 
     def configure(self, *, transport_ref: str, project_ref: str,
-                  executor_endpoint_id: str) -> dict[str, Any]:
+                  executor_endpoint_id: str, context_kind: str = "project") -> dict[str, Any]:
         observation = self.observe(transport_ref)
         candidate = {
             "schema_version": "loopx_chat_conversation_binding_v0",
             "binding_id": uuid.uuid4().hex[:24], "transport_ref": transport_ref,
             "provider_ref": observation["provider_ref"], "operator_ref": observation["operator_ref"],
-            "context_kind": "project", "project_ref": project_ref,
-            "executor_endpoint_id": executor_endpoint_id, "grant": "workspace_read", "enabled": True,
+            "context_kind": context_kind, "project_ref": project_ref,
+            "executor_endpoint_id": executor_endpoint_id,
+            "grant": "workspace_read" if context_kind == "project" else "portfolio_read", "enabled": True,
+            **({"goal_ids": []} if context_kind == "steward" else {}),
         }
         with exclusive_file_lock(self.path, operation="configure_chat_conversation_binding"):
             current = self.read()
+            previous = next((row for row in current["bindings"] if row["transport_ref"] == transport_ref), None)
+            if (context_kind == "steward" and previous and all(previous.get(key) == candidate.get(key)
+                    for key in ["context_kind", "project_ref", "executor_endpoint_id", "provider_ref", "operator_ref"])):
+                candidate["goal_ids"] = previous["goal_ids"]
             result = self._core("collaboration.conversation.binding", {
                 "current": current, "expected_revision": current.get("revision"), "operation": "configure",
                 "binding": candidate, "observation": observation, "available_projects": self.projects.available(),
@@ -90,3 +96,28 @@ class ChatConversationBindings:
     def session_context(self, saved: dict[str, Any]) -> dict[str, Any]:
         return self.resolve(binding_id=saved["binding_id"], source_ref=saved["source_ref"],
                             sender_ref=saved["operator_ref"], private_human_message=True, session_context=saved)
+
+    def steward_scope(self, session: dict[str, Any]) -> list[str] | None:
+        saved = session.get("steward_context")
+        if not isinstance(saved, dict):
+            return None
+        selected = self.session_context(saved)
+        if session.get("goal_id") != "loopx-manager" or session.get("channel_id") != selected["channel_id"]:
+            raise ValueError("bound steward audience changed")
+        return list(selected["context"]["goal_ids"])
+
+    def adopt_created_goal(self, *, binding_id: str, source: dict[str, Any], proposal: dict[str, Any],
+                          goal: dict[str, Any]) -> None:
+        selected = self.resolve(binding_id=binding_id, **source)
+        with exclusive_file_lock(self.path, operation="adopt_steward_created_goal"):
+            current = self.read()
+            result = self._core("collaboration.conversation.binding", {
+                "current": current, "expected_revision": current["revision"], "operation": "adopt_created_goal",
+                "binding_id": binding_id, "context": selected["context"], "proposal": proposal,
+                "goal": {"goal_id": goal["id"], "workspace_path": str(Path(goal["repo"]).resolve()),
+                         "creation_operation_id": goal.get("creation_operation_id")},
+            })
+            if result["changed"]:
+                _atomic_write_json(self.path, result["state"])
+            if self.read() != result["state"]:
+                raise OSError("steward scope publication did not verify")

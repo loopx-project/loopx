@@ -50,6 +50,16 @@ class ChatProjectContexts:
             raise ValueError(str(exc)) from exc
 
     def session_context(self, session: dict[str, Any]) -> dict[str, Any]:
+        steward = session.get("steward_context")
+        if isinstance(steward, dict):
+            if self.conversation_bindings is None:
+                raise ValueError("bound steward authority is unavailable")
+            selected = self.conversation_bindings.session_context(steward)
+            if session.get("goal_id") != "loopx-manager" or session.get("channel_id") != selected["channel_id"]:
+                raise ValueError("steward audience mismatch")
+            from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+            return {"project": Path(selected["context"]["workspace_path"]), "objective": MANAGER_AGENT_OBJECTIVE,
+                    "title": "Steward"}
         saved = session.get("project_context")
         if not isinstance(saved, dict) or session.get("goal_id") is not None:
             raise ValueError("invalid ordinary project Session")
@@ -64,3 +74,26 @@ class ChatProjectContexts:
         return {"project": Path(selected["context"]["workspace_path"]),
                 "objective": PROJECT_CONVERSATION_OBJECTIVE,
                 "title": Path(selected["context"]["workspace_path"]).name}
+
+    def open_bound(self, binding_id: str, source: dict[str, Any], *, executor: str, channel_id: str | None) -> dict[str, Any]:
+        if self.conversation_bindings is None:
+            raise ValueError("bound conversation authority is unavailable")
+        selected = self.conversation_bindings.resolve(binding_id=binding_id, **source)
+        if selected["binding"]["executor_endpoint_id"] != executor:
+            raise ValueError("executor does not match the conversation grant")
+        if channel_id is not None and channel_id != selected["channel_id"]:
+            raise ValueError("bound conversation channel mismatch")
+        steward = selected["binding"]["context_kind"] == "steward"
+        session = {"goal_id": "loopx-manager" if steward else None, "channel_id": selected["channel_id"],
+                   "project_context": None if steward else selected["context"],
+                   "steward_context": selected["context"] if steward else None}
+        return {**session, **self.session_context(session)}
+
+    @staticmethod
+    def initialize_bound_scope(store, session):
+        steward = session.get("steward_context")
+        if not steward:
+            return session
+        from ...chat_manager_context import manager_authorization_scope_id
+        return store.update_session(session["session_id"], manager_authorization_scope_id=manager_authorization_scope_id(
+            steward["goal_ids"], runtime_root=store.root.parent, channel_id=session["channel_id"]))

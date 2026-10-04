@@ -2380,9 +2380,9 @@ export async function updateGoalOwnership(body: { goal_id: string; mode: Executi
 
 
 const privateConversationSchema = z.object({
-  binding_id: z.string(), app_ref: z.string(), context_kind: z.literal("project"),
+  binding_id: z.string(), app_ref: z.string(), context_kind: z.enum(["project", "steward"]),
   project_ref: z.string(), project_title: z.string(), context_available: z.boolean(), executor_endpoint_id: z.string(),
-  grant: z.literal("workspace_read"), listener_status: z.string(),
+  grant: z.enum(["workspace_read", "portfolio_read"]), goal_count: z.number().int().default(0), listener_status: z.string(),
   pending_count: z.number().int(), recovery_count: z.number().int(),
 });
 const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
@@ -2391,10 +2391,10 @@ export type PrivateConversation = z.infer<typeof privateConversationSchema>;
 export async function fetchPrivateConversations() {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
 }
-export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string) {
+export async function connectPrivateConversation(appRef: string, projectRef: string, executor: string, contextKind: "project" | "steward" = "project") {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
     method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor}),
+    body: JSON.stringify({app_ref: appRef, project_ref: projectRef, executor_endpoint_id: executor, context_kind: contextKind}),
   }));
 }
 export async function disconnectPrivateConversation(bindingId: string, revision: number) {

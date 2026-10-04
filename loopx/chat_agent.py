@@ -835,7 +835,11 @@ class CodexChatAgentSession:
                 try:
                     message = waiter.get_nowait()
                 except queue.Empty:
-                    with self._message_dispatch_lock:
+                    # A streaming reader can route this RPC response while holding
+                    # the fence. Recheck our waiter instead of waiting for an event.
+                    if not self._message_dispatch_lock.acquire(timeout=0.1):
+                        continue
+                    try:
                         try:
                             message = waiter.get_nowait()
                         except queue.Empty:
@@ -870,6 +874,8 @@ class CodexChatAgentSession:
                                     continue
                                 self._pending_events.put(message)
                                 continue
+                    finally:
+                        self._message_dispatch_lock.release()
                 if message.get("id") == request_id:
                     if message.get("error"):
                         if method in {

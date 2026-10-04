@@ -28,6 +28,30 @@ export function projectConversationIdentity(input: Record<string, unknown>): Rec
     ? `project.${context.project_ref}` : `project.external.${context.binding_id}.${context.source_ref}`};
 }
 
+export function normalizeStewardGoalScope(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 128
+      || value.some(g => typeof g !== "string" || !/^[A-Za-z0-9._-]{1,160}$/.test(g)
+        || [".", "..", "loopx-manager"].includes(g))) throw new Error("invalid steward Goal scope");
+  return [...new Set(value as string[])].sort();
+}
+
+/** An explicitly selected steward has a bounded portfolio, including an honest
+ * empty one. Identity is persisted by Core; message text cannot select it.
+ */
+export function normalizeStewardContext(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("steward context unavailable");
+  const row = value as Record<string, unknown>;
+  const workspace = normalizeProjectContext({...row, kind: "project_workspace", grant: "workspace_read"});
+  if (row.kind !== "bound_steward" || row.audience !== "bound_owner" || row.grant !== "portfolio_read"
+      ) throw new Error("invalid bounded steward context");
+  return {...workspace, kind: "bound_steward", grant: "portfolio_read", goal_ids: normalizeStewardGoalScope(row.goal_ids)};
+}
+
+export function stewardConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
+  const context = normalizeStewardContext(input.context);
+  return {context, channel_id: `manager.external.native.${context.binding_id}.${context.source_ref}`};
+}
+
 type ConversationScope = Record<string, unknown> & (
   | {kind: "owner_portfolio"; goal_ids: null; private_conversation: true}
   | {kind: "owner_goal"; goal_ids: [string]; private_conversation: true}
@@ -53,6 +77,14 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
         return {kind: "project_workspace", goal_ids: [], private_conversation: false};
       }
     } catch { /* Incomplete host identity grants no context. */ }
+  }
+  if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark")) {
+    try {
+      const selected = stewardConversationIdentity({context: input.steward_context});
+      if (channel === selected.channel_id) {
+        return {kind: "external_audience", goal_ids: [], private_conversation: false, bound_steward: true};
+      }
+    } catch { /* An incomplete steward identity cannot authorize a portfolio. */ }
   }
   if (channel === "manager") {
     return {kind: "owner_portfolio", goal_ids: null, private_conversation: true};

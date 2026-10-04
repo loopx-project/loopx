@@ -60,7 +60,7 @@ browser coverage. A native Codex source canary separately qualifies distinct
 upstream threads with independently observed real App identities. Neither is a
 live Lark/model/mobile result. Installed service qualification, phone journeys,
 registered Agent selection, real incremental/media/permission interactions and
-a separately granted long-running steward remain open acceptance. Runtime and
+broader long-running coordination remain open acceptance. Runtime and
 permission-boundary changes require maintainer review before promotion.
 
 The private setup UI composes within Settings → Lark; the App workspace scope
@@ -73,6 +73,57 @@ resides in the extension, while the typed binding owner remains provider-neutral
 Synthetic product previews: [desktop](../../assets/personal-workspace/private-project-conversations.png),
 [narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
 [revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
+
+## Bound steward private Chat: explicit new commissions
+
+Settings → Lark can now select a steward role independently of ordinary project
+Chat. The existing typed conversation binding owns its App, verified owner,
+source, workspace and bounded portfolio. A verified empty scope is distinct from
+an unavailable authorization; it contains no inherited Goals and does not certify
+global inventory coverage. Ordinary Chat still has no Goal or manager identity.
+
+Only an explicit `/delegate --tokens N objective` prepares a `goal.create`
+preview. Confirmation must arrive from that exact owner/App/source within fifteen
+minutes. The immutable preview shows the read-only boundary, total native token
+allowance and absence of automatic scheduling. Existing canonical Chat actions
+create the Goal and return their receipt; Core adopts only that exact new creation
+in the configured workspace. Existing Goal and single-workspace fallbacks cannot
+redirect it. Neither normal conversation nor model prose creates a commission.
+
+The existing service worker advances the durable Core request without blocking
+inbound admission. Codex native Goal continuation performs the read-only work;
+its result returns through the original private-source delivery journal.
+`/stop-commission` freezes the execution target at admission, while an explicit
+`/resume-commission ... --tokens N` retains the original Session, native thread,
+objective and cumulative usage. Native completion is host execution evidence,
+not canonical Goal/Todo acceptance. An allowance includes previous usage and
+context; an in-flight request can exceed it. No default heartbeat is enabled.
+
+Portfolio extension refreshes scoped evidence/tools in the same steward thread.
+After creation commits, the existing request journal saves its exact resource
+receipt before attempting portfolio adoption. An adoption or readback failure
+keeps that operation queued for recovery. Recovery rechecks the original
+binding and canonical receipt, adopts the same resources, and returns their
+result without creating another Goal or model thread. Notification cannot
+settle an operation whose adoption is pending. Fault journeys cover adoption
+failure, lost adoption readback, an interrupted creation-owner call and revoked
+binding; they qualify provider/Core IO recovery, not a full host restart.
+App, owner, source and workspace identity remain frozen and rechecked. A silent
+native event reader cannot block the control RPC receipt needed to pause work.
+The provider-specific setup companion belongs to the Lark extension; the
+conversation, request, scope and creation semantics remain in their typed owners.
+
+Regression journeys cover independently verified empty versus missing scope,
+wrong App/source confirmation, expiry, creation/adoption, native result return,
+stop, duplicate events and same-thread recovery. A local actual Codex source
+canary separately exercised a budget-limited synthetic commission and resumed it
+in the same native thread to return verified fixture findings. It did not prove
+real Lark inbound or phone acceptance. Multi-Agent coordination, actual media /
+permission interactions, installed login recovery and mobile journeys remain
+open; runtime/authority promotion still requires maintainer review.
+
+Synthetic product previews: [empty steward and project assistant](../../assets/personal-workspace/private-steward-empty.png),
+[narrow](../../assets/personal-workspace/private-steward-empty-narrow.png).
 
 ## Decision: make the App the place where work conversations continue
 
