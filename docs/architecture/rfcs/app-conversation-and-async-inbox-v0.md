@@ -28,6 +28,26 @@ Five questions organize the experience: is my request still here; who is actuall
 working; did my correction or stop take effect; where is the checked result; and
 how do I come back after failure without starting the work again?
 
+### Realtime Bot entry and recipient purpose
+
+A native Bot replacement is another entry to this conversation lifecycle. Its
+realtime connection is independent of periodic Goal work. Entry and recipient
+purpose are separate: ordinary project chat, direct conversation with an existing
+Agent, and the persistent steward share mechanics but have different objectives
+and grants. The [steward operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract)
+orders transport isolation, ordinary DM/role choice, progress/media/permissions
+and installed replacement qualification under S5.
+
+Ordinary project chat needs a shared Core conversation context whose workspace,
+executor and audience are explicitly authorized, without a user-created Goal or
+an automatic global-steward objective. This is a remaining entry requirement,
+not a new shipped Session schema. Lark must not implement it by creating hidden
+Goals, copying another host's sessions, or introducing an independent executor.
+Explicit recipient selection uses permitted stable references; labels do not
+confer grants. Switching the selected recipient affects future input, while
+accepted work and returns retain their original Session, source and audience.
+Stop targets the exact current request rather than every Agent behind a Bot.
+
 ### Managed and attached are different execution relationships
 
 | Relationship | App promise | Required evidence and limit |

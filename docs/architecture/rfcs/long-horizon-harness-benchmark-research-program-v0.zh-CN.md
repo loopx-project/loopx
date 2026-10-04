@@ -552,6 +552,14 @@ non-material event mix；它不能证明 benchmark integrity，也不能复用�
 研究应估计 model/work-class-specific response curve，而不是一个全局 tool-call 或 Todo-count
 threshold。更宽并不天然更好。
 
+拟议[长作业修订](hierarchical-agent-stride-control-v0.zh-CN.md#75-长作业与决策-checkpoint修订提案)
+测试**决策时机**，不延后 Turn 记账。先 shadow capture 一个 provider 的 validated
+result/checkpoint 和绑定 monitor；只有通过资格验证的 opt-in arm 才能抑制
+unchanged model admission。原生评测、job 资源、deadline 与所有欠付 Turn
+settlement 保持一致。测量 observer CPU/IO、模型 token/call、result-to-decision
+latency、漏结果、重复执行/debit 与总预算下原生结果。Callback 丢失必须按已声明
+observation deadline 恢复。训练更久或 bookkeeping call 更少，单独都不够资格。
+
 ### 8.2 Evidence、空转检测与 semantic replan
 
 核心假设是 durable coverage ledger 与 semantic progress observation 能阻止重复 maintenance
@@ -562,6 +570,15 @@ successor、coverage-backed exhaustion、blocker 或 no-follow-up。
 LHTB 是首要动态实验场，因为 partial reward 与 checkpoint 可以显示方向变化是否产生进展。
 DeepSWE 验证相同机制能否改善 repository outcome，且不依赖 reward-specific shortcut。
 ALE 验证它能否迁移到异构专业工作流。
+
+拟议[实验决策路径](research-exploration-control-plane-v0.zh-CN.md#115-由证据驱动的实验决策修订提案)
+把 result adoption 与 cadence 分别验证。固定 session continuity、planning、model
+和总预算，对比仅交付 evidence 与 evidence-linked continuation/successor adoption，
+独立比较成立后再组合机制。包含有效负证据、inconclusive/conflicting measurement、
+失败前置条件、有依据复验、未覆盖的同 family probe 与 input 改变后重开 scope。
+除原生结果和成本外，判断实际执行的 next action 是否遵循 scoped result。
+Citation/schema compliance 单独不够；压制有用实验的强制 pivot 算失败。
+这些是拟议 study，不是当前 C2/C4 evidence，也不授予 job launch 权限。
 
 ### 8.3 研究探索与组合
 
