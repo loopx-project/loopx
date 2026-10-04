@@ -60,12 +60,19 @@ owner submitting a directory entry.
   goal/todo/evidence/monitor/replan state while `research_loop` owns scientific
   state. **Status: maintenance integration merged**; later auto-wake
   [PR #26](https://github.com/hk20013106/RLR/pull/26) is closed unmerged.
-- **LoopX Console** (xielixing) — a third-party BitFun MiniApp uses the local
-  LoopX CLI, `quota should-run` and host Agent execution for GitHub issue repair.
-  [Source and installation](https://github.com/xielixing/loopx-console) and
-  [releases](https://github.com/xielixing/loopx-console/releases) are public.
-  **Status: independently published**; OpenBitFun upstream inclusion is a
-  separate proposal below.
+- **LoopX Console** (xielixing) — a third-party BitFun MiniApp for GitHub issue
+  repair. Independent [v3.9.29](https://github.com/xielixing/loopx-console/releases/tag/v3.9.29)
+  was published August 18, 2026, with a MiniApp ZIP asset.
+  The [checked main worker](https://github.com/xielixing/loopx-console/blob/dca7883ea5d4e2a0d48c0af5a1764c51a5023b53/source/worker.js)
+  calls the local LoopX CLI and `quota should-run` using the `outer_controller`
+  profile; its fallback source installation pins LoopX **v0.2.13**.
+  The [same snapshot's README](https://github.com/xielixing/loopx-console/blob/dca7883ea5d4e2a0d48c0af5a1764c51a5023b53/README.md)
+  assigns scheduling and execution to the MiniApp/BitFun host and describes
+  human approval before PR publication. **Status: independently published,
+  historical CLI integration observed**. Release metadata and current source
+  are separate evidence; the ZIP, real host execution, current LoopX compatibility
+  and sustained use were not independently tested. OpenBitFun upstream inclusion
+  remains a separate proposal below. Checked October 5, 2026.
 - **zyra** (BingruL) — its [packaging configuration](https://github.com/BingruL/zyra/blob/fix/execution-timeouts-and-diagnostics/pyproject.toml)
   includes an embedded LoopX runtime and CLI entry points.
   **Status: source and packaging integration observed**; deployment and
@@ -177,7 +184,9 @@ accepted design documents are distinct from depending on the LoopX runtime.
   is open and replaces closed, unmerged #2382. The maintainer
   [prioritizes beta stability before evaluating the larger feature](https://github.com/GCWing/OpenBitFun/pull/2836#issuecomment-5613986161).
   **Status: upstream integration proposed**, separate from the published
-  third-party LoopX Console.
+  third-party LoopX Console. Neither the independent release nor the author's
+  reported local checks establishes an upstream merge or release.
+  Checked October 5, 2026.
 - **codexia** — upstream [PR #71](https://github.com/milisp/codexia/pull/71)
   was closed unmerged after the author explained it targeted the wrong repository;
   downstream [PR #1](https://github.com/connorodea/codexia-task-management/pull/1)
@@ -299,7 +308,8 @@ accepted design documents are distinct from depending on the LoopX runtime.
   adds no confirmed runtime adopter and does not revalidate the rest of the table.
 - Scoped update: **2026-10-04–05**, rechecking OpenViking, NoKV, Hufu and
   benjamin-plugins against current public PR/issue states and pinned source files.
-  AAOP's historical pilot and current retirement were reconciled on October 5.
+  AAOP's historical pilot/retirement and LoopX Console's independent release,
+  historical CLI pin and separate OpenBitFun proposal were reconciled on October 5.
   This distinguishes proposal packaging, historical tooling and pilots, plugin
   registration and current acceptance limits. No live integration was
   independently reproduced and other entries were not revalidated.
