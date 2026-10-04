@@ -313,24 +313,23 @@ These are integration-cost and contract observations, not claims that Pi lacks
 events or DSH cannot support other models. Both expose control-capable APIs;
 passivity is a property of the selected adapter and its loaded dependencies.
 
-The two LoopX surfaces that depend on dsh do not move together. The bounded Turn
-host uses the Python SDK/runtime pin recorded above (`0.1.5rc1`, the released
-channel). The dsh-side plugin (`packages/dsh-loopx-plugin`) now builds its
-development, host, and client surfaces on the same released `0.1.5-rc.2` line
-instead of the retired `0.1.1-rc.2` one, and its npm peer ranges admit only
-`>=0.1.5-rc.1`. Three upstream moves forced that, so it is a new release line
-rather than a patch: the 0.1.5 line no longer publishes
-`@deepseek-ai/dsh-client-runtime` (last released 0.1.1-rc.2), which moves the
-`slots` service seat to `@deepseek-ai/dsh-client-ui-renderer` — the package this
-manifest now names in `dsh.client.inject`; `Session.events` became
-`Session.snapshotEvents()` and `Inbox.hasPending` became the two pending queues;
-and the shared `/api` bridge addresses Remote methods as `<namespace>/<method>`
-with a single `args` payload field. One `dsh.client.inject` list cannot order
-boot rows for both generations at once, so the plugin cannot claim both. The L1
-observer contract above is unchanged: the observer still consumes only
-`session/created`, `session/event`, and `session/disposed`, and now treats
-token-level `assistant/chunk` rows as retired input replayed from older durable
-logs instead of a live event type.
+The bounded Turn host's Python SDK/runtime pin remains separate from the
+independently versioned `packages/dsh-loopx-plugin`. The plugin source now pins
+its development, host, and Client packages to `0.2.0-rc.2`, retaining the supported
+0.1.5 and explicit 0.1.7 prerelease peer ranges. It registers its initialization
+message source, resets Session state at `agent/created`, and keeps Connection
+Peer admission in the upstream transport. Client revisions remain opaque.
+The retired 0.1.1 Client runtime is still unsupported; the renderer owns slots,
+and the shared `/api` carrier retains `<namespace>/<method>` and `args`.
+
+Distribution acceptance requires the exact GitHub release artifact on npm,
+the qualified `latest` tag, and repository search selecting `dsh-loopx-plugin`
+instead of the monorepo root. The registry smoke qualifies package-name
+installation and removal locally; CI covers Linux and Windows. Public npm
+publication, marketplace catalog adoption, and browser-mounted Start/Pause
+remain independent release evidence. The L1 observer still consumes only
+`session/created`, `session/event`, and `session/disposed`; this compatibility
+repair does not close its separately budgeted C0/C1 or overhead qualification.
 
 ## Data and Authority Flow
 

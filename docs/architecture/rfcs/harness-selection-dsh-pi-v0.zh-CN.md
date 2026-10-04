@@ -250,20 +250,18 @@ tag：PyPI 上的 `deepseek-harness-sdk==0.1.5rc1` /
 这是接入成本和合同差异，不是说 Pi 没有事件，或 DSH 不能使用其他模型。
 两个 harness 都有控制 API；“被动”是具体 adapter 和实际加载依赖的性质。
 
-依赖 dsh 的两个 LoopX 面并不一起移动：有界 Turn 宿主使用上文记录的 Python
-SDK/runtime 固定版本（`0.1.5rc1`，已发布通道）；而 dsh 侧插件
-（`packages/dsh-loopx-plugin`）的开发、宿主与客户端面现已统一构建在同一已发布的
-`0.1.5-rc.2` 线上，不再停留在 `0.1.1-rc.2`，其 npm peer 范围只接受
-`>=0.1.5-rc.1`。这是上游三处变化逼出来的，因此它是一条新的发布线而不是原地补丁：
-0.1.5 线不再发布 `@deepseek-ai/dsh-client-runtime`（最后发布版本为 `0.1.1-rc.2`），
-`slots` service 座位随之移到 `@deepseek-ai/dsh-client-ui-renderer`，也就是本 manifest
-现在写入 `dsh.client.inject` 的包；`Session.events` 变为 `Session.snapshotEvents()`，
-`Inbox.hasPending` 变为两个 pending 队列；共享 `/api` bridge 用
-`<namespace>/<method>` 寻址 Remote 方法，并只接受一个 `args` payload 字段。一份
-`dsh.client.inject` 无法同时为两代排序 boot row，所以插件不能同时声明两代。上文的
-L1 observer 契约不变：observer 仍只消费 `session/created`、`session/event`、
-`session/disposed`，只是把 token 级 `assistant/chunk` 行视为旧 durable 日志重放出来的
-已退场输入，而不是现存事件类型。
+有界 Turn 宿主的 Python SDK/runtime 固定版本，与独立版本化的
+`packages/dsh-loopx-plugin` 分开维护。插件源码现将开发、Host、Client 包固定为
+`0.2.0-rc.2`，保留已支持的 0.1.5 和显式 0.1.7 预发布 peer 范围。插件注册自己的
+初始化消息来源，在 `agent/created` 重置 Session 状态，并由上游 Connection transport
+继续负责 Peer 准入；Client revision 保持不透明。已退场的 0.1.1 Client runtime 仍不支持，
+slots 由 renderer 提供，共享 `/api` 保留 `<namespace>/<method>` 和 `args` 契约。
+
+分发验收要求 npm 上的包与 GitHub release artifact 完全一致，`latest` 指向已验证版本，
+仓库搜索选中 `dsh-loopx-plugin` 而不是 monorepo 根目录。registry smoke 在本地验证
+包名安装与卸载，CI 覆盖 Linux 和 Windows。公开 npm 发布、市场目录采用，以及浏览器
+挂载后的 Start/Pause 仍各自需要发布证据。L1 observer 仍只消费 `session/created`、
+`session/event`、`session/disposed`；兼容性修复不关闭另行预算的 C0/C1 或开销验收。
 
 ## 数据流与权限
 
