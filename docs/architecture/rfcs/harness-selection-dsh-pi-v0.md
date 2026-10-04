@@ -319,6 +319,8 @@ its development, host, and Client packages to `0.2.0-rc.2`, retaining the suppor
 0.1.5 and explicit 0.1.7 prerelease peer ranges. It registers its initialization
 message source, resets Session state at `agent/created`, and keeps Connection
 Peer admission in the upstream transport. Client revisions remain opaque.
+Bootstrap and runtime consumers require LoopX 1.2.4 or newer, including the
+released Windows peer-file fix; an explicit outdated CLI fails before install.
 The retired 0.1.1 Client runtime is still unsupported; the renderer owns slots,
 and the shared `/api` carrier retains `<namespace>/<method>` and `args`.
 

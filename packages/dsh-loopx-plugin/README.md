@@ -51,9 +51,11 @@ copy under `$DSH_AGENTS_HOME/runtime/dsh-loopx-plugin` (default
 `~/.agents/runtime/dsh-loopx-plugin`) and never mutates the system Python
 environment. This works with externally managed Python distributions that
 enforce PEP 668; the plugin does not use `--break-system-packages`.
-The published plugin requires LoopX 0.5.4 or newer. Although 0.5.3 carried the
-workflow-skill files, 0.5.4 is the first release that discovers them after the
-plugin's Linux `pip --target` managed-runtime install.
+The source candidate requires LoopX 1.2.4 or newer, the published release that
+includes the Windows peer-file fix. Bootstrap, Driver and GoalBar use the same
+version floor; an older global or managed CLI is upgraded or rejected before
+business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
+owner. Older plugin releases retain their original CLI requirements.
 Install the prebuilt release into the web profile:
 
 ```bash
@@ -157,6 +159,8 @@ For every DSH plugin release:
    The registry smoke serves the real packed bytes on loopback and invokes
    DSH's unversioned package-name installer; it publishes nothing. CI repeats
    this installation and removal on Linux and Windows.
+   Qualification uses pnpm 10.33.0; use that version for reproducible source
+   and isolated-registry checks.
 2. Prepare complete bilingual GitHub release notes. Run
    `examples/release/release-readiness-doc-smoke.py` with one `--surface` for
    every optional capability changed by the release.

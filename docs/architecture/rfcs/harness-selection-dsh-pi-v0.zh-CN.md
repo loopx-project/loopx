@@ -254,8 +254,10 @@ tag：PyPI 上的 `deepseek-harness-sdk==0.1.5rc1` /
 `packages/dsh-loopx-plugin` 分开维护。插件源码现将开发、Host、Client 包固定为
 `0.2.0-rc.2`，保留已支持的 0.1.5 和显式 0.1.7 预发布 peer 范围。插件注册自己的
 初始化消息来源，在 `agent/created` 重置 Session 状态，并由上游 Connection transport
-继续负责 Peer 准入；Client revision 保持不透明。已退场的 0.1.1 Client runtime 仍不支持，
-slots 由 renderer 提供，共享 `/api` 保留 `<namespace>/<method>` 和 `args` 契约。
+继续负责 Peer 准入；Client revision 保持不透明。
+初始化与运行时统一要求包含 Windows peer-file 修复的 LoopX 1.2.4 或更新版本；
+显式指定的旧 CLI 在安装前失败。已退场的 0.1.1 Client runtime 仍不支持，slots 由
+renderer 提供，共享 `/api` 保留 `<namespace>/<method>` 和 `args` 契约。
 
 分发验收要求 npm 上的包与 GitHub release artifact 完全一致，`latest` 指向已验证版本，
 仓库搜索选中 `dsh-loopx-plugin` 而不是 monorepo 根目录。registry smoke 在本地验证
