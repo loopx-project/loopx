@@ -344,6 +344,7 @@ def run_worker(
             continue
 
         retry_after_error = False
+        wake_completed = False
         while True:
             if decision.reset_token and decision.reset_token != previous_token:
                 unchanged_count = 0
@@ -417,6 +418,7 @@ def run_worker(
                     retry_after_error = True
                 else:
                     unchanged_count = 0
+                    wake_completed = bool(args.wake_cmd)
                 break
 
             _log(
@@ -501,7 +503,12 @@ def run_worker(
 
         if once:
             return 0
-        sleep(max(5, interval_minutes * 60))
+        # A completed synchronous wake is an event to recheck admission now,
+        # not a reason to add an idle polling interval. The fresh quota decision
+        # still owns continuation; waiting/observe-only ticks retain their
+        # cadence and failures use the independent backoff path above.
+        if not wake_completed:
+            sleep(max(5, interval_minutes * 60))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

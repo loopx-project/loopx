@@ -246,6 +246,58 @@ def test_quota_probe_timeout_enters_tick_error(tmp_path: Path) -> None:
     assert time.monotonic() - started < 2.0
 
 
+@pytest.mark.parametrize("expected_sleeps,wake_exit,observe_only,next_state", [
+    ([], 0, False, "terminal"),
+    ([], 0, False, "active"),
+    ([60], 0, False, "waiting"),
+    ([5], 1, False, "terminal"),
+    ([60], 0, True, "terminal"),
+])
+def test_completed_wake_rechecks_admission_without_active_delay(
+    tmp_path: Path,
+    expected_sleeps: list[float], wake_exit: int, observe_only: bool, next_state: str,
+) -> None:
+    # Real worker and child commands, with requested waits captured.
+    # The second quota response revokes admission: a completed wake must never
+    # cause another wake using its old should_run decision.
+    fake_cli = tmp_path / "quota"
+    counter = tmp_path / "quota-count"
+    active = _hint_payload(should_run=True)
+    terminal = _hint_payload(should_run=False, local_scheduler_directive="stop")
+    packets = [active]
+    if next_state == "active":
+        packets.append(active)
+    elif next_state == "waiting":
+        packets.append(_waiting_payload())
+    packets.append(terminal)
+    _write_executable(fake_cli, "#!/usr/bin/env python3\n"
+        "import json\nfrom pathlib import Path\n"
+        f"counter = Path({str(counter)!r})\n"
+        "n = int(counter.read_text()) if counter.exists() else 0\n"
+        "counter.write_text(str(n + 1))\n"
+        f"print(json.dumps({packets!r}[n]))\n")
+    marker = tmp_path / "wake-count"
+    wake_code = ("from pathlib import Path; "
+        f"p=Path({str(marker)!r}); "
+        "p.write_text(str(int(p.read_text()) + 1) if p.exists() else '1'); "
+        f"raise SystemExit({wake_exit})")
+    args = _args(fake_cli=fake_cli, state_file=tmp_path / "state.json",
+        wake_cmd=shlex.join([sys.executable, "-c", wake_code]),
+        quota_timeout_seconds=5.0, wake_timeout_seconds=5.0)
+    args.once = False
+    if observe_only:
+        args.wake_cmd = None
+    sleeps: list[float] = []
+
+    assert worker.run_worker(args, sleep=sleeps.append) == 0
+    assert sleeps == expected_sleeps
+    assert counter.read_text() == str(len(packets))
+    if observe_only:
+        assert not marker.exists()
+    else:
+        assert marker.read_text() == ("2" if next_state == "active" else "1")
+
+
 @pytest.mark.parametrize(
     "action",
     ["stop_until_explicit_resume", "return_to_owner_until_material_change"],
