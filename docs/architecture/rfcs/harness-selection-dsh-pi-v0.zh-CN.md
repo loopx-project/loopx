@@ -259,10 +259,12 @@ tag：PyPI 上的 `deepseek-harness-sdk==0.1.5rc1` /
 显式指定的旧 CLI 在安装前失败。已退场的 0.1.1 Client runtime 仍不支持，slots 由
 renderer 提供，共享 `/api` 保留 `<namespace>/<method>` 和 `args` 契约。
 
-分发验收要求 npm 上的包与 GitHub release artifact 完全一致，`latest` 指向已验证版本，
+npm 分发通道要求包与 GitHub release artifact 完全一致，`latest` 指向已验证版本，
 仓库搜索选中 `dsh-loopx-plugin` 而不是 monorepo 根目录。registry smoke 在本地验证
-包名安装与卸载，CI 覆盖 Linux 和 Windows。公开 npm 发布、市场目录采用，以及浏览器
-挂载后的 Start/Pause 仍各自需要发布证据。L1 observer 仍只消费 `session/created`、
+包名安装与卸载，CI 覆盖 Linux 和 Windows。
+[Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93) 提议按现有权威目录命令
+直接安装 release 包；该通道须待 Hub 发布并验证在线目录采用后，才能替代对 npm 的要求。
+公开分发、市场目录采用，以及浏览器挂载后的 Start/Pause 仍各自需要发布证据。L1 observer 仍只消费 `session/created`、
 `session/event`、`session/disposed`；兼容性修复不关闭另行预算的 C0/C1 或开销验收。
 
 ## 数据流与权限

@@ -144,12 +144,15 @@ never opens a browser or configures a model provider.
 
 ## Maintainer release and marketplace handoff
 
-A DSH plugin release is complete only after the same prebuilt package is
-published to npm, its immutable GitHub asset exists, and an update pull request
-has been opened against the upstream
+A DSH plugin release needs an immutable prebuilt GitHub asset, a qualified
+marketplace install channel, and an update pull request against the upstream
 [`awesome-dsh-plugin`](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
 marketplace. Marketplace maintainers retain merge authority; publishing a
-LoopX release does not grant authority over that catalog.
+LoopX release does not grant authority over that catalog. The current DSH Hub
+requires npm discovery to avoid its root-Git fallback. Direct release-package
+support is proposed in [Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93);
+using that route requires a released Hub version and online catalog readback
+that selects the pinned package, installs it and removes it successfully.
 
 For every DSH plugin release:
 
@@ -168,8 +171,8 @@ For every DSH plugin release:
    publish both the version tag and `dsh-loopx-plugin-<version>.tgz` asset.
 4. Read the remote release body back and rerun the release-readiness smoke.
    Download the remote asset and verify that its SHA-256 matches the local
-   package before advertising it. Publish that **same tarball**, including its
-   compiled Host, Client, Driver and initializer, to npm:
+   package before advertising it. For the npm channel, publish that **same
+   tarball**, including its compiled Host, Client, Driver and initializer:
 
    ```bash
    npm whoami
@@ -199,7 +202,9 @@ For every DSH plugin release:
    `node scripts/generate-readme.mjs --check` and `git diff --check`.
 6. Open an upstream marketplace pull request and link it from the release
    closeout. Do not describe the release as marketplace-published until that
-   pull request is merged by the upstream maintainers.
+   pull request is merged by the upstream maintainers and the installed
+   marketplace resolves the released package. A catalog listing alone does
+   not prove that its installer consumes the pinned release command.
 
 ## Shadow observer (default off)
 

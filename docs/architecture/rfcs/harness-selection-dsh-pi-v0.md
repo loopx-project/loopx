@@ -324,12 +324,15 @@ released Windows peer-file fix; an explicit outdated CLI fails before install.
 The retired 0.1.1 Client runtime is still unsupported; the renderer owns slots,
 and the shared `/api` carrier retains `<namespace>/<method>` and `args`.
 
-Distribution acceptance requires the exact GitHub release artifact on npm,
+The npm distribution channel requires the exact GitHub release artifact,
 the qualified `latest` tag, and repository search selecting `dsh-loopx-plugin`
 instead of the monorepo root. The registry smoke qualifies package-name
-installation and removal locally; CI covers Linux and Windows. Public npm
-publication, marketplace catalog adoption, and browser-mounted Start/Pause
-remain independent release evidence. The L1 observer still consumes only
+installation and removal locally; CI covers Linux and Windows. Direct release
+installation is proposed in [Hub PR #93](https://github.com/dshplugin/dsh-plugin-hub/pull/93),
+using the existing authoritative catalog command. It needs a released Hub and
+verified online-catalog adoption before it replaces the npm requirement for
+that route. Public distribution, marketplace adoption, and browser-mounted
+Start/Pause remain independent release evidence. The L1 observer still consumes only
 `session/created`, `session/event`, and `session/disposed`; this compatibility
 repair does not close its separately budgeted C0/C1 or overhead qualification.
 
