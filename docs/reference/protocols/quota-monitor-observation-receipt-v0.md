@@ -76,9 +76,14 @@ advancement work remains active.
   Turn recomputes them. The automation stays active and quiet between Turns.
   Completing, superseding or archiving the Monitor cannot reopen its committed
   Turn. The settlement reader reports `replay_phase=settled`; CLI replay retains
-  the original identity in `heartbeat_receipt.settlement_identity` and has no
-  executable `selected_todo`. Consumers must use the receipt for historical
-  identity instead of requiring the Monitor to remain in the open frontier.
+  the original identity in `heartbeat_receipt.settlement_identity`. The same
+  receipt-bound identity is also projected as `selected_todo` and, when its
+  recorded monitor item is available, `agent_lane_next_action` with
+  `receipt_bound_monitor_phase=settled`. These are historical readback, not
+  executable selection: `should_run=false`, `must_attempt_work=false` and
+  `effective_action=heartbeat_settled_skip` remain authoritative. Consumers
+  must not require the Monitor to remain in the open frontier or infer a new
+  poll, delivery or spend from the presence of these identity fields.
   Uncommitted observation rows and auxiliary polls for another Todo do not
   qualify this closeout.
 
