@@ -345,6 +345,10 @@ def release_runtime_identity(release_root: Path | None = None) -> dict[str, str 
     return identity
 
 
+def _distribution_artifact_file(path: Path) -> bool:
+    return "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
+
+
 def _distribution_runtime_fingerprint() -> str | None:
     """Hash the actual imported, RECORD-owned wheel contents, not RECORD hashes.
 
@@ -361,6 +365,7 @@ def _distribution_runtime_fingerprint() -> str | None:
             item.as_posix(): Path(item.locate())
             for item in installed.files or ()
             if item.as_posix().startswith("loopx/")
+            and _distribution_artifact_file(Path(item.as_posix()))
         }
         module = files.get("loopx/release_manifest.py")
         if module is None or module.resolve() != Path(__file__).resolve():
@@ -371,8 +376,7 @@ def _distribution_runtime_fingerprint() -> str | None:
         actual = {
             "loopx/" + path.relative_to(package_root).as_posix()
             for path in entries
-            if path.is_file() and "__pycache__" not in path.parts
-            and path.suffix not in {".pyc", ".pyo"}
+            if path.is_file() and _distribution_artifact_file(path.relative_to(package_root))
         }
         if actual != files.keys():
             return None

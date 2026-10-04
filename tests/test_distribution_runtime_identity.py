@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
+import sys
+import venv
+import zipfile
 
 import pytest
 
@@ -48,6 +52,43 @@ def test_generated_bytecode_does_not_retag_the_installed_artifact(owned_package)
     (package / "__pycache__").mkdir()
     (package / "__pycache__/release_manifest.cpython-312.pyc").write_bytes(b"cache")
     assert manifest.release_runtime_identity() == before
+
+
+def test_real_pip_compiled_and_uncompiled_wheel_have_the_same_identity(tmp_path: Path):
+    # Use the production identity module in a small valid wheel. pip, rather
+    # than this fixture, generates bytecode and its installed RECORD entries.
+    version = manifest.__version__
+    metadata = f"loopx-{version}.dist-info"
+    contents = {
+        "loopx/__init__.py": Path(manifest.__file__).with_name("__init__.py").read_text(),
+        "loopx/release_manifest.py": Path(manifest.__file__).read_text(),
+        f"{metadata}/METADATA": f"Metadata-Version: 2.1\nName: loopx\nVersion: {version}\n",
+        f"{metadata}/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    }
+    contents[f"{metadata}/RECORD"] = "".join(f"{name},,\n" for name in [*contents, f"{metadata}/RECORD"])
+    wheel = tmp_path / f"loopx-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    identities = []
+    for compile_bytecode in (True, False):
+        environment = tmp_path / ("compiled" if compile_bytecode else "uncompiled")
+        venv.EnvBuilder(with_pip=True).create(environment)
+        python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+        subprocess.run([str(python), "-I", "-m", "pip", "install", "--no-index", "--no-deps",
+                        "--disable-pip-version-check", *([] if compile_bytecode else ["--no-compile"]),
+                        str(wheel)], check=True, capture_output=True, text=True, timeout=60)
+        observed = subprocess.run([str(python), "-I", "-c",
+            "import json; from importlib.metadata import distribution; "
+            "from loopx.release_manifest import release_runtime_identity; "
+            "print(json.dumps({'identity': release_runtime_identity(), "
+            "'recorded_bytecode': sum(p.suffix == '.pyc' for p in distribution('loopx').files)}))"],
+            check=True, capture_output=True, text=True, timeout=60)
+        result = json.loads(observed.stdout)
+        assert bool(result["recorded_bytecode"]) is compile_bytecode
+        assert result["identity"]["package_fingerprint"].startswith("sha256:")
+        identities.append(result["identity"])
+    assert identities[0] == identities[1]
 
 
 @pytest.mark.parametrize("invalid", ["editable", "unowned", "extra", "missing", "symlink", "broken_symlink", "version"])
