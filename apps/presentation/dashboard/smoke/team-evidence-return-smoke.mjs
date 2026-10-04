@@ -78,6 +78,10 @@ try {
     if (body.operation === "read" && body.operation_id === "accepted-analysis") {
       return route.fulfill({status: 409, json: {error: "original acceptance revoked"}});
     }
+    if (body.operation === "operations") {
+      return route.fulfill({json: {items: [{record_id: "a".repeat(64), operation_id: "accepted-analysis",
+        status: "unavailable", recovery_required: null}], has_more: false, next_cursor: null, page_readback_complete: false}});
+    }
     return route.fallback();
   };
   await page.route("**/api/chat/sessions/*/loopx", failedReturn);
@@ -86,10 +90,41 @@ try {
   assert.equal(await original().count(), 0, "Returning after revocation cannot restore the old report");
   assert.equal(await verificationGap.count(), 0, "Unavailable evidence cannot retain a prior correction trace");
   await dialog.getByRole("button", {name: "返回执行列表", exact: true}).click();
+  await dialog.locator('.goal-team-record[data-state="unavailable"]').waitFor({timeout: 3000});
+  assert.equal(await dialog.locator('.goal-team-pulse [data-bucket="accepted"] strong').textContent(), "0",
+    "Returning to the list must withdraw accepted counts when current evidence is unavailable");
+  assert.ok(await openEvidence.first().evaluate(el => el === document.activeElement));
+  await page.unroute("**/api/chat/sessions/*/loopx", failedReturn);
+  const refresh = dialog.getByRole("button", {name: "重新核验", exact: true});
+  await refresh.click();
+  await dialog.locator('.goal-team-record[data-state="accepted"]').waitFor();
+  await openEvidence.first().click();
+  await original().waitFor();
+  const failedList = async route => route.request().postDataJSON()?.operation === "operations"
+    ? route.fulfill({status: 503, json: {error: "delegation inventory unavailable"}}) : route.fallback();
+  await page.route("**/api/chat/sessions/*/loopx", failedList);
+  await dialog.getByRole("button", {name: "返回执行列表", exact: true}).click();
+  await dialog.getByRole("alert").filter({hasText: "delegation inventory unavailable"}).waitFor();
+  assert.equal(await dialog.locator(".goal-team-pulse").count(), 0, "Failed readback cannot retain cached counts");
+  assert.equal(await openEvidence.count(), 0, "Failed readback cannot retain cached execution records");
+  assert.ok(await refresh.evaluate(el => el === document.activeElement), "Unavailable list returns focus to recovery");
+  await page.unroute("**/api/chat/sessions/*/loopx", failedList);
+  await refresh.click();
+  await dialog.locator('.goal-team-record[data-state="accepted"]').waitFor();
+  await dialog.getByRole("button", {name: "下一页", exact: true}).click();
+  await dialog.locator('.goal-team-record[data-state="recovery_required"]').waitFor();
+  await openEvidence.first().click();
+  await evidence.waitFor();
+  const listReadsBefore = api.loopxModeRequests.filter(row => row.operation === "operations").length;
+  await dialog.getByRole("button", {name: "返回执行列表", exact: true}).click();
+  await dialog.locator('.goal-team-record[data-state="recovery_required"]').waitFor();
+  const listReads = api.loopxModeRequests.filter(row => row.operation === "operations");
+  assert.equal(listReads.length, listReadsBefore + 1, "List return performs one read, without polling");
+  assert.equal(listReads.at(-1).cursor, "b".repeat(64), "Return retains the original page instead of jumping to the first page");
   assert.ok(await openEvidence.first().evaluate(el => el === document.activeElement));
   assert.equal(api.turnRequests.length, 0);
   assert.equal(api.loopxModeRequests.filter(row => row.operation === "message").length, 0);
-  console.log("team-evidence-return: passed (packaged navigation, multi-step keyboard return, fresh acceptance, revoked return, mobile and no execution)");
+  console.log("team-evidence-return: passed (packaged navigation, keyboard return, fresh evidence/list, revocation, list failure/recovery, pagination, mobile and no execution)");
 } finally {
   await workspace?.close();
   await browser?.close();

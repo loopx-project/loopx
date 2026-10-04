@@ -60,6 +60,9 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   const backButton = useRef<HTMLButtonElement | null>(null);
   const lastSelection = useRef<string | null>(null);
   const selectedTrigger = useRef<HTMLButtonElement | null>(null);
+  const refreshButton = useRef<HTMLButtonElement | null>(null);
+  const pageCursor = useRef<string | undefined>(undefined);
+  const pendingListFocus = useRef(false);
   const [page, setPage] = useState<DelegationInventory | null>(null);
   const [checks, setChecks] = useState<Record<string, DelegationPreflight>>({});
   const [checkErrors, setCheckErrors] = useState<Record<string, string>>({});
@@ -67,15 +70,23 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0);
-  useEffect(() => {(selected ? backButton.current : selectedTrigger.current)?.focus();}, [selected]);
+  useEffect(() => {
+    if (selected) backButton.current?.focus();
+    else if (pendingListFocus.current && !busy) {
+      (selectedTrigger.current ?? refreshButton.current)?.focus();
+      pendingListFocus.current = false;
+    }
+  }, [selected, busy, page]);
   const memberKey = members.map(member => `${member.id}:${member.agent_id}:${member.todo_id}`).join("|");
   useEffect(() => {
-    generation.current++; setPage(null); setChecks({}); setCheckErrors({}); setInspectionTotal(0); setError(""); setBusy(false);
+    generation.current++; pendingListFocus.current = false;
+    setPage(null); setChecks({}); setCheckErrors({}); setInspectionTotal(0); setError(""); setBusy(false);
     void read();
     return () => {generation.current++;};
   }, [sessionId, memberKey]);
   async function read(cursor?: string) {
     const current = ++generation.current;
+    pageCursor.current = cursor;
     setBusy(true); setError(""); setPage(null); setEvidencePath([]);
     try {
       const result = await fetchLoopXTeamWork(sessionId, cursor);
@@ -83,6 +94,12 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
     } catch (failure) {
       if (current === generation.current) setError(failure instanceof Error ? failure.message : String(failure));
     } finally {if (current === generation.current) setBusy(false);}
+  }
+  function returnToList() {
+    // Reconcile current acceptance before restoring the original page/focus.
+    // A failed read leaves recovery available, rather than stale success rows.
+    pendingListFocus.current = true;
+    void read(pageCursor.current);
   }
   async function inspect(id: string) {
     const current = ++generation.current;
@@ -123,10 +140,13 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
   const blocked = checked - ready - unverified;
   if (selected) return <div className="goal-team-work">
     <div className="goal-team-work-actions">
-      <button ref={backButton} type="button" onClick={() => setEvidencePath(path => path.slice(0, -1))}>
+      <button ref={backButton} type="button" onClick={() => {
+        if (evidencePath.length > 1) setEvidencePath(path => path.slice(0, -1));
+        else returnToList();
+      }}>
         {evidencePath.length > 1 ? (zh ? "返回上一份证据" : "Back to previous evidence") : (zh ? "返回执行列表" : "Back to executions")}
       </button>
-      {evidencePath.length > 1 ? <button type="button" onClick={() => setEvidencePath([])}>{zh ? "返回执行列表" : "Back to executions"}</button> : null}
+      {evidencePath.length > 1 ? <button type="button" onClick={returnToList}>{zh ? "返回执行列表" : "Back to executions"}</button> : null}
     </div>
     <GoalTeamEvidence key={`${sessionId}:${selected}`} sessionId={sessionId} operationId={selected} zh={zh} canMessage={canMessage} ingress={ingress}
       onInspect={operationId => {if (operationId !== selected) setEvidencePath(path => [...path, operationId]);}}/>
@@ -194,7 +214,7 @@ export function GoalTeamWork({sessionId, members, zh, canMessage, ingress}: {ses
         </li>;
       })}</ul>
       <div className="goal-team-work-actions"><strong>{zh ? "此协调身份的持久工作" : "Durable work for this coordinator"}</strong>
-        <span><button type="button" disabled={busy} onClick={() => {setChecks({}); setCheckErrors({}); void read();}}>{zh ? "重新核验" : "Refresh"}</button>
+        <span><button ref={refreshButton} type="button" disabled={busy} onClick={() => {setChecks({}); setCheckErrors({}); void read();}}>{zh ? "重新核验" : "Refresh"}</button>
         {page?.has_more && page.next_cursor ? <button type="button" disabled={busy} onClick={() => void read(page.next_cursor!)}>{zh ? "下一页" : "Next page"}</button> : null}</span></div>
       {busy ? <p role="status">{zh ? "正在读取当前事实…" : "Reading current facts…"}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
