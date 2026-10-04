@@ -171,6 +171,9 @@ class BenchmarkCodex(CodexOffline):
                 f"chmod 0644 {_BASH_ENV}; "
                 f"find {_SRC} -maxdepth 2 \\( -name '*.egg-info' -o "
                 f"-name '*.dist-info' \\) -exec rm -rf {{}} +; "
+                # The formal source installer builds generated frontend assets
+                # as the environment user; the archive is extracted by root.
+                f"chown -R {shlex.quote(str(environment.default_user or 'root'))} {_SRC}; "
                 f"chmod -R a+rX {_SRC} {_PYTHON} {_NODE}; "
                 f"chmod -R a+rwX {_PROFILE} {_CONTROL} {_CODEX_HOME} {_WAKE_LOG_DIR}"
             ),
@@ -197,6 +200,12 @@ class BenchmarkCodex(CodexOffline):
             )
             if "error" in (install.stderr or "").lower():
                 self.logger.debug("LoopX installer stderr: %s", install.stderr[-1000:])
+
+            # Ownership is needed only for the trusted build. Restore the
+            # staged source boundary before any solver/worker starts.
+            await self.exec_as_root(
+                environment, command=f"chown -R root {_SRC}", timeout_sec=180,
+            )
 
             doctor = await self.exec_as_agent(
                 environment,
