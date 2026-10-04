@@ -87,7 +87,8 @@ def test_local_peer_delivery_completes_and_settles_without_git(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_local_in_flight_progress_keeps_completion_independent(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("release_execution_lease", [False, True])
+def test_local_in_flight_progress_keeps_completion_independent(tmp_path, monkeypatch, provider, release_execution_lease):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry, _, _ = journey._source(
         tmp_path, provider=provider, handoff_mode="hard_lease",
@@ -103,6 +104,14 @@ def test_local_in_flight_progress_keeps_completion_independent(tmp_path, monkeyp
                                 "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID,
                                 "--task-lease-idempotency-key", "local-in-flight", cwd=project)
     assert code == 0 and claimed["ok"], claimed
+    if release_execution_lease:
+        code, released = cli._run_cli(
+            registry, runtime, "task-lease", "release", "--goal-id", cli.GOAL_ID,
+            "--todo-id", cli.TODO_ID, "--owner", cli.AGENT_ID,
+            "--idempotency-key", "local-in-flight",
+            "--expected-version", str(claimed["lease"]["version"]), cwd=project,
+        )
+        assert code == 0 and released["ok"], released
     code, refreshed = cli._run_cli(
         registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
         "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
