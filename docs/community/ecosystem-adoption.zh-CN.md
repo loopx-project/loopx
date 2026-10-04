@@ -59,9 +59,16 @@
   **状态：独立发布，已观察到历史 CLI 集成**。发布元数据与当前源码是不同证据；
   ZIP、真实宿主执行、当前 LoopX 兼容和持续使用未独立验证。是否进入 OpenBitFun
   上游仍是下文的另一项提案。核对日期：2026-10-05。
-- **zyra**（BingruL）——[打包配置](https://github.com/BingruL/zyra/blob/fix/execution-timeouts-and-diagnostics/pyproject.toml)
-  内嵌 LoopX runtime 并注册 CLI 入口。
-  **状态：已观察到源码与打包集成**；未验证部署和持续运行。
+- **zyra**（BingruL）——核对时默认分支为
+  `fix/execution-timeouts-and-diagnostics`；此处固定到 2026-09-19 的
+  [源码快照](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/pyproject.toml)。打包配置包含内嵌 LoopX 模块和 CLI 入口；
+  [源码清单](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/loopx_runtime/SOURCE-MANIFEST.json)
+  固定 **LoopX v0.2.13**，所列源文件与上游该 tag 的源码树一致。
+  [运行时解析器](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/zyra_integrations/loopx/runtime/resolver.py)
+  要求使用内嵌源码或归属 Zyra 的已安装发行包，不回退到归档包。
+  **状态：已观察到固定版本的源码与打包集成**。复核时未列出 GitHub release 或 tag，
+  这不说明是否曾在其他渠道发布。wheel 安装、真实 Web/API 执行、当前 LoopX 兼容
+  和持续使用均未独立验证。核对日期：2026-10-05。
 - **Hufu**（Blicae8917）——已合并的
   [PR #70](https://github.com/Blicae8917/hufu/pull/70) 于 2026-08-23 增加显式启用的
   LoopX v0.5.2 RunOnce Consumer。核对的 main 快照已
@@ -265,6 +272,7 @@
   的源文件；本轮未新增可确认的运行时采用者，也不代表其余条目重新验真。
 - 局部更新：**2026-10-04–05**，按当前公开 PR/Issue 状态和固定版本源文件复核
   OpenViking、NoKV、Hufu 和 benjamin-plugins；10 月 5 日对齐 AAOP 历史试点/退役、
-  LoopX Console 独立发布与历史 CLI pin，以及单独的 OpenBitFun 提案。
+  LoopX Console 独立发布与历史 CLI pin、zyra 的默认分支与内嵌源码 pin，
+  以及单独的 OpenBitFun 提案。
   区分提案打包配置、历史工具和试点、插件注册及当前验收限制。
   未独立复现真实集成，其余条目未重新验真。

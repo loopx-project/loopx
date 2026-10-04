@@ -73,10 +73,19 @@ owner submitting a directory entry.
   are separate evidence; the ZIP, real host execution, current LoopX compatibility
   and sustained use were not independently tested. OpenBitFun upstream inclusion
   remains a separate proposal below. Checked October 5, 2026.
-- **zyra** (BingruL) — its [packaging configuration](https://github.com/BingruL/zyra/blob/fix/execution-timeouts-and-diagnostics/pyproject.toml)
-  includes an embedded LoopX runtime and CLI entry points.
-  **Status: source and packaging integration observed**; deployment and
-  sustained runtime use were not verified.
+- **zyra** (BingruL) — the checked default branch is
+  `fix/execution-timeouts-and-diagnostics`, pinned here to the September 19, 2026
+  [source snapshot](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/pyproject.toml).
+  Packaging includes the embedded LoopX modules and CLI entry points. Its
+  [source manifest](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/loopx_runtime/SOURCE-MANIFEST.json)
+  pins **LoopX v0.2.13**; the listed source files match the upstream tag's tree.
+  The [runtime resolver](https://github.com/BingruL/zyra/blob/3e20698e0182ec291cbdd87e7206fbae87706004/packages/integrations/zyra_integrations/loopx/runtime/resolver.py)
+  requires the embedded source or a Zyra-owned installed distribution, without
+  an archive fallback. **Status: pinned source and packaging integration observed**.
+  No GitHub release or tag was listed at review; this does not establish whether
+  a package was published elsewhere. Wheel installation, live Web/API execution,
+  compatibility with current LoopX and sustained use were not independently
+  verified. Checked October 5, 2026.
 - **Hufu** (Blicae8917) — [PR #70](https://github.com/Blicae8917/hufu/pull/70),
   merged August 23, 2026, adds an opt-in LoopX v0.5.2 RunOnce Consumer.
   The checked main snapshot [exports the consumer and its ports](https://github.com/Blicae8917/hufu/blob/51adc0918c6e904ce904f2be93a4d1a76fcef502/src/hufu/index.ts);
@@ -309,7 +318,8 @@ accepted design documents are distinct from depending on the LoopX runtime.
 - Scoped update: **2026-10-04–05**, rechecking OpenViking, NoKV, Hufu and
   benjamin-plugins against current public PR/issue states and pinned source files.
   AAOP's historical pilot/retirement and LoopX Console's independent release,
-  historical CLI pin and separate OpenBitFun proposal were reconciled on October 5.
+  historical CLI pin, zyra's default branch and embedded source pin, and the separate
+  OpenBitFun proposal were reconciled on October 5.
   This distinguishes proposal packaging, historical tooling and pilots, plugin
   registration and current acceptance limits. No live integration was
   independently reproduced and other entries were not revalidated.
