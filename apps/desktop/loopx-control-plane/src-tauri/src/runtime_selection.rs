@@ -1,0 +1,283 @@
+//! Native launch preference only; installation identity remains owned by Core.
+use serde_json::{json, Value};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+use tauri::{AppHandle, Manager};
+
+pub(crate) struct Selection {
+    pub executable: String,
+    pub explicit: bool,
+    pub environment_override: bool,
+}
+
+fn preference_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|_| "runtime_selection_unavailable")?
+        .join("runtime-selection.json"))
+}
+
+fn read_preference(path: &Path) -> Result<Option<String>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("runtime_selection_unavailable".into()),
+    };
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| "runtime_selection_invalid")?;
+    let executable = value["executable"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or("runtime_selection_invalid")?;
+    if value["schema_version"] != "desktop_runtime_selection_v1"
+        || !Path::new(executable).is_absolute()
+    {
+        return Err("runtime_selection_invalid".into());
+    }
+    Ok(Some(executable.to_owned()))
+}
+
+pub(crate) fn selected(app: &AppHandle) -> Result<Selection, String> {
+    if let Ok(executable) = std::env::var("LOOPX_BIN") {
+        if !executable.trim().is_empty() {
+            let executable = crate::services::loopx_executable();
+            let executable = fs::canonicalize(&executable)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or(executable);
+            return Ok(Selection {
+                executable,
+                explicit: true,
+                environment_override: true,
+            });
+        }
+    }
+    // A corrupt preference is not an installation failure. Automatic discovery
+    // can still find a usable CLI or prepare the App-owned runtime.
+    let remembered = match read_preference(&preference_path(app)?) {
+        Err(error) => {
+            eprintln!("LoopX launch preference ignored: {error}");
+            None
+        }
+        Ok(value) => value,
+    };
+    if let Some(executable) = remembered {
+        return Ok(Selection {
+            executable,
+            explicit: true,
+            environment_override: false,
+        });
+    }
+    Ok(Selection {
+        executable: crate::services::loopx_executable(),
+        explicit: false,
+        environment_override: false,
+    })
+}
+
+fn write_preference(path: &Path, executable: &str) -> Result<(), String> {
+    let executable = fs::canonicalize(executable).map_err(|_| "runtime_selection_unavailable")?;
+    let value = json!({"schema_version":"desktop_runtime_selection_v1",
+        "executable":executable.to_string_lossy()});
+    let directory = path.parent().ok_or("runtime_selection_unavailable")?;
+    fs::create_dir_all(directory).map_err(|_| "runtime_selection_unavailable")?;
+    let mut file =
+        tempfile::NamedTempFile::new_in(directory).map_err(|_| "runtime_selection_unavailable")?;
+    use std::io::Write;
+    file.write_all(value.to_string().as_bytes())
+        .map_err(|_| "runtime_selection_unavailable")?;
+    file.as_file()
+        .sync_all()
+        .map_err(|_| "runtime_selection_unavailable")?;
+    file.persist(path)
+        .map_err(|_| "runtime_selection_unavailable")?;
+    Ok(())
+}
+
+pub(crate) fn remember(app: &AppHandle, selection: &Selection) -> Result<(), String> {
+    write_preference(&preference_path(app)?, &selection.executable)
+}
+
+pub(crate) fn forget(app: &AppHandle) -> Result<(), String> {
+    match fs::remove_file(preference_path(app)?) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("runtime_selection_unavailable".into()),
+    }
+}
+
+// Native launch coordination only. Core continues to qualify installation
+// identity. Equal package versions need Git ancestry, never install timestamps
+// or lexical SHA order; an offline/diverged answer keeps the usable runtime.
+pub(crate) fn compare_runtimes(
+    package: &tauri::utils::PackageInfo,
+    installed: &Value,
+    candidate: &Value,
+    compare_commits: impl FnOnce(&str, &str) -> Option<std::cmp::Ordering>,
+) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    fn parse_like<T: std::str::FromStr>(_: &T, text: &str) -> Option<T> {
+        text.parse().ok()
+    }
+    let mut left = parse_like(&package.version, installed["package_version"].as_str()?)?;
+    let mut right = parse_like(&package.version, candidate["package_version"].as_str()?)?;
+    // Core wheels carry the release base; main-channel shell prereleases do
+    // not make that same Core version older than the stable package string.
+    left.pre = Default::default();
+    left.build = Default::default();
+    right.pre = Default::default();
+    right.build = Default::default();
+    match left.cmp(&right) {
+        Ordering::Equal => {
+            let left = installed["source_revision"].as_str()?;
+            let right = candidate["source_revision"].as_str()?;
+            if left == right {
+                Some(Ordering::Equal)
+            } else {
+                compare_commits(left, right)
+            }
+        }
+        order => Some(order),
+    }
+}
+
+pub(crate) fn compare_official_commits(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    if ![left, right]
+        .iter()
+        .all(|revision| revision.len() == 40 && revision.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return None;
+    }
+    // GitHub includes file patches only on page one. Page two retains the
+    // comparison relation without downloading a potentially huge source diff.
+    // https://docs.github.com/en/rest/commits/commits#compare-two-commits
+    let url = format!(
+        "https://api.github.com/repos/loopx-project/loopx/compare/{left}...{right}?per_page=1&page=2"
+    );
+    let mut command = std::process::Command::new("curl");
+    crate::services::configure_runtime_environment(&mut command);
+    command.args([
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--proto",
+        "=https",
+        "--max-time",
+        "2",
+        "--header",
+        "Accept: application/vnd.github+json",
+        &url,
+    ]);
+    let output =
+        crate::services::timed_output_with_timeout(command, std::time::Duration::from_secs(3))?;
+    if !output.status.success() {
+        return None;
+    }
+    let payload: Value = serde_json::from_slice(&output.stdout).ok()?;
+    match payload["status"].as_str()? {
+        "ahead" => Some(std::cmp::Ordering::Less),
+        "behind" => Some(std::cmp::Ordering::Greater),
+        "identical" => Some(std::cmp::Ordering::Equal),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn newer_runtime_uses_versions_then_ancestry_and_never_install_time() {
+        use std::cmp::Ordering;
+        let package = tauri::utils::PackageInfo {
+            name: "LoopX".into(),
+            version: "1.2.4-main.20261004".parse().unwrap(),
+            authors: "contributors",
+            description: "desktop",
+            crate_name: "desktop",
+        };
+        let identity = |version: &str, revision: Option<&str>| json!({"package_version":version,"source_revision":revision});
+        for (left, right, expected) in [
+            ("1.2.10", "1.2.9", Ordering::Greater),
+            ("1.2.3", "1.2.4", Ordering::Less),
+        ] {
+            assert_eq!(
+                compare_runtimes(
+                    &package,
+                    &identity(left, None),
+                    &identity(right, None),
+                    |_, _| panic!("different versions do not need a network")
+                ),
+                Some(expected)
+            );
+        }
+        let old = identity("1.2.4", Some("older"));
+        let main = identity("1.2.4-main.20261004", Some("newer"));
+        assert_eq!(
+            compare_runtimes(&package, &old, &main, |left, right| {
+                assert_eq!((left, right), ("older", "newer"));
+                Some(Ordering::Less)
+            }),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_runtimes(&package, &old, &main, |_, _| None),
+            None,
+            "offline or diverged is not permission to replace"
+        );
+        assert_eq!(
+            compare_runtimes(&package, &old, &old, |_, _| panic!(
+                "same revision needs no lookup"
+            )),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            compare_runtimes(&package, &identity("1.2.4", None), &main, |_, _| panic!(
+                "wheel has no source attestation"
+            )),
+            None
+        );
+        assert_eq!(
+            compare_runtimes(&package, &identity("invalid", None), &main, |_, _| panic!(
+                "invalid version"
+            )),
+            None
+        );
+    }
+    #[test]
+    fn preference_survives_restart_but_does_not_store_an_identity_or_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("loopx");
+        fs::write(&executable, b"installed CLI").unwrap();
+        let path = root.path().join("runtime-selection.json");
+        write_preference(&path, executable.to_str().unwrap()).unwrap();
+        assert_eq!(
+            read_preference(&path).unwrap(),
+            Some(
+                fs::canonicalize(&executable)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        let value: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 2);
+    }
+    #[test]
+    fn broken_selection_is_not_treated_as_a_missing_installation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("runtime-selection.json");
+        assert!(read_preference(&path).unwrap().is_none());
+        for bytes in [
+            "broken",
+            "{}",
+            r#"{"schema_version":"desktop_runtime_selection_v1","executable":"relative/loopx","use_installed":true}"#,
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(
+                read_preference(&path).unwrap_err(),
+                "runtime_selection_invalid"
+            );
+        }
+    }
+}
