@@ -51,8 +51,7 @@ shared request owner, and a replay retains the original Session/Turn target.
 A lost admission correlation cannot move a request to a newer Session. Admission
 feedback and final delivery use separate durable provider intents; an ambiguous
 write is read back without blind resend. Unsupported media receives an explicit
-notice. This grant remains workspace reading, without a Goal, portfolio or peer
-execution authority.
+notice. The workspace grant grants neither Goal, portfolio nor peer execution authority.
 
 The packaged settings journey, source revocation/recovery, duplicate events,
 native queue/stop and two-App isolation have synthetic-provider regression and
@@ -73,6 +72,33 @@ resides in the extension, while the typed binding owner remains provider-neutral
 Synthetic product previews: [desktop](../../assets/personal-workspace/private-project-conversations.png),
 [narrow](../../assets/personal-workspace/private-project-conversations-narrow.png),
 [revoked workspace](../../assets/personal-workspace/private-project-workspace-revoked.png).
+
+## Ordinary workspace writes: default and revocation checkpoint
+
+Ordinary project Chat defaults to `workspace_write` for host-declared roots. The
+Core context owner derives the actual Codex `workspace-write` sandbox on start
+and exact-thread resume; this is conversational work, without Task/Goal mode or
+manager permissions. The project prompt follows workspace `AGENTS.md` and skills,
+permits requested bounded edits, and keeps durable operations with their existing
+owners. A write grant does not activate Material Lifecycle or certify a project
+adapter's intake/ranking workflow.
+
+`loopx chat --project-workspace-grant workspace_read` restricts the host to
+read-only, including Lark bindings. Settings → Lark defaults a Codex project App
+to workspace writes within that host grant and exposes an explicit read-only
+choice. Other executors remain read-only until their host policy is qualified.
+The readback, `/status` and `/help` show the effective grant. Selecting an existing
+App restores its persisted setting. Changing a binding's grant requires a new
+identity and Session, invalidates the old Session for new work, and requires new
+Agent target grants; it cannot silently elevate an attached host or another App.
+Host grant removal or downgrade is rechecked before admission and resume.
+
+Typed Core/HTTP/native-host regressions qualify default writes, explicit read-only,
+workspace identity, independent App grants, old-Session rejection and exact-thread
+resume. A real Codex canary edited and read back a synthetic note under project
+rules while preserving prior text and creating no Goal. It is a host/filesystem
+result, not live Lark write-workflow, material intake or release qualification.
+Maintainer review, installed/Lark journeys and broader IM interactions remain open.
 
 ## Bound steward private Chat: explicit new commissions
 

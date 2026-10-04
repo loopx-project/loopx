@@ -415,6 +415,14 @@ Chat, session, collaboration and presentation owners as R2/R3 integration work.
 Do not call a candidate catalog, spinner or queued inbox receipt a completed
 worker handoff. This checkpoint does not lower R1–R3 or G1 gates.
 
+The [ordinary workspace write checkpoint](app-conversation-and-async-inbox-v0.md#ordinary-workspace-writes-default-and-revocation-checkpoint)
+adds default project writes under the host grant, explicit read-only launch/App
+settings and actual Codex sandbox enforcement on start/resume. It reuses the typed
+conversation owner and has no hidden Goal or manager permissions. Synthetic
+Core/HTTP cases and a real host note-edit canary do not establish installed Lark
+workflow readiness or activate a project's Material Lifecycle adapter. R3/S5
+still require original-audience write/readback, revoke/recovery and IM qualification.
+
 ### Attention-cost acceptance: create, connect, collaborate, understand
 
 The [public-safe golden-query pack](../../product/use-cases/steward/golden-queries.md)

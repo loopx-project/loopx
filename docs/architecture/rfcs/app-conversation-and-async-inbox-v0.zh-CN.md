@@ -522,3 +522,23 @@ Turn HTTP 预算包含既有附件额度的 base64 编码：最多四张图片�
 源码验收覆盖 HTTP 准入、会话持久化读回和合成 Codex 协议进程，以及打包后的桌面/窄屏
 图片发送、历史操作卡与拒绝后的草稿恢复。该证据只证明传输和界面行为，不证明真实模型质量、
 公开发布或已安装宿主验收。GQ06 的材料入口及 GQ07–09 的连续性仍须完成各自的交付与恢复验收。
+
+## 普通工作区读写：默认值与撤权检查点
+
+普通项目 Chat 对宿主声明的工作区默认使用 `workspace_write`。Core context owner
+在启动和原线程恢复时导出真实 Codex `workspace-write` 沙箱；仍是普通对话，不借
+Task/Goal 模式或 manager 权限。项目 prompt 要求读取工作区 AGENTS.md 与适用 skills，
+执行明确请求所需的有界编辑；持久状态继续走既有 owner。读写 grant 本身不激活
+Material Lifecycle，也不证明项目 adapter 的 intake/ranking 已接通。
+
+`loopx chat --project-workspace-grant workspace_read` 将宿主及 Lark 项目绑定限制为
+只读。设置 → Lark 的 Codex 项目 App 默认读写，并保留只读选项；其它 executor 在
+宿主策略完成验收前保持只读。设置读回、/status 和 /help 显示实际 grant，重新选择
+已配置 App 会恢复持久配置。改变 grant 会创建新绑定及 Session，拒绝旧会话的新工作，
+直连 Agent 必须重新授权；不能偷偷提高 attached 宿主或另一 App 的权限。宿主撤权或
+降为只读后，入站受理及恢复重新核验授权。
+
+typed Core、HTTP 与原生宿主回归覆盖默认读写、明确只读、工作区身份、App 独立授权、
+旧会话拒绝和原线程恢复。真实 Codex canary 按项目规则编辑并读回合成笔记，保留原文、
+不创建 Goal；这只是宿主/文件系统结果，不代表真实 Lark 写入、素材 intake 或发布完成。
+维护者 review、安装与 Lark 旅程、更多 IM 交互仍未关闭。
