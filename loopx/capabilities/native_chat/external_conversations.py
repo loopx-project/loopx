@@ -50,6 +50,12 @@ class ChatExternalConversations:
         controller = self.controller
         current = controller.store.latest_session(goal_id=None,
             agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
+        if row["command"] in {"status", "help"}:
+            # Observation must retain failed/closed originals. Admission still
+            # uses the resumable selector and never resumes from this snapshot.
+            current = max(controller.store.session_candidates(goal_id=None,
+                agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"]),
+                key=lambda candidate: str(candidate.get("updated_at") or ""), default=None)
         if row.get("session_id") and row["command"] is None:
             current = controller.store.load_session(row["session_id"])
             if current is None:
