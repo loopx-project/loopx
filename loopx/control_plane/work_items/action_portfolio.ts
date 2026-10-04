@@ -420,6 +420,14 @@ export function qualifyActionSelection(value: unknown): ActionSelectionQualifica
       requested_todo_id: requestedTodoId,
       reason: preemptions[0] ?? "current_delivery_gate",
       delivery_preemptions: preemptions,
+      // This is permission to refresh admission, never permission to deliver.
+      // Other hard lanes must remain visible to the caller without an inline
+      // retry. The CLI must durably retain the choice before taking this hop.
+      ...(shouldRun && !normalDeliveryAllowed &&
+          preemptions.includes("autonomous_replan") &&
+          preemptions.every((reason) =>
+            reason === "autonomous_replan" || reason === "delivery_not_allowed"
+          ) ? { inline_reentry_allowed: true } : {}),
     };
   }
   return {
