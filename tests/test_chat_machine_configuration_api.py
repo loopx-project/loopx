@@ -149,7 +149,7 @@ def test_real_chat_http_catalog_and_machine_write_boundary(tmp_path: Path) -> No
         assert {item["capability_id"] for item in catalog} >= {
             "periodic_report",
             "multi_subagent",
-            "explore_graph",
+            "explore_harness",
         }
         connection.request(
             "POST",

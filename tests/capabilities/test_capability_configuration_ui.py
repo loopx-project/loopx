@@ -366,7 +366,7 @@ def test_resolution_rejects_values_for_unsupported_scopes() -> None:
         ("multi_subagent", ["goal"]),
         ("peer_task_coordination", ["goal"]),
         ("explore_harness", ["goal"]),
-        ("explore_graph", ["goal"]),
+        ("explore_harness", ["goal"]),
         ("progress_review", ["goal"]),
         ("reward_memory", ["goal"]),
         ("lark_kanban_heartbeat_sync", ["goal"]),
