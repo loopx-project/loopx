@@ -21,6 +21,8 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 | `loopx status --use-projection-cache` hit | `status`, `served_from_cache: true` | as stored |
 | `loopx global-summary` | `global_summary` | `global` |
 | `loopx global-gates` | `global_gates` | `global` |
+| `loopx global-todos` | `global_todos` | `global` |
+| `loopx global-risks` | `global_risks` | `global` |
 
 Other read models adopt the envelope in the order listed in the RFC; until
 then they carry no freshness guarantee and consumer rule 1 below applies.
