@@ -32,12 +32,12 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
     return <fieldset className="personal-pr-review-agent-orders"><legend>{label}</legend>
       {(field.agents ?? []).map((agent) => <label htmlFor={`${id}-${agent}`} key={agent}>
         <span>{agent}</span>
-        <select aria-label={agent} disabled={readOnly} id={`${id}-${agent}`} value={String(orders[agent] ?? "inherit")}
+        <select aria-label={agent} disabled={readOnly} id={`${id}-${agent}`} value={String(Object.hasOwn(orders, agent) ? orders[agent] : "inherit")}
           onChange={onChange ? (event) => {
-            const next = {...orders};
-            if (event.target.value === "inherit") delete next[agent];
-            else next[agent] = event.target.value;
-            onChange(field.key, next);
+            const next = new Map(Object.entries(orders));
+            if (event.target.value === "inherit") next.delete(agent);
+            else next.set(agent, event.target.value);
+            onChange(field.key, Object.fromEntries(next));
           } : undefined}>
           <option value="inherit">{locale === "zh-CN" ? "继承 Goal" : "Inherit Goal"}</option>
           <option value="forward">{directionLabel("forward")}</option>

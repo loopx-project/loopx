@@ -16,7 +16,7 @@ import json,pathlib,sys
 from loopx.chat_server import ChatHTTPServer,ChatRequestHandler
 r=pathlib.Path(sys.argv[1]); runtime=r/'runtime'; registry=r/'.loopx/registry.json'
 registry.parent.mkdir()
-registry.write_text(json.dumps({'common_runtime_root':str(runtime),'goals':[{'id':'product-release','repo':str(r),'coordination':{'registered_agents':['a','b','code','docs','recovery','research','delivery']},'control_plane':{'pull_request_review':{'schema_version':'pull_request_review_goal_configuration_v0','agent_orders':{'a':'forward'}}}}]}))
+registry.write_text(json.dumps({'common_runtime_root':str(runtime),'goals':[{'id':'product-release','repo':str(r),'coordination':{'registered_agents':['a','b','code','docs','recovery','research','delivery','constructor']},'control_plane':{'pull_request_review':{'schema_version':'pull_request_review_goal_configuration_v0','agent_orders':{'a':'forward'}}}}]}))
 p=runtime/'machine/configuration.json';p.parent.mkdir(parents=True)
 p.write_text(json.dumps({'schema_version':'loopx_machine_configuration_v0','namespaces':{'pull_request_review':{'schema_version':'pull_request_review_machine_defaults_v0','wait_for_ci':False,'review_order':'forward'}}}))
 s=ChatHTTPServer(('127.0.0.1',0),ChatRequestHandler);s.registry_path=registry;s.runtime_root=runtime;s.runtime_root_override=str(runtime);s.verbose=False
@@ -56,9 +56,13 @@ export const prReviewAgentOrderScenario = {
       await page.getByRole("combobox", {name: "目标 Goal", exact: true}).selectOption("product-release");
       await page.getByRole("navigation", {name: "Goal 能力目录"}).getByRole("button", {name: /Pull-request Review/}).click();
       const detail = page.locator(".personal-capability-detail");
-      for (const agent of ["a", "b", "code", "docs", "recovery", "research", "delivery"]) {
+      for (const agent of ["a", "b", "code", "docs", "recovery", "research", "delivery", "constructor"]) {
         try { await detail.getByLabel(agent, {exact: true}).waitFor({timeout: 5000}); }
         catch (error) { throw new Error(`${error.message}; detail=${await detail.innerText()}; errors=${context.errors.join(" | ")}`); }
+      }
+      for (const agent of ["constructor"]) {
+        assert.equal(await detail.getByLabel(agent, {exact: true}).inputValue(), "inherit");
+        await detail.getByLabel(agent, {exact: true}).selectOption("reverse");
       }
       await detail.getByLabel("b", {exact: true}).selectOption("reverse");
       await detail.getByRole("button", {name: "预览变更", exact: true}).click();
@@ -70,11 +74,12 @@ export const prReviewAgentOrderScenario = {
       await (await reloaded).finished();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const readback = async () => JSON.parse(await readFile(join(root, ".loopx/registry.json"), "utf8")).goals[0].control_plane.pull_request_review;
-      assert.deepEqual((await readback()).agent_orders, {a: "forward", b: "reverse"});
+      assert.deepEqual((await readback()).agent_orders, {a: "forward", b: "reverse", constructor: "reverse"});
       assert.equal(Object.hasOwn(await readback(), "wait_for_ci"), false, "Agent save must retain live machine CI inheritance");
       await detail.evaluate(element => {element.scrollTop = 0;});
       await page.screenshot({path: resolve(outputDir, "pr-review-agent-directions.png"), animations: "disabled"});
       await detail.getByLabel("b", {exact: true}).selectOption("inherit");
+      for (const agent of ["constructor"]) await detail.getByLabel(agent, {exact: true}).selectOption("inherit");
       await detail.getByRole("button", {name: "预览变更", exact: true}).click();
       await detail.getByText("锁定 revision 的变更预览", {exact: true}).waitFor();
       const saved = page.waitForResponse(response => response.url().endsWith("goal-configuration/apply"));
@@ -103,7 +108,7 @@ export const prReviewAgentOrderScenario = {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
       assert.deepEqual(context.errors.filter(error => error !== "Failed to load resource: the server responded with a status of 400 (Bad Request)"), []);
       assert.ok(context.errors.length <= 1, "Only the explicitly asserted invalid-Agent response may log an HTTP error");
-      return {coverageEntries: context.coverageEntries, note: "Packaged Goal editor: seven Agents, real revisioned writer/readback, peer-preserving inherit, unknown-Agent error/recovery and narrow viewport; no live external calls."};
+      return {coverageEntries: context.coverageEntries, note: "Packaged Goal editor: eight Agents including an object-property name, real revisioned writer/readback, peer-preserving inherit, unknown-Agent error/recovery and narrow viewport; no live external calls."};
     } finally {
       clearTimeout(timer); lines.close();
       await context?.close();
