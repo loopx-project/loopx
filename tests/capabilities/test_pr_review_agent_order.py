@@ -86,6 +86,18 @@ def test_observation_selects_same_order_and_preserves_acknowledgments():
     assert selected["projected_candidate_count"] == 1
 
 
+def test_native_direction_prevents_independent_approval_preemption():
+    rows = _packet("forward")["pull_requests"]
+    rows = [row for row in rows if row["number"] in {4, 5}]
+    previous = build_pull_request_review_queue_observation(repository="owner/repo",
+        pull_requests=rows, result_completeness={"complete": True}, review_order="forward")
+    rows[1]["review_decision"] = "APPROVED"
+    for direction, expected in [("forward", 4), ("reverse", 5)]:
+        current = build_pull_request_review_queue_observation(repository="owner/repo",
+            pull_requests=rows, result_completeness={"complete": True}, previous_observation=previous, review_order=direction)
+        assert current["candidate"]["number"] == expected
+
+
 def test_scoped_precedence_patch_inheritance_and_unknown_agent_no_mutation():
     goal = {"coordination": {"registered_agents": ["a", "b"]}}
     machine = {"namespaces": {"pull_request_review": {
