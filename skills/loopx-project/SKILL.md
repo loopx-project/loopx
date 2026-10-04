@@ -1,14 +1,23 @@
 ---
 name: loopx-project
-description: Use when connecting a repository or project goal document to LoopX, maintaining project-local goal state, refreshing stale dashboard status, syncing local projects into the shared global registry, or diagnosing LoopX CLI/PATH/status/history issues across multiple repos. For registering durable project materials such as Lark/wiki/design docs, prefer the narrower loopx-doc-registry skill.
+description: Use for LoopX project lifecycle work: connect or configure a project/Goal, repair project-local state or stale dashboard status, sync registry entries, or diagnose CLI/PATH/status/history routing. Ordinary task execution and routine refresh-state settlement already directed by a current interaction_contract do not require this skill. For registering durable project materials, prefer loopx-doc-registry.
 ---
 
 # LoopX Project Workflow
 
-Use this skill when the task mentions LoopX, loopx, a project goal
-document, multi-project dashboard/status, stale latest run,
-`.loopx/registry.json`, `.codex/goals`, `refresh-state`,
-`sync-global`, or connecting a new repo. If the task is mainly about reading,
+Use this skill when the requested operation changes or diagnoses the project
+lifecycle, Goal configuration, registry routing, or status projection. A LoopX
+mention, registry path, or routine `refresh-state` command in an admitted task
+does not by itself select the project lifecycle workflow.
+
+For ordinary task execution, follow the current `interaction_contract`, its
+required reads and ordered settlement commands. Do not repeat onboarding,
+registry synchronization, or lifecycle discovery merely to execute that packet.
+This routing rule does not replace fresh admission, lease checks, required
+reads, or repair instructions. A missing or contradictory contract still needs
+the relevant diagnosis; an explicit request to use this skill still applies.
+
+If the task is mainly about reading,
 remembering, recording, indexing, or registering a durable project material,
 load `loopx-doc-registry` and use that narrower workflow first.
 
