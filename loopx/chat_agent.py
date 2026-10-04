@@ -432,7 +432,7 @@ class CodexChatAgentSession:
     reasoning_effort: str | None = None
     response_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
-    hard_timeout_sec: float = 900.0
+    hard_timeout_sec: float | None = 900.0
     next_request_id: int = 5
     current_turn_id: str = ""
     model_catalog_compatibility_applied: bool = False
@@ -468,7 +468,7 @@ class CodexChatAgentSession:
         objective: str,
         response_timeout_sec: float = 30.0,
         idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float = 900.0,
+        hard_timeout_sec: float | None = 900.0,
         resume_thread_id: str | None = None,
         execution_mode: bool = False,
         isolate_process_tree: bool = False,
@@ -988,7 +988,7 @@ class CodexChatAgentSession:
         last_activity_at = started_at
         while True:
             now = time.monotonic()
-            if now - started_at >= self.hard_timeout_sec:
+            if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:
                 raise self._timeout_error(
                     "hard_timeout", "Codex Chat turn reached its hard time limit."
                 )
@@ -996,15 +996,14 @@ class CodexChatAgentSession:
                 raise self._timeout_error(
                     "idle_timeout", "Codex Chat turn stopped producing activity."
                 )
-            deadline = min(
-                started_at + self.hard_timeout_sec,
-                last_activity_at + self.idle_timeout_sec,
-            )
+            deadline = last_activity_at + self.idle_timeout_sec
+            if self.hard_timeout_sec is not None:
+                deadline = min(deadline, started_at + self.hard_timeout_sec)
             try:
                 message = self._next_event(deadline=deadline)
             except CodexChatAgentError:
                 now = time.monotonic()
-                if now - started_at >= self.hard_timeout_sec:
+                if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:
                     raise self._timeout_error(
                         "hard_timeout",
                         "Codex Chat turn reached its hard time limit.",

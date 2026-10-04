@@ -311,7 +311,8 @@ def register_turn_commands(
             "run_dsh_turn(...) used instead of the DeepSeek Harness SDK."
         ),
     )
-    run_once.add_argument("--timeout-seconds", type=float, default=120.0)
+    run_once.add_argument("--timeout-seconds", type=float, default=None,
+                          help="Optional execution deadline; by default wait for host completion or cancellation.")
     run_once.add_argument(
         "--retry-failed-turn",
         action="store_true",

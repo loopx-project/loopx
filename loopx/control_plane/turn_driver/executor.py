@@ -662,7 +662,7 @@ def _run_host(
     *,
     argv: Sequence[str],
     project: Path,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
 ) -> dict[str, Any]:
     stdout: list[str] = []
     stderr_chars = 0
@@ -784,7 +784,7 @@ def _host_result_stage(
     argv: Sequence[str] | None,
     completion_lifecycle_configured: bool,
     project: Path,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     journal: dict[str, Any],
     persist_journal: JournalPersist,
     effects: dict[str, bool],
@@ -1276,7 +1276,7 @@ def run_loopx_turn_once(
     project: Path,
     runtime_root: Path,
     goal_id: str,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     execute: bool,
     retry_failed: bool = False,
     task_validator: TaskValidator | None = None,

@@ -264,11 +264,11 @@ def _shell_argv(command: str) -> list[str]:
     return ["/bin/sh", "-c", command]
 
 
-def _run_wake(command: str, *, timeout_seconds: float) -> CappedProcessResult:
+def _run_wake(command: str, *, timeout_seconds: float | None) -> CappedProcessResult:
     return run_capped_process(
         _shell_argv(command),
         stdin=b"",
-        timeout_seconds=max(0.01, timeout_seconds),
+        timeout_seconds=None if timeout_seconds is None else max(0.01, timeout_seconds),
         output_limit_bytes=PROCESS_OUTPUT_LIMIT_BYTES,
         termination_grace_seconds=10,
     )
@@ -376,9 +376,7 @@ def run_worker(
                 if args.wake_cmd:
                     wake_result = _run_wake(
                         args.wake_cmd,
-                        timeout_seconds=float(
-                            getattr(args, "wake_timeout_seconds", 600.0)
-                        ),
+                        timeout_seconds=getattr(args, "wake_timeout_seconds", None),
                     )
                     wake_rc = wake_result.returncode
                     wake_failure_kind = wake_result.failure_kind
@@ -552,8 +550,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--wake-timeout-seconds",
         type=float,
-        default=600.0,
-        help="Maximum duration of one configured wake command.",
+        default=None,
+        help="Optional wake execution deadline; default waits for completion or cancellation.",
     )
     args = parser.parse_args(argv)
     if args.registry is None:

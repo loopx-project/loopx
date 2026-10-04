@@ -53,7 +53,7 @@ class BenchmarkCodex(CodexOffline):
         iteration_context="fresh",
         codex_sandbox="danger-full-access",
         validation_command=None,
-        turn_timeout_sec=4700,
+        turn_timeout_sec=None,
         scheduler_timeout_sec=5080,
         replan_after_todos=3,
         task_entry="seeded-todo",
@@ -66,7 +66,7 @@ class BenchmarkCodex(CodexOffline):
             execution_mode,
             iteration_context,
             codex_sandbox,
-            float(turn_timeout_sec),
+            float(scheduler_timeout_sec) - 160 if turn_timeout_sec is None else float(turn_timeout_sec),
             validation_command if validation_command is not None else (),
             task_entry,
         )
