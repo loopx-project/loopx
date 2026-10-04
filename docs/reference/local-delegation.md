@@ -868,6 +868,8 @@ paths, credential/endpoint configuration, or provider payloads.
 或原 runner 配置，再重新核验。模块可用不证明凭据、profile、任务验收或远端容量；
 此检查不暴露解释器路径、凭据/endpoint 配置或 provider 原始数据。
 
+### Inspect accepted evidence and return
+
 Enabled MCP exposes `inspect_execution_binding`; newly enrolled Goal Chat tools
 accept `action=inspect` with `binding_id`. Existing native thread schemas remain
 unchanged. Owners can use **Team execution** directly below the Goal conversation
@@ -878,7 +880,7 @@ acceptance, canonical completion and current file bytes are checked again.
 Changed or unavailable evidence clears the prior content. These are on-demand
 observations, not continuous liveness; accepted output does not prove requester
 adoption. Text is rendered inertly, and source/version identifiers remain
-inspectable. Returning preserves the execution list and keyboard focus.
+inspectable. Returning rereads the current execution page and restores keyboard focus.
 
 Configured Goal conversations also expose **Team results** in the main view.
 Select an accepted artifact to recheck its exact operation, reference and hash
@@ -931,16 +933,27 @@ operator entrypoint does not grant a Lark audience access.
 中文：配置原有执行绑定后，在 Goal 对话的「团队执行情况」中选择原执行的
 「查看证据与反馈」，直接读取经当前验收、绑定和文件核验的产物正文。文件变化或
 读取失败时清除旧内容；这是按需观察，验收通过不代表协调员已采用。来源和版本标识
-可展开查看，返回列表保留位置与键盘焦点。协调员运行时，可把执行标识、看到的
+可展开查看，打开关联证据后可逐级返回；返回执行列表会重读当前页，保留分页与
+键盘焦点。产物失效时撤回原先的验收计数；列表读取失败会清除旧记录，可重新核验
+恢复。协调员运行时，可把执行标识、看到的
 产物哈希和反馈投递到原收件箱；等待投递、已交付和已应用不能混为一谈。不确定响应
 后重试同一消息和标识，避免重复投递。面板内的「暂停协调员」显示实际反馈，但不会
 停止已派发成员，也不宣称整个团队停止。要停止某个成员，显式使用
 `delegation stop --execute` 或 `stop_delegation` 并阅读其回执。暂停时仍可检查证据；读取不启动模型。
 
-Screenshots use isolated synthetic research data, not a live-model qualification:
-[desktop evidence](../assets/personal-workspace/team-evidence-desktop.png),
-[mobile evidence](../assets/personal-workspace/team-evidence-mobile.png), and
-[stale evidence](../assets/personal-workspace/team-evidence-stale.png).
+Linked evidence has a stepwise back action and a separate exit to the execution list. Returning to that list now reads its current page once: a changed output loses its accepted count, and an unavailable inventory clears earlier rows instead of replaying cached success. The current page and keyboard focus are retained. Refresh recovers after a failed read; no additional work or model is launched.
+
+A revision can have current task acceptance and valid requester adoption while independent-verifier evidence is missing. These are distinct facts. The correction path explicitly says **Independent verification · evidence not provided**; neither `responds_to`, a reviewer's name nor a successful validator is an exact-version independent-verifier receipt.
+
+The following views use the packaged frontend with an isolated production SQLite/HTTP/CLI fixture. They contain synthetic data and do not qualify a live-model correction or the installed native App. The desktop view exposes the missing verifier beside valid adoption; the mobile view shows the same gap in the scrollable correction path. The stale view shows acceptance withdrawn after changed output:
+
+![Packaged correction evidence: independent verification missing beside current adoption](../assets/personal-workspace/team-evidence-desktop.png)
+
+![390px correction evidence with the missing-verifier state](../assets/personal-workspace/team-evidence-mobile.png)
+
+![Current execution list withdraws acceptance for changed output](../assets/personal-workspace/team-evidence-stale.png)
+
+中文：返回执行列表现在单次重读当前页，保留分页与键盘焦点；产物变化撤回验收，列表失联清除旧行，可刷新恢复，不启动额外工作。任务接受有效和请求方采用有效，仍不能证明独立验收者验证了准确版本。纠偏路径对此明确留缺口。图中均为隔离 production SQLite/HTTP/CLI 与打包前端的合成数据，不作为真实模型纠偏或已安装 Native App 验收。
 
 ## Use the same bindings through MCP
 
