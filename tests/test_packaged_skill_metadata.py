@@ -1,8 +1,17 @@
 import re
 from pathlib import Path
 
+import pytest
+
+from loopx.capabilities.project_skill_delivery import classify_host_skill_sources
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_SCOPED_SOURCES = classify_host_skill_sources(REPO_ROOT / "skills")
+RELEASE_SKILL_IDS = (
+    *_SCOPED_SOURCES["deliverable_skill_ids"],
+    *_SCOPED_SOURCES["project_skill_ids"],
+)
 
 
 def test_packaged_loopx_skills_use_canonical_brand_display_names() -> None:
@@ -20,24 +29,22 @@ def test_packaged_loopx_skills_use_canonical_brand_display_names() -> None:
         assert not display_name.startswith("Loopx"), display_name
 
 
-def test_packaged_scope_markers_ship_with_workflow_sources():
+@pytest.mark.parametrize("skill_id", RELEASE_SKILL_IDS)
+def test_release_scoped_skills_ship_source_and_scope_markers(skill_id):
     import tomllib
-    from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
 
     package = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
     data_files = package["tool"]["setuptools"]["data-files"]
-    for skill_id in PACKAGED_HOST_SKILL_IDS:
-        assert f"skills/{skill_id}/.loopx-skill-scope" in data_files[
-            f"share/loopx/skills/{skill_id}"
-        ]
+    sources = data_files[f"share/loopx/skills/{skill_id}"]
+    assert f"skills/{skill_id}/SKILL.md" in sources
+    assert f"skills/{skill_id}/.loopx-skill-scope" in sources
 
 
-def test_packaged_skill_display_metadata_is_in_distribution():
+@pytest.mark.parametrize("skill_id", RELEASE_SKILL_IDS)
+def test_release_scoped_skill_display_metadata_is_in_distribution(skill_id):
     import tomllib
-    from loopx.skill_install_readback import PACKAGED_HOST_SKILL_IDS
 
     package = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     data_files = package["tool"]["setuptools"]["data-files"]
-    for skill_id in PACKAGED_HOST_SKILL_IDS:
-        assert f"skills/{skill_id}/agents/openai.yaml" in data_files[
-            f"share/loopx/skills/{skill_id}/agents"]
+    assert f"skills/{skill_id}/agents/openai.yaml" in data_files[
+        f"share/loopx/skills/{skill_id}/agents"]
