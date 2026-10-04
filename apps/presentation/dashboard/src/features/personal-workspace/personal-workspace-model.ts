@@ -41,6 +41,7 @@ export type WorkspaceAgentTodo = {
   dependencies?: string[];
   done: boolean;
   evidence?: string | null;
+  note?: string | null;
   nextTransition?: string | null;
   priority?: string | null;
   status?: string | null;
@@ -69,7 +70,8 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     done: todo.status === "deferred" ? false : todo.done,
     status: todo.status ?? null,
     claimedBy: todo.claimed_by ?? null,
-    evidence: todo.evidence || todo.note || null,
+    evidence: todo.evidence ?? null,
+    note: todo.note ?? null,
     priority: todo.priority ?? null,
     taskClass: todo.task_class ?? null,
     taskDomain: todo.task_domain ?? null,

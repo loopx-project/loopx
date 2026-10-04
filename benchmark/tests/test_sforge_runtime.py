@@ -252,3 +252,37 @@ def test_native_swallowed_interrupt_is_observed_and_handler_restored():
         assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
     finally:
         signal.signal(signal.SIGINT, previous)
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_native_terminal_handoff_is_readable_by_visualizer(tmp_path, timed_out):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import _write_native_final_result
+    from sforge.harness.run_agent import RunResult
+    from sforge.visualizer.scanner import _build_run
+    trial = tmp_path / "run" / "case"
+    trial.mkdir(parents=True)
+    result = RunResult(best_score=0.0, best_pass_rate=1.0, best_round="auto-1",
+                       total_rounds=1, auto_submissions=1, runtime_seconds=12.0,
+                       timed_out=timed_out)
+    _write_native_final_result(trial, result, status="terminal", agent="codex",
+                              task="case", run_id="run", model="model", effort="xhigh")
+    final = json.loads((trial / "final_result.json").read_text())
+    assert all(final[k] == v for k, v in result.to_dict().items())
+    assert not (trial / "final_result.json.tmp").exists()
+    displayed = _build_run("run", trial)
+    assert displayed.has_final and not displayed.aborted
+    assert displayed.best_score == 0.0 and displayed.runtime_seconds == 12.0
+    assert displayed.model == "model"
+
+
+@pytest.mark.parametrize("status", ["cancelled", "launch_failed", "runner_failed"])
+def test_native_failed_run_does_not_publish_completed_result(tmp_path, status):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import _write_native_final_result
+    from sforge.harness.run_agent import RunResult
+    _write_native_final_result(tmp_path, RunResult(), status=status, agent="codex",
+                              task="case", run_id="run", model="model", effort="xhigh")
+    assert not (tmp_path / "final_result.json").exists()

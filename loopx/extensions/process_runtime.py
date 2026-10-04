@@ -102,7 +102,7 @@ def run_capped_process(
     argv: Sequence[str],
     *,
     stdin: bytes,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
     output_limit_bytes: int,
     env: Mapping[str, str] | None = None,
     cwd: str | Path | None = None,
@@ -194,16 +194,16 @@ def run_capped_process(
     for thread in threads:
         thread.start()
 
-    deadline = time.monotonic() + timeout_seconds
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     timed_out = False
     try:
         while process.poll() is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
                 timed_out = True
                 terminate_process_tree(process, termination_grace_seconds)
                 break
-            if limit_event.wait(timeout=min(0.05, remaining)):
+            if limit_event.wait(timeout=0.05 if remaining is None else min(0.05, remaining)):
                 terminate_process_tree(process, termination_grace_seconds)
                 break
     except BaseException:

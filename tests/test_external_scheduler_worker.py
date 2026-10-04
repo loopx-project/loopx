@@ -383,3 +383,18 @@ def test_wake_timeout_enters_failed_backoff_and_kills_descendants(
     state = json.loads(state_file.read_text(encoding="utf-8"))
     assert state["last_wake_status"] == "wake_failed"
     assert state["last_wake_failure_kind"] == "timeout"
+
+
+def test_wake_default_has_no_execution_deadline(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(worker, "run_worker", lambda args: seen.append(args) or 0)
+    assert worker.main(["--goal-id", "fixture", "--agent-id", "agent",
+                        "--registry", str(tmp_path / "registry.json")]) == 0
+    assert seen[0].wake_timeout_seconds is None
+    assert seen[0].quota_timeout_seconds == 30.0
+    result = worker._run_wake(
+        shlex.join([sys.executable, "-c", "import time;time.sleep(.1);print('done')"]),
+        timeout_seconds=None,
+    )
+    assert result.returncode == 0
+    assert result.failure_kind is None

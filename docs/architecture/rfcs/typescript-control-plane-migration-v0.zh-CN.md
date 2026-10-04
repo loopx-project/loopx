@@ -305,6 +305,13 @@ promotion gate。
 本地晋升等待容量与自然时间双重资格化，不等待 PostgreSQL 服务，也不在第十天使
 receipt 过期。
 
+调用方恢复的有界切片现有 [claim 参数指引](../../reference/source-cli-entrypoint.md#claim-argument-recovery--claim-参数恢复)：
+一次拒绝同时列出缺失／非法参数，保留原 argv 绑定，不猜 executor 或改变 source/lease
+准入。语法／展示归现有 CLI adapter，claim 权威保留在 TypeScript。真实
+Legacy/File/SQLite 重试与负例只验收这个边界。较大错误与省掉 help 的取舍、实际模型
+token／重试成本、source-mode 修复和常规短上下文／replan 完整历史仍是分别待验证的
+问题；不代表长目标或 provider 性能验收完成。
+
 ### 交付语义：先修正规则，再迁移
 
 Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、

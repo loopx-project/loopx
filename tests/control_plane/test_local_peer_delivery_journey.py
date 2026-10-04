@@ -252,3 +252,34 @@ def test_local_blocked_writeback_preserves_retry_and_spends_nothing(tmp_path, mo
     assert todo["status"] == "open" and not todo["resume_ready"]
     assert not todo.get("completion_result")
     assert cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("explicit_repository", [False, True])
+def test_originless_local_git_settles_without_fabricating_repository(tmp_path, monkeypatch, provider, explicit_repository):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    extra = f"claimed_by={cli.AGENT_ID}"
+    if explicit_repository:
+        extra += " task_repository=git:github.com/example/required"
+    project, runtime, registry, _, _ = journey._source(tmp_path, provider=provider, extra=extra)
+    subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+    code, guard = journey._guard(project, runtime, registry)
+    assert code == 0, guard
+    code, refreshed = cli._run_cli(
+        registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
+        "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+        "--turn-instance-id", cli.TURN_ID, "--delivery-boundary", "in_flight_continuation",
+        "--delivery-outcome", "outcome_progress", "--delivery-batch-scale", "multi_surface",
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    if explicit_repository:
+        assert code != 0 and not refreshed["ok"] and not refreshed["appended"], refreshed
+        assert cli._spend_run_count(runtime) == 0
+        return
+    assert code == 0 and refreshed["ok"], refreshed
+    assert refreshed["delivery_workspace"]["workspace_identity"] == f"loopx:{cli.GOAL_ID}"
+    code, spent = journey._execute(refreshed["settlement_owed"]["command"], project, runtime, registry)
+    assert code == 0 and spent["settlement_progress"]["state"] == "settled", spent
+    code, repeated = journey._execute(refreshed["settlement_owed"]["command"], project, runtime, registry)
+    assert code == 0 and not repeated["appended"], repeated
+    assert cli._spend_run_count(runtime) == 1

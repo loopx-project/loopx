@@ -144,8 +144,8 @@ def turn_command(
         env["MODEL_NAME"],
         "--codex-sandbox",
         execution.sandbox,
-        "--timeout-seconds",
-        str(execution.timeout_seconds),
+        *(["--timeout-seconds", str(execution.timeout_seconds)]
+          if execution.timeout_seconds is not None else []),
         "--validation-command-json",
         json.dumps(execution.validation_command),
         "--available-capability",
@@ -235,7 +235,8 @@ def run_once(env: dict[str, str]) -> dict:
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT", "fresh"),
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"),
-        timeout_seconds=float(env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC", "4700")),
+        timeout_seconds=(float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"])
+                         if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY", "seeded-todo"),
     )
@@ -272,7 +273,8 @@ def run_once(env: dict[str, str]) -> dict:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
             execution = replace(
-                execution, timeout_seconds=min(execution.timeout_seconds, remaining - 160)
+                execution, timeout_seconds=(remaining - 160 if execution.timeout_seconds is None
+                                             else min(execution.timeout_seconds, remaining - 160))
             )
         prepare_codex_home(
             home,
@@ -330,6 +332,7 @@ def run_once(env: dict[str, str]) -> dict:
                     ) as process:
                         allowance = 150 if execution.mode == "turn" and stage == "execute" else 0
                         timeout = (float(env["LOOPX_PLANNING_TIMEOUT_SEC"]) if stage == "plan"
+                                   else None if execution.timeout_seconds is None
                                    else execution.timeout_seconds + allowance)
                         process.communicate(
                             input=body, timeout=timeout

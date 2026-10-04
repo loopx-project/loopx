@@ -349,7 +349,7 @@ def wait_native_goal_turn(
     transport: NativeGoalEventTransport,
     turn: NativeGoalTurn,
     *,
-    timeout_sec: float,
+    timeout_sec: float | None,
     completed_before: int | None = None,
 ) -> NativeGoalTurn:
     """Drain events until one more correlated turn reaches a terminal event.
@@ -359,18 +359,18 @@ def wait_native_goal_turn(
     preserves the single-turn behavior for existing callers.
     """
 
-    if timeout_sec <= 0:
+    if timeout_sec is not None and timeout_sec <= 0:
         raise ValueError("timeout_sec must be positive")
-    deadline = time.monotonic() + timeout_sec
+    deadline = None if timeout_sec is None else time.monotonic() + timeout_sec
     if completed_before is None:
         if turn.terminal_event_observed:
             return turn
         completed_before = turn.turn_completed_count
     while turn.turn_completed_count <= completed_before:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
             raise NativeGoalProtocolError("goal_turn_timeout")
-        event = transport.next_event(timeout_sec=min(0.25, remaining))
+        event = transport.next_event(timeout_sec=0.25 if remaining is None else min(0.25, remaining))
         if event is not None:
             observe_native_goal_event(turn, event)
     return turn
@@ -399,7 +399,7 @@ def run_native_goal_turn(
     transport: NativeGoalEventTransport,
     config: NativeGoalConfig,
     *,
-    timeout_sec: float,
+    timeout_sec: float | None,
 ) -> NativeGoalTurn:
     """Execute the complete native Goal transaction over an admitted transport."""
 
@@ -413,7 +413,7 @@ def run_native_goal_until_terminal(
     transport: NativeGoalEventTransport,
     config: NativeGoalConfig,
     *,
-    timeout_sec: float,
+    timeout_sec: float | None,
     on_turn_started: Callable[[NativeGoalTurn], None] | None = None,
 ) -> NativeGoalTurn:
     """Run one native Goal until its status leaves ``active``.
@@ -423,16 +423,16 @@ def run_native_goal_until_terminal(
     continuation events and reading the Goal status under one total timeout.
     """
 
-    if timeout_sec <= 0:
+    if timeout_sec is not None and timeout_sec <= 0:
         raise ValueError("timeout_sec must be positive")
     turn = start_native_goal_turn(transport, config)
     if on_turn_started is not None:
         on_turn_started(turn)
-    deadline = time.monotonic() + timeout_sec
+    deadline = None if timeout_sec is None else time.monotonic() + timeout_sec
     completed_before = turn.turn_completed_count
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
             raise NativeGoalDeadlineExceeded("goal_timeout_before_terminal")
         try:
             wait_native_goal_turn(
@@ -639,7 +639,7 @@ def run_native_goal_process(
     process_env: Mapping[str, str] | None = None,
     process_cwd: str | None = None,
     response_timeout_sec: float = 30,
-    goal_timeout_sec: float = 21_600,
+    goal_timeout_sec: float | None = 21_600,
 ) -> NativeGoalTurn:
     """Spawn a real app-server and execute one complete native Goal turn."""
 
@@ -661,7 +661,7 @@ def run_native_goal_process_until_terminal(
     process_env: Mapping[str, str] | None = None,
     process_cwd: str | None = None,
     response_timeout_sec: float = 30,
-    goal_timeout_sec: float = 21_600,
+    goal_timeout_sec: float | None = 21_600,
 ) -> NativeGoalTurn:
     """Spawn app-server and keep the native Goal alive through continuations."""
 

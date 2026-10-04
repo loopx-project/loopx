@@ -645,7 +645,7 @@ def run_codex_cli_host(
     model: str | None = None,
     reasoning_effort: str | None = None,
     mcp_server: Mapping[str, Any] | None = None,
-    timeout_seconds: float = 115.0,
+    timeout_seconds: float | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, Any]:
     if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:

@@ -20,7 +20,7 @@ class Execution:
     mode: str = "heartbeat"
     context: str = "fresh"
     sandbox: str = "danger-full-access"
-    timeout_seconds: float = 4700
+    timeout_seconds: float | None = None
     validation_command: tuple[str, ...] = ()
     task_entry: str = "seeded-todo"
 
@@ -35,7 +35,9 @@ class Execution:
             raise ValueError("resume requires mode=turn or mode=heartbeat")
         if self.sandbox not in SANDBOXES:
             raise ValueError("unsupported Codex sandbox")
-        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
+        if self.timeout_seconds is not None and (
+            not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0
+        ):
             raise ValueError("execution timeout must be finite and positive")
         if not isinstance(self.validation_command, (list, tuple)):
             raise ValueError("validation_command must be an argv list")

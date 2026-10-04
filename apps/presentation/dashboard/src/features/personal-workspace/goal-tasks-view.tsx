@@ -240,7 +240,7 @@ export function GoalTasksView({
       </TaskLane>
       <TaskLane listView={listView} count={openAgentTodos.length} label={t("tasks.pendingAndRunning")} tone="progress">
         {openAgentTodos.map((todo) => {
-          const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? goal.agentLabel ?? goal.agentId };
+          const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? t("drawer.notAssigned") };
           const execution = executionRuns.find((item) => item.run.todoId === todo.todoId)?.run;
           return (
             <div className={`personal-task-card${execution ? " has-session" : ""}${selectedTodoId === todo.todoId ? " is-selected" : ""}`} key={todo.todoId} ref={selectedTodoId === todo.todoId ? (element) => { selectedTodoRef.current = element; } : undefined}>
@@ -251,7 +251,7 @@ export function GoalTasksView({
                   {todo.status === "blocked" ? <span className="personal-priority-badge is-blocked">{t("tasks.blocked")}</span> : null}
                   {execution ? <span className="personal-task-session-status">{execution.status === "running" || execution.status === "queued" ? t("runs.running") : execution.status === "failed" ? t("tasks.sessionError") : t("common.waiting")}</span> : null}
                   {todo.status === "deferred" ? <span className="personal-task-session-status">{t("drawer.taskStatusDeferred")}</span> : !execution ? <span className="personal-task-session-status">{t("tasks.waiting")}</span> : null}
-                  {todo.claimedBy ?? goal.agentLabel ?? goal.agentId}
+                  {enriched.ownerLabel}
                 </small>
               </button>
               <div className="personal-task-card-actions">
