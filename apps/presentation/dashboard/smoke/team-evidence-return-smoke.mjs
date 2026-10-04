@@ -25,7 +25,7 @@ try {
   const configured = api.loopxModeRequests.findLast(row => row.operation === "configure");
   const mode = page.__loopxRuntime.loopxModes.get(configured.sessionId);
   Object.assign(mode, {enabled: true, paused: false, active_turn_id: "fixture-loopx-turn",
-    native: {status: "active", tokenBudget: 100000}, fixtureCorrectionEpisode: true});
+    native: {status: "active", tokenBudget: 100000}, fixtureCorrectionEpisode: true, fixtureAdoptionState: "current"});
   await page.getByText("LoopX · 正在推进", {exact: true}).waitFor();
   await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
   const dialog = page.getByRole("dialog", {name: "团队执行情况"});
@@ -35,6 +35,18 @@ try {
   const original = () => evidence.getByLabel("证据内容: report.json");
   await original().waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  const verificationGap = evidence.getByText("当前读回未提供独立验收者与指定版本回执。", {exact: true});
+  await verificationGap.waitFor({timeout: 3000});
+  await evidence.getByText("后续结果 · 当前验收与采用记录有效", {exact: false}).waitFor();
+  await mkdir(outputDir, {recursive: true});
+  await verificationGap.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-verifier-gap-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  await page.emulateMedia({reducedMotion: "reduce"});
+  assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+  await verificationGap.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-verifier-gap-mobile.png"), animations: "disabled"});
+  await page.setViewportSize({width: 1512, height: 980});
   await evidence.getByRole("button", {name: "阅读回应与证据", exact: true}).click();
   await evidence.getByLabel("证据内容: objection.json").waitFor();
   await evidence.getByRole("button", {name: "original-analysis", exact: true}).click();
@@ -72,6 +84,7 @@ try {
   await back.click();
   await evidence.getByRole("alert").filter({hasText: "已清除上次证据"}).waitFor();
   assert.equal(await original().count(), 0, "Returning after revocation cannot restore the old report");
+  assert.equal(await verificationGap.count(), 0, "Unavailable evidence cannot retain a prior correction trace");
   await dialog.getByRole("button", {name: "返回执行列表", exact: true}).click();
   assert.ok(await openEvidence.first().evaluate(el => el === document.activeElement));
   assert.equal(api.turnRequests.length, 0);
