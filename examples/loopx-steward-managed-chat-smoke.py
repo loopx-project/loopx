@@ -237,9 +237,9 @@ def _run_turn(args: argparse.Namespace) -> int:
         "the managed host must be reached by selection, not by discovering a credential",
     )
     _assert(
-        binding["model"] == "deepseek-v4-flash"
+        binding["model"] == "deepseek-flash"
         and binding["model_source"] == "managed_execution_profile"
-        and binding["execution_profile"] == "deepseek-v4-flash@high",
+        and binding["execution_profile"] == "deepseek-flash@high",
         "the channel must run the managed execution profile",
     )
 

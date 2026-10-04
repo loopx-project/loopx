@@ -177,7 +177,7 @@ flowchart LR
   CPA --> A[Codex subscription A]
   CPA --> B[Codex subscription B]
   CPA -. future expansion .-> C[Codex subscription C<br/>reserved, not configured]
-  CPA --> Ark[Ark DeepSeek V4 Flash]
+  CPA --> Ark[Ark DeepSeek V4.1 Flash]
   CCS[CC Switch<br/>bootstrap / rollback] -. credentials and profiles .-> CPA
   Home -. explicit stale-task migration .-> Swap[AgentSwap<br/>offline sidecar]
   Swap -. new native session .-> Quarantine[隔离 target task]
@@ -205,7 +205,7 @@ flowchart LR
 | `fast/codex-b/gpt-5.6-sol` | Prefer B：B → A；不落 Ark | `text, image` | Fast，强制 `priority` |
 | [`gpt-5.6-luna`](https://developers.openai.com/codex/models) | Luna；复用同一个 A/B 账号环，只在 Codex A/B 间路由，不异构降级到 Ark | `text, image`；推理档位为 `low` 至 `max`，不声明 `ultra` | Standard；不生成重复 Fast alias |
 | `codex-c/gpt-5.6-sol` | 预留；只有第三个订阅真实接入并通过矩阵后才暴露 | 由真实 credential 决定 | 不预声明 |
-| `ark/deepseek-v4-flash` | 手动固定到 Ark DeepSeek V4 Flash | `text` | 不支持 |
+| `ark/deepseek-v4-flash` | 手动固定到 Ark DeepSeek V4.1 Flash（上游 ID 由 operator 配置决定） | `text` | 不支持 |
 | `gpt-5.6-sol` | 隐藏 compatibility alias；处理 App / host 继承裸 model metadata 的旧 task，实际行为与 Auto 一致 | `text, image` | 可选，默认关闭 |
 
 模型 ID 是路由契约，不是上游真实 model slug。显示名可本地化，但 ID 一经上线应保持稳定，
@@ -465,7 +465,7 @@ openai-compatibility:
     models:
       - name: "<ARK_DEEPSEEK_V4_FLASH_ENDPOINT_ID>"
         alias: "deepseek-v4-flash"
-        display-name: "Ark DeepSeek V4 Flash"
+        display-name: "Ark DeepSeek V4.1 Flash"
         is-compat: true
         input-modalities: [text]
         output-modalities: [text]

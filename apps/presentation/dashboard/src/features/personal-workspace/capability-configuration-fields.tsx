@@ -54,8 +54,12 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
     );
   }
   const numeric = field.input_kind === "number";
+  // Models the shipped executors run: the Codex models of the interactive
+  // endpoint and the managed host's DeepSeek default, which is the canonical
+  // `deepseek-flash` id of DeepSeek-V4.1-Flash. Suggestions only: the field
+  // stays free text so an operator can name any id their endpoint serves.
   const modelSuggestions = field.key === "executor_model"
-    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra"] : [];
+    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "deepseek-flash", "deepseek-v4-pro"] : [];
   return (
     <label htmlFor={id}>
       <span>{label}</span>

@@ -133,11 +133,11 @@ then the product default.
 | execution profile field | product default | operator override | legacy lower-precedence override |
 | --- | --- | --- | --- |
 | provider | `deepseek-official` | `LOOPX_TURN_PROVIDER` | `DSH_PROVIDER` |
-| model | `deepseek-v4-flash` | `LOOPX_TURN_MODEL` | `DSH_MODEL` |
+| model | `deepseek-flash` | `LOOPX_TURN_MODEL` | `DSH_MODEL` |
 | reasoning effort | `high` | `LOOPX_TURN_REASONING_EFFORT` | — |
 
 The managed `managed_executor` readback reports the resolved profile as one line,
-`<model>@<reasoning_effort>` (the shipped shape is `deepseek-v4-flash@high`).
+`<model>@<reasoning_effort>` (the shipped shape is `deepseek-flash@high`).
 The provider is prepended as `<provider>/…` only when the resolved provider is
 not the shipped one, because dropping it for a deviating provider would make the
 line claim a profile the Turn would not use. Whichever values the line names are

@@ -16,18 +16,53 @@ from typing import Any
 
 from .selectors import FAST_MODELS, MODEL_FAMILIES, ROUTES, SLOTS, VISIBLE_SELECTORS
 
-SELECTORS = {slug: route["display_name"] for (slug, route) in ROUTES.items()}
-SELECTORS.update(
+ROUTE_SELECTORS = {slug: route["display_name"] for (slug, route) in ROUTES.items()}
+ROUTE_SELECTORS.update(
     {model: f"{label} · Auto (legacy id)" for model, label in MODEL_FAMILIES.items()}
 )
-SELECTORS.update(
-    {
-        "ark/deepseek-v4-flash": "Ark · DeepSeek V4 Flash",
-        "deepseek-v4-flash": "Ark · DeepSeek V4 Flash (legacy id)",
-        "deepseek-v4-flash-ga-260731": "Ark · DeepSeek V4 Flash (260731)",
-        "deepseek-v4-pro-ga-260813": "Ark · DeepSeek V4 Pro (260813)",
+ARK_FLASH_ALIAS = "ark/deepseek-v4-flash"
+ARK_LEGACY_FLASH_ALIAS = "deepseek-v4-flash"
+ARK_FLASH_LABEL = "Ark · DeepSeek V4.1 Flash"
+ARK_PRO_LABEL = "Ark · DeepSeek V4 Pro"
+# The ids a stock operator configuration names. They are only the default view
+# of the Ark rows: an operator who configures a newer upstream generation --
+# DeepSeek-V4.1-Flash under its own endpoint id -- gets that id's row instead,
+# because the configured id is the model a request has to name.
+SHIPPED_ARK_MODEL = "deepseek-v4-flash-ga-260731"
+SHIPPED_ARK_PRO_MODEL = "deepseek-v4-pro-ga-260813"
+
+
+def release_suffix(model: str) -> str:
+    """Return the release an upstream id pins, so two generations read apart."""
+
+    tail = model.rsplit("-", 1)[-1]
+    return tail if len(tail) == 6 and tail.isdigit() else model
+
+
+def ark_selectors(flash_model: str, pro_model: str) -> dict[str, str]:
+    """Return the Ark-backed catalog rows for the configured upstream ids.
+
+    The two ids come from the operator's own configuration, so moving to a
+    newer upstream generation is a configuration change rather than a source
+    change. The two historical aliases stay, so a selector pinned to either
+    spelling keeps resolving to whatever the endpoint now serves.
+    """
+
+    return {
+        ARK_FLASH_ALIAS: ARK_FLASH_LABEL,
+        ARK_LEGACY_FLASH_ALIAS: f"{ARK_FLASH_LABEL} (legacy id)",
+        flash_model: f"{ARK_FLASH_LABEL} ({release_suffix(flash_model)})",
+        pro_model: f"{ARK_PRO_LABEL} ({release_suffix(pro_model)})",
     }
-)
+
+
+# The rows a stock configuration publishes. Kept as the module-level view for
+# readers that predate the configurable Ark ids; one operator's projection is
+# the AppCatalog instance's own, built from the ids that operator configured.
+SELECTORS = {
+    **ROUTE_SELECTORS,
+    **ark_selectors(SHIPPED_ARK_MODEL, SHIPPED_ARK_PRO_MODEL),
+}
 FAST_SELECTORS = set(FAST_MODELS)
 ROUTE_FALLBACK_TAILS = {slug: route["tail"] for (slug, route) in ROUTES.items()}
 EXPECTED_ROUTE_ORDERS = {
@@ -123,6 +158,15 @@ class AppCatalog:
         self.AUTH_DIR = runtime.AUTH_DIR
         self.SLOTS_FILE = runtime.SLOTS_FILE
         self.PORT = runtime.PORT
+        # The Ark rows follow the ids this operator configured, so a newer
+        # upstream generation is adopted from the private configuration
+        # instead of from a literal in this module.
+        self.ARK_MODEL = runtime.ARK_MODEL
+        self.ARK_PRO_MODEL = runtime.ARK_PRO_MODEL
+        self.SELECTORS = {
+            **ROUTE_SELECTORS,
+            **ark_selectors(self.ARK_MODEL, self.ARK_PRO_MODEL),
+        }
 
     def ark_source(self, slug: str) -> dict[str, Any]:
         for path in (self.ARK_CATALOG, self.ARK_PROFILE_CATALOG, self.OUTPUT):
@@ -140,7 +184,7 @@ class AppCatalog:
             for model in (*MODEL_FAMILIES, "gpt-5.6-luna")
         }
         entries = []
-        for slug, label in SELECTORS.items():
+        for slug, label in self.SELECTORS.items():
             route = ROUTES.get(slug, ROUTES.get(f"auto/{slug}"))
             if route:
                 source = deepcopy(sources[route["model"]])
@@ -153,7 +197,7 @@ class AppCatalog:
                     ]
             else:
                 source = self.ark_source(
-                    slug if slug.endswith("260813") else "deepseek-v4-flash-ga-260731"
+                    self.ARK_PRO_MODEL if slug == self.ARK_PRO_MODEL else self.ARK_MODEL
                 )
             entry = make_entry(source, slug, label, len(entries) + 1)
             entry["visibility"] = "list" if slug in VISIBLE_SELECTORS else "hide"
@@ -331,7 +375,7 @@ class AppCatalog:
             for row in data
             if isinstance(row, dict)
             and not row.get("hidden")
-            and row.get("id") not in SELECTORS
+            and row.get("id") not in self.SELECTORS
         )
         rows = {
             str(row.get("id")): {
@@ -348,9 +392,9 @@ class AppCatalog:
                 ],
             }
             for row in data
-            if isinstance(row, dict) and row.get("id") in SELECTORS
+            if isinstance(row, dict) and row.get("id") in self.SELECTORS
         }
-        missing = sorted(set(SELECTORS) - set(rows))
+        missing = sorted(set(self.SELECTORS) - set(rows))
         hidden = sorted(
             key
             for key, row in rows.items()
@@ -358,7 +402,7 @@ class AppCatalog:
         )
         wrong_display_names = sorted(
             key
-            for (key, display_name) in SELECTORS.items()
+            for (key, display_name) in self.SELECTORS.items()
             if rows.get(key, {}).get("displayName") != display_name
         )
         wrong_default_service_tiers = sorted(
@@ -372,7 +416,7 @@ class AppCatalog:
         )
         missing_auto_efforts = sorted(set(AUTO_REASONING_EFFORTS) - set(auto_efforts))
         live_models = self.cpa_models()
-        cpa_missing = sorted(set(SELECTORS) - live_models)
+        cpa_missing = sorted(set(self.SELECTORS) - live_models)
         route_traversal = self.route_traversal_readback()
         route_mismatches = sorted(
             route
@@ -393,7 +437,7 @@ class AppCatalog:
             "schema_version": "cpa_codex_app_model_probe_v1",
             "codex_binary": str(self.CODEX_BINARY),
             "catalog_path": str(self.OUTPUT),
-            "expected_selectors": sorted(SELECTORS),
+            "expected_selectors": sorted(self.SELECTORS),
             "projected_selectors": rows,
             "visible_selectors": sorted(
                 key for key, row in rows.items() if not row.get("hidden")

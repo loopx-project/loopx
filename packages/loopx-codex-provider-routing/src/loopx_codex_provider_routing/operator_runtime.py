@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .operator_catalog import ARK_FLASH_LABEL, ARK_PRO_LABEL
 from .operator_observations import ObservationMixin
 from .selectors import FAST_MODELS, MODEL_FAMILIES, ROUTES, SLOTS, aliases_for_slot
 
@@ -182,6 +183,10 @@ class CPAOperator(ObservationMixin):
             port = self.PORT
         if management_secret is None:
             management_secret = self.management_key()
+        # The same rows the App catalog publishes, so one row cannot read as two
+        # generations depending on which surface rendered it.
+        flash_legacy_label = f"{ARK_FLASH_LABEL} (legacy id)"
+        flash_endpoint_label = f"{ARK_FLASH_LABEL} (endpoint id)"
         return "\n".join(
             [
                 'host: "127.0.0.1"',
@@ -224,7 +229,7 @@ class CPAOperator(ObservationMixin):
                 *self.ark_fallback_models(),
                 f"      - name: {yaml_quote(self.ARK_MODEL)}",
                 '        alias: "ark/deepseek-v4-flash"',
-                '        display-name: "Ark · DeepSeek V4 Flash"',
+                f"        display-name: {yaml_quote(ARK_FLASH_LABEL)}",
                 "        force-mapping: true",
                 "        is-compat: true",
                 "        input-modalities: [text]",
@@ -233,7 +238,7 @@ class CPAOperator(ObservationMixin):
                 '          levels: ["high", "medium", "low"]',
                 f"      - name: {yaml_quote(self.ARK_MODEL)}",
                 '        alias: "deepseek-v4-flash"',
-                '        display-name: "Ark · DeepSeek V4 Flash (legacy id)"',
+                f"        display-name: {yaml_quote(flash_legacy_label)}",
                 "        force-mapping: true",
                 "        is-compat: true",
                 "        input-modalities: [text]",
@@ -242,7 +247,7 @@ class CPAOperator(ObservationMixin):
                 '          levels: ["high", "medium", "low"]',
                 f"      - name: {yaml_quote(self.ARK_MODEL)}",
                 f"        alias: {yaml_quote(self.ARK_MODEL)}",
-                '        display-name: "Ark · DeepSeek V4 Flash (endpoint id)"',
+                f"        display-name: {yaml_quote(flash_endpoint_label)}",
                 "        force-mapping: true",
                 "        is-compat: true",
                 "        input-modalities: [text]",
@@ -251,7 +256,7 @@ class CPAOperator(ObservationMixin):
                 '          levels: ["high", "medium", "low"]',
                 f"      - name: {yaml_quote(self.ARK_PRO_MODEL)}",
                 f"        alias: {yaml_quote(self.ARK_PRO_MODEL)}",
-                '        display-name: "Ark · DeepSeek V4 Pro"',
+                f"        display-name: {yaml_quote(ARK_PRO_LABEL)}",
                 "        force-mapping: true",
                 "        is-compat: true",
                 "        input-modalities: [text]",

@@ -121,9 +121,9 @@ def _assert_selection_moves_the_channel_to_the_managed_host() -> dict[str, objec
         "an explicit endpoint selection must be the only way onto the managed host",
     )
     _assert(
-        selected["model"] == "deepseek-v4-flash"
+        selected["model"] == "deepseek-flash"
         and selected["model_source"] == MANAGER_MODEL_SOURCE_MANAGED_PROFILE
-        and selected["execution_profile"] == "deepseek-v4-flash@high",
+        and selected["execution_profile"] == "deepseek-flash@high",
         "the managed endpoint must run the managed execution profile",
     )
     _assert(
@@ -370,7 +370,7 @@ def _assert_the_machine_default_is_first_class() -> dict[str, object]:
             _assert(
                 binding["model"] == "deepseek-v4-flash"
                 and binding["model_source"] == MANAGER_MODEL_SOURCE_MACHINE_CONFIGURATION
-                and binding["execution_profile"] == "deepseek-v4-flash@high",
+                and binding["execution_profile"] == "deepseek-flash@high",
                 "the model and the effort must follow the machine selection",
             )
             _assert(
