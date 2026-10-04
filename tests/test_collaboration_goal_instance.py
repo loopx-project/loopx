@@ -1177,17 +1177,29 @@ def test_lost_response_recovery_requires_the_same_committed_request(tmp_path, da
     assert not any(m.get("origin") == "manager_followup" for m in store.messages(session["session_id"]))
 
 
-@pytest.mark.parametrize("revoke", [False, True])
-def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_path, revoke):
+@pytest.mark.parametrize("revocation", [
+    "none", "selected_empty", "blocked_target", "sender_removed",
+])
+def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_path, revocation):
     registry = _create_source_registry(tmp_path)
     store, session, receipt = _external_manager_request(tmp_path, registry)
     turn = store.turn_for_client(session["session_id"], "owner-request")
     store.update_turn(session["session_id"], turn["turn_id"], status="timed_out", response=None)
-    if revoke:
-        policy_path = _root(tmp_path) / "policy.json"
-        policy = json.loads(policy_path.read_text())
-        policy["sources"][session["channel_id"]]["targets"] = []
-        _write(policy_path, policy)
+    policy_path = _root(tmp_path) / "policy.json"
+    original_policy = policy_path.read_text()
+    policy = json.loads(original_policy)
+    source = policy["sources"][session["channel_id"]]
+    # Empty targets retain access under the default all_registered scope.
+    # Revocation must change an actual grant, not just its optional target list.
+    source["targets"] = []
+    if revocation == "selected_empty":
+        source["local_delivery_scope"] = "selected"
+    elif revocation == "blocked_target":
+        source["blocked_targets"] = [{"goal_id": "delivery", "agent_id": "builder"}]
+    elif revocation == "sender_removed":
+        source["sender_ids"] = []
+    _write(policy_path, policy)
+    revoke = revocation != "none"
     calls = []
 
     def sender(route, current_session, current_turn, text):
@@ -1196,6 +1208,10 @@ def test_failed_external_turn_returns_only_through_its_current_sender_grant(tmp_
 
     assert drain(tmp_path, registry, ChatSessionStore(tmp_path), sender) == (0 if revoke else 1)
     assert len(calls) == (0 if revoke else 1)
+    if revoke:
+        policy_path.write_text(original_policy)
+        assert drain(tmp_path, registry, ChatSessionStore(tmp_path), sender) == 1
+        assert len(calls) == 1
     if calls:
         route, current_session, current_turn, text = calls[0]
         assert route["source_id"] == "lark:source"
