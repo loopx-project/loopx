@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+from uuid import uuid4
 from pathlib import Path
 
 from .capabilities.machine_configuration.goal_storage import new_goal_storage_target, initialize_goal_storage_target
 from .registry import find_registry_goal
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
+from .control_plane.coordination.legacy_writer_fence import require_registry_source_write_allowed
 from .control_plane.coordination.runtime_shadow_writer_adapter import require_runtime_shadow_capture_prepared, begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture
 from .control_plane.projects.registry_codec import (
     load_project_registry,
@@ -395,6 +397,9 @@ def bootstrap_project(
         storage_target = new_goal_storage_target(runtime_root)
     if storage_target is not None:
         goal_entry.setdefault("coordination", {})["storage_target"] = storage_target
+    canonical_creation = (storage_target or {}).get("schema_version") == "loopx_new_goal_storage_target_v1"
+    if canonical_creation:
+        goal_entry["creation_operation_id"] = creation_operation_id or (previous_goal or {}).get("creation_operation_id") or f"goal-create:{uuid4().hex}"
     registry, registry_goal_action = merge_goal(registry, goal_entry, force=force)
 
     state_exists = state_file.exists()
@@ -524,12 +529,13 @@ def bootstrap_project(
     shadow_capture = None
     shadow_evidence: dict[str, Any] = {}
     if not dry_run:
+        canonical_bootstrap_transport = canonical_creation
         with project_registry_transaction(
             registry_path,
             operation="bootstrap_registry",
             create=dict,
         ) as registry_transaction, legacy_todo_write_transaction(
-            registry_path, goal_id, state_file, None, "bootstrap_state", False,
+            registry_path, goal_id, state_file, None, "bootstrap_state", canonical_creation,
             runtime_root=runtime_root,
         ):
             current_registry = registry_transaction.payload_copy()
@@ -544,6 +550,10 @@ def bootstrap_project(
                 goal_entry.setdefault("coordination", {}).pop("storage_target", None)
                 if frozen is not None:
                     goal_entry["coordination"]["storage_target"] = frozen
+            frozen_target = goal_entry.get("coordination", {}).get("storage_target") or {}
+            canonical_creation = frozen_target.get("schema_version") == "loopx_new_goal_storage_target_v1"
+            if canonical_creation and force and state_file.exists():
+                raise ValueError("Canonical creation cannot rebuild existing state; restore or migrate through its owning operation")
 
             # A first explicit bootstrap has no previous Goal authority to fence.
             # Existing Goals still resolve and authorize their original route.
@@ -561,7 +571,7 @@ def bootstrap_project(
             state_action = ("kept-existing-preserve-todos" if force and preserve_todos else "kept-existing") if state_file.exists() and (not force or preserve_todos) else "replaced" if state_file.exists() else "created"
             planned = original
             if state_action in {"created", "replaced"}:
-                declared_handoff_mode = goal_handoff_mode(original) if original and force else HANDOFF_MODE_LEGACY
+                declared_handoff_mode = goal_handoff_mode(original) if original and force else frozen_target.get("handoff_mode", HANDOFF_MODE_LEGACY)
                 planned = render_state_markdown(
                     project=project,
                     goal_id=goal_id,
@@ -572,16 +582,21 @@ def bootstrap_project(
                     execution_profile=execution_profile,
                     handoff_mode=declared_handoff_mode,
                 )
-            else:
+            elif not canonical_creation:
                 planned, repaired_todo_source_roles = repair_missing_todo_source_sections(original)
             if planned != original:
-                shadow_capture = begin_todo_runtime_shadow_capture(registry_path=registry_path,
-                    runtime_root=runtime_root, goal_id=goal_id, state_path=state_file,
-                    write_class="bootstrap_state", original_text=original)
-                shadow_capture.prepare(planned)
-                require_runtime_shadow_capture_prepared(shadow_capture, runtime_root=runtime_root, goal_id=goal_id)
+                if canonical_bootstrap_transport:
+                    require_registry_source_write_allowed(registry_path=registry_path, runtime_root=runtime_root,
+                        goal_id=goal_id, state_file=state_file)
+                if not canonical_creation:
+                    shadow_capture = begin_todo_runtime_shadow_capture(registry_path=registry_path,
+                        runtime_root=runtime_root, goal_id=goal_id, state_path=state_file,
+                        write_class="bootstrap_state", original_text=original)
+                    shadow_capture.prepare(planned)
+                    require_runtime_shadow_capture_prepared(shadow_capture, runtime_root=runtime_root, goal_id=goal_id)
                 atomic_write_state_text(state_file, planned)
-                shadow_capture.committed()
+                if shadow_capture is not None:
+                    shadow_capture.committed()
                 if todo_source_migration is not None:
                     todo_source_migration["applied"] = True
             current_registry.setdefault("schema_version", "0.1")
@@ -592,7 +607,7 @@ def bootstrap_project(
         # Registry intent survives an interrupted initialization. Reconnect retries
         # it outside the legacy/registry locks; changing machine defaults cannot
         # retarget that Goal. The TS owner refuses replacing an existing provider.
-        storage_selection = initialize_goal_storage_target(runtime_root, find_registry_goal(registry, goal_id) or {})
+        storage_selection = initialize_goal_storage_target(runtime_root, find_registry_goal(registry, goal_id) or {}, registry_path=registry_path)
         if shadow_capture is not None:
             shadow_evidence = settle_todo_runtime_shadow_capture({}, registry_path=registry_path,
                 runtime_root=runtime_root, goal_id=goal_id, capture=shadow_capture, emit_disabled=False)

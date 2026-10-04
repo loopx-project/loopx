@@ -602,7 +602,7 @@ class ChatActionService(
             # Registry publication precedes storage initialization. Resume the
             # frozen target through its TS owner before any downstream effects;
             # re-running Markdown bootstrap could overwrite a promoted Goal.
-            initialize_goal_storage_target(runtime_root, existing_goal)
+            initialize_goal_storage_target(runtime_root, existing_goal, registry_path=self.registry_path)
             result = {"ok": True}
         else:
             try:

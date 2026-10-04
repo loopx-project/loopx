@@ -160,6 +160,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                 'outbox_manifest_schema': 'loopx_shadow_outbox_manifest_v1',
                                 'exact_outbox_manifest_schema': 'loopx_shadow_outbox_manifest_v2'},
  'legacy_writer_fence_protocol': {'fence_schema': 'loopx_legacy_coordination_writer_fence_v0',
+                                  'creation_fence_schema': 'loopx_new_goal_writer_fence_v0',
                                   'engage_request_schema': 'loopx_legacy_coordination_writer_fence_engage_request_v0',
                                   'result_schema': 'loopx_legacy_coordination_writer_fence_result_v0',
                                   'write_check_request_schema': 'loopx_legacy_coordination_write_check_request_v0',
@@ -270,6 +271,7 @@ SHADOW_OUTBOX_MANIFEST_SCHEMA: Final[str] = 'loopx_shadow_outbox_manifest_v1'
 SHADOW_EXACT_OUTBOX_MANIFEST_SCHEMA: Final[str] = 'loopx_shadow_outbox_manifest_v2'
 
 LEGACY_COORDINATION_WRITER_FENCE_SCHEMA: Final[str] = 'loopx_legacy_coordination_writer_fence_v0'
+NEW_GOAL_WRITER_FENCE_SCHEMA: Final[str] = 'loopx_new_goal_writer_fence_v0'
 LEGACY_COORDINATION_WRITER_FENCE_ENGAGE_REQUEST_SCHEMA: Final[str] = 'loopx_legacy_coordination_writer_fence_engage_request_v0'
 LEGACY_COORDINATION_WRITER_FENCE_RESULT_SCHEMA: Final[str] = 'loopx_legacy_coordination_writer_fence_result_v0'
 LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA: Final[str] = 'loopx_legacy_coordination_write_check_request_v0'

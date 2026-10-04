@@ -111,7 +111,7 @@
     },
     {
       "site": "loopx/bootstrap.py::<module>.bootstrap_project::codec_transaction:project_registry_transaction#1",
-      "line": 527,
+      "line": 533,
       "column": 14,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",
@@ -119,7 +119,7 @@
     },
     {
       "site": "loopx/bootstrap.py::<module>.read_json_if_exists::codec_read:load_project_registry#1",
-      "line": 84,
+      "line": 86,
       "column": 15,
       "kind": "codec_read",
       "api": "load_project_registry",

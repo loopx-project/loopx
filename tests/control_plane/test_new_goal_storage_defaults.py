@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import threading
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -24,14 +25,17 @@ def environment(tmp_path, monkeypatch):
     project.mkdir()
     config = runtime / "machine/configuration.json"
     config.parent.mkdir(parents=True)
-    def configure(provider):
+    def configure(provider, *, mode=None):
+        defaults = {"schema_version": "loopx_goal_storage_defaults_v0", "new_goal_provider": provider}
+        if mode is not None:
+            defaults.update(schema_version="loopx_goal_storage_defaults_v1", canonical_creation=True, new_goal_handoff_mode=mode)
         config.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
-            "goal_storage": {"schema_version": "loopx_goal_storage_defaults_v0", "new_goal_provider": provider}}}))
-    def bootstrap(goal="first", *extra):
+            "goal_storage": defaults}}))
+    def bootstrap(goal="first", *extra, expected_code=0):
         result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(project / ".loopx/registry.json"),
             "--runtime-root", str(runtime), "--format", "json", "bootstrap", "--project", str(project), "--goal-id", goal,
             "--objective", "Validate a new project", "--no-global-sync", *extra], capture_output=True, text=True, timeout=60)
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.returncode == expected_code, result.stdout + result.stderr
         return json.loads(result.stdout)
     def marker(goal="first"):
         return runtime / "authority" / f"provider-{hashlib.sha256(goal.encode()).hexdigest()}.json"
@@ -60,6 +64,33 @@ def test_existing_implicit_file_goal_is_not_retargeted(environment):
     configure("sqlite")
     assert bootstrap()["storage_selection"] is None
     assert not marker().exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("mode", ["soft_claim", "hard_lease"])
+def test_opted_in_creation_has_complete_canonical_authority_and_frozen_policy(environment, provider, mode):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, bootstrap, _, _, runtime = environment
+    configuration = runtime / "machine/configuration.json"
+    configuration.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "goal_storage": {"schema_version": "loopx_goal_storage_defaults_v1", "new_goal_provider": provider,
+                         "canonical_creation": True, "new_goal_handoff_mode": mode}}}))
+    preview = bootstrap("native", "--dry-run")
+    assert not (runtime / "authority-transition").exists()
+    actual = bootstrap("native")
+    source = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="native", include_leases=True)
+    assert source is not None
+    assert source["source_authority"] == f"{provider}_v0"
+    assert source["handoff_mode"] == mode
+    assert source["todos"] == []
+    assert actual["storage_selection"]["authority_initialized"] is True
+    assert actual["storage_target"] == preview["storage_target"]
+    configure("file" if provider == "sqlite" else "sqlite")
+    restart_effect_runtime()
+    reconnect = bootstrap("native")
+    assert reconnect["storage_selection"]["authority_initialized"] is True
+    assert reconnect["storage_selection"]["handoff_mode"] == mode
 
 
 def test_pending_creation_uses_frozen_intent_after_machine_default_changes(environment):
@@ -113,13 +144,14 @@ def app(environment):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("relative_runtime", [False, True])
-def test_app_creation_retries_storage_before_reporting_success(environment, app, monkeypatch, provider, relative_runtime):
+@pytest.mark.parametrize("mode", [None, "soft_claim", "hard_lease"])
+def test_app_creation_retries_storage_before_reporting_success(environment, app, monkeypatch, provider, relative_runtime, mode):
     from loopx.capabilities.machine_configuration import goal_storage
     from loopx.todos import add_goal_todo
 
     configure, _, marker, project, _ = environment
     store, request = app
-    configure(provider)
+    configure(provider, mode=mode)
     registry = project / ".loopx/registry.json"
     # Registry-relative runtime routing must agree with CLI bootstrap, regardless
     # of the HTTP server process's working directory.
@@ -177,6 +209,14 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
         assert recovered["proposal"]["receipt"]["outcome"] == "goal_created"
         assert selections[-1]["provider"] == provider
         assert selections[-1]["promotion_performed"] is False
+        if mode is not None:
+            from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+            source = read_canonical_todos_if_promoted(runtime_root=project.parent / "runtime", goal_id="recovery", include_leases=True)
+            assert source["handoff_mode"] == mode
+            assert len(source["todos"]) == 1
+            assert source["todos"][0]["text"] == "Verify recovery"
+            assert source["source_authority"] == f"{provider}_v0"
+            assert selections[-1]["authority_initialized"] is True
         if provider == "sqlite":
             assert json.loads(marker("recovery").read_text())["provider"] == provider
         else:
@@ -184,7 +224,20 @@ def test_app_creation_retries_storage_before_reporting_success(environment, app,
         assert add.call_count == 1
         assert request(apply_path, {})[1]["proposal"]["receipt"] == recovered["proposal"]["receipt"]
         assert add.call_count == 1
-        assert len(selections) == 1
+        assert len(selections) == (1 if mode is None else 2)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_canonical_creation_force_rebuild_is_rejected_without_changing_todos(environment, provider):
+    configure, bootstrap, _, project, runtime = environment
+    configure(provider, mode="hard_lease")
+    created = bootstrap()
+    state = Path(created["state_file"])
+    before = state.read_bytes()
+    rejected = bootstrap("first", "--force", expected_code=1)
+    assert "cannot rebuild" in rejected["error"]
+    assert state.read_bytes() == before
+    assert created["storage_selection"]["legacy_writer_fenced"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
