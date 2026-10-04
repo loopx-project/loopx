@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +10,57 @@ import pytest
 import test_quota_authority_settlement_journey as journey
 import test_quota_settlement_cli as cli
 from canonical_authority_fixture import isolate_sqlite_runtime
+
+
+@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+def test_bound_repository_is_checked_from_the_complete_todo_source(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, _, _ = journey._source(
+        tmp_path, provider=provider,
+        extra=f"claimed_by={cli.AGENT_ID} task_repository=git:github.com/example/right",
+    )
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("peer-researcher")
+    registry.write_text(json.dumps(data))
+
+    def worktree(name):
+        repository, checkout = tmp_path / name, tmp_path / f"{name}-worktree"
+        repository.mkdir()
+
+        def git(*args):
+            subprocess.run(["git", "-C", str(repository), *args], check=True, capture_output=True)
+
+        git("init", "--quiet")
+        git("config", "remote.origin.url", f"https://github.com/example/{name}.git")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "--quiet", "--allow-empty", "--signoff", "-m", "Synthetic fixture")
+        git("worktree", "add", "--quiet", "-b", "codex/fixture", str(checkout))
+        return checkout
+
+    wrong, right = worktree("wrong"), worktree("right")
+    code, guard = journey._guard(project, runtime, registry)
+    assert code == 0 and guard["selected_todo"]["task_repository"] == "git:github.com/example/right", guard
+
+    def refresh(checkout):
+        return cli._run_cli(
+            registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
+            "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+            "--turn-instance-id", cli.TURN_ID, "--delivery-boundary", "in_flight_continuation",
+            "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(checkout),
+            "--no-global-sync", "--suppress-external-sinks", cwd=checkout,
+        )
+
+    code, rejected = refresh(wrong)
+    assert code != 0 and not rejected["ok"] and not rejected["appended"], rejected
+    assert cli._spend_run_count(runtime) == 0
+    code, recovered = refresh(right)
+    assert code == 0 and recovered["ok"], recovered
+    assert recovered["delivery_workspace"]["task_repository"] == "git:github.com/example/right"
+    code, spent = journey._execute(recovered["settlement_owed"]["command"], right, runtime, registry)
+    assert code == 0 and spent["settlement_progress"]["state"] == "settled", spent
+    code, retry = journey._execute(recovered["settlement_owed"]["command"], right, runtime, registry)
+    assert code == 0 and not retry["appended"], retry
+    assert cli._spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
