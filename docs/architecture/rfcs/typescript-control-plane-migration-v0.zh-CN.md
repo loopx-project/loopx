@@ -851,6 +851,12 @@ codec；较大的完整事实快照通过私有临时文件和摘要绑定的引
 内存，也不证明分布式执行。游标/checkpoint 归约保留为以测量驱动、完整源语义一致
 为前提的后续工作，不再造 Python 规则。见[历史决策证据](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.zh-CN.md)。
 
+**Checkpoint 恢复编写契约。** 现有 TS vision owner 只能投影校验器接受的恢复
+选项：没有持久 vision 时，缺失的 checkpoint 必须提交 vision patch；有该基线时
+才提供 unchanged reason。Authoring 契约复用校验器的 `todo_delta` 限制：保留前
+八项，每个保留项至多 80 字符。隔离的真实 CLI 恢复必须保持原结算身份和 replay
+约束。这闭合恢复指引的正确性缺口，不代表上下文、IO 或延迟成本已降低。
+
 **恢复边界（2026-09-22）。** [authority archive 命令](../../reference/authority-archive.md)
 由现有 TS coordination owner 负责历史校验、状态 delta 重建和可重入恢复；Python
 只解析 CLI 路径、传递请求并展示紧凑结果。复用 state-log codec，避免各 provider
