@@ -8,6 +8,8 @@ import json
 import logging
 import ipaddress
 import os
+import signal
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,6 +21,38 @@ from sforge.harness.task_spec import make_task_spec
 from benchmark.runtime.sforge import DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
+
+
+def _observe_run(call):
+    """Observe Ctrl+C even when the native runner consumes KeyboardInterrupt."""
+    interrupted = False
+    previous = signal.getsignal(signal.SIGINT)
+
+    def on_interrupt(signum, frame):
+        nonlocal interrupted
+        interrupted = True
+        if callable(previous):
+            previous(signum, frame)
+        else:
+            signal.default_int_handler(signum, frame)
+
+    # Respect an embedding host that intentionally ignores SIGINT.
+    if previous != signal.SIG_IGN:
+        signal.signal(signal.SIGINT, on_interrupt)
+    started = time.monotonic()
+    try:
+        result = call()
+        return result, interrupted, time.monotonic() - started
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def _result_status(*, interrupted, started, runtime_seconds):
+    if interrupted:
+        return "cancelled"
+    if not started:
+        return "launch_failed"
+    return "terminal" if runtime_seconds > 0 else "runner_failed"
 
 
 def main(argv=None):
@@ -98,27 +132,29 @@ def main(argv=None):
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))
     try:
-        result = run_agent(
+        result, was_interrupted, elapsed = _observe_run(lambda: run_agent(
             task_spec=task, agent=agent, config=config, backend=backend,
             run_id=args.run_id, model=args.model, timeout=args.timeout,
             judge_url=args.judge_url, eval_interval=args.eval_interval,
             submission_cooldown=args.submission_cooldown, internet=task.internet,
             disable_stop_hook=False, disable_auto_resume=agent.resume_cmd is None,
             max_submissions=0 if args.feedback == "blind" else None,
-        )
+        ))
     except Exception as error:
         receipt.update(status="runner_failed", error_kind=type(error).__name__)
         receipt_path.write_text(json.dumps(receipt, indent=2))
         raise
-    # Native Docker error paths can return a zero-like RunResult. A start marker
-    # plus elapsed execution distinguish launch failure from a legitimate score.
-    started = (trial / "started_at").is_file() and result.runtime_seconds > 0
-    receipt.update(status="terminal" if started else "launch_failed",
+    # Native cancellation and swallowed Docker failures return runtime=0.
+    # Observe the signal independently; never infer cancellation from output prose.
+    status = _result_status(interrupted=was_interrupted,
+                            started=(trial / "started_at").is_file(),
+                            runtime_seconds=result.runtime_seconds)
+    receipt.update(status=status, controller_elapsed_seconds=elapsed,
                    timed_out=result.timed_out, runtime_seconds=result.runtime_seconds,
                    best_score=result.best_score, total_rounds=result.total_rounds)
     receipt_path.write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt))
-    return 0 if started else 1
+    return 0 if status == "terminal" else 130 if status == "cancelled" else 1
 
 
 if __name__ == "__main__":

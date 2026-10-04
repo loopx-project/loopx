@@ -212,3 +212,43 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
     alias = AllowedEndpoint(ip="172.17.0.1", port=9090, hostname="judge-alias")
     with pytest.raises(RuntimeError, match="distinct from the judge"):
         backend.create_network_isolation(None, [alias, api], None)
+
+
+@pytest.mark.parametrize("interrupted,started,runtime,status", [
+    (True, True, 0, "cancelled"),
+    (True, False, 0, "cancelled"),
+    (False, False, 0, "launch_failed"),
+    (False, True, 0, "runner_failed"),
+    (False, True, 1, "terminal"),
+])
+def test_native_result_disposition_uses_signal_and_start_evidence(interrupted, started, runtime, status):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import _result_status
+    assert _result_status(interrupted=interrupted, started=started, runtime_seconds=runtime) == status
+
+
+def test_native_swallowed_interrupt_is_observed_and_handler_restored():
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    import os
+    import signal
+    from benchmark.edgebench.run import _observe_run
+    previous = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        def native_cancel():
+            try:
+                os.kill(os.getpid(), signal.SIGINT)
+            except KeyboardInterrupt:
+                return "native-cancelled-result"
+        result, interrupted, elapsed = _observe_run(native_cancel)
+        assert result == "native-cancelled-result" and interrupted and elapsed >= 0
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        result, interrupted, _ = _observe_run(lambda: "completed")
+        assert result == "completed" and not interrupted
+        with pytest.raises(RuntimeError):
+            _observe_run(lambda: (_ for _ in ()).throw(RuntimeError("fixture")))
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
