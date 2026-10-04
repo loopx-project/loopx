@@ -19,6 +19,7 @@ class ChatExternalConversations:
     def __init__(self, controller: Any) -> None:
         self.controller = controller
         self.bindings = controller.project_contexts.conversation_bindings
+        self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
         self.actions: Any | None = None
 
@@ -27,11 +28,12 @@ class ChatExternalConversations:
         import re
         if not re.fullmatch(r"[a-f0-9]{24}", request_ref):
             raise ValueError("invalid external request reference")
-        if command not in {None, "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
+        if command not in {None, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
             raise ValueError("unsupported external conversation command")
         selected = self.bindings.resolve(binding_id=binding_id, **source)
         path = self.root / f"{request_ref}.json"
-        with exclusive_file_lock(path, operation="admit_external_chat_request"):
+        with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"), exclusive_file_lock(path, operation="admit_external_chat_request"):
+            selected = self.bindings.resolve(binding_id=binding_id, **source)
             expected = {"binding_id": binding_id, "source": source, "message": message, "command": command}
             if path.exists():
                 row = _read_json(path)
@@ -44,11 +46,33 @@ class ChatExternalConversations:
                        **expected, "status": "prepared", "session_id": None, "turn_id": None,
                        "created_at": datetime.now(timezone.utc).isoformat()}
                 _atomic_write_json(path, row)
-            return self._admit_prepared(path, row, selected)
+            try:
+                return self._admit_prepared(path, row, selected)
+            except ValueError:
+                # Invalid commands and definitive grant denials are terminal
+                # admission outcomes; recovery must not retry them forever.
+                row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
+                _atomic_write_json(path, row)
+                raise
 
     def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
         controller = self.controller
-        current = controller.store.latest_session(goal_id=None,
+        if not row.get("routing_recorded"):
+            choices = [item for item in self.pending() if item["binding_id"] == row["binding_id"]
+                and item["source"]["source_ref"] == row["source"]["source_ref"]
+                and item.get("selection_recorded")]
+            previous = max(choices, key=lambda item: item.get("selection_order", 0)) if choices else None
+            row.update(routing_recorded=True, agent_target=previous.get("selection_target") if previous else None)
+            _atomic_write_json(path, row)
+        if row["command"] in {"agents", "select_agent", "select_project"}:
+            row["agent_target"] = None
+        target = row.get("agent_target")
+        if target:
+            authority = self.bindings.resolve_agent_target(selected, target)
+            row["agent_audience"] = authority["audience"]
+            current = controller.store.load_session(target["session_id"])
+        else:
+            current = controller.store.latest_session(goal_id=None,
             agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
         if row["command"] in {"status", "help"}:
             # Observation must retain failed/closed originals. Admission still
@@ -65,7 +89,8 @@ class ChatExternalConversations:
                 # The canonical store validates exact replay before its closed
                 # Session check. Never move an accepted request to a new Session.
                 turn, _ = controller.store.create_queued_turn(current["session_id"],
-                    client_turn_id=client_id, message=row["message"], origin="lark")
+                    client_turn_id=client_id, message=row["message"], origin="lark",
+                    external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
                 _atomic_write_json(path, row)
                 return row
@@ -78,9 +103,36 @@ class ChatExternalConversations:
                 "queued_count": len(controller.store.queued_turns(current["session_id"])) if current else 0,
                 "active_turn": controller.store.load_turn(current["session_id"], active_id) if active_id else None}
         plan = effect_runtime_result("collaboration.conversation.request", {
-            "request": row, "current_session": current, "binding": selected["binding"], **observations})
+            "request": row, "current_session": current, "binding": selected["binding"],
+            "agent_target": target, **observations})
         operation = plan["operation"]
-        if operation == "steward_action":
+        if operation == "select_recipient":
+            if selected["binding"]["context_kind"] != "project":
+                raise ValueError("Agent selection requires the project assistant")
+            granted = selected["binding"].get("agent_targets", [])
+            choices = []
+            for candidate in granted:
+                try:
+                    self.bindings.resolve_agent_target(selected, candidate)
+                    choices.append(candidate)
+                except (ValueError, OSError, KeyError):
+                    continue
+            if row["command"] == "select_agent":
+                import re
+                match = re.fullmatch(r"/agent ([a-f0-9]{24})", row["message"].strip())
+                chosen = next((item for item in choices if match and item["target_ref"] == match[1]), None)
+                if chosen is None:
+                    raise ValueError("select the exact currently authorized Agent reference")
+                row.update(selection_recorded=True, selection_target=chosen, response=f"已选择 Agent：{chosen['agent_id']}。后续文字进入原宿主持久队列；/project 返回普通项目对话。")
+            elif row["command"] == "select_project":
+                row.update(selection_recorded=True, selection_target=None, response="已返回普通项目对话；保留原项目会话。此前受理的 Agent 消息仍返回原私聊。")
+            else:
+                row["response"] = "当前没有已授权且可用的 Agent。请在本机 Chat → 设置 → Lark，为此 App 明确授权已有 attached Session；名称相似不会获得授权。" if not choices else "可选 Agent（使用确切命令）：\n" + "\n".join(f"{item['agent_id']} · {item['goal_id']}\n/agent {item['target_ref']}" for item in choices)
+            if row.get("selection_recorded"):
+                row["selection_order"] = 1 + max((item.get("selection_order", 0) for item in self.pending()
+                    if item["binding_id"] == row["binding_id"] and item["source"]["source_ref"] == row["source"]["source_ref"]), default=0)
+            row.update(status="command_completed", session_id=None, turn_id=None)
+        elif operation == "steward_action":
             parsed = self.bindings._core("collaboration.steward.command", {"command": row["command"], "message": row["message"]})
             if row["command"] in {"stop_commission", "resume_commission"} and not row.get("target_recorded"):
                 if self.actions is None:
@@ -121,7 +173,8 @@ class ChatExternalConversations:
             try:
                 turn, _ = controller.enqueue_turn(session_id=current["session_id"],
                     client_turn_id=plan["client_turn_id"], message=row["message"],
-                    work_dir=Path("."), objective="", origin="lark")
+                    work_dir=Path("."), objective="", origin="lark",
+                    external_agent_target={"target": target, "context": selected["context"]} if target else None)
                 row.update(status="accepted", turn_id=turn["turn_id"])
             except RuntimeError as exc:
                 if str(exc) != "session_queue_full":
@@ -299,6 +352,9 @@ class ChatExternalConversations:
                 elif row["status"] == "command_queued":
                     self._run_steward_action(row)
                 elif row["status"] == "accepted":
+                    if row.get("agent_target"):
+                        self.bindings.resolve_agent_target(self.bindings.resolve(binding_id=row["binding_id"], **row["source"]), row["agent_target"])
+                        continue  # Existing host owns claim and completion; no adapter is resumed.
                     session = self.controller.store.load_session(row["session_id"])
                     if session and session.get("status") != "closed":
                         context = self.controller.project_contexts.session_context(session)

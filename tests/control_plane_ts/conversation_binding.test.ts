@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {planConversationBinding, resolveBoundConversation, planBoundConversationRequest,
-  stewardCommand, authorizeStewardCreation} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
+  stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 import {resolveConversationScope} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
 
 const project = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/authorized/notes",
@@ -174,4 +174,53 @@ test("steward status counts its fresh grant, not a global portfolio or old Sessi
       goal_id: "loopx-manager", steward_context: {...context, goal_ids: []}, status: "ready", active_turn_id: null}});
   assert.equal((plan.status_snapshot as Record<string, unknown>).authorized_commission_count, 1);
   assert.equal(JSON.stringify(plan).includes("fresh-goal"), false);
+});
+
+test("an exact registered attached Session needs its own App grant and workspace", () => {
+  const target = {target_ref: "f".repeat(24), host_ref: "a".repeat(24), session_id: "exact-session", goal_id: "sample-goal",
+    goal_instance_id: "lifetime-a", agent_id: "notes-worker", executor_endpoint_id: "codex"};
+  const observed = {session: {...target, session_mode: "attached_host", status: "ready"},
+    goal: {goal_id: target.goal_id, workspace_path: project.workspace_path, registered_agents: [target.agent_id]},
+    host_binding_verified: true, host_ref: target.host_ref, host_audience_binding_ids: []};
+  const configured = planConversationBinding(request).state as typeof current;
+  const grantInput = {current: configured, expected_revision: 1, operation: "grant_agent_target",
+    binding_id: row.binding_id, target, target_observation: observed, observation, available_projects: [project]};
+  const longGoal = "g".repeat(160);
+  assert.equal(planConversationBinding({...grantInput, target: {...target, goal_id: longGoal},
+    target_observation: {...observed, session: {...observed.session, goal_id: longGoal},
+      goal: {...observed.goal, goal_id: longGoal}}}).changed, true);
+  const granted = planConversationBinding(grantInput).state as typeof current;
+  const selected = resolveBoundConversation({current: granted, binding_id: row.binding_id, source_ref: "e".repeat(24),
+    sender_ref: row.operator_ref, private_human_message: true, observation, available_projects: [project]});
+  const input = {binding: (granted.bindings as unknown[])[0], context: selected.context, target, target_observation: observed};
+  assert.deepEqual(resolveConversationAgentTarget(input).target, target);
+  for (const bad of [{...input, target: {...target, agent_id: "codex"}},
+    {...input, context: {...selected.context as object, provider_ref: "e".repeat(24)}},
+    {...input, target_observation: {...observed, host_binding_verified: false}},
+    {...input, target_observation: {...observed, session: {...observed.session, goal_instance_id: "recreated"}}},
+    {...input, target_observation: {...observed, goal: {...observed.goal, registered_agents: []}}},
+    {...input, target_observation: {...observed, goal: {...observed.goal, workspace_path: "/other"}}},
+    {...input, target_observation: {...observed, session: {...observed.session, external_conversation_binding_id: "e".repeat(24)}}}]) {
+    assert.throws(() => resolveConversationAgentTarget(bad));
+  }
+  const revoked = planConversationBinding({current: granted, expected_revision: 2, operation: "revoke_agent_target",
+    binding_id: row.binding_id, target_ref: target.target_ref, observation}).state as typeof current;
+  assert.throws(() => resolveConversationAgentTarget({...input, binding: (revoked.bindings as unknown[])[0]}), /grant/);
+});
+
+test("attached status names the registered recipient and stop cannot pretend host push support", () => {
+  const target = {target_ref: "f".repeat(24), host_ref: "a".repeat(24), session_id: "original", goal_id: "sample-goal",
+    goal_instance_id: null, agent_id: "notes-worker", executor_endpoint_id: "codex"};
+  const context = resolveBoundConversation({current: planConversationBinding(request).state,
+    binding_id: row.binding_id, source_ref: "e".repeat(24), sender_ref: row.operator_ref,
+    private_human_message: true, observation, available_projects: [project]}).context;
+  const session = {...target, session_mode: "attached_host", status: "busy", active_turn_id: "original-turn"};
+  const input = {binding: {...row, agent_targets: [target]}, context, current_session: session, agent_target: target,
+    queued_count: 2, active_turn: {session_id: "original", turn_id: "original-turn", status: "running"},
+    observed_at: "2026-01-01T10:00:00Z", request: {request_ref: "e".repeat(24), command: "status"}};
+  const snapshot = planBoundConversationRequest(input).status_snapshot as Record<string, unknown>;
+  assert.equal(snapshot.recipient_agent_id, "notes-worker");
+  assert.equal(snapshot.queued_count, 2);
+  for (const command of ["stop", "new"]) assert.equal(planBoundConversationRequest({...input,
+    request: {...input.request, command}}).response_code, "attached_control_unavailable");
 });

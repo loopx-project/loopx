@@ -23,11 +23,83 @@ function token(value: unknown, label: string): string {
   return result;
 }
 
+/** Mirror the canonical Chat store opaque-id boundary, including legacy Goals. */
+function sessionIdentity(value: unknown, label: string): string {
+  const result = requireNonEmptyString(value, label);
+  if (!/^[A-Za-z0-9._-]{1,160}$/.test(result)) throw new EffectRuntimeRequestError(`${label} is invalid`);
+  return result;
+}
+
+function agentTarget(value: unknown): JsonObject {
+  const row = requireJsonObject(value, "attached Agent target grant");
+  return {target_ref: ref(row.target_ref, "Agent target reference"), host_ref: ref(row.host_ref, "attached host reference"),
+    session_id: sessionIdentity(row.session_id, "attached Session identity"),
+    goal_id: sessionIdentity(row.goal_id, "Agent Goal identity"),
+    goal_instance_id: row.goal_instance_id === null ? null : sessionIdentity(row.goal_instance_id, "Goal lifetime"),
+    agent_id: sessionIdentity(row.agent_id, "registered Agent identity"),
+    executor_endpoint_id: token(row.executor_endpoint_id, "Agent executor")};
+}
+
+/** A configured target names an existing attached Session, not an executor
+ * label. Its host retains claim, completion and permission authority. */
+export function resolveConversationAgentTarget(params: JsonObject): JsonObject {
+  const selected = binding(params.binding);
+  const target = agentTarget(params.target);
+  const granted = (selected.agent_targets as JsonObject[] | undefined)?.find(row => row.target_ref === target.target_ref);
+  if (!granted || JSON.stringify(granted) !== JSON.stringify(target)) {
+    throw new EffectRuntimeRequestError("the exact Agent target grant is unavailable");
+  }
+  const context = normalizeProjectContext(params.context);
+  if (selected.context_kind !== "project" || context.binding_id !== selected.binding_id
+      || context.project_ref !== selected.project_ref || context.provider_ref !== selected.provider_ref
+      || context.operator_ref !== selected.operator_ref || context.audience !== "bound_owner") {
+    throw new EffectRuntimeRequestError("Agent target belongs to another audience");
+  }
+  validateAgentTargetObservation(target, params.target_observation, context.workspace_path, selected.binding_id);
+  return {target, audience: {binding_id: selected.binding_id, source_ref: ref(context.source_ref, "Agent source"),
+    provider_ref: selected.provider_ref, operator_ref: selected.operator_ref, project_ref: selected.project_ref}};
+}
+
+function validateAgentTargetObservation(target: JsonObject, value: unknown, workspace: unknown, bindingId: unknown): void {
+  const observation = requireJsonObject(value, "attached Agent observation");
+  const session = requireJsonObject(observation.session, "attached Session observation");
+  const goal = requireJsonObject(observation.goal, "registered Agent Goal observation");
+  if (session.external_conversation_binding_id != null && session.external_conversation_binding_id !== bindingId) {
+    throw new EffectRuntimeRequestError("the attached Session previously belonged to another App audience");
+  }
+  if (observation.host_binding_verified !== true || session.session_mode !== "attached_host"
+      || !["ready", "busy"].includes(String(session.status))
+      || observation.host_ref !== target.host_ref
+      || !Array.isArray(observation.host_audience_binding_ids)
+      || observation.host_audience_binding_ids.some(owner => owner !== bindingId)
+      || goal.workspace_path !== workspace || goal.goal_id !== target.goal_id
+      || !Array.isArray(goal.registered_agents) || !goal.registered_agents.includes(target.agent_id)) {
+    throw new EffectRuntimeRequestError("Agent target is not an available registered host in this workspace");
+  }
+  for (const field of ["session_id", "goal_id", "agent_id", "executor_endpoint_id"]) {
+    if (session[field] !== target[field]) throw new EffectRuntimeRequestError("Agent Session identity changed");
+  }
+  if ((session.goal_instance_id ?? null) !== target.goal_instance_id) {
+    throw new EffectRuntimeRequestError("Agent Goal lifetime changed");
+  }
+}
+
 function binding(value: unknown): JsonObject {
   const row = requireJsonObject(value, "conversation binding");
   if (row.schema_version !== BINDING_SCHEMA || !["project", "steward"].includes(String(row.context_kind))
       || row.grant !== (row.context_kind === "project" ? "workspace_read" : "portfolio_read") || row.enabled !== true) {
     throw new EffectRuntimeRequestError("unsupported conversation binding");
+  }
+  const targets = row.agent_targets === undefined ? [] : row.agent_targets;
+  if (!Array.isArray(targets) || targets.length > 16
+      || (row.context_kind !== "project" && targets.length !== 0)) {
+    throw new EffectRuntimeRequestError("invalid Agent target grant set");
+  }
+  const agents = targets.map(agentTarget);
+  for (const field of ["target_ref", "session_id"]) {
+    if (new Set(agents.map(row => row[field])).size !== agents.length) {
+      throw new EffectRuntimeRequestError("ambiguous Agent target grant");
+    }
   }
   return {
     schema_version: BINDING_SCHEMA, binding_id: ref(row.binding_id, "binding identity"),
@@ -38,6 +110,7 @@ function binding(value: unknown): JsonObject {
     executor_endpoint_id: token(row.executor_endpoint_id, "executor endpoint"),
     grant: row.grant, enabled: true,
     ...(row.context_kind === "steward" ? {goal_ids: normalizeStewardGoalScope(row.goal_ids)} : {}),
+    ...(agents.length ? {agent_targets: agents} : {}),
   };
 }
 
@@ -52,6 +125,17 @@ function state(value: unknown): {schema_version: string; revision: number; bindi
     if (new Set(bindings.map(row => row[field])).size !== bindings.length) {
       throw new EffectRuntimeRequestError("conversation listener ownership is ambiguous");
     }
+  }
+  const sessions = bindings.flatMap(row => (row.agent_targets as JsonObject[] | undefined ?? []).map(target => target.session_id));
+  const hosts = new Map<unknown, unknown>();
+  for (const row of bindings) for (const target of row.agent_targets as JsonObject[] | undefined ?? []) {
+    if (hosts.has(target.host_ref) && hosts.get(target.host_ref) !== row.binding_id) {
+      throw new EffectRuntimeRequestError("an attached host cannot share two App audiences");
+    }
+    hosts.set(target.host_ref, row.binding_id);
+  }
+  if (new Set(sessions).size !== sessions.length) {
+    throw new EffectRuntimeRequestError("an attached Session cannot share two App audiences");
   }
   return {schema_version: SET_SCHEMA, revision: Number(row.revision), bindings};
 }
@@ -83,6 +167,23 @@ export function planConversationBinding(params: JsonObject): JsonObject {
     }
     if (previous?.binding_id === candidate.binding_id) throw new EffectRuntimeRequestError("changed context requires a new binding identity");
     rows = [...current.bindings.filter(row => row.transport_ref !== candidate.transport_ref), candidate];
+  } else if (params.operation === "grant_agent_target" || params.operation === "revoke_agent_target") {
+    const id = ref(params.binding_id, "binding identity");
+    const previous = current.bindings.find(row => row.binding_id === id);
+    if (!previous || previous.context_kind !== "project") throw new EffectRuntimeRequestError("Agent selection requires a project binding");
+    observed(previous, params.observation);
+    const existing = previous.agent_targets as JsonObject[] | undefined ?? [];
+    let targets: JsonObject[];
+    if (params.operation === "grant_agent_target") {
+      const target = agentTarget(params.target);
+      if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
+      const project = params.available_projects.map(normalizeProjectContext).find(row => row.project_ref === previous.project_ref);
+      if (!project) throw new EffectRuntimeRequestError("workspace grant unavailable");
+      validateAgentTargetObservation(target, params.target_observation, project.workspace_path, previous.binding_id);
+      if (existing.some(row => row.session_id === target.session_id)) throw new EffectRuntimeRequestError("this Agent Session is already granted");
+      targets = [...existing, target];
+    } else targets = existing.filter(row => row.target_ref !== ref(params.target_ref, "Agent target reference"));
+    rows = current.bindings.map(row => row.binding_id === id ? {...row, agent_targets: targets} : row);
   } else if (params.operation === "adopt_created_goal") {
     const id = ref(params.binding_id, "binding identity");
     const previous = current.bindings.find(row => row.binding_id === id);
@@ -151,13 +252,26 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
   const row = requireJsonObject(params.request, "external request");
   const request = ref(row.request_ref, "external request identity");
   const command = row.command;
-  if (![null, "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(command as null | string)) {
+  if (![null, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(command as null | string)) {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
   const current = params.current_session === null ? null : requireJsonObject(params.current_session, "current Session");
   const target = row.target_recorded === true ? row : current;
   const session = target?.session_id ?? null;
   const turn = row.target_recorded === true ? row.turn_id ?? null : current?.active_turn_id ?? null;
+  if (["agents", "select_agent", "select_project"].includes(String(command))) {
+    return {operation: "select_recipient", session_id: null, turn_id: null};
+  }
+  if (params.agent_target !== undefined && params.agent_target !== null) {
+    const target = agentTarget(params.agent_target);
+    if (!current || current.session_id !== target.session_id || current.goal_id !== target.goal_id
+        || current.agent_id !== target.agent_id || current.session_mode !== "attached_host") {
+      throw new EffectRuntimeRequestError("the selected Agent Session is unavailable");
+    }
+    if (command === "new" || command === "stop") {
+      return {operation: "reply", session_id: current.session_id, turn_id: null, response_code: "attached_control_unavailable"};
+    }
+  }
   if (["commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(String(command))) {
     const selected = requireJsonObject(params.binding, "steward binding");
     if (selected.context_kind !== "steward") throw new EffectRuntimeRequestError("explicit commissions require a selected steward");
@@ -195,7 +309,13 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
   const source = ref(context.source_ref, "status source identity");
   const channel = steward ? `manager.external.native.${selected.binding_id}.${source}`
     : `project.external.${selected.binding_id}.${source}`;
-  if (current) {
+  const recipient = params.agent_target ? agentTarget(params.agent_target) : null;
+  if (recipient) {
+    if (!current || current.session_id !== recipient.session_id || current.goal_id !== recipient.goal_id
+        || current.agent_id !== recipient.agent_id || current.session_mode !== "attached_host") {
+      throw new EffectRuntimeRequestError("status Agent Session changed");
+    }
+  } else if (current) {
     const saved = steward ? normalizeStewardContext(current.steward_context) : normalizeProjectContext(current.project_context);
     if (current.channel_id !== channel || current.goal_id !== (steward ? "loopx-manager" : null)
         || JSON.stringify({...saved, goal_ids: []}) !== JSON.stringify({...context, goal_ids: []})) {
@@ -217,7 +337,8 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
   }
   return {schema_version: "loopx_chat_bound_status_v0", observed_at: instant,
     context_kind: selected.context_kind, workspace_path: context.workspace_path,
-    executor_endpoint_id: selected.executor_endpoint_id, grant: selected.grant,
+    executor_endpoint_id: recipient?.executor_endpoint_id ?? selected.executor_endpoint_id, grant: selected.grant,
+    ...(recipient ? {recipient_agent_id: recipient.agent_id, recipient_goal_id: recipient.goal_id, recipient_mode: "attached_host"} : {}),
     authorized_commission_count: steward ? (selected.goal_ids as string[]).length : 0,
     session_status: current?.status ?? null, active_turn_status: turn?.status ?? null,
     active_turn_observation_available: !current?.active_turn_id || turn !== null,

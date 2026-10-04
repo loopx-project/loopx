@@ -1256,6 +1256,7 @@ class ChatRuntimeController:
         work_dir: Path,
         objective: str,
         origin: str = "external",
+        external_agent_target: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Persist a bounded same-Session Turn and dispatch it in FIFO order."""
 
@@ -1279,8 +1280,11 @@ class ChatRuntimeController:
                 client_turn_id=client_turn_id,
                 message=message,
                 origin=origin,
+                external_agent_target=external_agent_target,
             )
         else:
+            if external_agent_target is not None:
+                raise ValueError("Agent target requires its original attached Session")
             turn, created = self.store.create_queued_turn(
                 session_id,
                 client_turn_id=client_turn_id,

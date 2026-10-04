@@ -1464,6 +1464,7 @@ class ChatRequestHandler(
             CHAT_LARK_APP_SETUPS_PATH: self._lark_setup_start,
             CHAT_LARK_CONNECTIONS_PATH: self._lark_connect,
             PRIVATE_CONVERSATIONS_PATH: self._private_conversation_connect,
+            PRIVATE_CONVERSATIONS_PATH + "/agent-targets": self._private_conversation_agent_target,
             **self._configuration_post_routes(),
             **self._ssh_source_post_routes(),
         }

@@ -144,7 +144,48 @@ Regression coverage uses the production native filesystem store, durable queue,
 bound request and provider admission/reconciliation paths with a synthetic
 provider and protocol executor. It qualifies queue/stop/readback and duplicate
 delivery, not live provider, mobile or installed-service acceptance of this delta.
-Registered Agent selection and broader coordination remain open.
+The explicit attached-target selection checkpoint below is source-qualified; broader coordination and live acceptance remain open.
+
+## Explicit registered Agent selection: original attached host
+
+Settings → Lark can grant a project App access to an exact existing registered
+Agent's attached Session in that authorized workspace. The typed binding owner
+checks Goal, Agent, Session, executor, Goal lifetime and exact host identity,
+with an independently verified App/owner and revision-fenced publication. Up to
+sixteen explicit target grants fit in one App binding. Executor names alone do
+not select a registered Agent. This creates no Agent or Goal and imports no
+host history, prior bindings or portfolio.
+
+In private Chat, `/agents` lists only currently usable grants. Copy its complete
+`/agent <target-ref>` command to select one; subsequent text enters the original
+canonical Session queue for that existing host to claim and complete.
+`/project` returns to the original ordinary project Session. Accepted messages
+and their replies retain their original target and App/source even after that
+switch or a crash. No model adapter is started or resumed for an attached target.
+The host must already consume its [native attached broker](../../integrations/attached-agent-session-broker.md).
+
+The queue stores its frozen audience and exact target. Host claim revalidates
+the local grant, current registration, workspace, lifetime and host under the
+grant/queue fences. Revocation prevents pending claims and private result
+return; a previously claimed execution still belongs to its host. Session and
+host audience stamps prohibit assigning the same ongoing host conversation to
+another App, including after grant revocation. Inbound and outbound provider
+checks independently verify that App's owner/source. Granting message delivery
+preserves the original host's permissions and claim/completion authority.
+
+`/status` names the actual registered recipient and durable queue. The current
+attached broker has no push interrupt or new-session capability: `/stop` and
+`/new` return an explicit unavailable response and preserve the original host.
+Handle those actions at that host, or use `/project` for ordinary Chat. Settings
+can revoke a target or disconnect the App; stale roots/grants remain unavailable.
+An empty candidate list does not bootstrap roles or fabricate a Goal.
+
+Synthetic provider/native-store journeys qualify selection, follow-up, original
+result return, replay/recovery, revoked pending claims, exact registration and
+cross-App/host refusal. Source type checks and packaged Settings build qualify
+the companion. Live attached-host automation, mobile acceptance, incremental
+media/permission interactions and broader steward coordination remain open.
+This source delta requires maintainer review before installed promotion.
 
 ## Decision: make the App the place where work conversations continue
 

@@ -63,7 +63,11 @@ class LarkPrivateConversations:
         """
         event = record["event"]
         try:
-            self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+            selected = self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+            native_path = self.core.root / f"{record['request_ref']}.json"
+            native = _read_json(native_path) if native_path.exists() else {}
+            if native.get("agent_target"):
+                self.bindings.resolve_agent_target(selected, native["agent_target"])
             result = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=record["profile"],
                 tail=["im", "+messages-mget", "--message-ids", event["message_id"],
                       "--as", "bot", "--no-reactions", "--format", "json"]))
@@ -150,6 +154,12 @@ class LarkPrivateConversations:
                 if not text.strip():
                     return {"status": "empty_text"}
             command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(text.strip())
+            if text.strip() == "/agents":
+                command = "agents"
+            elif text.strip() == "/project":
+                command = "select_project"
+            elif text.strip() == "/agent" or text.strip().startswith("/agent "):
+                command = "select_agent"
             if binding["context_kind"] == "steward":
                 for prefix, selected_command in [("/delegate", "commission"), ("/委托", "commission"),
                                                   ("/confirm", "confirm_commission"), ("/cancel", "cancel_commission"),
@@ -163,7 +173,7 @@ class LarkPrivateConversations:
                 admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                     request_ref=request, message=text, command=command)
             except ValueError:
-                record.update(status="rejected", response="操作格式不正确；新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。")
+                record.update(status="rejected", response="操作或原授权不可用；Agent 请先用 /agents 查看确切命令，/project 返回项目对话。新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。")
                 _atomic_write_json(path, record)
                 return {"status": "command_rejected"}
             except RuntimeError as exc:
@@ -244,9 +254,12 @@ class LarkPrivateConversations:
                                       commission_resources=native.get("commission_resources"),
                                       status_snapshot=native.get("status_snapshot"))
                     if record["status"] == "accepted":
+                        native = self.core.read_request(record["request_ref"])
+                        if native.get("agent_target"):
+                            self.bindings.resolve_agent_target(self.bindings.resolve(binding_id=record["binding_id"], **record["source"]), native["agent_target"])
                         # Receipt follows persistent Core admission and is
                         # independent of terminal execution and reply delivery.
-                        self._deliver(path, record, "admission", "已持久受理；若已有执行，本条会排队。可发送 /status、/stop 或 /new。")
+                        self._deliver(path, record, "admission", "已持久受理到原 Agent 会话；等待原宿主领取。/status 查看持久队列，/project 返回普通项目对话。实时停止暂不支持，请在原宿主处理。" if native.get("agent_target") else "已持久受理；若已有执行，本条会排队。可发送 /status、/stop 或 /new。")
                         turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
                         if not turn or turn["status"] not in {"completed", "failed", "interrupted", "expired"}:
                             continue
@@ -289,6 +302,7 @@ def _command_text(code: str) -> str:
     return {"unsupported_attachment": "此入口目前只支持文字；图片或文件没有交给模型。请发送文字描述。",
         "no_session": "尚无会话；发送文字即可开始。", "active_session": "正在执行；后续文字会进入同一会话队列。",
         "ready_session": "会话已就绪，可继续发送文字。", "new_session": "已关闭此前会话；下一条文字将开启新会话。",
+        "attached_control_unavailable": "原 Agent 宿主尚不支持此处的实时停止或新建会话；原执行没有被停止或替换。请在原宿主处理，/project 返回普通项目对话。",
         "stop_requested": "已请求停止这条消息对应的执行。", "no_active_turn": "当前没有正在执行的消息。"}.get(code, "")
 
 
@@ -313,9 +327,13 @@ def _status_text(snapshot: dict[str, Any], *, help_requested: bool) -> str:
     text = (f"状态快照（{snapshot['observed_at']}）\n角色：{'长期管家' if steward else '普通项目对话'}"
         f"\n工作区：{snapshot['workspace_path']}\n执行器：{snapshot['executor_endpoint_id']}"
         f"\n{state}\n已持久排队：{snapshot['queued_count']} 条。")
+    if snapshot.get("recipient_agent_id"):
+        return text + f"\n已选择 Agent：{snapshot['recipient_agent_id']} · {snapshot['recipient_goal_id']}。等待原宿主领取队列；/agents 查看授权，/project 返回普通项目对话。实时停止或新建请在原宿主处理。"
     text += (f"\n已授权新委托：{snapshot['authorized_commission_count']}；执行结束不代表委托验收。" if steward else
         "\n当前仅有工作区只读授权；没有自动选用注册 Agent 或创建 Goal。")
     text += "\n/status 查看状态；/stop 停止当前聊天执行；/new 关闭当前聊天并开启下次新会话；/help 查看用法。"
+    if not steward:
+        text += "\n/agents 查看本 App 已授权的 Agent；使用列表中的完整 /agent 命令选择，/project 返回此项目会话。"
     if help_requested:
         text += "\n工作区、执行器与解绑：本机 Chat → 设置 → Lark。变更或解绑会重新核验授权；已受理工作不会迁移到新会话。图片/文件目前未交给模型，请改用文字。"
         if steward:

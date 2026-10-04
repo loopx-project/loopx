@@ -21,6 +21,9 @@ class PrivateConversationRequestMixin:
              "project_ref": row["project_ref"], "context_available": row["project_ref"] in titles, "project_title": titles.get(row["project_ref"], "Unavailable workspace"),
              "executor_endpoint_id": row["executor_endpoint_id"], "grant": row["grant"],
              "goal_count": len(row.get("goal_ids", [])),
+             "agent_candidates": [{key: item.get(key) for key in ["session_id", "goal_id", "agent_id", "executor_endpoint_id"]}
+                for item in bindings.agent_candidates(row["binding_id"])],
+             "agent_targets": row.get("agent_targets", []),
              "listener_status": health.get(row["transport_ref"], {}).get("status", "starting"),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]]})
@@ -64,6 +67,19 @@ class PrivateConversationRequestMixin:
                 str(body["binding_id"]), expected_revision=body["revision"])
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
+            self._send_error(str(exc), status=400)
+            return
+        self._private_conversations()
+
+    def _private_conversation_agent_target(self) -> None:
+        try:
+            body = self._read_json()
+            if set(body) not in [{"binding_id", "revision", "session_id"}, {"binding_id", "revision", "target_ref"}]:
+                raise ValueError("grant an exact existing Session or revoke an exact target revision")
+            bindings = self.server.runtime_controller.project_contexts.conversation_bindings
+            bindings.change_agent_target(binding_id=str(body["binding_id"]), expected_revision=body["revision"],
+                session_id=body.get("session_id"), target_ref=body.get("target_ref"))
+        except (ValueError, OSError, KeyError, StopIteration) as exc:
             self._send_error(str(exc), status=400)
             return
         self._private_conversations()

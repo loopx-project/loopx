@@ -365,6 +365,7 @@ class ChatSessionStore(ChatIngressStore):
                     "codex_home",
                     "manager_context_version",
                     "coordination_context_version",
+                    "external_conversation_binding_id",
                     "loopx_mode",
                     "loopx_tools", "loopx_executor",
                     "loopx_deliveries",
@@ -382,6 +383,11 @@ class ChatSessionStore(ChatIngressStore):
                 unknown = set(changes) - allowed
                 if unknown:
                     raise ValueError(f"unsupported chat session fields: {sorted(unknown)}")
+                if "external_conversation_binding_id" in changes:
+                    identity = _opaque_id(changes["external_conversation_binding_id"], field="external_conversation_binding_id")
+                    if payload.get("session_mode") != CHAT_SESSION_MODE_ATTACHED or payload.get("external_conversation_binding_id") not in {None, identity}:
+                        raise ValueError("an attached Session cannot change its external audience")
+                    changes["external_conversation_binding_id"] = identity
                 if "coordination_context_version" in changes:
                     version = changes["coordination_context_version"]
                     if type(version) is not int or version < 1:
@@ -1026,6 +1032,7 @@ class ChatSessionStore(ChatIngressStore):
         goal_instance_id: str | None = None,
         ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
         origin: str = "external",
+        external_agent_target: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Persist one bounded follow-up without replacing the active Turn."""
 
@@ -1045,6 +1052,7 @@ class ChatSessionStore(ChatIngressStore):
                         request={
                             "message": str(message),
                             "origin": _opaque_id(origin, field="origin"),
+                            "external_agent_target": external_agent_target,
                         },
                     )
                     return existing, False
@@ -1077,6 +1085,7 @@ class ChatSessionStore(ChatIngressStore):
                     ),
                     "client_turn_id": client_id,
                     "status": "queued",
+                    **({"external_agent_target": external_agent_target} if external_agent_target is not None else {}),
                     "message": str(message),
                     "origin": _opaque_id(origin, field="origin"),
                     "upstream_turn_id": None,
@@ -1188,6 +1197,7 @@ class ChatSessionStore(ChatIngressStore):
         *,
         host_claim_id: str | None = None,
         admitted_goal_instance_id: str | None = None,
+        admission_validator: Any | None = None,
     ) -> dict[str, Any] | None:
         """Atomically make the oldest live queued Turn active for its Session."""
 
@@ -1220,6 +1230,8 @@ class ChatSessionStore(ChatIngressStore):
                             raise ValueError(
                                 "active Turn Goal instance admission is invalid"
                             )
+                        if admission_validator is not None:
+                            admission_validator(active)
                         return active
                     return None
                 for turn in self._settle_expired_queued_turns(
@@ -1227,6 +1239,12 @@ class ChatSessionStore(ChatIngressStore):
                     now=datetime.now(timezone.utc),
                 ):
                     turn_id = str(turn["turn_id"])
+                    if admission_validator is not None:
+                        try:
+                            admission_validator(turn)
+                        except (ValueError, OSError, KeyError):
+                            self.update_turn(session_id, turn_id, status="failed", error_code="external_agent_grant_unavailable", completed_at=utc_now())
+                            continue
                     if admitted_goal_instance_id is not None and (
                         turn.get("goal_instance_id") != admitted_goal_instance_id
                     ):

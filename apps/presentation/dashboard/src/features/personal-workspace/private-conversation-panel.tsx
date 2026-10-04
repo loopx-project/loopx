@@ -1,6 +1,6 @@
 import {useEffect, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
-  fetchChatProjects, fetchChatCapabilities, fetchLarkApps, type PrivateConversation,
+  changePrivateAgentTarget, fetchChatProjects, fetchChatCapabilities, fetchLarkApps, type PrivateConversation,
   type ChatProject, type LarkApp} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import "./private-conversation.css";
@@ -64,6 +64,7 @@ export function PrivateConversationPanel() {
       <p>{zh ? `待处理或回复：${row.pending_count}` : `Pending execution or reply: ${row.pending_count}`}</p>
       {row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
       {!row.context_available ? <p role="alert">{zh ? "工作区授权已失效；请恢复原工作区或重新选择。旧会话不会移到其它工作区。" : "The workspace grant is unavailable. Restore the original workspace or select a new one; the old Session will not move."}</p> : null}
+      {row.context_kind === "project" ? <PrivateAgentTargets row={row} revision={revision} zh={zh} busy={busy} act={act}/> : null}
       <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "解绑" : "Disconnect"}</button>
     </article>)}
     {rows.length === 0 ? <p>{zh ? "尚未连接本人私聊。" : "No owner private Chat connected."}</p> : null}
@@ -88,4 +89,22 @@ export function PrivateConversationPanel() {
     <p>{zh ? "管家新委托：/delegate --tokens N 具体目标。先读预览，再用原私聊的完整 /confirm 命令确认；15 分钟过期。原生执行保持只读，总 token 上限可能被运行中的请求超过；没有默认定时调度。回执提供 /stop-commission 停止和 /resume-commission 恢复命令；恢复保留原线程及累计用量。" : "Steward commission: /delegate --tokens N objective. Read the preview, then use its full /confirm command in the original private Chat within 15 minutes. Native execution remains read-only; in-flight requests can exceed the total token allowance. No default schedule. Receipts provide /stop-commission and /resume-commission commands; recovery retains the original thread and cumulative usage."}</p>
     {error ? <p role="alert">{error}</p> : null}
   </section>;
+}
+
+function PrivateAgentTargets({row, revision, zh, busy, act}: {row: PrivateConversation; revision: number; zh: boolean;
+  busy: boolean; act: (operation: () => Promise<unknown>) => Promise<void>}) {
+  const [session, setSession] = useState("");
+  const candidates = row.agent_candidates.filter(item => !row.agent_targets.some(target => target.session_id === item.session_id));
+  return <div>
+    <p>{zh ? "直连注册 Agent：只授权确切的已有 attached Session。消息进入原宿主队列；此处不创建 Agent、不继承其它目标或提高宿主权限。一个 Session 的 App 受众固定，撤销后也不能换给另一 App。" : "Direct registered Agent: grant an exact existing attached Session. Messages enter its original host queue; this creates no Agent, inherits no other Goals and raises no host permission. The Session audience remains fixed even after revocation."}</p>
+    {row.agent_targets.map(target => <p key={target.target_ref}>{target.agent_id} · {target.goal_id}<br/>
+      <code>/agent {target.target_ref}</code> <button type="button" disabled={busy} onClick={() => void act(() => changePrivateAgentTarget(row.binding_id, revision, {target_ref: target.target_ref}))}>{zh ? "撤销直连授权" : "Revoke direct access"}</button></p>)}
+    <label>{zh ? "已有 Agent 会话" : "Existing Agent Session"}<select value={session} disabled={busy} onChange={event => setSession(event.target.value)}>
+      <option value="">{zh ? "选择确切会话" : "Select exact Session"}</option>
+      {candidates.map(item => <option key={item.session_id} value={item.session_id}>{item.agent_id} · {item.goal_id} · {item.session_id.slice(-6)}</option>)}
+    </select></label>
+    <button type="button" disabled={busy || !candidates.some(item => item.session_id === session)} onClick={() => void act(() => changePrivateAgentTarget(row.binding_id, revision, {session_id: session}))}>{zh ? "授权此 App 直连" : "Grant this App direct access"}</button>
+    {row.agent_candidates.length === 0 ? <p>{zh ? "暂无此工作区的可用 attached Agent 会话。请先在原宿主完成注册和 attached-session-bind；普通聊天仍可直接使用，不需要创建 Goal。" : "No eligible attached Agent Session in this workspace. Register and bind it in its original host first; ordinary Chat remains available without a Goal."}</p> : null}
+    <p>{zh ? "私聊 /agents 查看当前可用授权，复制完整 /agent 命令选择；/project 返回原项目对话。实时停止或新建 Agent 会话请在原宿主处理。" : "Use /agents to list usable grants, select with the full /agent command, and /project to return to project Chat. Stop or create Agent Sessions in their original host."}</p>
+  </div>;
 }
